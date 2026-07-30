@@ -34,15 +34,16 @@ The current server milestone supports atomic content-LDIF import/export,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
-also supports RFC 4528 Assertion and RFC 4527 pre-read/post-read controls on
-their applicable operations. It loads OpenLDAP schema, ordered ACLs, database
-roots, hidden/disabled databases, and selected operation settings from
-`cn=config`; supported online changes are validated transactionally and
-published as one runtime snapshot. Database entry partitions allow different
-OpenLDAP backends to hold the same DN without crossing authorization or search
-boundaries, while `olcSubordinate` databases participate in OpenLDAP-style glue
-searches. The compatibility matrix marks these as partial until the remaining
-schema, ACL, control, alias, configuration, and differential cases pass.
+also supports RFC 4528 Assertion, RFC 4527 pre-read/post-read, and RFC 2696
+simple paged-results controls on their applicable operations. It loads
+OpenLDAP schema, ordered ACLs, database roots, hidden/disabled databases, and
+selected operation settings from `cn=config`; supported online changes are
+validated transactionally and published as one runtime snapshot. Database
+entry partitions allow different OpenLDAP backends to hold the same DN without
+crossing authorization or search boundaries, while `olcSubordinate` databases
+participate in OpenLDAP-style glue searches. The compatibility matrix marks
+these as partial until the remaining schema, ACL, control, alias,
+configuration, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \

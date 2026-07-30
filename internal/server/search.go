@@ -22,7 +22,7 @@ func (server *Server) handleSearch(
 ) error {
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsAssertion,
+		supportsAssertion|supportsPagedResults,
 	)
 	if controlFailure != nil {
 		return server.writeSearchDone(
@@ -32,12 +32,40 @@ func (server *Server) handleSearch(
 		)
 	}
 
-	base, err := directory.ParseDN(request.BaseDN)
-	if err != nil {
+	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
+	paging, pagingFailure := preparePagedSearch(
+		state,
+		request,
+		message.Controls,
+		controls.paging,
+		limit,
+	)
+	if pagingFailure != nil {
 		return server.writeSearchDone(
 			connection,
 			message.ID,
+			*pagingFailure,
+		)
+	}
+	if paging != nil && paging.abandoned {
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+		)
+	}
+
+	base, err := directory.ParseDN(request.BaseDN)
+	if err != nil {
+		return server.writeSearchResult(
+			connection,
+			message.ID,
+			state,
+			paging,
+			nil,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+			pagedSearchCursor{},
+			false,
 		)
 	}
 
@@ -49,6 +77,7 @@ func (server *Server) handleSearch(
 			message.ID,
 			request,
 			controls.assertion,
+			paging,
 		)
 	}
 	if isSubschemaDN(base) {
@@ -59,21 +88,38 @@ func (server *Server) handleSearch(
 			message.ID,
 			request,
 			controls.assertion,
+			paging,
 		)
 	}
 	routes := databaseSearchRoutes(state.runtime.databases, base, request.Scope)
 	if len(routes) == 0 {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			message.ID,
+			state,
+			paging,
+			nil,
 			ldapwire.Result{Code: ldapwire.ResultReferral},
+			pagedSearchCursor{},
+			false,
 		)
 	}
 
-	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
 	deadline := timeLimitDeadline(request.TimeLimit)
 	entries := make([]directory.Entry, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	entryLimit := limit
+	if paging != nil {
+		remaining := limit - paging.count
+		if remaining < 0 {
+			remaining = 0
+		}
+		entryLimit = min(paging.size, remaining)
+	}
+	var (
+		hasMore    bool
+		lastCursor pagedSearchCursor
+	)
 
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		primary := routes[0]
@@ -130,6 +176,10 @@ func (server *Server) handleSearch(
 		}
 
 		for routeIndex, route := range routes {
+			if paging != nil && paging.cursor.valid &&
+				routeIndex < paging.cursor.route {
+				continue
+			}
 			database := &state.runtime.databases[route.databaseIndex]
 			tx := storage.ReaderInPartition(reader, database.partition)
 			if routeIndex > 0 {
@@ -155,13 +205,20 @@ func (server *Server) handleSearch(
 			}
 
 			err := tx.ForEach(func(entry directory.Entry) error {
-				if expired(deadline) {
-					result.Code = ldapwire.ResultTimeLimitExceeded
-					return errStopSearch
-				}
 				candidate, err := directory.ParseDN(entry.DN)
 				if err != nil {
 					return err
+				}
+				if paging != nil && paging.cursor.valid {
+					if routeIndex < paging.cursor.route ||
+						(routeIndex == paging.cursor.route &&
+							candidate.Key() <= paging.cursor.dnKey) {
+						return nil
+					}
+				}
+				if expired(deadline) {
+					result.Code = ldapwire.ResultTimeLimitExceeded
+					return errStopSearch
 				}
 				if !directory.InScope(route.base, candidate, route.scope) {
 					return nil
@@ -193,8 +250,13 @@ func (server *Server) handleSearch(
 				) {
 					return nil
 				}
-				if len(entries) >= limit {
-					result.Code = ldapwire.ResultSizeLimitExceeded
+				if len(entries) >= entryLimit {
+					if paging != nil &&
+						paging.count+len(entries) < limit {
+						hasMore = true
+					} else {
+						result.Code = ldapwire.ResultSizeLimitExceeded
+					}
 					return errStopSearch
 				}
 				readable := server.attributesWithPrivilege(
@@ -212,6 +274,11 @@ func (server *Server) handleSearch(
 					request.TypesOnly,
 				)
 				entries = append(entries, selected)
+				lastCursor = pagedSearchCursor{
+					route: routeIndex,
+					dnKey: candidate.Key(),
+					valid: true,
+				}
 				return nil
 			})
 			if err != nil {
@@ -221,15 +288,22 @@ func (server *Server) handleSearch(
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStopSearch) {
+		if paging != nil {
+			state.pagedSearch = nil
+		}
 		return fmt.Errorf("search directory: %w", err)
 	}
 
-	for _, entry := range entries {
-		if err := ldapwire.Write(connection, ldapwire.EncodeSearchResultEntry(message.ID, entry, nil)); err != nil {
-			return err
-		}
-	}
-	return server.writeSearchDone(connection, message.ID, result)
+	return server.writeSearchResult(
+		connection,
+		message.ID,
+		state,
+		paging,
+		entries,
+		result,
+		lastCursor,
+		hasMore,
+	)
 }
 
 type databaseSearchRoute struct {
@@ -312,6 +386,7 @@ func (server *Server) searchRootDSE(
 	messageID int64,
 	request ldapwire.SearchRequest,
 	assertion *directory.Filter,
+	paging *pagedSearchContext,
 ) error {
 	entry := server.rootDSE(state.runtime, state.externalDN != "")
 	var selected *directory.Entry
@@ -366,28 +441,43 @@ func (server *Server) searchRootDSE(
 		return nil
 	})
 	if err != nil {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
+			pagedSearchCursor{},
+			false,
 		)
 	}
 	if assertionFailed {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.Result{Code: ldapwire.ResultAssertionFailed},
+			pagedSearchCursor{},
+			false,
 		)
 	}
+	var entries []directory.Entry
 	if selected != nil {
-		if err := ldapwire.Write(
-			connection,
-			ldapwire.EncodeSearchResultEntry(messageID, *selected, nil),
-		); err != nil {
-			return err
-		}
+		entries = append(entries, *selected)
 	}
-	return server.writeSearchDone(connection, messageID, ldapwire.Result{Code: ldapwire.ResultSuccess})
+	return server.writeSearchResult(
+		connection,
+		messageID,
+		state,
+		paging,
+		entries,
+		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		pagedSearchCursor{},
+		false,
+	)
 }
 
 func (server *Server) searchSubschema(
@@ -397,25 +487,39 @@ func (server *Server) searchSubschema(
 	messageID int64,
 	request ldapwire.SearchRequest,
 	assertion *directory.Filter,
+	paging *pagedSearchContext,
 ) error {
 	entry := server.subschemaEntry(state.runtime)
 	candidate, err := directory.ParseDN(entry.DN)
 	if err != nil {
+		if paging != nil {
+			state.pagedSearch = nil
+		}
 		return fmt.Errorf("parse subschema DN: %w", err)
 	}
 	base, err := directory.ParseDN(request.BaseDN)
 	if err != nil {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+			pagedSearchCursor{},
+			false,
 		)
 	}
 	if !directory.InScope(base, candidate, request.Scope) {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			pagedSearchCursor{},
+			false,
 		)
 	}
 	var selected *directory.Entry
@@ -470,31 +574,42 @@ func (server *Server) searchSubschema(
 		return nil
 	})
 	if err != nil {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
+			pagedSearchCursor{},
+			false,
 		)
 	}
 	if assertionFailed {
-		return server.writeSearchDone(
+		return server.writeSearchResult(
 			connection,
 			messageID,
+			state,
+			paging,
+			nil,
 			ldapwire.Result{Code: ldapwire.ResultAssertionFailed},
+			pagedSearchCursor{},
+			false,
 		)
 	}
+	var entries []directory.Entry
 	if selected != nil {
-		if err := ldapwire.Write(
-			connection,
-			ldapwire.EncodeSearchResultEntry(messageID, *selected, nil),
-		); err != nil {
-			return err
-		}
+		entries = append(entries, *selected)
 	}
-	return server.writeSearchDone(
+	return server.writeSearchResult(
 		connection,
 		messageID,
+		state,
+		paging,
+		entries,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		pagedSearchCursor{},
+		false,
 	)
 }
 
@@ -573,6 +688,7 @@ func (server *Server) rootDSE(
 			assertionControlOID,
 			preReadControlOID,
 			postReadControlOID,
+			pagedResultsControlOID,
 		),
 	})
 	if hasExternalIdentity {
@@ -669,7 +785,61 @@ func (server *Server) writeSearchDone(
 	messageID int64,
 	result ldapwire.Result,
 ) error {
-	return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(messageID, result, nil))
+	return server.writeSearchDoneWithControls(
+		connection,
+		messageID,
+		result,
+		nil,
+	)
+}
+
+func (server *Server) writeSearchDoneWithControls(
+	connection net.Conn,
+	messageID int64,
+	result ldapwire.Result,
+	controls []ldapwire.Control,
+) error {
+	return ldapwire.Write(
+		connection,
+		ldapwire.EncodeSearchResultDone(messageID, result, controls),
+	)
+}
+
+func (server *Server) writeSearchResult(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+) error {
+	responseControls, err := completePagedSearch(
+		state,
+		paging,
+		result,
+		len(entries),
+		cursor,
+		hasMore,
+	)
+	if err != nil {
+		return fmt.Errorf("complete paged search: %w", err)
+	}
+	for _, entry := range entries {
+		if err := ldapwire.Write(
+			connection,
+			ldapwire.EncodeSearchResultEntry(messageID, entry, nil),
+		); err != nil {
+			return err
+		}
+	}
+	return server.writeSearchDoneWithControls(
+		connection,
+		messageID,
+		result,
+		responseControls,
+	)
 }
 
 var errStopSearch = errors.New("stop search")

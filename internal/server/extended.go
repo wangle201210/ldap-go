@@ -104,6 +104,7 @@ func (server *Server) handleStartTLS(
 	}
 
 	state.boundDN = ""
+	state.pagedSearch = nil
 	secured, err := server.secureHandshake(ctx, connection)
 	if err != nil {
 		return fmt.Errorf("complete StartTLS handshake: %w", err)

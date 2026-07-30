@@ -273,6 +273,7 @@ func (server *Server) handleBind(
 	request ldapwire.BindRequest,
 ) error {
 	state.boundDN = ""
+	state.pagedSearch = nil
 	if hasUnsupportedCriticalControl(message.Controls) {
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
@@ -374,11 +375,12 @@ func (server *Server) closeConnections() {
 }
 
 type connectionState struct {
-	boundDN    string
-	runtime    *runtimeState
-	connection net.Conn
-	secure     bool
-	externalDN string
+	boundDN     string
+	runtime     *runtimeState
+	connection  net.Conn
+	secure      bool
+	externalDN  string
+	pagedSearch *pagedSearchState
 }
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {

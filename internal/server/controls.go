@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	assertionControlOID = "1.3.6.1.1.12"
-	preReadControlOID   = "1.3.6.1.1.13.1"
-	postReadControlOID  = "1.3.6.1.1.13.2"
+	assertionControlOID    = "1.3.6.1.1.12"
+	preReadControlOID      = "1.3.6.1.1.13.1"
+	postReadControlOID     = "1.3.6.1.1.13.2"
+	pagedResultsControlOID = "1.2.840.113556.1.4.319"
 )
 
 type requestControlSupport uint8
@@ -21,12 +22,14 @@ const (
 	supportsAssertion requestControlSupport = 1 << iota
 	supportsPreRead
 	supportsPostRead
+	supportsPagedResults
 )
 
 type requestControls struct {
 	assertion *directory.Filter
 	preRead   *readControlRequest
 	postRead  *readControlRequest
+	paging    *pagedResultsRequest
 }
 
 type readControlRequest struct {
@@ -110,6 +113,42 @@ func parseRequestControls(
 				return requestControls{}, result
 			}
 			parsed.postRead = request
+		case pagedResultsControlOID:
+			if supported&supportsPagedResults == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.paging != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"paged results control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"paged results control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"paged results control value is empty",
+				)
+			}
+			size, cookie, err := ldapwire.DecodePagedResultsValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"paged results control could not be decoded",
+				)
+			}
+			parsed.paging = &pagedResultsRequest{
+				size:   size,
+				cookie: cookie,
+			}
 		default:
 			if control.Critical {
 				return unsupportedCriticalControl()

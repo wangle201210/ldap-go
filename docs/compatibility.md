@@ -41,7 +41,7 @@ No row may become `compatible` based only on unit tests.
 | Cancel | planned | RFC 3909 concurrent operation tests |
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
 | Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
-| Paged results | planned | RFC 2696 cookie and mutation tests |
+| Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
 | Server-side sorting | planned | RFC 2891 matching and error tests |
 | VLV | planned | OpenLDAP control differential tests |
 | Subentries | planned | RFC 3672 visibility tests |
@@ -213,6 +213,21 @@ attributes, and the empty default selection, and are only returned after a
 successful commit. Tests cover old/new values and DNs, operational attributes,
 password-value filtering, malformed and duplicate controls, operation
 applicability, and rollback after a critical post-read failure. OpenLDAP
+differential fixtures remain pending.
+
+RFC 2696 simple paged results are published through Root DSE
+`supportedControl`. Request and response values use strict BER decoding and an
+opaque, connection-local cookie; only the latest cookie can continue a search,
+and it is bound to the authenticated identity, request semantics, control
+criticality, and current runtime configuration. Page size may change between
+requests. Completion returns an empty cookie, while a size-zero continuation
+abandons the sequence. Continuation uses a database-route and normalized-DN
+cursor, preserves the total search size limit across pages, applies normal
+filter and read ACL processing before page boundaries, and reports a zero size
+estimate to avoid disclosing unreadable candidates. Tests cover malformed,
+old, and reused cookies, Bind reset, changed requests, empty initial requests,
+cross-database glue searches, mutation between pages, and
+`github.com/go-ldap/ldap/v3` interoperability. OpenLDAP process-level
 differential fixtures remain pending.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
