@@ -70,6 +70,63 @@ type UnbindRequest struct{}
 
 func (UnbindRequest) ApplicationTag() uint64 { return ApplicationUnbindRequest }
 
+type AddRequest struct {
+	Entry directory.Entry
+}
+
+func (AddRequest) ApplicationTag() uint64 { return ApplicationAddRequest }
+
+type ModificationOperation int
+
+const (
+	ModificationAdd ModificationOperation = iota
+	ModificationDelete
+	ModificationReplace
+	ModificationIncrement
+)
+
+type Modification struct {
+	Operation ModificationOperation
+	Attribute directory.Attribute
+}
+
+type ModifyRequest struct {
+	DN      string
+	Changes []Modification
+}
+
+func (ModifyRequest) ApplicationTag() uint64 { return ApplicationModifyRequest }
+
+type DeleteRequest struct {
+	DN string
+}
+
+func (DeleteRequest) ApplicationTag() uint64 { return ApplicationDeleteRequest }
+
+type ModifyDNRequest struct {
+	DN             string
+	NewRDN         string
+	DeleteOldRDN   bool
+	NewSuperior    string
+	HasNewSuperior bool
+}
+
+func (ModifyDNRequest) ApplicationTag() uint64 { return ApplicationModifyDNRequest }
+
+type CompareRequest struct {
+	DN        string
+	Attribute string
+	Assertion []byte
+}
+
+func (CompareRequest) ApplicationTag() uint64 { return ApplicationCompareRequest }
+
+type AbandonRequest struct {
+	MessageID int64
+}
+
+func (AbandonRequest) ApplicationTag() uint64 { return ApplicationAbandonRequest }
+
 type UnsupportedRequest struct {
 	Tag uint64
 }

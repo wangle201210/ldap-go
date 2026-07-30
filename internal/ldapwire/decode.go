@@ -109,6 +109,18 @@ func decodeMessage(packet *ber.Packet) (Message, error) {
 		} else {
 			request = UnbindRequest{}
 		}
+	case ApplicationModifyRequest:
+		request, err = decodeModifyRequest(opPacket)
+	case ApplicationAddRequest:
+		request, err = decodeAddRequest(opPacket)
+	case ApplicationDeleteRequest:
+		request, err = decodeDeleteRequest(opPacket)
+	case ApplicationModifyDNRequest:
+		request, err = decodeModifyDNRequest(opPacket)
+	case ApplicationCompareRequest:
+		request, err = decodeCompareRequest(opPacket)
+	case ApplicationAbandonRequest:
+		request, err = decodeAbandonRequest(opPacket)
 	default:
 		request = UnsupportedRequest{Tag: uint64(opPacket.Tag)}
 	}
@@ -172,6 +184,172 @@ func decodeBindRequest(packet *ber.Packet) (BindRequest, error) {
 		return BindRequest{}, malformed("unknown authentication choice %d", authPacket.Tag)
 	}
 	return request, nil
+}
+
+func decodeAddRequest(packet *ber.Packet) (AddRequest, error) {
+	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 2 {
+		return AddRequest{}, malformed("invalid AddRequest")
+	}
+	dn, err := packetString(packet.Children[0])
+	if err != nil || dn == "" {
+		return AddRequest{}, malformed("invalid AddRequest DN")
+	}
+	attributes, err := decodeAttributeList(packet.Children[1], false)
+	if err != nil {
+		return AddRequest{}, err
+	}
+	return AddRequest{Entry: directory.Entry{DN: dn, Attributes: attributes}}, nil
+}
+
+func decodeModifyRequest(packet *ber.Packet) (ModifyRequest, error) {
+	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 2 {
+		return ModifyRequest{}, malformed("invalid ModifyRequest")
+	}
+	dn, err := packetString(packet.Children[0])
+	if err != nil || dn == "" {
+		return ModifyRequest{}, malformed("invalid ModifyRequest DN")
+	}
+	changesPacket := packet.Children[1]
+	if !isPacket(changesPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
+		len(changesPacket.Children) == 0 {
+		return ModifyRequest{}, malformed("ModifyRequest has no changes")
+	}
+
+	request := ModifyRequest{DN: dn, Changes: make([]Modification, 0, len(changesPacket.Children))}
+	for _, changePacket := range changesPacket.Children {
+		if !isPacket(changePacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
+			len(changePacket.Children) != 2 {
+			return ModifyRequest{}, malformed("invalid modify change")
+		}
+		operation, err := packetInteger(changePacket.Children[0])
+		if err != nil || operation < 0 || operation > 3 {
+			return ModifyRequest{}, malformed("invalid modify operation")
+		}
+		attributes, err := decodeAttributeListElement(changePacket.Children[1], true)
+		if err != nil {
+			return ModifyRequest{}, err
+		}
+		request.Changes = append(request.Changes, Modification{
+			Operation: ModificationOperation(operation),
+			Attribute: attributes,
+		})
+	}
+	return request, nil
+}
+
+func decodeDeleteRequest(packet *ber.Packet) (DeleteRequest, error) {
+	if packet.TagType != ber.TypePrimitive || len(packet.Children) != 0 || packet.Data.Len() == 0 {
+		return DeleteRequest{}, malformed("invalid DeleteRequest")
+	}
+	return DeleteRequest{DN: string(packet.Data.Bytes())}, nil
+}
+
+func decodeModifyDNRequest(packet *ber.Packet) (ModifyDNRequest, error) {
+	if packet.TagType != ber.TypeConstructed ||
+		(len(packet.Children) != 3 && len(packet.Children) != 4) {
+		return ModifyDNRequest{}, malformed("invalid ModifyDNRequest")
+	}
+	dn, err := packetString(packet.Children[0])
+	if err != nil || dn == "" {
+		return ModifyDNRequest{}, malformed("invalid ModifyDNRequest DN")
+	}
+	newRDN, err := packetString(packet.Children[1])
+	if err != nil || newRDN == "" {
+		return ModifyDNRequest{}, malformed("invalid new RDN")
+	}
+	deleteOldRDN, err := packetBoolean(packet.Children[2])
+	if err != nil {
+		return ModifyDNRequest{}, malformed("invalid deleteOldRDN")
+	}
+	request := ModifyDNRequest{DN: dn, NewRDN: newRDN, DeleteOldRDN: deleteOldRDN}
+	if len(packet.Children) == 4 {
+		superior := packet.Children[3]
+		if !isPacket(superior, ber.ClassContext, ber.TypePrimitive, 0) ||
+			superior.Data.Len() == 0 {
+			return ModifyDNRequest{}, malformed("invalid newSuperior")
+		}
+		request.NewSuperior = string(superior.Data.Bytes())
+		request.HasNewSuperior = true
+	}
+	return request, nil
+}
+
+func decodeCompareRequest(packet *ber.Packet) (CompareRequest, error) {
+	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 2 {
+		return CompareRequest{}, malformed("invalid CompareRequest")
+	}
+	dn, err := packetString(packet.Children[0])
+	if err != nil || dn == "" {
+		return CompareRequest{}, malformed("invalid CompareRequest DN")
+	}
+	assertionPacket := packet.Children[1]
+	if !isPacket(assertionPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
+		len(assertionPacket.Children) != 2 {
+		return CompareRequest{}, malformed("invalid compare assertion")
+	}
+	attribute, err := packetString(assertionPacket.Children[0])
+	if err != nil || attribute == "" {
+		return CompareRequest{}, malformed("invalid compare attribute")
+	}
+	assertion, err := packetBytes(assertionPacket.Children[1])
+	if err != nil {
+		return CompareRequest{}, malformed("invalid compare value")
+	}
+	return CompareRequest{DN: dn, Attribute: attribute, Assertion: assertion}, nil
+}
+
+func decodeAbandonRequest(packet *ber.Packet) (AbandonRequest, error) {
+	if packet.TagType != ber.TypePrimitive || len(packet.Children) != 0 || packet.Data.Len() == 0 {
+		return AbandonRequest{}, malformed("invalid AbandonRequest")
+	}
+	messageID, err := ber.ParseInt64(packet.Data.Bytes())
+	if err != nil || messageID <= 0 || messageID > math.MaxInt32 {
+		return AbandonRequest{}, malformed("invalid abandoned message ID")
+	}
+	return AbandonRequest{MessageID: messageID}, nil
+}
+
+func decodeAttributeList(packet *ber.Packet, allowEmptyValues bool) ([]directory.Attribute, error) {
+	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
+		return nil, malformed("invalid attribute list")
+	}
+	attributes := make([]directory.Attribute, 0, len(packet.Children))
+	for _, child := range packet.Children {
+		attribute, err := decodeAttributeListElement(child, allowEmptyValues)
+		if err != nil {
+			return nil, err
+		}
+		attributes = append(attributes, attribute)
+	}
+	return attributes, nil
+}
+
+func decodeAttributeListElement(packet *ber.Packet, allowEmptyValues bool) (directory.Attribute, error) {
+	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
+		len(packet.Children) != 2 {
+		return directory.Attribute{}, malformed("invalid attribute")
+	}
+	description, err := packetString(packet.Children[0])
+	if err != nil || description == "" {
+		return directory.Attribute{}, malformed("invalid attribute description")
+	}
+	valuesPacket := packet.Children[1]
+	if !isPacket(valuesPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSet) ||
+		(!allowEmptyValues && len(valuesPacket.Children) == 0) {
+		return directory.Attribute{}, malformed("invalid attribute values")
+	}
+	attribute := directory.Attribute{
+		Description: description,
+		Values:      make([][]byte, 0, len(valuesPacket.Children)),
+	}
+	for _, valuePacket := range valuesPacket.Children {
+		value, err := packetBytes(valuePacket)
+		if err != nil {
+			return directory.Attribute{}, malformed("invalid attribute value")
+		}
+		attribute.Values = append(attribute.Values, value)
+	}
+	return attribute, nil
 }
 
 func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {

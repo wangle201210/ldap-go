@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -43,6 +44,8 @@ func run(
 	switch args[0] {
 	case "import":
 		err = runImport(args[1:], stdin, stdout, stderr)
+	case "export":
+		err = runExport(args[1:], stdout, stderr)
 	case "serve":
 		err = runServe(args[1:], stdout, stderr, getenv)
 	case "version":
@@ -60,6 +63,69 @@ func run(
 		return 1
 	}
 	return 0
+}
+
+func runExport(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("export", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "source database path")
+	ldifPath := flags.String("ldif", "-", "destination LDIF path, or - for stdout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+
+	store, err := storage.OpenBolt(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	if *ldifPath == "-" {
+		result, err := migration.ExportLDIF(context.Background(), store, stdout)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stderr, "exported %d entries\n", result.Entries)
+		return err
+	}
+	return exportToFile(store, *ldifPath, stderr)
+}
+
+func exportToFile(store storage.Store, path string, stderr io.Writer) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create export directory: %w", err)
+	}
+	temp, err := os.CreateTemp(directory, ".ldap-go-export-*")
+	if err != nil {
+		return fmt.Errorf("create temporary export: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	result, exportErr := migration.ExportLDIF(context.Background(), store, temp)
+	syncErr := temp.Sync()
+	closeErr := temp.Close()
+	if exportErr != nil {
+		return exportErr
+	}
+	if syncErr != nil {
+		return fmt.Errorf("sync export: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close export: %w", closeErr)
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		return fmt.Errorf("secure export permissions: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("publish export: %w", err)
+	}
+	_, err = fmt.Fprintf(stderr, "exported %d entries to %s\n", result.Entries, path)
+	return err
 }
 
 func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -192,6 +258,7 @@ func printUsage(writer io.Writer) {
 
 commands:
   import   atomically import slapcat-compatible content LDIF
+  export   atomically export directory content as LDIF
   serve    serve the persistent directory over LDAP
   version  print the build version`)
 }

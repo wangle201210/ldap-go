@@ -2,8 +2,17 @@ package directory
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+)
+
+var (
+	ErrNoSuchAttribute       = errors.New("no such attribute")
+	ErrAttributeValueExists  = errors.New("attribute or value exists")
+	ErrInvalidIncrementValue = errors.New("invalid increment value")
 )
 
 // Attribute preserves the attribute description and raw LDAP values exactly as
@@ -107,6 +116,144 @@ func (e Entry) Equal(other Entry) bool {
 		}
 	}
 	return true
+}
+
+func (e Entry) HasValue(description string, value []byte) bool {
+	for _, existing := range e.Values(description) {
+		if EqualValue(existing, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Entry) AddValues(description string, values [][]byte) error {
+	if len(values) == 0 {
+		return ErrNoSuchAttribute
+	}
+	index := e.attributeIndex(description)
+	if index < 0 {
+		e.Attributes = append(e.Attributes, Attribute{
+			Description: description,
+			Values:      cloneValues(values),
+		})
+		return nil
+	}
+	for _, value := range values {
+		if e.HasValue(description, value) {
+			return ErrAttributeValueExists
+		}
+	}
+	e.Attributes[index].Values = append(e.Attributes[index].Values, cloneValues(values)...)
+	return nil
+}
+
+func (e *Entry) DeleteValues(description string, values [][]byte) error {
+	index := e.attributeIndex(description)
+	if index < 0 {
+		return ErrNoSuchAttribute
+	}
+	if len(values) == 0 {
+		e.Attributes = append(e.Attributes[:index], e.Attributes[index+1:]...)
+		return nil
+	}
+	for _, value := range values {
+		if !e.HasValue(description, value) {
+			return ErrNoSuchAttribute
+		}
+	}
+
+	remaining := make([][]byte, 0, len(e.Attributes[index].Values))
+	for _, existing := range e.Attributes[index].Values {
+		if slices.ContainsFunc(values, func(value []byte) bool {
+			return EqualValue(existing, value)
+		}) {
+			continue
+		}
+		remaining = append(remaining, bytes.Clone(existing))
+	}
+	if len(remaining) == 0 {
+		e.Attributes = append(e.Attributes[:index], e.Attributes[index+1:]...)
+	} else {
+		e.Attributes[index].Values = remaining
+	}
+	return nil
+}
+
+func (e *Entry) ReplaceValues(description string, values [][]byte) {
+	index := e.attributeIndex(description)
+	if len(values) == 0 {
+		if index >= 0 {
+			e.Attributes = append(e.Attributes[:index], e.Attributes[index+1:]...)
+		}
+		return
+	}
+	if index < 0 {
+		e.Attributes = append(e.Attributes, Attribute{
+			Description: description,
+			Values:      cloneValues(values),
+		})
+		return
+	}
+	e.Attributes[index].Values = cloneValues(values)
+}
+
+func (e *Entry) Increment(description string, increment []byte) error {
+	index := e.attributeIndex(description)
+	if index < 0 || len(e.Attributes[index].Values) != 1 {
+		return ErrNoSuchAttribute
+	}
+	delta, err := strconv.ParseInt(string(increment), 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidIncrementValue, err)
+	}
+	current, err := strconv.ParseInt(string(e.Attributes[index].Values[0]), 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidIncrementValue, err)
+	}
+	next, err := addInt64(current, delta)
+	if err != nil {
+		return err
+	}
+	e.Attributes[index].Values = [][]byte{[]byte(strconv.FormatInt(next, 10))}
+	return nil
+}
+
+func (e *Entry) EnsureRDNValues(dn DN) {
+	for _, attribute := range dn.RDNValues() {
+		if !e.HasValue(attribute.Type, attribute.Value) {
+			_ = e.AddValues(attribute.Type, [][]byte{attribute.Value})
+		}
+	}
+}
+
+func (e *Entry) DeleteRDNValues(dn DN) {
+	for _, attribute := range dn.RDNValues() {
+		if e.HasValue(attribute.Type, attribute.Value) {
+			_ = e.DeleteValues(attribute.Type, [][]byte{attribute.Value})
+		}
+	}
+}
+
+func EqualValue(left, right []byte) bool {
+	return compareDirectoryValue(left, right) == 0
+}
+
+func (e Entry) attributeIndex(description string) int {
+	for i := range e.Attributes {
+		if equalAttributeDescription(e.Attributes[i].Description, description) {
+			return i
+		}
+	}
+	return -1
+}
+
+func addInt64(left, right int64) (int64, error) {
+	result := left + right
+	if (right > 0 && result < left) || (right < 0 && result > left) {
+		return 0, ErrInvalidIncrementValue
+	}
+	return result, nil
 }
 
 func cloneValues(values [][]byte) [][]byte {

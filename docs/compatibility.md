@@ -21,11 +21,11 @@ No row may become `compatible` based only on unit tests.
 | Bind: SASL | planned | mechanism matrix and channel-binding tests |
 | Search and SearchResultReference | partial | scope, deref, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
-| Modify | planned | atomic modification and error-order differential tests |
-| Add | planned | parent/schema/ACL/operational-attribute tests |
-| Delete | planned | leaf/subtree/referral behavior tests |
-| ModifyDN | planned | rename/move/subtree and RDN-value tests |
-| Compare | planned | matching-rule and ACL disclosure tests |
+| Modify | partial | atomic modification and error-order differential tests |
+| Add | partial | parent/schema/ACL/operational-attribute tests |
+| Delete | partial | leaf/subtree/referral behavior tests |
+| ModifyDN | partial | rename/move/subtree and RDN-value tests |
+| Compare | partial | matching-rule and ACL disclosure tests |
 | Abandon and cancellation | planned | concurrent operation tests |
 | Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | planned | topology differential tests |
@@ -56,7 +56,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | DN/RDN parsing and normalization | partial | RFC 4514 corpus and OpenLDAP normalization |
 | Core syntaxes and matching rules | planned | RFC 4517 schema-aware corpus |
-| Standard operational attributes | planned | create/modify/rename differential tests |
+| Standard operational attributes | partial | create/modify/rename differential tests |
 | Subschema subentry | planned | discovery and schema publication tests |
 | Runtime schema through `cn=config` | planned | add/modify/delete and restart tests |
 | Collective attributes and subentries | planned | RFC 3671/3672 tests |
@@ -132,7 +132,7 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Server daemon and config validation | partial | lifecycle and config diagnostics |
-| `slapadd` / `slapcat` equivalents | planned | OpenLDAP LDIF round trips |
+| `slapadd` / `slapcat` equivalents | partial | OpenLDAP LDIF round trips |
 | `slapindex` / `slaptest` / `slapdn` | planned | output and exit-code differential tests |
 | LDAP client tools | planned | option and protocol interoperability |
 | Load balancer tooling | planned | `lloadd` configuration tests |
@@ -142,14 +142,19 @@ rebuilt by `ldap-go`.
 The first runnable subset includes bounded BER framing; LDAPv3 anonymous/simple
 Bind; Root DSE; base, one-level, and subtree Search; boolean, equality,
 presence, substring, ordering, approximate, and basic extensible filters;
-Unbind; a transactional bbolt backend; and atomic content LDIF import.
+Unbind; Add, Modify (including increment), leaf Delete, subtree ModifyDN,
+Compare; a transactional bbolt backend; and atomic content LDIF import/export.
+Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
+create/modify timestamps. Modify and ModifyDN update modification metadata.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, and `{SMD5}`. Until ordered OpenLDAP ACL evaluation is
 implemented, non-root search responses always suppress `userPassword`.
 
 Evidence currently consists of package tests, TCP interoperability tests using
-`github.com/go-ldap/ldap/v3`, and manual process-level searches using OpenLDAP
-2.6.13 `ldapsearch`. Rows remain `partial` because schema-aware matching,
-aliases/referrals, controls, ACLs, SASL, writes, and full differential fixtures
+`github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
+process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
+`ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
+`partial` because schema-aware matching, aliases/referrals, controls, ordered
+ACL evaluation, SASL, subtree-delete control, and full differential fixtures
 are still pending.

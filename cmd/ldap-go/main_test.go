@@ -46,7 +46,6 @@ sn: Example
 	if err != nil {
 		t.Fatalf("OpenBolt(): %v", err)
 	}
-	defer store.Close()
 	dn, err := directory.ParseDN("uid=alice,dc=example,dc=com")
 	if err != nil {
 		t.Fatalf("ParseDN(): %v", err)
@@ -56,5 +55,25 @@ sn: Example
 		return err
 	}); err != nil {
 		t.Fatalf("imported entry: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run(
+		[]string{"export", "-db", databasePath, "-ldif", "-"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 0 {
+		t.Fatalf("export run() exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "dn: uid=alice,dc=example,dc=com") ||
+		!strings.Contains(stderr.String(), "exported 2 entries") {
+		t.Fatalf("export stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }

@@ -30,11 +30,12 @@ go test ./...
 
 ## Current runnable milestone
 
-The current server milestone supports atomic content-LDIF import, anonymous and
-simple Bind, Root DSE discovery, base/one/subtree Search, common LDAP filters,
-binary attributes, size/time limits, and Unbind. The compatibility matrix marks
-these as partial until the remaining schema, ACL, control, alias, and
-differential cases pass.
+The current server milestone supports atomic content-LDIF import/export,
+anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
+LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
+subtree ModifyDN, Compare, and Unbind. Writes are root-only until the ordered
+OpenLDAP ACL evaluator lands. The compatibility matrix marks these as partial
+until the remaining schema, ACL, control, alias, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \
@@ -48,6 +49,10 @@ go run ./cmd/ldap-go serve \
 
 ldapsearch -x -H ldap://127.0.0.1:1389 \
   -b dc=example,dc=com '(objectClass=*)'
+
+go run ./cmd/ldap-go export \
+  -db ./data/ldap-go.db \
+  -ldif ./data/export.ldif
 ```
 
 To configure an OpenLDAP-style root identity without exposing its password in

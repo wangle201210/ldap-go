@@ -1,6 +1,7 @@
 package directory
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,11 @@ import (
 type DN struct {
 	parsed    *ldap.DN
 	canonical string
+}
+
+type AttributeValue struct {
+	Type  string
+	Value []byte
 }
 
 func ParseDN(value string) (DN, error) {
@@ -52,6 +58,49 @@ func (dn DN) Parent() (DN, bool) {
 		parsed:    parent,
 		canonical: strings.ToLower(parent.String()),
 	}, true
+}
+
+func ComposeDN(rdn string, superior DN) (DN, error) {
+	parsedRDN, err := ParseDN(rdn)
+	if err != nil {
+		return DN{}, err
+	}
+	if parsedRDN.Depth() != 1 {
+		return DN{}, errors.New("new RDN must contain exactly one relative distinguished name")
+	}
+	if superior.Depth() == 0 {
+		return parsedRDN, nil
+	}
+	return ParseDN(parsedRDN.String() + "," + superior.String())
+}
+
+func (dn DN) ReplaceAncestor(oldBase, newBase DN) (DN, error) {
+	if !oldBase.Equal(dn) && !oldBase.AncestorOf(dn) {
+		return DN{}, errors.New("DN is outside the old naming subtree")
+	}
+	prefixLength := dn.Depth() - oldBase.Depth()
+	rdns := make([]*ldap.RelativeDN, 0, prefixLength+newBase.Depth())
+	rdns = append(rdns, dn.parsed.RDNs[:prefixLength]...)
+	rdns = append(rdns, newBase.parsed.RDNs...)
+	replaced := &ldap.DN{RDNs: rdns}
+	return DN{
+		parsed:    replaced,
+		canonical: strings.ToLower(replaced.String()),
+	}, nil
+}
+
+func (dn DN) RDNValues() []AttributeValue {
+	if dn.Depth() == 0 {
+		return nil
+	}
+	values := make([]AttributeValue, 0, len(dn.parsed.RDNs[0].Attributes))
+	for _, attribute := range dn.parsed.RDNs[0].Attributes {
+		values = append(values, AttributeValue{
+			Type:  attribute.Type,
+			Value: []byte(attribute.Value),
+		})
+	}
+	return values
 }
 
 type Scope int

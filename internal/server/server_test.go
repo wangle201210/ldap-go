@@ -123,6 +123,150 @@ func TestLDAPClientRejectsInvalidPassword(t *testing.T) {
 	}
 }
 
+func TestLDAPClientCoreWriteOperations(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+
+	add := ldap.NewAddRequest("uid=bob,ou=people,dc=example,dc=com", nil)
+	add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
+	add.Attribute("uid", []string{"bob"})
+	add.Attribute("cn", []string{"Bob Example"})
+	add.Attribute("sn", []string{"Example"})
+	add.Attribute("loginCount", []string{"1"})
+	if err := client.Add(add); err != nil {
+		t.Fatalf("Add(): %v", err)
+	}
+
+	matches, err := client.Compare("uid=bob,ou=people,dc=example,dc=com", "cn", "bob example")
+	if err != nil {
+		t.Fatalf("Compare(): %v", err)
+	}
+	if !matches {
+		t.Fatal("Compare() = false, want true")
+	}
+
+	modify := ldap.NewModifyRequest("uid=bob,ou=people,dc=example,dc=com", nil)
+	modify.Replace("cn", []string{"Robert Example"})
+	modify.Add("mail", []string{"robert@example.com"})
+	modify.Increment("loginCount", "2")
+	if err := client.Modify(modify); err != nil {
+		t.Fatalf("Modify(): %v", err)
+	}
+
+	result, err := client.Search(ldap.NewSearchRequest(
+		"uid=bob,ou=people,dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"cn", "mail", "loginCount", "entryUUID", "entryCSN", "modifyTimestamp"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("Search after Modify(): %v", err)
+	}
+	entry := result.Entries[0]
+	if entry.GetAttributeValue("cn") != "Robert Example" ||
+		entry.GetAttributeValue("loginCount") != "3" ||
+		entry.GetAttributeValue("entryUUID") == "" ||
+		entry.GetAttributeValue("entryCSN") == "" ||
+		entry.GetAttributeValue("modifyTimestamp") == "" {
+		t.Fatalf("modified entry = %#v", entry)
+	}
+
+	child := ldap.NewAddRequest("cn=profile,uid=bob,ou=people,dc=example,dc=com", nil)
+	child.Attribute("objectClass", []string{"top", "organizationalRole"})
+	child.Attribute("cn", []string{"profile"})
+	if err := client.Add(child); err != nil {
+		t.Fatalf("Add(child): %v", err)
+	}
+
+	rename := ldap.NewModifyDNRequest(
+		"uid=bob,ou=people,dc=example,dc=com",
+		"uid=robert",
+		true,
+		"ou=archive,dc=example,dc=com",
+	)
+	if err := client.ModifyDN(rename); err != nil {
+		t.Fatalf("ModifyDN(): %v", err)
+	}
+
+	movedChild := "cn=profile,uid=robert,ou=archive,dc=example,dc=com"
+	if _, err := client.Search(ldap.NewSearchRequest(
+		movedChild,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"cn"},
+		nil,
+	)); err != nil {
+		t.Fatalf("moved child Search(): %v", err)
+	}
+
+	parentDN := "uid=robert,ou=archive,dc=example,dc=com"
+	err = client.Del(ldap.NewDelRequest(parentDN, nil))
+	assertLDAPResultCode(t, err, ldap.LDAPResultNotAllowedOnNonLeaf)
+	if err := client.Del(ldap.NewDelRequest(movedChild, nil)); err != nil {
+		t.Fatalf("Del(child): %v", err)
+	}
+	if err := client.Del(ldap.NewDelRequest(parentDN, nil)); err != nil {
+		t.Fatalf("Del(parent): %v", err)
+	}
+}
+
+func TestLDAPClientWriteRequiresRoot(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("uid=alice,ou=people,dc=example,dc=com", "secret"); err != nil {
+		t.Fatalf("user Bind(): %v", err)
+	}
+
+	add := ldap.NewAddRequest("uid=denied,ou=people,dc=example,dc=com", nil)
+	add.Attribute("objectClass", []string{"inetOrgPerson"})
+	add.Attribute("uid", []string{"denied"})
+	add.Attribute("cn", []string{"Denied"})
+	add.Attribute("sn", []string{"Denied"})
+	assertLDAPResultCode(t, client.Add(add), ldap.LDAPResultInsufficientAccessRights)
+}
+
 func seedDirectory(t *testing.T, store storage.Store) {
 	t.Helper()
 	entries := []directory.Entry{
@@ -138,6 +282,13 @@ func seedDirectory(t *testing.T, store storage.Store) {
 			Attributes: []directory.Attribute{
 				{Description: "objectClass", Values: [][]byte{[]byte("organizationalUnit")}},
 				{Description: "ou", Values: [][]byte{[]byte("people")}},
+			},
+		},
+		{
+			DN: "ou=archive,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: [][]byte{[]byte("organizationalUnit")}},
+				{Description: "ou", Values: [][]byte{[]byte("archive")}},
 			},
 		},
 		{
@@ -161,6 +312,14 @@ func seedDirectory(t *testing.T, store storage.Store) {
 		return tx.SetNamingContexts([]string{"dc=example,dc=com"})
 	}); err != nil {
 		t.Fatalf("seed directory: %v", err)
+	}
+}
+
+func assertLDAPResultCode(t *testing.T, err error, want uint16) {
+	t.Helper()
+	var ldapErr *ldap.Error
+	if !errors.As(err, &ldapErr) || ldapErr.ResultCode != want {
+		t.Fatalf("LDAP error = %v, want result code %d", err, want)
 	}
 }
 

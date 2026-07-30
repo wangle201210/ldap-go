@@ -35,6 +35,10 @@ type Server struct {
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
 	wg          sync.WaitGroup
+
+	csnMu      sync.Mutex
+	lastCSN    time.Time
+	csnCounter uint32
 }
 
 func New(config Config) (*Server, error) {
@@ -151,10 +155,21 @@ func (server *Server) dispatch(
 		return false, server.handleBind(ctx, connection, state, message, request)
 	case ldapwire.SearchRequest:
 		return false, server.handleSearch(ctx, connection, state, message, request)
+	case ldapwire.AddRequest:
+		return false, server.handleAdd(ctx, connection, state, message, request)
+	case ldapwire.ModifyRequest:
+		return false, server.handleModify(ctx, connection, state, message, request)
+	case ldapwire.DeleteRequest:
+		return false, server.handleDelete(ctx, connection, state, message, request)
+	case ldapwire.ModifyDNRequest:
+		return false, server.handleModifyDN(ctx, connection, state, message, request)
+	case ldapwire.CompareRequest:
+		return false, server.handleCompare(ctx, connection, state, message, request)
+	case ldapwire.AbandonRequest:
+		// Requests are currently dispatched serially per connection, so there
+		// is no outstanding operation to cancel yet.
+		return false, nil
 	case ldapwire.UnsupportedRequest:
-		if request.Tag == ldapwire.ApplicationAbandonRequest {
-			return false, nil
-		}
 		responseTag, responds := responseTagFor(request.Tag)
 		if !responds {
 			return false, nil
