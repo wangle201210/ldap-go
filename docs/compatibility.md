@@ -55,10 +55,10 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | DN/RDN parsing and normalization | partial | RFC 4514 corpus and OpenLDAP normalization |
-| Core syntaxes and matching rules | planned | RFC 4517 schema-aware corpus |
+| Core syntaxes and matching rules | partial | RFC 4517 schema-aware corpus |
 | Standard operational attributes | partial | create/modify/rename differential tests |
-| Subschema subentry | planned | discovery and schema publication tests |
-| Runtime schema through `cn=config` | planned | add/modify/delete and restart tests |
+| Subschema subentry | partial | discovery and schema publication tests |
+| Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
 | Collective attributes and subentries | planned | RFC 3671/3672 tests |
 | DIT content/name/structure rules | planned | schema enforcement differential tests |
 
@@ -82,7 +82,7 @@ No row may become `compatible` based only on unit tests.
 | Multiple suffixes and subordinate DBs | planned | naming-context routing tests |
 | `cn=config` online configuration | planned | OpenLDAP LDIF import and online changes |
 | `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
-| `slapcat` `cn=config` import | planned | boot from imported configuration |
+| `slapcat` `cn=config` import | partial | boot from imported configuration |
 | Backup, restore, index rebuild, check | planned | fault-injection and round-trip tests |
 | Proxy, relay, monitor, and null backends | planned | OpenLDAP behavior suites |
 | SQL, sock, and perl-style adapters | planned | backend-specific compatibility suites |
@@ -145,7 +145,15 @@ presence, substring, ordering, approximate, and basic extensible filters;
 Unbind; Add, Modify (including increment), leaf Delete, subtree ModifyDN,
 Compare; a transactional bbolt backend; and atomic content LDIF import/export.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
-create/modify timestamps. Modify and ModifyDN update modification metadata.
+create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
+Modify and ModifyDN update modification metadata.
+
+The schema registry parses OpenLDAP `{n}`-ordered `olcAttributeTypes` and
+`olcObjectClasses`, applies object-class and syntax checks to writes, and uses
+registered matching rules for Search and Compare. Root DSE discovery and the
+read-only `cn=Subschema` entry publish built-in and imported definitions.
+Attribute selection distinguishes user attributes (`*`) from operational
+attributes (`+`).
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, and `{SMD5}`. Until ordered OpenLDAP ACL evaluation is
@@ -155,6 +163,11 @@ Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
 `ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
-`partial` because schema-aware matching, aliases/referrals, controls, ordered
-ACL evaluation, SASL, subtree-delete control, and full differential fixtures
-are still pending.
+`partial` because the complete RFC 4517 syntax/matching-rule set,
+aliases/referrals, controls, ordered ACL evaluation, SASL, subtree-delete
+control, and full differential fixtures are still pending.
+
+Schema bootstrap was also exercised by importing the unmodified Homebrew
+OpenLDAP 2.6 `core`, `cosine`, `inetorgperson`, `nis`, and `openldap` schema
+LDIF files, starting `ldap-go` from that database, and reading Root DSE and
+`cn=Subschema` with OpenLDAP `ldapsearch`.

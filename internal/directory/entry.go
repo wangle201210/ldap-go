@@ -59,19 +59,34 @@ func (e Entry) HasAttribute(description string) bool {
 }
 
 func (e Entry) Select(requested []string, typesOnly bool) Entry {
+	return e.SelectWith(requested, typesOnly, nil)
+}
+
+func (e Entry) SelectWith(
+	requested []string,
+	typesOnly bool,
+	isOperational func(string) bool,
+) Entry {
 	out := Entry{DN: e.DN}
 	if selectsNoAttributes(requested) {
 		return out
 	}
 
-	all := len(requested) == 0 || slices.ContainsFunc(requested, func(value string) bool {
-		return value == "*"
+	allUserAttributes := len(requested) == 0 || slices.ContainsFunc(requested, func(value string) bool {
+		return strings.EqualFold(value, "*")
+	})
+	allOperationalAttributes := slices.ContainsFunc(requested, func(value string) bool {
+		return strings.EqualFold(value, "+")
 	})
 
 	for _, attribute := range e.Attributes {
-		if !all && !slices.ContainsFunc(requested, func(value string) bool {
+		explicitlyRequested := slices.ContainsFunc(requested, func(value string) bool {
 			return equalAttributeDescription(value, attribute.Description)
-		}) {
+		})
+		operational := isOperational != nil && isOperational(attribute.Description)
+		if !explicitlyRequested &&
+			(!operational || !allOperationalAttributes) &&
+			(operational || !allUserAttributes) {
 			continue
 		}
 

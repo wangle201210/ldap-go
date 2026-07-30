@@ -14,6 +14,7 @@ import (
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -26,11 +27,13 @@ type Config struct {
 	RootDN           string
 	RootPassword     []byte
 	Logger           *slog.Logger
+	Schema           *schema.Registry
 }
 
 type Server struct {
 	config Config
 	rootDN *directory.DN
+	schema *schema.Registry
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
@@ -54,6 +57,16 @@ func New(config Config) (*Server, error) {
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if config.Schema == nil {
+		var err error
+		config.Schema, err = schema.NewBuiltinRegistry()
+		if err != nil {
+			return nil, fmt.Errorf("initialize built-in schema: %w", err)
+		}
+	}
+	if _, err := schema.LoadOpenLDAPConfig(context.Background(), config.Store, config.Schema); err != nil {
+		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
+	}
 
 	var rootDN *directory.DN
 	if config.RootDN != "" {
@@ -70,6 +83,7 @@ func New(config Config) (*Server, error) {
 	return &Server{
 		config:      config,
 		rootDN:      rootDN,
+		schema:      config.Schema,
 		connections: make(map[net.Conn]struct{}),
 	}, nil
 }

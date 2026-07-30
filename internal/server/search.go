@@ -38,6 +38,9 @@ func (server *Server) handleSearch(
 	if base.Depth() == 0 && request.Scope == directory.ScopeBase {
 		return server.searchRootDSE(ctx, connection, message.ID, request)
 	}
+	if isSubschemaDN(base) {
+		return server.searchSubschema(connection, message.ID, request)
+	}
 
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
 	deadline := timeLimitDeadline(request.TimeLimit)
@@ -66,7 +69,8 @@ func (server *Server) handleSearch(
 			if !directory.InScope(base, candidate, request.Scope) {
 				return nil
 			}
-			matches, err := request.Filter.Match(entry)
+			entry = withSubschemaReference(entry)
+			matches, err := request.Filter.MatchWith(entry, server.schema)
 			if err != nil {
 				result.Code = ldapwire.ResultInappropriateMatching
 				result.DiagnosticMessage = err.Error()
@@ -79,7 +83,7 @@ func (server *Server) handleSearch(
 				result.Code = ldapwire.ResultSizeLimitExceeded
 				return errStopSearch
 			}
-			selected := entry.Select(request.Attributes, request.TypesOnly)
+			selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
 			if !server.isRoot(state.boundDN) {
 				selected = selected.Without("userPassword")
 			}
@@ -115,7 +119,7 @@ func (server *Server) searchRootDSE(
 	}
 
 	entry := rootDSE(namingContexts)
-	matches, err := request.Filter.Match(entry)
+	matches, err := request.Filter.MatchWith(entry, server.schema)
 	if err != nil {
 		return server.writeSearchDone(
 			connection,
@@ -124,12 +128,61 @@ func (server *Server) searchRootDSE(
 		)
 	}
 	if matches {
-		selected := entry.Select(request.Attributes, request.TypesOnly)
+		selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
 		if err := ldapwire.Write(connection, ldapwire.EncodeSearchResultEntry(messageID, selected, nil)); err != nil {
 			return err
 		}
 	}
 	return server.writeSearchDone(connection, messageID, ldapwire.Result{Code: ldapwire.ResultSuccess})
+}
+
+func (server *Server) searchSubschema(
+	connection net.Conn,
+	messageID int64,
+	request ldapwire.SearchRequest,
+) error {
+	entry := server.subschemaEntry()
+	candidate, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return fmt.Errorf("parse subschema DN: %w", err)
+	}
+	base, err := directory.ParseDN(request.BaseDN)
+	if err != nil {
+		return server.writeSearchDone(
+			connection,
+			messageID,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if !directory.InScope(base, candidate, request.Scope) {
+		return server.writeSearchDone(
+			connection,
+			messageID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+		)
+	}
+	matches, err := request.Filter.MatchWith(entry, server.schema)
+	if err != nil {
+		return server.writeSearchDone(
+			connection,
+			messageID,
+			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
+		)
+	}
+	if matches {
+		selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
+		if err := ldapwire.Write(
+			connection,
+			ldapwire.EncodeSearchResultEntry(messageID, selected, nil),
+		); err != nil {
+			return err
+		}
+	}
+	return server.writeSearchDone(
+		connection,
+		messageID,
+		ldapwire.Result{Code: ldapwire.ResultSuccess},
+	)
 }
 
 func rootDSE(namingContexts []string) directory.Entry {
@@ -141,12 +194,61 @@ func rootDSE(namingContexts []string) directory.Entry {
 		DN: "",
 		Attributes: []directory.Attribute{
 			{Description: "objectClass", Values: [][]byte{[]byte("top")}},
+			{Description: "subschemaSubentry", Values: [][]byte{[]byte("cn=Subschema")}},
 			{Description: "supportedLDAPVersion", Values: [][]byte{[]byte("3")}},
 			{Description: "namingContexts", Values: contextValues},
 			{Description: "vendorName", Values: [][]byte{[]byte("ldap-go")}},
 			{Description: "vendorVersion", Values: [][]byte{[]byte("0.1-dev")}},
 		},
 	}
+}
+
+func (server *Server) subschemaEntry() directory.Entry {
+	return directory.Entry{
+		DN: "cn=Subschema",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: stringValues("top", "subschema")},
+			{Description: "cn", Values: stringValues("Subschema")},
+			{
+				Description: "attributeTypes",
+				Values:      stringValues(server.schema.AttributeTypeDescriptions()...),
+			},
+			{
+				Description: "objectClasses",
+				Values:      stringValues(server.schema.ObjectClassDescriptions()...),
+			},
+		},
+	}
+}
+
+func (server *Server) selectEntry(
+	entry directory.Entry,
+	requested []string,
+	typesOnly bool,
+) directory.Entry {
+	return entry.SelectWith(requested, typesOnly, server.schema.IsOperational)
+}
+
+func withSubschemaReference(entry directory.Entry) directory.Entry {
+	if entry.HasAttribute("subschemaSubentry") {
+		return entry
+	}
+	entry = entry.Clone()
+	entry.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
+	return entry
+}
+
+func stringValues(values ...string) [][]byte {
+	result := make([][]byte, len(values))
+	for i := range values {
+		result[i] = []byte(values[i])
+	}
+	return result
+}
+
+func isSubschemaDN(dn directory.DN) bool {
+	subSchema, err := directory.ParseDN("cn=Subschema")
+	return err == nil && dn.Equal(subSchema)
 }
 
 func nearestExistingAncestor(reader storage.Reader, dn directory.DN) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,14 +42,15 @@ func TestLDAPClientBindAndSearch(t *testing.T) {
 		0,
 		false,
 		"(objectClass=*)",
-		[]string{"namingContexts", "supportedLDAPVersion"},
+		[]string{"namingContexts", "supportedLDAPVersion", "subschemaSubentry"},
 		nil,
 	))
 	if err != nil {
 		t.Fatalf("root DSE Search(): %v", err)
 	}
 	if len(root.Entries) != 1 ||
-		root.Entries[0].GetAttributeValue("namingContexts") != "dc=example,dc=com" {
+		root.Entries[0].GetAttributeValue("namingContexts") != "dc=example,dc=com" ||
+		root.Entries[0].GetAttributeValue("subschemaSubentry") != "cn=Subschema" {
 		t.Fatalf("root DSE entries = %#v", root.Entries)
 	}
 
@@ -146,11 +148,19 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 	}
 
 	add := ldap.NewAddRequest("uid=bob,ou=people,dc=example,dc=com", nil)
-	add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
+	add.Attribute("objectClass", []string{
+		"top",
+		"person",
+		"organizationalPerson",
+		"inetOrgPerson",
+		"posixAccount",
+	})
 	add.Attribute("uid", []string{"bob"})
 	add.Attribute("cn", []string{"Bob Example"})
 	add.Attribute("sn", []string{"Example"})
-	add.Attribute("loginCount", []string{"1"})
+	add.Attribute("uidNumber", []string{"1"})
+	add.Attribute("gidNumber", []string{"1000"})
+	add.Attribute("homeDirectory", []string{"/home/bob"})
 	if err := client.Add(add); err != nil {
 		t.Fatalf("Add(): %v", err)
 	}
@@ -166,7 +176,7 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 	modify := ldap.NewModifyRequest("uid=bob,ou=people,dc=example,dc=com", nil)
 	modify.Replace("cn", []string{"Robert Example"})
 	modify.Add("mail", []string{"robert@example.com"})
-	modify.Increment("loginCount", "2")
+	modify.Increment("uidNumber", "2")
 	if err := client.Modify(modify); err != nil {
 		t.Fatalf("Modify(): %v", err)
 	}
@@ -179,7 +189,16 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 		0,
 		false,
 		"(objectClass=*)",
-		[]string{"cn", "mail", "loginCount", "entryUUID", "entryCSN", "modifyTimestamp"},
+		[]string{
+			"cn",
+			"mail",
+			"uidNumber",
+			"entryUUID",
+			"entryCSN",
+			"modifyTimestamp",
+			"structuralObjectClass",
+			"subschemaSubentry",
+		},
 		nil,
 	))
 	if err != nil {
@@ -187,10 +206,12 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 	}
 	entry := result.Entries[0]
 	if entry.GetAttributeValue("cn") != "Robert Example" ||
-		entry.GetAttributeValue("loginCount") != "3" ||
+		entry.GetAttributeValue("uidNumber") != "3" ||
 		entry.GetAttributeValue("entryUUID") == "" ||
 		entry.GetAttributeValue("entryCSN") == "" ||
-		entry.GetAttributeValue("modifyTimestamp") == "" {
+		entry.GetAttributeValue("modifyTimestamp") == "" ||
+		entry.GetAttributeValue("structuralObjectClass") != "inetOrgPerson" ||
+		entry.GetAttributeValue("subschemaSubentry") != "cn=Subschema" {
 		t.Fatalf("modified entry = %#v", entry)
 	}
 
@@ -235,6 +256,163 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 	if err := client.Del(ldap.NewDelRequest(parentDN, nil)); err != nil {
 		t.Fatalf("Del(parent): %v", err)
 	}
+}
+
+func TestLDAPClientLoadsAndPublishesOpenLDAPSchema(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	schemaEntry := directory.Entry{
+		DN: "cn={1}application,cn=schema,cn=config",
+		Attributes: []directory.Attribute{
+			{
+				Description: "olcAttributeTypes",
+				Values: stringValues(
+					"{0}( 1.2.3.4 NAME 'appID' EQUALITY caseIgnoreMatch " +
+						"SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )",
+				),
+			},
+			{
+				Description: "olcObjectClasses",
+				Values: stringValues(
+					"{0}( 1.2.3.5 NAME 'appUser' SUP top AUXILIARY MUST appID )",
+				),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.Put(schemaEntry, false)
+	}); err != nil {
+		t.Fatalf("seed OpenLDAP schema: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+
+	add := ldap.NewAddRequest("uid=custom,ou=people,dc=example,dc=com", nil)
+	add.Attribute("objectClass", []string{"inetOrgPerson", "appUser"})
+	add.Attribute("uid", []string{"custom"})
+	add.Attribute("cn", []string{"Custom User"})
+	add.Attribute("sn", []string{"User"})
+	add.Attribute("appID", []string{"Portal"})
+	if err := client.Add(add); err != nil {
+		t.Fatalf("Add(custom schema): %v", err)
+	}
+
+	userAttributes, err := client.Search(ldap.NewSearchRequest(
+		"uid=custom,ou=people,dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(appID=portal)",
+		[]string{"*"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("Search(user attributes): %v", err)
+	}
+	if len(userAttributes.Entries) != 1 ||
+		userAttributes.Entries[0].GetAttributeValue("appID") != "Portal" ||
+		userAttributes.Entries[0].GetAttributeValue("entryUUID") != "" {
+		t.Fatalf("user attributes = %#v", userAttributes.Entries)
+	}
+
+	operational, err := client.Search(ldap.NewSearchRequest(
+		"uid=custom,ou=people,dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"+"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("Search(operational attributes): %v", err)
+	}
+	if len(operational.Entries) != 1 ||
+		operational.Entries[0].GetAttributeValue("entryUUID") == "" ||
+		operational.Entries[0].GetAttributeValue("structuralObjectClass") != "inetOrgPerson" ||
+		operational.Entries[0].GetAttributeValue("uid") != "" {
+		t.Fatalf("operational attributes = %#v", operational.Entries)
+	}
+
+	subSchema, err := client.Search(ldap.NewSearchRequest(
+		"cn=Subschema",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=subschema)",
+		[]string{"attributeTypes", "objectClasses"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("Search(cn=Subschema): %v", err)
+	}
+	if len(subSchema.Entries) != 1 ||
+		!containsSubstring(subSchema.Entries[0].GetAttributeValues("attributeTypes"), "NAME 'appID'") ||
+		!containsSubstring(subSchema.Entries[0].GetAttributeValues("objectClasses"), "NAME 'appUser'") {
+		t.Fatalf("subschema entry = %#v", subSchema.Entries)
+	}
+}
+
+func TestLDAPClientSchemaViolations(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+
+	undefined := ldap.NewAddRequest("uid=undefined,ou=people,dc=example,dc=com", nil)
+	undefined.Attribute("objectClass", []string{"inetOrgPerson"})
+	undefined.Attribute("uid", []string{"undefined"})
+	undefined.Attribute("cn", []string{"Undefined"})
+	undefined.Attribute("sn", []string{"Undefined"})
+	undefined.Attribute("loginCount", []string{"1"})
+	assertLDAPResultCode(t, client.Add(undefined), ldap.LDAPResultUndefinedAttributeType)
+
+	missingRequired := ldap.NewAddRequest("uid=incomplete,ou=people,dc=example,dc=com", nil)
+	missingRequired.Attribute("objectClass", []string{"inetOrgPerson", "posixAccount"})
+	missingRequired.Attribute("uid", []string{"incomplete"})
+	missingRequired.Attribute("cn", []string{"Incomplete"})
+	missingRequired.Attribute("sn", []string{"Incomplete"})
+	missingRequired.Attribute("uidNumber", []string{"2"})
+	missingRequired.Attribute("homeDirectory", []string{"/home/incomplete"})
+	assertLDAPResultCode(t, client.Add(missingRequired), ldap.LDAPResultObjectClassViolation)
 }
 
 func TestLDAPClientWriteRequiresRoot(t *testing.T) {
@@ -321,6 +499,15 @@ func assertLDAPResultCode(t *testing.T, err error, want uint16) {
 	if !errors.As(err, &ldapErr) || ldapErr.ResultCode != want {
 		t.Fatalf("LDAP error = %v, want result code %d", err, want)
 	}
+}
+
+func containsSubstring(values []string, substring string) bool {
+	for _, value := range values {
+		if strings.Contains(value, substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func startServer(t *testing.T, store storage.Store, config Config) (string, func()) {

@@ -38,11 +38,20 @@ type Filter struct {
 	DNAttributes bool
 }
 
+type ValueMatcher interface {
+	Compare(attribute, matchingRule string, left, right []byte) (int, error)
+	MatchSubstring(attribute string, value []byte, substring Substring) (bool, error)
+}
+
 func (filter Filter) Match(entry Entry) (bool, error) {
+	return filter.MatchWith(entry, BasicMatcher{})
+}
+
+func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) {
 	switch filter.Kind {
 	case FilterAnd:
 		for _, child := range filter.Children {
-			matches, err := child.Match(entry)
+			matches, err := child.MatchWith(entry, matcher)
 			if err != nil || !matches {
 				return matches, err
 			}
@@ -51,7 +60,7 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 
 	case FilterOr:
 		for _, child := range filter.Children {
-			matches, err := child.Match(entry)
+			matches, err := child.MatchWith(entry, matcher)
 			if err != nil {
 				return false, err
 			}
@@ -65,7 +74,7 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 		if len(filter.Children) != 1 {
 			return false, fmt.Errorf("not filter requires exactly one child")
 		}
-		matches, err := filter.Children[0].Match(entry)
+		matches, err := filter.Children[0].MatchWith(entry, matcher)
 		return !matches, err
 
 	case FilterPresent:
@@ -74,7 +83,10 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 	case FilterEquality, FilterApprox, FilterGreaterOrEqual, FilterLessOrEqual:
 		values := entry.Values(filter.Attribute)
 		for _, value := range values {
-			comparison := compareDirectoryValue(value, filter.Assertion)
+			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
+			if err != nil {
+				return false, err
+			}
 			switch filter.Kind {
 			case FilterEquality, FilterApprox:
 				if comparison == 0 {
@@ -94,19 +106,29 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 
 	case FilterSubstrings:
 		for _, value := range entry.Values(filter.Attribute) {
-			if matchSubstring(value, filter.Substring) {
+			matches, err := matcher.MatchSubstring(filter.Attribute, value, filter.Substring)
+			if err != nil {
+				return false, err
+			}
+			if matches {
 				return true, nil
 			}
 		}
 		return false, nil
 
 	case FilterExtensible:
-		if filter.MatchingRule != "" {
-			return false, fmt.Errorf("matching rule %q is not registered", filter.MatchingRule)
-		}
 		if filter.Attribute != "" {
 			for _, value := range entry.Values(filter.Attribute) {
-				if compareDirectoryValue(value, filter.Assertion) == 0 {
+				comparison, err := matcher.Compare(
+					filter.Attribute,
+					filter.MatchingRule,
+					value,
+					filter.Assertion,
+				)
+				if err != nil {
+					return false, err
+				}
+				if comparison == 0 {
 					return true, nil
 				}
 			}
@@ -114,7 +136,16 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 		}
 		for _, attribute := range entry.Attributes {
 			for _, value := range attribute.Values {
-				if compareDirectoryValue(value, filter.Assertion) == 0 {
+				comparison, err := matcher.Compare(
+					attribute.Description,
+					filter.MatchingRule,
+					value,
+					filter.Assertion,
+				)
+				if err != nil {
+					continue
+				}
+				if comparison == 0 {
 					return true, nil
 				}
 			}
@@ -124,6 +155,19 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 	default:
 		return false, fmt.Errorf("unknown filter kind %d", filter.Kind)
 	}
+}
+
+type BasicMatcher struct{}
+
+func (BasicMatcher) Compare(_, matchingRule string, left, right []byte) (int, error) {
+	if matchingRule != "" {
+		return 0, fmt.Errorf("matching rule %q is not registered", matchingRule)
+	}
+	return compareDirectoryValue(left, right), nil
+}
+
+func (BasicMatcher) MatchSubstring(_ string, value []byte, substring Substring) (bool, error) {
+	return matchSubstring(value, substring), nil
 }
 
 func compareDirectoryValue(left, right []byte) int {

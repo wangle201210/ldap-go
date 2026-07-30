@@ -12,6 +12,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -46,12 +47,27 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	if isSubschemaDN(dn) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, ""),
+		)
+	}
 	if result := validateNewEntry(request.Entry, dn); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
 
 	entry := request.Entry.Clone()
 	if err := server.applyCreateOperationalAttributes(&entry, state.boundDN); err != nil {
+		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
+	}
+	if err := server.schema.ValidateEntry(entry); err != nil {
+		result := schemaValidationResult(err)
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, result)
+	}
+	if err := server.applySchemaOperationalAttributes(&entry); err != nil {
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
 	}
 
@@ -103,6 +119,14 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	if isSubschemaDN(dn) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
+		)
+	}
 
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		entry, err := tx.Get(dn)
@@ -127,6 +151,12 @@ func (server *Server) handleModify(
 			}
 		}
 		server.applyModifyOperationalAttributes(&entry, state.boundDN)
+		if err := server.schema.ValidateEntry(entry); err != nil {
+			return operationFailureFromSchema(err)
+		}
+		if err := server.applySchemaOperationalAttributes(&entry); err != nil {
+			return err
+		}
 		return tx.Put(entry, true)
 	})
 	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyResponse, err)
@@ -149,6 +179,14 @@ func (server *Server) handleDelete(
 			message.ID,
 			ldapwire.ApplicationDeleteResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if isSubschemaDN(dn) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
 
@@ -200,6 +238,14 @@ func (server *Server) handleModifyDN(
 			message.ID,
 			ldapwire.ApplicationModifyDNResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if isSubschemaDN(oldDN) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
 
@@ -314,6 +360,12 @@ func (server *Server) handleModifyDN(
 				}
 				item.entry.EnsureRDNValues(newDN)
 				server.applyModifyOperationalAttributes(&item.entry, state.boundDN)
+				if err := server.schema.ValidateEntry(item.entry); err != nil {
+					return operationFailureFromSchema(err)
+				}
+				if err := server.applySchemaOperationalAttributes(&item.entry); err != nil {
+					return err
+				}
 			}
 			if err := tx.Put(item.entry, false); err != nil {
 				return err
@@ -358,26 +410,43 @@ func (server *Server) handleCompare(
 	}
 
 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
-	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
-		entry, err := tx.Get(dn)
-		if errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
-		}
-		if err != nil {
-			return err
-		}
-		if !entry.HasAttribute(request.Attribute) {
-			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
-		}
-		if entry.HasValue(request.Attribute, request.Assertion) {
-			result.Code = ldapwire.ResultCompareTrue
-		}
-		return nil
-	})
+	var entry directory.Entry
+	if isSubschemaDN(dn) {
+		entry = server.subschemaEntry()
+	} else {
+		err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+			var getErr error
+			entry, getErr = tx.Get(dn)
+			if errors.Is(getErr, storage.ErrEntryNotFound) {
+				return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
+			}
+			return getErr
+		})
+		entry = withSubschemaReference(entry)
+	}
 	if failure := asOperationFailure(err); failure != nil {
 		result = failure.result
 	} else if err != nil {
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationCompareResponse, err)
+	} else if !entry.HasAttribute(request.Attribute) {
+		result = ldapwire.ResultError(ldapwire.ResultNoSuchAttribute, "")
+	} else {
+		for _, value := range entry.Values(request.Attribute) {
+			comparison, compareErr := server.schema.Compare(
+				request.Attribute,
+				"",
+				value,
+				request.Assertion,
+			)
+			if compareErr != nil {
+				result = ldapwire.ResultError(ldapwire.ResultInappropriateMatching, compareErr.Error())
+				break
+			}
+			if comparison == 0 {
+				result.Code = ldapwire.ResultCompareTrue
+				break
+			}
+		}
 	}
 	return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationCompareResponse, result)
 }
@@ -464,6 +533,28 @@ func applyModification(entry *directory.Entry, change ldapwire.Modification) err
 	}
 }
 
+func schemaValidationResult(err error) ldapwire.Result {
+	var violation *schema.Violation
+	if !errors.As(err, &violation) {
+		return ldapwire.ResultError(ldapwire.ResultOther, err.Error())
+	}
+	switch violation.Kind {
+	case schema.ViolationUndefinedAttribute:
+		return ldapwire.ResultError(ldapwire.ResultUndefinedAttributeType, violation.Error())
+	case schema.ViolationSyntax:
+		return ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, violation.Error())
+	case schema.ViolationSingleValue:
+		return ldapwire.ResultError(ldapwire.ResultConstraintViolation, violation.Error())
+	default:
+		return ldapwire.ResultError(ldapwire.ResultObjectClassViolation, violation.Error())
+	}
+}
+
+func operationFailureFromSchema(err error) error {
+	result := schemaValidationResult(err)
+	return &operationFailure{result: result}
+}
+
 func (server *Server) applyCreateOperationalAttributes(entry *directory.Entry, actor string) error {
 	for _, description := range protectedOperationalAttributes {
 		entry.ReplaceValues(description, nil)
@@ -487,6 +578,16 @@ func (server *Server) applyModifyOperationalAttributes(entry *directory.Entry, a
 	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN())})
 	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
+}
+
+func (server *Server) applySchemaOperationalAttributes(entry *directory.Entry) error {
+	structuralObjectClass, err := server.schema.StructuralObjectClass(*entry)
+	if err != nil {
+		return fmt.Errorf("resolve structural object class: %w", err)
+	}
+	entry.ReplaceValues("structuralObjectClass", stringValues(structuralObjectClass))
+	entry.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
+	return nil
 }
 
 func (server *Server) nextCSN() string {

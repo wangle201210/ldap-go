@@ -90,6 +90,38 @@ func TestFilterMatch(t *testing.T) {
 	}
 }
 
+func TestEntrySelectsUserAndOperationalAttributes(t *testing.T) {
+	t.Parallel()
+
+	entry := Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []Attribute{
+			{Description: "uid", Values: [][]byte{[]byte("alice")}},
+			{Description: "modifyTimestamp", Values: [][]byte{[]byte("20260730000000Z")}},
+		},
+	}
+	isOperational := func(description string) bool {
+		return description == "modifyTimestamp"
+	}
+
+	user := entry.SelectWith([]string{"*"}, false, isOperational)
+	if !user.HasAttribute("uid") || user.HasAttribute("modifyTimestamp") {
+		t.Fatalf("user selection = %#v", user.Attributes)
+	}
+	operational := entry.SelectWith([]string{"+"}, false, isOperational)
+	if operational.HasAttribute("uid") || !operational.HasAttribute("modifyTimestamp") {
+		t.Fatalf("operational selection = %#v", operational.Attributes)
+	}
+	all := entry.SelectWith([]string{"*", "+"}, false, isOperational)
+	if !all.HasAttribute("uid") || !all.HasAttribute("modifyTimestamp") {
+		t.Fatalf("combined selection = %#v", all.Attributes)
+	}
+	explicit := entry.SelectWith([]string{"modifyTimestamp"}, true, isOperational)
+	if len(explicit.Attributes) != 1 || len(explicit.Attributes[0].Values) != 0 {
+		t.Fatalf("typesOnly explicit selection = %#v", explicit.Attributes)
+	}
+}
+
 func mustDN(t *testing.T, value string) DN {
 	t.Helper()
 	dn, err := ParseDN(value)

@@ -1,0 +1,233 @@
+package schema
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/wangle201210/ldap-go/internal/directory"
+)
+
+func TestParseOpenLDAPSchemaDescriptions(t *testing.T) {
+	t.Parallel()
+
+	attribute, err := ParseAttributeType(
+		"{12}( 1.2.3.4 NAME ( 'appID' 'legacyAppID' ) DESC 'Application\\20identifier' " +
+			"EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch " +
+			"SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} SINGLE-VALUE X-ORIGIN 'test' )",
+	)
+	if err != nil {
+		t.Fatalf("ParseAttributeType(): %v", err)
+	}
+	if attribute.OID != "1.2.3.4" ||
+		len(attribute.Names) != 2 ||
+		attribute.Description != "Application identifier" ||
+		attribute.SyntaxLength != 64 ||
+		!attribute.SingleValue ||
+		attribute.Extensions["X-ORIGIN"][0] != "test" {
+		t.Fatalf("attribute = %#v", attribute)
+	}
+
+	objectClass, err := ParseObjectClass(
+		"{3}( 1.2.3.5 NAME 'appUser' SUP ( person $ organizationalPerson ) " +
+			"AUXILIARY MUST appID MAY ( mail $ description ) X-ORIGIN ( 'one' 'two' ) )",
+	)
+	if err != nil {
+		t.Fatalf("ParseObjectClass(): %v", err)
+	}
+	if objectClass.Kind != ObjectClassAuxiliary ||
+		len(objectClass.Superiors) != 2 ||
+		len(objectClass.Must) != 1 ||
+		len(objectClass.May) != 2 ||
+		len(objectClass.Extensions["X-ORIGIN"]) != 2 {
+		t.Fatalf("objectClass = %#v", objectClass)
+	}
+}
+
+func TestBuiltinSchemaValidatesEntries(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	valid := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("inetOrgPerson")},
+			{Description: "uid", Values: byteValues("alice")},
+			{Description: "cn", Values: byteValues("Alice")},
+			{Description: "sn", Values: byteValues("Example")},
+			{Description: "mail", Values: byteValues("alice@example.com")},
+		},
+	}
+	if err := registry.ValidateEntry(valid); err != nil {
+		t.Fatalf("ValidateEntry(valid): %v", err)
+	}
+
+	missingRequired := valid.Clone()
+	missingRequired.ReplaceValues("sn", nil)
+	assertViolation(t, registry.ValidateEntry(missingRequired), ViolationMissingRequiredAttribute)
+
+	undefined := valid.Clone()
+	undefined.Attributes = append(undefined.Attributes, directory.Attribute{
+		Description: "notInSchema",
+		Values:      byteValues("value"),
+	})
+	assertViolation(t, registry.ValidateEntry(undefined), ViolationUndefinedAttribute)
+
+	singleValue := directory.Entry{
+		DN: "dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("domain")},
+			{Description: "dc", Values: byteValues("example", "second")},
+		},
+	}
+	assertViolation(t, registry.ValidateEntry(singleValue), ViolationSingleValue)
+}
+
+func TestRegistryAcceptsCustomOpenLDAPSchema(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if err := registry.ParseAndRegisterAttributeType(
+		"( 1.2.3.4 NAME 'appID' EQUALITY caseIgnoreMatch " +
+			"SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )",
+	); err != nil {
+		t.Fatalf("register attribute: %v", err)
+	}
+	if err := registry.ParseAndRegisterObjectClass(
+		"( 1.2.3.5 NAME 'appUser' SUP top AUXILIARY MUST appID )",
+	); err != nil {
+		t.Fatalf("register object class: %v", err)
+	}
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("inetOrgPerson", "appUser")},
+			{Description: "uid", Values: byteValues("alice")},
+			{Description: "cn", Values: byteValues("Alice")},
+			{Description: "sn", Values: byteValues("Example")},
+			{Description: "appID", Values: byteValues("portal")},
+		},
+	}
+	if err := registry.ValidateEntry(entry); err != nil {
+		t.Fatalf("ValidateEntry(custom): %v", err)
+	}
+}
+
+func TestSchemaAwareMatching(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	comparison, err := registry.Compare("uid", "", []byte(" Alice   Example "), []byte("alice example"))
+	if err != nil {
+		t.Fatalf("Compare(uid): %v", err)
+	}
+	if comparison != 0 {
+		t.Fatalf("Compare(uid) = %d, want 0", comparison)
+	}
+	comparison, err = registry.Compare("userPassword", "", []byte("Secret"), []byte("secret"))
+	if err != nil {
+		t.Fatalf("Compare(userPassword): %v", err)
+	}
+	if comparison == 0 {
+		t.Fatal("octetStringMatch ignored byte case")
+	}
+	matches, err := registry.MatchSubstring(
+		"mail",
+		[]byte("Alice.Example@EXAMPLE.COM"),
+		directory.Substring{Initial: []byte("alice"), Final: []byte(".com")},
+	)
+	if err != nil {
+		t.Fatalf("MatchSubstring(mail): %v", err)
+	}
+	if !matches {
+		t.Fatal("caseIgnoreIA5 substring did not match")
+	}
+}
+
+func TestSchemaDescriptionsRoundTripAndPublishOnce(t *testing.T) {
+	t.Parallel()
+
+	attribute, err := ParseAttributeType(
+		"( 1.2.3.4 NAME ( 'appID' 'legacyAppID' ) DESC 'Application\\20ID' " +
+			"EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} " +
+			"SINGLE-VALUE X-ORIGIN ( 'one' 'two' ) )",
+	)
+	if err != nil {
+		t.Fatalf("ParseAttributeType(): %v", err)
+	}
+	formatted := FormatAttributeType(attribute)
+	roundTripped, err := ParseAttributeType(formatted)
+	if err != nil {
+		t.Fatalf("ParseAttributeType(formatted): %v", err)
+	}
+	if roundTripped.OID != attribute.OID ||
+		roundTripped.Description != attribute.Description ||
+		roundTripped.SyntaxLength != attribute.SyntaxLength ||
+		len(roundTripped.Names) != len(attribute.Names) {
+		t.Fatalf("round-tripped attribute = %#v, source = %#v", roundTripped, attribute)
+	}
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	descriptions := registry.AttributeTypeDescriptions()
+	uidDefinitions := 0
+	for _, description := range descriptions {
+		if strings.HasPrefix(description, "( 0.9.2342.19200300.100.1.1 ") {
+			uidDefinitions++
+		}
+	}
+	if uidDefinitions != 1 {
+		t.Fatalf("published uid definitions = %d, want 1", uidDefinitions)
+	}
+}
+
+func TestStructuralObjectClassUsesMostSpecificClass(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	entry := directory.Entry{
+		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      byteValues("top", "person", "organizationalPerson", "inetOrgPerson"),
+			},
+		},
+	}
+	structural, err := registry.StructuralObjectClass(entry)
+	if err != nil {
+		t.Fatalf("StructuralObjectClass(): %v", err)
+	}
+	if structural != "inetOrgPerson" {
+		t.Fatalf("structural object class = %q, want inetOrgPerson", structural)
+	}
+}
+
+func assertViolation(t *testing.T, err error, kind ViolationKind) {
+	t.Helper()
+	var violation *Violation
+	if !errors.As(err, &violation) || violation.Kind != kind {
+		t.Fatalf("error = %v, want violation kind %d", err, kind)
+	}
+}
+
+func byteValues(values ...string) [][]byte {
+	result := make([][]byte, len(values))
+	for i := range values {
+		result[i] = []byte(values[i])
+	}
+	return result
+}
