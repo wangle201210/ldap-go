@@ -60,6 +60,22 @@ go run ./cmd/ldap-go export \
   -ldif ./data/export.ldif
 ```
 
+Supplying a PEM certificate and key enables StartTLS:
+
+```sh
+go run ./cmd/ldap-go serve \
+  -db ./data/ldap-go.db \
+  -listen 127.0.0.1:1389 \
+  -tls-cert ./server.crt \
+  -tls-key ./server.key
+
+ldapsearch -x -ZZ -H ldap://127.0.0.1:1389 \
+  -b dc=example,dc=com '(objectClass=*)'
+```
+
+Add `-ldaps` to negotiate TLS immediately and advertise an `ldaps://` endpoint
+instead. TLS 1.2 is the minimum accepted version.
+
 For a complete multi-database OpenLDAP migration, import `cn=config` first and
 then select each database using the same numeric index accepted by `slapcat`:
 

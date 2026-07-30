@@ -121,6 +121,8 @@ func decodeMessage(packet *ber.Packet) (Message, error) {
 		request, err = decodeCompareRequest(opPacket)
 	case ApplicationAbandonRequest:
 		request, err = decodeAbandonRequest(opPacket)
+	case ApplicationExtendedRequest:
+		request, err = decodeExtendedRequest(opPacket)
 	default:
 		request = UnsupportedRequest{Tag: uint64(opPacket.Tag)}
 	}
@@ -307,6 +309,29 @@ func decodeAbandonRequest(packet *ber.Packet) (AbandonRequest, error) {
 		return AbandonRequest{}, malformed("invalid abandoned message ID")
 	}
 	return AbandonRequest{MessageID: messageID}, nil
+}
+
+func decodeExtendedRequest(packet *ber.Packet) (ExtendedRequest, error) {
+	if packet.TagType != ber.TypeConstructed ||
+		len(packet.Children) < 1 ||
+		len(packet.Children) > 2 {
+		return ExtendedRequest{}, malformed("invalid ExtendedRequest")
+	}
+	name := packet.Children[0]
+	if !isPacket(name, ber.ClassContext, ber.TypePrimitive, 0) ||
+		name.Data.Len() == 0 {
+		return ExtendedRequest{}, malformed("invalid ExtendedRequest name")
+	}
+	request := ExtendedRequest{Name: string(name.Data.Bytes())}
+	if len(packet.Children) == 2 {
+		value := packet.Children[1]
+		if !isPacket(value, ber.ClassContext, ber.TypePrimitive, 1) {
+			return ExtendedRequest{}, malformed("invalid ExtendedRequest value")
+		}
+		request.Value = bytes.Clone(value.Data.Bytes())
+		request.HasValue = true
+	}
+	return request, nil
 }
 
 func decodeAttributeList(packet *ber.Packet, allowEmptyValues bool) ([]directory.Attribute, error) {

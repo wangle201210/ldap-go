@@ -157,3 +157,18 @@ description: selected database
 		t.Fatalf("selected export stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }
+
+func TestLoadServerTLSConfigRequiresCertificatePair(t *testing.T) {
+	t.Parallel()
+
+	config, err := loadServerTLSConfig("", "")
+	if err != nil || config != nil {
+		t.Fatalf("loadServerTLSConfig(empty) = %#v, %v", config, err)
+	}
+	if _, err := loadServerTLSConfig("server.crt", ""); err == nil {
+		t.Fatal("certificate without private key was accepted")
+	}
+	if _, err := loadServerTLSConfig("", "server.key"); err == nil {
+		t.Fatal("private key without certificate was accepted")
+	}
+}

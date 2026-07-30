@@ -94,6 +94,71 @@ func TestReadMessageRejectsOversizedFrame(t *testing.T) {
 	}
 }
 
+func TestReadExtendedRequest(t *testing.T) {
+	t.Parallel()
+
+	operation := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationExtendedRequest,
+		nil,
+		"",
+	)
+	operation.AppendChild(ber.NewString(
+		ber.ClassContext,
+		ber.TypePrimitive,
+		0,
+		"1.3.6.1.4.1.1466.20037",
+		"",
+	))
+	value := ber.Encode(ber.ClassContext, ber.TypePrimitive, 1, nil, "")
+	_, _ = value.Data.Write([]byte{0x00, 0xff})
+	operation.AppendChild(value)
+
+	decoded, err := ReadMessage(
+		bytes.NewReader(testMessage(9, operation).Bytes()),
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("ReadMessage(): %v", err)
+	}
+	request, ok := decoded.Request.(ExtendedRequest)
+	if !ok {
+		t.Fatalf("request type = %T", decoded.Request)
+	}
+	if request.Name != "1.3.6.1.4.1.1466.20037" ||
+		!request.HasValue ||
+		!bytes.Equal(request.Value, []byte{0x00, 0xff}) {
+		t.Fatalf("decoded request = %#v", request)
+	}
+}
+
+func TestReadExtendedRequestRejectsInvalidElementOrder(t *testing.T) {
+	t.Parallel()
+
+	operation := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationExtendedRequest,
+		nil,
+		"",
+	)
+	operation.AppendChild(ber.NewString(
+		ber.ClassContext,
+		ber.TypePrimitive,
+		1,
+		"value-before-name",
+		"",
+	))
+	_, err := ReadMessage(
+		bytes.NewReader(testMessage(9, operation).Bytes()),
+		1024,
+	)
+	if !errors.Is(err, ErrMalformedMessage) {
+		t.Fatalf("ReadMessage() error = %v, want ErrMalformedMessage", err)
+	}
+}
+
 func TestEncodeSearchResultEntryPreservesBinaryValues(t *testing.T) {
 	t.Parallel()
 

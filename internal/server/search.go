@@ -284,7 +284,7 @@ func (server *Server) searchRootDSE(
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
-	entry := rootDSE(state.runtime)
+	entry := server.rootDSE(state.runtime)
 	var selected *directory.Entry
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
 		matches, err := server.filterMatches(
@@ -432,7 +432,7 @@ func (server *Server) searchSubschema(
 	)
 }
 
-func rootDSE(runtime *runtimeState) directory.Entry {
+func (server *Server) rootDSE(runtime *runtimeState) directory.Entry {
 	var namingContexts []string
 	var configContexts []string
 	var monitorContexts []string
@@ -488,6 +488,12 @@ func rootDSE(runtime *runtimeState) directory.Entry {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "monitorContext",
 			Values:      stringValues(monitorContexts...),
+		})
+	}
+	if server.secureTransport != nil {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "supportedExtension",
+			Values:      stringValues(startTLSOID),
 		})
 	}
 	return entry

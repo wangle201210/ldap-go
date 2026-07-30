@@ -98,9 +98,10 @@ log through the accesslog overlay.
 ### Security
 
 Transport security is abstracted from LDAP semantics. Standard TLS and StartTLS
-ship first; a national-cryptography transport can be added without forking the
-operation engine. Password schemes are registered modules and constant-time
-verification is mandatory.
+use the same `SecureTransport` server-handshake contract for explicit and
+implicit upgrades; a national-cryptography transport can implement that
+contract without forking the operation engine. Password schemes are registered
+modules and constant-time verification is mandatory.
 
 ## Data migration contract
 

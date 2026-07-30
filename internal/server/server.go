@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -22,20 +23,25 @@ import (
 const defaultSearchLimit = 1000
 
 type Config struct {
-	Store            storage.Store
-	MaxMessageSize   int64
-	MaxSearchEntries int
-	RootDN           string
-	RootPassword     []byte
-	Logger           *slog.Logger
-	Schema           *schema.Registry
-	AccessPolicy     *acl.Policy
+	Store                  storage.Store
+	MaxMessageSize         int64
+	MaxSearchEntries       int
+	RootDN                 string
+	RootPassword           []byte
+	Logger                 *slog.Logger
+	Schema                 *schema.Registry
+	AccessPolicy           *acl.Policy
+	TLSConfig              *tls.Config
+	SecureTransport        SecureTransport
+	ImplicitTLS            bool
+	SecureHandshakeTimeout time.Duration
 }
 
 type Server struct {
-	config     Config
-	baseSchema *schema.Registry
-	runtime    atomic.Pointer[runtimeState]
+	config          Config
+	baseSchema      *schema.Registry
+	secureTransport SecureTransport
+	runtime         atomic.Pointer[runtimeState]
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
@@ -73,11 +79,25 @@ func New(config Config) (*Server, error) {
 			return nil, errors.New("root password is required when root DN is configured")
 		}
 	}
+	secureTransport := config.SecureTransport
+	if config.TLSConfig != nil {
+		if secureTransport != nil {
+			return nil, errors.New("TLS config and secure transport are mutually exclusive")
+		}
+		secureTransport = standardTLSTransport{config: config.TLSConfig.Clone()}
+	}
+	if config.ImplicitTLS && secureTransport == nil {
+		return nil, errors.New("implicit TLS requires a secure transport")
+	}
+	if secureTransport != nil && config.SecureHandshakeTimeout <= 0 {
+		config.SecureHandshakeTimeout = defaultSecureHandshakeTimeout
+	}
 
 	server := &Server{
-		config:      config,
-		baseSchema:  baseSchema.Clone(),
-		connections: make(map[net.Conn]struct{}),
+		config:          config,
+		baseSchema:      baseSchema.Clone(),
+		secureTransport: secureTransport,
+		connections:     make(map[net.Conn]struct{}),
 	}
 	var runtime *runtimeState
 	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
@@ -139,16 +159,32 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
+	state := connectionState{connection: connection}
 	defer func() {
 		server.mu.Lock()
 		delete(server.connections, connection)
 		server.mu.Unlock()
-		_ = connection.Close()
+		_ = state.connection.Close()
 	}()
 
-	state := connectionState{}
+	if server.config.ImplicitTLS {
+		secured, err := server.secureHandshake(ctx, connection)
+		if err != nil {
+			server.config.Logger.Debug("TLS handshake failed", "error", err)
+			return
+		}
+		if secured == nil {
+			server.config.Logger.Debug("secure transport returned a nil connection")
+			return
+		}
+		state.connection = secured
+		state.secure = true
+	}
 	for {
-		message, err := ldapwire.ReadMessage(connection, server.config.MaxMessageSize)
+		message, err := ldapwire.ReadMessage(
+			state.connection,
+			server.config.MaxMessageSize,
+		)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
 				return
@@ -160,7 +196,12 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			return
 		}
 
-		closeConnection, err := server.dispatch(ctx, connection, &state, message)
+		closeConnection, err := server.dispatch(
+			ctx,
+			state.connection,
+			&state,
+			message,
+		)
 		if err != nil {
 			server.config.Logger.Debug("LDAP request failed", "message_id", message.ID, "error", err)
 			return
@@ -199,6 +240,14 @@ func (server *Server) dispatch(
 		// Requests are currently dispatched serially per connection, so there
 		// is no outstanding operation to cancel yet.
 		return false, nil
+	case ldapwire.ExtendedRequest:
+		return false, server.handleExtended(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+		)
 	case ldapwire.UnsupportedRequest:
 		responseTag, responds := responseTagFor(request.Tag)
 		if !responds {
@@ -328,8 +377,10 @@ func (server *Server) closeConnections() {
 }
 
 type connectionState struct {
-	boundDN string
-	runtime *runtimeState
+	boundDN    string
+	runtime    *runtimeState
+	connection net.Conn
+	secure     bool
 }
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {

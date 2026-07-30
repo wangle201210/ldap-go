@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/server"
@@ -219,6 +221,14 @@ func runServe(
 	maxMessageSize := flags.Int64("max-message-size", 16<<20, "maximum BER message size in bytes")
 	searchLimit := flags.Int("search-limit", 1000, "server-side maximum entries per search")
 	logLevel := flags.String("log-level", "info", "debug, info, warn, or error")
+	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
+	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
+	implicitTLS := flags.Bool("ldaps", false, "negotiate TLS before reading LDAP messages")
+	secureHandshakeTimeout := flags.Duration(
+		"tls-handshake-timeout",
+		10*time.Second,
+		"maximum TLS handshake duration",
+	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -231,6 +241,16 @@ func runServe(
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
+	tlsConfig, err := loadServerTLSConfig(*tlsCertificate, *tlsPrivateKey)
+	if err != nil {
+		return err
+	}
+	if *implicitTLS && tlsConfig == nil {
+		return errors.New("-ldaps requires -tls-cert and -tls-key")
+	}
+	if tlsConfig != nil && *secureHandshakeTimeout <= 0 {
+		return errors.New("-tls-handshake-timeout must be positive")
+	}
 
 	store, err := storage.OpenBolt(*databasePath)
 	if err != nil {
@@ -239,12 +259,15 @@ func runServe(
 	defer store.Close()
 
 	instance, err := server.New(server.Config{
-		Store:            store,
-		MaxMessageSize:   *maxMessageSize,
-		MaxSearchEntries: *searchLimit,
-		RootDN:           *rootDN,
-		RootPassword:     []byte(getenv(rootPasswordEnvironment)),
-		Logger:           logger,
+		Store:                  store,
+		MaxMessageSize:         *maxMessageSize,
+		MaxSearchEntries:       *searchLimit,
+		RootDN:                 *rootDN,
+		RootPassword:           []byte(getenv(rootPasswordEnvironment)),
+		Logger:                 logger,
+		TLSConfig:              tlsConfig,
+		ImplicitTLS:            *implicitTLS,
+		SecureHandshakeTimeout: *secureHandshakeTimeout,
 	})
 	if err != nil {
 		return err
@@ -256,12 +279,33 @@ func runServe(
 	}
 	defer listener.Close()
 
-	if _, err := fmt.Fprintf(stdout, "ldap-go listening on ldap://%s\n", listener.Addr()); err != nil {
+	scheme := "ldap"
+	if *implicitTLS {
+		scheme = "ldaps"
+	}
+	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return instance.Serve(ctx, listener)
+}
+
+func loadServerTLSConfig(certificateFile, privateKeyFile string) (*tls.Config, error) {
+	if certificateFile == "" && privateKeyFile == "" {
+		return nil, nil
+	}
+	if certificateFile == "" || privateKeyFile == "" {
+		return nil, errors.New("-tls-cert and -tls-key must be provided together")
+	}
+	certificate, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate: %w", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

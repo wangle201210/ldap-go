@@ -35,7 +35,7 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| StartTLS | planned | RFC 4511/4513 state machine and TLS tests |
+| StartTLS | partial | RFC 4511/4513 state machine, TLS tests, and OpenLDAP differential |
 | Password Modify | planned | RFC 3062 and password policy integration |
 | Who Am I? | planned | RFC 4532 authorization identity tests |
 | Cancel | planned | RFC 3909 concurrent operation tests |
@@ -144,6 +144,9 @@ Bind; Root DSE; base, one-level, and subtree Search; boolean, equality,
 presence, substring, ordering, approximate, and basic extensible filters;
 Unbind; Add, Modify (including increment), leaf Delete, subtree ModifyDN,
 Compare; a transactional bbolt backend; and atomic content LDIF import/export.
+StartTLS and implicit LDAPS use a shared pluggable secure-transport interface;
+the standard TLS adapter requires TLS 1.2 or newer, publishes the StartTLS OID,
+and resets an authenticated connection to anonymous after a successful upgrade.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
 create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
 Modify and ModifyDN update modification metadata.

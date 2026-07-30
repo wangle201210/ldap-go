@@ -127,6 +127,14 @@ type AbandonRequest struct {
 
 func (AbandonRequest) ApplicationTag() uint64 { return ApplicationAbandonRequest }
 
+type ExtendedRequest struct {
+	Name     string
+	Value    []byte
+	HasValue bool
+}
+
+func (ExtendedRequest) ApplicationTag() uint64 { return ApplicationExtendedRequest }
+
 type UnsupportedRequest struct {
 	Tag uint64
 }
