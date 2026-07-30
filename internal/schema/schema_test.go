@@ -110,6 +110,28 @@ func TestRegistryIdentifiesDNValuedAttributes(t *testing.T) {
 	}
 }
 
+func TestRegistryCloneIsIndependent(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	cloned := registry.Clone()
+	if err := cloned.ParseAndRegisterAttributeType(
+		"( 1.2.3.4 NAME 'cloneOnly' EQUALITY caseIgnoreMatch SYNTAX " +
+			SyntaxDirectoryString + " )",
+	); err != nil {
+		t.Fatalf("register clone attribute: %v", err)
+	}
+	if _, exists := registry.AttributeType("cloneOnly"); exists {
+		t.Fatal("clone mutation changed the source registry")
+	}
+	if _, exists := cloned.AttributeType("cn"); !exists {
+		t.Fatal("clone lost a built-in alias")
+	}
+}
+
 func TestRegistryAcceptsCustomOpenLDAPSchema(t *testing.T) {
 	t.Parallel()
 

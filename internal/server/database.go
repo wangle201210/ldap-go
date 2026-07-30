@@ -22,85 +22,90 @@ func loadRuntimeDatabases(
 	ctx context.Context,
 	store storage.Store,
 ) ([]runtimeDatabase, error) {
+	var databases []runtimeDatabase
+	err := store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		databases, err = loadRuntimeDatabasesReader(reader)
+		return err
+	})
+	return databases, err
+}
+
+func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error) {
 	configSuffix, err := directory.ParseDN("cn=config")
 	if err != nil {
 		return nil, err
 	}
 
 	var databases []runtimeDatabase
-	var namingContexts []string
-	err = store.View(ctx, func(reader storage.Reader) error {
-		if err := reader.ForEach(func(entry directory.Entry) error {
-			entryDN, err := directory.ParseDN(entry.DN)
-			if err != nil {
-				return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
-			}
-			if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
-				return nil
-			}
-
-			databaseValues := entry.Values("olcDatabase")
-			if len(databaseValues) == 0 {
-				return nil
-			}
-			if len(databaseValues) != 1 {
-				return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
-			}
-			database := runtimeDatabase{name: string(databaseValues[0])}
-			for _, rawSuffix := range entry.Values("olcSuffix") {
-				suffix, err := directory.ParseDN(string(rawSuffix))
-				if err != nil {
-					return fmt.Errorf("%s olcSuffix: %w", entry.DN, err)
-				}
-				database.suffixes = append(database.suffixes, suffix)
-			}
-			if len(database.suffixes) == 0 {
-				switch {
-				case strings.Contains(strings.ToLower(database.name), "config"):
-					database.suffixes = []directory.DN{configSuffix}
-				case strings.Contains(strings.ToLower(database.name), "monitor"):
-					monitor, err := directory.ParseDN("cn=Monitor")
-					if err != nil {
-						return err
-					}
-					database.suffixes = []directory.DN{monitor}
-				}
-			}
-
-			rootDNValues := entry.Values("olcRootDN")
-			if len(rootDNValues) > 1 {
-				return fmt.Errorf("%s olcRootDN must be single-valued", entry.DN)
-			}
-			if len(rootDNValues) == 1 {
-				rootDN, err := directory.ParseDN(string(rootDNValues[0]))
-				if err != nil {
-					return fmt.Errorf("%s olcRootDN: %w", entry.DN, err)
-				}
-				database.rootDN = &rootDN
-			}
-
-			rootPasswordValues := entry.Values("olcRootPW")
-			if len(rootPasswordValues) > 1 {
-				return fmt.Errorf("%s olcRootPW must be single-valued", entry.DN)
-			}
-			if len(rootPasswordValues) == 1 {
-				if database.rootDN == nil {
-					return fmt.Errorf("%s olcRootPW requires olcRootDN", entry.DN)
-				}
-				database.rootPasswordSet = true
-				database.rootPassword = bytes.Clone(rootPasswordValues[0])
-			}
-			databases = append(databases, database)
-			return nil
-		}); err != nil {
-			return err
+	if err := reader.ForEach(func(entry directory.Entry) error {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
 		}
-		var err error
-		namingContexts, err = reader.NamingContexts()
-		return err
-	})
-	if err != nil {
+		if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
+			return nil
+		}
+
+		databaseValues := entry.Values("olcDatabase")
+		if len(databaseValues) == 0 {
+			return nil
+		}
+		if len(databaseValues) != 1 {
+			return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
+		}
+		database := runtimeDatabase{name: string(databaseValues[0])}
+		for _, rawSuffix := range entry.Values("olcSuffix") {
+			suffix, err := directory.ParseDN(string(rawSuffix))
+			if err != nil {
+				return fmt.Errorf("%s olcSuffix: %w", entry.DN, err)
+			}
+			database.suffixes = append(database.suffixes, suffix)
+		}
+		if len(database.suffixes) == 0 {
+			switch {
+			case strings.Contains(strings.ToLower(database.name), "config"):
+				database.suffixes = []directory.DN{configSuffix}
+			case strings.Contains(strings.ToLower(database.name), "monitor"):
+				monitor, err := directory.ParseDN("cn=Monitor")
+				if err != nil {
+					return err
+				}
+				database.suffixes = []directory.DN{monitor}
+			}
+		}
+
+		rootDNValues := entry.Values("olcRootDN")
+		if len(rootDNValues) > 1 {
+			return fmt.Errorf("%s olcRootDN must be single-valued", entry.DN)
+		}
+		if len(rootDNValues) == 1 {
+			rootDN, err := directory.ParseDN(string(rootDNValues[0]))
+			if err != nil {
+				return fmt.Errorf("%s olcRootDN: %w", entry.DN, err)
+			}
+			database.rootDN = &rootDN
+		}
+
+		rootPasswordValues := entry.Values("olcRootPW")
+		if len(rootPasswordValues) > 1 {
+			return fmt.Errorf("%s olcRootPW must be single-valued", entry.DN)
+		}
+		if len(rootPasswordValues) == 1 {
+			if database.rootDN == nil {
+				return fmt.Errorf("%s olcRootPW requires olcRootDN", entry.DN)
+			}
+			database.rootPasswordSet = true
+			database.rootPassword = bytes.Clone(rootPasswordValues[0])
+		}
+		databases = append(databases, database)
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("load runtime databases: %w", err)
+	}
+	namingContexts, err := reader.NamingContexts()
+	if err != nil {
+		return nil, fmt.Errorf("load runtime database naming contexts: %w", err)
 	}
 	if err := validateDatabaseSuffixes(databases); err != nil {
 		return nil, err

@@ -59,19 +59,27 @@ func (server *Server) handleAdd(
 	if result := validateNewEntry(request.Entry, dn); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
+	configurationWrite := isConfigurationDN(dn)
+	if configurationWrite {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
 
 	entry := request.Entry.Clone()
 	if err := server.applyCreateOperationalAttributes(&entry, state.boundDN); err != nil {
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
 	}
-	if err := server.schema.ValidateEntry(entry); err != nil {
-		result := schemaValidationResult(err)
-		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, result)
-	}
-	if err := server.applySchemaOperationalAttributes(&entry); err != nil {
-		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
+	if !configurationWrite {
+		if err := state.runtime.schema.ValidateEntry(entry); err != nil {
+			result := schemaValidationResult(err)
+			return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, result)
+		}
+		if err := server.applySchemaOperationalAttributes(state.runtime, &entry); err != nil {
+			return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
+		}
 	}
 
+	var nextRuntime *runtimeState
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		if _, err := tx.Get(dn); err == nil {
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
@@ -91,7 +99,7 @@ func (server *Server) handleAdd(
 				if belowContext {
 					return operationFailed(
 						ldapwire.ResultNoSuchObject,
-						server.disclosedAncestor(tx, state.boundDN, dn),
+						server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
 					)
 				}
 			}
@@ -105,13 +113,29 @@ func (server *Server) handleAdd(
 				return getErr
 			}
 		}
-		if !server.allowed(tx, state.boundDN, parent, "children", nil, acl.WriteAdd) ||
-			!server.allowed(tx, state.boundDN, entry, "entry", nil, acl.WriteAdd) {
+		if !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			parent,
+			"children",
+			nil,
+			acl.WriteAdd,
+		) || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			"entry",
+			nil,
+			acl.WriteAdd,
+		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
-		if server.access.RequiresAddContentACL(dn) {
+		if state.runtime.access.RequiresAddContentACL(dn) {
 			for _, attribute := range request.Entry.Attributes {
 				if !server.canAccessAttribute(
+					state.runtime,
 					tx,
 					state.boundDN,
 					entry,
@@ -125,8 +149,19 @@ func (server *Server) handleAdd(
 		if err := tx.Put(entry, false); err != nil {
 			return err
 		}
-		return refreshNamingContexts(tx)
+		if err := refreshNamingContexts(tx); err != nil {
+			return err
+		}
+		if configurationWrite {
+			var validationErr error
+			nextRuntime, validationErr = server.validateRuntimeConfiguration(tx)
+			return validationErr
+		}
+		return nil
 	})
+	if err == nil && nextRuntime != nil {
+		server.runtime.Store(nextRuntime)
+	}
 	return server.finishOperation(connection, message.ID, ldapwire.ApplicationAddResponse, err)
 }
 
@@ -157,13 +192,19 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
+	configurationWrite := isConfigurationDN(dn)
+	if configurationWrite {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
 
+	var nextRuntime *runtimeState
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
-				server.disclosedAncestor(tx, state.boundDN, dn),
+				server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
 			)
 		}
 		if err != nil {
@@ -171,6 +212,7 @@ func (server *Server) handleModify(
 		}
 
 		if !server.canApplyModifications(
+			state.runtime,
 			tx,
 			state.boundDN,
 			entry,
@@ -192,14 +234,27 @@ func (server *Server) handleModify(
 			}
 		}
 		server.applyModifyOperationalAttributes(&entry, state.boundDN)
-		if err := server.schema.ValidateEntry(entry); err != nil {
-			return operationFailureFromSchema(err)
+		if !configurationWrite {
+			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
+				return operationFailureFromSchema(err)
+			}
+			if err := server.applySchemaOperationalAttributes(state.runtime, &entry); err != nil {
+				return err
+			}
 		}
-		if err := server.applySchemaOperationalAttributes(&entry); err != nil {
+		if err := tx.Put(entry, true); err != nil {
 			return err
 		}
-		return tx.Put(entry, true)
+		if configurationWrite {
+			var err error
+			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			return err
+		}
+		return nil
 	})
+	if err == nil && nextRuntime != nil {
+		server.runtime.Store(nextRuntime)
+	}
 	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyResponse, err)
 }
 
@@ -230,13 +285,19 @@ func (server *Server) handleDelete(
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
+	configurationWrite := isConfigurationDN(dn)
+	if configurationWrite {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
 
+	var nextRuntime *runtimeState
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
-				server.disclosedAncestor(tx, state.boundDN, dn),
+				server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
 			)
 		}
 		if err != nil {
@@ -247,8 +308,23 @@ func (server *Server) handleDelete(
 		if err != nil {
 			return err
 		}
-		if !server.allowed(tx, state.boundDN, parent, "children", nil, acl.WriteDelete) ||
-			!server.allowed(tx, state.boundDN, entry, "entry", nil, acl.WriteDelete) {
+		if !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			parent,
+			"children",
+			nil,
+			acl.WriteDelete,
+		) || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			"entry",
+			nil,
+			acl.WriteDelete,
+		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 
@@ -271,8 +347,19 @@ func (server *Server) handleDelete(
 		if err := tx.Delete(dn); err != nil {
 			return err
 		}
-		return refreshNamingContexts(tx)
+		if err := refreshNamingContexts(tx); err != nil {
+			return err
+		}
+		if configurationWrite {
+			var err error
+			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			return err
+		}
+		return nil
 	})
+	if err == nil && nextRuntime != nil {
+		server.runtime.Store(nextRuntime)
+	}
 	return server.finishOperation(connection, message.ID, ldapwire.ApplicationDeleteResponse, err)
 }
 
@@ -331,6 +418,19 @@ func (server *Server) handleModifyDN(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	configurationWrite := isConfigurationDN(oldDN)
+	if configurationWrite != isConfigurationDN(newDN) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultAffectsMultipleDSAs, ""),
+		)
+	}
+	if configurationWrite {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
 	if oldDN.Equal(newDN) {
 		return server.writeOperationResult(
 			connection,
@@ -348,12 +448,13 @@ func (server *Server) handleModifyDN(
 		)
 	}
 
+	var nextRuntime *runtimeState
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		sourceEntry, err := tx.Get(oldDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
-				server.disclosedAncestor(tx, state.boundDN, oldDN),
+				server.disclosedAncestor(state.runtime, tx, state.boundDN, oldDN),
 			)
 		}
 		if err != nil {
@@ -365,7 +466,7 @@ func (server *Server) handleModifyDN(
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				return operationFailed(
 					ldapwire.ResultNoSuchObject,
-					server.disclosedAncestor(tx, state.boundDN, superior),
+					server.disclosedAncestor(state.runtime, tx, state.boundDN, superior),
 				)
 			}
 			if err != nil {
@@ -390,13 +491,36 @@ func (server *Server) handleModifyDN(
 				Values:      [][]byte{value.Value},
 			})
 		}
-		if !server.allowed(tx, state.boundDN, sourceEntry, "entry", nil, acl.Write) ||
-			!server.allowed(tx, state.boundDN, oldParent, "children", nil, acl.WriteDelete) ||
-			!server.allowed(tx, state.boundDN, newParent, "children", nil, acl.WriteAdd) {
+		if !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			sourceEntry,
+			"entry",
+			nil,
+			acl.Write,
+		) || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			oldParent,
+			"children",
+			nil,
+			acl.WriteDelete,
+		) || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			newParent,
+			"children",
+			nil,
+			acl.WriteAdd,
+		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		for _, attribute := range newRDNAttributes {
 			if !server.canAccessAttribute(
+				state.runtime,
 				tx,
 				state.boundDN,
 				sourceEntry,
@@ -409,6 +533,7 @@ func (server *Server) handleModifyDN(
 		if request.DeleteOldRDN {
 			for _, attribute := range oldRDNAttributes {
 				if !server.canAccessAttribute(
+					state.runtime,
 					tx,
 					state.boundDN,
 					sourceEntry,
@@ -473,19 +598,35 @@ func (server *Server) handleModifyDN(
 				}
 				item.entry.EnsureRDNValues(newDN)
 				server.applyModifyOperationalAttributes(&item.entry, state.boundDN)
-				if err := server.schema.ValidateEntry(item.entry); err != nil {
-					return operationFailureFromSchema(err)
-				}
-				if err := server.applySchemaOperationalAttributes(&item.entry); err != nil {
-					return err
+				if !configurationWrite {
+					if err := state.runtime.schema.ValidateEntry(item.entry); err != nil {
+						return operationFailureFromSchema(err)
+					}
+					if err := server.applySchemaOperationalAttributes(
+						state.runtime,
+						&item.entry,
+					); err != nil {
+						return err
+					}
 				}
 			}
 			if err := tx.Put(item.entry, false); err != nil {
 				return err
 			}
 		}
-		return refreshNamingContexts(tx)
+		if err := refreshNamingContexts(tx); err != nil {
+			return err
+		}
+		if configurationWrite {
+			var err error
+			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			return err
+		}
+		return nil
 	})
+	if err == nil && nextRuntime != nil {
+		server.runtime.Store(nextRuntime)
+	}
 	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyDNResponse, err)
 }
 
@@ -518,14 +659,14 @@ func (server *Server) handleCompare(
 	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
 		var entry directory.Entry
 		if isSubschemaDN(dn) {
-			entry = server.subschemaEntry()
+			entry = server.subschemaEntry(state.runtime)
 		} else {
 			var getErr error
 			entry, getErr = tx.Get(dn)
 			if errors.Is(getErr, storage.ErrEntryNotFound) {
 				return operationFailed(
 					ldapwire.ResultNoSuchObject,
-					server.disclosedAncestor(tx, state.boundDN, dn),
+					server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
 				)
 			}
 			if getErr != nil {
@@ -534,6 +675,7 @@ func (server *Server) handleCompare(
 			entry = withSubschemaReference(entry)
 		}
 		if !server.allowed(
+			state.runtime,
 			tx,
 			state.boundDN,
 			entry,
@@ -547,7 +689,7 @@ func (server *Server) handleCompare(
 			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
 		}
 		for _, value := range entry.Values(request.Attribute) {
-			comparison, compareErr := server.schema.Compare(
+			comparison, compareErr := state.runtime.schema.Compare(
 				request.Attribute,
 				"",
 				value,
@@ -693,8 +835,11 @@ func (server *Server) applyModifyOperationalAttributes(entry *directory.Entry, a
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
 }
 
-func (server *Server) applySchemaOperationalAttributes(entry *directory.Entry) error {
-	structuralObjectClass, err := server.schema.StructuralObjectClass(*entry)
+func (server *Server) applySchemaOperationalAttributes(
+	runtime *runtimeState,
+	entry *directory.Entry,
+) error {
+	structuralObjectClass, err := runtime.schema.StructuralObjectClass(*entry)
 	if err != nil {
 		return fmt.Errorf("resolve structural object class: %w", err)
 	}

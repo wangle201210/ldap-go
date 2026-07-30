@@ -53,14 +53,35 @@ func (server *Server) handleSearch(
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				result.Code = ldapwire.ResultNoSuchObject
-				result.MatchedDN = server.disclosedAncestor(tx, state.boundDN, base)
+				result.MatchedDN = server.disclosedAncestor(
+					state.runtime,
+					tx,
+					state.boundDN,
+					base,
+				)
 				return nil
 			}
 			return err
 		}
 		baseEntry = withSubschemaReference(baseEntry)
-		if !server.allowed(tx, state.boundDN, baseEntry, "entry", nil, acl.Search) {
-			if server.allowed(tx, state.boundDN, baseEntry, "entry", nil, acl.Disclose) {
+		if !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			baseEntry,
+			"entry",
+			nil,
+			acl.Search,
+		) {
+			if server.allowed(
+				state.runtime,
+				tx,
+				state.boundDN,
+				baseEntry,
+				"entry",
+				nil,
+				acl.Disclose,
+			) {
 				result.Code = ldapwire.ResultInsufficientAccessRights
 			} else {
 				result.Code = ldapwire.ResultNoSuchObject
@@ -81,7 +102,13 @@ func (server *Server) handleSearch(
 				return nil
 			}
 			entry = withSubschemaReference(entry)
-			matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
+			matches, err := server.filterMatches(
+				state.runtime,
+				tx,
+				state.boundDN,
+				entry,
+				request.Filter,
+			)
 			if err != nil {
 				result.Code = ldapwire.ResultInappropriateMatching
 				result.DiagnosticMessage = err.Error()
@@ -90,7 +117,15 @@ func (server *Server) handleSearch(
 			if !matches {
 				return nil
 			}
-			if !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+			if !server.allowed(
+				state.runtime,
+				tx,
+				state.boundDN,
+				entry,
+				"entry",
+				nil,
+				acl.Read,
+			) {
 				return nil
 			}
 			if len(entries) >= limit {
@@ -98,13 +133,19 @@ func (server *Server) handleSearch(
 				return errStopSearch
 			}
 			readable := server.attributesWithPrivilege(
+				state.runtime,
 				tx,
 				state.boundDN,
 				entry,
 				acl.Read,
 				request.TypesOnly,
 			)
-			selected := server.selectEntry(readable, request.Attributes, request.TypesOnly)
+			selected := server.selectEntry(
+				state.runtime,
+				readable,
+				request.Attributes,
+				request.TypesOnly,
+			)
 			entries = append(entries, selected)
 			return nil
 		})
@@ -140,21 +181,41 @@ func (server *Server) searchRootDSE(
 	entry := rootDSE(namingContexts)
 	var selected *directory.Entry
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
-		matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
+		matches, err := server.filterMatches(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			request.Filter,
+		)
 		if err != nil {
 			return err
 		}
-		if !matches || !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+		if !matches || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			"entry",
+			nil,
+			acl.Read,
+		) {
 			return nil
 		}
 		readable := server.attributesWithPrivilege(
+			state.runtime,
 			tx,
 			state.boundDN,
 			entry,
 			acl.Read,
 			request.TypesOnly,
 		)
-		value := server.selectEntry(readable, request.Attributes, request.TypesOnly)
+		value := server.selectEntry(
+			state.runtime,
+			readable,
+			request.Attributes,
+			request.TypesOnly,
+		)
 		selected = &value
 		return nil
 	})
@@ -183,7 +244,7 @@ func (server *Server) searchSubschema(
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
-	entry := server.subschemaEntry()
+	entry := server.subschemaEntry(state.runtime)
 	candidate, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return fmt.Errorf("parse subschema DN: %w", err)
@@ -205,21 +266,41 @@ func (server *Server) searchSubschema(
 	}
 	var selected *directory.Entry
 	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
-		matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
+		matches, err := server.filterMatches(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			request.Filter,
+		)
 		if err != nil {
 			return err
 		}
-		if !matches || !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+		if !matches || !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			"entry",
+			nil,
+			acl.Read,
+		) {
 			return nil
 		}
 		readable := server.attributesWithPrivilege(
+			state.runtime,
 			tx,
 			state.boundDN,
 			entry,
 			acl.Read,
 			request.TypesOnly,
 		)
-		value := server.selectEntry(readable, request.Attributes, request.TypesOnly)
+		value := server.selectEntry(
+			state.runtime,
+			readable,
+			request.Attributes,
+			request.TypesOnly,
+		)
 		selected = &value
 		return nil
 	})
@@ -263,7 +344,8 @@ func rootDSE(namingContexts []string) directory.Entry {
 	}
 }
 
-func (server *Server) subschemaEntry() directory.Entry {
+func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
+	registry := runtime.schema
 	return directory.Entry{
 		DN: "cn=Subschema",
 		Attributes: []directory.Attribute{
@@ -271,22 +353,23 @@ func (server *Server) subschemaEntry() directory.Entry {
 			{Description: "cn", Values: stringValues("Subschema")},
 			{
 				Description: "attributeTypes",
-				Values:      stringValues(server.schema.AttributeTypeDescriptions()...),
+				Values:      stringValues(registry.AttributeTypeDescriptions()...),
 			},
 			{
 				Description: "objectClasses",
-				Values:      stringValues(server.schema.ObjectClassDescriptions()...),
+				Values:      stringValues(registry.ObjectClassDescriptions()...),
 			},
 		},
 	}
 }
 
 func (server *Server) selectEntry(
+	runtime *runtimeState,
 	entry directory.Entry,
 	requested []string,
 	typesOnly bool,
 ) directory.Entry {
-	return entry.SelectWith(requested, typesOnly, server.schema.IsOperational)
+	return entry.SelectWith(requested, typesOnly, runtime.schema.IsOperational)
 }
 
 func withSubschemaReference(entry directory.Entry) directory.Entry {
@@ -312,6 +395,7 @@ func isSubschemaDN(dn directory.DN) bool {
 }
 
 func (server *Server) disclosedAncestor(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	dn directory.DN,
@@ -323,7 +407,15 @@ func (server *Server) disclosedAncestor(
 			return ""
 		}
 		if entry, err := reader.Get(parent); err == nil {
-			if server.allowed(reader, subjectDN, entry, "entry", nil, acl.Disclose) {
+			if server.allowed(
+				runtime,
+				reader,
+				subjectDN,
+				entry,
+				"entry",
+				nil,
+				acl.Disclose,
+			) {
 				return entry.DN
 			}
 			return ""

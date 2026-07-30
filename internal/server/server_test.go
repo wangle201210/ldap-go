@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -945,6 +946,230 @@ func TestLDAPClientConfigRootPasswordFallbackAndEmptyValue(t *testing.T) {
 	})
 }
 
+func TestLDAPClientOnlineConfigReloadsAtomically(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	anonymous, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(anonymous): %v", err)
+	}
+	defer anonymous.Close()
+
+	searchData := func() error {
+		_, err := anonymous.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		))
+		return err
+	}
+	if err := searchData(); err != nil {
+		t.Fatalf("initial anonymous Search(): %v", err)
+	}
+
+	dataConfigDN := "olcDatabase={1}mdb,cn=config"
+	deny := ldap.NewModifyRequest(dataConfigDN, nil)
+	deny.Replace("olcAccess", []string{"{0}to * by * none"})
+	if err := configClient.Modify(deny); err != nil {
+		t.Fatalf("deny ACL Modify(): %v", err)
+	}
+	assertLDAPResultCode(t, searchData(), ldap.LDAPResultNoSuchObject)
+
+	invalid := ldap.NewModifyRequest(dataConfigDN, nil)
+	invalid.Replace("olcAccess", []string{`{0}to filter="(uid=*)" by * manage`})
+	assertLDAPResultCode(t, configClient.Modify(invalid), ldap.LDAPResultConstraintViolation)
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		dn, err := directory.ParseDN(dataConfigDN)
+		if err != nil {
+			return err
+		}
+		entry, err := reader.Get(dn)
+		if err != nil {
+			return err
+		}
+		values := entry.Values("olcAccess")
+		if len(values) != 1 || string(values[0]) != "{0}to * by * none" {
+			return fmt.Errorf("rolled-back olcAccess = %q", values)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("verify ACL rollback: %v", err)
+	}
+
+	allow := ldap.NewModifyRequest(dataConfigDN, nil)
+	allow.Replace("olcAccess", []string{"{0}to * by * read"})
+	if err := configClient.Modify(allow); err != nil {
+		t.Fatalf("allow ACL Modify(): %v", err)
+	}
+	if err := searchData(); err != nil {
+		t.Fatalf("re-enabled anonymous Search(): %v", err)
+	}
+
+	rootPassword := ldap.NewModifyRequest("olcDatabase={0}config,cn=config", nil)
+	rootPassword.Replace("olcRootPW", []string{"new-config-secret"})
+	if err := configClient.Modify(rootPassword); err != nil {
+		t.Fatalf("root password Modify(): %v", err)
+	}
+	oldRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(old root): %v", err)
+	}
+	defer oldRoot.Close()
+	assertLDAPResultCode(
+		t,
+		oldRoot.Bind("cn=config", "config-secret"),
+		ldap.LDAPResultInvalidCredentials,
+	)
+	newRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(new root): %v", err)
+	}
+	defer newRoot.Close()
+	if err := newRoot.Bind("cn=config", "new-config-secret"); err != nil {
+		t.Fatalf("new config root Bind(): %v", err)
+	}
+
+	schemaDN := "cn={9}online,cn=schema,cn=config"
+	addSchema := ldap.NewAddRequest(schemaDN, nil)
+	addSchema.Attribute("objectClass", []string{"olcSchemaConfig"})
+	addSchema.Attribute("cn", []string{"{9}online"})
+	addSchema.Attribute("olcAttributeTypes", []string{
+		"{0}( 1.2.840.113556.999.1 NAME 'onlineID' EQUALITY caseIgnoreMatch " +
+			"SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+	})
+	if err := configClient.Add(addSchema); err != nil {
+		t.Fatalf("schema Add(): %v", err)
+	}
+	searchSchema := func() []string {
+		t.Helper()
+		result, err := configClient.Search(ldap.NewSearchRequest(
+			"cn=Subschema",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"attributeTypes"},
+			nil,
+		))
+		if err != nil {
+			t.Fatalf("subschema Search(): %v", err)
+		}
+		return result.Entries[0].GetAttributeValues("attributeTypes")
+	}
+	if !containsSubstring(searchSchema(), "NAME 'onlineID'") {
+		t.Fatal("online schema was not published")
+	}
+	if err := configClient.Del(ldap.NewDelRequest(schemaDN, nil)); err != nil {
+		t.Fatalf("schema Delete(): %v", err)
+	}
+	if containsSubstring(searchSchema(), "NAME 'onlineID'") {
+		t.Fatal("deleted online schema remained published")
+	}
+}
+
+func TestLDAPClientConcurrentOnlineACLReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+
+	const readerCount = 4
+	readers := make([]*ldap.Conn, readerCount)
+	for index := range readers {
+		readers[index], err = ldap.DialURL("ldap://" + address)
+		if err != nil {
+			t.Fatalf("DialURL(reader %d): %v", index, err)
+		}
+		defer readers[index].Close()
+	}
+
+	searchRequest := func() *ldap.SearchRequest {
+		return ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		)
+	}
+	unexpected := make(chan error, readerCount)
+	var wait sync.WaitGroup
+	for _, client := range readers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for range 25 {
+				_, err := client.Search(searchRequest())
+				if err == nil {
+					continue
+				}
+				var ldapError *ldap.Error
+				if !errors.As(err, &ldapError) ||
+					ldapError.ResultCode != ldap.LDAPResultNoSuchObject {
+					unexpected <- err
+					return
+				}
+			}
+		}()
+	}
+
+	for iteration := range 25 {
+		value := "{0}to * by * read"
+		if iteration%2 == 0 {
+			value = "{0}to * by * none"
+		}
+		modify := ldap.NewModifyRequest("olcDatabase={1}mdb,cn=config", nil)
+		modify.Replace("olcAccess", []string{value})
+		if err := configClient.Modify(modify); err != nil {
+			t.Fatalf("ACL reload %d: %v", iteration, err)
+		}
+	}
+	wait.Wait()
+	close(unexpected)
+	for err := range unexpected {
+		t.Fatalf("concurrent Search(): %v", err)
+	}
+}
+
 func TestLDAPClientGranularWriteACL(t *testing.T) {
 	t.Parallel()
 
@@ -1110,6 +1335,60 @@ func TestLDAPClientWriteRequiresRoot(t *testing.T) {
 		"secret",
 	)
 	assertLDAPResultCode(t, err, ldap.LDAPResultInsufficientAccessRights)
+}
+
+func seedOnlineConfiguration(t *testing.T, store storage.Store) {
+	t.Helper()
+	seedDirectory(t, store)
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		dataConfigDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		dataConfig, err := tx.Get(dataConfigDN)
+		if err != nil {
+			return err
+		}
+		dataConfig.ReplaceValues("objectClass", stringValues("olcDatabaseConfig"))
+		dataConfig.ReplaceValues("olcAccess", stringValues("{0}to * by * read"))
+		if err := tx.Put(dataConfig, true); err != nil {
+			return err
+		}
+		entries := []directory.Entry{
+			{
+				DN: "cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcGlobal")},
+					{Description: "cn", Values: stringValues("config")},
+				},
+			},
+			{
+				DN: "cn=schema,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcSchemaConfig")},
+					{Description: "cn", Values: stringValues("schema")},
+				},
+			},
+			{
+				DN: "olcDatabase={0}config,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+					{Description: "olcDatabase", Values: stringValues("{0}config")},
+					{Description: "olcRootDN", Values: stringValues("cn=config")},
+					{Description: "olcRootPW", Values: stringValues("config-secret")},
+					{Description: "olcAccess", Values: stringValues("{0}to * by * none")},
+				},
+			},
+		}
+		for _, entry := range entries {
+			if err := tx.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return tx.SetNamingContexts([]string{"dc=example,dc=com", "cn=config"})
+	}); err != nil {
+		t.Fatalf("configure online cn=config: %v", err)
+	}
 }
 
 func seedDirectory(t *testing.T, store storage.Store) {

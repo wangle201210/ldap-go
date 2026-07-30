@@ -18,6 +18,7 @@ const (
 )
 
 func (server *Server) allowed(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
@@ -25,16 +26,16 @@ func (server *Server) allowed(
 	value []byte,
 	privilege acl.Privilege,
 ) bool {
-	if server.isRoot(subjectDN, entry.DN, attribute) {
+	if server.isRoot(runtime, subjectDN, entry.DN, attribute) {
 		return true
 	}
-	return server.access.Allowed(
+	return runtime.access.Allowed(
 		acl.Subject{DN: subjectDN},
 		acl.Target{
 			Entry:     entry,
 			Attribute: attribute,
 			Value:     value,
-			DNValued:  server.schema.IsDNValued(attribute),
+			DNValued:  runtime.schema.IsDNValued(attribute),
 		},
 		privilege,
 		reader,
@@ -42,6 +43,7 @@ func (server *Server) allowed(
 }
 
 func (server *Server) attributesWithPrivilege(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
@@ -52,6 +54,7 @@ func (server *Server) attributesWithPrivilege(
 	for _, attribute := range entry.Attributes {
 		if typesOnly {
 			if server.allowed(
+				runtime,
 				reader,
 				subjectDN,
 				entry,
@@ -68,6 +71,7 @@ func (server *Server) attributesWithPrivilege(
 		selected := directory.Attribute{Description: attribute.Description}
 		for _, value := range attribute.Values {
 			if server.allowed(
+				runtime,
 				reader,
 				subjectDN,
 				entry,
@@ -79,6 +83,7 @@ func (server *Server) attributesWithPrivilege(
 			}
 		}
 		if len(attribute.Values) == 0 && server.allowed(
+			runtime,
 			reader,
 			subjectDN,
 			entry,
@@ -97,16 +102,18 @@ func (server *Server) attributesWithPrivilege(
 }
 
 func (server *Server) filterMatches(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
 	filter directory.Filter,
 ) (bool, error) {
-	result, err := server.evaluateFilter(reader, subjectDN, entry, filter)
+	result, err := server.evaluateFilter(runtime, reader, subjectDN, entry, filter)
 	return result == filterTrue, err
 }
 
 func (server *Server) evaluateFilter(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
@@ -116,7 +123,7 @@ func (server *Server) evaluateFilter(
 	case directory.FilterAnd:
 		result := filterTrue
 		for _, child := range filter.Children {
-			childResult, err := server.evaluateFilter(reader, subjectDN, entry, child)
+			childResult, err := server.evaluateFilter(runtime, reader, subjectDN, entry, child)
 			if err != nil {
 				return filterUndefined, err
 			}
@@ -131,7 +138,7 @@ func (server *Server) evaluateFilter(
 	case directory.FilterOr:
 		result := filterFalse
 		for _, child := range filter.Children {
-			childResult, err := server.evaluateFilter(reader, subjectDN, entry, child)
+			childResult, err := server.evaluateFilter(runtime, reader, subjectDN, entry, child)
 			if err != nil {
 				return filterUndefined, err
 			}
@@ -147,7 +154,13 @@ func (server *Server) evaluateFilter(
 		if len(filter.Children) != 1 {
 			return filterUndefined, errors.New("not filter requires exactly one child")
 		}
-		result, err := server.evaluateFilter(reader, subjectDN, entry, filter.Children[0])
+		result, err := server.evaluateFilter(
+			runtime,
+			reader,
+			subjectDN,
+			entry,
+			filter.Children[0],
+		)
 		switch result {
 		case filterTrue:
 			return filterFalse, err
@@ -161,6 +174,7 @@ func (server *Server) evaluateFilter(
 		directory.FilterGreaterOrEqual,
 		directory.FilterLessOrEqual:
 		if !server.allowed(
+			runtime,
 			reader,
 			subjectDN,
 			entry,
@@ -172,6 +186,7 @@ func (server *Server) evaluateFilter(
 		}
 	case directory.FilterPresent, directory.FilterSubstrings:
 		if !server.allowed(
+			runtime,
 			reader,
 			subjectDN,
 			entry,
@@ -186,6 +201,7 @@ func (server *Server) evaluateFilter(
 			filtered := directory.Entry{DN: entry.DN}
 			for _, attribute := range entry.Attributes {
 				if server.allowed(
+					runtime,
 					reader,
 					subjectDN,
 					entry,
@@ -196,10 +212,11 @@ func (server *Server) evaluateFilter(
 					filtered.Attributes = append(filtered.Attributes, attribute)
 				}
 			}
-			matches, err := filter.MatchWith(filtered, server.schema)
+			matches, err := filter.MatchWith(filtered, runtime.schema)
 			return booleanFilterResult(matches), err
 		}
 		if !server.allowed(
+			runtime,
 			reader,
 			subjectDN,
 			entry,
@@ -213,7 +230,7 @@ func (server *Server) evaluateFilter(
 		return filterUndefined, errors.New("unknown filter kind")
 	}
 
-	matches, err := filter.MatchWith(entry, server.schema)
+	matches, err := filter.MatchWith(entry, runtime.schema)
 	return booleanFilterResult(matches), err
 }
 
@@ -225,6 +242,7 @@ func booleanFilterResult(value bool) filterResult {
 }
 
 func (server *Server) canAccessAttribute(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
@@ -232,10 +250,26 @@ func (server *Server) canAccessAttribute(
 	privilege acl.Privilege,
 ) bool {
 	if len(attribute.Values) == 0 {
-		return server.allowed(reader, subjectDN, entry, attribute.Description, nil, privilege)
+		return server.allowed(
+			runtime,
+			reader,
+			subjectDN,
+			entry,
+			attribute.Description,
+			nil,
+			privilege,
+		)
 	}
 	for _, value := range attribute.Values {
-		if !server.allowed(reader, subjectDN, entry, attribute.Description, value, privilege) {
+		if !server.allowed(
+			runtime,
+			reader,
+			subjectDN,
+			entry,
+			attribute.Description,
+			value,
+			privilege,
+		) {
 			return false
 		}
 	}
@@ -243,6 +277,7 @@ func (server *Server) canAccessAttribute(
 }
 
 func (server *Server) canApplyModifications(
+	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
 	entry directory.Entry,
@@ -252,6 +287,7 @@ func (server *Server) canApplyModifications(
 		switch change.Operation {
 		case ldapwire.ModificationAdd:
 			if !server.canAccessAttribute(
+				runtime,
 				reader,
 				subjectDN,
 				entry,
@@ -262,6 +298,7 @@ func (server *Server) canApplyModifications(
 			}
 		case ldapwire.ModificationDelete:
 			if !server.canAccessAttribute(
+				runtime,
 				reader,
 				subjectDN,
 				entry,
@@ -272,6 +309,7 @@ func (server *Server) canApplyModifications(
 			}
 		case ldapwire.ModificationReplace, ldapwire.ModificationIncrement:
 			if !server.allowed(
+				runtime,
 				reader,
 				subjectDN,
 				entry,
@@ -282,6 +320,7 @@ func (server *Server) canApplyModifications(
 				return false
 			}
 			if len(change.Attribute.Values) > 0 && !server.canAccessAttribute(
+				runtime,
 				reader,
 				subjectDN,
 				entry,

@@ -27,6 +27,34 @@ func NewRegistry() *Registry {
 	}
 }
 
+func (registry *Registry) Clone() *Registry {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	cloned := NewRegistry()
+	attributeCopies := make(map[*AttributeType]*AttributeType)
+	for key, attribute := range registry.attributes {
+		copy, exists := attributeCopies[attribute]
+		if !exists {
+			value := cloneAttributeType(*attribute)
+			copy = &value
+			attributeCopies[attribute] = copy
+		}
+		cloned.attributes[key] = copy
+	}
+	objectClassCopies := make(map[*ObjectClass]*ObjectClass)
+	for key, objectClass := range registry.objectClasses {
+		copy, exists := objectClassCopies[objectClass]
+		if !exists {
+			value := cloneObjectClass(*objectClass)
+			copy = &value
+			objectClassCopies[objectClass] = copy
+		}
+		cloned.objectClasses[key] = copy
+	}
+	return cloned
+}
+
 func (registry *Registry) RegisterAttributeType(attribute AttributeType) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -45,6 +73,32 @@ func (registry *Registry) RegisterAttributeType(attribute AttributeType) error {
 		registry.attributes[key] = &copy
 	}
 	return nil
+}
+
+func cloneAttributeType(attribute AttributeType) AttributeType {
+	attribute.Names = append([]string(nil), attribute.Names...)
+	attribute.Extensions = cloneExtensions(attribute.Extensions)
+	return attribute
+}
+
+func cloneObjectClass(objectClass ObjectClass) ObjectClass {
+	objectClass.Names = append([]string(nil), objectClass.Names...)
+	objectClass.Superiors = append([]string(nil), objectClass.Superiors...)
+	objectClass.Must = append([]string(nil), objectClass.Must...)
+	objectClass.May = append([]string(nil), objectClass.May...)
+	objectClass.Extensions = cloneExtensions(objectClass.Extensions)
+	return objectClass
+}
+
+func cloneExtensions(extensions map[string][]string) map[string][]string {
+	if extensions == nil {
+		return nil
+	}
+	cloned := make(map[string][]string, len(extensions))
+	for key, values := range extensions {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
 }
 
 func (registry *Registry) RegisterObjectClass(objectClass ObjectClass) error {

@@ -21,6 +21,19 @@ func LoadOpenLDAPConfig(
 	store storage.Store,
 	registry *Registry,
 ) (LoadResult, error) {
+	var result LoadResult
+	err := store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		result, err = LoadOpenLDAPConfigReader(reader, registry)
+		return err
+	})
+	return result, err
+}
+
+func LoadOpenLDAPConfigReader(
+	reader storage.Reader,
+	registry *Registry,
+) (LoadResult, error) {
 	if registry == nil {
 		return LoadResult{}, fmt.Errorf("schema registry is required")
 	}
@@ -31,23 +44,21 @@ func LoadOpenLDAPConfig(
 
 	var attributeDescriptions []string
 	var objectClassDescriptions []string
-	if err := store.View(ctx, func(tx storage.Reader) error {
-		return tx.ForEach(func(entry directory.Entry) error {
-			entryDN, err := directory.ParseDN(entry.DN)
-			if err != nil {
-				return fmt.Errorf("parse configuration entry DN %q: %w", entry.DN, err)
-			}
-			if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
-				return nil
-			}
-			for _, value := range entry.Values("olcAttributeTypes") {
-				attributeDescriptions = append(attributeDescriptions, string(value))
-			}
-			for _, value := range entry.Values("olcObjectClasses") {
-				objectClassDescriptions = append(objectClassDescriptions, string(value))
-			}
+	if err := reader.ForEach(func(entry directory.Entry) error {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse configuration entry DN %q: %w", entry.DN, err)
+		}
+		if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
 			return nil
-		})
+		}
+		for _, value := range entry.Values("olcAttributeTypes") {
+			attributeDescriptions = append(attributeDescriptions, string(value))
+		}
+		for _, value := range entry.Values("olcObjectClasses") {
+			objectClassDescriptions = append(objectClassDescriptions, string(value))
+		}
+		return nil
 	}); err != nil {
 		return LoadResult{}, fmt.Errorf("scan OpenLDAP schema entries: %w", err)
 	}

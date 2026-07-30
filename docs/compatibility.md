@@ -80,7 +80,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | Transactional durable backend | partial | crash, atomicity, recovery, race tests |
 | Multiple suffixes and subordinate DBs | planned | naming-context routing tests |
-| `cn=config` online configuration | planned | OpenLDAP LDIF import and online changes |
+| `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
 | `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
 | `slapcat` `cn=config` import | partial | boot from imported configuration |
 | Backup, restore, index rebuild, check | planned | fault-injection and round-trip tests |
@@ -182,6 +182,15 @@ passwords; an unset root password falls back to normal entry authentication,
 while an explicitly empty value disables simple Bind for that root DN.
 Configuration-like attributes outside `cn=config` are ignored by schema, ACL,
 and runtime database loaders.
+
+Online Add, Modify, Delete, and in-tree ModifyDN operations under `cn=config`
+build schema, ACL, and database routing as one immutable snapshot inside the
+write transaction. Invalid supported configuration rolls back the directory
+change; a successful commit atomically publishes the new snapshot. Tests cover
+immediate ACL and root-password changes, schema publication/removal, rollback,
+and concurrent searches during repeated ACL reloads. The complete OpenLDAP
+configuration schema, backend/module-specific mutation hooks, ordered-entry
+renumbering, and full differential error behavior remain pending.
 
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual

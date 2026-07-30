@@ -10,6 +10,17 @@ import (
 )
 
 func LoadOpenLDAPConfig(ctx context.Context, store storage.Store) (*Policy, LoadResult, error) {
+	var policy *Policy
+	var result LoadResult
+	err := store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		policy, result, err = LoadOpenLDAPConfigReader(reader)
+		return err
+	})
+	return policy, result, err
+}
+
+func LoadOpenLDAPConfigReader(reader storage.Reader) (*Policy, LoadResult, error) {
 	type ruleSet struct {
 		suffixes      []string
 		global        bool
@@ -17,62 +28,60 @@ func LoadOpenLDAPConfig(ctx context.Context, store storage.Store) (*Policy, Load
 		addContentACL bool
 	}
 	var sets []ruleSet
-	if err := store.View(ctx, func(tx storage.Reader) error {
-		return tx.ForEach(func(entry directory.Entry) error {
-			entryDN, err := directory.ParseDN(entry.DN)
-			if err != nil {
-				return fmt.Errorf("parse configuration entry DN %q: %w", entry.DN, err)
-			}
-			if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
-				return nil
-			}
-			values := entry.Values("olcAccess")
-			set := ruleSet{}
-			for _, value := range values {
-				rule, err := ParseRule(string(value))
-				if err != nil {
-					return fmt.Errorf("%s olcAccess: %w", entry.DN, err)
-				}
-				set.rules = append(set.rules, rule)
-			}
-			SortRules(set.rules)
-			for _, suffix := range entry.Values("olcSuffix") {
-				set.suffixes = append(set.suffixes, string(suffix))
-			}
-			addContentValues := entry.Values("olcAddContentAcl")
-			if len(addContentValues) > 1 {
-				return fmt.Errorf("%s olcAddContentAcl has multiple values", entry.DN)
-			}
-			if len(addContentValues) == 1 {
-				switch {
-				case strings.EqualFold(string(addContentValues[0]), "TRUE"):
-					set.addContentACL = true
-				case strings.EqualFold(string(addContentValues[0]), "FALSE"):
-				default:
-					return fmt.Errorf(
-						"%s olcAddContentAcl has invalid value %q",
-						entry.DN,
-						addContentValues[0],
-					)
-				}
-			}
-			database := strings.ToLower(firstString(entry.Values("olcDatabase")))
-			if len(values) == 0 && len(set.suffixes) == 0 && database == "" {
-				return nil
-			}
-			if len(set.suffixes) == 0 {
-				switch {
-				case strings.Contains(database, "config"):
-					set.suffixes = []string{"cn=config"}
-				case strings.Contains(database, "monitor"):
-					set.suffixes = []string{"cn=Monitor"}
-				default:
-					set.global = true
-				}
-			}
-			sets = append(sets, set)
+	if err := reader.ForEach(func(entry directory.Entry) error {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse configuration entry DN %q: %w", entry.DN, err)
+		}
+		if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
 			return nil
-		})
+		}
+		values := entry.Values("olcAccess")
+		set := ruleSet{}
+		for _, value := range values {
+			rule, err := ParseRule(string(value))
+			if err != nil {
+				return fmt.Errorf("%s olcAccess: %w", entry.DN, err)
+			}
+			set.rules = append(set.rules, rule)
+		}
+		SortRules(set.rules)
+		for _, suffix := range entry.Values("olcSuffix") {
+			set.suffixes = append(set.suffixes, string(suffix))
+		}
+		addContentValues := entry.Values("olcAddContentAcl")
+		if len(addContentValues) > 1 {
+			return fmt.Errorf("%s olcAddContentAcl has multiple values", entry.DN)
+		}
+		if len(addContentValues) == 1 {
+			switch {
+			case strings.EqualFold(string(addContentValues[0]), "TRUE"):
+				set.addContentACL = true
+			case strings.EqualFold(string(addContentValues[0]), "FALSE"):
+			default:
+				return fmt.Errorf(
+					"%s olcAddContentAcl has invalid value %q",
+					entry.DN,
+					addContentValues[0],
+				)
+			}
+		}
+		database := strings.ToLower(firstString(entry.Values("olcDatabase")))
+		if len(values) == 0 && len(set.suffixes) == 0 && database == "" {
+			return nil
+		}
+		if len(set.suffixes) == 0 {
+			switch {
+			case strings.Contains(database, "config"):
+				set.suffixes = []string{"cn=config"}
+			case strings.Contains(database, "monitor"):
+				set.suffixes = []string{"cn=Monitor"}
+			default:
+				set.global = true
+			}
+		}
+		sets = append(sets, set)
+		return nil
 	}); err != nil {
 		return nil, LoadResult{}, fmt.Errorf("load OpenLDAP ACL configuration: %w", err)
 	}

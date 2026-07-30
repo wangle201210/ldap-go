@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -32,14 +33,14 @@ type Config struct {
 }
 
 type Server struct {
-	config    Config
-	databases []runtimeDatabase
-	schema    *schema.Registry
-	access    *acl.Policy
+	config     Config
+	baseSchema *schema.Registry
+	runtime    atomic.Pointer[runtimeState]
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
 	wg          sync.WaitGroup
+	configMu    sync.Mutex
 
 	csnMu      sync.Mutex
 	lastCSN    time.Time
@@ -59,44 +60,36 @@ func New(config Config) (*Server, error) {
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	if config.Schema == nil {
+	baseSchema := config.Schema
+	if baseSchema == nil {
 		var err error
-		config.Schema, err = schema.NewBuiltinRegistry()
+		baseSchema, err = schema.NewBuiltinRegistry()
 		if err != nil {
 			return nil, fmt.Errorf("initialize built-in schema: %w", err)
 		}
-	}
-	if _, err := schema.LoadOpenLDAPConfig(context.Background(), config.Store, config.Schema); err != nil {
-		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
-	}
-	if config.AccessPolicy == nil {
-		var err error
-		config.AccessPolicy, _, err = acl.LoadOpenLDAPConfig(context.Background(), config.Store)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	databases, err := loadRuntimeDatabases(context.Background(), config.Store)
-	if err != nil {
-		return nil, err
 	}
 	if config.RootDN != "" {
 		if len(config.RootPassword) == 0 {
 			return nil, errors.New("root password is required when root DN is configured")
 		}
-		if err := applyBootstrapRoot(databases, config.RootDN, config.RootPassword); err != nil {
-			return nil, err
-		}
 	}
 
-	return &Server{
+	server := &Server{
 		config:      config,
-		databases:   databases,
-		schema:      config.Schema,
-		access:      config.AccessPolicy,
+		baseSchema:  baseSchema.Clone(),
 		connections: make(map[net.Conn]struct{}),
-	}, nil
+	}
+	var runtime *runtimeState
+	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
+		var err error
+		runtime, err = server.buildRuntimeState(reader)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	server.runtime.Store(runtime)
+	return server, nil
 }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
@@ -173,6 +166,7 @@ func (server *Server) dispatch(
 	state *connectionState,
 	message ldapwire.Message,
 ) (bool, error) {
+	state.runtime = server.runtime.Load()
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
 		return true, nil
@@ -240,7 +234,12 @@ func (server *Server) handleBind(
 		))
 	}
 
-	authenticated, err := server.authenticate(ctx, request.Name, request.Authentication.Simple)
+	authenticated, err := server.authenticate(
+		ctx,
+		state.runtime,
+		request.Name,
+		request.Authentication.Simple,
+	)
 	if err != nil {
 		return err
 	}
@@ -259,7 +258,12 @@ func (server *Server) handleBind(
 	))
 }
 
-func (server *Server) authenticate(ctx context.Context, rawDN string, password []byte) (bool, error) {
+func (server *Server) authenticate(
+	ctx context.Context,
+	runtime *runtimeState,
+	rawDN string,
+	password []byte,
+) (bool, error) {
 	if rawDN == "" {
 		return len(password) == 0, nil
 	}
@@ -271,7 +275,7 @@ func (server *Server) authenticate(ctx context.Context, rawDN string, password [
 		return false, nil
 	}
 
-	if database := server.databaseForDN(dn); database != nil &&
+	if database := databaseForDN(runtime, dn); database != nil &&
 		database.rootDN != nil &&
 		database.rootDN.Equal(dn) &&
 		database.rootPasswordSet {
@@ -287,7 +291,7 @@ func (server *Server) authenticate(ctx context.Context, rawDN string, password [
 		if err != nil {
 			return err
 		}
-		if !server.allowed(tx, "", entry, "userPassword", nil, acl.Auth) {
+		if !server.allowed(runtime, tx, "", entry, "userPassword", nil, acl.Auth) {
 			return nil
 		}
 		for _, stored := range entry.Values("userPassword") {
@@ -310,6 +314,7 @@ func (server *Server) closeConnections() {
 
 type connectionState struct {
 	boundDN string
+	runtime *runtimeState
 }
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {
@@ -354,7 +359,10 @@ func expired(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (server *Server) isRoot(rawDN, targetDN, attribute string) bool {
+func (server *Server) isRoot(
+	runtime *runtimeState,
+	rawDN, targetDN, attribute string,
+) bool {
 	if rawDN == "" {
 		return false
 	}
@@ -363,30 +371,30 @@ func (server *Server) isRoot(rawDN, targetDN, attribute string) bool {
 		return false
 	}
 	if targetDN == "" {
-		return attribute == "children" && server.isAnyDatabaseRoot(subject)
+		return attribute == "children" && isAnyDatabaseRoot(runtime, subject)
 	}
 	target, err := directory.ParseDN(targetDN)
 	if err != nil {
 		return false
 	}
-	database := server.databaseForDN(target)
+	database := databaseForDN(runtime, target)
 	return database != nil && database.rootDN != nil && database.rootDN.Equal(subject)
 }
 
-func (server *Server) isAnyDatabaseRoot(subject directory.DN) bool {
-	for index := range server.databases {
-		if server.databases[index].rootDN != nil &&
-			server.databases[index].rootDN.Equal(subject) {
+func isAnyDatabaseRoot(runtime *runtimeState, subject directory.DN) bool {
+	for index := range runtime.databases {
+		if runtime.databases[index].rootDN != nil &&
+			runtime.databases[index].rootDN.Equal(subject) {
 			return true
 		}
 	}
 	return false
 }
 
-func (server *Server) databaseForDN(dn directory.DN) *runtimeDatabase {
-	index := databaseIndexForDN(server.databases, dn)
+func databaseForDN(runtime *runtimeState, dn directory.DN) *runtimeDatabase {
+	index := databaseIndexForDN(runtime.databases, dn)
 	if index < 0 {
 		return nil
 	}
-	return &server.databases[index]
+	return &runtime.databases[index]
 }
