@@ -17,6 +17,42 @@ func EncodeSearchResultDone(messageID int64, result Result, controls []Control) 
 	return encodeResultMessage(messageID, ApplicationSearchResultDone, result, controls)
 }
 
+func EncodeExtendedResponse(
+	messageID int64,
+	result Result,
+	responseName string,
+	responseValue []byte,
+	controls []Control,
+) []byte {
+	response := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationExtendedResponse,
+		nil,
+		"ExtendedResponse",
+	)
+	appendLDAPResult(response, result)
+	if responseName != "" {
+		response.AppendChild(ber.NewString(
+			ber.ClassContext,
+			ber.TypePrimitive,
+			10,
+			responseName,
+			"responseName",
+		))
+	}
+	if responseValue != nil {
+		response.AppendChild(ber.NewString(
+			ber.ClassContext,
+			ber.TypePrimitive,
+			11,
+			string(responseValue),
+			"responseValue",
+		))
+	}
+	return encodeMessage(messageID, response, controls)
+}
+
 func EncodeResultResponse(messageID int64, applicationTag uint64, result Result, controls []Control) []byte {
 	return encodeResultMessage(messageID, applicationTag, result, controls)
 }
@@ -47,22 +83,13 @@ func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []
 }
 
 func EncodeNoticeOfDisconnection(result Result) []byte {
-	response := ber.Encode(
-		ber.ClassApplication,
-		ber.TypeConstructed,
-		ApplicationExtendedResponse,
-		nil,
-		"ExtendedResponse",
-	)
-	appendLDAPResult(response, result)
-	response.AppendChild(ber.NewString(
-		ber.ClassContext,
-		ber.TypePrimitive,
-		10,
+	return EncodeExtendedResponse(
+		0,
+		result,
 		"1.3.6.1.4.1.1466.20036",
-		"responseName",
-	))
-	return encodeMessage(0, response, nil)
+		nil,
+		nil,
+	)
 }
 
 func Write(writer io.Writer, encoded []byte) error {

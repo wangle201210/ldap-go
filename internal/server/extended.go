@@ -9,7 +9,10 @@ import (
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
-const startTLSOID = "1.3.6.1.4.1.1466.20037"
+const (
+	startTLSOID       = "1.3.6.1.4.1.1466.20037"
+	passwordModifyOID = "1.3.6.1.4.1.4203.1.11.1"
+)
 
 func (server *Server) handleExtended(
 	ctx context.Context,
@@ -29,7 +32,12 @@ func (server *Server) handleExtended(
 			nil,
 		))
 	}
-	if request.Name != startTLSOID {
+	switch request.Name {
+	case startTLSOID:
+		return server.handleStartTLS(ctx, connection, state, message, request)
+	case passwordModifyOID:
+		return server.handlePasswordModify(ctx, connection, state, message, request)
+	default:
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
@@ -40,6 +48,15 @@ func (server *Server) handleExtended(
 			nil,
 		))
 	}
+}
+
+func (server *Server) handleStartTLS(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.ExtendedRequest,
+) error {
 	if request.HasValue {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,

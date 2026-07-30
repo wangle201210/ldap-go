@@ -490,12 +490,14 @@ func (server *Server) rootDSE(runtime *runtimeState) directory.Entry {
 			Values:      stringValues(monitorContexts...),
 		})
 	}
+	supportedExtensions := []string{passwordModifyOID}
 	if server.secureTransport != nil {
-		entry.Attributes = append(entry.Attributes, directory.Attribute{
-			Description: "supportedExtension",
-			Values:      stringValues(startTLSOID),
-		})
+		supportedExtensions = append([]string{startTLSOID}, supportedExtensions...)
 	}
+	entry.Attributes = append(entry.Attributes, directory.Attribute{
+		Description: "supportedExtension",
+		Values:      stringValues(supportedExtensions...),
+	})
 	return entry
 }
 

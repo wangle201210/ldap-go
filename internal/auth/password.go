@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
@@ -19,6 +20,9 @@ import (
 const (
 	DefaultSMPBKDF2Iterations = 100_000
 	MaxSMPBKDF2Iterations     = 10_000_000
+	OpenLDAPDefaultHashScheme = "{SSHA}"
+	SMPBKDF2HashScheme        = "{PBKDF2-SM3}"
+	openLDAPPasswordSaltSize  = 4
 	smPasswordSaltSize        = 16
 	maxSMPBKDF2PayloadSize    = 8 + 1 + 22 + 1 + 43
 )
@@ -73,6 +77,93 @@ func VerifyPassword(stored, supplied []byte) bool {
 	}
 }
 
+func NormalizePasswordHashScheme(value string) (string, error) {
+	scheme := strings.ToUpper(strings.TrimSpace(value))
+	switch scheme {
+	case "{CLEARTEXT}",
+		"{SHA}",
+		"{SSHA}",
+		"{MD5}",
+		"{SMD5}",
+		"{SM3}",
+		"{SSM3}",
+		SMPBKDF2HashScheme:
+		return scheme, nil
+	default:
+		return "", fmt.Errorf("unsupported password hash scheme %q", value)
+	}
+}
+
+func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, errors.New("password must not be empty")
+	}
+	normalized, err := NormalizePasswordHashScheme(scheme)
+	if err != nil {
+		return nil, err
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+
+	switch normalized {
+	case "{CLEARTEXT}":
+		return bytes.Clone(password), nil
+	case "{SHA}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := sha1.Sum(value)
+			return digest[:]
+		})
+	case "{SSHA}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			openLDAPPasswordSaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := sha1.Sum(value)
+				return digest[:]
+			},
+		)
+	case "{MD5}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := md5.Sum(value)
+			return digest[:]
+		})
+	case "{SMD5}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			openLDAPPasswordSaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := md5.Sum(value)
+				return digest[:]
+			},
+		)
+	case "{SM3}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := sm3.Sum(value)
+			return digest[:]
+		})
+	case "{SSM3}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			smPasswordSaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := sm3.Sum(value)
+				return digest[:]
+			},
+		)
+	case SMPBKDF2HashScheme:
+		return HashPasswordSMPBKDF2(password, DefaultSMPBKDF2Iterations, random)
+	default:
+		panic("validated password hash scheme was not handled")
+	}
+}
+
 func HashPasswordSMPBKDF2(
 	password []byte,
 	iterations int,
@@ -101,6 +192,27 @@ func HashPasswordSMPBKDF2(
 		adaptedBase64(salt),
 		adaptedBase64(derived),
 	)), nil
+}
+
+func hashPasswordDigest(
+	password []byte,
+	scheme string,
+	saltSize int,
+	random io.Reader,
+	sum func([]byte) []byte,
+) ([]byte, error) {
+	salt := make([]byte, saltSize)
+	if _, err := io.ReadFull(random, salt); err != nil {
+		return nil, fmt.Errorf("generate password salt: %w", err)
+	}
+	input := make([]byte, 0, len(password)+len(salt))
+	input = append(input, password...)
+	input = append(input, salt...)
+	digest := sum(input)
+	encoded := make([]byte, 0, len(digest)+len(salt))
+	encoded = append(encoded, digest...)
+	encoded = append(encoded, salt...)
+	return []byte(scheme + base64.StdEncoding.EncodeToString(encoded)), nil
 }
 
 func splitScheme(stored []byte) (string, []byte) {

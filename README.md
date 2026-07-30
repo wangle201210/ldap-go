@@ -33,14 +33,15 @@ go test ./...
 The current server milestone supports atomic content-LDIF import/export,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
-subtree ModifyDN, Compare, and Unbind. It loads OpenLDAP schema, ordered ACLs,
-database roots, hidden/disabled databases, and selected operation settings from
-`cn=config`; supported online changes are validated transactionally and
-published as one runtime snapshot. Database entry partitions allow different
-OpenLDAP backends to hold the same DN without crossing authorization or search
-boundaries, while `olcSubordinate` databases participate in OpenLDAP-style glue
-searches. The compatibility matrix marks these as partial until the remaining
-schema, ACL, control, alias, configuration, and differential cases pass.
+subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
+loads OpenLDAP schema, ordered ACLs, database roots, hidden/disabled databases,
+and selected operation settings from `cn=config`; supported online changes are
+validated transactionally and published as one runtime snapshot. Database
+entry partitions allow different OpenLDAP backends to hold the same DN without
+crossing authorization or search boundaries, while `olcSubordinate` databases
+participate in OpenLDAP-style glue searches. The compatibility matrix marks
+these as partial until the remaining schema, ACL, control, alias,
+configuration, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \
@@ -135,6 +136,26 @@ values, but those fast digest schemes should only be retained for migration.
 `{PBKDF2-SM3}` is an `ldap-go` extension modeled on OpenLDAP's contributed
 PBKDF2 format; an upstream OpenLDAP server needs a matching module or patch to
 authenticate against it.
+
+RFC 3062 Password Modify follows OpenLDAP's `olcPasswordHash` setting. Its
+default remains `{SSHA}` for OpenLDAP compatibility. To make server-side
+password changes use national cryptography, set the frontend database entry:
+
+```ldif
+dn: olcDatabase={-1}frontend,cn=config
+changetype: modify
+replace: olcPasswordHash
+olcPasswordHash: {PBKDF2-SM3}
+```
+
+The setting is validated and reloaded atomically. Users can then change their
+own passwords with an RFC 3062 client without putting either password in
+command arguments:
+
+```sh
+ldappasswd -x -H ldap://127.0.0.1:1389 \
+  -D uid=alice,ou=people,dc=example,dc=com -W -A -S
+```
 
 See [docs/architecture.md](docs/architecture.md) for the implementation model
 and [docs/testing.md](docs/testing.md) for compatibility gates.

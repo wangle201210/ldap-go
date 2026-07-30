@@ -103,6 +103,65 @@ func TestHashPasswordSMPBKDF2(t *testing.T) {
 	}
 }
 
+func TestHashPasswordSchemes(t *testing.T) {
+	t.Parallel()
+
+	password := []byte("secret")
+	tests := []struct {
+		scheme string
+		prefix string
+	}{
+		{scheme: "{CLEARTEXT}", prefix: "secret"},
+		{scheme: "{SHA}", prefix: "{SHA}"},
+		{scheme: "{SSHA}", prefix: "{SSHA}"},
+		{scheme: "{MD5}", prefix: "{MD5}"},
+		{scheme: "{SMD5}", prefix: "{SMD5}"},
+		{scheme: "{SM3}", prefix: "{SM3}"},
+		{scheme: "{SSM3}", prefix: "{SSM3}"},
+		{scheme: SMPBKDF2HashScheme, prefix: "{PBKDF2-SM3}100000$"},
+	}
+	for _, test := range tests {
+		t.Run(test.scheme, func(t *testing.T) {
+			t.Parallel()
+
+			stored, err := HashPassword(
+				password,
+				strings.ToLower(test.scheme),
+				bytes.NewReader(make([]byte, smPasswordSaltSize)),
+			)
+			if err != nil {
+				t.Fatalf("HashPassword(): %v", err)
+			}
+			if !strings.HasPrefix(string(stored), test.prefix) {
+				t.Fatalf("HashPassword() = %q", stored)
+			}
+			if !VerifyPassword(stored, password) {
+				t.Fatal("generated password did not verify")
+			}
+			if VerifyPassword(stored, []byte("wrong")) {
+				t.Fatal("generated password accepted an incorrect value")
+			}
+		})
+	}
+}
+
+func TestHashPasswordRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	if _, err := HashPassword(nil, "{SSHA}", nil); err == nil {
+		t.Fatal("empty password was accepted")
+	}
+	if _, err := HashPassword([]byte("secret"), "{CRYPT}", nil); err == nil {
+		t.Fatal("unsupported scheme was accepted")
+	}
+	if _, err := HashPassword([]byte("secret"), "{SSHA}", errorReader{}); err == nil {
+		t.Fatal("salt generation failure was ignored")
+	}
+	if _, err := HashPassword([]byte("secret"), "{SHA}", errorReader{}); err != nil {
+		t.Fatalf("unsalted scheme read random source: %v", err)
+	}
+}
+
 func TestHashPasswordSMPBKDF2RejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 

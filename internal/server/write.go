@@ -239,6 +239,35 @@ func (server *Server) handleModify(
 			*result,
 		)
 	}
+	nextRuntime, err := server.modifyEntry(
+		ctx,
+		state.runtime,
+		state.boundDN,
+		dn,
+		*database,
+		request.Changes,
+		nil,
+	)
+	if err == nil && nextRuntime != nil {
+		server.runtime.Store(nextRuntime)
+	}
+	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyResponse, err)
+}
+
+type entryModificationPrecondition func(
+	reader storage.Reader,
+	entry directory.Entry,
+) error
+
+func (server *Server) modifyEntry(
+	ctx context.Context,
+	runtime *runtimeState,
+	boundDN string,
+	dn directory.DN,
+	database runtimeDatabase,
+	changes []ldapwire.Modification,
+	precondition entryModificationPrecondition,
+) (*runtimeState, error) {
 	configurationWrite := isConfigurationDN(dn)
 	if configurationWrite {
 		server.configMu.Lock()
@@ -246,29 +275,34 @@ func (server *Server) handleModify(
 	}
 
 	var nextRuntime *runtimeState
-	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
-				server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
+				server.disclosedAncestor(runtime, tx, boundDN, dn),
 			)
 		}
 		if err != nil {
 			return err
 		}
+		if precondition != nil {
+			if err := precondition(tx, entry); err != nil {
+				return err
+			}
+		}
 
 		if !server.canApplyModifications(
-			state.runtime,
+			runtime,
 			tx,
-			state.boundDN,
+			boundDN,
 			entry,
-			request.Changes,
+			changes,
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
-		for _, change := range request.Changes {
+		for _, change := range changes {
 			if isProtectedOperationalAttribute(change.Attribute.Description) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
 			}
@@ -281,14 +315,14 @@ func (server *Server) handleModify(
 				return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
 			}
 		}
-		if lastModEnabled(state.runtime, dn) {
-			server.applyModifyOperationalAttributes(&entry, state.boundDN)
+		if lastModEnabled(runtime, dn) {
+			server.applyModifyOperationalAttributes(&entry, boundDN)
 		}
 		if !configurationWrite {
-			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
+			if err := runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
 			}
-			if err := server.applySchemaOperationalAttributes(state.runtime, &entry); err != nil {
+			if err := server.applySchemaOperationalAttributes(runtime, &entry); err != nil {
 				return err
 			}
 		}
@@ -302,10 +336,7 @@ func (server *Server) handleModify(
 		}
 		return nil
 	})
-	if err == nil && nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
-	}
-	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyResponse, err)
+	return nextRuntime, err
 }
 
 func (server *Server) handleDelete(

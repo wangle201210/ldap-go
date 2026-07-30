@@ -107,7 +107,11 @@ and constant-time verification is mandatory. Imported OpenLDAP digest schemes
 remain readable, while new national-cryptography credentials use salted,
 costed PBKDF2-SM3 rather than a fast bare SM3 digest. Stored iteration counts
 are bounded during verification so a malicious directory value cannot force
-unlimited work on a Bind handler.
+unlimited work on a Bind handler. RFC 3062 Password Modify runs old-password
+verification, ACL checks, password replacement, schema validation, and
+operational-attribute updates in one storage transaction. Hash selection is
+loaded from the frontend database's `olcPasswordHash` values in the same
+immutable runtime snapshot as ACL and schema configuration.
 
 ## Data migration contract
 

@@ -36,7 +36,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | StartTLS | partial | RFC 4511/4513 state machine, TLS tests, and OpenLDAP differential |
-| Password Modify | planned | RFC 3062 and password policy integration |
+| Password Modify | partial | RFC 3062 core passes; password policy integration remains |
 | Who Am I? | planned | RFC 4532 authorization identity tests |
 | Cancel | planned | RFC 3909 concurrent operation tests |
 | Assertion | planned | RFC 4528 atomic write tests |
@@ -177,6 +177,17 @@ migration requires a corresponding OpenLDAP password module or patch.
 `ldap-go passwd` generates `{PBKDF2-SM3}` values. It reads the cleartext from
 `LDAP_GO_PASSWORD` or bounded standard input and never accepts it as a
 positional command argument.
+
+RFC 3062 Password Modify is advertised in Root DSE and supports the bound
+identity or an explicit target DN, optional old-password verification,
+client-supplied passwords, server-generated passwords, ACL enforcement, and
+normal schema/operational-attribute updates in one storage transaction. The
+frontend database's `olcPasswordHash` values select one or more output hashes;
+the OpenLDAP default is `{SSHA}`, while `{PBKDF2-SM3}` enables the costed SM3
+format. Legacy placement on `cn=config` is also accepted. Online changes are
+validated as part of the runtime snapshot and unsupported schemes roll back.
+Password policy controls, history, quality checks, expiry, and lockout remain
+pending with the ppolicy overlay.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

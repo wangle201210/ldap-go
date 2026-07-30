@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -19,6 +20,7 @@ type runtimeState struct {
 	access                *acl.Policy
 	databases             []runtimeDatabase
 	allowAnonymousUpdates bool
+	passwordHashSchemes   []string
 }
 
 func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, error) {
@@ -44,6 +46,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	passwordHashSchemes, err := loadPasswordHashSchemes(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -58,7 +64,71 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		access:                access,
 		databases:             databases,
 		allowAnonymousUpdates: allowAnonymousUpdates,
+		passwordHashSchemes:   passwordHashSchemes,
 	}, nil
+}
+
+func loadPasswordHashSchemes(reader storage.Reader) ([]string, error) {
+	var globalValues [][]byte
+	global, err := reader.Get(configurationSuffix)
+	switch {
+	case err == nil:
+		globalValues = global.Values("olcPasswordHash")
+	case errors.Is(err, storage.ErrEntryNotFound):
+	default:
+		return nil, fmt.Errorf("load global password hash configuration: %w", err)
+	}
+
+	var frontendValues [][]byte
+	frontendFound := false
+	err = reader.ForEach(func(entry directory.Entry) error {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
+		}
+		if !configurationSuffix.Equal(entryDN) &&
+			!configurationSuffix.AncestorOf(entryDN) {
+			return nil
+		}
+		databaseValues := entry.Values("olcDatabase")
+		if len(databaseValues) != 1 ||
+			databaseType(string(databaseValues[0])) != "frontend" {
+			return nil
+		}
+		if frontendFound {
+			return fmt.Errorf("multiple frontend database entries configure password hashes")
+		}
+		frontendFound = true
+		frontendValues = entry.Values("olcPasswordHash")
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load frontend password hash configuration: %w", err)
+	}
+
+	values := globalValues
+	if len(frontendValues) > 0 {
+		values = frontendValues
+	}
+	if len(values) == 0 {
+		return []string{auth.OpenLDAPDefaultHashScheme}, nil
+	}
+
+	var schemes []string
+	for _, rawValue := range values {
+		fields := strings.Fields(string(rawValue))
+		if len(fields) == 0 {
+			return nil, errors.New("olcPasswordHash contains an empty value")
+		}
+		for _, field := range fields {
+			scheme, err := auth.NormalizePasswordHashScheme(field)
+			if err != nil {
+				return nil, fmt.Errorf("olcPasswordHash: %w", err)
+			}
+			schemes = append(schemes, scheme)
+		}
+	}
+	return schemes, nil
 }
 
 func loadAnonymousUpdateAllowance(reader storage.Reader) (bool, error) {
