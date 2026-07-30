@@ -2,14 +2,29 @@ package auth
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
 	"strings"
+
+	"github.com/emmansun/gmsm/sm3"
+	"golang.org/x/crypto/pbkdf2"
 )
 
-// VerifyPassword supports the password schemes built into a typical OpenLDAP
-// deployment that can be implemented without platform-specific crypt(3).
+const (
+	DefaultSMPBKDF2Iterations = 100_000
+	MaxSMPBKDF2Iterations     = 10_000_000
+	smPasswordSaltSize        = 16
+	maxSMPBKDF2PayloadSize    = 8 + 1 + 22 + 1 + 43
+)
+
+// VerifyPassword accepts portable OpenLDAP digest schemes and ldap-go's SM3
+// extensions without relying on platform-specific crypt(3).
 func VerifyPassword(stored, supplied []byte) bool {
 	if len(stored) == 0 || len(supplied) == 0 {
 		return false
@@ -41,9 +56,51 @@ func VerifyPassword(stored, supplied []byte) bool {
 			digest := md5.Sum(value)
 			return digest[:]
 		})
+	case "SM3":
+		return verifyDigest(payload, supplied, false, sm3.Size, func(value []byte) []byte {
+			digest := sm3.Sum(value)
+			return digest[:]
+		})
+	case "SSM3":
+		return verifyDigest(payload, supplied, true, sm3.Size, func(value []byte) []byte {
+			digest := sm3.Sum(value)
+			return digest[:]
+		})
+	case "PBKDF2-SM3":
+		return verifySMPBKDF2(payload, supplied)
 	default:
 		return false
 	}
+}
+
+func HashPasswordSMPBKDF2(
+	password []byte,
+	iterations int,
+	random io.Reader,
+) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, errors.New("password must not be empty")
+	}
+	if iterations < 1 || iterations > MaxSMPBKDF2Iterations {
+		return nil, fmt.Errorf(
+			"PBKDF2-SM3 iterations must be between 1 and %d",
+			MaxSMPBKDF2Iterations,
+		)
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	salt := make([]byte, smPasswordSaltSize)
+	if _, err := io.ReadFull(random, salt); err != nil {
+		return nil, fmt.Errorf("generate password salt: %w", err)
+	}
+	derived := pbkdf2.Key(password, salt, iterations, sm3.Size, sm3.New)
+	return []byte(fmt.Sprintf(
+		"{PBKDF2-SM3}%d$%s$%s",
+		iterations,
+		adaptedBase64(salt),
+		adaptedBase64(derived),
+	)), nil
 }
 
 func splitScheme(stored []byte) (string, []byte) {
@@ -80,6 +137,56 @@ func verifyDigest(
 	input = append(input, salt...)
 	actual := sum(input)
 	return subtle.ConstantTimeCompare(decoded[:digestLength], actual) == 1
+}
+
+func verifySMPBKDF2(payload, password []byte) bool {
+	if len(payload) > maxSMPBKDF2PayloadSize {
+		return false
+	}
+	fields := strings.Split(string(payload), "$")
+	if len(fields) != 3 ||
+		len(fields[0]) == 0 ||
+		len(fields[0]) > 8 ||
+		len(fields[1]) > 24 ||
+		len(fields[2]) > 44 {
+		return false
+	}
+	iterations, err := strconv.Atoi(fields[0])
+	if err != nil || iterations < 1 || iterations > MaxSMPBKDF2Iterations {
+		return false
+	}
+	salt, err := decodeAdaptedBase64(fields[1])
+	if err != nil || len(salt) != smPasswordSaltSize {
+		return false
+	}
+	expected, err := decodeAdaptedBase64(fields[2])
+	if err != nil || len(expected) != sm3.Size {
+		return false
+	}
+	actual := pbkdf2.Key(password, salt, iterations, sm3.Size, sm3.New)
+	return subtle.ConstantTimeCompare(expected, actual) == 1
+}
+
+func adaptedBase64(value []byte) string {
+	return strings.ReplaceAll(
+		base64.RawStdEncoding.EncodeToString(value),
+		"+",
+		".",
+	)
+}
+
+func decodeAdaptedBase64(value string) ([]byte, error) {
+	normalized := strings.ReplaceAll(value, ".", "+")
+	switch len(normalized) % 4 {
+	case 0:
+	case 2:
+		normalized += "=="
+	case 3:
+		normalized += "="
+	default:
+		return nil, errors.New("invalid adapted base64")
+	}
+	return base64.StdEncoding.DecodeString(normalized)
 }
 
 func constantTimeEqual(left, right []byte) bool {

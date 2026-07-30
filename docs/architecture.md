@@ -103,7 +103,11 @@ implicit upgrades. The TLCP provider implements GB/T 38636 with separate SM2
 signing and encryption certificates and SM4/SM3 cipher suites without forking
 the operation engine. RFC 8998 TLS 1.3 support is a separate provider because
 it is not wire-compatible with TLCP. Password schemes are registered modules
-and constant-time verification is mandatory.
+and constant-time verification is mandatory. Imported OpenLDAP digest schemes
+remain readable, while new national-cryptography credentials use salted,
+costed PBKDF2-SM3 rather than a fast bare SM3 digest. Stored iteration counts
+are bounded during verification so a malicious directory value cannot force
+unlimited work on a Bind handler.
 
 ## Data migration contract
 

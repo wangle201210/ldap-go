@@ -66,7 +66,7 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| OpenLDAP password schemes | partial | hash/verify vectors and migration tests |
+| OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
@@ -163,7 +163,20 @@ Attribute selection distinguishes user attributes (`*`) from operational
 attributes (`+`).
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
-`{SSHA}`, `{MD5}`, and `{SMD5}`.
+`{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
+national-cryptography password values use `{PBKDF2-SM3}` with a random 16-byte
+salt, a 32-byte derived key, and 100,000 iterations by default. The textual
+layout follows OpenLDAP's contributed PBKDF2 scheme:
+`{PBKDF2-SM3}<iterations>$<salt>$<derived-key>`, using unpadded adapted
+base64. Verification rejects iteration counts above 10,000,000 to bound Bind
+work from untrusted stored values. `{SM3}` and `{SSM3}` are accepted for
+existing deployments but are not recommended for newly stored passwords.
+These three SM3 scheme names are not built into upstream OpenLDAP; reverse
+migration requires a corresponding OpenLDAP password module or patch.
+
+`ldap-go passwd` generates `{PBKDF2-SM3}` values. It reads the cleartext from
+`LDAP_GO_PASSWORD` or bounded standard input and never accepts it as a
+positional command argument.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

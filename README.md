@@ -121,5 +121,20 @@ LDAP_GO_ROOT_PASSWORD='change-me' \
   -root-dn cn=admin,dc=example,dc=com
 ```
 
+Generate a salted national-cryptography password value for `userPassword` or
+`olcRootPW` without passing the cleartext password as a command argument:
+
+```sh
+LDAP_GO_PASSWORD='change-me' \
+  go run ./cmd/ldap-go passwd
+```
+
+The output uses `{PBKDF2-SM3}` with a random 16-byte salt and 100,000
+iterations by default. `ldap-go` also verifies imported `{SM3}` and `{SSM3}`
+values, but those fast digest schemes should only be retained for migration.
+`{PBKDF2-SM3}` is an `ldap-go` extension modeled on OpenLDAP's contributed
+PBKDF2 format; an upstream OpenLDAP server needs a matching module or patch to
+authenticate against it.
+
 See [docs/architecture.md](docs/architecture.md) for the implementation model
 and [docs/testing.md](docs/testing.md) for compatibility gates.

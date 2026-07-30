@@ -7,9 +7,109 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
+
+func TestPasswordCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		password string
+	}{
+		{name: "environment", password: "environment secret"},
+		{name: "stdin LF", input: "stdin secret\n", password: "stdin secret"},
+		{name: "stdin CRLF", input: "stdin secret\r\n", password: "stdin secret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				[]string{"passwd", "-iterations", "10"},
+				strings.NewReader(test.input),
+				&stdout,
+				&stderr,
+				func(name string) string {
+					if name == passwordEnvironment && test.input == "" {
+						return test.password
+					}
+					return ""
+				},
+			)
+			if exitCode != 0 {
+				t.Fatalf("run() exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			stored := []byte(strings.TrimSuffix(stdout.String(), "\n"))
+			if !strings.HasPrefix(string(stored), "{PBKDF2-SM3}10$") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+			if !auth.VerifyPassword(stored, []byte(test.password)) {
+				t.Fatal("generated password does not verify")
+			}
+			if auth.VerifyPassword(stored, []byte("wrong")) {
+				t.Fatal("generated password accepted an incorrect value")
+			}
+		})
+	}
+}
+
+func TestPasswordCommandRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		args  []string
+		input string
+	}{
+		{name: "empty", args: []string{"passwd"}},
+		{
+			name:  "iterations",
+			args:  []string{"passwd", "-iterations", "0"},
+			input: "secret\n",
+		},
+		{
+			name:  "unexpected argument",
+			args:  []string{"passwd", "secret"},
+			input: "ignored\n",
+		},
+		{
+			name:  "input limit",
+			args:  []string{"passwd"},
+			input: strings.Repeat("x", maxPasswordInputSize+1),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			if exitCode := run(
+				test.args,
+				strings.NewReader(test.input),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			); exitCode != 1 {
+				t.Fatalf(
+					"run() exit code = %d, stdout = %q, stderr = %q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "error:") {
+				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
 
 func TestImportCommand(t *testing.T) {
 	t.Parallel()

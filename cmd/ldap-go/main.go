@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -17,13 +18,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/gmtransport"
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-const rootPasswordEnvironment = "LDAP_GO_ROOT_PASSWORD"
+const (
+	rootPasswordEnvironment = "LDAP_GO_ROOT_PASSWORD"
+	passwordEnvironment     = "LDAP_GO_PASSWORD"
+	maxPasswordInputSize    = 1 << 20
+)
 
 var version = "dev"
 
@@ -49,6 +55,8 @@ func run(
 		err = runImport(args[1:], stdin, stdout, stderr)
 	case "export":
 		err = runExport(args[1:], stdout, stderr)
+	case "passwd":
+		err = runPassword(args[1:], stdin, stdout, stderr, getenv)
 	case "serve":
 		err = runServe(args[1:], stdout, stderr, getenv)
 	case "version":
@@ -66,6 +74,49 @@ func run(
 		return 1
 	}
 	return 0
+}
+
+func runPassword(
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	getenv func(string) string,
+) error {
+	flags := flag.NewFlagSet("passwd", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	iterations := flags.Int(
+		"iterations",
+		auth.DefaultSMPBKDF2Iterations,
+		"PBKDF2-SM3 iteration count",
+	)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+
+	password := []byte(getenv(passwordEnvironment))
+	if len(password) == 0 {
+		input, err := io.ReadAll(io.LimitReader(stdin, maxPasswordInputSize+1))
+		if err != nil {
+			return fmt.Errorf("read password: %w", err)
+		}
+		if len(input) > maxPasswordInputSize {
+			clear(input)
+			return fmt.Errorf("password input exceeds %d bytes", maxPasswordInputSize)
+		}
+		password = bytes.TrimSuffix(input, []byte{'\n'})
+		password = bytes.TrimSuffix(password, []byte{'\r'})
+	}
+	defer clear(password)
+
+	stored, err := auth.HashPasswordSMPBKDF2(password, *iterations, nil)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, string(stored))
+	return err
 }
 
 func runExport(args []string, stdout, stderr io.Writer) error {
@@ -401,6 +452,7 @@ func printUsage(writer io.Writer) {
 commands:
   import   atomically import slapcat-compatible LDIF
   export   atomically export a directory database as LDIF
+  passwd   generate a PBKDF2-SM3 userPassword value
   serve    serve the persistent directory over LDAP
   version  print the build version`)
 }

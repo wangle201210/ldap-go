@@ -12,6 +12,7 @@ import (
 	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -861,6 +862,110 @@ func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
 		nil,
 	))
 	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+}
+
+func TestLDAPClientBindsWithSMPBKDF2Passwords(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+
+	userPassword, err := auth.HashPasswordSMPBKDF2(
+		[]byte("user-secret"),
+		20,
+		strings.NewReader("0123456789abcdef"),
+	)
+	if err != nil {
+		t.Fatalf("hash user password: %v", err)
+	}
+	rootPassword, err := auth.HashPasswordSMPBKDF2(
+		[]byte("root-secret"),
+		20,
+		strings.NewReader("fedcba9876543210"),
+	)
+	if err != nil {
+		t.Fatalf("hash root password: %v", err)
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		userDN, err := directory.ParseDN("uid=alice,ou=people,dc=example,dc=com")
+		if err != nil {
+			return err
+		}
+		user, err := tx.Get(userDN)
+		if err != nil {
+			return err
+		}
+		user.ReplaceValues("userPassword", [][]byte{userPassword})
+		if err := tx.Put(user, true); err != nil {
+			return err
+		}
+
+		configDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		config, err := tx.Get(configDN)
+		if err != nil {
+			return err
+		}
+		config.ReplaceValues("olcRootDN", stringValues("cn=admin,dc=example,dc=com"))
+		config.ReplaceValues("olcRootPW", [][]byte{rootPassword})
+		return tx.Put(config, true)
+	}); err != nil {
+		t.Fatalf("configure PBKDF2-SM3 passwords: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	tests := []struct {
+		name     string
+		dn       string
+		password string
+		wantCode uint16
+	}{
+		{
+			name:     "user",
+			dn:       "uid=alice,ou=people,dc=example,dc=com",
+			password: "user-secret",
+		},
+		{
+			name:     "user wrong password",
+			dn:       "uid=alice,ou=people,dc=example,dc=com",
+			password: "wrong",
+			wantCode: ldap.LDAPResultInvalidCredentials,
+		},
+		{
+			name:     "database root",
+			dn:       "cn=admin,dc=example,dc=com",
+			password: "root-secret",
+		},
+		{
+			name:     "database root wrong password",
+			dn:       "cn=admin,dc=example,dc=com",
+			password: "wrong",
+			wantCode: ldap.LDAPResultInvalidCredentials,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, err := ldap.DialURL("ldap://" + address)
+			if err != nil {
+				t.Fatalf("DialURL(): %v", err)
+			}
+			defer client.Close()
+
+			err = client.Bind(test.dn, test.password)
+			if test.wantCode == 0 {
+				if err != nil {
+					t.Fatalf("Bind(): %v", err)
+				}
+				return
+			}
+			assertLDAPResultCode(t, err, test.wantCode)
+		})
+	}
 }
 
 func TestLDAPClientConfigRootPasswordFallbackAndEmptyValue(t *testing.T) {
