@@ -168,6 +168,177 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeDatabasesLoadsServerSideSortOverlay(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+			},
+		},
+		{
+			DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+				{Description: "olcSssVlvMaxKeys", Values: stringValues("3")},
+			},
+		},
+		{
+			DN: "uid=not-config,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "olcOverlay", Values: stringValues("sssvlv")},
+				{Description: "olcSssVlvMaxKeys", Values: stringValues("-1")},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		for _, entry := range entries {
+			if err := tx.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	databases, err := loadRuntimeDatabases(context.Background(), store)
+	if err != nil {
+		t.Fatalf("loadRuntimeDatabases(): %v", err)
+	}
+	dn, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	database := databases[databaseIndexForDN(databases, dn)]
+	if !database.serverSideSort || database.sortMaxKeys != 3 {
+		t.Fatalf("server-side sort database = %#v", database)
+	}
+}
+
+func TestServerSideSortSettingsFollowTargetAndFrontend(t *testing.T) {
+	t.Parallel()
+
+	databases := []runtimeDatabase{
+		{name: "{-1}frontend"},
+		{
+			name:           "{1}mdb",
+			serverSideSort: true,
+			sortMaxKeys:    2,
+		},
+		{name: "{2}mdb"},
+	}
+	if maxKeys, enabled := serverSideSortSettingsForDatabase(
+		databases,
+		1,
+	); !enabled || maxKeys != 2 {
+		t.Fatalf("target sort settings = %d, %t", maxKeys, enabled)
+	}
+	if _, enabled := serverSideSortSettingsForDatabase(
+		databases,
+		2,
+	); enabled {
+		t.Fatal("unconfigured target inherited a database-local overlay")
+	}
+
+	databases[0].serverSideSort = true
+	databases[0].sortMaxKeys = 4
+	if maxKeys, enabled := serverSideSortSettingsForDatabase(
+		databases,
+		2,
+	); !enabled || maxKeys != 4 {
+		t.Fatalf("frontend sort settings = %d, %t", maxKeys, enabled)
+	}
+
+	databases[0].sortMaxKeys = 1
+	if maxKeys, enabled := serverSideSortSettingsForDatabase(
+		databases,
+		1,
+	); !enabled || maxKeys != 1 {
+		t.Fatalf("combined sort settings = %d, %t", maxKeys, enabled)
+	}
+}
+
+func TestLoadRuntimeDatabasesRejectsInvalidServerSideSortOverlay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		overlays []directory.Entry
+	}{
+		{
+			name: "invalid maximum keys",
+			overlays: []directory.Entry{{
+				DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+					{Description: "olcSssVlvMaxKeys", Values: stringValues("-1")},
+				},
+			}},
+		},
+		{
+			name: "duplicate overlay",
+			overlays: []directory.Entry{
+				{
+					DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+					Attributes: []directory.Attribute{
+						{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+					},
+				},
+				{
+					DN: "olcOverlay={1}sssvlv,olcDatabase={1}mdb,cn=config",
+					Attributes: []directory.Attribute{
+						{Description: "olcOverlay", Values: stringValues("{1}sssvlv")},
+					},
+				},
+			},
+		},
+		{
+			name: "orphan overlay",
+			overlays: []directory.Entry{{
+				DN: "olcOverlay={0}sssvlv,olcDatabase={9}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+				},
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			database := directory.Entry{
+				DN: "olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+					{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+				},
+			}
+			if err := store.Update(context.Background(), func(tx storage.Writer) error {
+				if err := tx.Put(database, false); err != nil {
+					return err
+				}
+				for _, overlay := range test.overlays {
+					if err := tx.Put(overlay, false); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("seed store: %v", err)
+			}
+			if _, err := loadRuntimeDatabases(context.Background(), store); err == nil {
+				t.Fatal("invalid sssvlv overlay was accepted")
+			}
+		})
+	}
+}
+
 func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 	t.Parallel()
 

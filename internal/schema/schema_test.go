@@ -199,6 +199,66 @@ func TestSchemaAwareMatching(t *testing.T) {
 	}
 }
 
+func TestSchemaOrderingMatching(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	comparison, err := registry.CompareOrdering(
+		"uidNumber",
+		"",
+		[]byte("10"),
+		[]byte("2"),
+	)
+	if err != nil {
+		t.Fatalf("CompareOrdering(uidNumber): %v", err)
+	}
+	if comparison <= 0 {
+		t.Fatalf("CompareOrdering(uidNumber) = %d, want positive", comparison)
+	}
+
+	comparison, err = registry.CompareOrdering(
+		"cn",
+		"2.5.13.3",
+		[]byte(" Alice "),
+		[]byte("bob"),
+	)
+	if err != nil {
+		t.Fatalf("CompareOrdering(cn, OID): %v", err)
+	}
+	if comparison >= 0 {
+		t.Fatalf("CompareOrdering(cn, OID) = %d, want negative", comparison)
+	}
+
+	comparison, err = registry.CompareOrdering(
+		"mail",
+		"1.3.6.1.4.1.1466.109.114.2",
+		[]byte(" Alice@example.com "),
+		[]byte("bob@example.com"),
+	)
+	if err != nil {
+		t.Fatalf("CompareOrdering(mail, IA5 OID): %v", err)
+	}
+	if comparison >= 0 {
+		t.Fatalf(
+			"CompareOrdering(mail, IA5 OID) = %d, want negative",
+			comparison,
+		)
+	}
+
+	if _, err := registry.OrderingRule("cn", ""); err == nil {
+		t.Fatal("OrderingRule(cn) accepted an attribute without ORDERING")
+	}
+	if _, err := registry.OrderingRule("missing", "caseIgnoreOrderingMatch"); err == nil {
+		t.Fatal("OrderingRule(missing) accepted an undefined attribute")
+	}
+	if _, err := registry.OrderingRule("cn", "missingOrderingMatch"); err == nil {
+		t.Fatal("OrderingRule(cn) accepted an unsupported matching rule")
+	}
+}
+
 func TestSchemaDescriptionsRoundTripAndPublishOnce(t *testing.T) {
 	t.Parallel()
 

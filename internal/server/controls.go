@@ -14,6 +14,8 @@ const (
 	preReadControlOID      = "1.3.6.1.1.13.1"
 	postReadControlOID     = "1.3.6.1.1.13.2"
 	pagedResultsControlOID = "1.2.840.113556.1.4.319"
+	sortRequestControlOID  = "1.2.840.113556.1.4.473"
+	sortResponseControlOID = "1.2.840.113556.1.4.474"
 )
 
 type requestControlSupport uint8
@@ -23,6 +25,7 @@ const (
 	supportsPreRead
 	supportsPostRead
 	supportsPagedResults
+	supportsServerSideSort
 )
 
 type requestControls struct {
@@ -30,6 +33,7 @@ type requestControls struct {
 	preRead   *readControlRequest
 	postRead  *readControlRequest
 	paging    *pagedResultsRequest
+	sorting   *serverSideSortRequest
 }
 
 type readControlRequest struct {
@@ -148,6 +152,42 @@ func parseRequestControls(
 			parsed.paging = &pagedResultsRequest{
 				size:   size,
 				cookie: cookie,
+			}
+		case sortRequestControlOID:
+			if supported&supportsServerSideSort == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.sorting != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"server-side sort control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"server-side sort control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"server-side sort control value is empty",
+				)
+			}
+			keys, err := ldapwire.DecodeSortRequestValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"server-side sort control could not be decoded",
+				)
+			}
+			parsed.sorting = &serverSideSortRequest{
+				keys:     keys,
+				critical: control.Critical,
 			}
 		default:
 			if control.Critical {

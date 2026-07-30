@@ -42,7 +42,7 @@ No row may become `compatible` based only on unit tests.
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
 | Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
 | Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
-| Server-side sorting | planned | RFC 2891 matching and error tests |
+| Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
 | VLV | planned | OpenLDAP control differential tests |
 | Subentries | planned | RFC 3672 visibility tests |
 | Don't Use Copy | planned | RFC 6171 topology tests |
@@ -107,6 +107,7 @@ rebuilt by `ldap-go`.
 | ppolicy | planned | full password policy suite |
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
+| sssvlv | partial | RFC 2891 sorting and RFC 2696 interaction pass; VLV and concurrency limits remain |
 | syncprov | planned | RFC 4533 provider suite |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
@@ -229,6 +230,28 @@ old, and reused cookies, Bind reset, changed requests, empty initial requests,
 cross-database glue searches, mutation between pages, and
 `github.com/go-ldap/ldap/v3` interoperability. OpenLDAP process-level
 differential fixtures remain pending.
+
+RFC 2891 server-side sorting is advertised only when an OpenLDAP `sssvlv`
+overlay is loaded. Overlay settings are bound to their parent database, while
+a frontend overlay applies globally; `olcSssVlvMaxKeys` is validated and
+defaults to five. Request and response values use strict BER. The server sorts
+the complete ACL-visible candidate set before size limits or RFC 2696 page
+boundaries, supports multiple keys, reverse order, absent and multi-valued
+attributes, and resolves default or explicitly named/OID ordering rules through
+the active schema. Sorted paging preserves the initial ordered route/DN set,
+excludes later additions, skips deletions, and re-evaluates current entry and
+attribute ACLs on continuation.
+
+OpenLDAP-compatible request failures return direct LDAP result codes 16, 18,
+and 53 for unknown attributes, unavailable ordering rules, and excessive key
+counts; duplicate alias keys remain accepted. Process-level differential tests
+against OpenLDAP 2.6.13 using `ldapsearch -E sss -E pr` pass for multi-key,
+reverse, absent-value, paging, and error cases. VLV, `olcSssVlvMax`,
+`olcSssVlvMaxPerConn`, and their concurrency accounting remain pending. One
+known differential remains for sort plus paging plus a total size limit:
+OpenLDAP's overlay can report `sizeLimitExceeded` on an earlier page, while
+`ldap-go` reports it when the cumulative limit is reached; both return the same
+globally sorted top-N entries.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

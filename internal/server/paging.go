@@ -23,11 +23,23 @@ type pagedSearchCursor struct {
 	valid bool
 }
 
+type pagedSortedItem struct {
+	route int
+	dn    string
+}
+
+type pagedSortedSearch struct {
+	items     []pagedSortedItem
+	offset    int
+	truncated bool
+}
+
 type pagedSearchState struct {
 	cookie      []byte
 	fingerprint [sha256.Size]byte
 	runtime     *runtimeState
 	cursor      pagedSearchCursor
+	sorted      *pagedSortedSearch
 	count       int
 }
 
@@ -36,6 +48,7 @@ type pagedSearchContext struct {
 	fingerprint [sha256.Size]byte
 	runtime     *runtimeState
 	cursor      pagedSearchCursor
+	sorted      *pagedSortedSearch
 	count       int
 	abandoned   bool
 }
@@ -92,6 +105,7 @@ func preparePagedSearch(
 		fingerprint: fingerprint,
 		runtime:     state.runtime,
 		cursor:      current.cursor,
+		sorted:      clonePagedSortedSearch(current.sorted),
 		count:       current.count,
 	}
 	if paging.size == 0 {
@@ -116,7 +130,7 @@ func completePagedSearch(
 		state.pagedSearch = nil
 		return nil, nil
 	}
-	if hasMore && !cursor.valid {
+	if hasMore && !cursor.valid && paging.sorted == nil {
 		state.pagedSearch = nil
 		return nil, errors.New("paged search continuation has no cursor")
 	}
@@ -134,6 +148,7 @@ func completePagedSearch(
 			fingerprint: paging.fingerprint,
 			runtime:     paging.runtime,
 			cursor:      cursor,
+			sorted:      clonePagedSortedSearch(paging.sorted),
 			count:       paging.count + entryCount,
 		}
 	} else {
@@ -147,6 +162,15 @@ func completePagedSearch(
 		),
 		HasValue: true,
 	}}, nil
+}
+
+func clonePagedSortedSearch(source *pagedSortedSearch) *pagedSortedSearch {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.items = append([]pagedSortedItem(nil), source.items...)
+	return &cloned
 }
 
 func newPagedResultsCookie() ([]byte, error) {

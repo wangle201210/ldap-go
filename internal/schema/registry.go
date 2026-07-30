@@ -336,6 +336,48 @@ func (registry *Registry) Compare(
 	return compareWithRule(rule, left, right)
 }
 
+func (registry *Registry) OrderingRule(
+	attributeName,
+	matchingRule string,
+) (string, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return "", fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return "", err
+	}
+	rule := matchingRule
+	if rule == "" {
+		rule = effective.Ordering
+	}
+	if rule == "" {
+		return "", fmt.Errorf("attribute %q has no ordering matching rule", attributeName)
+	}
+	rule = canonicalMatchingRule(rule)
+	if !supportedMatchingRule(rule) {
+		return "", fmt.Errorf("unsupported matching rule %q", rule)
+	}
+	return rule, nil
+}
+
+func (registry *Registry) CompareOrdering(
+	attributeName,
+	matchingRule string,
+	left,
+	right []byte,
+) (int, error) {
+	rule, err := registry.OrderingRule(attributeName, matchingRule)
+	if err != nil {
+		return 0, err
+	}
+	return compareWithRule(rule, left, right)
+}
+
 func (registry *Registry) MatchSubstring(
 	attributeName string,
 	value []byte,
@@ -620,7 +662,7 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 }
 
 func compareWithRule(rule string, left, right []byte) (int, error) {
-	switch strings.ToLower(rule) {
+	switch canonicalMatchingRule(rule) {
 	case "caseignorematch",
 		"caseignoreia5match",
 		"caseignoreorderingmatch",
@@ -663,6 +705,81 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
 	default:
 		return 0, fmt.Errorf("unsupported matching rule %q", rule)
+	}
+}
+
+func supportedMatchingRule(rule string) bool {
+	switch canonicalMatchingRule(rule) {
+	case "caseignorematch",
+		"caseignoreia5match",
+		"caseignoreorderingmatch",
+		"caseignoreia5orderingmatch",
+		"caseexactmatch",
+		"caseexactia5match",
+		"caseexactorderingmatch",
+		"caseexactia5orderingmatch",
+		"octetstringmatch",
+		"octetstringorderingmatch",
+		"objectidentifiermatch",
+		"integermatch",
+		"integerorderingmatch",
+		"booleanmatch",
+		"distinguishednamematch",
+		"uuidmatch",
+		"uuidorderingmatch",
+		"generalizedtimematch",
+		"generalizedtimeorderingmatch",
+		"csnmatch",
+		"csnorderingmatch":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalMatchingRule(rule string) string {
+	normalized := strings.ToLower(strings.TrimSpace(rule))
+	switch normalized {
+	case "2.5.13.0":
+		return "objectidentifiermatch"
+	case "2.5.13.1":
+		return "distinguishednamematch"
+	case "2.5.13.2":
+		return "caseignorematch"
+	case "2.5.13.3":
+		return "caseignoreorderingmatch"
+	case "2.5.13.5":
+		return "caseexactmatch"
+	case "2.5.13.6":
+		return "caseexactorderingmatch"
+	case "2.5.13.13":
+		return "booleanmatch"
+	case "2.5.13.14":
+		return "integermatch"
+	case "2.5.13.15":
+		return "integerorderingmatch"
+	case "2.5.13.17":
+		return "octetstringmatch"
+	case "2.5.13.18":
+		return "octetstringorderingmatch"
+	case "2.5.13.27":
+		return "generalizedtimematch"
+	case "2.5.13.28":
+		return "generalizedtimeorderingmatch"
+	case "1.3.6.1.4.1.1466.109.114.1":
+		return "caseexactia5match"
+	case "1.3.6.1.4.1.1466.109.114.2":
+		return "caseignoreia5match"
+	case "1.3.6.1.1.16.2":
+		return "uuidmatch"
+	case "1.3.6.1.1.16.3":
+		return "uuidorderingmatch"
+	case "1.3.6.1.4.1.4203.666.11.2.2":
+		return "csnmatch"
+	case "1.3.6.1.4.1.4203.666.11.2.3":
+		return "csnorderingmatch"
+	default:
+		return normalized
 	}
 }
 

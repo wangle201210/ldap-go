@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -23,6 +24,9 @@ type runtimeDatabase struct {
 	advertise       bool
 	readOnly        bool
 	lastMod         bool
+	configDNKey     string
+	serverSideSort  bool
+	sortMaxKeys     int
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -72,9 +76,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			entryUUID = entryUUIDValues[0]
 		}
 		database := runtimeDatabase{
-			name:      string(databaseValues[0]),
-			partition: storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
-			lastMod:   true,
+			name:        string(databaseValues[0]),
+			partition:   storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
+			lastMod:     true,
+			configDNKey: entryDN.Key(),
 		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
 			suffix, err := directory.ParseDN(string(rawSuffix))
@@ -167,6 +172,9 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	if err := validateDatabasePartitions(databases); err != nil {
 		return nil, err
 	}
+	if err := loadRuntimeDatabaseOverlays(reader, databases); err != nil {
+		return nil, err
+	}
 
 	for _, rawContext := range namingContexts {
 		contextDN, err := directory.ParseDN(rawContext)
@@ -185,6 +193,118 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	}
 	applyFrontendDatabaseDefaults(databases)
 	return databases, nil
+}
+
+func loadRuntimeDatabaseOverlays(
+	reader storage.Reader,
+	databases []runtimeDatabase,
+) error {
+	configSuffix, err := directory.ParseDN("cn=config")
+	if err != nil {
+		return err
+	}
+	return reader.ForEach(func(entry directory.Entry) error {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
+		}
+		if !configSuffix.AncestorOf(entryDN) {
+			return nil
+		}
+
+		overlayValues := entry.Values("olcOverlay")
+		if len(overlayValues) == 0 {
+			return nil
+		}
+		if len(overlayValues) != 1 {
+			return fmt.Errorf("%s olcOverlay must be single-valued", entry.DN)
+		}
+		if databaseType(string(overlayValues[0])) != "sssvlv" {
+			return nil
+		}
+
+		parent, ok := entryDN.Parent()
+		if !ok {
+			return fmt.Errorf("%s sssvlv overlay has no database parent", entry.DN)
+		}
+		databaseIndex := -1
+		for index := range databases {
+			if databases[index].configDNKey == parent.Key() {
+				databaseIndex = index
+				break
+			}
+		}
+		if databaseIndex < 0 {
+			return fmt.Errorf(
+				"%s sssvlv overlay parent is not a configured database",
+				entry.DN,
+			)
+		}
+		database := &databases[databaseIndex]
+		if database.serverSideSort {
+			return fmt.Errorf(
+				"%s configures a duplicate sssvlv overlay for %s",
+				entry.DN,
+				database.name,
+			)
+		}
+
+		maxKeys := defaultServerSideSortMaxKeys
+		values := entry.Values("olcSssVlvMaxKeys")
+		if len(values) > 1 {
+			return fmt.Errorf(
+				"%s olcSssVlvMaxKeys must be single-valued",
+				entry.DN,
+			)
+		}
+		if len(values) == 1 {
+			maxKeys, err = strconv.Atoi(strings.TrimSpace(string(values[0])))
+			if err != nil || maxKeys < 0 {
+				return fmt.Errorf(
+					"%s olcSssVlvMaxKeys has invalid value %q",
+					entry.DN,
+					values[0],
+				)
+			}
+		}
+		database.serverSideSort = true
+		database.sortMaxKeys = maxKeys
+		return nil
+	})
+}
+
+func runtimeSupportsServerSideSort(databases []runtimeDatabase) bool {
+	for _, database := range databases {
+		if database.serverSideSort {
+			return true
+		}
+	}
+	return false
+}
+
+func serverSideSortSettingsForDatabase(
+	databases []runtimeDatabase,
+	databaseIndex int,
+) (int, bool) {
+	maxKeys := 0
+	enabled := false
+	if databaseIndex >= 0 &&
+		databaseIndex < len(databases) &&
+		databases[databaseIndex].serverSideSort {
+		maxKeys = databases[databaseIndex].sortMaxKeys
+		enabled = true
+	}
+	for _, database := range databases {
+		if databaseType(database.name) == "frontend" &&
+			database.serverSideSort {
+			if !enabled || database.sortMaxKeys < maxKeys {
+				maxKeys = database.sortMaxKeys
+			}
+			enabled = true
+			break
+		}
+	}
+	return maxKeys, enabled
 }
 
 func singleBoolean(
