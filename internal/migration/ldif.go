@@ -13,7 +13,8 @@ import (
 )
 
 type ImportOptions struct {
-	Replace bool
+	Replace  bool
+	Database string
 }
 
 type ImportResult struct {
@@ -21,10 +22,10 @@ type ImportResult struct {
 	NamingContexts []string
 }
 
-// ImportLDIF atomically imports content LDIF, including slapcat operational
-// attributes. Change records are rejected because they have different
-// transaction semantics and are handled by the future ldapmodify-compatible
-// command.
+// ImportLDIF atomically imports slapcat LDIF, including operational attributes.
+// Configuration entries are isolated from content databases. Change records
+// are rejected because they have different transaction semantics and are
+// handled by the future ldapmodify-compatible command.
 func ImportLDIF(
 	ctx context.Context,
 	store storage.Store,
@@ -37,9 +38,20 @@ func ImportLDIF(
 
 	var result ImportResult
 	err := store.Update(ctx, func(tx storage.Writer) error {
+		target, err := resolveDatabaseTarget(tx, options.Database)
+		if err != nil {
+			return err
+		}
 		if options.Replace {
-			if err := tx.Clear(); err != nil {
-				return fmt.Errorf("clear destination: %w", err)
+			if options.Database == "" {
+				if err := tx.Clear(); err != nil {
+					return fmt.Errorf("clear destination: %w", err)
+				}
+			} else if err := storage.WriterInPartition(
+				tx,
+				target.partition,
+			).Clear(); err != nil {
+				return fmt.Errorf("clear database %q: %w", options.Database, err)
 			}
 		}
 
@@ -56,7 +68,30 @@ func ImportLDIF(
 			}
 
 			entry := fromLDAPEntry(record.Entry)
-			if err := tx.Put(entry, false); err != nil {
+			configurationEntry, err := isConfigurationDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf("import %q: %w", entry.DN, err)
+			}
+			partition := ""
+			switch {
+			case options.Database == "" && configurationEntry:
+				partition = storage.OpenLDAPConfigPartition
+			case options.Database == "":
+			case target.config && !configurationEntry:
+				return fmt.Errorf(
+					"entry %q is outside the selected config database",
+					entry.DN,
+				)
+			case !target.config && configurationEntry:
+				return fmt.Errorf(
+					"entry %q belongs to cn=config, not database %q",
+					entry.DN,
+					options.Database,
+				)
+			default:
+				partition = target.partition
+			}
+			if err := tx.PutIn(partition, entry, false); err != nil {
 				return fmt.Errorf("import %q: %w", entry.DN, err)
 			}
 			result.Entries++

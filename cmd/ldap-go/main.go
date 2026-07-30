@@ -70,6 +70,11 @@ func runExport(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "source database path")
 	ldifPath := flags.String("ldif", "-", "destination LDIF path, or - for stdout")
+	database := flags.String(
+		"database",
+		"",
+		"OpenLDAP database index, olcDatabase value, or config entry DN",
+	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -83,18 +88,29 @@ func runExport(args []string, stdout, stderr io.Writer) error {
 	}
 	defer store.Close()
 
+	options := migration.ExportOptions{Database: *database}
 	if *ldifPath == "-" {
-		result, err := migration.ExportLDIF(context.Background(), store, stdout)
+		result, err := migration.ExportLDIFWithOptions(
+			context.Background(),
+			store,
+			stdout,
+			options,
+		)
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(stderr, "exported %d entries\n", result.Entries)
 		return err
 	}
-	return exportToFile(store, *ldifPath, stderr)
+	return exportToFile(store, *ldifPath, stderr, options)
 }
 
-func exportToFile(store storage.Store, path string, stderr io.Writer) error {
+func exportToFile(
+	store storage.Store,
+	path string,
+	stderr io.Writer,
+	options migration.ExportOptions,
+) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create export directory: %w", err)
@@ -106,7 +122,12 @@ func exportToFile(store storage.Store, path string, stderr io.Writer) error {
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 
-	result, exportErr := migration.ExportLDIF(context.Background(), store, temp)
+	result, exportErr := migration.ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		temp,
+		options,
+	)
 	syncErr := temp.Sync()
 	closeErr := temp.Close()
 	if exportErr != nil {
@@ -134,6 +155,11 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	databasePath := flags.String("db", "data/ldap-go.db", "destination database path")
 	ldifPath := flags.String("ldif", "-", "slapcat LDIF path, or - for stdin")
 	replace := flags.Bool("replace", false, "atomically replace existing directory content")
+	database := flags.String(
+		"database",
+		"",
+		"OpenLDAP database index, olcDatabase value, or config entry DN",
+	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -163,7 +189,10 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		context.Background(),
 		store,
 		reader,
-		migration.ImportOptions{Replace: *replace},
+		migration.ImportOptions{
+			Replace:  *replace,
+			Database: *database,
+		},
 	)
 	if err != nil {
 		return err
@@ -257,8 +286,8 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `usage: ldap-go <command> [options]
 
 commands:
-  import   atomically import slapcat-compatible content LDIF
-  export   atomically export directory content as LDIF
+  import   atomically import slapcat-compatible LDIF
+  export   atomically export a directory database as LDIF
   serve    serve the persistent directory over LDAP
   version  print the build version`)
 }

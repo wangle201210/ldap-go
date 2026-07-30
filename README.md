@@ -59,6 +59,22 @@ go run ./cmd/ldap-go export \
   -ldif ./data/export.ldif
 ```
 
+For a complete multi-database OpenLDAP migration, import `cn=config` first and
+then select each database using the same numeric index accepted by `slapcat`:
+
+```sh
+slapcat -n 0 -l config.ldif
+slapcat -n 1 -l data-1.ldif
+
+go run ./cmd/ldap-go import \
+  -db ./data/ldap-go.db -ldif ./config.ldif -replace
+go run ./cmd/ldap-go import \
+  -db ./data/ldap-go.db -ldif ./data-1.ldif -database 1 -replace
+
+go run ./cmd/ldap-go export \
+  -db ./data/ldap-go.db -ldif ./data-1-export.ldif -database 1
+```
+
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit
 bootstrap override without exposing its password in the process arguments:

@@ -212,8 +212,10 @@ selection and Root DSE publication, while their entries remain isolated and
 may use the same DN as a visible database. Online hide/show changes and suffix
 conflict rollback are covered by TCP tests. Root DSE `namingContexts`,
 `configContext`, and `monitorContext` values are built from the same runtime
-snapshot. `olcSubordinate`/glue behavior and database-selective LDIF tooling
-remain pending.
+snapshot. Database-selective import/export accepts a slapcat-style numeric
+index, an `olcDatabase` value, or a configuration-entry DN; tests import and
+export identical DNs from visible and hidden databases independently.
+`olcSubordinate` and glue search behavior remain pending.
 
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual

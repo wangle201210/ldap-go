@@ -109,6 +109,11 @@ content databases and `cn=config`. Import must:
 - reject partial imports atomically and report the record and line;
 - produce an export whose normalized LDAP content is equivalent to the input.
 
+Configuration LDIF is imported first. Subsequent content imports identify the
+OpenLDAP database by numeric index, `olcDatabase` value, or configuration-entry
+DN, which permits overlapping backends to contain identical DNs. A
+database-scoped replacement clears only that partition.
+
 ## Dependency policy
 
 Small, well-maintained libraries may be used for generic primitives such as BER

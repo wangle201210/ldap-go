@@ -16,10 +16,23 @@ type ExportResult struct {
 	Entries int
 }
 
+type ExportOptions struct {
+	Database string
+}
+
 func ExportLDIF(
 	ctx context.Context,
 	store storage.Store,
 	writer io.Writer,
+) (ExportResult, error) {
+	return ExportLDIFWithOptions(ctx, store, writer, ExportOptions{})
+}
+
+func ExportLDIFWithOptions(
+	ctx context.Context,
+	store storage.Store,
+	writer io.Writer,
+	options ExportOptions,
 ) (ExportResult, error) {
 	if writer == nil {
 		return ExportResult{}, fmt.Errorf("LDIF writer is required")
@@ -27,7 +40,30 @@ func ExportLDIF(
 
 	var entries []directory.Entry
 	err := store.View(ctx, func(tx storage.Reader) error {
-		return tx.ForEach(func(entry directory.Entry) error {
+		if options.Database != "" {
+			target, err := resolveDatabaseTarget(tx, options.Database)
+			if err != nil {
+				return err
+			}
+			return tx.ForEachIn(target.partition, func(entry directory.Entry) error {
+				entries = append(entries, entry)
+				return nil
+			})
+		}
+
+		seen := make(map[string]string)
+		return tx.ForEachPartition(func(partition string, entry directory.Entry) error {
+			dn, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return err
+			}
+			if previous, exists := seen[dn.Key()]; exists && previous != partition {
+				return fmt.Errorf(
+					"DN %q exists in multiple databases; select one database for export",
+					entry.DN,
+				)
+			}
+			seen[dn.Key()] = partition
 			entries = append(entries, entry)
 			return nil
 		})
