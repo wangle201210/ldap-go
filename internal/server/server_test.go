@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1633,6 +1634,243 @@ func TestLDAPClientHiddenDatabaseRoutingReload(t *testing.T) {
 	}
 }
 
+func TestLDAPClientGlueSubordinateSearchAndReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedGlueConfiguration(t, store)
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+
+	searchDNs := func(base string, scope int) []string {
+		t.Helper()
+		result, err := client.Search(ldap.NewSearchRequest(
+			base,
+			scope,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"1.1"},
+			nil,
+		))
+		if err != nil {
+			t.Fatalf("Search(%q, %d): %v", base, scope, err)
+		}
+		dns := make([]string, len(result.Entries))
+		for index, entry := range result.Entries {
+			dns[index] = entry.DN
+		}
+		sort.Strings(dns)
+		return dns
+	}
+	assertDNs := func(got, want []string) {
+		t.Helper()
+		sort.Strings(want)
+		if len(got) != len(want) {
+			t.Fatalf("search DNs = %v, want %v", got, want)
+		}
+		for index := range got {
+			if got[index] != want[index] {
+				t.Fatalf("search DNs = %v, want %v", got, want)
+			}
+		}
+	}
+	namingContexts := func() []string {
+		t.Helper()
+		result, err := client.Search(ldap.NewSearchRequest(
+			"",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"namingContexts"},
+			nil,
+		))
+		if err != nil || len(result.Entries) != 1 {
+			t.Fatalf("Root DSE Search() = %#v, %v", result, err)
+		}
+		values := result.Entries[0].GetAttributeValues("namingContexts")
+		sort.Strings(values)
+		return values
+	}
+
+	assertDNs(searchDNs("dc=example,dc=com", ldap.ScopeBaseObject), []string{
+		"dc=example,dc=com",
+	})
+	assertDNs(searchDNs("dc=example,dc=com", ldap.ScopeSingleLevel), []string{
+		"ou=devices,dc=example,dc=com",
+		"ou=groups,dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+	})
+	parentSubtree := []string{
+		"cn=core,ou=teams,ou=people,dc=example,dc=com",
+		"cn=operators,ou=groups,dc=example,dc=com",
+		"cn=router,ou=devices,dc=example,dc=com",
+		"dc=example,dc=com",
+		"ou=devices,dc=example,dc=com",
+		"ou=groups,dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+		"ou=teams,ou=people,dc=example,dc=com",
+		"uid=alice,ou=people,dc=example,dc=com",
+	}
+	assertDNs(
+		searchDNs("dc=example,dc=com", ldap.ScopeWholeSubtree),
+		parentSubtree,
+	)
+	assertDNs(
+		searchDNs("ou=people,dc=example,dc=com", ldap.ScopeSingleLevel),
+		[]string{
+			"ou=teams,ou=people,dc=example,dc=com",
+			"uid=alice,ou=people,dc=example,dc=com",
+		},
+	)
+	assertDNs(
+		searchDNs("ou=external,dc=example,dc=com", ldap.ScopeWholeSubtree),
+		[]string{
+			"cn=service,ou=managed,ou=external,dc=example,dc=com",
+			"ou=external,dc=example,dc=com",
+			"ou=managed,ou=external,dc=example,dc=com",
+			"uid=vendor,ou=external,dc=example,dc=com",
+		},
+	)
+	assertDNs(namingContexts(), []string{
+		"dc=example,dc=com",
+		"ou=devices,dc=example,dc=com",
+		"ou=external,dc=example,dc=com",
+	})
+	limited, err := client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		4,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"1.1"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultSizeLimitExceeded)
+	if len(limited.Entries) != 4 {
+		t.Fatalf("glue size-limited entries = %d, want 4", len(limited.Entries))
+	}
+
+	if err := client.Bind("uid=alice,ou=people,dc=example,dc=com", "alice-secret"); err != nil {
+		t.Fatalf("subordinate user Bind(): %v", err)
+	}
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("glue root Bind(): %v", err)
+	}
+	emptySuffix := "ou=empty,dc=example,dc=com"
+	addEmptySuffix := ldap.NewAddRequest(emptySuffix, nil)
+	addEmptySuffix.Attribute("objectClass", []string{"organizationalUnit"})
+	addEmptySuffix.Attribute("ou", []string{"empty"})
+	if err := client.Add(addEmptySuffix); err != nil {
+		t.Fatalf("Add(empty subordinate suffix): %v", err)
+	}
+	assertDNs(searchDNs("dc=example,dc=com", ldap.ScopeSingleLevel), []string{
+		"ou=devices,dc=example,dc=com",
+		emptySuffix,
+		"ou=groups,dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+	})
+	if err := client.Del(ldap.NewDelRequest(emptySuffix, nil)); err != nil {
+		t.Fatalf("Delete(empty subordinate suffix): %v", err)
+	}
+	crossDatabase := ldap.NewModifyDNRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		"uid=alice",
+		true,
+		"ou=groups,dc=example,dc=com",
+	)
+	assertLDAPResultCode(
+		t,
+		client.ModifyDN(crossDatabase),
+		ldap.LDAPResultAffectsMultipleDSAs,
+	)
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	peopleConfigDN := "olcDatabase={2}mdb,cn=config"
+
+	makeIndependent := ldap.NewModifyRequest(peopleConfigDN, nil)
+	makeIndependent.Replace("olcSubordinate", []string{"FALSE"})
+	if err := configClient.Modify(makeIndependent); err != nil {
+		t.Fatalf("olcSubordinate FALSE Modify(): %v", err)
+	}
+	assertDNs(
+		searchDNs("dc=example,dc=com", ldap.ScopeWholeSubtree),
+		[]string{
+			"cn=operators,ou=groups,dc=example,dc=com",
+			"cn=router,ou=devices,dc=example,dc=com",
+			"dc=example,dc=com",
+			"ou=devices,dc=example,dc=com",
+			"ou=groups,dc=example,dc=com",
+		},
+	)
+	assertDNs(namingContexts(), []string{
+		"dc=example,dc=com",
+		"ou=devices,dc=example,dc=com",
+		"ou=external,dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+	})
+
+	advertise := ldap.NewModifyRequest(peopleConfigDN, nil)
+	advertise.Replace("olcSubordinate", []string{"advertise"})
+	if err := configClient.Modify(advertise); err != nil {
+		t.Fatalf("olcSubordinate advertise Modify(): %v", err)
+	}
+	assertDNs(
+		searchDNs("dc=example,dc=com", ldap.ScopeWholeSubtree),
+		parentSubtree,
+	)
+	assertDNs(namingContexts(), []string{
+		"dc=example,dc=com",
+		"ou=devices,dc=example,dc=com",
+		"ou=external,dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+	})
+
+	hideContext := ldap.NewModifyRequest(peopleConfigDN, nil)
+	hideContext.Replace("olcSubordinate", []string{"TRUE"})
+	if err := configClient.Modify(hideContext); err != nil {
+		t.Fatalf("olcSubordinate TRUE Modify(): %v", err)
+	}
+	invalid := ldap.NewModifyRequest(peopleConfigDN, nil)
+	invalid.Replace("olcSubordinate", []string{"sometimes"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalid),
+		ldap.LDAPResultConstraintViolation,
+	)
+	assertDNs(
+		searchDNs("dc=example,dc=com", ldap.ScopeWholeSubtree),
+		parentSubtree,
+	)
+	assertDNs(namingContexts(), []string{
+		"dc=example,dc=com",
+		"ou=devices,dc=example,dc=com",
+		"ou=external,dc=example,dc=com",
+	})
+}
+
 func TestLDAPClientConcurrentOnlineACLReload(t *testing.T) {
 	t.Parallel()
 
@@ -2005,6 +2243,216 @@ func seedHiddenConfiguration(t *testing.T, store storage.Store) {
 		return writer.SetNamingContexts([]string{"dc=example,dc=com", "cn=config"})
 	}); err != nil {
 		t.Fatalf("seed hidden configuration: %v", err)
+	}
+}
+
+func seedGlueConfiguration(t *testing.T, store storage.Store) {
+	t.Helper()
+
+	databaseConfig := func(name, suffix, subordinate string) directory.Entry {
+		attributes := []directory.Attribute{
+			{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+			{Description: "olcDatabase", Values: stringValues(name)},
+			{Description: "olcSuffix", Values: stringValues(suffix)},
+			{Description: "olcRootDN", Values: stringValues("cn=admin,dc=example,dc=com")},
+			{Description: "olcRootPW", Values: stringValues("admin-secret")},
+			{Description: "olcAccess", Values: stringValues("{0}to * by * read")},
+		}
+		if subordinate != "" {
+			attributes = append(attributes, directory.Attribute{
+				Description: "olcSubordinate",
+				Values:      stringValues(subordinate),
+			})
+		}
+		return directory.Entry{
+			DN:         "olcDatabase=" + name + ",cn=config",
+			Attributes: attributes,
+		}
+	}
+	configEntries := []directory.Entry{
+		{
+			DN: "cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcGlobal")},
+				{Description: "cn", Values: stringValues("config")},
+			},
+		},
+		{
+			DN: "olcDatabase={0}config,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+				{Description: "olcDatabase", Values: stringValues("{0}config")},
+				{Description: "olcRootDN", Values: stringValues("cn=config")},
+				{Description: "olcRootPW", Values: stringValues("config-secret")},
+				{Description: "olcAccess", Values: stringValues("{0}to * by * none")},
+			},
+		},
+		databaseConfig("{1}mdb", "dc=example,dc=com", ""),
+		databaseConfig("{2}mdb", "ou=people,dc=example,dc=com", "TRUE"),
+		databaseConfig("{3}mdb", "ou=teams,ou=people,dc=example,dc=com", "TRUE"),
+		databaseConfig("{4}mdb", "ou=devices,dc=example,dc=com", "advertise"),
+		databaseConfig("{5}mdb", "ou=external,dc=example,dc=com", ""),
+		databaseConfig("{6}mdb", "ou=managed,ou=external,dc=example,dc=com", "TRUE"),
+		databaseConfig("{7}mdb", "ou=empty,dc=example,dc=com", "TRUE"),
+	}
+	databaseEntries := []struct {
+		name    string
+		entries []directory.Entry
+	}{
+		{
+			name: "{1}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("domain")},
+						{Description: "dc", Values: stringValues("example")},
+					},
+				},
+				{
+					DN: "ou=groups,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("groups")},
+					},
+				},
+				{
+					DN: "cn=operators,ou=groups,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalRole")},
+						{Description: "cn", Values: stringValues("operators")},
+					},
+				},
+			},
+		},
+		{
+			name: "{2}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "ou=people,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("people")},
+					},
+				},
+				{
+					DN: "uid=alice,ou=people,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("inetOrgPerson")},
+						{Description: "uid", Values: stringValues("alice")},
+						{Description: "cn", Values: stringValues("Alice")},
+						{Description: "sn", Values: stringValues("Alice")},
+						{Description: "userPassword", Values: stringValues("alice-secret")},
+					},
+				},
+			},
+		},
+		{
+			name: "{3}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "ou=teams,ou=people,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("teams")},
+					},
+				},
+				{
+					DN: "cn=core,ou=teams,ou=people,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalRole")},
+						{Description: "cn", Values: stringValues("core")},
+					},
+				},
+			},
+		},
+		{
+			name: "{4}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "ou=devices,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("devices")},
+					},
+				},
+				{
+					DN: "cn=router,ou=devices,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("device")},
+						{Description: "cn", Values: stringValues("router")},
+					},
+				},
+			},
+		},
+		{
+			name: "{5}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "ou=external,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("external")},
+					},
+				},
+				{
+					DN: "uid=vendor,ou=external,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("inetOrgPerson")},
+						{Description: "uid", Values: stringValues("vendor")},
+						{Description: "cn", Values: stringValues("Vendor")},
+						{Description: "sn", Values: stringValues("Vendor")},
+					},
+				},
+			},
+		},
+		{
+			name: "{6}mdb",
+			entries: []directory.Entry{
+				{
+					DN: "ou=managed,ou=external,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("organizationalUnit")},
+						{Description: "ou", Values: stringValues("managed")},
+					},
+				},
+				{
+					DN: "cn=service,ou=managed,ou=external,dc=example,dc=com",
+					Attributes: []directory.Attribute{
+						{Description: "objectClass", Values: stringValues("applicationProcess")},
+						{Description: "cn", Values: stringValues("service")},
+					},
+				},
+			},
+		},
+	}
+
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, entry := range configEntries {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		for _, database := range databaseEntries {
+			partition := configuredDatabasePartition(database.name)
+			for _, entry := range database.entries {
+				if err := writer.PutIn(partition, entry, false); err != nil {
+					return err
+				}
+			}
+		}
+		return writer.SetNamingContexts([]string{
+			"dc=example,dc=com",
+			"ou=people,dc=example,dc=com",
+			"ou=teams,ou=people,dc=example,dc=com",
+			"ou=devices,dc=example,dc=com",
+			"ou=external,dc=example,dc=com",
+			"ou=managed,ou=external,dc=example,dc=com",
+			"ou=empty,dc=example,dc=com",
+			"cn=config",
+		})
+	}); err != nil {
+		t.Fatalf("seed glue configuration: %v", err)
 	}
 }
 

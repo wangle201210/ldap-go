@@ -218,7 +218,16 @@ value rollback are covered through TCP tests. Root DSE `namingContexts`,
 snapshot. Database-selective import/export accepts a slapcat-style numeric
 index, an `olcDatabase` value, or a configuration-entry DN; tests import and
 export identical DNs from visible and hidden databases independently.
-`olcSubordinate` and glue search behavior remain pending.
+`olcSubordinate: TRUE`, `FALSE`, and `advertise` are loaded and validated with
+OpenLDAP's single-suffix restriction. Base searches stay in the selected
+backend; one-level and subtree searches fan out across the applicable
+subordinate partitions with shared limits. Unadvertised subordinate suffixes
+are omitted from Root DSE, while `advertise` publishes them. Bind and writes
+still select the most-specific backend, empty subordinate suffix entries can be
+created online, and cross-database ModifyDN returns `affectsMultipleDSAs`.
+Online setting changes and invalid-value rollback are covered by TCP tests.
+Glue interactions with controls and explicitly positioned overlays remain
+pending.
 
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual

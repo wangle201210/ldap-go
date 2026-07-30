@@ -117,15 +117,17 @@ func (server *Server) handleAdd(
 				if !errors.Is(err, storage.ErrEntryNotFound) {
 					return err
 				}
-				belowContext, err := belowKnownNamingContext(tx, dn)
-				if err != nil {
-					return err
-				}
-				if belowContext {
-					return operationFailed(
-						ldapwire.ResultNoSuchObject,
-						server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
-					)
+				if !databaseOwnsSuffix(*database, dn) {
+					belowContext, err := belowKnownNamingContext(tx, dn)
+					if err != nil {
+						return err
+					}
+					if belowContext {
+						return operationFailed(
+							ldapwire.ResultNoSuchObject,
+							server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
+						)
+					}
 				}
 			}
 		}

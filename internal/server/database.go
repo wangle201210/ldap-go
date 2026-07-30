@@ -19,6 +19,8 @@ type runtimeDatabase struct {
 	rootPasswordSet bool
 	disabled        bool
 	hidden          bool
+	subordinate     bool
+	advertise       bool
 	readOnly        bool
 	lastMod         bool
 }
@@ -133,6 +135,18 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		var subordinatePresent bool
+		database.subordinate, database.advertise, subordinatePresent, err =
+			subordinateSetting(entry)
+		if err != nil {
+			return err
+		}
+		if subordinatePresent && len(database.suffixes) != 1 {
+			return fmt.Errorf(
+				"%s olcSubordinate requires exactly one suffix",
+				entry.DN,
+			)
+		}
 		if lastMod, present, err := singleBoolean(entry, "olcLastMod"); err != nil {
 			return err
 		} else if present {
@@ -194,6 +208,35 @@ func singleBoolean(
 			"%s %s has invalid value %q",
 			entry.DN,
 			attribute,
+			values[0],
+		)
+	}
+}
+
+func subordinateSetting(
+	entry directory.Entry,
+) (subordinate, advertise, present bool, err error) {
+	values := entry.Values("olcSubordinate")
+	if len(values) == 0 {
+		return false, false, false, nil
+	}
+	if len(values) != 1 {
+		return false, false, false, fmt.Errorf(
+			"%s olcSubordinate must be single-valued",
+			entry.DN,
+		)
+	}
+	switch {
+	case strings.EqualFold(string(values[0]), "TRUE"):
+		return true, false, true, nil
+	case strings.EqualFold(string(values[0]), "FALSE"):
+		return false, false, true, nil
+	case strings.EqualFold(string(values[0]), "advertise"):
+		return true, true, true, nil
+	default:
+		return false, false, false, fmt.Errorf(
+			"%s olcSubordinate has invalid value %q",
+			entry.DN,
 			values[0],
 		)
 	}
@@ -290,6 +333,38 @@ func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
 	return bestIndex
 }
 
+func glueSuperiorDatabaseIndex(
+	databases []runtimeDatabase,
+	subordinateIndex int,
+) int {
+	if subordinateIndex < 0 ||
+		subordinateIndex >= len(databases) ||
+		!databases[subordinateIndex].subordinate ||
+		len(databases[subordinateIndex].suffixes) != 1 {
+		return -1
+	}
+
+	childSuffix := databases[subordinateIndex].suffixes[0]
+	bestIndex := -1
+	bestDepth := -1
+	for index := range databases {
+		database := &databases[index]
+		if database.hidden || database.disabled || database.subordinate {
+			continue
+		}
+		for _, suffix := range database.suffixes {
+			if !suffix.AncestorOf(childSuffix) {
+				continue
+			}
+			if suffix.Depth() > bestDepth {
+				bestIndex = index
+				bestDepth = suffix.Depth()
+			}
+		}
+	}
+	return bestIndex
+}
+
 func databaseIndexForRootOverride(
 	databases []runtimeDatabase,
 	dn directory.DN,
@@ -343,10 +418,17 @@ func databaseIndexForLegacyDN(
 
 func databaseHasSuffix(databases []runtimeDatabase, suffix directory.DN) bool {
 	for _, database := range databases {
-		for _, candidate := range database.suffixes {
-			if candidate.Equal(suffix) {
-				return true
-			}
+		if databaseOwnsSuffix(database, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func databaseOwnsSuffix(database runtimeDatabase, dn directory.DN) bool {
+	for _, suffix := range database.suffixes {
+		if suffix.Equal(dn) {
+			return true
 		}
 	}
 	return false

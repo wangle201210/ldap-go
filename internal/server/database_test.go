@@ -176,6 +176,7 @@ func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 		"olcDisabled",
 		"olcHidden",
 		"olcLastMod",
+		"olcSubordinate",
 	} {
 		attribute := attribute
 		t.Run(attribute, func(t *testing.T) {
@@ -201,6 +202,252 @@ func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 				t.Fatalf("invalid %s was accepted", attribute)
 			}
 		})
+	}
+}
+
+func TestLoadRuntimeDatabasesLoadsSubordinateHierarchy(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+			},
+		},
+		{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{2}mdb")},
+				{Description: "olcSuffix", Values: stringValues("ou=people,dc=example,dc=com")},
+				{Description: "olcSubordinate", Values: stringValues("advertise")},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		for _, entry := range entries {
+			if err := tx.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	databases, err := loadRuntimeDatabases(context.Background(), store)
+	if err != nil {
+		t.Fatalf("loadRuntimeDatabases(): %v", err)
+	}
+	parentIndex := -1
+	childIndex := -1
+	for index := range databases {
+		switch databases[index].name {
+		case "{1}mdb":
+			parentIndex = index
+		case "{2}mdb":
+			childIndex = index
+		}
+	}
+	if parentIndex < 0 || childIndex < 0 {
+		t.Fatalf("loaded databases = %#v", databases)
+	}
+	if !databases[childIndex].subordinate || !databases[childIndex].advertise {
+		t.Fatalf("subordinate database = %#v", databases[childIndex])
+	}
+	if got := glueSuperiorDatabaseIndex(databases, childIndex); got != parentIndex {
+		t.Fatalf("glue superior index = %d, want %d", got, parentIndex)
+	}
+}
+
+func TestLoadRuntimeDatabasesRejectsInvalidSubordinateShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		suffixes []string
+		values   []string
+	}{
+		{name: "missing suffix", values: []string{"TRUE"}},
+		{name: "false without suffix", values: []string{"FALSE"}},
+		{
+			name:     "multiple suffixes",
+			suffixes: []string{"ou=people,dc=example,dc=com", "ou=users,dc=example,dc=com"},
+			values:   []string{"TRUE"},
+		},
+		{
+			name:     "multiple values",
+			suffixes: []string{"ou=people,dc=example,dc=com"},
+			values:   []string{"TRUE", "advertise"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			entry := directory.Entry{
+				DN: "olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+					{Description: "olcSuffix", Values: stringValues(test.suffixes...)},
+					{Description: "olcSubordinate", Values: stringValues(test.values...)},
+				},
+			}
+			if err := store.Update(context.Background(), func(tx storage.Writer) error {
+				return tx.Put(entry, false)
+			}); err != nil {
+				t.Fatalf("seed store: %v", err)
+			}
+
+			if _, err := loadRuntimeDatabases(context.Background(), store); err == nil {
+				t.Fatal("invalid olcSubordinate configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestDatabaseSearchRoutesFollowGlueScope(t *testing.T) {
+	t.Parallel()
+
+	mustDN := func(t *testing.T, raw string) directory.DN {
+		t.Helper()
+		dn, err := directory.ParseDN(raw)
+		if err != nil {
+			t.Fatalf("ParseDN(%q): %v", raw, err)
+		}
+		return dn
+	}
+	databases := []runtimeDatabase{
+		{
+			name:     "parent",
+			suffixes: []directory.DN{mustDN(t, "dc=example,dc=com")},
+		},
+		{
+			name:        "people",
+			suffixes:    []directory.DN{mustDN(t, "ou=people,dc=example,dc=com")},
+			subordinate: true,
+		},
+		{
+			name:        "teams",
+			suffixes:    []directory.DN{mustDN(t, "ou=teams,ou=people,dc=example,dc=com")},
+			subordinate: true,
+		},
+		{
+			name:        "devices",
+			suffixes:    []directory.DN{mustDN(t, "ou=devices,dc=example,dc=com")},
+			subordinate: true,
+			advertise:   true,
+		},
+		{
+			name:     "external",
+			suffixes: []directory.DN{mustDN(t, "ou=external,dc=example,dc=com")},
+		},
+		{
+			name:        "managed",
+			suffixes:    []directory.DN{mustDN(t, "ou=managed,ou=external,dc=example,dc=com")},
+			subordinate: true,
+		},
+	}
+
+	tests := []struct {
+		name  string
+		base  string
+		scope directory.Scope
+		want  []string
+	}{
+		{
+			name:  "parent base",
+			base:  "dc=example,dc=com",
+			scope: directory.ScopeBase,
+			want:  []string{"parent"},
+		},
+		{
+			name:  "parent one level",
+			base:  "dc=example,dc=com",
+			scope: directory.ScopeSingleLevel,
+			want:  []string{"parent", "people", "devices"},
+		},
+		{
+			name:  "parent subtree",
+			base:  "dc=example,dc=com",
+			scope: directory.ScopeWholeSubtree,
+			want:  []string{"parent", "teams", "people", "devices"},
+		},
+		{
+			name:  "subordinate base",
+			base:  "ou=people,dc=example,dc=com",
+			scope: directory.ScopeBase,
+			want:  []string{"people"},
+		},
+		{
+			name:  "subordinate one level",
+			base:  "ou=people,dc=example,dc=com",
+			scope: directory.ScopeSingleLevel,
+			want:  []string{"people", "teams"},
+		},
+		{
+			name:  "subordinate subtree",
+			base:  "ou=people,dc=example,dc=com",
+			scope: directory.ScopeWholeSubtree,
+			want:  []string{"people", "teams"},
+		},
+		{
+			name:  "independent subtree",
+			base:  "ou=external,dc=example,dc=com",
+			scope: directory.ScopeWholeSubtree,
+			want:  []string{"external", "managed"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			routes := databaseSearchRoutes(
+				databases,
+				mustDN(t, test.base),
+				test.scope,
+			)
+			got := make([]string, len(routes))
+			for index, route := range routes {
+				got[index] = databases[route.databaseIndex].name
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("route databases = %v, want %v", got, test.want)
+			}
+			for index := range got {
+				if got[index] != test.want[index] {
+					t.Fatalf("route databases = %v, want %v", got, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestDatabaseSearchRoutesRejectOrphanSubordinate(t *testing.T) {
+	t.Parallel()
+
+	suffix, err := directory.ParseDN("ou=people,dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	databases := []runtimeDatabase{{
+		name:        "orphan",
+		suffixes:    []directory.DN{suffix},
+		subordinate: true,
+	}}
+	if routes := databaseSearchRoutes(
+		databases,
+		suffix,
+		directory.ScopeBase,
+	); len(routes) != 0 {
+		t.Fatalf("orphan subordinate routes = %#v", routes)
 	}
 }
 

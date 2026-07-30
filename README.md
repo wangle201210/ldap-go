@@ -38,7 +38,8 @@ database roots, hidden/disabled databases, and selected operation settings from
 `cn=config`; supported online changes are validated transactionally and
 published as one runtime snapshot. Database entry partitions allow different
 OpenLDAP backends to hold the same DN without crossing authorization or search
-boundaries. The compatibility matrix marks these as partial until the remaining
+boundaries, while `olcSubordinate` databases participate in OpenLDAP-style glue
+searches. The compatibility matrix marks these as partial until the remaining
 schema, ACL, control, alias, configuration, and differential cases pass.
 
 ```sh

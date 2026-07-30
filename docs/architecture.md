@@ -70,7 +70,10 @@ partition identities across ordered configuration changes; legacy stores are
 partitioned atomically at startup. Hidden databases retain their data partition
 but do not participate in operation routing or Root DSE publication. Disabled
 databases also retain their partition and leave operation routing, but remain
-published in Root DSE to match slapd.
+published in Root DSE to match slapd. Subordinate databases form glue
+hierarchies under the nearest non-subordinate naming context. Base searches
+stay in the most-specific partition, while one-level and subtree searches build
+a deterministic multi-partition plan with one shared size/time budget.
 
 ### Overlays
 

@@ -43,8 +43,8 @@ func (server *Server) handleSearch(
 	if isSubschemaDN(base) {
 		return server.searchSubschema(ctx, connection, state, message.ID, request)
 	}
-	database := databaseForDN(state.runtime, base)
-	if database == nil {
+	routes := databaseSearchRoutes(state.runtime.databases, base, request.Scope)
+	if len(routes) == 0 {
 		return server.writeSearchDone(
 			connection,
 			message.ID,
@@ -58,14 +58,16 @@ func (server *Server) handleSearch(
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
-		baseEntry, err := tx.Get(base)
+		primary := routes[0]
+		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
+		primaryReader := storage.ReaderInPartition(reader, primaryDatabase.partition)
+		baseEntry, err := primaryReader.Get(base)
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				result.Code = ldapwire.ResultNoSuchObject
 				result.MatchedDN = server.disclosedAncestor(
 					state.runtime,
-					tx,
+					primaryReader,
 					state.boundDN,
 					base,
 				)
@@ -76,7 +78,7 @@ func (server *Server) handleSearch(
 		baseEntry = withSubschemaReference(baseEntry)
 		if !server.allowed(
 			state.runtime,
-			tx,
+			primaryReader,
 			state.boundDN,
 			baseEntry,
 			"entry",
@@ -85,7 +87,7 @@ func (server *Server) handleSearch(
 		) {
 			if server.allowed(
 				state.runtime,
-				tx,
+				primaryReader,
 				state.boundDN,
 				baseEntry,
 				"entry",
@@ -99,66 +101,96 @@ func (server *Server) handleSearch(
 			return nil
 		}
 
-		return tx.ForEach(func(entry directory.Entry) error {
-			if expired(deadline) {
-				result.Code = ldapwire.ResultTimeLimitExceeded
-				return errStopSearch
+		for routeIndex, route := range routes {
+			database := &state.runtime.databases[route.databaseIndex]
+			tx := storage.ReaderInPartition(reader, database.partition)
+			if routeIndex > 0 {
+				routeBaseEntry, err := tx.Get(route.base)
+				if errors.Is(err, storage.ErrEntryNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				routeBaseEntry = withSubschemaReference(routeBaseEntry)
+				if !server.allowed(
+					state.runtime,
+					tx,
+					state.boundDN,
+					routeBaseEntry,
+					"entry",
+					nil,
+					acl.Search,
+				) {
+					continue
+				}
 			}
-			candidate, err := directory.ParseDN(entry.DN)
+
+			err := tx.ForEach(func(entry directory.Entry) error {
+				if expired(deadline) {
+					result.Code = ldapwire.ResultTimeLimitExceeded
+					return errStopSearch
+				}
+				candidate, err := directory.ParseDN(entry.DN)
+				if err != nil {
+					return err
+				}
+				if !directory.InScope(route.base, candidate, route.scope) {
+					return nil
+				}
+				entry = withSubschemaReference(entry)
+				matches, err := server.filterMatches(
+					state.runtime,
+					tx,
+					state.boundDN,
+					entry,
+					request.Filter,
+				)
+				if err != nil {
+					result.Code = ldapwire.ResultInappropriateMatching
+					result.DiagnosticMessage = err.Error()
+					return errStopSearch
+				}
+				if !matches {
+					return nil
+				}
+				if !server.allowed(
+					state.runtime,
+					tx,
+					state.boundDN,
+					entry,
+					"entry",
+					nil,
+					acl.Read,
+				) {
+					return nil
+				}
+				if len(entries) >= limit {
+					result.Code = ldapwire.ResultSizeLimitExceeded
+					return errStopSearch
+				}
+				readable := server.attributesWithPrivilege(
+					state.runtime,
+					tx,
+					state.boundDN,
+					entry,
+					acl.Read,
+					request.TypesOnly,
+				)
+				selected := server.selectEntry(
+					state.runtime,
+					readable,
+					request.Attributes,
+					request.TypesOnly,
+				)
+				entries = append(entries, selected)
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			if !directory.InScope(base, candidate, request.Scope) {
-				return nil
-			}
-			entry = withSubschemaReference(entry)
-			matches, err := server.filterMatches(
-				state.runtime,
-				tx,
-				state.boundDN,
-				entry,
-				request.Filter,
-			)
-			if err != nil {
-				result.Code = ldapwire.ResultInappropriateMatching
-				result.DiagnosticMessage = err.Error()
-				return errStopSearch
-			}
-			if !matches {
-				return nil
-			}
-			if !server.allowed(
-				state.runtime,
-				tx,
-				state.boundDN,
-				entry,
-				"entry",
-				nil,
-				acl.Read,
-			) {
-				return nil
-			}
-			if len(entries) >= limit {
-				result.Code = ldapwire.ResultSizeLimitExceeded
-				return errStopSearch
-			}
-			readable := server.attributesWithPrivilege(
-				state.runtime,
-				tx,
-				state.boundDN,
-				entry,
-				acl.Read,
-				request.TypesOnly,
-			)
-			selected := server.selectEntry(
-				state.runtime,
-				readable,
-				request.Attributes,
-				request.TypesOnly,
-			)
-			entries = append(entries, selected)
-			return nil
-		})
+		}
+		return nil
 	})
 	if err != nil && !errors.Is(err, errStopSearch) {
 		return fmt.Errorf("search directory: %w", err)
@@ -170,6 +202,79 @@ func (server *Server) handleSearch(
 		}
 	}
 	return server.writeSearchDone(connection, message.ID, result)
+}
+
+type databaseSearchRoute struct {
+	databaseIndex int
+	base          directory.DN
+	scope         directory.Scope
+}
+
+func databaseSearchRoutes(
+	databases []runtimeDatabase,
+	base directory.DN,
+	scope directory.Scope,
+) []databaseSearchRoute {
+	primaryIndex := databaseIndexForDN(databases, base)
+	if primaryIndex < 0 {
+		return nil
+	}
+
+	superiorIndex := primaryIndex
+	if databases[primaryIndex].subordinate {
+		superiorIndex = glueSuperiorDatabaseIndex(databases, primaryIndex)
+		if superiorIndex < 0 {
+			return nil
+		}
+	}
+	routes := []databaseSearchRoute{{
+		databaseIndex: primaryIndex,
+		base:          base,
+		scope:         scope,
+	}}
+	if scope == directory.ScopeBase {
+		return routes
+	}
+
+	var subordinateRoutes []databaseSearchRoute
+	for index := range databases {
+		database := &databases[index]
+		if index == primaryIndex ||
+			database.hidden ||
+			database.disabled ||
+			!database.subordinate ||
+			len(database.suffixes) != 1 ||
+			glueSuperiorDatabaseIndex(databases, index) != superiorIndex {
+			continue
+		}
+
+		suffix := database.suffixes[0]
+		route := databaseSearchRoute{
+			databaseIndex: index,
+			base:          suffix,
+		}
+		switch scope {
+		case directory.ScopeSingleLevel:
+			parent, ok := suffix.Parent()
+			if !ok || !parent.Equal(base) {
+				continue
+			}
+			route.scope = directory.ScopeBase
+		case directory.ScopeWholeSubtree:
+			if !base.Equal(suffix) && !base.AncestorOf(suffix) {
+				continue
+			}
+			route.scope = directory.ScopeWholeSubtree
+		default:
+			continue
+		}
+		subordinateRoutes = append(subordinateRoutes, route)
+	}
+	sort.SliceStable(subordinateRoutes, func(i, j int) bool {
+		return subordinateRoutes[i].base.Depth() >
+			subordinateRoutes[j].base.Depth()
+	})
+	return append(routes, subordinateRoutes...)
 }
 
 func (server *Server) searchRootDSE(
@@ -345,6 +450,9 @@ func rootDSE(runtime *runtimeState) directory.Entry {
 				monitorContexts = append(monitorContexts, suffix.String())
 			}
 		default:
+			if database.subordinate && !database.advertise {
+				continue
+			}
 			for _, suffix := range database.suffixes {
 				namingContexts = append(namingContexts, suffix.String())
 			}
