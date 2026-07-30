@@ -17,6 +17,7 @@ type runtimeDatabase struct {
 	rootDN          *directory.DN
 	rootPassword    []byte
 	rootPasswordSet bool
+	disabled        bool
 	hidden          bool
 	readOnly        bool
 	lastMod         bool
@@ -124,6 +125,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		database.disabled, _, err = singleBoolean(entry, "olcDisabled")
+		if err != nil {
+			return err
+		}
 		database.hidden, _, err = singleBoolean(entry, "olcHidden")
 		if err != nil {
 			return err
@@ -210,7 +215,7 @@ func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 	owners := make(map[string]string)
 	for _, database := range databases {
-		if database.hidden {
+		if database.hidden || database.disabled {
 			continue
 		}
 		for _, suffix := range database.suffixes {
@@ -255,7 +260,7 @@ func applyBootstrapRoot(
 	if err != nil {
 		return fmt.Errorf("root DN: %w", err)
 	}
-	index := databaseIndexForDN(databases, rootDN)
+	index := databaseIndexForRootOverride(databases, rootDN)
 	if index < 0 {
 		return fmt.Errorf("root DN %q is not within a configured naming context", rawDN)
 	}
@@ -266,6 +271,29 @@ func applyBootstrapRoot(
 }
 
 func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
+	bestIndex := -1
+	bestDepth := -1
+	for index := range databases {
+		if databases[index].hidden || databases[index].disabled {
+			continue
+		}
+		for _, suffix := range databases[index].suffixes {
+			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
+				continue
+			}
+			if suffix.Depth() > bestDepth {
+				bestIndex = index
+				bestDepth = suffix.Depth()
+			}
+		}
+	}
+	return bestIndex
+}
+
+func databaseIndexForRootOverride(
+	databases []runtimeDatabase,
+	dn directory.DN,
+) int {
 	bestIndex := -1
 	bestDepth := -1
 	for index := range databases {

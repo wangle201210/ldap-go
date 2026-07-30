@@ -210,7 +210,10 @@ operations only see the selected partition; ModifyDN rejects cross-database
 moves with `affectsMultipleDSAs`. `olcHidden` databases are skipped during
 selection and Root DSE publication, while their entries remain isolated and
 may use the same DN as a visible database. Online hide/show changes and suffix
-conflict rollback are covered by TCP tests. Root DSE `namingContexts`,
+conflict rollback are covered by TCP tests. `olcDisabled` databases are also
+removed from operation routing but, matching slapd, remain published in Root
+DSE and retain their isolated data. Online disable/enable changes and invalid-
+value rollback are covered through TCP tests. Root DSE `namingContexts`,
 `configContext`, and `monitorContext` values are built from the same runtime
 snapshot. Database-selective import/export accepts a slapcat-style numeric
 index, an `olcDatabase` value, or a configuration-entry DN; tests import and

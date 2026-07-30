@@ -171,7 +171,12 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 	t.Parallel()
 
-	for _, attribute := range []string{"olcReadOnly", "olcHidden", "olcLastMod"} {
+	for _, attribute := range []string{
+		"olcReadOnly",
+		"olcDisabled",
+		"olcHidden",
+		"olcLastMod",
+	} {
 		attribute := attribute
 		t.Run(attribute, func(t *testing.T) {
 			t.Parallel()

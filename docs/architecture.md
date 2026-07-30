@@ -68,7 +68,9 @@ OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
 partition identities across ordered configuration changes; legacy stores are
 partitioned atomically at startup. Hidden databases retain their data partition
-but do not participate in operation routing or Root DSE publication.
+but do not participate in operation routing or Root DSE publication. Disabled
+databases also retain their partition and leave operation routing, but remain
+published in Root DSE to match slapd.
 
 ### Overlays
 

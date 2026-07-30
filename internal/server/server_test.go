@@ -1239,6 +1239,107 @@ func TestLDAPClientReadOnlyDatabaseReload(t *testing.T) {
 	}
 }
 
+func TestLDAPClientDisabledDatabaseReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	const dataRootDN = "cn=admin,dc=example,dc=com"
+	address, stop := startServer(t, store, Config{
+		RootDN:       dataRootDN,
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	dataRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(data root): %v", err)
+	}
+	defer dataRoot.Close()
+	if err := dataRoot.Bind(dataRootDN, "admin-secret"); err != nil {
+		t.Fatalf("data root Bind(): %v", err)
+	}
+
+	searchData := func(client *ldap.Conn) (*ldap.SearchResult, error) {
+		return client.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		))
+	}
+	dataConfigDN := "olcDatabase={1}mdb,cn=config"
+	disable := ldap.NewModifyRequest(dataConfigDN, nil)
+	disable.Replace("olcDisabled", []string{"TRUE"})
+	if err := configClient.Modify(disable); err != nil {
+		t.Fatalf("enable olcDisabled Modify(): %v", err)
+	}
+	_, err = searchData(dataRoot)
+	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+
+	newDataRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(new data root): %v", err)
+	}
+	defer newDataRoot.Close()
+	assertLDAPResultCode(
+		t,
+		newDataRoot.Bind(dataRootDN, "admin-secret"),
+		ldap.LDAPResultInvalidCredentials,
+	)
+
+	rootDSE, err := dataRoot.Search(ldap.NewSearchRequest(
+		"",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"namingContexts"},
+		nil,
+	))
+	if err != nil || len(rootDSE.Entries) != 1 ||
+		rootDSE.Entries[0].GetAttributeValue("namingContexts") != "dc=example,dc=com" {
+		t.Fatalf("disabled database Root DSE = %#v, %v", rootDSE, err)
+	}
+
+	enable := ldap.NewModifyRequest(dataConfigDN, nil)
+	enable.Replace("olcDisabled", []string{"FALSE"})
+	if err := configClient.Modify(enable); err != nil {
+		t.Fatalf("disable olcDisabled Modify(): %v", err)
+	}
+	if result, err := searchData(dataRoot); err != nil || len(result.Entries) != 1 {
+		t.Fatalf("re-enabled database Search() = %#v, %v", result, err)
+	}
+
+	invalid := ldap.NewModifyRequest(dataConfigDN, nil)
+	invalid.Replace("olcDisabled", []string{"sometimes"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalid),
+		ldap.LDAPResultConstraintViolation,
+	)
+	if result, err := searchData(dataRoot); err != nil || len(result.Entries) != 1 {
+		t.Fatalf("rolled-back olcDisabled changed routing: %#v, %v", result, err)
+	}
+}
+
 func TestLDAPClientLastModReload(t *testing.T) {
 	t.Parallel()
 
