@@ -86,7 +86,43 @@ func (tx *boltTx) Get(dn directory.DN) (directory.Entry, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return directory.Entry{}, err
 	}
-	value := tx.entries.Get([]byte(dn.Key()))
+	var result directory.Entry
+	found := false
+	foundPartition := ""
+	err := tx.entries.ForEach(func(key, value []byte) error {
+		partition, entryDN := splitPartitionedEntryKey(string(key))
+		if entryDN != dn.Key() {
+			return nil
+		}
+		if found && partition != foundPartition {
+			return ErrEntryAmbiguous
+		}
+		entry, err := decodeEntry(value)
+		if err != nil {
+			return err
+		}
+		result = entry
+		found = true
+		foundPartition = partition
+		return nil
+	})
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if !found {
+		return directory.Entry{}, ErrEntryNotFound
+	}
+	return result, nil
+}
+
+func (tx *boltTx) GetIn(partition string, dn directory.DN) (directory.Entry, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return directory.Entry{}, err
+	}
+	value := tx.entries.Get([]byte(partitionedEntryKey(partition, dn.Key())))
+	if value == nil && partition == "" {
+		value = tx.entries.Get([]byte(dn.Key()))
+	}
 	if value == nil {
 		return directory.Entry{}, ErrEntryNotFound
 	}
@@ -106,6 +142,42 @@ func (tx *boltTx) ForEach(fn func(directory.Entry) error) error {
 	})
 }
 
+func (tx *boltTx) ForEachIn(
+	partition string,
+	fn func(directory.Entry) error,
+) error {
+	return tx.entries.ForEach(func(key, value []byte) error {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		entryPartition, _ := splitPartitionedEntryKey(string(key))
+		if entryPartition != partition {
+			return nil
+		}
+		entry, err := decodeEntry(value)
+		if err != nil {
+			return err
+		}
+		return fn(entry)
+	})
+}
+
+func (tx *boltTx) ForEachPartition(
+	fn func(string, directory.Entry) error,
+) error {
+	return tx.entries.ForEach(func(key, value []byte) error {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		partition, _ := splitPartitionedEntryKey(string(key))
+		entry, err := decodeEntry(value)
+		if err != nil {
+			return err
+		}
+		return fn(partition, entry)
+	})
+}
+
 func (tx *boltTx) NamingContexts() ([]string, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return nil, err
@@ -122,6 +194,14 @@ func (tx *boltTx) NamingContexts() ([]string, error) {
 }
 
 func (tx *boltTx) Put(entry directory.Entry, replace bool) error {
+	return tx.PutIn("", entry, replace)
+}
+
+func (tx *boltTx) PutIn(
+	partition string,
+	entry directory.Entry,
+	replace bool,
+) error {
 	if !tx.tx.Writable() {
 		return errorsReadOnly()
 	}
@@ -132,26 +212,74 @@ func (tx *boltTx) Put(entry directory.Entry, replace bool) error {
 	if err != nil {
 		return err
 	}
-	key := []byte(dn.Key())
-	if tx.entries.Get(key) != nil && !replace {
+	key := []byte(partitionedEntryKey(partition, dn.Key()))
+	existing := tx.entries.Get(key)
+	if existing == nil && partition == "" {
+		existing = tx.entries.Get([]byte(dn.Key()))
+	}
+	if existing != nil && !replace {
 		return ErrEntryExists
 	}
 	value, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 	}
-	return tx.entries.Put(key, value)
+	if err := tx.entries.Put(key, value); err != nil {
+		return err
+	}
+	if partition == "" {
+		return tx.entries.Delete([]byte(dn.Key()))
+	}
+	return nil
 }
 
 func (tx *boltTx) Delete(dn directory.DN) error {
 	if !tx.tx.Writable() {
 		return errorsReadOnly()
 	}
-	key := []byte(dn.Key())
-	if tx.entries.Get(key) == nil {
+	found := false
+	foundPartition := ""
+	err := tx.entries.ForEach(func(key, _ []byte) error {
+		partition, entryDN := splitPartitionedEntryKey(string(key))
+		if entryDN != dn.Key() {
+			return nil
+		}
+		if found && partition != foundPartition {
+			return ErrEntryAmbiguous
+		}
+		found = true
+		foundPartition = partition
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
 		return ErrEntryNotFound
 	}
-	return tx.entries.Delete(key)
+	return tx.DeleteIn(foundPartition, dn)
+}
+
+func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
+	if !tx.tx.Writable() {
+		return errorsReadOnly()
+	}
+	key := []byte(partitionedEntryKey(partition, dn.Key()))
+	legacyKey := []byte(dn.Key())
+	exists := tx.entries.Get(key) != nil
+	if partition == "" && tx.entries.Get(legacyKey) != nil {
+		exists = true
+	}
+	if !exists {
+		return ErrEntryNotFound
+	}
+	if err := tx.entries.Delete(key); err != nil {
+		return err
+	}
+	if partition == "" {
+		return tx.entries.Delete(legacyKey)
+	}
+	return nil
 }
 
 func (tx *boltTx) Clear() error {

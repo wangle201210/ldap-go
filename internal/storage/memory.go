@@ -85,7 +85,32 @@ func (tx *memoryTx) Get(dn directory.DN) (directory.Entry, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return directory.Entry{}, err
 	}
-	entry, ok := tx.entries[dn.Key()]
+	var result directory.Entry
+	found := false
+	foundPartition := ""
+	for key, entry := range tx.entries {
+		partition, entryDN := splitPartitionedEntryKey(key)
+		if entryDN != dn.Key() {
+			continue
+		}
+		if found && partition != foundPartition {
+			return directory.Entry{}, ErrEntryAmbiguous
+		}
+		result = entry
+		found = true
+		foundPartition = partition
+	}
+	if !found {
+		return directory.Entry{}, ErrEntryNotFound
+	}
+	return result.Clone(), nil
+}
+
+func (tx *memoryTx) GetIn(partition string, dn directory.DN) (directory.Entry, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return directory.Entry{}, err
+	}
+	entry, ok := tx.entries[partitionedEntryKey(partition, dn.Key())]
 	if !ok {
 		return directory.Entry{}, ErrEntryNotFound
 	}
@@ -110,6 +135,51 @@ func (tx *memoryTx) ForEach(fn func(directory.Entry) error) error {
 	return nil
 }
 
+func (tx *memoryTx) ForEachIn(
+	partition string,
+	fn func(directory.Entry) error,
+) error {
+	keys := make([]string, 0)
+	for key := range tx.entries {
+		entryPartition, _ := splitPartitionedEntryKey(key)
+		if entryPartition == partition {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(tx.entries[key].Clone()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tx *memoryTx) ForEachPartition(
+	fn func(string, directory.Entry) error,
+) error {
+	keys := make([]string, 0, len(tx.entries))
+	for key := range tx.entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		partition, _ := splitPartitionedEntryKey(key)
+		if err := fn(partition, tx.entries[key].Clone()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (tx *memoryTx) NamingContexts() ([]string, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return nil, err
@@ -118,6 +188,14 @@ func (tx *memoryTx) NamingContexts() ([]string, error) {
 }
 
 func (tx *memoryTx) Put(entry directory.Entry, replace bool) error {
+	return tx.PutIn("", entry, replace)
+}
+
+func (tx *memoryTx) PutIn(
+	partition string,
+	entry directory.Entry,
+	replace bool,
+) error {
 	if tx.readOnly {
 		return errorsReadOnly()
 	}
@@ -128,10 +206,11 @@ func (tx *memoryTx) Put(entry directory.Entry, replace bool) error {
 	if err != nil {
 		return err
 	}
-	if _, exists := tx.entries[dn.Key()]; exists && !replace {
+	key := partitionedEntryKey(partition, dn.Key())
+	if _, exists := tx.entries[key]; exists && !replace {
 		return ErrEntryExists
 	}
-	tx.entries[dn.Key()] = entry.Clone()
+	tx.entries[key] = entry.Clone()
 	return nil
 }
 
@@ -139,10 +218,35 @@ func (tx *memoryTx) Delete(dn directory.DN) error {
 	if tx.readOnly {
 		return errorsReadOnly()
 	}
-	if _, exists := tx.entries[dn.Key()]; !exists {
+	foundKey := ""
+	foundPartition := ""
+	for key := range tx.entries {
+		partition, entryDN := splitPartitionedEntryKey(key)
+		if entryDN != dn.Key() {
+			continue
+		}
+		if foundKey != "" && partition != foundPartition {
+			return ErrEntryAmbiguous
+		}
+		foundKey = key
+		foundPartition = partition
+	}
+	if foundKey == "" {
 		return ErrEntryNotFound
 	}
-	delete(tx.entries, dn.Key())
+	delete(tx.entries, foundKey)
+	return nil
+}
+
+func (tx *memoryTx) DeleteIn(partition string, dn directory.DN) error {
+	if tx.readOnly {
+		return errorsReadOnly()
+	}
+	key := partitionedEntryKey(partition, dn.Key())
+	if _, exists := tx.entries[key]; !exists {
+		return ErrEntryNotFound
+	}
+	delete(tx.entries, key)
 	return nil
 }
 
