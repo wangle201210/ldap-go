@@ -725,7 +725,7 @@ func TestLDAPClientFilterACLUsesAssertionAndUndefined(t *testing.T) {
 	}
 }
 
-func TestLDAPClientConfigBackendDefaultsToNoAccess(t *testing.T) {
+func TestLDAPClientUnconfiguredConfigDITReturnsReferral(t *testing.T) {
 	t.Parallel()
 
 	store := storage.NewMemory()
@@ -752,7 +752,7 @@ func TestLDAPClientConfigBackendDefaultsToNoAccess(t *testing.T) {
 		nil,
 	)
 	_, err = client.Search(request)
-	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
+	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
 }
 
 func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
@@ -859,7 +859,7 @@ func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
 		[]string{"olcRootDN"},
 		nil,
 	))
-	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
+	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
 }
 
 func TestLDAPClientConfigRootPasswordFallbackAndEmptyValue(t *testing.T) {
@@ -1369,6 +1369,169 @@ func TestLDAPClientLastModReload(t *testing.T) {
 	}
 }
 
+func TestNewPartitionsLegacyEntriesByDatabase(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	const databaseUUID = "11111111-2222-3333-8444-555555555555"
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("entryUUID", stringValues(databaseUUID))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("add database entryUUID: %v", err)
+	}
+
+	if _, err := New(Config{Store: store}); err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		defaultEntries := 0
+		if err := reader.ForEachIn("", func(directory.Entry) error {
+			defaultEntries++
+			return nil
+		}); err != nil {
+			return err
+		}
+		if defaultEntries != 0 {
+			return fmt.Errorf("default partition contains %d entries", defaultEntries)
+		}
+
+		dataDN, err := directory.ParseDN("dc=example,dc=com")
+		if err != nil {
+			return err
+		}
+		if _, err := reader.GetIn(
+			storage.OpenLDAPDatabasePartition("{1}mdb", []byte(databaseUUID)),
+			dataDN,
+		); err != nil {
+			return fmt.Errorf("read data partition: %w", err)
+		}
+		configDN, err := directory.ParseDN("cn=config")
+		if err != nil {
+			return err
+		}
+		if _, err := reader.GetIn(configurationStoragePartition, configDN); err != nil {
+			return fmt.Errorf("read config partition: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("verify storage partitions: %v", err)
+	}
+}
+
+func TestLDAPClientHiddenDatabaseRoutingReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedHiddenConfiguration(t, store)
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	anonymous, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(anonymous): %v", err)
+	}
+	defer anonymous.Close()
+	searchVisible := func() (*ldap.SearchResult, error) {
+		return anonymous.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"description"},
+			nil,
+		))
+	}
+	result, err := searchVisible()
+	if err != nil || len(result.Entries) != 1 ||
+		result.Entries[0].GetAttributeValue("description") != "visible database" {
+		t.Fatalf("visible database Search() = %#v, %v", result, err)
+	}
+	assertLDAPResultCode(
+		t,
+		anonymous.Bind("cn=hidden-admin,dc=example,dc=com", "hidden-secret"),
+		ldap.LDAPResultInvalidCredentials,
+	)
+
+	rootDSE, err := anonymous.Search(ldap.NewSearchRequest(
+		"",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"namingContexts", "configContext"},
+		nil,
+	))
+	if err != nil || len(rootDSE.Entries) != 1 {
+		t.Fatalf("Root DSE Search() = %#v, %v", rootDSE, err)
+	}
+	if values := rootDSE.Entries[0].GetAttributeValues("namingContexts"); len(values) != 1 || values[0] != "dc=example,dc=com" {
+		t.Fatalf("namingContexts = %v", values)
+	}
+	if got := rootDSE.Entries[0].GetAttributeValue("configContext"); got != "cn=config" {
+		t.Fatalf("configContext = %q", got)
+	}
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+
+	visibleConfigDN := "olcDatabase={1}mdb,cn=config"
+	hideVisible := ldap.NewModifyRequest(visibleConfigDN, nil)
+	hideVisible.Replace("olcHidden", []string{"TRUE"})
+	if err := configClient.Modify(hideVisible); err != nil {
+		t.Fatalf("hide visible database Modify(): %v", err)
+	}
+	_, err = searchVisible()
+	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+
+	showVisible := ldap.NewModifyRequest(visibleConfigDN, nil)
+	showVisible.Replace("olcHidden", []string{"FALSE"})
+	if err := configClient.Modify(showVisible); err != nil {
+		t.Fatalf("show visible database Modify(): %v", err)
+	}
+	result, err = searchVisible()
+	if err != nil || len(result.Entries) != 1 ||
+		result.Entries[0].GetAttributeValue("description") != "visible database" {
+		t.Fatalf("restored visible Search() = %#v, %v", result, err)
+	}
+
+	showDuplicate := ldap.NewModifyRequest("olcDatabase={2}mdb,cn=config", nil)
+	showDuplicate.Replace("olcHidden", []string{"FALSE"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(showDuplicate),
+		ldap.LDAPResultConstraintViolation,
+	)
+	result, err = searchVisible()
+	if err != nil || len(result.Entries) != 1 ||
+		result.Entries[0].GetAttributeValue("description") != "visible database" {
+		t.Fatalf("rolled-back hidden setting changed routing: %#v, %v", result, err)
+	}
+}
+
 func TestLDAPClientConcurrentOnlineACLReload(t *testing.T) {
 	t.Parallel()
 
@@ -1667,6 +1830,80 @@ func seedOnlineConfiguration(t *testing.T, store storage.Store) {
 		return tx.SetNamingContexts([]string{"dc=example,dc=com", "cn=config"})
 	}); err != nil {
 		t.Fatalf("configure online cn=config: %v", err)
+	}
+}
+
+func seedHiddenConfiguration(t *testing.T, store storage.Store) {
+	t.Helper()
+
+	visiblePartition := configuredDatabasePartition("{1}mdb")
+	hiddenPartition := configuredDatabasePartition("{2}mdb")
+	entries := []directory.Entry{
+		{
+			DN: "cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcGlobal")},
+				{Description: "cn", Values: stringValues("config")},
+			},
+		},
+		{
+			DN: "olcDatabase={0}config,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+				{Description: "olcDatabase", Values: stringValues("{0}config")},
+				{Description: "olcRootDN", Values: stringValues("cn=config")},
+				{Description: "olcRootPW", Values: stringValues("config-secret")},
+				{Description: "olcAccess", Values: stringValues("{0}to * by * none")},
+			},
+		},
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+				{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+				{Description: "olcAccess", Values: stringValues("{0}to * by * read")},
+			},
+		},
+		{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+				{Description: "olcDatabase", Values: stringValues("{2}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+				{Description: "olcRootDN", Values: stringValues("cn=hidden-admin,dc=example,dc=com")},
+				{Description: "olcRootPW", Values: stringValues("hidden-secret")},
+				{Description: "olcHidden", Values: stringValues("TRUE")},
+				{Description: "olcAccess", Values: stringValues("{0}to * by * read")},
+			},
+		},
+	}
+	visible := directory.Entry{
+		DN: "dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: stringValues("domain")},
+			{Description: "dc", Values: stringValues("example")},
+			{Description: "description", Values: stringValues("visible database")},
+		},
+	}
+	hidden := visible.Clone()
+	hidden.ReplaceValues("description", stringValues("hidden database"))
+
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, entry := range entries {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		if err := writer.PutIn(visiblePartition, visible, false); err != nil {
+			return err
+		}
+		if err := writer.PutIn(hiddenPartition, hidden, false); err != nil {
+			return err
+		}
+		return writer.SetNamingContexts([]string{"dc=example,dc=com", "cn=config"})
+	}); err != nil {
+		t.Fatalf("seed hidden configuration: %v", err)
 	}
 }
 

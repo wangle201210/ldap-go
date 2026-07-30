@@ -64,8 +64,11 @@ interface must support:
 - snapshot reads and ordered change records for replication;
 - online backup, restore, and consistency checking.
 
-OpenLDAP-style databases map to backend instances selected by the longest
-matching naming context.
+OpenLDAP-style databases map to isolated storage partitions selected by the
+longest matching naming context. Imported database-entry UUIDs provide stable
+partition identities across ordered configuration changes; legacy stores are
+partitioned atomically at startup. Hidden databases retain their data partition
+but do not participate in operation routing or Root DSE publication.
 
 ### Overlays
 

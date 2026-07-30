@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -42,13 +43,22 @@ func (server *Server) handleSearch(
 	if isSubschemaDN(base) {
 		return server.searchSubschema(ctx, connection, state, message.ID, request)
 	}
+	database := databaseForDN(state.runtime, base)
+	if database == nil {
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			ldapwire.Result{Code: ldapwire.ResultReferral},
+		)
+	}
 
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
 	deadline := timeLimitDeadline(request.TimeLimit)
 	entries := make([]directory.Entry, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 
-	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := storage.ReaderInPartition(reader, database.partition)
 		baseEntry, err := tx.Get(base)
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
@@ -169,16 +179,7 @@ func (server *Server) searchRootDSE(
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
-	var namingContexts []string
-	if err := server.config.Store.View(ctx, func(tx storage.Reader) error {
-		var err error
-		namingContexts, err = tx.NamingContexts()
-		return err
-	}); err != nil {
-		return fmt.Errorf("read naming contexts: %w", err)
-	}
-
-	entry := rootDSE(namingContexts)
+	entry := rootDSE(state.runtime)
 	var selected *directory.Entry
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
 		matches, err := server.filterMatches(
@@ -326,22 +327,62 @@ func (server *Server) searchSubschema(
 	)
 }
 
-func rootDSE(namingContexts []string) directory.Entry {
-	contextValues := make([][]byte, len(namingContexts))
-	for i := range namingContexts {
-		contextValues[i] = []byte(namingContexts[i])
+func rootDSE(runtime *runtimeState) directory.Entry {
+	var namingContexts []string
+	var configContexts []string
+	var monitorContexts []string
+	for _, database := range runtime.databases {
+		if database.hidden || len(database.suffixes) == 0 {
+			continue
+		}
+		switch {
+		case isConfigDatabase(database):
+			for _, suffix := range database.suffixes {
+				configContexts = append(configContexts, suffix.String())
+			}
+		case isMonitorDatabase(database):
+			for _, suffix := range database.suffixes {
+				monitorContexts = append(monitorContexts, suffix.String())
+			}
+		default:
+			for _, suffix := range database.suffixes {
+				namingContexts = append(namingContexts, suffix.String())
+			}
+		}
 	}
-	return directory.Entry{
+	sort.Strings(namingContexts)
+	sort.Strings(configContexts)
+	sort.Strings(monitorContexts)
+
+	entry := directory.Entry{
 		DN: "",
 		Attributes: []directory.Attribute{
 			{Description: "objectClass", Values: [][]byte{[]byte("top")}},
 			{Description: "subschemaSubentry", Values: [][]byte{[]byte("cn=Subschema")}},
 			{Description: "supportedLDAPVersion", Values: [][]byte{[]byte("3")}},
-			{Description: "namingContexts", Values: contextValues},
 			{Description: "vendorName", Values: [][]byte{[]byte("ldap-go")}},
 			{Description: "vendorVersion", Values: [][]byte{[]byte("0.1-dev")}},
 		},
 	}
+	if len(namingContexts) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "namingContexts",
+			Values:      stringValues(namingContexts...),
+		})
+	}
+	if len(configContexts) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "configContext",
+			Values:      stringValues(configContexts...),
+		})
+	}
+	if len(monitorContexts) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "monitorContext",
+			Values:      stringValues(monitorContexts...),
+		})
+	}
+	return entry
 }
 
 func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {

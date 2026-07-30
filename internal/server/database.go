@@ -12,13 +12,17 @@ import (
 
 type runtimeDatabase struct {
 	name            string
+	partition       string
 	suffixes        []directory.DN
 	rootDN          *directory.DN
 	rootPassword    []byte
 	rootPasswordSet bool
+	hidden          bool
 	readOnly        bool
 	lastMod         bool
 }
+
+const configurationStoragePartition = storage.OpenLDAPConfigPartition
 
 func loadRuntimeDatabases(
 	ctx context.Context,
@@ -56,9 +60,18 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if len(databaseValues) != 1 {
 			return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
 		}
+		entryUUIDValues := entry.Values("entryUUID")
+		if len(entryUUIDValues) > 1 {
+			return fmt.Errorf("%s entryUUID must be single-valued", entry.DN)
+		}
+		var entryUUID []byte
+		if len(entryUUIDValues) == 1 {
+			entryUUID = entryUUIDValues[0]
+		}
 		database := runtimeDatabase{
-			name:    string(databaseValues[0]),
-			lastMod: true,
+			name:      string(databaseValues[0]),
+			partition: storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
+			lastMod:   true,
 		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
 			suffix, err := directory.ParseDN(string(rawSuffix))
@@ -69,9 +82,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		}
 		if len(database.suffixes) == 0 {
 			switch {
-			case strings.Contains(strings.ToLower(database.name), "config"):
+			case isConfigDatabase(database):
 				database.suffixes = []directory.DN{configSuffix}
-			case strings.Contains(strings.ToLower(database.name), "monitor"):
+				database.partition = configurationStoragePartition
+			case isMonitorDatabase(database):
 				monitor, err := directory.ParseDN("cn=Monitor")
 				if err != nil {
 					return err
@@ -110,6 +124,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		database.hidden, _, err = singleBoolean(entry, "olcHidden")
+		if err != nil {
+			return err
+		}
 		if lastMod, present, err := singleBoolean(entry, "olcLastMod"); err != nil {
 			return err
 		} else if present {
@@ -127,6 +145,9 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	if err := validateDatabaseSuffixes(databases); err != nil {
 		return nil, err
 	}
+	if err := validateDatabasePartitions(databases); err != nil {
+		return nil, err
+	}
 
 	for _, rawContext := range namingContexts {
 		contextDN, err := directory.ParseDN(rawContext)
@@ -137,9 +158,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			continue
 		}
 		databases = append(databases, runtimeDatabase{
-			name:     "bootstrap",
-			suffixes: []directory.DN{contextDN},
-			lastMod:  true,
+			name:      "bootstrap",
+			partition: storage.OpenLDAPBootstrapPartition(contextDN),
+			suffixes:  []directory.DN{contextDN},
+			lastMod:   true,
 		})
 	}
 	applyFrontendDatabaseDefaults(databases)
@@ -175,8 +197,7 @@ func singleBoolean(
 func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 	frontendReadOnly := false
 	for _, database := range databases {
-		if strings.Contains(strings.ToLower(database.name), "frontend") &&
-			database.readOnly {
+		if databaseType(database.name) == "frontend" && database.readOnly {
 			frontendReadOnly = database.readOnly
 			break
 		}
@@ -189,6 +210,9 @@ func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 	owners := make(map[string]string)
 	for _, database := range databases {
+		if database.hidden {
+			continue
+		}
 		for _, suffix := range database.suffixes {
 			if owner, exists := owners[suffix.Key()]; exists {
 				return fmt.Errorf(
@@ -200,6 +224,24 @@ func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 			}
 			owners[suffix.Key()] = database.name
 		}
+	}
+	return nil
+}
+
+func validateDatabasePartitions(databases []runtimeDatabase) error {
+	owners := make(map[string]string)
+	for _, database := range databases {
+		if database.partition == "" {
+			continue
+		}
+		if owner, exists := owners[database.partition]; exists {
+			return fmt.Errorf(
+				"databases %q and %q use the same storage partition",
+				owner,
+				database.name,
+			)
+		}
+		owners[database.partition] = database.name
 	}
 	return nil
 }
@@ -227,6 +269,9 @@ func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
 	bestIndex := -1
 	bestDepth := -1
 	for index := range databases {
+		if databases[index].hidden {
+			continue
+		}
 		for _, suffix := range databases[index].suffixes {
 			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
 				continue
@@ -240,6 +285,34 @@ func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
 	return bestIndex
 }
 
+func databaseIndexForLegacyDN(
+	databases []runtimeDatabase,
+	dn directory.DN,
+) (int, error) {
+	bestIndex := -1
+	bestDepth := -1
+	for index := range databases {
+		for _, suffix := range databases[index].suffixes {
+			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
+				continue
+			}
+			switch {
+			case suffix.Depth() > bestDepth:
+				bestIndex = index
+				bestDepth = suffix.Depth()
+			case suffix.Depth() == bestDepth &&
+				bestIndex >= 0 &&
+				databases[bestIndex].partition != databases[index].partition:
+				return -1, fmt.Errorf(
+					"DN %q belongs to multiple OpenLDAP databases at the same suffix depth",
+					dn.String(),
+				)
+			}
+		}
+	}
+	return bestIndex, nil
+}
+
 func databaseHasSuffix(databases []runtimeDatabase, suffix directory.DN) bool {
 	for _, database := range databases {
 		for _, candidate := range database.suffixes {
@@ -249,4 +322,26 @@ func databaseHasSuffix(databases []runtimeDatabase, suffix directory.DN) bool {
 		}
 	}
 	return false
+}
+
+func configuredDatabasePartition(name string) string {
+	return storage.OpenLDAPDatabasePartition(name, nil)
+}
+
+func isConfigDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "config"
+}
+
+func isMonitorDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "monitor"
+}
+
+func databaseType(name string) string {
+	value := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(value, "{") {
+		if end := strings.IndexByte(value, '}'); end >= 0 {
+			value = value[end+1:]
+		}
+	}
+	return value
 }

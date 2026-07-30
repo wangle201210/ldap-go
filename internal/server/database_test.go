@@ -171,7 +171,7 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 	t.Parallel()
 
-	for _, attribute := range []string{"olcReadOnly", "olcLastMod"} {
+	for _, attribute := range []string{"olcReadOnly", "olcHidden", "olcLastMod"} {
 		attribute := attribute
 		t.Run(attribute, func(t *testing.T) {
 			t.Parallel()
@@ -196,5 +196,55 @@ func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 				t.Fatalf("invalid %s was accepted", attribute)
 			}
 		})
+	}
+}
+
+func TestLoadRuntimeDatabasesAllowsHiddenDuplicateSuffix(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+			},
+		},
+		{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{2}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+				{Description: "olcHidden", Values: stringValues("TRUE")},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		for _, entry := range entries {
+			if err := tx.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return tx.SetNamingContexts([]string{"dc=example,dc=com"})
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	databases, err := loadRuntimeDatabases(context.Background(), store)
+	if err != nil {
+		t.Fatalf("loadRuntimeDatabases(): %v", err)
+	}
+	dn, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	index := databaseIndexForDN(databases, dn)
+	if index < 0 || databases[index].name != "{1}mdb" {
+		t.Fatalf("selected database = %d, %#v", index, databases)
+	}
+	if _, err := databaseIndexForLegacyDN(databases, dn); err == nil {
+		t.Fatal("ambiguous unpartitioned entry was assigned across duplicate suffixes")
 	}
 }

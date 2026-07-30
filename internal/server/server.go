@@ -88,6 +88,17 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := server.partitionDefaultEntries(context.Background(), runtime); err != nil {
+		return nil, err
+	}
+	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
+		var err error
+		runtime, err = server.buildRuntimeState(reader)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
 	server.runtime.Store(runtime)
 	return server, nil
 }
@@ -275,15 +286,19 @@ func (server *Server) authenticate(
 		return false, nil
 	}
 
-	if database := databaseForDN(runtime, dn); database != nil &&
-		database.rootDN != nil &&
+	database := databaseForDN(runtime, dn)
+	if database == nil {
+		return false, nil
+	}
+	if database.rootDN != nil &&
 		database.rootDN.Equal(dn) &&
 		database.rootPasswordSet {
 		return auth.VerifyPassword(database.rootPassword, password), nil
 	}
 
 	var authenticated bool
-	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := storage.ReaderInPartition(reader, database.partition)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil

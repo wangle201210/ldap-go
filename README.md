@@ -34,9 +34,11 @@ The current server milestone supports atomic content-LDIF import/export,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, and Unbind. It loads OpenLDAP schema, ordered ACLs,
-database roots, and selected operation settings from `cn=config`; supported
-online changes are validated transactionally and published as one runtime
-snapshot. The compatibility matrix marks these as partial until the remaining
+database roots, hidden databases, and selected operation settings from
+`cn=config`; supported online changes are validated transactionally and
+published as one runtime snapshot. Database entry partitions allow different
+OpenLDAP backends to hold the same DN without crossing authorization or search
+boundaries. The compatibility matrix marks these as partial until the remaining
 schema, ACL, control, alias, configuration, and differential cases pass.
 
 ```sh

@@ -48,20 +48,32 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
-	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationAddResponse,
-			*result,
-		)
-	}
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationAddResponse,
 			ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, ""),
+		)
+	}
+	database := databaseForDN(state.runtime, dn)
+	if database == nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			),
+		)
+	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			*result,
 		)
 	}
 	if result := validateNewEntry(request.Entry, dn); result != nil {
@@ -92,7 +104,8 @@ func (server *Server) handleAdd(
 	}
 
 	var nextRuntime *runtimeState
-	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		tx := storage.WriterInPartition(writer, database.partition)
 		if _, err := tx.Get(dn); err == nil {
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
@@ -161,12 +174,12 @@ func (server *Server) handleAdd(
 		if err := tx.Put(entry, false); err != nil {
 			return err
 		}
-		if err := refreshNamingContexts(tx); err != nil {
+		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
 		if configurationWrite {
 			var validationErr error
-			nextRuntime, validationErr = server.validateRuntimeConfiguration(tx)
+			nextRuntime, validationErr = server.validateRuntimeConfiguration(writer)
 			return validationErr
 		}
 		return nil
@@ -196,20 +209,32 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
-	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationModifyResponse,
-			*result,
-		)
-	}
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationModifyResponse,
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
+		)
+	}
+	database := databaseForDN(state.runtime, dn)
+	if database == nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			),
+		)
+	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			*result,
 		)
 	}
 	configurationWrite := isConfigurationDN(dn)
@@ -219,7 +244,8 @@ func (server *Server) handleModify(
 	}
 
 	var nextRuntime *runtimeState
-	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
@@ -269,7 +295,7 @@ func (server *Server) handleModify(
 		}
 		if configurationWrite {
 			var err error
-			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			nextRuntime, err = server.validateRuntimeConfiguration(writer)
 			return err
 		}
 		return nil
@@ -299,20 +325,32 @@ func (server *Server) handleDelete(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
-	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationDeleteResponse,
-			*result,
-		)
-	}
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationDeleteResponse,
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
+		)
+	}
+	database := databaseForDN(state.runtime, dn)
+	if database == nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			),
+		)
+	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			*result,
 		)
 	}
 	configurationWrite := isConfigurationDN(dn)
@@ -322,7 +360,8 @@ func (server *Server) handleDelete(
 	}
 
 	var nextRuntime *runtimeState
-	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
@@ -377,12 +416,12 @@ func (server *Server) handleDelete(
 		if err := tx.Delete(dn); err != nil {
 			return err
 		}
-		if err := refreshNamingContexts(tx); err != nil {
+		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
 		if configurationWrite {
 			var err error
-			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			nextRuntime, err = server.validateRuntimeConfiguration(writer)
 			return err
 		}
 		return nil
@@ -410,18 +449,6 @@ func (server *Server) handleModifyDN(
 			message.ID,
 			ldapwire.ApplicationModifyDNResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
-		)
-	}
-	if result := updateOperationPrecondition(
-		state.runtime,
-		state.boundDN,
-		oldDN,
-	); result != nil {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationModifyDNResponse,
-			*result,
 		)
 	}
 	if isSubschemaDN(oldDN) {
@@ -460,6 +487,43 @@ func (server *Server) handleModifyDN(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	database := databaseForDN(state.runtime, oldDN)
+	destinationDatabase := databaseForDN(state.runtime, newDN)
+	if database == nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			),
+		)
+	}
+	if destinationDatabase == nil ||
+		destinationDatabase.partition != database.partition {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultAffectsMultipleDSAs,
+				"cannot rename between DSAs",
+			),
+		)
+	}
+	if result := updateOperationPrecondition(
+		state.runtime,
+		state.boundDN,
+		oldDN,
+	); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			*result,
+		)
+	}
 	configurationWrite := isConfigurationDN(oldDN)
 	if configurationWrite != isConfigurationDN(newDN) {
 		return server.writeOperationResult(
@@ -491,7 +555,8 @@ func (server *Server) handleModifyDN(
 	}
 
 	var nextRuntime *runtimeState
-	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		tx := storage.WriterInPartition(writer, database.partition)
 		sourceEntry, err := tx.Get(oldDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
@@ -658,12 +723,12 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 		}
-		if err := refreshNamingContexts(tx); err != nil {
+		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
 		if configurationWrite {
 			var err error
-			nextRuntime, err = server.validateRuntimeConfiguration(tx)
+			nextRuntime, err = server.validateRuntimeConfiguration(writer)
 			return err
 		}
 		return nil
@@ -698,9 +763,25 @@ func (server *Server) handleCompare(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	var database *runtimeDatabase
+	if !isSubschemaDN(dn) {
+		database = databaseForDN(state.runtime, dn)
+		if database == nil {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationCompareResponse,
+				ldapwire.Result{Code: ldapwire.ResultReferral},
+			)
+		}
+	}
 
 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
-	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := reader
+		if database != nil {
+			tx = storage.ReaderInPartition(reader, database.partition)
+		}
 		var entry directory.Entry
 		if isSubschemaDN(dn) {
 			entry = server.subschemaEntry(state.runtime)

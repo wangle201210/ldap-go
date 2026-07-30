@@ -79,7 +79,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Transactional durable backend | partial | crash, atomicity, recovery, race tests |
-| Multiple suffixes and subordinate DBs | planned | naming-context routing tests |
+| Multiple suffixes and subordinate DBs | partial | partition, hidden, and glue routing tests |
 | `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
 | `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
 | `slapcat` `cn=config` import | partial | boot from imported configuration |
@@ -202,6 +202,18 @@ attributes remain available. Online changes and invalid-value rollback are
 covered through TCP client tests. Other `olcAllows` behavior, `olcRestrict`,
 `olcRequires`, listener permissions, and SSF-based update requirements remain
 pending.
+
+Every configured database now has an isolated storage partition, keyed by its
+imported configuration-entry UUID when available. Existing single-namespace
+stores are partitioned atomically at startup. Bind, Search, Compare, and write
+operations only see the selected partition; ModifyDN rejects cross-database
+moves with `affectsMultipleDSAs`. `olcHidden` databases are skipped during
+selection and Root DSE publication, while their entries remain isolated and
+may use the same DN as a visible database. Online hide/show changes and suffix
+conflict rollback are covered by TCP tests. Root DSE `namingContexts`,
+`configContext`, and `monitorContext` values are built from the same runtime
+snapshot. `olcSubordinate`/glue behavior and database-selective LDIF tooling
+remain pending.
 
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
