@@ -26,7 +26,7 @@ No row may become `compatible` based only on unit tests.
 | Delete | partial | leaf/subtree/referral behavior tests |
 | ModifyDN | partial | rename/move/subtree and RDN-value tests |
 | Compare | partial | matching-rule and ACL disclosure tests |
-| Abandon and cancellation | planned | concurrent operation tests |
+| Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | planned | topology differential tests |
 | LDAP URLs and attribute options | planned | RFC 4516 and binary/language option tests |
@@ -38,7 +38,7 @@ No row may become `compatible` based only on unit tests.
 | StartTLS | partial | RFC 4511/4513 state machine, TLS tests, and OpenLDAP differential |
 | Password Modify | partial | RFC 3062 core passes; password policy integration remains |
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
-| Cancel | planned | RFC 3909 concurrent operation tests |
+| Cancel | partial | RFC 3909 BER, result, ordering, isolation, and OpenLDAP 2.6.13 differential tests pass |
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
 | Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
 | Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
@@ -216,6 +216,33 @@ password-value filtering, malformed and duplicate controls, operation
 applicability, and rollback after a critical post-read failure. OpenLDAP
 differential fixtures remain pending.
 
+RFC 4511 Abandon and RFC 3909 Cancel use a connection-local operation registry.
+The connection reader can accept either request while the serial operation
+worker is scanning or transmitting an active Search. Abandon cancels the
+Search context, immediately suppresses further entries, and sends no
+SearchResultDone. A successful Cancel waits for the target Search to return
+`canceled` (118), then sends an ExtendedResponse success with no responseName
+or responseValue. Message IDs cannot cross LDAP associations. Bind and
+StartTLS remain read barriers, and complete BER PDUs share one write lock.
+
+Request values use strict BER for `SEQUENCE { cancelID MessageID }`; absent,
+empty, malformed, unknown, finalizing, pending, and non-cancelable targets map
+to the RFC result codes. Deterministic TCP tests pause the storage scan and
+cover response ordering, connection reuse, Root DSE discovery, and cross-
+connection rejection. Process-level probes against OpenLDAP 2.6.13 match
+result codes, diagnostics, and target-before-Cancel response ordering for
+normal cases. Two strict RFC differences are intentional: `ldap-go` rejects
+trailing bytes after cancelRequestValue and returns `cannotCancel` when a
+Cancel targets its own message ID; OpenLDAP 2.6.13 accepts the trailing data
+and returns success for self-cancel despite RFC 3909 declaring Cancel
+non-cancelable.
+
+Cancel and Abandon currently interrupt Search only. Running update operations
+return `cannotCancel`, pending Search follows OpenLDAP's `cannotCancel`
+behavior, and ordinary operations on one connection execute serially. Update
+cancellation, discretionary update Abandon, and OpenLDAP-style parallel
+operation execution remain before these rows can become `compatible`.
+
 RFC 2696 simple paged results are published through Root DSE
 `supportedControl`. Request and response values use strict BER decoding and an
 opaque, connection-local cookie; only the latest cookie can continue a search,
@@ -257,9 +284,9 @@ without sort, paging, or VLV response controls.
 One known differential remains for sort plus paging plus a total size limit:
 OpenLDAP's overlay can report `sizeLimitExceeded` on an earlier page, while
 `ldap-go` reports it when the cumulative limit is reached; both return the same
-globally sorted top-N entries. Concurrent operations on one LDAP connection
-remain pending together with Abandon support, so the `sssvlv` row remains
-partial.
+globally sorted top-N entries. Same-connection request intake and Abandon now
+work, but ordinary operations still execute serially instead of using
+OpenLDAP's worker-level concurrency, so the `sssvlv` row remains partial.
 
 Virtual list views from `draft-ietf-ldapext-ldapv3-vlv-09` use strict BER and
 are advertised with the `sssvlv` overlay. They require an RFC 2891 sort control

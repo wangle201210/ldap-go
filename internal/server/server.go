@@ -161,11 +161,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	defer server.wg.Done()
 	state := connectionState{connection: connection}
 	defer func() {
-		clearSearchSessions(&state)
+		_ = state.connection.Close()
 		server.mu.Lock()
 		delete(server.connections, connection)
 		server.mu.Unlock()
-		_ = state.connection.Close()
 	}()
 
 	if server.config.ImplicitTLS {
@@ -182,35 +181,287 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		state.secure = true
 		state.externalDN = externalIdentityDN(secured)
 	}
+
+	connectionContext, cancelConnection := context.WithCancel(ctx)
+	operations := newOperationRegistry()
+	queue := newOperationQueue()
+	writeMutex := &sync.Mutex{}
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		server.runConnectionOperations(
+			connectionContext,
+			&state,
+			operations,
+			queue,
+			writeMutex,
+		)
+	}()
+
+	readConnection := state.connection
+	defer func() {
+		cancelConnection()
+		queue.close()
+		operations.shutdown()
+		_ = connection.Close()
+		<-workerDone
+		clearSearchSessions(&state)
+	}()
+
 	for {
 		message, err := ldapwire.ReadMessage(
-			state.connection,
+			readConnection,
 			server.config.MaxMessageSize,
 		)
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+			if errors.Is(err, io.EOF) ||
+				errors.Is(err, net.ErrClosed) ||
+				connectionContext.Err() != nil ||
+				channelClosed(workerDone) {
 				return
 			}
 			server.config.Logger.Debug("closing malformed LDAP connection", "error", err)
-			_ = ldapwire.Write(connection, ldapwire.EncodeNoticeOfDisconnection(
+			responseConnection := &serializedResponseConnection{
+				Conn: readConnection,
+				mu:   writeMutex,
+			}
+			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 				ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
 			))
 			return
 		}
 
-		closeConnection, err := server.dispatch(
-			ctx,
-			state.connection,
-			&state,
-			message,
+		if _, ok := message.Request.(ldapwire.UnbindRequest); ok {
+			return
+		}
+		if operations.contains(message.ID) {
+			responseConnection := &serializedResponseConnection{
+				Conn: readConnection,
+				mu:   writeMutex,
+			}
+			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
+				ldapwire.ResultError(
+					ldapwire.ResultProtocolError,
+					"message ID is already in use",
+				),
+			))
+			return
+		}
+
+		switch request := message.Request.(type) {
+		case ldapwire.AbandonRequest:
+			if !hasUnsupportedCriticalControl(message.Controls) {
+				operations.abandon(request.MessageID)
+			}
+			continue
+		case ldapwire.ExtendedRequest:
+			if request.Name == cancelOID {
+				responseConnection := &serializedResponseConnection{
+					Conn: readConnection,
+					mu:   writeMutex,
+				}
+				if err := server.handleCancel(
+					connectionContext,
+					responseConnection,
+					operations,
+					message,
+					request,
+				); err != nil {
+					if connectionContext.Err() == nil {
+						server.config.Logger.Debug(
+							"LDAP Cancel request failed",
+							"message_id",
+							message.ID,
+							"error",
+							err,
+						)
+					}
+					return
+				}
+				continue
+			}
+		}
+
+		operation, registered := operations.register(connectionContext, message)
+		if !registered {
+			return
+		}
+		queued := &queuedOperation{
+			message:    message,
+			operation:  operation,
+			completion: make(chan operationCompletion, 1),
+		}
+		if !queue.push(queued) {
+			operations.finish(operation)
+			return
+		}
+		if !connectionBarrier(message) {
+			continue
+		}
+
+		select {
+		case completion := <-queued.completion:
+			if completion.err != nil || completion.closeConnection {
+				return
+			}
+			readConnection = completion.connection
+		case <-workerDone:
+			return
+		case <-connectionContext.Done():
+			return
+		}
+	}
+}
+
+func (server *Server) runConnectionOperations(
+	ctx context.Context,
+	state *connectionState,
+	operations *operationRegistry,
+	queue *operationQueue,
+	writeMutex *sync.Mutex,
+) {
+	for {
+		queued, ok := queue.pop()
+		if !ok {
+			return
+		}
+
+		baseConnection := &serializedResponseConnection{
+			Conn: state.connection,
+			mu:   writeMutex,
+		}
+		responseConnection := &operationResponseConnection{
+			Conn:      baseConnection,
+			operation: queued.operation,
+		}
+
+		var (
+			closeConnection bool
+			err             error
 		)
+		searchSessions := snapshotSearchSessions(state, queued.message)
+		if queued.operation.start() {
+			closeConnection, err = server.dispatch(
+				queued.operation.ctx,
+				responseConnection,
+				state,
+				queued.message,
+			)
+		}
+
+		switch queued.operation.stopMode() {
+		case operationAbandoned:
+			server.clearStoppedSearchState(state, queued.message, searchSessions)
+			closeConnection = false
+			err = nil
+		case operationCanceled:
+			server.clearStoppedSearchState(state, queued.message, searchSessions)
+			closeConnection = false
+			err = ldapwire.Write(
+				baseConnection,
+				ldapwire.EncodeSearchResultDone(
+					queued.message.ID,
+					ldapwire.Result{Code: ldapwire.ResultCanceled},
+					nil,
+				),
+			)
+		}
+
+		operations.finish(queued.operation)
+		queued.completion <- operationCompletion{
+			closeConnection: closeConnection,
+			connection:      state.connection,
+			err:             err,
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
-			server.config.Logger.Debug("LDAP request failed", "message_id", message.ID, "error", err)
+			server.config.Logger.Debug(
+				"LDAP request failed",
+				"message_id",
+				queued.message.ID,
+				"error",
+				err,
+			)
+			_ = state.connection.Close()
 			return
 		}
 		if closeConnection {
+			_ = state.connection.Close()
 			return
 		}
+	}
+}
+
+type searchSessionSnapshot struct {
+	virtualListViews map[string]*virtualListViewState
+}
+
+func snapshotSearchSessions(
+	state *connectionState,
+	message ldapwire.Message,
+) searchSessionSnapshot {
+	if _, ok := message.Request.(ldapwire.SearchRequest); !ok {
+		return searchSessionSnapshot{}
+	}
+	snapshot := searchSessionSnapshot{}
+	for _, control := range message.Controls {
+		if control.OID != vlvRequestControlOID {
+			continue
+		}
+		snapshot.virtualListViews = make(
+			map[string]*virtualListViewState,
+			len(state.virtualListViews),
+		)
+		for key, view := range state.virtualListViews {
+			snapshot.virtualListViews[key] = view
+		}
+		break
+	}
+	return snapshot
+}
+
+func (server *Server) clearStoppedSearchState(
+	state *connectionState,
+	message ldapwire.Message,
+	snapshot searchSessionSnapshot,
+) {
+	if _, ok := message.Request.(ldapwire.SearchRequest); !ok {
+		return
+	}
+	for _, control := range message.Controls {
+		switch control.OID {
+		case pagedResultsControlOID:
+			clearPagedSearch(state)
+		case vlvRequestControlOID:
+			for key, view := range state.virtualListViews {
+				if snapshot.virtualListViews[key] != view {
+					discardVirtualListView(state, view)
+				}
+			}
+		}
+	}
+}
+
+func connectionBarrier(message ldapwire.Message) bool {
+	switch request := message.Request.(type) {
+	case ldapwire.BindRequest:
+		return true
+	case ldapwire.ExtendedRequest:
+		return request.Name == startTLSOID
+	default:
+		return false
+	}
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -243,8 +494,8 @@ func (server *Server) dispatch(
 	case ldapwire.CompareRequest:
 		return false, server.handleCompare(ctx, connection, state, message, request)
 	case ldapwire.AbandonRequest:
-		// Requests are currently dispatched serially per connection, so there
-		// is no outstanding operation to cancel yet.
+		// Abandon is handled by the connection reader so it can interrupt
+		// the serial operation worker.
 		return false, nil
 	case ldapwire.ExtendedRequest:
 		return false, server.handleExtended(

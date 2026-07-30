@@ -1442,7 +1442,7 @@ func (server *Server) rootDSE(
 			Values:      stringValues(monitorContexts...),
 		})
 	}
-	supportedExtensions := []string{passwordModifyOID, whoAmIOID}
+	supportedExtensions := []string{cancelOID, passwordModifyOID, whoAmIOID}
 	if server.secureTransport != nil {
 		supportedExtensions = append([]string{startTLSOID}, supportedExtensions...)
 	}
@@ -1575,6 +1575,13 @@ func (server *Server) writeSearchDoneWithControls(
 	result ldapwire.Result,
 	controls []ldapwire.Control,
 ) error {
+	if finalizer, ok := connection.(interface {
+		beginFinalResponse() error
+	}); ok {
+		if err := finalizer.beginFinalResponse(); err != nil {
+			return err
+		}
+	}
 	return ldapwire.Write(
 		connection,
 		ldapwire.EncodeSearchResultDone(messageID, result, controls),

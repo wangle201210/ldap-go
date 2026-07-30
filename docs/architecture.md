@@ -40,6 +40,15 @@ have no response. Bind and StartTLS enforce the RFC connection-state rules.
 Cancellation, time limits, size limits, backpressure, and graceful shutdown are
 handled here.
 
+One reader accepts and registers requests while one worker serializes ordinary
+operations that share authentication, paging, VLV, and runtime state. Abandon
+and RFC 3909 Cancel are handled by the reader so they can cancel the active
+Search context without waiting behind it. Bind and StartTLS are read barriers,
+and a connection-wide writer lock keeps every BER PDU intact when a Cancel
+response races with Search output. The registry establishes an atomic
+final-response boundary for `tooLate` and limits cancellation to the LDAP
+association that created the target operation.
+
 ### Directory service agent
 
 The DSA implements Bind, Search, Modify, Add, Delete, ModifyDN, Compare,

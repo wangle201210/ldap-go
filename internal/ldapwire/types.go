@@ -191,6 +191,10 @@ const (
 	ResultAffectsMultipleDSAs          ResultCode = 71
 	ResultVirtualListViewError         ResultCode = 76
 	ResultOther                        ResultCode = 80
+	ResultCanceled                     ResultCode = 118
+	ResultNoSuchOperation              ResultCode = 119
+	ResultTooLate                      ResultCode = 120
+	ResultCannotCancel                 ResultCode = 121
 	ResultAssertionFailed              ResultCode = 122
 )
 

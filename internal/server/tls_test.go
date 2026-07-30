@@ -157,6 +157,48 @@ func TestLDAPClientImplicitTLS(t *testing.T) {
 	}
 }
 
+func TestImplicitTLSHandshakeFailureCleansUpConnection(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	instance, err := New(Config{
+		Store:       store,
+		TLSConfig:   testServerTLSConfig(t),
+		ImplicitTLS: true,
+	})
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+
+	client, serverConnection := net.Pipe()
+	instance.mu.Lock()
+	instance.connections[serverConnection] = struct{}{}
+	instance.mu.Unlock()
+	instance.wg.Add(1)
+	go instance.serveConnection(context.Background(), serverConnection)
+
+	_, _ = client.Write([]byte("not a TLS record"))
+	_ = client.Close()
+	done := make(chan struct{})
+	go func() {
+		instance.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed implicit TLS connection did not stop")
+	}
+
+	instance.mu.Lock()
+	connectionCount := len(instance.connections)
+	instance.mu.Unlock()
+	if connectionCount != 0 {
+		t.Fatalf("tracked connection count = %d, want 0", connectionCount)
+	}
+}
+
 func TestNewRejectsImplicitTLSWithoutTransport(t *testing.T) {
 	t.Parallel()
 

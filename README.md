@@ -35,18 +35,19 @@ anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
 also supports RFC 4528 Assertion, RFC 4527 pre-read/post-read, and RFC 2696
-simple paged-results controls on their applicable operations. RFC 2891
-server-side sorting is available on databases configured with OpenLDAP's
-`sssvlv` overlay, including paged-search interaction and virtual list views
-with offset, proportional, assertion-value, and opaque context requests. It
-loads OpenLDAP schema, ordered ACLs, database roots, hidden/disabled databases,
-and selected operation settings from `cn=config`; supported online changes are
-validated transactionally and published as one runtime snapshot. Database
-entry partitions allow different OpenLDAP backends to hold the same DN without
-crossing authorization or search boundaries, while `olcSubordinate` databases
-participate in OpenLDAP-style glue searches. The compatibility matrix marks
-these as partial until the remaining schema, ACL, control, alias,
-configuration, and differential cases pass.
+simple paged-results controls on their applicable operations. RFC 4511
+Abandon and RFC 3909 Cancel can interrupt active Search operations on the same
+LDAP connection. RFC 2891 server-side sorting is available on databases
+configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
+and virtual list views with offset, proportional, assertion-value, and opaque
+context requests. It loads OpenLDAP schema, ordered ACLs, database roots,
+hidden/disabled databases, and selected operation settings from `cn=config`;
+supported online changes are validated transactionally and published as one
+runtime snapshot. Database entry partitions allow different OpenLDAP backends
+to hold the same DN without crossing authorization or search boundaries, while
+`olcSubordinate` databases participate in OpenLDAP-style glue searches. The
+compatibility matrix marks these as partial until the remaining schema, ACL,
+control, alias, configuration, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \

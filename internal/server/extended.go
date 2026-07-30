@@ -12,6 +12,7 @@ import (
 
 const (
 	startTLSOID       = "1.3.6.1.4.1.1466.20037"
+	cancelOID         = "1.3.6.1.1.8"
 	passwordModifyOID = "1.3.6.1.4.1.4203.1.11.1"
 	whoAmIOID         = "1.3.6.1.4.1.4203.1.11.3"
 )
@@ -105,7 +106,7 @@ func (server *Server) handleStartTLS(
 
 	state.boundDN = ""
 	clearSearchSessions(state)
-	secured, err := server.secureHandshake(ctx, connection)
+	secured, err := server.secureHandshake(ctx, state.connection)
 	if err != nil {
 		return fmt.Errorf("complete StartTLS handshake: %w", err)
 	}
@@ -116,6 +117,67 @@ func (server *Server) handleStartTLS(
 	state.secure = true
 	state.externalDN = externalIdentityDN(secured)
 	return nil
+}
+
+func (server *Server) handleCancel(
+	ctx context.Context,
+	connection net.Conn,
+	operations *operationRegistry,
+	message ldapwire.Message,
+	request ldapwire.ExtendedRequest,
+) error {
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	var target *trackedOperation
+
+	switch {
+	case hasUnsupportedCriticalControl(message.Controls):
+		result = ldapwire.ResultError(
+			ldapwire.ResultUnavailableCriticalExtension,
+			"unsupported critical control",
+		)
+	case !request.HasValue:
+		result = ldapwire.ResultError(
+			ldapwire.ResultProtocolError,
+			"no message ID supplied",
+		)
+	case len(request.Value) == 0:
+		result = ldapwire.ResultError(
+			ldapwire.ResultProtocolError,
+			"empty request data field",
+		)
+	default:
+		targetID, err := ldapwire.DecodeCancelRequestValue(request.Value)
+		if err != nil {
+			result = ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"message ID parse failed",
+			)
+			break
+		}
+		if targetID == message.ID {
+			result = ldapwire.ResultError(
+				ldapwire.ResultCannotCancel,
+				"Cancel operations cannot be canceled",
+			)
+			break
+		}
+		target, result = operations.cancel(targetID)
+	}
+
+	if result.Code == ldapwire.ResultSuccess && target != nil {
+		select {
+		case <-target.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		message.ID,
+		result,
+		"",
+		nil,
+		nil,
+	))
 }
 
 func (server *Server) handleWhoAmI(
