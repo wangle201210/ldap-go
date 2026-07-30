@@ -23,7 +23,7 @@ func (server *Server) handleSearch(
 ) error {
 	controlSupport := supportsAssertion | supportsPagedResults
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
-		controlSupport |= supportsServerSideSort
+		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
@@ -96,13 +96,19 @@ func (server *Server) handleSearch(
 	rootDSESearch := base.Depth() == 0 &&
 		request.Scope == directory.ScopeBase
 	subschemaSearch := isSubschemaDN(base)
-	if (rootDSESearch || subschemaSearch) && controls.sorting != nil {
+	vlvRequest := controls.vlv
+	if (rootDSESearch || subschemaSearch) &&
+		(controls.sorting != nil || vlvRequest != nil) {
 		maxKeys, enabled := serverSideSortSettingsForDatabase(
 			state.runtime.databases,
 			-1,
 		)
+		critical := vlvRequest != nil && vlvRequest.critical
+		if controls.sorting != nil {
+			critical = critical || controls.sorting.critical
+		}
 		switch {
-		case !enabled && controls.sorting.critical:
+		case !enabled && critical:
 			return server.writeSearchResult(
 				connection,
 				message.ID,
@@ -119,7 +125,9 @@ func (server *Server) handleSearch(
 			)
 		case !enabled:
 			sorting = nil
-		case len(controls.sorting.keys) > maxKeys:
+			vlvRequest = nil
+		case controls.sorting != nil &&
+			len(controls.sorting.keys) > maxKeys:
 			return server.writeSearchResult(
 				connection,
 				message.ID,
@@ -135,6 +143,126 @@ func (server *Server) handleSearch(
 				false,
 			)
 		}
+	}
+	if (rootDSESearch || subschemaSearch) && vlvRequest != nil {
+		if controls.paging != nil {
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				paging,
+				nil,
+				nil,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"VLV is incompatible with paged results",
+				),
+				pagedSearchCursor{},
+				false,
+			)
+		}
+		if controls.sorting == nil {
+			state.virtualListView = nil
+			failure := newVirtualListViewFailure(
+				openLDAPVLVSortControlMissing,
+				"sort control is required with VLV",
+				0,
+				nil,
+			)
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				nil,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		sorting.forceResponse = true
+		virtualListView, failure := prepareVirtualListView(
+			state,
+			request,
+			message.Controls,
+			vlvRequest,
+		)
+		if failure != nil {
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		view := virtualListView.state
+		if view == nil {
+			var err error
+			view, err = startVirtualListView(
+				state,
+				virtualListView,
+				nil,
+			)
+			if err != nil {
+				return fmt.Errorf("create special-entry VLV context: %w", err)
+			}
+		}
+		_, _, target, code, windowErr := virtualListViewWindow(
+			state.runtime.schema,
+			virtualListView.request,
+			sorting.keys[0],
+			view.items,
+		)
+		if code != ldapwire.ResultSuccess || windowErr != nil {
+			diagnostic := "VLV target is invalid"
+			if windowErr != nil {
+				diagnostic = windowErr.Error()
+			}
+			failure := newVirtualListViewFailure(
+				code,
+				diagnostic,
+				0,
+				view.contextID,
+			)
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		response := ldapwire.VirtualListViewResponse{
+			TargetPosition: int64(target),
+			Result:         ldapwire.ResultSuccess,
+			ContextID:      view.contextID,
+			HasContextID:   true,
+		}
+		return server.writeSearchResultWithControls(
+			connection,
+			message.ID,
+			state,
+			nil,
+			sorting,
+			nil,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			pagedSearchCursor{},
+			false,
+			virtualListViewResponseControl(response),
+		)
 	}
 	if rootDSESearch {
 		return server.searchRootDSE(
@@ -174,13 +302,17 @@ func (server *Server) handleSearch(
 			false,
 		)
 	}
-	if controls.sorting != nil {
+	if controls.sorting != nil || vlvRequest != nil {
 		maxKeys, enabled := serverSideSortSettingsForDatabase(
 			state.runtime.databases,
 			routes[0].databaseIndex,
 		)
+		critical := vlvRequest != nil && vlvRequest.critical
+		if controls.sorting != nil {
+			critical = critical || controls.sorting.critical
+		}
 		if !enabled {
-			if controls.sorting.critical {
+			if critical {
 				return server.writeSearchResult(
 					connection,
 					message.ID,
@@ -197,8 +329,10 @@ func (server *Server) handleSearch(
 				)
 			}
 			sorting = nil
+			vlvRequest = nil
 		} else {
-			if len(controls.sorting.keys) > maxKeys {
+			if controls.sorting != nil &&
+				len(controls.sorting.keys) > maxKeys {
 				return server.writeSearchResult(
 					connection,
 					message.ID,
@@ -214,6 +348,139 @@ func (server *Server) handleSearch(
 					false,
 				)
 			}
+		}
+	}
+
+	var virtualListView *virtualListViewContext
+	if vlvRequest != nil {
+		if controls.paging != nil {
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				paging,
+				nil,
+				nil,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"VLV is incompatible with paged results",
+				),
+				pagedSearchCursor{},
+				false,
+			)
+		}
+		if controls.sorting == nil {
+			state.virtualListView = nil
+			failure := newVirtualListViewFailure(
+				openLDAPVLVSortControlMissing,
+				"sort control is required with VLV",
+				0,
+				nil,
+			)
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				nil,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		sorting.forceResponse = true
+		var failure *virtualListViewFailure
+		virtualListView, failure = prepareVirtualListView(
+			state,
+			request,
+			message.Controls,
+			vlvRequest,
+		)
+		if failure != nil {
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		if virtualListView.state != nil {
+			view := virtualListView.state
+			start, end, target, code, windowErr := virtualListViewWindow(
+				state.runtime.schema,
+				virtualListView.request,
+				sorting.keys[0],
+				view.items,
+			)
+			if code != ldapwire.ResultSuccess || windowErr != nil {
+				diagnostic := "VLV target is invalid"
+				if windowErr != nil {
+					diagnostic = windowErr.Error()
+				}
+				failure := newVirtualListViewFailure(
+					code,
+					diagnostic,
+					len(view.items),
+					view.contextID,
+				)
+				return server.writeSearchResultWithControls(
+					connection,
+					message.ID,
+					state,
+					nil,
+					sorting,
+					nil,
+					failure.result,
+					pagedSearchCursor{},
+					false,
+					virtualListViewResponseControl(failure.response),
+				)
+			}
+			entries, err := server.virtualListViewEntries(
+				ctx,
+				state,
+				routes,
+				request,
+				view,
+				start,
+				end,
+			)
+			if err != nil {
+				state.virtualListView = nil
+				return fmt.Errorf("read VLV window: %w", err)
+			}
+			result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+			if len(entries) > limit {
+				entries = entries[:limit]
+				result.Code = ldapwire.ResultSizeLimitExceeded
+			}
+			response := ldapwire.VirtualListViewResponse{
+				TargetPosition: int64(target),
+				ContentCount:   int64(len(view.items)),
+				Result:         ldapwire.ResultSuccess,
+				ContextID:      view.contextID,
+				HasContextID:   true,
+			}
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				entries,
+				result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(response),
+			)
 		}
 	}
 
@@ -473,6 +740,95 @@ func (server *Server) handleSearch(
 				)
 			}
 		}
+	}
+
+	if virtualListView != nil {
+		if !sorting.active() {
+			state.virtualListView = nil
+			failure := newVirtualListViewFailure(
+				sorting.result,
+				"server-side sorting could not be performed for VLV",
+				len(candidates),
+				nil,
+			)
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		view, err := startVirtualListView(
+			state,
+			virtualListView,
+			candidates,
+		)
+		if err != nil {
+			state.virtualListView = nil
+			return fmt.Errorf("create VLV context: %w", err)
+		}
+		start, end, target, code, windowErr := virtualListViewWindow(
+			state.runtime.schema,
+			virtualListView.request,
+			sorting.keys[0],
+			view.items,
+		)
+		if code != ldapwire.ResultSuccess || windowErr != nil {
+			diagnostic := "VLV target is invalid"
+			if windowErr != nil {
+				diagnostic = windowErr.Error()
+			}
+			failure := newVirtualListViewFailure(
+				code,
+				diagnostic,
+				len(view.items),
+				view.contextID,
+			)
+			return server.writeSearchResultWithControls(
+				connection,
+				message.ID,
+				state,
+				nil,
+				sorting,
+				nil,
+				failure.result,
+				pagedSearchCursor{},
+				false,
+				virtualListViewResponseControl(failure.response),
+			)
+		}
+		entries := selectedSearchEntries(candidates[start:end])
+		if len(entries) > limit {
+			entries = entries[:limit]
+			if result.Code == ldapwire.ResultSuccess {
+				result.Code = ldapwire.ResultSizeLimitExceeded
+			}
+		}
+		response := ldapwire.VirtualListViewResponse{
+			TargetPosition: int64(target),
+			ContentCount:   int64(len(view.items)),
+			Result:         ldapwire.ResultSuccess,
+			ContextID:      view.contextID,
+			HasContextID:   true,
+		}
+		return server.writeSearchResultWithControls(
+			connection,
+			message.ID,
+			state,
+			nil,
+			sorting,
+			entries,
+			result,
+			pagedSearchCursor{},
+			false,
+			virtualListViewResponseControl(response),
+		)
 	}
 
 	if len(candidates) > limit {
@@ -1031,7 +1387,11 @@ func (server *Server) rootDSE(
 		pagedResultsControlOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {
-		supportedControls = append(supportedControls, sortRequestControlOID)
+		supportedControls = append(
+			supportedControls,
+			sortRequestControlOID,
+			vlvRequestControlOID,
+		)
 	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedControl",
@@ -1162,11 +1522,38 @@ func (server *Server) writeSearchResult(
 	cursor pagedSearchCursor,
 	hasMore bool,
 ) error {
+	return server.writeSearchResultWithControls(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		nil,
+	)
+}
+
+func (server *Server) writeSearchResultWithControls(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	additionalControls []ldapwire.Control,
+) error {
 	responseControls := serverSideSortResponseControl(
 		sorting,
 		result,
 		len(entries),
 	)
+	responseControls = append(responseControls, additionalControls...)
 	pagingControls, err := completePagedSearch(
 		state,
 		paging,

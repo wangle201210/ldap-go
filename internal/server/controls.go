@@ -16,6 +16,8 @@ const (
 	pagedResultsControlOID = "1.2.840.113556.1.4.319"
 	sortRequestControlOID  = "1.2.840.113556.1.4.473"
 	sortResponseControlOID = "1.2.840.113556.1.4.474"
+	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
+	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
 )
 
 type requestControlSupport uint8
@@ -26,6 +28,7 @@ const (
 	supportsPostRead
 	supportsPagedResults
 	supportsServerSideSort
+	supportsVirtualListView
 )
 
 type requestControls struct {
@@ -34,6 +37,7 @@ type requestControls struct {
 	postRead  *readControlRequest
 	paging    *pagedResultsRequest
 	sorting   *serverSideSortRequest
+	vlv       *virtualListViewRequest
 }
 
 type readControlRequest struct {
@@ -187,6 +191,44 @@ func parseRequestControls(
 			}
 			parsed.sorting = &serverSideSortRequest{
 				keys:     keys,
+				critical: control.Critical,
+			}
+		case vlvRequestControlOID:
+			if supported&supportsVirtualListView == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.vlv != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"VLV control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"VLV control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"VLV control value is empty",
+				)
+			}
+			request, err := ldapwire.DecodeVirtualListViewRequestValue(
+				control.Value,
+			)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"VLV control could not be decoded",
+				)
+			}
+			parsed.vlv = &virtualListViewRequest{
+				request:  request,
 				critical: control.Critical,
 			}
 		default:

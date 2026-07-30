@@ -1,0 +1,374 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+
+	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+const (
+	virtualListViewContextLength = 16
+
+	openLDAPVLVSortControlMissing ldapwire.ResultCode = 76
+	openLDAPVLVOffsetRangeError   ldapwire.ResultCode = 77
+)
+
+type virtualListViewRequest struct {
+	request  ldapwire.VirtualListViewRequest
+	critical bool
+}
+
+type virtualListViewItem struct {
+	route   int
+	dn      string
+	primary sortValue
+}
+
+type virtualListViewState struct {
+	contextID   []byte
+	fingerprint [sha256.Size]byte
+	runtime     *runtimeState
+	items       []virtualListViewItem
+}
+
+type virtualListViewContext struct {
+	request     ldapwire.VirtualListViewRequest
+	fingerprint [sha256.Size]byte
+	runtime     *runtimeState
+	state       *virtualListViewState
+}
+
+type virtualListViewFailure struct {
+	result   ldapwire.Result
+	response ldapwire.VirtualListViewResponse
+}
+
+func prepareVirtualListView(
+	state *connectionState,
+	searchRequest ldapwire.SearchRequest,
+	controls []ldapwire.Control,
+	request *virtualListViewRequest,
+) (*virtualListViewContext, *virtualListViewFailure) {
+	if request == nil {
+		return nil, nil
+	}
+	fingerprint := virtualListViewFingerprint(
+		state.boundDN,
+		searchRequest,
+		controls,
+	)
+	context := &virtualListViewContext{
+		request:     request.request,
+		fingerprint: fingerprint,
+		runtime:     state.runtime,
+	}
+	if !validVirtualListViewRange(request.request) {
+		state.virtualListView = nil
+		return nil, newVirtualListViewFailure(
+			openLDAPVLVOffsetRangeError,
+			"VLV request range is invalid",
+			0,
+			nil,
+		)
+	}
+	if !request.request.HasContextID {
+		state.virtualListView = nil
+		return context, nil
+	}
+
+	current := state.virtualListView
+	if len(request.request.ContextID) != virtualListViewContextLength ||
+		current == nil ||
+		!bytes.Equal(request.request.ContextID, current.contextID) ||
+		current.runtime != state.runtime ||
+		current.fingerprint != fingerprint {
+		state.virtualListView = nil
+		return nil, newVirtualListViewFailure(
+			ldapwire.ResultProtocolError,
+			"VLV contextID is invalid",
+			0,
+			nil,
+		)
+	}
+	context.state = current
+	return context, nil
+}
+
+func validVirtualListViewRange(request ldapwire.VirtualListViewRequest) bool {
+	if request.BeforeCount < 0 ||
+		request.BeforeCount > math.MaxInt32 ||
+		request.AfterCount < 0 ||
+		request.AfterCount > math.MaxInt32 ||
+		request.BeforeCount+request.AfterCount+1 > math.MaxInt32 {
+		return false
+	}
+	if !request.ByOffset {
+		return true
+	}
+	return request.Offset >= 1 &&
+		request.Offset <= math.MaxInt32 &&
+		request.ContentCount >= 0 &&
+		request.ContentCount <= math.MaxInt32
+}
+
+func newVirtualListViewFailure(
+	code ldapwire.ResultCode,
+	diagnostic string,
+	contentCount int,
+	contextID []byte,
+) *virtualListViewFailure {
+	return &virtualListViewFailure{
+		result: ldapwire.ResultError(
+			ldapwire.ResultVirtualListViewError,
+			diagnostic,
+		),
+		response: ldapwire.VirtualListViewResponse{
+			ContentCount: int64(contentCount),
+			Result:       code,
+			ContextID:    bytes.Clone(contextID),
+			HasContextID: contextID != nil,
+		},
+	}
+}
+
+func startVirtualListView(
+	state *connectionState,
+	context *virtualListViewContext,
+	candidates []searchCandidate,
+) (*virtualListViewState, error) {
+	contextID := make([]byte, virtualListViewContextLength)
+	if _, err := rand.Read(contextID); err != nil {
+		return nil, err
+	}
+	items := make([]virtualListViewItem, len(candidates))
+	for index := range candidates {
+		var primary sortValue
+		if len(candidates[index].values) > 0 {
+			primary = candidates[index].values[0]
+			primary.value = bytes.Clone(primary.value)
+		}
+		items[index] = virtualListViewItem{
+			route:   candidates[index].route,
+			dn:      candidates[index].dn,
+			primary: primary,
+		}
+	}
+	view := &virtualListViewState{
+		contextID:   contextID,
+		fingerprint: context.fingerprint,
+		runtime:     context.runtime,
+		items:       items,
+	}
+	state.virtualListView = view
+	context.state = view
+	return view, nil
+}
+
+func virtualListViewWindow(
+	registry *schema.Registry,
+	request ldapwire.VirtualListViewRequest,
+	primaryKey resolvedSortKey,
+	items []virtualListViewItem,
+) (int, int, int, ldapwire.ResultCode, error) {
+	count := len(items)
+	if count == 0 {
+		return 0, 0, 0, ldapwire.ResultSuccess, nil
+	}
+
+	targetPosition := 0
+	if request.ByOffset {
+		switch {
+		case request.ContentCount > 0 &&
+			request.Offset > request.ContentCount:
+			return 0, 0, 0, openLDAPVLVOffsetRangeError, nil
+		case request.Offset == request.ContentCount:
+			targetPosition = count
+		case request.Offset == 1:
+			targetPosition = 1
+		case request.ContentCount > 0 &&
+			request.ContentCount != int64(count):
+			count64 := int64(count)
+			targetPosition = int(
+				count64/request.ContentCount*request.Offset +
+					count64%request.ContentCount*
+						request.Offset/request.ContentCount,
+			)
+		default:
+			if request.Offset > int64(count) {
+				return 0, 0, 0, openLDAPVLVOffsetRangeError, nil
+			}
+			targetPosition = int(request.Offset)
+		}
+	} else {
+		targetPosition = count + 1
+		for index, item := range items {
+			comparison, err := compareVirtualListViewAssertion(
+				registry,
+				primaryKey,
+				item.primary,
+				request.AssertionValue,
+			)
+			if err != nil {
+				return 0, 0, 0, ldapwire.ResultInappropriateMatching, err
+			}
+			if comparison >= 0 {
+				targetPosition = index + 1
+				break
+			}
+		}
+	}
+
+	if targetPosition == count+1 {
+		before := max(int(request.BeforeCount), 1)
+		return max(0, count-before), count, targetPosition,
+			ldapwire.ResultSuccess, nil
+	}
+	if targetPosition == 0 {
+		return 0, min(count, int(request.AfterCount)+1), targetPosition,
+			ldapwire.ResultSuccess, nil
+	}
+	start := max(0, targetPosition-1-int(request.BeforeCount))
+	end := min(count, targetPosition+int(request.AfterCount))
+	return start, end, targetPosition, ldapwire.ResultSuccess, nil
+}
+
+func compareVirtualListViewAssertion(
+	registry *schema.Registry,
+	key resolvedSortKey,
+	value sortValue,
+	assertion []byte,
+) (int, error) {
+	comparison := 1
+	if value.present {
+		var err error
+		comparison, err = registry.CompareOrdering(
+			key.attribute,
+			key.orderingRule,
+			value.value,
+			assertion,
+		)
+		if err != nil {
+			return 0, err
+		}
+	} else if _, err := registry.CompareOrdering(
+		key.attribute,
+		key.orderingRule,
+		assertion,
+		assertion,
+	); err != nil {
+		return 0, err
+	}
+	if key.reverse {
+		comparison = -comparison
+	}
+	return comparison, nil
+}
+
+func (server *Server) virtualListViewEntries(
+	ctx context.Context,
+	state *connectionState,
+	routes []databaseSearchRoute,
+	request ldapwire.SearchRequest,
+	view *virtualListViewState,
+	start,
+	end int,
+) ([]directory.Entry, error) {
+	if view == nil || start < 0 || end < start || end > len(view.items) {
+		return nil, errors.New("VLV window is invalid")
+	}
+	entries := make([]directory.Entry, 0, end-start)
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		for _, item := range view.items[start:end] {
+			if item.route < 0 || item.route >= len(routes) {
+				return fmt.Errorf("VLV route %d is invalid", item.route)
+			}
+			dn, err := directory.ParseDN(item.dn)
+			if err != nil {
+				return fmt.Errorf("parse VLV DN %q: %w", item.dn, err)
+			}
+			database := &state.runtime.databases[routes[item.route].databaseIndex]
+			tx := storage.ReaderInPartition(reader, database.partition)
+			entry, err := tx.Get(dn)
+			if errors.Is(err, storage.ErrEntryNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			entry = withSubschemaReference(entry)
+			if !server.allowed(
+				state.runtime,
+				tx,
+				state.boundDN,
+				entry,
+				"entry",
+				nil,
+				acl.Read,
+			) {
+				continue
+			}
+			readable := server.attributesWithPrivilege(
+				state.runtime,
+				tx,
+				state.boundDN,
+				entry,
+				acl.Read,
+				false,
+			)
+			entries = append(entries, server.selectEntry(
+				state.runtime,
+				readable,
+				request.Attributes,
+				request.TypesOnly,
+			))
+		}
+		return nil
+	})
+	return entries, err
+}
+
+func virtualListViewResponseControl(
+	response ldapwire.VirtualListViewResponse,
+) []ldapwire.Control {
+	return []ldapwire.Control{{
+		OID:      vlvResponseControlOID,
+		Value:    ldapwire.EncodeVirtualListViewResponseValue(response),
+		HasValue: true,
+	}}
+}
+
+func virtualListViewFingerprint(
+	boundDN string,
+	request ldapwire.SearchRequest,
+	controls []ldapwire.Control,
+) [sha256.Size]byte {
+	normalizedControls := make([]ldapwire.Control, 0, len(controls))
+	for _, control := range controls {
+		if control.OID == vlvRequestControlOID {
+			control.Value = nil
+			control.HasValue = true
+		}
+		normalizedControls = append(normalizedControls, control)
+	}
+	encoded, _ := json.Marshal(struct {
+		BoundDN  string
+		Request  ldapwire.SearchRequest
+		Controls []ldapwire.Control
+	}{
+		BoundDN:  boundDN,
+		Request:  request,
+		Controls: normalizedControls,
+	})
+	return sha256.Sum256(encoded)
+}

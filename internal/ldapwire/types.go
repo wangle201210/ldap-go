@@ -189,6 +189,7 @@ const (
 	ResultEntryAlreadyExists           ResultCode = 68
 	ResultObjectClassModsProhibited    ResultCode = 69
 	ResultAffectsMultipleDSAs          ResultCode = 71
+	ResultVirtualListViewError         ResultCode = 76
 	ResultOther                        ResultCode = 80
 	ResultAssertionFailed              ResultCode = 122
 )

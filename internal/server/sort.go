@@ -104,7 +104,7 @@ func (context *serverSideSortContext) fail(
 	context.keys = nil
 	context.result = result
 	context.attributeType = attributeType
-	context.forceResponse = context.critical
+	context.forceResponse = context.forceResponse || context.critical
 }
 
 func (context *serverSideSortContext) active() bool {
@@ -276,7 +276,8 @@ func serverSideSortResponseControl(
 		return nil
 	}
 	if context.result == ldapwire.ResultSuccess {
-		if searchResult.Code != ldapwire.ResultSuccess || entryCount == 0 {
+		if !context.forceResponse &&
+			(searchResult.Code != ldapwire.ResultSuccess || entryCount == 0) {
 			return nil
 		}
 	} else if !context.forceResponse &&
