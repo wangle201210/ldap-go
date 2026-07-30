@@ -284,7 +284,7 @@ func (server *Server) searchRootDSE(
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
-	entry := server.rootDSE(state.runtime)
+	entry := server.rootDSE(state.runtime, state.externalDN != "")
 	var selected *directory.Entry
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
 		matches, err := server.filterMatches(
@@ -432,7 +432,10 @@ func (server *Server) searchSubschema(
 	)
 }
 
-func (server *Server) rootDSE(runtime *runtimeState) directory.Entry {
+func (server *Server) rootDSE(
+	runtime *runtimeState,
+	hasExternalIdentity bool,
+) directory.Entry {
 	var namingContexts []string
 	var configContexts []string
 	var monitorContexts []string
@@ -498,6 +501,12 @@ func (server *Server) rootDSE(runtime *runtimeState) directory.Entry {
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),
 	})
+	if hasExternalIdentity {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "supportedSASLMechanisms",
+			Values:      stringValues("EXTERNAL"),
+		})
+	}
 	return entry
 }
 

@@ -113,6 +113,7 @@ func (server *Server) handleStartTLS(
 	}
 	state.connection = secured
 	state.secure = true
+	state.externalDN = externalIdentityDN(secured)
 	return nil
 }
 

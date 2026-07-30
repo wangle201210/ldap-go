@@ -271,6 +271,14 @@ func TestLoadServerTLSConfigRequiresCertificatePair(t *testing.T) {
 	if _, err := loadServerTLSConfig("", "server.key"); err == nil {
 		t.Fatal("private key without certificate was accepted")
 	}
+	if _, err := loadServerTLSConfigWithClientAuth(
+		"server.crt",
+		"server.key",
+		"",
+		true,
+	); err == nil || !strings.Contains(err.Error(), "-tls-client-ca") {
+		t.Fatalf("required TLS client certificate error = %v", err)
+	}
 }
 
 func TestLoadServerTLCPRequiresDualCertificatePairs(t *testing.T) {
@@ -287,5 +295,15 @@ func TestLoadServerTLCPRequiresDualCertificatePairs(t *testing.T) {
 		"",
 	); err == nil {
 		t.Fatal("TLCP configuration without encryption certificate was accepted")
+	}
+	if _, err := loadServerTLCPWithClientAuth(
+		"sign.crt",
+		"sign.key",
+		"enc.crt",
+		"enc.key",
+		"",
+		true,
+	); err == nil || !strings.Contains(err.Error(), "-tlcp-client-ca") {
+		t.Fatalf("required TLCP client certificate error = %v", err)
 	}
 }

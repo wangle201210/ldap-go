@@ -57,6 +57,16 @@ func TestTLCPServerHandshake(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("server ServerHandshake(): %v", result.err)
 	}
+	identityProvider, ok := result.connection.(interface {
+		ExternalIdentity() (string, bool)
+	})
+	if !ok {
+		t.Fatal("TLCP connection does not expose an external identity")
+	}
+	if identity, ok := identityProvider.ExternalIdentity(); !ok ||
+		identity != "CN=ldap-go TLCP client" {
+		t.Fatalf("TLCP external identity = %q, %v", identity, ok)
+	}
 
 	payload := []byte("ldap over tlcp")
 	writeResult := make(chan error, 1)
@@ -139,6 +149,26 @@ func TestLoadTLCPDualCertificateFiles(t *testing.T) {
 	); err != nil {
 		t.Fatalf("LoadTLCP(): %v", err)
 	}
+	if _, err := gmtransport.LoadTLCPWithClientAuth(
+		files[0],
+		files[1],
+		files[2],
+		files[3],
+		"",
+		true,
+	); err == nil {
+		t.Fatal("required TLCP client certificate without CA was accepted")
+	}
+	if _, err := gmtransport.LoadTLCPWithClientAuth(
+		files[0],
+		files[1],
+		files[2],
+		files[3],
+		files[0],
+		true,
+	); err != nil {
+		t.Fatalf("LoadTLCPWithClientAuth(): %v", err)
+	}
 }
 
 func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
@@ -173,7 +203,12 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 		t.Fatalf("ParseCertificate(root): %v", err)
 	}
 
-	leaf := func(serial int64, commonName string, usage smx509.KeyUsage) tlcp.Certificate {
+	leaf := func(
+		serial int64,
+		commonName string,
+		usage smx509.KeyUsage,
+		extendedUsage smx509.ExtKeyUsage,
+	) tlcp.Certificate {
 		t.Helper()
 		key, err := sm2.GenerateKey(rand.Reader)
 		if err != nil {
@@ -185,7 +220,7 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 			NotBefore:    now.Add(-time.Minute),
 			NotAfter:     now.Add(time.Hour),
 			KeyUsage:     usage,
-			ExtKeyUsage:  []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
+			ExtKeyUsage:  []smx509.ExtKeyUsage{extendedUsage},
 			DNSNames:     []string{"localhost"},
 		}
 		der, err := smx509.CreateCertificate(
@@ -213,6 +248,7 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 		2,
 		"ldap-go TLCP signing",
 		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageServerAuth,
 	)
 	encryption := leaf(
 		3,
@@ -220,11 +256,23 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 		smx509.KeyUsageKeyEncipherment|
 			smx509.KeyUsageDataEncipherment|
 			smx509.KeyUsageKeyAgreement,
+		smx509.ExtKeyUsageServerAuth,
 	)
+	client := leaf(
+		4,
+		"ldap-go TLCP client",
+		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageClientAuth,
+	)
+	rootPool := smx509.NewCertPool()
+	rootPool.AddCert(rootCertificate)
 	return &tlcp.Config{
 			Certificates: []tlcp.Certificate{signing, encryption},
 			CipherSuites: []uint16{tlcp.ECC_SM4_GCM_SM3},
+			ClientAuth:   tlcp.RequireAndVerifyClientCert,
+			ClientCAs:    rootPool,
 		}, &tlcp.Config{
+			Certificates:       []tlcp.Certificate{client},
 			InsecureSkipVerify: true,
 			CipherSuites:       []uint16{tlcp.ECC_SM4_GCM_SM3},
 		}

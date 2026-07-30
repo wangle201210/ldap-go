@@ -18,7 +18,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
-| Bind: SASL | planned | mechanism matrix and channel-binding tests |
+| Bind: SASL | partial | EXTERNAL over verified TLS/TLCP passes; other mechanisms remain |
 | Search and SearchResultReference | partial | scope, deref, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
@@ -70,8 +70,8 @@ No row may become `compatible` based only on unit tests.
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
-| TLS and mutual TLS | partial | LDAPS/StartTLS pass; reload, CRL, and client cert remain |
-| National cryptography transport | partial | GB/T 38636 TLCP dual-certificate client matrix |
+| TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; reload and CRL remain |
+| National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert and mutual-client-cert matrix |
 | Audit and security logging | planned | redaction, integrity, and operation coverage |
 
 ## Storage, configuration, and migration
@@ -151,6 +151,12 @@ The GB/T 38636 TLCP adapter requires separate SM2 signing/encryption
 certificates and has an end-to-end LDAP Bind/Search test fixed to
 `ECC_SM4_GCM_SM3`. It intentionally does not claim RFC 8998 TLS 1.3
 compatibility.
+Verified standard TLS and TLCP client certificate chains expose their
+normalized Subject DN to SASL EXTERNAL. Root DSE publishes EXTERNAL only on a
+connection with such an identity. Empty authorization identities bind as the
+certificate DN; non-empty proxy authorization identities are currently
+rejected. Tests cover EXTERNAL root authorization, Who Am I, simple-Bind state
+replacement, and both implicit TLCP and StartTLS-to-TLCP paths.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
 create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
 Modify and ModifyDN update modification metadata.

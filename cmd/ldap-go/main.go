@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -275,6 +276,12 @@ func runServe(
 	logLevel := flags.String("log-level", "info", "debug, info, warn, or error")
 	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
 	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
+	tlsClientCA := flags.String("tls-client-ca", "", "PEM CA bundle for TLS client certificates")
+	tlsRequireClientCertificate := flags.Bool(
+		"tls-require-client-cert",
+		false,
+		"require and verify a TLS client certificate",
+	)
 	implicitTLS := flags.Bool("ldaps", false, "negotiate TLS before reading LDAP messages")
 	tlcpSignCertificate := flags.String(
 		"tlcp-sign-cert",
@@ -291,6 +298,16 @@ func runServe(
 		"tlcp-enc-key",
 		"",
 		"PEM TLCP encryption private key",
+	)
+	tlcpClientCA := flags.String(
+		"tlcp-client-ca",
+		"",
+		"PEM SM2 CA bundle for TLCP client certificates",
+	)
+	tlcpRequireClientCertificate := flags.Bool(
+		"tlcp-require-client-cert",
+		false,
+		"require and verify a TLCP client certificate",
 	)
 	implicitTLCP := flags.Bool("tlcp-implicit", false, "negotiate TLCP before LDAP messages")
 	secureHandshakeTimeout := 10 * time.Second
@@ -318,15 +335,22 @@ func runServe(
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
-	tlsConfig, err := loadServerTLSConfig(*tlsCertificate, *tlsPrivateKey)
+	tlsConfig, err := loadServerTLSConfigWithClientAuth(
+		*tlsCertificate,
+		*tlsPrivateKey,
+		*tlsClientCA,
+		*tlsRequireClientCertificate,
+	)
 	if err != nil {
 		return err
 	}
-	tlcpTransport, err := loadServerTLCP(
+	tlcpTransport, err := loadServerTLCPWithClientAuth(
 		*tlcpSignCertificate,
 		*tlcpSignPrivateKey,
 		*tlcpEncryptionCertificate,
 		*tlcpEncryptionPrivateKey,
+		*tlcpClientCA,
+		*tlcpRequireClientCertificate,
 	)
 	if err != nil {
 		return err
@@ -392,20 +416,56 @@ func runServe(
 }
 
 func loadServerTLSConfig(certificateFile, privateKeyFile string) (*tls.Config, error) {
-	if certificateFile == "" && privateKeyFile == "" {
+	return loadServerTLSConfigWithClientAuth(
+		certificateFile,
+		privateKeyFile,
+		"",
+		false,
+	)
+}
+
+func loadServerTLSConfigWithClientAuth(
+	certificateFile,
+	privateKeyFile,
+	clientCAFile string,
+	requireClientCertificate bool,
+) (*tls.Config, error) {
+	if certificateFile == "" &&
+		privateKeyFile == "" &&
+		clientCAFile == "" &&
+		!requireClientCertificate {
 		return nil, nil
 	}
 	if certificateFile == "" || privateKeyFile == "" {
 		return nil, errors.New("-tls-cert and -tls-key must be provided together")
 	}
+	if requireClientCertificate && clientCAFile == "" {
+		return nil, errors.New("-tls-require-client-cert requires -tls-client-ca")
+	}
 	certificate, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load TLS certificate: %w", err)
 	}
-	return &tls.Config{
+	config := &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS12,
-	}, nil
+	}
+	if clientCAFile != "" {
+		pemData, err := os.ReadFile(clientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read TLS client CA: %w", err)
+		}
+		clientCAs := x509.NewCertPool()
+		if !clientCAs.AppendCertsFromPEM(pemData) {
+			return nil, errors.New("TLS client CA file contains no certificates")
+		}
+		config.ClientCAs = clientCAs
+		config.ClientAuth = tls.VerifyClientCertIfGiven
+		if requireClientCertificate {
+			config.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	}
+	return config, nil
 }
 
 func loadServerTLCP(
@@ -414,17 +474,42 @@ func loadServerTLCP(
 	encryptionCertificateFile,
 	encryptionPrivateKeyFile string,
 ) (*gmtransport.TLCP, error) {
-	if signCertificateFile == "" &&
-		signPrivateKeyFile == "" &&
-		encryptionCertificateFile == "" &&
-		encryptionPrivateKeyFile == "" {
-		return nil, nil
-	}
-	return gmtransport.LoadTLCP(
+	return loadServerTLCPWithClientAuth(
 		signCertificateFile,
 		signPrivateKeyFile,
 		encryptionCertificateFile,
 		encryptionPrivateKeyFile,
+		"",
+		false,
+	)
+}
+
+func loadServerTLCPWithClientAuth(
+	signCertificateFile,
+	signPrivateKeyFile,
+	encryptionCertificateFile,
+	encryptionPrivateKeyFile,
+	clientCAFile string,
+	requireClientCertificate bool,
+) (*gmtransport.TLCP, error) {
+	if signCertificateFile == "" &&
+		signPrivateKeyFile == "" &&
+		encryptionCertificateFile == "" &&
+		encryptionPrivateKeyFile == "" &&
+		clientCAFile == "" &&
+		!requireClientCertificate {
+		return nil, nil
+	}
+	if requireClientCertificate && clientCAFile == "" {
+		return nil, errors.New("-tlcp-require-client-cert requires -tlcp-client-ca")
+	}
+	return gmtransport.LoadTLCPWithClientAuth(
+		signCertificateFile,
+		signPrivateKeyFile,
+		encryptionCertificateFile,
+		encryptionPrivateKeyFile,
+		clientCAFile,
+		requireClientCertificate,
 	)
 }
 

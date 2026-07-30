@@ -113,6 +113,13 @@ operational-attribute updates in one storage transaction. Hash selection is
 loaded from the frontend database's `olcPasswordHash` values in the same
 immutable runtime snapshot as ACL and schema configuration.
 
+Secure transports may expose an external identity only after validating the
+peer certificate chain. The standard TLS and TLCP adapters both return the
+certificate Subject as an LDAP DN through the same connection interface. SASL
+EXTERNAL is advertised per connection, never globally, and a successful Bind
+copies that DN into the ordinary authorization state used by ACL and root
+checks.
+
 ## Data migration contract
 
 `ldap-go import` must accept unmodified LDIF emitted by OpenLDAP `slapcat` for

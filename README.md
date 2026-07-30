@@ -75,7 +75,13 @@ ldapsearch -x -ZZ -H ldap://127.0.0.1:1389 \
 ```
 
 Add `-ldaps` to negotiate TLS immediately and advertise an `ldaps://` endpoint
-instead. TLS 1.2 is the minimum accepted version.
+instead. TLS 1.2 is the minimum accepted version. `-tls-client-ca` enables
+verification of optional client certificates; `-tls-require-client-cert`
+makes a verified certificate mandatory. For example, append:
+
+```sh
+-tls-client-ca ./client-ca.crt -tls-require-client-cert
+```
 
 GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
 
@@ -93,7 +99,25 @@ go run ./cmd/ldap-go serve \
 The TLCP endpoint is reported as `ldap+tlcp://`. Omitting `-tlcp-implicit`
 enables a StartTLS-OID upgrade followed by a TLCP handshake for clients that
 support that profile. TLCP and RFC 8998 TLS 1.3 cipher suites are distinct;
-this milestone implements TLCP only.
+this milestone implements TLCP only. The corresponding optional client
+authentication flags are `-tlcp-client-ca` and
+`-tlcp-require-client-cert`.
+
+After a standard TLS or TLCP client certificate chain is verified, the
+certificate Subject is normalized as an LDAP DN and the connection advertises
+the SASL `EXTERNAL` mechanism. A client can then bind without an LDAP password:
+
+```sh
+LDAPTLS_CERT=./client.crt \
+LDAPTLS_KEY=./client.key \
+LDAPTLS_CACERT=./server-ca.crt \
+  ldapwhoami -Y EXTERNAL -ZZ -H ldap://127.0.0.1:1389
+```
+
+An unverified certificate never produces an EXTERNAL identity. The current
+implementation accepts an empty SASL authorization identity only; proxy
+authorization through EXTERNAL remains pending. TLCP requires a client that
+implements GB/T 38636 rather than a stock TLS-only OpenLDAP client.
 
 For a complete multi-database OpenLDAP migration, import `cn=config` first and
 then select each database using the same numeric index accepted by `slapcat`:

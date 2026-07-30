@@ -179,6 +179,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		}
 		state.connection = secured
 		state.secure = true
+		state.externalDN = externalIdentityDN(secured)
 	}
 	for {
 		message, err := ldapwire.ReadMessage(
@@ -287,11 +288,7 @@ func (server *Server) handleBind(
 		))
 	}
 	if request.Authentication.IsSASL {
-		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
-			message.ID,
-			ldapwire.ResultError(ldapwire.ResultAuthMethodNotSupported, "SASL is not implemented"),
-			nil,
-		))
+		return server.handleSASLBind(connection, state, message, request)
 	}
 
 	authenticated, err := server.authenticate(
@@ -381,6 +378,7 @@ type connectionState struct {
 	runtime    *runtimeState
 	connection net.Conn
 	secure     bool
+	externalDN string
 }
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {

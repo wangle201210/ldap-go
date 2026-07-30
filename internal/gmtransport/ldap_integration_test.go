@@ -131,6 +131,28 @@ func assertLDAPOverTLCP(t *testing.T, secured net.Conn) {
 	client := ldap.NewConn(secured, true)
 	client.Start()
 	defer client.Close()
+	rootDSE, err := client.Search(ldap.NewSearchRequest(
+		"",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"supportedSASLMechanisms"},
+		nil,
+	))
+	if err != nil || len(rootDSE.Entries) != 1 ||
+		rootDSE.Entries[0].GetAttributeValue("supportedSASLMechanisms") != "EXTERNAL" {
+		t.Fatalf("TLCP SASL Root DSE = %#v, %v", rootDSE, err)
+	}
+	if err := client.ExternalBind(); err != nil {
+		t.Fatalf("TLCP ExternalBind(): %v", err)
+	}
+	identity, err := client.WhoAmI(nil)
+	if err != nil || identity.AuthzID != "dn:cn=ldap-go TLCP client" {
+		t.Fatalf("TLCP WhoAmI() = %#v, %v", identity, err)
+	}
 	if err := client.Bind("uid=alice,dc=example,dc=com", "secret"); err != nil {
 		t.Fatalf("TLCP LDAP Bind(): %v", err)
 	}

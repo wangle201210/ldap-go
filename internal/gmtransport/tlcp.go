@@ -5,12 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 
 	"gitee.com/Trisia/gotlcp/tlcp"
+	"github.com/emmansun/gmsm/smx509"
 )
 
 type TLCP struct {
 	config *tlcp.Config
+}
+
+type identityConnection struct {
+	*tlcp.Conn
+}
+
+func (secured *identityConnection) ExternalIdentity() (string, bool) {
+	state := secured.ConnectionState()
+	if len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 {
+		return "", false
+	}
+	return state.PeerCertificates[0].Subject.String(), true
 }
 
 func NewTLCP(config *tlcp.Config) (*TLCP, error) {
@@ -35,6 +49,24 @@ func LoadTLCP(
 	signPrivateKeyFile,
 	encryptionCertificateFile,
 	encryptionPrivateKeyFile string,
+) (*TLCP, error) {
+	return LoadTLCPWithClientAuth(
+		signCertificateFile,
+		signPrivateKeyFile,
+		encryptionCertificateFile,
+		encryptionPrivateKeyFile,
+		"",
+		false,
+	)
+}
+
+func LoadTLCPWithClientAuth(
+	signCertificateFile,
+	signPrivateKeyFile,
+	encryptionCertificateFile,
+	encryptionPrivateKeyFile,
+	clientCAFile string,
+	requireClientCertificate bool,
 ) (*TLCP, error) {
 	files := []string{
 		signCertificateFile,
@@ -63,9 +95,30 @@ func LoadTLCP(
 	if err != nil {
 		return nil, fmt.Errorf("load TLCP encryption certificate: %w", err)
 	}
-	return NewTLCP(&tlcp.Config{
+	config := &tlcp.Config{
 		Certificates: []tlcp.Certificate{signing, encryption},
-	})
+	}
+	if requireClientCertificate && clientCAFile == "" {
+		return nil, errors.New(
+			"requiring a TLCP client certificate needs a client CA file",
+		)
+	}
+	if clientCAFile != "" {
+		pemData, err := os.ReadFile(clientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read TLCP client CA: %w", err)
+		}
+		clientCAs := smx509.NewCertPool()
+		if !clientCAs.AppendCertsFromPEM(pemData) {
+			return nil, errors.New("TLCP client CA file contains no certificates")
+		}
+		config.ClientCAs = clientCAs
+		config.ClientAuth = tlcp.VerifyClientCertIfGiven
+		if requireClientCertificate {
+			config.ClientAuth = tlcp.RequireAndVerifyClientCert
+		}
+	}
+	return NewTLCP(config)
 }
 
 func (transport *TLCP) ServerHandshake(
@@ -76,5 +129,5 @@ func (transport *TLCP) ServerHandshake(
 	if err := secured.HandshakeContext(ctx); err != nil {
 		return nil, err
 	}
-	return secured, nil
+	return &identityConnection{Conn: secured}, nil
 }
