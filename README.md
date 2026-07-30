@@ -76,6 +76,24 @@ ldapsearch -x -ZZ -H ldap://127.0.0.1:1389 \
 Add `-ldaps` to negotiate TLS immediately and advertise an `ldaps://` endpoint
 instead. TLS 1.2 is the minimum accepted version.
 
+GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
+
+```sh
+go run ./cmd/ldap-go serve \
+  -db ./data/ldap-go.db \
+  -listen 127.0.0.1:1636 \
+  -tlcp-sign-cert ./server-sign.crt \
+  -tlcp-sign-key ./server-sign.key \
+  -tlcp-enc-cert ./server-enc.crt \
+  -tlcp-enc-key ./server-enc.key \
+  -tlcp-implicit
+```
+
+The TLCP endpoint is reported as `ldap+tlcp://`. Omitting `-tlcp-implicit`
+enables a StartTLS-OID upgrade followed by a TLCP handshake for clients that
+support that profile. TLCP and RFC 8998 TLS 1.3 cipher suites are distinct;
+this milestone implements TLCP only.
+
 For a complete multi-database OpenLDAP migration, import `cn=config` first and
 then select each database using the same numeric index accepted by `slapcat`:
 

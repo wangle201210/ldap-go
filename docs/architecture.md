@@ -99,9 +99,11 @@ log through the accesslog overlay.
 
 Transport security is abstracted from LDAP semantics. Standard TLS and StartTLS
 use the same `SecureTransport` server-handshake contract for explicit and
-implicit upgrades; a national-cryptography transport can implement that
-contract without forking the operation engine. Password schemes are registered
-modules and constant-time verification is mandatory.
+implicit upgrades. The TLCP provider implements GB/T 38636 with separate SM2
+signing and encryption certificates and SM4/SM3 cipher suites without forking
+the operation engine. RFC 8998 TLS 1.3 support is a separate provider because
+it is not wire-compatible with TLCP. Password schemes are registered modules
+and constant-time verification is mandatory.
 
 ## Data migration contract
 

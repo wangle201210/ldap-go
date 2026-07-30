@@ -70,8 +70,8 @@ No row may become `compatible` based only on unit tests.
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
-| TLS and mutual TLS | planned | LDAPS, StartTLS, reload, CRL, client cert |
-| National cryptography transport | planned | selected GM/T profile and client matrix |
+| TLS and mutual TLS | partial | LDAPS/StartTLS pass; reload, CRL, and client cert remain |
+| National cryptography transport | partial | GB/T 38636 TLCP dual-certificate client matrix |
 | Audit and security logging | planned | redaction, integrity, and operation coverage |
 
 ## Storage, configuration, and migration
@@ -147,6 +147,10 @@ Compare; a transactional bbolt backend; and atomic content LDIF import/export.
 StartTLS and implicit LDAPS use a shared pluggable secure-transport interface;
 the standard TLS adapter requires TLS 1.2 or newer, publishes the StartTLS OID,
 and resets an authenticated connection to anonymous after a successful upgrade.
+The GB/T 38636 TLCP adapter requires separate SM2 signing/encryption
+certificates and has an end-to-end LDAP Bind/Search test fixed to
+`ECC_SM4_GCM_SM3`. It intentionally does not claim RFC 8998 TLS 1.3
+compatibility.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
 create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
 Modify and ModifyDN update modification metadata.

@@ -172,3 +172,20 @@ func TestLoadServerTLSConfigRequiresCertificatePair(t *testing.T) {
 		t.Fatal("private key without certificate was accepted")
 	}
 }
+
+func TestLoadServerTLCPRequiresDualCertificatePairs(t *testing.T) {
+	t.Parallel()
+
+	transport, err := loadServerTLCP("", "", "", "")
+	if err != nil || transport != nil {
+		t.Fatalf("loadServerTLCP(empty) = %#v, %v", transport, err)
+	}
+	if _, err := loadServerTLCP(
+		"sign.crt",
+		"sign.key",
+		"",
+		"",
+	); err == nil {
+		t.Fatal("TLCP configuration without encryption certificate was accepted")
+	}
+}

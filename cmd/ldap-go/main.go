@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wangle201210/ldap-go/internal/gmtransport"
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -224,10 +225,35 @@ func runServe(
 	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
 	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
 	implicitTLS := flags.Bool("ldaps", false, "negotiate TLS before reading LDAP messages")
-	secureHandshakeTimeout := flags.Duration(
+	tlcpSignCertificate := flags.String(
+		"tlcp-sign-cert",
+		"",
+		"PEM TLCP signing certificate",
+	)
+	tlcpSignPrivateKey := flags.String("tlcp-sign-key", "", "PEM TLCP signing private key")
+	tlcpEncryptionCertificate := flags.String(
+		"tlcp-enc-cert",
+		"",
+		"PEM TLCP encryption certificate",
+	)
+	tlcpEncryptionPrivateKey := flags.String(
+		"tlcp-enc-key",
+		"",
+		"PEM TLCP encryption private key",
+	)
+	implicitTLCP := flags.Bool("tlcp-implicit", false, "negotiate TLCP before LDAP messages")
+	secureHandshakeTimeout := 10 * time.Second
+	flags.DurationVar(
+		&secureHandshakeTimeout,
+		"secure-handshake-timeout",
+		secureHandshakeTimeout,
+		"maximum TLS or TLCP handshake duration",
+	)
+	flags.DurationVar(
+		&secureHandshakeTimeout,
 		"tls-handshake-timeout",
-		10*time.Second,
-		"maximum TLS handshake duration",
+		secureHandshakeTimeout,
+		"alias for -secure-handshake-timeout",
 	)
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -245,11 +271,31 @@ func runServe(
 	if err != nil {
 		return err
 	}
-	if *implicitTLS && tlsConfig == nil {
-		return errors.New("-ldaps requires -tls-cert and -tls-key")
+	tlcpTransport, err := loadServerTLCP(
+		*tlcpSignCertificate,
+		*tlcpSignPrivateKey,
+		*tlcpEncryptionCertificate,
+		*tlcpEncryptionPrivateKey,
+	)
+	if err != nil {
+		return err
 	}
-	if tlsConfig != nil && *secureHandshakeTimeout <= 0 {
-		return errors.New("-tls-handshake-timeout must be positive")
+	if tlsConfig != nil && tlcpTransport != nil {
+		return errors.New("standard TLS and TLCP certificate options are mutually exclusive")
+	}
+	if *implicitTLCP && tlcpTransport == nil {
+		return errors.New("-tlcp-implicit requires all four TLCP certificate/key options")
+	}
+	if *implicitTLS {
+		if tlcpTransport != nil {
+			return errors.New("use -tlcp-implicit instead of -ldaps with TLCP")
+		}
+		if tlsConfig == nil {
+			return errors.New("-ldaps requires -tls-cert and -tls-key")
+		}
+	}
+	if (tlsConfig != nil || tlcpTransport != nil) && secureHandshakeTimeout <= 0 {
+		return errors.New("-secure-handshake-timeout must be positive")
 	}
 
 	store, err := storage.OpenBolt(*databasePath)
@@ -266,8 +312,9 @@ func runServe(
 		RootPassword:           []byte(getenv(rootPasswordEnvironment)),
 		Logger:                 logger,
 		TLSConfig:              tlsConfig,
-		ImplicitTLS:            *implicitTLS,
-		SecureHandshakeTimeout: *secureHandshakeTimeout,
+		SecureTransport:        tlcpTransport,
+		ImplicitTLS:            *implicitTLS || *implicitTLCP,
+		SecureHandshakeTimeout: secureHandshakeTimeout,
 	})
 	if err != nil {
 		return err
@@ -282,6 +329,8 @@ func runServe(
 	scheme := "ldap"
 	if *implicitTLS {
 		scheme = "ldaps"
+	} else if *implicitTLCP {
+		scheme = "ldap+tlcp"
 	}
 	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
 		return err
@@ -306,6 +355,26 @@ func loadServerTLSConfig(certificateFile, privateKeyFile string) (*tls.Config, e
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS12,
 	}, nil
+}
+
+func loadServerTLCP(
+	signCertificateFile,
+	signPrivateKeyFile,
+	encryptionCertificateFile,
+	encryptionPrivateKeyFile string,
+) (*gmtransport.TLCP, error) {
+	if signCertificateFile == "" &&
+		signPrivateKeyFile == "" &&
+		encryptionCertificateFile == "" &&
+		encryptionPrivateKeyFile == "" {
+		return nil, nil
+	}
+	return gmtransport.LoadTLCP(
+		signCertificateFile,
+		signPrivateKeyFile,
+		encryptionCertificateFile,
+		encryptionPrivateKeyFile,
+	)
 }
 
 func parseLogLevel(value string) (slog.Level, error) {
