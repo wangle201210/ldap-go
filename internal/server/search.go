@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -36,10 +37,10 @@ func (server *Server) handleSearch(
 	}
 
 	if base.Depth() == 0 && request.Scope == directory.ScopeBase {
-		return server.searchRootDSE(ctx, connection, message.ID, request)
+		return server.searchRootDSE(ctx, connection, state, message.ID, request)
 	}
 	if isSubschemaDN(base) {
-		return server.searchSubschema(connection, message.ID, request)
+		return server.searchSubschema(ctx, connection, state, message.ID, request)
 	}
 
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
@@ -48,13 +49,23 @@ func (server *Server) handleSearch(
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 
 	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
-		if _, err := tx.Get(base); err != nil {
+		baseEntry, err := tx.Get(base)
+		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				result.Code = ldapwire.ResultNoSuchObject
-				result.MatchedDN = nearestExistingAncestor(tx, base)
+				result.MatchedDN = server.disclosedAncestor(tx, state.boundDN, base)
 				return nil
 			}
 			return err
+		}
+		baseEntry = withSubschemaReference(baseEntry)
+		if !server.allowed(tx, state.boundDN, baseEntry, "entry", nil, acl.Search) {
+			if server.allowed(tx, state.boundDN, baseEntry, "entry", nil, acl.Disclose) {
+				result.Code = ldapwire.ResultInsufficientAccessRights
+			} else {
+				result.Code = ldapwire.ResultNoSuchObject
+			}
+			return nil
 		}
 
 		return tx.ForEach(func(entry directory.Entry) error {
@@ -70,7 +81,7 @@ func (server *Server) handleSearch(
 				return nil
 			}
 			entry = withSubschemaReference(entry)
-			matches, err := request.Filter.MatchWith(entry, server.schema)
+			matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
 			if err != nil {
 				result.Code = ldapwire.ResultInappropriateMatching
 				result.DiagnosticMessage = err.Error()
@@ -79,14 +90,21 @@ func (server *Server) handleSearch(
 			if !matches {
 				return nil
 			}
+			if !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+				return nil
+			}
 			if len(entries) >= limit {
 				result.Code = ldapwire.ResultSizeLimitExceeded
 				return errStopSearch
 			}
-			selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
-			if !server.isRoot(state.boundDN) {
-				selected = selected.Without("userPassword")
-			}
+			readable := server.attributesWithPrivilege(
+				tx,
+				state.boundDN,
+				entry,
+				acl.Read,
+				request.TypesOnly,
+			)
+			selected := server.selectEntry(readable, request.Attributes, request.TypesOnly)
 			entries = append(entries, selected)
 			return nil
 		})
@@ -106,6 +124,7 @@ func (server *Server) handleSearch(
 func (server *Server) searchRootDSE(
 	ctx context.Context,
 	connection net.Conn,
+	state *connectionState,
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
@@ -119,7 +138,26 @@ func (server *Server) searchRootDSE(
 	}
 
 	entry := rootDSE(namingContexts)
-	matches, err := request.Filter.MatchWith(entry, server.schema)
+	var selected *directory.Entry
+	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
+		matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
+		if err != nil {
+			return err
+		}
+		if !matches || !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+			return nil
+		}
+		readable := server.attributesWithPrivilege(
+			tx,
+			state.boundDN,
+			entry,
+			acl.Read,
+			request.TypesOnly,
+		)
+		value := server.selectEntry(readable, request.Attributes, request.TypesOnly)
+		selected = &value
+		return nil
+	})
 	if err != nil {
 		return server.writeSearchDone(
 			connection,
@@ -127,9 +165,11 @@ func (server *Server) searchRootDSE(
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
 		)
 	}
-	if matches {
-		selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
-		if err := ldapwire.Write(connection, ldapwire.EncodeSearchResultEntry(messageID, selected, nil)); err != nil {
+	if selected != nil {
+		if err := ldapwire.Write(
+			connection,
+			ldapwire.EncodeSearchResultEntry(messageID, *selected, nil),
+		); err != nil {
 			return err
 		}
 	}
@@ -137,7 +177,9 @@ func (server *Server) searchRootDSE(
 }
 
 func (server *Server) searchSubschema(
+	ctx context.Context,
 	connection net.Conn,
+	state *connectionState,
 	messageID int64,
 	request ldapwire.SearchRequest,
 ) error {
@@ -161,7 +203,26 @@ func (server *Server) searchSubschema(
 			ldapwire.Result{Code: ldapwire.ResultSuccess},
 		)
 	}
-	matches, err := request.Filter.MatchWith(entry, server.schema)
+	var selected *directory.Entry
+	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+		matches, err := server.filterMatches(tx, state.boundDN, entry, request.Filter)
+		if err != nil {
+			return err
+		}
+		if !matches || !server.allowed(tx, state.boundDN, entry, "entry", nil, acl.Read) {
+			return nil
+		}
+		readable := server.attributesWithPrivilege(
+			tx,
+			state.boundDN,
+			entry,
+			acl.Read,
+			request.TypesOnly,
+		)
+		value := server.selectEntry(readable, request.Attributes, request.TypesOnly)
+		selected = &value
+		return nil
+	})
 	if err != nil {
 		return server.writeSearchDone(
 			connection,
@@ -169,11 +230,10 @@ func (server *Server) searchSubschema(
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
 		)
 	}
-	if matches {
-		selected := server.selectEntry(entry, request.Attributes, request.TypesOnly)
+	if selected != nil {
 		if err := ldapwire.Write(
 			connection,
-			ldapwire.EncodeSearchResultEntry(messageID, selected, nil),
+			ldapwire.EncodeSearchResultEntry(messageID, *selected, nil),
 		); err != nil {
 			return err
 		}
@@ -251,7 +311,11 @@ func isSubschemaDN(dn directory.DN) bool {
 	return err == nil && dn.Equal(subSchema)
 }
 
-func nearestExistingAncestor(reader storage.Reader, dn directory.DN) string {
+func (server *Server) disclosedAncestor(
+	reader storage.Reader,
+	subjectDN string,
+	dn directory.DN,
+) string {
 	current := dn
 	for {
 		parent, ok := current.Parent()
@@ -259,7 +323,10 @@ func nearestExistingAncestor(reader storage.Reader, dn directory.DN) string {
 			return ""
 		}
 		if entry, err := reader.Get(parent); err == nil {
-			return entry.DN
+			if server.allowed(reader, subjectDN, entry, "entry", nil, acl.Disclose) {
+				return entry.DN
+			}
+			return ""
 		}
 		current = parent
 	}

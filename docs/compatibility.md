@@ -68,7 +68,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | OpenLDAP password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
-| OpenLDAP ACL grammar and evaluation | planned | ordered rule differential suite |
+| OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
 | TLS and mutual TLS | planned | LDAPS, StartTLS, reload, CRL, client cert |
 | National cryptography transport | planned | selected GM/T profile and client matrix |
@@ -156,18 +156,39 @@ Attribute selection distinguishes user attributes (`*`) from operational
 attributes (`+`).
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
-`{SSHA}`, `{MD5}`, and `{SMD5}`. Until ordered OpenLDAP ACL evaluation is
-implemented, non-root search responses always suppress `userPassword`.
+`{SSHA}`, `{MD5}`, and `{SMD5}`.
+
+The ACL evaluator loads ordered `olcAccess` values from frontend and database
+entries. It supports exact/base, one-level, subtree, children, and regular
+expression DN targets; attribute targets; anonymous, users, self, DN, DN
+attribute, static group, and SSF subjects; access levels and `=`, `+`, `-`
+privileges; `stop`, `continue`, and `break`; and OpenLDAP's implicit clauses.
+Search/Compare/Bind and all write operations enforce attribute or pseudo-
+attribute access. Add/delete privileges (`a`/`z`), Replace semantics,
+`olcAddContentAcl`, ModifyDN parent/RDN checks, DN-syntax-only `selfwrite`,
+root bypass, default read access, and the `cn=config` default-none exception
+follow the slapd implementation.
+
+ACL filter/value targets, object-class attribute sets, dynamic groups, sets,
+network/peer selectors, ACI, DN expansion, and transport-derived SSF remain
+unimplemented. Configurations using an unsupported selector fail server
+startup instead of silently weakening access control.
 
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
 `ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
 `partial` because the complete RFC 4517 syntax/matching-rule set,
-aliases/referrals, controls, ordered ACL evaluation, SASL, subtree-delete
-control, and full differential fixtures are still pending.
+aliases/referrals, controls, the remaining ACL grammar and differential suite,
+SASL, subtree-delete control, and full differential fixtures are still
+pending.
 
 Schema bootstrap was also exercised by importing the unmodified Homebrew
 OpenLDAP 2.6 `core`, `cosine`, `inetorgperson`, `nis`, and `openldap` schema
 LDIF files, starting `ldap-go` from that database, and reading Root DSE and
 `cn=Subschema` with OpenLDAP `ldapsearch`.
+
+ACL behavior was aligned against `OPENLDAP_REL_ENG_2_6` revision
+`04a19039e8d13dc06316e2d90994d6ff2812eb3d`, primarily
+`servers/slapd/acl.c`, `servers/slapd/aclparse.c`, the MDB operation
+implementations, and `slapd.access(5)`.

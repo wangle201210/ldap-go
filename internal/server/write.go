@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -34,7 +35,7 @@ func (server *Server) handleAdd(
 	message ldapwire.Message,
 	request ldapwire.AddRequest,
 ) error {
-	if result := server.writePrecondition(state, message.Controls); result != nil {
+	if result := server.writeControlPrecondition(message.Controls); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
 
@@ -88,7 +89,36 @@ func (server *Server) handleAdd(
 					return err
 				}
 				if belowContext {
-					return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
+					return operationFailed(
+						ldapwire.ResultNoSuchObject,
+						server.disclosedAncestor(tx, state.boundDN, dn),
+					)
+				}
+			}
+		}
+		parent := directory.Entry{DN: ""}
+		if parentDN, ok := dn.Parent(); ok {
+			parent.DN = parentDN.String()
+			if storedParent, getErr := tx.Get(parentDN); getErr == nil {
+				parent = storedParent
+			} else if !errors.Is(getErr, storage.ErrEntryNotFound) {
+				return getErr
+			}
+		}
+		if !server.allowed(tx, state.boundDN, parent, "children", nil, acl.WriteAdd) ||
+			!server.allowed(tx, state.boundDN, entry, "entry", nil, acl.WriteAdd) {
+			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
+		if server.access.RequiresAddContentACL(dn) {
+			for _, attribute := range request.Entry.Attributes {
+				if !server.canAccessAttribute(
+					tx,
+					state.boundDN,
+					entry,
+					attribute,
+					acl.WriteAdd,
+				) {
+					return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 				}
 			}
 		}
@@ -107,7 +137,7 @@ func (server *Server) handleModify(
 	message ldapwire.Message,
 	request ldapwire.ModifyRequest,
 ) error {
-	if result := server.writePrecondition(state, message.Controls); result != nil {
+	if result := server.writeControlPrecondition(message.Controls); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
 	}
 	dn, err := directory.ParseDN(request.DN)
@@ -131,12 +161,23 @@ func (server *Server) handleModify(
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
+			return operationFailed(
+				ldapwire.ResultNoSuchObject,
+				server.disclosedAncestor(tx, state.boundDN, dn),
+			)
 		}
 		if err != nil {
 			return err
 		}
 
+		if !server.canApplyModifications(
+			tx,
+			state.boundDN,
+			entry,
+			request.Changes,
+		) {
+			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
 		for _, change := range request.Changes {
 			if isProtectedOperationalAttribute(change.Attribute.Description) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
@@ -169,7 +210,7 @@ func (server *Server) handleDelete(
 	message ldapwire.Message,
 	request ldapwire.DeleteRequest,
 ) error {
-	if result := server.writePrecondition(state, message.Controls); result != nil {
+	if result := server.writeControlPrecondition(message.Controls); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
 	}
 	dn, err := directory.ParseDN(request.DN)
@@ -191,10 +232,24 @@ func (server *Server) handleDelete(
 	}
 
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
-		if _, err := tx.Get(dn); errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
-		} else if err != nil {
+		entry, err := tx.Get(dn)
+		if errors.Is(err, storage.ErrEntryNotFound) {
+			return operationFailed(
+				ldapwire.ResultNoSuchObject,
+				server.disclosedAncestor(tx, state.boundDN, dn),
+			)
+		}
+		if err != nil {
 			return err
+		}
+
+		parent, err := parentEntry(tx, dn)
+		if err != nil {
+			return err
+		}
+		if !server.allowed(tx, state.boundDN, parent, "children", nil, acl.WriteDelete) ||
+			!server.allowed(tx, state.boundDN, entry, "entry", nil, acl.WriteDelete) {
+			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 
 		hasChildren := false
@@ -228,7 +283,7 @@ func (server *Server) handleModifyDN(
 	message ldapwire.Message,
 	request ldapwire.ModifyDNRequest,
 ) error {
-	if result := server.writePrecondition(state, message.Controls); result != nil {
+	if result := server.writeControlPrecondition(message.Controls); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
 	}
 	oldDN, err := directory.ParseDN(request.DN)
@@ -294,16 +349,74 @@ func (server *Server) handleModifyDN(
 	}
 
 	err = server.config.Store.Update(ctx, func(tx storage.Writer) error {
-		if _, err := tx.Get(oldDN); errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, oldDN))
-		} else if err != nil {
+		sourceEntry, err := tx.Get(oldDN)
+		if errors.Is(err, storage.ErrEntryNotFound) {
+			return operationFailed(
+				ldapwire.ResultNoSuchObject,
+				server.disclosedAncestor(tx, state.boundDN, oldDN),
+			)
+		}
+		if err != nil {
 			return err
 		}
+		newParent := directory.Entry{DN: superior.String()}
 		if superior.Depth() > 0 {
-			if _, err := tx.Get(superior); errors.Is(err, storage.ErrEntryNotFound) {
-				return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, superior))
-			} else if err != nil {
+			newParent, err = tx.Get(superior)
+			if errors.Is(err, storage.ErrEntryNotFound) {
+				return operationFailed(
+					ldapwire.ResultNoSuchObject,
+					server.disclosedAncestor(tx, state.boundDN, superior),
+				)
+			}
+			if err != nil {
 				return err
+			}
+		}
+		oldParent, err := parentEntry(tx, oldDN)
+		if err != nil {
+			return err
+		}
+		newRDNAttributes := make([]directory.Attribute, 0, len(newDN.RDNValues()))
+		for _, value := range newDN.RDNValues() {
+			newRDNAttributes = append(newRDNAttributes, directory.Attribute{
+				Description: value.Type,
+				Values:      [][]byte{value.Value},
+			})
+		}
+		oldRDNAttributes := make([]directory.Attribute, 0, len(oldDN.RDNValues()))
+		for _, value := range oldDN.RDNValues() {
+			oldRDNAttributes = append(oldRDNAttributes, directory.Attribute{
+				Description: value.Type,
+				Values:      [][]byte{value.Value},
+			})
+		}
+		if !server.allowed(tx, state.boundDN, sourceEntry, "entry", nil, acl.Write) ||
+			!server.allowed(tx, state.boundDN, oldParent, "children", nil, acl.WriteDelete) ||
+			!server.allowed(tx, state.boundDN, newParent, "children", nil, acl.WriteAdd) {
+			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
+		for _, attribute := range newRDNAttributes {
+			if !server.canAccessAttribute(
+				tx,
+				state.boundDN,
+				sourceEntry,
+				attribute,
+				acl.WriteAdd,
+			) {
+				return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+			}
+		}
+		if request.DeleteOldRDN {
+			for _, attribute := range oldRDNAttributes {
+				if !server.canAccessAttribute(
+					tx,
+					state.boundDN,
+					sourceEntry,
+					attribute,
+					acl.WriteDelete,
+				) {
+					return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+				}
 			}
 		}
 
@@ -391,14 +504,6 @@ func (server *Server) handleCompare(
 			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
 		)
 	}
-	if strings.EqualFold(request.Attribute, "userPassword") && !server.isRoot(state.boundDN) {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationCompareResponse,
-			ldapwire.ResultError(ldapwire.ResultInsufficientAccessRights, ""),
-		)
-	}
 	dn, err := directory.ParseDN(request.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
@@ -410,27 +515,37 @@ func (server *Server) handleCompare(
 	}
 
 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
-	var entry directory.Entry
-	if isSubschemaDN(dn) {
-		entry = server.subschemaEntry()
-	} else {
-		err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+		var entry directory.Entry
+		if isSubschemaDN(dn) {
+			entry = server.subschemaEntry()
+		} else {
 			var getErr error
 			entry, getErr = tx.Get(dn)
 			if errors.Is(getErr, storage.ErrEntryNotFound) {
-				return operationFailed(ldapwire.ResultNoSuchObject, nearestExistingAncestor(tx, dn))
+				return operationFailed(
+					ldapwire.ResultNoSuchObject,
+					server.disclosedAncestor(tx, state.boundDN, dn),
+				)
 			}
-			return getErr
-		})
-		entry = withSubschemaReference(entry)
-	}
-	if failure := asOperationFailure(err); failure != nil {
-		result = failure.result
-	} else if err != nil {
-		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationCompareResponse, err)
-	} else if !entry.HasAttribute(request.Attribute) {
-		result = ldapwire.ResultError(ldapwire.ResultNoSuchAttribute, "")
-	} else {
+			if getErr != nil {
+				return getErr
+			}
+			entry = withSubschemaReference(entry)
+		}
+		if !server.allowed(
+			tx,
+			state.boundDN,
+			entry,
+			request.Attribute,
+			request.Assertion,
+			acl.Compare,
+		) {
+			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
+		if !entry.HasAttribute(request.Attribute) {
+			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
+		}
 		for _, value := range entry.Values(request.Attribute) {
 			comparison, compareErr := server.schema.Compare(
 				request.Attribute,
@@ -439,31 +554,29 @@ func (server *Server) handleCompare(
 				request.Assertion,
 			)
 			if compareErr != nil {
-				result = ldapwire.ResultError(ldapwire.ResultInappropriateMatching, compareErr.Error())
-				break
+				return operationFailed(ldapwire.ResultInappropriateMatching, compareErr.Error())
 			}
 			if comparison == 0 {
 				result.Code = ldapwire.ResultCompareTrue
 				break
 			}
 		}
+		return nil
+	})
+	if failure := asOperationFailure(err); failure != nil {
+		result = failure.result
+	} else if err != nil {
+		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationCompareResponse, err)
 	}
 	return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationCompareResponse, result)
 }
 
-func (server *Server) writePrecondition(
-	state *connectionState,
-	controls []ldapwire.Control,
-) *ldapwire.Result {
+func (server *Server) writeControlPrecondition(controls []ldapwire.Control) *ldapwire.Result {
 	if hasUnsupportedCriticalControl(controls) {
 		result := ldapwire.ResultError(
 			ldapwire.ResultUnavailableCriticalExtension,
 			"unsupported critical control",
 		)
-		return &result
-	}
-	if !server.isRoot(state.boundDN) {
-		result := ldapwire.ResultError(ldapwire.ResultInsufficientAccessRights, "")
 		return &result
 	}
 	return nil

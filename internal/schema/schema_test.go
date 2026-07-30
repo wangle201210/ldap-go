@@ -86,6 +86,30 @@ func TestBuiltinSchemaValidatesEntries(t *testing.T) {
 	assertViolation(t, registry.ValidateEntry(singleValue), ViolationSingleValue)
 }
 
+func TestRegistryIdentifiesDNValuedAttributes(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if err := registry.ParseAndRegisterAttributeType(
+		"( 1.2.3.4 NAME 'delegatedCreator' SUP creatorsName )",
+	); err != nil {
+		t.Fatalf("register inherited DN attribute: %v", err)
+	}
+
+	if !registry.IsDNValued("creatorsName") {
+		t.Fatal("direct DN syntax was not identified")
+	}
+	if !registry.IsDNValued("delegatedCreator") {
+		t.Fatal("inherited DN syntax was not identified")
+	}
+	if registry.IsDNValued("cn") || registry.IsDNValued("undefined") {
+		t.Fatal("non-DN attribute was identified as DN-valued")
+	}
+}
+
 func TestRegistryAcceptsCustomOpenLDAPSchema(t *testing.T) {
 	t.Parallel()
 

@@ -162,6 +162,18 @@ func (registry *Registry) IsOperational(attributeName string) bool {
 	return effective.Usage != UsageUserApplications
 }
 
+func (registry *Registry) IsDNValued(attributeName string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return false
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	return err == nil && effective.Syntax == SyntaxDistinguishedName
+}
+
 func (registry *Registry) AttributeTypeDescriptions() []string {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()

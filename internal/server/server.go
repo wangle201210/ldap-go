@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -28,12 +29,14 @@ type Config struct {
 	RootPassword     []byte
 	Logger           *slog.Logger
 	Schema           *schema.Registry
+	AccessPolicy     *acl.Policy
 }
 
 type Server struct {
 	config Config
 	rootDN *directory.DN
 	schema *schema.Registry
+	access *acl.Policy
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
@@ -67,6 +70,13 @@ func New(config Config) (*Server, error) {
 	if _, err := schema.LoadOpenLDAPConfig(context.Background(), config.Store, config.Schema); err != nil {
 		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
 	}
+	if config.AccessPolicy == nil {
+		var err error
+		config.AccessPolicy, _, err = acl.LoadOpenLDAPConfig(context.Background(), config.Store)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var rootDN *directory.DN
 	if config.RootDN != "" {
@@ -84,6 +94,7 @@ func New(config Config) (*Server, error) {
 		config:      config,
 		rootDN:      rootDN,
 		schema:      config.Schema,
+		access:      config.AccessPolicy,
 		connections: make(map[net.Conn]struct{}),
 	}, nil
 }
@@ -273,6 +284,9 @@ func (server *Server) authenticate(ctx context.Context, rawDN string, password [
 		}
 		if err != nil {
 			return err
+		}
+		if !server.allowed(tx, "", entry, "userPassword", nil, acl.Auth) {
+			return nil
 		}
 		for _, stored := range entry.Values("userPassword") {
 			if auth.VerifyPassword(stored, password) {
