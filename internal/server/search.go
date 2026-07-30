@@ -20,11 +20,12 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
-	if hasUnsupportedCriticalControl(message.Controls) {
+	controls, controlFailure := parseRequestControls(message.Controls)
+	if controlFailure != nil {
 		return server.writeSearchDone(
 			connection,
 			message.ID,
-			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
+			*controlFailure,
 		)
 	}
 
@@ -38,10 +39,24 @@ func (server *Server) handleSearch(
 	}
 
 	if base.Depth() == 0 && request.Scope == directory.ScopeBase {
-		return server.searchRootDSE(ctx, connection, state, message.ID, request)
+		return server.searchRootDSE(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			request,
+			controls.assertion,
+		)
 	}
 	if isSubschemaDN(base) {
-		return server.searchSubschema(ctx, connection, state, message.ID, request)
+		return server.searchSubschema(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			request,
+			controls.assertion,
+		)
 	}
 	routes := databaseSearchRoutes(state.runtime.databases, base, request.Scope)
 	if len(routes) == 0 {
@@ -76,6 +91,16 @@ func (server *Server) handleSearch(
 			return err
 		}
 		baseEntry = withSubschemaReference(baseEntry)
+		if err := server.checkAssertion(
+			state.runtime,
+			primaryReader,
+			state.boundDN,
+			baseEntry,
+			controls.assertion,
+		); err != nil {
+			result.Code = ldapwire.ResultAssertionFailed
+			return nil
+		}
 		if !server.allowed(
 			state.runtime,
 			primaryReader,
@@ -283,10 +308,22 @@ func (server *Server) searchRootDSE(
 	state *connectionState,
 	messageID int64,
 	request ldapwire.SearchRequest,
+	assertion *directory.Filter,
 ) error {
 	entry := server.rootDSE(state.runtime, state.externalDN != "")
 	var selected *directory.Entry
+	assertionFailed := false
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			assertion,
+		); err != nil {
+			assertionFailed = true
+			return nil
+		}
 		matches, err := server.filterMatches(
 			state.runtime,
 			tx,
@@ -332,6 +369,13 @@ func (server *Server) searchRootDSE(
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
 		)
 	}
+	if assertionFailed {
+		return server.writeSearchDone(
+			connection,
+			messageID,
+			ldapwire.Result{Code: ldapwire.ResultAssertionFailed},
+		)
+	}
 	if selected != nil {
 		if err := ldapwire.Write(
 			connection,
@@ -349,6 +393,7 @@ func (server *Server) searchSubschema(
 	state *connectionState,
 	messageID int64,
 	request ldapwire.SearchRequest,
+	assertion *directory.Filter,
 ) error {
 	entry := server.subschemaEntry(state.runtime)
 	candidate, err := directory.ParseDN(entry.DN)
@@ -371,7 +416,18 @@ func (server *Server) searchSubschema(
 		)
 	}
 	var selected *directory.Entry
+	assertionFailed := false
 	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			assertion,
+		); err != nil {
+			assertionFailed = true
+			return nil
+		}
 		matches, err := server.filterMatches(
 			state.runtime,
 			tx,
@@ -415,6 +471,13 @@ func (server *Server) searchSubschema(
 			connection,
 			messageID,
 			ldapwire.ResultError(ldapwire.ResultInappropriateMatching, err.Error()),
+		)
+	}
+	if assertionFailed {
+		return server.writeSearchDone(
+			connection,
+			messageID,
+			ldapwire.Result{Code: ldapwire.ResultAssertionFailed},
 		)
 	}
 	if selected != nil {
@@ -500,6 +563,10 @@ func (server *Server) rootDSE(
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),
+	})
+	entry.Attributes = append(entry.Attributes, directory.Attribute{
+		Description: "supportedControl",
+		Values:      stringValues(assertionControlOID),
 	})
 	if hasExternalIdentity {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{

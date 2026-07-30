@@ -465,6 +465,7 @@ func decodeControls(packet *ber.Packet) ([]Control, error) {
 			if err != nil {
 				return nil, malformed("invalid control value")
 			}
+			control.HasValue = true
 			position++
 		}
 		if position != len(controlPacket.Children) {

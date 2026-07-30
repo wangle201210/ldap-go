@@ -161,7 +161,7 @@ func encodeControls(controls []Control) *ber.Packet {
 				"criticality",
 			))
 		}
-		if control.Value != nil {
+		if control.HasValue || control.Value != nil {
 			packet.AppendChild(octetString(control.Value))
 		}
 		wrapper.AppendChild(packet)

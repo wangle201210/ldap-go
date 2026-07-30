@@ -145,6 +145,7 @@ type Control struct {
 	OID      string
 	Critical bool
 	Value    []byte
+	HasValue bool
 }
 
 type ResultCode int
@@ -189,6 +190,7 @@ const (
 	ResultObjectClassModsProhibited    ResultCode = 69
 	ResultAffectsMultipleDSAs          ResultCode = 71
 	ResultOther                        ResultCode = 80
+	ResultAssertionFailed              ResultCode = 122
 )
 
 type Result struct {

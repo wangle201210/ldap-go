@@ -39,7 +39,7 @@ No row may become `compatible` based only on unit tests.
 | Password Modify | partial | RFC 3062 core passes; password policy integration remains |
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | planned | RFC 3909 concurrent operation tests |
-| Assertion | planned | RFC 4528 atomic write tests |
+| Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
 | Pre-read and post-read | planned | RFC 4527 write transaction tests |
 | Paged results | planned | RFC 2696 cookie and mutation tests |
 | Server-side sorting | planned | RFC 2891 matching and error tests |
@@ -194,6 +194,14 @@ format. Legacy placement on `cn=config` is also accepted. Online changes are
 validated as part of the runtime snapshot and unsupported schemes roll back.
 Password policy controls, history, quality checks, expiry, and lockout remain
 pending with the ppolicy overlay.
+
+RFC 4528 Assertion is published through Root DSE `supportedControl`. The BER
+filter is decoded strictly and evaluated inside the same storage transaction
+as Add, Modify, Delete, and ModifyDN; failed assertions return result code 122
+without side effects. Search evaluates the assertion against its base entry,
+and Compare against its target entry. Tests cover duplicate/missing/empty
+control values, malformed and trailing BER, noncritical handling, schema-aware
+matching, and successful/failed atomic operations.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

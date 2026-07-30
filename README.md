@@ -34,8 +34,9 @@ The current server milestone supports atomic content-LDIF import/export,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
-loads OpenLDAP schema, ordered ACLs, database roots, hidden/disabled databases,
-and selected operation settings from `cn=config`; supported online changes are
+also supports RFC 4528 Assertion on writes, Search, and Compare. It loads
+OpenLDAP schema, ordered ACLs, database roots, hidden/disabled databases, and
+selected operation settings from `cn=config`; supported online changes are
 validated transactionally and published as one runtime snapshot. Database
 entry partitions allow different OpenLDAP backends to hold the same DN without
 crossing authorization or search boundaries, while `olcSubordinate` databases

@@ -35,7 +35,8 @@ func (server *Server) handleAdd(
 	message ldapwire.Message,
 	request ldapwire.AddRequest,
 ) error {
-	if result := server.writeControlPrecondition(message.Controls); result != nil {
+	controls, result := parseRequestControls(message.Controls)
+	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
 
@@ -109,6 +110,15 @@ func (server *Server) handleAdd(
 		if _, err := tx.Get(dn); err == nil {
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
+			return err
+		}
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.assertion,
+		); err != nil {
 			return err
 		}
 
@@ -199,7 +209,8 @@ func (server *Server) handleModify(
 	message ldapwire.Message,
 	request ldapwire.ModifyRequest,
 ) error {
-	if result := server.writeControlPrecondition(message.Controls); result != nil {
+	controls, result := parseRequestControls(message.Controls)
+	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
 	}
 	dn, err := directory.ParseDN(request.DN)
@@ -246,7 +257,15 @@ func (server *Server) handleModify(
 		dn,
 		*database,
 		request.Changes,
-		nil,
+		func(reader storage.Reader, entry directory.Entry) error {
+			return server.checkAssertion(
+				state.runtime,
+				reader,
+				state.boundDN,
+				entry,
+				controls.assertion,
+			)
+		},
 	)
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
@@ -346,7 +365,8 @@ func (server *Server) handleDelete(
 	message ldapwire.Message,
 	request ldapwire.DeleteRequest,
 ) error {
-	if result := server.writeControlPrecondition(message.Controls); result != nil {
+	controls, result := parseRequestControls(message.Controls)
+	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
 	}
 	dn, err := directory.ParseDN(request.DN)
@@ -403,6 +423,15 @@ func (server *Server) handleDelete(
 			)
 		}
 		if err != nil {
+			return err
+		}
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.assertion,
+		); err != nil {
 			return err
 		}
 
@@ -472,7 +501,8 @@ func (server *Server) handleModifyDN(
 	message ldapwire.Message,
 	request ldapwire.ModifyDNRequest,
 ) error {
-	if result := server.writeControlPrecondition(message.Controls); result != nil {
+	controls, result := parseRequestControls(message.Controls)
+	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
 	}
 	oldDN, err := directory.ParseDN(request.DN)
@@ -598,6 +628,15 @@ func (server *Server) handleModifyDN(
 			)
 		}
 		if err != nil {
+			return err
+		}
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			sourceEntry,
+			controls.assertion,
+		); err != nil {
 			return err
 		}
 		newParent := directory.Entry{DN: superior.String()}
@@ -779,12 +818,13 @@ func (server *Server) handleCompare(
 	message ldapwire.Message,
 	request ldapwire.CompareRequest,
 ) error {
-	if hasUnsupportedCriticalControl(message.Controls) {
+	controls, controlFailure := parseRequestControls(message.Controls)
+	if controlFailure != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationCompareResponse,
-			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
+			*controlFailure,
 		)
 	}
 	dn, err := directory.ParseDN(request.DN)
@@ -832,6 +872,15 @@ func (server *Server) handleCompare(
 			}
 			entry = withSubschemaReference(entry)
 		}
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.assertion,
+		); err != nil {
+			return err
+		}
 		if !server.allowed(
 			state.runtime,
 			tx,
@@ -869,17 +918,6 @@ func (server *Server) handleCompare(
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationCompareResponse, err)
 	}
 	return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationCompareResponse, result)
-}
-
-func (server *Server) writeControlPrecondition(controls []ldapwire.Control) *ldapwire.Result {
-	if hasUnsupportedCriticalControl(controls) {
-		result := ldapwire.ResultError(
-			ldapwire.ResultUnavailableCriticalExtension,
-			"unsupported critical control",
-		)
-		return &result
-	}
-	return nil
 }
 
 func validateNewEntry(entry directory.Entry, dn directory.DN) *ldapwire.Result {

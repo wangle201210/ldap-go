@@ -9,6 +9,21 @@ import (
 
 const maxFilterDepth = 64
 
+func DecodeFilter(value []byte) (directory.Filter, error) {
+	if len(value) == 0 {
+		return directory.Filter{}, malformed("filter value is empty")
+	}
+	reader := bytes.NewReader(value)
+	packet, err := ber.ReadPacket(reader)
+	if err != nil {
+		return directory.Filter{}, malformed("decode filter: %v", err)
+	}
+	if reader.Len() != 0 {
+		return directory.Filter{}, malformed("filter has trailing data")
+	}
+	return decodeFilter(packet, 0)
+}
+
 func decodeFilter(packet *ber.Packet, depth int) (directory.Filter, error) {
 	if depth > maxFilterDepth {
 		return directory.Filter{}, malformed("filter nesting exceeds %d", maxFilterDepth)

@@ -94,6 +94,88 @@ func TestReadMessageRejectsOversizedFrame(t *testing.T) {
 	}
 }
 
+func TestDecodeFilterRejectsTrailingPacket(t *testing.T) {
+	t.Parallel()
+
+	packet := ber.Encode(
+		ber.ClassContext,
+		ber.TypeConstructed,
+		ber.Tag(3),
+		nil,
+		"equalityMatch",
+	)
+	packet.AppendChild(ber.NewString(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		"uid",
+		"attribute",
+	))
+	packet.AppendChild(ber.NewString(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		"alice",
+		"assertion",
+	))
+	filter, err := DecodeFilter(packet.Bytes())
+	if err != nil {
+		t.Fatalf("DecodeFilter(): %v", err)
+	}
+	if filter.Kind != directory.FilterEquality ||
+		filter.Attribute != "uid" ||
+		string(filter.Assertion) != "alice" {
+		t.Fatalf("filter = %#v", filter)
+	}
+	if _, err := DecodeFilter(append(bytes.Clone(packet.Bytes()), 0x00)); !errors.Is(
+		err,
+		ErrMalformedMessage,
+	) {
+		t.Fatalf("DecodeFilter(trailing) error = %v", err)
+	}
+}
+
+func TestReadControlPreservesEmptyValuePresence(t *testing.T) {
+	t.Parallel()
+
+	unbind := ber.Encode(
+		ber.ClassApplication,
+		ber.TypePrimitive,
+		ApplicationUnbindRequest,
+		nil,
+		"UnbindRequest",
+	)
+	message := testMessage(10, unbind)
+	controls := ber.Encode(ber.ClassContext, ber.TypeConstructed, 0, nil, "controls")
+	control := ber.NewSequence("Control")
+	control.AppendChild(ber.NewString(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		"1.3.6.1.1.12",
+		"controlType",
+	))
+	control.AppendChild(ber.NewString(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		"",
+		"controlValue",
+	))
+	controls.AppendChild(control)
+	message.AppendChild(controls)
+
+	decoded, err := ReadMessage(bytes.NewReader(message.Bytes()), 1024)
+	if err != nil {
+		t.Fatalf("ReadMessage(): %v", err)
+	}
+	if len(decoded.Controls) != 1 ||
+		!decoded.Controls[0].HasValue ||
+		len(decoded.Controls[0].Value) != 0 {
+		t.Fatalf("controls = %#v", decoded.Controls)
+	}
+}
+
 func TestReadExtendedRequest(t *testing.T) {
 	t.Parallel()
 
