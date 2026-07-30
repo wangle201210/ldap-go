@@ -16,18 +16,18 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| BER framing and LDAPMessage | planned | RFC malformed-input corpus and client interoperability |
-| Bind: anonymous and simple | planned | RFC 4511/4513 plus OpenLDAP differential tests |
+| BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
+| Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
 | Bind: SASL | planned | mechanism matrix and channel-binding tests |
-| Search and SearchResultReference | planned | scope, deref, limits, attributes, typesOnly |
-| Filters and matching | planned | RFC 4515 corpus and schema-aware differential tests |
+| Search and SearchResultReference | partial | scope, deref, limits, attributes, typesOnly |
+| Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | planned | atomic modification and error-order differential tests |
 | Add | planned | parent/schema/ACL/operational-attribute tests |
 | Delete | planned | leaf/subtree/referral behavior tests |
 | ModifyDN | planned | rename/move/subtree and RDN-value tests |
 | Compare | planned | matching-rule and ACL disclosure tests |
 | Abandon and cancellation | planned | concurrent operation tests |
-| Unbind and disconnect notices | planned | connection-state tests |
+| Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | planned | topology differential tests |
 | LDAP URLs and attribute options | planned | RFC 4516 and binary/language option tests |
 
@@ -54,7 +54,7 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| DN/RDN parsing and normalization | planned | RFC 4514 corpus and OpenLDAP normalization |
+| DN/RDN parsing and normalization | partial | RFC 4514 corpus and OpenLDAP normalization |
 | Core syntaxes and matching rules | planned | RFC 4517 schema-aware corpus |
 | Standard operational attributes | planned | create/modify/rename differential tests |
 | Subschema subentry | planned | discovery and schema publication tests |
@@ -66,7 +66,7 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| OpenLDAP password schemes | planned | hash/verify vectors and migration tests |
+| OpenLDAP password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | planned | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
@@ -78,10 +78,10 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Transactional durable backend | planned | crash, atomicity, recovery, race tests |
+| Transactional durable backend | partial | crash, atomicity, recovery, race tests |
 | Multiple suffixes and subordinate DBs | planned | naming-context routing tests |
 | `cn=config` online configuration | planned | OpenLDAP LDIF import and online changes |
-| `slapcat` content LDIF import/export | planned | lossless fixtures and large-dataset tests |
+| `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
 | `slapcat` `cn=config` import | planned | boot from imported configuration |
 | Backup, restore, index rebuild, check | planned | fault-injection and round-trip tests |
 | Proxy, relay, monitor, and null backends | planned | OpenLDAP behavior suites |
@@ -131,9 +131,25 @@ rebuilt by `ldap-go`.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Server daemon and config validation | planned | lifecycle and config diagnostics |
+| Server daemon and config validation | partial | lifecycle and config diagnostics |
 | `slapadd` / `slapcat` equivalents | planned | OpenLDAP LDIF round trips |
 | `slapindex` / `slaptest` / `slapdn` | planned | output and exit-code differential tests |
 | LDAP client tools | planned | option and protocol interoperability |
 | Load balancer tooling | planned | `lloadd` configuration tests |
 
+## Implemented subset evidence
+
+The first runnable subset includes bounded BER framing; LDAPv3 anonymous/simple
+Bind; Root DSE; base, one-level, and subtree Search; boolean, equality,
+presence, substring, ordering, approximate, and basic extensible filters;
+Unbind; a transactional bbolt backend; and atomic content LDIF import.
+
+Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
+`{SSHA}`, `{MD5}`, and `{SMD5}`. Until ordered OpenLDAP ACL evaluation is
+implemented, non-root search responses always suppress `userPassword`.
+
+Evidence currently consists of package tests, TCP interoperability tests using
+`github.com/go-ldap/ldap/v3`, and manual process-level searches using OpenLDAP
+2.6.13 `ldapsearch`. Rows remain `partial` because schema-aware matching,
+aliases/referrals, controls, ACLs, SASL, writes, and full differential fixtures
+are still pending.

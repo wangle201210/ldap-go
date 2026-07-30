@@ -1,0 +1,319 @@
+package ldapwire
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+
+	ber "github.com/go-asn1-ber/asn1-ber"
+	"github.com/wangle201210/ldap-go/internal/directory"
+)
+
+var ErrMalformedMessage = errors.New("malformed LDAP message")
+
+func ReadMessage(reader io.Reader, maxSize int64) (Message, error) {
+	frame, err := readFrame(reader, maxSize)
+	if err != nil {
+		return Message{}, err
+	}
+	packet, err := ber.DecodePacketErr(frame)
+	if err != nil {
+		return Message{}, malformed("decode BER: %v", err)
+	}
+	return decodeMessage(packet)
+}
+
+func readFrame(reader io.Reader, maxSize int64) ([]byte, error) {
+	if maxSize <= 0 {
+		maxSize = DefaultMaxMessageSize
+	}
+
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return nil, err
+	}
+	if header[0] != 0x30 {
+		return nil, malformed("LDAPMessage must be a BER sequence")
+	}
+
+	var contentLength uint64
+	if header[1]&0x80 == 0 {
+		contentLength = uint64(header[1])
+	} else {
+		lengthBytes := int(header[1] & 0x7f)
+		if lengthBytes == 0 {
+			return nil, malformed("indefinite BER length is not allowed")
+		}
+		if lengthBytes > 8 {
+			return nil, malformed("BER length uses %d octets", lengthBytes)
+		}
+		encodedLength := make([]byte, lengthBytes)
+		if _, err := io.ReadFull(reader, encodedLength); err != nil {
+			return nil, err
+		}
+		if encodedLength[0] == 0 {
+			return nil, malformed("BER length is not minimally encoded")
+		}
+		header = append(header, encodedLength...)
+		for _, value := range encodedLength {
+			if contentLength > (math.MaxUint64-uint64(value))/256 {
+				return nil, malformed("BER length overflows")
+			}
+			contentLength = contentLength*256 + uint64(value)
+		}
+		if contentLength < 128 {
+			return nil, malformed("BER long-form length is not minimal")
+		}
+	}
+
+	if contentLength > uint64(maxSize) || uint64(len(header)) > uint64(maxSize)-contentLength {
+		return nil, malformed("message exceeds %d-byte limit", maxSize)
+	}
+	frame := make([]byte, len(header)+int(contentLength))
+	copy(frame, header)
+	if _, err := io.ReadFull(reader, frame[len(header):]); err != nil {
+		return nil, err
+	}
+	return frame, nil
+}
+
+func decodeMessage(packet *ber.Packet) (Message, error) {
+	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
+		return Message{}, malformed("LDAPMessage is not a sequence")
+	}
+	if len(packet.Children) < 2 || len(packet.Children) > 3 {
+		return Message{}, malformed("LDAPMessage has %d elements", len(packet.Children))
+	}
+
+	id, err := packetInteger(packet.Children[0])
+	if err != nil || id <= 0 || id > math.MaxInt32 {
+		return Message{}, malformed("invalid message ID")
+	}
+
+	opPacket := packet.Children[1]
+	if opPacket.ClassType != ber.ClassApplication {
+		return Message{}, malformed("protocol operation is not application class")
+	}
+
+	var request Request
+	switch uint64(opPacket.Tag) {
+	case ApplicationBindRequest:
+		request, err = decodeBindRequest(opPacket)
+	case ApplicationSearchRequest:
+		request, err = decodeSearchRequest(opPacket)
+	case ApplicationUnbindRequest:
+		if opPacket.TagType != ber.TypePrimitive || opPacket.Data.Len() != 0 {
+			err = malformed("invalid UnbindRequest")
+		} else {
+			request = UnbindRequest{}
+		}
+	default:
+		request = UnsupportedRequest{Tag: uint64(opPacket.Tag)}
+	}
+	if err != nil {
+		return Message{}, err
+	}
+
+	message := Message{ID: id, Request: request}
+	if len(packet.Children) == 3 {
+		message.Controls, err = decodeControls(packet.Children[2])
+		if err != nil {
+			return Message{}, err
+		}
+	}
+	return message, nil
+}
+
+func decodeBindRequest(packet *ber.Packet) (BindRequest, error) {
+	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 3 {
+		return BindRequest{}, malformed("invalid BindRequest")
+	}
+	version, err := packetInteger(packet.Children[0])
+	if err != nil || version < 0 || version > math.MaxInt32 {
+		return BindRequest{}, malformed("invalid BindRequest version")
+	}
+	name, err := packetString(packet.Children[1])
+	if err != nil {
+		return BindRequest{}, malformed("invalid BindRequest name")
+	}
+
+	authPacket := packet.Children[2]
+	if authPacket.ClassType != ber.ClassContext {
+		return BindRequest{}, malformed("invalid BindRequest authentication")
+	}
+	request := BindRequest{Version: int(version), Name: name}
+	switch authPacket.Tag {
+	case 0:
+		if authPacket.TagType != ber.TypePrimitive {
+			return BindRequest{}, malformed("simple authentication must be primitive")
+		}
+		request.Authentication.Simple = bytes.Clone(authPacket.Data.Bytes())
+	case 3:
+		if authPacket.TagType != ber.TypeConstructed ||
+			len(authPacket.Children) < 1 || len(authPacket.Children) > 2 {
+			return BindRequest{}, malformed("invalid SASL credentials")
+		}
+		mechanism, err := packetString(authPacket.Children[0])
+		if err != nil || mechanism == "" {
+			return BindRequest{}, malformed("invalid SASL mechanism")
+		}
+		request.Authentication.IsSASL = true
+		request.Authentication.SASLMechanism = mechanism
+		if len(authPacket.Children) == 2 {
+			credentials, err := packetBytes(authPacket.Children[1])
+			if err != nil {
+				return BindRequest{}, malformed("invalid SASL credentials")
+			}
+			request.Authentication.SASLCredentials = credentials
+		}
+	default:
+		return BindRequest{}, malformed("unknown authentication choice %d", authPacket.Tag)
+	}
+	return request, nil
+}
+
+func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
+	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 8 {
+		return SearchRequest{}, malformed("invalid SearchRequest")
+	}
+
+	baseDN, err := packetString(packet.Children[0])
+	if err != nil {
+		return SearchRequest{}, malformed("invalid search base")
+	}
+	scope, err := packetInteger(packet.Children[1])
+	if err != nil || scope < 0 || scope > 2 {
+		return SearchRequest{}, malformed("invalid search scope")
+	}
+	derefAliases, err := packetInteger(packet.Children[2])
+	if err != nil || derefAliases < 0 || derefAliases > 3 {
+		return SearchRequest{}, malformed("invalid alias dereference mode")
+	}
+	sizeLimit, err := nonNegativeInt(packet.Children[3], "size limit")
+	if err != nil {
+		return SearchRequest{}, err
+	}
+	timeLimit, err := nonNegativeInt(packet.Children[4], "time limit")
+	if err != nil {
+		return SearchRequest{}, err
+	}
+	typesOnly, err := packetBoolean(packet.Children[5])
+	if err != nil {
+		return SearchRequest{}, malformed("invalid typesOnly value")
+	}
+	filter, err := decodeFilter(packet.Children[6], 0)
+	if err != nil {
+		return SearchRequest{}, err
+	}
+
+	attributesPacket := packet.Children[7]
+	if !isPacket(attributesPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
+		return SearchRequest{}, malformed("invalid requested attributes")
+	}
+	attributes := make([]string, 0, len(attributesPacket.Children))
+	for _, attributePacket := range attributesPacket.Children {
+		attribute, err := packetString(attributePacket)
+		if err != nil {
+			return SearchRequest{}, malformed("invalid requested attribute")
+		}
+		attributes = append(attributes, attribute)
+	}
+
+	return SearchRequest{
+		BaseDN:       baseDN,
+		Scope:        directory.Scope(scope),
+		DerefAliases: int(derefAliases),
+		SizeLimit:    sizeLimit,
+		TimeLimit:    timeLimit,
+		TypesOnly:    typesOnly,
+		Filter:       filter,
+		Attributes:   attributes,
+	}, nil
+}
+
+func decodeControls(packet *ber.Packet) ([]Control, error) {
+	if !isPacket(packet, ber.ClassContext, ber.TypeConstructed, 0) {
+		return nil, malformed("invalid controls wrapper")
+	}
+	controls := make([]Control, 0, len(packet.Children))
+	for _, controlPacket := range packet.Children {
+		if !isPacket(controlPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
+			len(controlPacket.Children) < 1 || len(controlPacket.Children) > 3 {
+			return nil, malformed("invalid control")
+		}
+		oid, err := packetString(controlPacket.Children[0])
+		if err != nil || oid == "" {
+			return nil, malformed("invalid control OID")
+		}
+		control := Control{OID: oid}
+		position := 1
+		if position < len(controlPacket.Children) &&
+			controlPacket.Children[position].Tag == ber.TagBoolean {
+			control.Critical, err = packetBoolean(controlPacket.Children[position])
+			if err != nil {
+				return nil, malformed("invalid control criticality")
+			}
+			position++
+		}
+		if position < len(controlPacket.Children) {
+			control.Value, err = packetBytes(controlPacket.Children[position])
+			if err != nil {
+				return nil, malformed("invalid control value")
+			}
+			position++
+		}
+		if position != len(controlPacket.Children) {
+			return nil, malformed("invalid control element order")
+		}
+		controls = append(controls, control)
+	}
+	return controls, nil
+}
+
+func nonNegativeInt(packet *ber.Packet, name string) (int, error) {
+	value, err := packetInteger(packet)
+	if err != nil || value < 0 || value > math.MaxInt32 {
+		return 0, malformed("invalid %s", name)
+	}
+	return int(value), nil
+}
+
+func packetInteger(packet *ber.Packet) (int64, error) {
+	if packet.ClassType != ber.ClassUniversal ||
+		(packet.Tag != ber.TagInteger && packet.Tag != ber.TagEnumerated) ||
+		packet.TagType != ber.TypePrimitive ||
+		packet.Data.Len() == 0 {
+		return 0, errors.New("not an integer")
+	}
+	return ber.ParseInt64(packet.Data.Bytes())
+}
+
+func packetBoolean(packet *ber.Packet) (bool, error) {
+	if !isPacket(packet, ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean) ||
+		packet.Data.Len() != 1 {
+		return false, errors.New("not a boolean")
+	}
+	return packet.Data.Bytes()[0] != 0, nil
+}
+
+func packetString(packet *ber.Packet) (string, error) {
+	value, err := packetBytes(packet)
+	return string(value), err
+}
+
+func packetBytes(packet *ber.Packet) ([]byte, error) {
+	if !isPacket(packet, ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString) {
+		return nil, errors.New("not an octet string")
+	}
+	return bytes.Clone(packet.Data.Bytes()), nil
+}
+
+func isPacket(packet *ber.Packet, class ber.Class, tagType ber.Type, tag ber.Tag) bool {
+	return packet != nil && packet.ClassType == class && packet.TagType == tagType && packet.Tag == tag
+}
+
+func malformed(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrMalformedMessage, fmt.Sprintf(format, args...))
+}

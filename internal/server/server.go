@@ -1,0 +1,318 @@
+package server
+
+import (
+	"context"
+	"crypto/subtle"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/wangle201210/ldap-go/internal/auth"
+	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+const defaultSearchLimit = 1000
+
+type Config struct {
+	Store            storage.Store
+	MaxMessageSize   int64
+	MaxSearchEntries int
+	RootDN           string
+	RootPassword     []byte
+	Logger           *slog.Logger
+}
+
+type Server struct {
+	config Config
+	rootDN *directory.DN
+
+	mu          sync.Mutex
+	connections map[net.Conn]struct{}
+	wg          sync.WaitGroup
+}
+
+func New(config Config) (*Server, error) {
+	if config.Store == nil {
+		return nil, errors.New("store is required")
+	}
+	if config.MaxMessageSize <= 0 {
+		config.MaxMessageSize = ldapwire.DefaultMaxMessageSize
+	}
+	if config.MaxSearchEntries <= 0 {
+		config.MaxSearchEntries = defaultSearchLimit
+	}
+	if config.Logger == nil {
+		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	var rootDN *directory.DN
+	if config.RootDN != "" {
+		parsed, err := directory.ParseDN(config.RootDN)
+		if err != nil {
+			return nil, fmt.Errorf("root DN: %w", err)
+		}
+		if len(config.RootPassword) == 0 {
+			return nil, errors.New("root password is required when root DN is configured")
+		}
+		rootDN = &parsed
+	}
+
+	return &Server{
+		config:      config,
+		rootDN:      rootDN,
+		connections: make(map[net.Conn]struct{}),
+	}, nil
+}
+
+func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
+	if listener == nil {
+		return errors.New("listener is required")
+	}
+
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+			server.closeConnections()
+		case <-stop:
+		}
+	}()
+	defer close(stop)
+
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				server.wg.Wait()
+				return nil
+			}
+			return fmt.Errorf("accept LDAP connection: %w", err)
+		}
+
+		server.mu.Lock()
+		server.connections[connection] = struct{}{}
+		server.mu.Unlock()
+		server.wg.Add(1)
+		go server.serveConnection(ctx, connection)
+	}
+}
+
+func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
+	defer server.wg.Done()
+	defer func() {
+		server.mu.Lock()
+		delete(server.connections, connection)
+		server.mu.Unlock()
+		_ = connection.Close()
+	}()
+
+	state := connectionState{}
+	for {
+		message, err := ldapwire.ReadMessage(connection, server.config.MaxMessageSize)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				return
+			}
+			server.config.Logger.Debug("closing malformed LDAP connection", "error", err)
+			_ = ldapwire.Write(connection, ldapwire.EncodeNoticeOfDisconnection(
+				ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
+			))
+			return
+		}
+
+		closeConnection, err := server.dispatch(ctx, connection, &state, message)
+		if err != nil {
+			server.config.Logger.Debug("LDAP request failed", "message_id", message.ID, "error", err)
+			return
+		}
+		if closeConnection {
+			return
+		}
+	}
+}
+
+func (server *Server) dispatch(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+) (bool, error) {
+	switch request := message.Request.(type) {
+	case ldapwire.UnbindRequest:
+		return true, nil
+	case ldapwire.BindRequest:
+		return false, server.handleBind(ctx, connection, state, message, request)
+	case ldapwire.SearchRequest:
+		return false, server.handleSearch(ctx, connection, state, message, request)
+	case ldapwire.UnsupportedRequest:
+		if request.Tag == ldapwire.ApplicationAbandonRequest {
+			return false, nil
+		}
+		responseTag, responds := responseTagFor(request.Tag)
+		if !responds {
+			return false, nil
+		}
+		return false, ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			responseTag,
+			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "operation is not implemented"),
+			nil,
+		))
+	default:
+		return false, errors.New("unknown request type")
+	}
+}
+
+func (server *Server) handleBind(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.BindRequest,
+) error {
+	state.boundDN = ""
+	if hasUnsupportedCriticalControl(message.Controls) {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
+			nil,
+		))
+	}
+	if request.Version != 3 {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultProtocolError, "only LDAPv3 is supported"),
+			nil,
+		))
+	}
+	if request.Authentication.IsSASL {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultAuthMethodNotSupported, "SASL is not implemented"),
+			nil,
+		))
+	}
+
+	authenticated, err := server.authenticate(ctx, request.Name, request.Authentication.Simple)
+	if err != nil {
+		return err
+	}
+	if !authenticated {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultInvalidCredentials, ""),
+			nil,
+		))
+	}
+	state.boundDN = request.Name
+	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+		message.ID,
+		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		nil,
+	))
+}
+
+func (server *Server) authenticate(ctx context.Context, rawDN string, password []byte) (bool, error) {
+	if rawDN == "" {
+		return len(password) == 0, nil
+	}
+	if len(password) == 0 {
+		return false, nil
+	}
+	dn, err := directory.ParseDN(rawDN)
+	if err != nil {
+		return false, nil
+	}
+
+	if server.rootDN != nil && server.rootDN.Equal(dn) {
+		return len(password) == len(server.config.RootPassword) &&
+			subtle.ConstantTimeCompare(password, server.config.RootPassword) == 1, nil
+	}
+
+	var authenticated bool
+	err = server.config.Store.View(ctx, func(tx storage.Reader) error {
+		entry, err := tx.Get(dn)
+		if errors.Is(err, storage.ErrEntryNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, stored := range entry.Values("userPassword") {
+			if auth.VerifyPassword(stored, password) {
+				authenticated = true
+			}
+		}
+		return nil
+	})
+	return authenticated, err
+}
+
+func (server *Server) closeConnections() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	for connection := range server.connections {
+		_ = connection.Close()
+	}
+}
+
+type connectionState struct {
+	boundDN string
+}
+
+func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {
+	for _, control := range controls {
+		if control.Critical {
+			return true
+		}
+	}
+	return false
+}
+
+func responseTagFor(requestTag uint64) (uint64, bool) {
+	switch requestTag {
+	case ldapwire.ApplicationModifyRequest,
+		ldapwire.ApplicationAddRequest,
+		ldapwire.ApplicationDeleteRequest,
+		ldapwire.ApplicationModifyDNRequest,
+		ldapwire.ApplicationCompareRequest:
+		return requestTag + 1, true
+	case ldapwire.ApplicationExtendedRequest:
+		return ldapwire.ApplicationExtendedResponse, true
+	default:
+		return 0, false
+	}
+}
+
+func effectiveSearchLimit(serverLimit, requestLimit int) int {
+	if requestLimit > 0 && requestLimit < serverLimit {
+		return requestLimit
+	}
+	return serverLimit
+}
+
+func timeLimitDeadline(seconds int) time.Time {
+	if seconds <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(seconds) * time.Second)
+}
+
+func expired(deadline time.Time) bool {
+	return !deadline.IsZero() && time.Now().After(deadline)
+}
+
+func (server *Server) isRoot(rawDN string) bool {
+	if server.rootDN == nil || rawDN == "" {
+		return false
+	}
+	dn, err := directory.ParseDN(rawDN)
+	return err == nil && server.rootDN.Equal(dn)
+}
