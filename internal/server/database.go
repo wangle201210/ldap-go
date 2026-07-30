@@ -27,6 +27,7 @@ type runtimeDatabase struct {
 	configDNKey     string
 	serverSideSort  bool
 	sortMaxKeys     int
+	sortLimiter     *serverSideSortLimiter
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -249,26 +250,39 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 
-		maxKeys := defaultServerSideSortMaxKeys
-		values := entry.Values("olcSssVlvMaxKeys")
-		if len(values) > 1 {
-			return fmt.Errorf(
-				"%s olcSssVlvMaxKeys must be single-valued",
-				entry.DN,
-			)
+		maximum, err := singleNonnegativeInteger(
+			entry,
+			"olcSssVlvMax",
+			defaultServerSideSortMax,
+		)
+		if err != nil {
+			return err
 		}
-		if len(values) == 1 {
-			maxKeys, err = strconv.Atoi(strings.TrimSpace(string(values[0])))
-			if err != nil || maxKeys < 0 {
-				return fmt.Errorf(
-					"%s olcSssVlvMaxKeys has invalid value %q",
-					entry.DN,
-					values[0],
-				)
-			}
+		if maximum == 0 {
+			maximum = defaultServerSideSortMax
+		}
+		maxKeys, err := singleNonnegativeInteger(
+			entry,
+			"olcSssVlvMaxKeys",
+			defaultServerSideSortMaxKeys,
+		)
+		if err != nil {
+			return err
+		}
+		maxPerConn, err := singleNonnegativeInteger(
+			entry,
+			"olcSssVlvMaxPerConn",
+			defaultServerSideSortMaxPerConn,
+		)
+		if err != nil {
+			return err
 		}
 		database.serverSideSort = true
 		database.sortMaxKeys = maxKeys
+		database.sortLimiter = &serverSideSortLimiter{
+			max:        maximum,
+			maxPerConn: maxPerConn,
+		}
 		return nil
 	})
 }
@@ -305,6 +319,58 @@ func serverSideSortSettingsForDatabase(
 		}
 	}
 	return maxKeys, enabled
+}
+
+func serverSideSortLimitersForDatabase(
+	databases []runtimeDatabase,
+	databaseIndex int,
+) []*serverSideSortLimiter {
+	var limiters []*serverSideSortLimiter
+	if databaseIndex >= 0 &&
+		databaseIndex < len(databases) &&
+		databases[databaseIndex].serverSideSort &&
+		databases[databaseIndex].sortLimiter != nil {
+		limiters = append(limiters, databases[databaseIndex].sortLimiter)
+	}
+	for index := range databases {
+		if databaseType(databases[index].name) == "frontend" &&
+			databases[index].serverSideSort &&
+			databases[index].sortLimiter != nil {
+			if index != databaseIndex {
+				limiters = append(limiters, databases[index].sortLimiter)
+			}
+			break
+		}
+	}
+	return limiters
+}
+
+func singleNonnegativeInteger(
+	entry directory.Entry,
+	attribute string,
+	defaultValue int,
+) (int, error) {
+	values := entry.Values(attribute)
+	if len(values) == 0 {
+		return defaultValue, nil
+	}
+	if len(values) != 1 {
+		return 0, fmt.Errorf(
+			"%s %s must be single-valued",
+			entry.DN,
+			attribute,
+		)
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(values[0])))
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf(
+			"%s %s has invalid value %q",
+			entry.DN,
+			attribute,
+			values[0],
+		)
+	}
+	return value, nil
 }
 
 func singleBoolean(

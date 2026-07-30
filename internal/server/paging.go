@@ -41,6 +41,7 @@ type pagedSearchState struct {
 	cursor      pagedSearchCursor
 	sorted      *pagedSortedSearch
 	count       int
+	sortLease   *serverSideSortLease
 }
 
 type pagedSearchContext struct {
@@ -51,6 +52,7 @@ type pagedSearchContext struct {
 	sorted      *pagedSortedSearch
 	count       int
 	abandoned   bool
+	sortLease   *serverSideSortLease
 }
 
 func preparePagedSearch(
@@ -70,7 +72,7 @@ func preparePagedSearch(
 		controls,
 	)
 	if len(paging.cookie) == 0 {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		if paging.size == 0 || paging.size >= totalLimit {
 			return nil, nil
 		}
@@ -82,7 +84,7 @@ func preparePagedSearch(
 	}
 
 	if len(paging.cookie) != pagedResultsCookieLength {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		return nil, pagingResult(
 			ldapwire.ResultProtocolError,
 			"paged results cookie is invalid",
@@ -93,7 +95,7 @@ func preparePagedSearch(
 		!bytes.Equal(paging.cookie, current.cookie) ||
 		current.runtime != state.runtime ||
 		current.fingerprint != fingerprint {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		return nil, pagingResult(
 			ldapwire.ResultUnwillingToPerform,
 			"paged results cookie is invalid or old",
@@ -107,9 +109,10 @@ func preparePagedSearch(
 		cursor:      current.cursor,
 		sorted:      clonePagedSortedSearch(current.sorted),
 		count:       current.count,
+		sortLease:   current.sortLease,
 	}
 	if paging.size == 0 {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		context.abandoned = true
 	}
 	return context, nil
@@ -127,11 +130,11 @@ func completePagedSearch(
 		return nil, nil
 	}
 	if result.Code != ldapwire.ResultSuccess {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		return nil, nil
 	}
 	if hasMore && !cursor.valid && paging.sorted == nil {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 		return nil, errors.New("paged search continuation has no cursor")
 	}
 
@@ -140,7 +143,7 @@ func completePagedSearch(
 		var err error
 		cookie, err = newPagedResultsCookie()
 		if err != nil {
-			state.pagedSearch = nil
+			clearPagedSearch(state)
 			return nil, err
 		}
 		state.pagedSearch = &pagedSearchState{
@@ -150,9 +153,10 @@ func completePagedSearch(
 			cursor:      cursor,
 			sorted:      clonePagedSortedSearch(paging.sorted),
 			count:       paging.count + entryCount,
+			sortLease:   paging.sortLease,
 		}
 	} else {
-		state.pagedSearch = nil
+		clearPagedSearch(state)
 	}
 	return []ldapwire.Control{{
 		OID: pagedResultsControlOID,
@@ -162,6 +166,13 @@ func completePagedSearch(
 		),
 		HasValue: true,
 	}}, nil
+}
+
+func clearPagedSearch(state *connectionState) {
+	if state.pagedSearch != nil {
+		releaseServerSideSortLease(state, state.pagedSearch.sortLease)
+	}
+	state.pagedSearch = nil
 }
 
 func clonePagedSortedSearch(source *pagedSortedSearch) *pagedSortedSearch {

@@ -3,13 +3,30 @@ package server
 import (
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
 )
 
-const defaultServerSideSortMaxKeys = 5
+const (
+	defaultServerSideSortMax        = 8
+	defaultServerSideSortMaxKeys    = 5
+	defaultServerSideSortMaxPerConn = 5
+)
+
+type serverSideSortLimiter struct {
+	mu         sync.Mutex
+	max        int
+	maxPerConn int
+	active     int
+}
+
+type serverSideSortLease struct {
+	limiters []*serverSideSortLimiter
+	released bool
+}
 
 type serverSideSortRequest struct {
 	keys     []ldapwire.SortKey
@@ -41,6 +58,83 @@ type searchCandidate struct {
 type sortValue struct {
 	value   []byte
 	present bool
+}
+
+func acquireServerSideSortLease(
+	state *connectionState,
+	databaseIndex int,
+) (*serverSideSortLease, bool) {
+	limiters := serverSideSortLimitersForDatabase(
+		state.runtime.databases,
+		databaseIndex,
+	)
+	if len(limiters) == 0 {
+		return nil, true
+	}
+	for _, limiter := range limiters {
+		if state.sortSessionCounts[limiter] >= limiter.maxPerConn {
+			return nil, false
+		}
+	}
+
+	for _, limiter := range limiters {
+		limiter.mu.Lock()
+	}
+	allowed := true
+	for _, limiter := range limiters {
+		if limiter.active >= limiter.max {
+			allowed = false
+			break
+		}
+	}
+	if allowed {
+		for _, limiter := range limiters {
+			limiter.active++
+		}
+	}
+	for index := len(limiters) - 1; index >= 0; index-- {
+		limiters[index].mu.Unlock()
+	}
+	if !allowed {
+		return nil, false
+	}
+	if state.sortSessionCounts == nil {
+		state.sortSessionCounts = make(map[*serverSideSortLimiter]int)
+	}
+	for _, limiter := range limiters {
+		state.sortSessionCounts[limiter]++
+	}
+	return &serverSideSortLease{limiters: limiters}, true
+}
+
+func releaseServerSideSortLease(
+	state *connectionState,
+	lease *serverSideSortLease,
+) {
+	if lease == nil || lease.released {
+		return
+	}
+	lease.released = true
+	for _, limiter := range lease.limiters {
+		if count := state.sortSessionCounts[limiter]; count <= 1 {
+			delete(state.sortSessionCounts, limiter)
+		} else {
+			state.sortSessionCounts[limiter] = count - 1
+		}
+		limiter.mu.Lock()
+		limiter.active--
+		limiter.mu.Unlock()
+	}
+	if len(state.sortSessionCounts) == 0 {
+		state.sortSessionCounts = nil
+	}
+}
+
+func serverSideSortBusyResult() ldapwire.Result {
+	return ldapwire.ResultError(
+		ldapwire.ResultBusy,
+		"Other sort requests already in progress",
+	)
 }
 
 func prepareServerSideSort(

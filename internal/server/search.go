@@ -21,6 +21,11 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
+	var sortLease *serverSideSortLease
+	defer func() {
+		releaseServerSideSortLease(state, sortLease)
+	}()
+
 	controlSupport := supportsAssertion | supportsPagedResults
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
@@ -162,7 +167,6 @@ func (server *Server) handleSearch(
 			)
 		}
 		if controls.sorting == nil {
-			state.virtualListView = nil
 			failure := newVirtualListViewFailure(
 				openLDAPVLVSortControlMissing,
 				"sort control is required with VLV",
@@ -205,15 +209,32 @@ func (server *Server) handleSearch(
 		}
 		view := virtualListView.state
 		if view == nil {
+			lease, ok := acquireServerSideSortLease(state, -1)
+			if !ok {
+				return server.writeSearchResult(
+					connection,
+					message.ID,
+					state,
+					nil,
+					nil,
+					nil,
+					serverSideSortBusyResult(),
+					pagedSearchCursor{},
+					false,
+				)
+			}
+			sortLease = lease
 			var err error
 			view, err = startVirtualListView(
 				state,
 				virtualListView,
 				nil,
+				sortLease,
 			)
 			if err != nil {
 				return fmt.Errorf("create special-entry VLV context: %w", err)
 			}
+			sortLease = nil
 		}
 		_, _, target, code, windowErr := virtualListViewWindow(
 			state.runtime.schema,
@@ -263,6 +284,23 @@ func (server *Server) handleSearch(
 			false,
 			virtualListViewResponseControl(response),
 		)
+	}
+	if (rootDSESearch || subschemaSearch) && sorting.active() {
+		lease, ok := acquireServerSideSortLease(state, -1)
+		if !ok {
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				paging,
+				nil,
+				nil,
+				serverSideSortBusyResult(),
+				pagedSearchCursor{},
+				false,
+			)
+		}
+		sortLease = lease
 	}
 	if rootDSESearch {
 		return server.searchRootDSE(
@@ -370,7 +408,6 @@ func (server *Server) handleSearch(
 			)
 		}
 		if controls.sorting == nil {
-			state.virtualListView = nil
 			failure := newVirtualListViewFailure(
 				openLDAPVLVSortControlMissing,
 				"sort control is required with VLV",
@@ -454,7 +491,7 @@ func (server *Server) handleSearch(
 				end,
 			)
 			if err != nil {
-				state.virtualListView = nil
+				discardVirtualListView(state, view)
 				return fmt.Errorf("read VLV window: %w", err)
 			}
 			result := ldapwire.Result{Code: ldapwire.ResultSuccess}
@@ -506,7 +543,7 @@ func (server *Server) handleSearch(
 			deadline,
 		)
 		if err != nil {
-			state.pagedSearch = nil
+			clearPagedSearch(state)
 			return fmt.Errorf("continue sorted paged search: %w", err)
 		}
 		return server.writeSearchResult(
@@ -520,6 +557,26 @@ func (server *Server) handleSearch(
 			pagedSearchCursor{},
 			hasMore,
 		)
+	}
+	if sorting.active() {
+		lease, ok := acquireServerSideSortLease(
+			state,
+			routes[0].databaseIndex,
+		)
+		if !ok {
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				paging,
+				nil,
+				nil,
+				serverSideSortBusyResult(),
+				pagedSearchCursor{},
+				false,
+			)
+		}
+		sortLease = lease
 	}
 
 	candidates := make([]searchCandidate, 0)
@@ -713,7 +770,7 @@ func (server *Server) handleSearch(
 	})
 	if err != nil && !errors.Is(err, errStopSearch) {
 		if paging != nil {
-			state.pagedSearch = nil
+			clearPagedSearch(state)
 		}
 		return fmt.Errorf("search directory: %w", err)
 	}
@@ -744,7 +801,6 @@ func (server *Server) handleSearch(
 
 	if virtualListView != nil {
 		if !sorting.active() {
-			state.virtualListView = nil
 			failure := newVirtualListViewFailure(
 				sorting.result,
 				"server-side sorting could not be performed for VLV",
@@ -768,11 +824,12 @@ func (server *Server) handleSearch(
 			state,
 			virtualListView,
 			candidates,
+			sortLease,
 		)
 		if err != nil {
-			state.virtualListView = nil
 			return fmt.Errorf("create VLV context: %w", err)
 		}
+		sortLease = nil
 		start, end, target, code, windowErr := virtualListViewWindow(
 			state.runtime.schema,
 			virtualListView.request,
@@ -869,7 +926,7 @@ func (server *Server) handleSearch(
 			last := candidates[len(candidates)-1]
 			lastDN, parseErr := directory.ParseDN(last.dn)
 			if parseErr != nil {
-				state.pagedSearch = nil
+				clearPagedSearch(state)
 				return fmt.Errorf("parse paged result DN %q: %w", last.dn, parseErr)
 			}
 			lastCursor = pagedSearchCursor{
@@ -881,7 +938,14 @@ func (server *Server) handleSearch(
 		entries = selectedSearchEntries(candidates)
 	}
 
-	return server.writeSearchResult(
+	if sorting.active() &&
+		paging != nil &&
+		paging.sorted != nil &&
+		hasMore &&
+		result.Code == ldapwire.ResultSuccess {
+		paging.sortLease = sortLease
+	}
+	writeErr := server.writeSearchResult(
 		connection,
 		message.ID,
 		state,
@@ -892,6 +956,12 @@ func (server *Server) handleSearch(
 		lastCursor,
 		hasMore,
 	)
+	if sortLease != nil &&
+		state.pagedSearch != nil &&
+		state.pagedSearch.sortLease == sortLease {
+		sortLease = nil
+	}
+	return writeErr
 }
 
 func selectedSearchEntries(candidates []searchCandidate) []directory.Entry {
@@ -1186,7 +1256,7 @@ func (server *Server) searchSubschema(
 	candidate, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		if paging != nil {
-			state.pagedSearch = nil
+			clearPagedSearch(state)
 		}
 		return fmt.Errorf("parse subschema DN: %w", err)
 	}

@@ -43,7 +43,7 @@ No row may become `compatible` based only on unit tests.
 | Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
 | Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
 | Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
-| VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, context, ACL, limit, and error tests pass |
+| VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
 | Subentries | planned | RFC 3672 visibility tests |
 | Don't Use Copy | planned | RFC 6171 topology tests |
 | LDAP Sync | planned | RFC 4533 refresh/persist interoperability |
@@ -107,7 +107,7 @@ rebuilt by `ldap-go`.
 | ppolicy | planned | full password policy suite |
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
-| sssvlv | partial | RFC 2891 sorting, VLV, and RFC 2696 interaction pass; concurrency limits remain |
+| sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
 | syncprov | planned | RFC 4533 provider suite |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
@@ -246,12 +246,20 @@ OpenLDAP-compatible request failures return direct LDAP result codes 16, 18,
 and 53 for unknown attributes, unavailable ordering rules, and excessive key
 counts; duplicate alias keys remain accepted. Process-level differential tests
 against OpenLDAP 2.6.13 using `ldapsearch -E sss -E pr` pass for multi-key,
-reverse, absent-value, paging, and error cases. `olcSssVlvMax`,
-`olcSssVlvMaxPerConn`, and their concurrency accounting remain pending. One
-known differential remains for sort plus paging plus a total size limit:
+reverse, absent-value, paging, and error cases. `olcSssVlvMaxKeys`,
+`olcSssVlvMax`, and `olcSssVlvMaxPerConn` are loaded per overlay with defaults
+of five, eight, and five. Eight matches half of OpenLDAP's default 16-worker
+pool. Regular sorts hold a transient lease; sorted paging and VLV retain leases
+for their cookie/context lifetime. A target and frontend overlay each account
+for the same request, and saturation returns OpenLDAP's LDAP `busy` result 51
+without sort, paging, or VLV response controls.
+
+One known differential remains for sort plus paging plus a total size limit:
 OpenLDAP's overlay can report `sizeLimitExceeded` on an earlier page, while
 `ldap-go` reports it when the cumulative limit is reached; both return the same
-globally sorted top-N entries.
+globally sorted top-N entries. Concurrent operations on one LDAP connection
+remain pending together with Abandon support, so the `sssvlv` row remains
+partial.
 
 Virtual list views from `draft-ietf-ldapext-ldapv3-vlv-09` use strict BER and
 are advertised with the `sssvlv` overlay. They require an RFC 2891 sort control
@@ -263,16 +271,15 @@ an out-of-range offset; `ldap-go` follows those deployed values.
 
 Each successful initial request creates a random 16-byte, connection-local
 context bound to the authenticated identity, search semantics, sort request,
-and runtime configuration. Continuations retain the initially sorted route/DN
-set, exclude later additions, skip deletions, re-read current values, reapply
-entry and attribute ACLs, and enforce the search size limit for every window.
-Bind and StartTLS invalidate the context. Process-level tests with OpenLDAP
-2.6.13 `ldapsearch` pass discovery, offset windows, response controls, and
-missing-sort errors. The current implementation retains only the latest VLV
-context on a connection; OpenLDAP's default `olcSssVlvMaxPerConn` permits five.
-Multiple simultaneous contexts and global/per-connection sort accounting
-remain pending. Unlike OpenLDAP's pointer-derived context, an `ldap-go`
-context cannot be reused with changed query semantics.
+and runtime configuration. Up to `olcSssVlvMaxPerConn` contexts can coexist.
+Continuations retain the initially sorted route/DN set, exclude later
+additions, skip deletions, re-read current values, reapply entry and attribute
+ACLs, and enforce the search size limit for every window. Bind, StartTLS,
+connection close, and runtime replacement invalidate all contexts and release
+their leases. Process-level tests with OpenLDAP 2.6.13 `ldapsearch` pass
+discovery, offset windows, response controls, and missing-sort errors. Unlike
+OpenLDAP's pointer-derived context, an `ldap-go` context cannot be reused with
+changed query semantics.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

@@ -40,6 +40,7 @@ type virtualListViewState struct {
 	fingerprint [sha256.Size]byte
 	runtime     *runtimeState
 	items       []virtualListViewItem
+	sortLease   *serverSideSortLease
 }
 
 type virtualListViewContext struct {
@@ -74,7 +75,6 @@ func prepareVirtualListView(
 		runtime:     state.runtime,
 	}
 	if !validVirtualListViewRange(request.request) {
-		state.virtualListView = nil
 		return nil, newVirtualListViewFailure(
 			openLDAPVLVOffsetRangeError,
 			"VLV request range is invalid",
@@ -83,17 +83,15 @@ func prepareVirtualListView(
 		)
 	}
 	if !request.request.HasContextID {
-		state.virtualListView = nil
 		return context, nil
 	}
 
-	current := state.virtualListView
+	current := state.virtualListViews[string(request.request.ContextID)]
 	if len(request.request.ContextID) != virtualListViewContextLength ||
 		current == nil ||
 		!bytes.Equal(request.request.ContextID, current.contextID) ||
 		current.runtime != state.runtime ||
 		current.fingerprint != fingerprint {
-		state.virtualListView = nil
 		return nil, newVirtualListViewFailure(
 			ldapwire.ResultProtocolError,
 			"VLV contextID is invalid",
@@ -146,10 +144,18 @@ func startVirtualListView(
 	state *connectionState,
 	context *virtualListViewContext,
 	candidates []searchCandidate,
+	sortLease *serverSideSortLease,
 ) (*virtualListViewState, error) {
-	contextID := make([]byte, virtualListViewContextLength)
-	if _, err := rand.Read(contextID); err != nil {
-		return nil, err
+	var contextID []byte
+	for {
+		contextID = make([]byte, virtualListViewContextLength)
+		if _, err := rand.Read(contextID); err != nil {
+			return nil, err
+		}
+		if state.virtualListViews == nil ||
+			state.virtualListViews[string(contextID)] == nil {
+			break
+		}
 	}
 	items := make([]virtualListViewItem, len(candidates))
 	for index := range candidates {
@@ -169,10 +175,39 @@ func startVirtualListView(
 		fingerprint: context.fingerprint,
 		runtime:     context.runtime,
 		items:       items,
+		sortLease:   sortLease,
 	}
-	state.virtualListView = view
+	if state.virtualListViews == nil {
+		state.virtualListViews = make(map[string]*virtualListViewState)
+	}
+	state.virtualListViews[string(contextID)] = view
 	context.state = view
 	return view, nil
+}
+
+func discardVirtualListView(
+	state *connectionState,
+	view *virtualListViewState,
+) {
+	if view == nil {
+		return
+	}
+	key := string(view.contextID)
+	if state.virtualListViews[key] != view {
+		return
+	}
+	delete(state.virtualListViews, key)
+	releaseServerSideSortLease(state, view.sortLease)
+	if len(state.virtualListViews) == 0 {
+		state.virtualListViews = nil
+	}
+}
+
+func clearVirtualListViews(state *connectionState) {
+	for _, view := range state.virtualListViews {
+		releaseServerSideSortLease(state, view.sortLease)
+	}
+	state.virtualListViews = nil
 }
 
 func virtualListViewWindow(

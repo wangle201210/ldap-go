@@ -50,6 +50,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	}
 
 	t.Run("offset", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		result, err := client.Search(newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "cn",
@@ -83,6 +84,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	})
 
 	t.Run("proportional offset", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		result, err := client.Search(newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "cn",
@@ -104,6 +106,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	})
 
 	t.Run("proportional offset rounds to zero", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		result, err := client.Search(newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "cn",
@@ -125,6 +128,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	})
 
 	t.Run("empty result ignores offset range", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		request := newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "cn",
@@ -152,6 +156,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	})
 
 	t.Run("typedown", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		result, err := client.Search(newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "cn",
@@ -173,6 +178,7 @@ func TestLDAPClientVirtualListView(t *testing.T) {
 	})
 
 	t.Run("reverse typedown", func(t *testing.T) {
+		rebindVirtualListViewClient(t, client)
 		result, err := client.Search(newSortablePeopleSearch([]ldap.Control{
 			newSortControl(ldap.SortKey{
 				AttributeType: "mail",
@@ -853,6 +859,16 @@ func newVirtualListViewControl(
 	request ldapwire.VirtualListViewRequest,
 ) ldap.Control {
 	return newVirtualListViewControlWithCriticality(request, true)
+}
+
+func rebindVirtualListViewClient(t *testing.T, client *ldap.Conn) {
+	t.Helper()
+	if err := client.Bind(
+		"cn=admin,dc=example,dc=com",
+		"admin-secret",
+	); err != nil {
+		t.Fatalf("reset VLV Bind(): %v", err)
+	}
 }
 
 func newVirtualListViewControlWithCriticality(

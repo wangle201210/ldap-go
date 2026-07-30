@@ -161,6 +161,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	defer server.wg.Done()
 	state := connectionState{connection: connection}
 	defer func() {
+		clearSearchSessions(&state)
 		server.mu.Lock()
 		delete(server.connections, connection)
 		server.mu.Unlock()
@@ -219,7 +220,11 @@ func (server *Server) dispatch(
 	state *connectionState,
 	message ldapwire.Message,
 ) (bool, error) {
-	state.runtime = server.runtime.Load()
+	runtime := server.runtime.Load()
+	if state.runtime != nil && state.runtime != runtime {
+		clearSearchSessions(state)
+	}
+	state.runtime = runtime
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
 		return true, nil
@@ -273,8 +278,7 @@ func (server *Server) handleBind(
 	request ldapwire.BindRequest,
 ) error {
 	state.boundDN = ""
-	state.pagedSearch = nil
-	state.virtualListView = nil
+	clearSearchSessions(state)
 	if hasUnsupportedCriticalControl(message.Controls) {
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
@@ -376,13 +380,19 @@ func (server *Server) closeConnections() {
 }
 
 type connectionState struct {
-	boundDN         string
-	runtime         *runtimeState
-	connection      net.Conn
-	secure          bool
-	externalDN      string
-	pagedSearch     *pagedSearchState
-	virtualListView *virtualListViewState
+	boundDN           string
+	runtime           *runtimeState
+	connection        net.Conn
+	secure            bool
+	externalDN        string
+	pagedSearch       *pagedSearchState
+	virtualListViews  map[string]*virtualListViewState
+	sortSessionCounts map[*serverSideSortLimiter]int
+}
+
+func clearSearchSessions(state *connectionState) {
+	clearPagedSearch(state)
+	clearVirtualListViews(state)
 }
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {

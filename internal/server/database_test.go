@@ -185,8 +185,24 @@ func TestLoadRuntimeDatabasesLoadsServerSideSortOverlay(t *testing.T) {
 			DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
 			Attributes: []directory.Attribute{
 				{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+				{Description: "olcSssVlvMax", Values: stringValues("2")},
 				{Description: "olcSssVlvMaxKeys", Values: stringValues("3")},
+				{Description: "olcSssVlvMaxPerConn", Values: stringValues("4")},
 			},
+		},
+		{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{2}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=default,dc=com")},
+			},
+		},
+		{
+			DN: "olcOverlay={0}sssvlv,olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{{
+				Description: "olcOverlay",
+				Values:      stringValues("{0}sssvlv"),
+			}},
 		},
 		{
 			DN: "uid=not-config,dc=example,dc=com",
@@ -216,8 +232,26 @@ func TestLoadRuntimeDatabasesLoadsServerSideSortOverlay(t *testing.T) {
 		t.Fatalf("ParseDN(): %v", err)
 	}
 	database := databases[databaseIndexForDN(databases, dn)]
-	if !database.serverSideSort || database.sortMaxKeys != 3 {
+	if !database.serverSideSort ||
+		database.sortMaxKeys != 3 ||
+		database.sortLimiter == nil ||
+		database.sortLimiter.max != 2 ||
+		database.sortLimiter.maxPerConn != 4 {
 		t.Fatalf("server-side sort database = %#v", database)
+	}
+
+	defaultDN, err := directory.ParseDN("dc=default,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(default): %v", err)
+	}
+	defaultDatabase := databases[databaseIndexForDN(databases, defaultDN)]
+	if !defaultDatabase.serverSideSort ||
+		defaultDatabase.sortMaxKeys != defaultServerSideSortMaxKeys ||
+		defaultDatabase.sortLimiter == nil ||
+		defaultDatabase.sortLimiter.max != defaultServerSideSortMax ||
+		defaultDatabase.sortLimiter.maxPerConn !=
+			defaultServerSideSortMaxPerConn {
+		t.Fatalf("default server-side sort database = %#v", defaultDatabase)
 	}
 }
 
@@ -230,6 +264,7 @@ func TestServerSideSortSettingsFollowTargetAndFrontend(t *testing.T) {
 			name:           "{1}mdb",
 			serverSideSort: true,
 			sortMaxKeys:    2,
+			sortLimiter:    &serverSideSortLimiter{},
 		},
 		{name: "{2}mdb"},
 	}
@@ -248,6 +283,7 @@ func TestServerSideSortSettingsFollowTargetAndFrontend(t *testing.T) {
 
 	databases[0].serverSideSort = true
 	databases[0].sortMaxKeys = 4
+	databases[0].sortLimiter = &serverSideSortLimiter{}
 	if maxKeys, enabled := serverSideSortSettingsForDatabase(
 		databases,
 		2,
@@ -261,6 +297,15 @@ func TestServerSideSortSettingsFollowTargetAndFrontend(t *testing.T) {
 		1,
 	); !enabled || maxKeys != 1 {
 		t.Fatalf("combined sort settings = %d, %t", maxKeys, enabled)
+	}
+	if limiters := serverSideSortLimitersForDatabase(databases, 1); len(limiters) != 2 ||
+		limiters[0] != databases[1].sortLimiter ||
+		limiters[1] != databases[0].sortLimiter {
+		t.Fatalf("combined sort limiters = %#v", limiters)
+	}
+	if limiters := serverSideSortLimitersForDatabase(databases, 2); len(limiters) != 1 ||
+		limiters[0] != databases[0].sortLimiter {
+		t.Fatalf("frontend sort limiters = %#v", limiters)
 	}
 }
 
@@ -278,6 +323,29 @@ func TestLoadRuntimeDatabasesRejectsInvalidServerSideSortOverlay(t *testing.T) {
 				Attributes: []directory.Attribute{
 					{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
 					{Description: "olcSssVlvMaxKeys", Values: stringValues("-1")},
+				},
+			}},
+		},
+		{
+			name: "invalid maximum requests",
+			overlays: []directory.Entry{{
+				DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+					{Description: "olcSssVlvMax", Values: stringValues("-1")},
+				},
+			}},
+		},
+		{
+			name: "multiple per-connection maxima",
+			overlays: []directory.Entry{{
+				DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "olcOverlay", Values: stringValues("{0}sssvlv")},
+					{
+						Description: "olcSssVlvMaxPerConn",
+						Values:      stringValues("1", "2"),
+					},
 				},
 			}},
 		},
