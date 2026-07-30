@@ -57,11 +57,19 @@ func TestLDAPClientStartTLS(t *testing.T) {
 	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
 		t.Fatalf("pre-TLS root Bind(): %v", err)
 	}
+	whoAmI, err := client.WhoAmI(nil)
+	if err != nil || whoAmI.AuthzID != "dn:cn=admin,dc=example,dc=com" {
+		t.Fatalf("pre-TLS WhoAmI() = %#v, %v", whoAmI, err)
+	}
 	if err := client.StartTLS(&tls.Config{
 		InsecureSkipVerify: true, // The test certificate is self-signed.
 		MinVersion:         tls.VersionTLS12,
 	}); err != nil {
 		t.Fatalf("StartTLS(): %v", err)
+	}
+	whoAmI, err = client.WhoAmI(nil)
+	if err != nil || whoAmI.AuthzID != "" {
+		t.Fatalf("post-TLS WhoAmI() = %#v, %v", whoAmI, err)
 	}
 
 	assertLDAPResultCode(

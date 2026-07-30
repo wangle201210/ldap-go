@@ -490,7 +490,7 @@ func (server *Server) rootDSE(runtime *runtimeState) directory.Entry {
 			Values:      stringValues(monitorContexts...),
 		})
 	}
-	supportedExtensions := []string{passwordModifyOID}
+	supportedExtensions := []string{passwordModifyOID, whoAmIOID}
 	if server.secureTransport != nil {
 		supportedExtensions = append([]string{startTLSOID}, supportedExtensions...)
 	}

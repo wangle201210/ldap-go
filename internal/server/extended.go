@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 const (
 	startTLSOID       = "1.3.6.1.4.1.1466.20037"
 	passwordModifyOID = "1.3.6.1.4.1.4203.1.11.1"
+	whoAmIOID         = "1.3.6.1.4.1.4203.1.11.3"
 )
 
 func (server *Server) handleExtended(
@@ -37,6 +39,8 @@ func (server *Server) handleExtended(
 		return server.handleStartTLS(ctx, connection, state, message, request)
 	case passwordModifyOID:
 		return server.handlePasswordModify(ctx, connection, state, message, request)
+	case whoAmIOID:
+		return server.handleWhoAmI(connection, state, message, request)
 	default:
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
@@ -110,4 +114,40 @@ func (server *Server) handleStartTLS(
 	state.connection = secured
 	state.secure = true
 	return nil
+}
+
+func (server *Server) handleWhoAmI(
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.ExtendedRequest,
+) error {
+	if request.HasValue {
+		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"no request data expected",
+			),
+			"",
+			nil,
+			nil,
+		))
+	}
+
+	authzID := []byte{}
+	if state.boundDN != "" {
+		dn, err := directory.ParseDN(state.boundDN)
+		if err != nil {
+			return fmt.Errorf("normalize bound DN: %w", err)
+		}
+		authzID = []byte("dn:" + dn.String())
+	}
+	return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		message.ID,
+		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		"",
+		authzID,
+		nil,
+	))
 }

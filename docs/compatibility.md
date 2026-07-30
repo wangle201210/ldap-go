@@ -37,7 +37,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | StartTLS | partial | RFC 4511/4513 state machine, TLS tests, and OpenLDAP differential |
 | Password Modify | partial | RFC 3062 core passes; password policy integration remains |
-| Who Am I? | planned | RFC 4532 authorization identity tests |
+| Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | planned | RFC 3909 concurrent operation tests |
 | Assertion | planned | RFC 4528 atomic write tests |
 | Pre-read and post-read | planned | RFC 4527 write transaction tests |
