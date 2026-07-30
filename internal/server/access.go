@@ -25,7 +25,7 @@ func (server *Server) allowed(
 	value []byte,
 	privilege acl.Privilege,
 ) bool {
-	if server.isRoot(subjectDN) {
+	if server.isRoot(subjectDN, entry.DN, attribute) {
 		return true
 	}
 	return server.access.Allowed(

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -33,10 +32,10 @@ type Config struct {
 }
 
 type Server struct {
-	config Config
-	rootDN *directory.DN
-	schema *schema.Registry
-	access *acl.Policy
+	config    Config
+	databases []runtimeDatabase
+	schema    *schema.Registry
+	access    *acl.Policy
 
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
@@ -78,21 +77,22 @@ func New(config Config) (*Server, error) {
 		}
 	}
 
-	var rootDN *directory.DN
+	databases, err := loadRuntimeDatabases(context.Background(), config.Store)
+	if err != nil {
+		return nil, err
+	}
 	if config.RootDN != "" {
-		parsed, err := directory.ParseDN(config.RootDN)
-		if err != nil {
-			return nil, fmt.Errorf("root DN: %w", err)
-		}
 		if len(config.RootPassword) == 0 {
 			return nil, errors.New("root password is required when root DN is configured")
 		}
-		rootDN = &parsed
+		if err := applyBootstrapRoot(databases, config.RootDN, config.RootPassword); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Server{
 		config:      config,
-		rootDN:      rootDN,
+		databases:   databases,
 		schema:      config.Schema,
 		access:      config.AccessPolicy,
 		connections: make(map[net.Conn]struct{}),
@@ -271,9 +271,11 @@ func (server *Server) authenticate(ctx context.Context, rawDN string, password [
 		return false, nil
 	}
 
-	if server.rootDN != nil && server.rootDN.Equal(dn) {
-		return len(password) == len(server.config.RootPassword) &&
-			subtle.ConstantTimeCompare(password, server.config.RootPassword) == 1, nil
+	if database := server.databaseForDN(dn); database != nil &&
+		database.rootDN != nil &&
+		database.rootDN.Equal(dn) &&
+		database.rootPasswordSet {
+		return auth.VerifyPassword(database.rootPassword, password), nil
 	}
 
 	var authenticated bool
@@ -352,10 +354,39 @@ func expired(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (server *Server) isRoot(rawDN string) bool {
-	if server.rootDN == nil || rawDN == "" {
+func (server *Server) isRoot(rawDN, targetDN, attribute string) bool {
+	if rawDN == "" {
 		return false
 	}
-	dn, err := directory.ParseDN(rawDN)
-	return err == nil && server.rootDN.Equal(dn)
+	subject, err := directory.ParseDN(rawDN)
+	if err != nil {
+		return false
+	}
+	if targetDN == "" {
+		return attribute == "children" && server.isAnyDatabaseRoot(subject)
+	}
+	target, err := directory.ParseDN(targetDN)
+	if err != nil {
+		return false
+	}
+	database := server.databaseForDN(target)
+	return database != nil && database.rootDN != nil && database.rootDN.Equal(subject)
+}
+
+func (server *Server) isAnyDatabaseRoot(subject directory.DN) bool {
+	for index := range server.databases {
+		if server.databases[index].rootDN != nil &&
+			server.databases[index].rootDN.Equal(subject) {
+			return true
+		}
+	}
+	return false
+}
+
+func (server *Server) databaseForDN(dn directory.DN) *runtimeDatabase {
+	index := databaseIndexForDN(server.databases, dn)
+	if index < 0 {
+		return nil
+	}
+	return &server.databases[index]
 }

@@ -24,11 +24,22 @@ func LoadOpenLDAPConfig(
 	if registry == nil {
 		return LoadResult{}, fmt.Errorf("schema registry is required")
 	}
+	configSuffix, err := directory.ParseDN("cn=config")
+	if err != nil {
+		return LoadResult{}, err
+	}
 
 	var attributeDescriptions []string
 	var objectClassDescriptions []string
 	if err := store.View(ctx, func(tx storage.Reader) error {
 		return tx.ForEach(func(entry directory.Entry) error {
+			entryDN, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf("parse configuration entry DN %q: %w", entry.DN, err)
+			}
+			if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
+				return nil
+			}
 			for _, value := range entry.Values("olcAttributeTypes") {
 				attributeDescriptions = append(attributeDescriptions, string(value))
 			}

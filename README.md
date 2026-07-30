@@ -55,8 +55,9 @@ go run ./cmd/ldap-go export \
   -ldif ./data/export.ldif
 ```
 
-To configure an OpenLDAP-style root identity without exposing its password in
-the process arguments:
+Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
+automatically and apply only to their database. To provide an explicit
+bootstrap override without exposing its password in the process arguments:
 
 ```sh
 LDAP_GO_ROOT_PASSWORD='change-me' \

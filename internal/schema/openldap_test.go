@@ -63,3 +63,33 @@ func TestLoadOpenLDAPConfigSchema(t *testing.T) {
 		t.Fatalf("ValidateEntry(): %v", err)
 	}
 }
+
+func TestLoadOpenLDAPConfigSchemaIgnoresBusinessEntries(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "olcAttributeTypes", Values: byteValues("not a schema description")},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.Put(entry, false)
+	}); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	result, err := LoadOpenLDAPConfig(context.Background(), store, registry)
+	if err != nil {
+		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
+	}
+	if result.AttributeTypes != 0 || result.ObjectClasses != 0 {
+		t.Fatalf("LoadResult = %#v", result)
+	}
+}

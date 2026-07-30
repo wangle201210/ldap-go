@@ -754,6 +754,197 @@ func TestLDAPClientConfigBackendDefaultsToNoAccess(t *testing.T) {
 	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
 }
 
+func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		configDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		config, err := tx.Get(configDN)
+		if err != nil {
+			return err
+		}
+		config.ReplaceValues("olcRootDN", stringValues("cn=admin,dc=example,dc=com"))
+		config.ReplaceValues(
+			"olcRootPW",
+			stringValues("{SHA}ZCHf5VENMosrLzndLUwwLaKYD44="),
+		)
+		config.ReplaceValues("olcAccess", stringValues("{0}to * by * none"))
+		if err := tx.Put(config, true); err != nil {
+			return err
+		}
+		if err := tx.Put(directory.Entry{
+			DN: "dc=other,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("domain")},
+				{Description: "dc", Values: stringValues("other")},
+			},
+		}, false); err != nil {
+			return err
+		}
+		if err := tx.Put(directory.Entry{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{2}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=other,dc=com")},
+				{Description: "olcAccess", Values: stringValues("{0}to * by * =d")},
+			},
+		}, false); err != nil {
+			return err
+		}
+		return tx.SetNamingContexts([]string{"dc=example,dc=com", "dc=other,dc=com"})
+	}); err != nil {
+		t.Fatalf("configure database roots: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	assertLDAPResultCode(
+		t,
+		client.Bind("cn=admin,dc=example,dc=com", "wrong"),
+		ldap.LDAPResultInvalidCredentials,
+	)
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+
+	result, err := client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"dc"},
+		nil,
+	))
+	if err != nil || len(result.Entries) != 1 {
+		t.Fatalf("root database Search() = %#v, %v", result, err)
+	}
+
+	_, err = client.Search(ldap.NewSearchRequest(
+		"dc=other,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"dc"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultInsufficientAccessRights)
+
+	_, err = client.Search(ldap.NewSearchRequest(
+		"olcDatabase={1}mdb,cn=config",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"olcRootDN"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
+}
+
+func TestLDAPClientConfigRootPasswordFallbackAndEmptyValue(t *testing.T) {
+	t.Parallel()
+
+	start := func(t *testing.T, rootPassword *string) (string, func()) {
+		t.Helper()
+		store := storage.NewMemory()
+		t.Cleanup(func() { _ = store.Close() })
+		seedDirectory(t, store)
+		if err := store.Update(context.Background(), func(tx storage.Writer) error {
+			configDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+			if err != nil {
+				return err
+			}
+			config, err := tx.Get(configDN)
+			if err != nil {
+				return err
+			}
+			config.ReplaceValues(
+				"olcRootDN",
+				stringValues("uid=alice,ou=people,dc=example,dc=com"),
+			)
+			if rootPassword == nil {
+				config.ReplaceValues("olcRootPW", nil)
+			} else {
+				config.ReplaceValues("olcRootPW", stringValues(*rootPassword))
+			}
+			config.ReplaceValues("olcAccess", stringValues(
+				"{0}to attrs=userPassword by anonymous auth by * none",
+				"{1}to * by * none",
+			))
+			return tx.Put(config, true)
+		}); err != nil {
+			t.Fatalf("configure root password: %v", err)
+		}
+		return startServer(t, store, Config{})
+	}
+
+	t.Run("unset falls back to entry", func(t *testing.T) {
+		address, stop := start(t, nil)
+		defer stop()
+		client, err := ldap.DialURL("ldap://" + address)
+		if err != nil {
+			t.Fatalf("DialURL(): %v", err)
+		}
+		defer client.Close()
+		if err := client.Bind(
+			"uid=alice,ou=people,dc=example,dc=com",
+			"secret",
+		); err != nil {
+			t.Fatalf("root entry Bind(): %v", err)
+		}
+		result, err := client.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		))
+		if err != nil || len(result.Entries) != 1 {
+			t.Fatalf("root entry Search() = %#v, %v", result, err)
+		}
+	})
+
+	t.Run("empty explicitly disables bind", func(t *testing.T) {
+		empty := ""
+		address, stop := start(t, &empty)
+		defer stop()
+		client, err := ldap.DialURL("ldap://" + address)
+		if err != nil {
+			t.Fatalf("DialURL(): %v", err)
+		}
+		defer client.Close()
+		assertLDAPResultCode(
+			t,
+			client.Bind("uid=alice,ou=people,dc=example,dc=com", "secret"),
+			ldap.LDAPResultInvalidCredentials,
+		)
+	})
+}
+
 func TestLDAPClientGranularWriteACL(t *testing.T) {
 	t.Parallel()
 

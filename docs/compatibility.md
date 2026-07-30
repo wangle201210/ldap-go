@@ -174,6 +174,15 @@ network/peer selectors, ACI, DN expansion, and transport-derived SSF remain
 unimplemented. Configurations using an unsupported selector fail server
 startup instead of silently weakening access control.
 
+Runtime database selection loads `olcDatabase`, all `olcSuffix` values,
+`olcRootDN`, and `olcRootPW` from imported `cn=config` entries. Longest-suffix
+selection scopes root authentication and ACL bypass to one database. Hashed
+root passwords use the same supported OpenLDAP password schemes as entry
+passwords; an unset root password falls back to normal entry authentication,
+while an explicitly empty value disables simple Bind for that root DN.
+Configuration-like attributes outside `cn=config` are ignored by schema, ACL,
+and runtime database loaders.
+
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
