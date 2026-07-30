@@ -40,7 +40,7 @@ No row may become `compatible` based only on unit tests.
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | planned | RFC 3909 concurrent operation tests |
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
-| Pre-read and post-read | planned | RFC 4527 write transaction tests |
+| Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
 | Paged results | planned | RFC 2696 cookie and mutation tests |
 | Server-side sorting | planned | RFC 2891 matching and error tests |
 | VLV | planned | OpenLDAP control differential tests |
@@ -202,6 +202,18 @@ without side effects. Search evaluates the assertion against its base entry,
 and Compare against its target entry. Tests cover duplicate/missing/empty
 control values, malformed and trailing BER, noncritical handling, schema-aware
 matching, and successful/failed atomic operations.
+
+RFC 4527 pre-read and post-read are also published through Root DSE
+`supportedControl`. Pre-read applies to Modify, Delete, and ModifyDN; post-read
+applies to Add, Modify, and ModifyDN. Their AttributeSelection values are
+decoded strictly, and response values contain the required SearchResultEntry
+application payload. Snapshots are generated inside the write transaction,
+use normal entry and attribute read ACLs, honor `*`, `+`, `1.1`, explicit
+attributes, and the empty default selection, and are only returned after a
+successful commit. Tests cover old/new values and DNs, operational attributes,
+password-value filtering, malformed and duplicate controls, operation
+applicability, and rollback after a critical post-read failure. OpenLDAP
+differential fixtures remain pending.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
 entries. It supports exact/base, one-level, subtree, children, and regular

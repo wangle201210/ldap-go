@@ -192,12 +192,18 @@ func TestLDAPClientAssertionControlOnSearchAndCompare(t *testing.T) {
 		[]string{"supportedControl"},
 		nil,
 	))
-	if err != nil || len(rootDSE.Entries) != 1 ||
-		!containsString(
-			rootDSE.Entries[0].GetAttributeValues("supportedControl"),
-			assertionControlOID,
-		) {
-		t.Fatalf("Assertion Root DSE = %#v, %v", rootDSE, err)
+	if err != nil || len(rootDSE.Entries) != 1 {
+		t.Fatalf("Control Root DSE = %#v, %v", rootDSE, err)
+	}
+	supportedControls := rootDSE.Entries[0].GetAttributeValues("supportedControl")
+	for _, oid := range []string{
+		assertionControlOID,
+		preReadControlOID,
+		postReadControlOID,
+	} {
+		if !containsString(supportedControls, oid) {
+			t.Fatalf("supportedControl = %q, missing %s", supportedControls, oid)
+		}
 	}
 }
 
@@ -259,17 +265,23 @@ func TestParseRequestControlsRejectsInvalidAssertion(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, result := parseRequestControls(test.controls)
+			_, result := parseRequestControls(
+				test.controls,
+				supportsAssertion,
+			)
 			if result == nil || result.Code != test.wantCode {
 				t.Fatalf("parseRequestControls() result = %#v", result)
 			}
 		})
 	}
 
-	parsed, result := parseRequestControls([]ldapwire.Control{
-		{OID: "1.2.3.4", Critical: false},
-		valid,
-	})
+	parsed, result := parseRequestControls(
+		[]ldapwire.Control{
+			{OID: "1.2.3.4", Critical: false},
+			valid,
+		},
+		supportsAssertion,
+	)
 	if result != nil || parsed.assertion == nil {
 		t.Fatalf("valid parseRequestControls() = %#v, %#v", parsed, result)
 	}

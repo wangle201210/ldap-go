@@ -167,6 +167,7 @@ func (server *Server) handlePasswordModify(
 		*database,
 		changes,
 		precondition,
+		nil,
 	)
 	if err != nil {
 		return server.finishPasswordModify(connection, message.ID, nil, err)

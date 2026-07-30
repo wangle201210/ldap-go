@@ -35,7 +35,10 @@ func (server *Server) handleAdd(
 	message ldapwire.Message,
 	request ldapwire.AddRequest,
 ) error {
-	controls, result := parseRequestControls(message.Controls)
+	controls, result := parseRequestControls(
+		message.Controls,
+		supportsAssertion|supportsPostRead,
+	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
@@ -104,7 +107,10 @@ func (server *Server) handleAdd(
 		}
 	}
 
-	var nextRuntime *runtimeState
+	var (
+		nextRuntime      *runtimeState
+		responseControls []ldapwire.Control
+	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		if _, err := tx.Get(dn); err == nil {
@@ -186,6 +192,20 @@ func (server *Server) handleAdd(
 		if err := tx.Put(entry, false); err != nil {
 			return err
 		}
+		postRead, err := server.readResponseControl(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.postRead,
+			postReadControlOID,
+		)
+		if err != nil {
+			return err
+		}
+		if postRead != nil {
+			responseControls = append(responseControls, *postRead)
+		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
@@ -199,7 +219,13 @@ func (server *Server) handleAdd(
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
-	return server.finishOperation(connection, message.ID, ldapwire.ApplicationAddResponse, err)
+	return server.finishOperationWithControls(
+		connection,
+		message.ID,
+		ldapwire.ApplicationAddResponse,
+		err,
+		responseControls,
+	)
 }
 
 func (server *Server) handleModify(
@@ -209,7 +235,10 @@ func (server *Server) handleModify(
 	message ldapwire.Message,
 	request ldapwire.ModifyRequest,
 ) error {
-	controls, result := parseRequestControls(message.Controls)
+	controls, result := parseRequestControls(
+		message.Controls,
+		supportsAssertion|supportsPreRead|supportsPostRead,
+	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
 	}
@@ -250,6 +279,7 @@ func (server *Server) handleModify(
 			*result,
 		)
 	}
+	var responseControls []ldapwire.Control
 	nextRuntime, err := server.modifyEntry(
 		ctx,
 		state.runtime,
@@ -258,22 +288,67 @@ func (server *Server) handleModify(
 		*database,
 		request.Changes,
 		func(reader storage.Reader, entry directory.Entry) error {
-			return server.checkAssertion(
+			if err := server.checkAssertion(
 				state.runtime,
 				reader,
 				state.boundDN,
 				entry,
 				controls.assertion,
+			); err != nil {
+				return err
+			}
+			preRead, err := server.readResponseControl(
+				state.runtime,
+				reader,
+				state.boundDN,
+				entry,
+				controls.preRead,
+				preReadControlOID,
 			)
+			if err != nil {
+				return err
+			}
+			if preRead != nil {
+				responseControls = append(responseControls, *preRead)
+			}
+			return nil
+		},
+		func(reader storage.Reader, entry directory.Entry) error {
+			postRead, err := server.readResponseControl(
+				state.runtime,
+				reader,
+				state.boundDN,
+				entry,
+				controls.postRead,
+				postReadControlOID,
+			)
+			if err != nil {
+				return err
+			}
+			if postRead != nil {
+				responseControls = append(responseControls, *postRead)
+			}
+			return nil
 		},
 	)
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
-	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyResponse, err)
+	return server.finishOperationWithControls(
+		connection,
+		message.ID,
+		ldapwire.ApplicationModifyResponse,
+		err,
+		responseControls,
+	)
 }
 
 type entryModificationPrecondition func(
+	reader storage.Reader,
+	entry directory.Entry,
+) error
+
+type entryModificationPostcondition func(
 	reader storage.Reader,
 	entry directory.Entry,
 ) error
@@ -286,6 +361,7 @@ func (server *Server) modifyEntry(
 	database runtimeDatabase,
 	changes []ldapwire.Modification,
 	precondition entryModificationPrecondition,
+	postcondition entryModificationPostcondition,
 ) (*runtimeState, error) {
 	configurationWrite := isConfigurationDN(dn)
 	if configurationWrite {
@@ -348,6 +424,11 @@ func (server *Server) modifyEntry(
 		if err := tx.Put(entry, true); err != nil {
 			return err
 		}
+		if postcondition != nil {
+			if err := postcondition(tx, entry); err != nil {
+				return err
+			}
+		}
 		if configurationWrite {
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
@@ -365,7 +446,10 @@ func (server *Server) handleDelete(
 	message ldapwire.Message,
 	request ldapwire.DeleteRequest,
 ) error {
-	controls, result := parseRequestControls(message.Controls)
+	controls, result := parseRequestControls(
+		message.Controls,
+		supportsAssertion|supportsPreRead,
+	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
 	}
@@ -412,7 +496,10 @@ func (server *Server) handleDelete(
 		defer server.configMu.Unlock()
 	}
 
-	var nextRuntime *runtimeState
+	var (
+		nextRuntime      *runtimeState
+		responseControls []ldapwire.Control
+	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := tx.Get(dn)
@@ -458,6 +545,20 @@ func (server *Server) handleDelete(
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
+		preRead, err := server.readResponseControl(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.preRead,
+			preReadControlOID,
+		)
+		if err != nil {
+			return err
+		}
+		if preRead != nil {
+			responseControls = append(responseControls, *preRead)
+		}
 
 		hasChildren := false
 		if err := tx.ForEach(func(entry directory.Entry) error {
@@ -491,7 +592,13 @@ func (server *Server) handleDelete(
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
-	return server.finishOperation(connection, message.ID, ldapwire.ApplicationDeleteResponse, err)
+	return server.finishOperationWithControls(
+		connection,
+		message.ID,
+		ldapwire.ApplicationDeleteResponse,
+		err,
+		responseControls,
+	)
 }
 
 func (server *Server) handleModifyDN(
@@ -501,7 +608,10 @@ func (server *Server) handleModifyDN(
 	message ldapwire.Message,
 	request ldapwire.ModifyDNRequest,
 ) error {
-	controls, result := parseRequestControls(message.Controls)
+	controls, result := parseRequestControls(
+		message.Controls,
+		supportsAssertion|supportsPreRead|supportsPostRead,
+	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
 	}
@@ -617,7 +727,10 @@ func (server *Server) handleModifyDN(
 		)
 	}
 
-	var nextRuntime *runtimeState
+	var (
+		nextRuntime      *runtimeState
+		responseControls []ldapwire.Control
+	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		sourceEntry, err := tx.Get(oldDN)
@@ -723,6 +836,20 @@ func (server *Server) handleModifyDN(
 				}
 			}
 		}
+		preRead, err := server.readResponseControl(
+			state.runtime,
+			tx,
+			state.boundDN,
+			sourceEntry,
+			controls.preRead,
+			preReadControlOID,
+		)
+		if err != nil {
+			return err
+		}
+		if preRead != nil {
+			responseControls = append(responseControls, *preRead)
+		}
 
 		type move struct {
 			oldDN directory.DN
@@ -794,6 +921,22 @@ func (server *Server) handleModifyDN(
 			if err := tx.Put(item.entry, false); err != nil {
 				return err
 			}
+			if item.oldDN.Equal(oldDN) {
+				postRead, err := server.readResponseControl(
+					state.runtime,
+					tx,
+					state.boundDN,
+					item.entry,
+					controls.postRead,
+					postReadControlOID,
+				)
+				if err != nil {
+					return err
+				}
+				if postRead != nil {
+					responseControls = append(responseControls, *postRead)
+				}
+			}
 		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
@@ -808,7 +951,13 @@ func (server *Server) handleModifyDN(
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
-	return server.finishOperation(connection, message.ID, ldapwire.ApplicationModifyDNResponse, err)
+	return server.finishOperationWithControls(
+		connection,
+		message.ID,
+		ldapwire.ApplicationModifyDNResponse,
+		err,
+		responseControls,
+	)
 }
 
 func (server *Server) handleCompare(
@@ -818,7 +967,10 @@ func (server *Server) handleCompare(
 	message ldapwire.Message,
 	request ldapwire.CompareRequest,
 ) error {
-	controls, controlFailure := parseRequestControls(message.Controls)
+	controls, controlFailure := parseRequestControls(
+		message.Controls,
+		supportsAssertion,
+	)
 	if controlFailure != nil {
 		return server.writeOperationResult(
 			connection,
@@ -1122,17 +1274,34 @@ func (server *Server) finishOperation(
 	responseTag uint64,
 	err error,
 ) error {
+	return server.finishOperationWithControls(
+		connection,
+		messageID,
+		responseTag,
+		err,
+		nil,
+	)
+}
+
+func (server *Server) finishOperationWithControls(
+	connection net.Conn,
+	messageID int64,
+	responseTag uint64,
+	err error,
+	controls []ldapwire.Control,
+) error {
 	if failure := asOperationFailure(err); failure != nil {
 		return server.writeOperationResult(connection, messageID, responseTag, failure.result)
 	}
 	if err != nil {
 		return server.internalOperationError(connection, messageID, responseTag, err)
 	}
-	return server.writeOperationResult(
+	return server.writeOperationResultWithControls(
 		connection,
 		messageID,
 		responseTag,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		controls,
 	)
 }
 
@@ -1157,9 +1326,25 @@ func (server *Server) writeOperationResult(
 	responseTag uint64,
 	result ldapwire.Result,
 ) error {
+	return server.writeOperationResultWithControls(
+		connection,
+		messageID,
+		responseTag,
+		result,
+		nil,
+	)
+}
+
+func (server *Server) writeOperationResultWithControls(
+	connection net.Conn,
+	messageID int64,
+	responseTag uint64,
+	result ldapwire.Result,
+	controls []ldapwire.Control,
+) error {
 	return ldapwire.Write(
 		connection,
-		ldapwire.EncodeResultResponse(messageID, responseTag, result, nil),
+		ldapwire.EncodeResultResponse(messageID, responseTag, result, controls),
 	)
 }
 

@@ -58,6 +58,14 @@ func EncodeResultResponse(messageID int64, applicationTag uint64, result Result,
 }
 
 func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []Control) []byte {
+	return encodeMessage(messageID, encodeSearchResultEntry(entry), controls)
+}
+
+func EncodeReadControlValue(entry directory.Entry) []byte {
+	return encodeSearchResultEntry(entry).Bytes()
+}
+
+func encodeSearchResultEntry(entry directory.Entry) *ber.Packet {
 	response := ber.Encode(
 		ber.ClassApplication,
 		ber.TypeConstructed,
@@ -79,7 +87,7 @@ func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []
 		attributes.AppendChild(partial)
 	}
 	response.AppendChild(attributes)
-	return encodeMessage(messageID, response, controls)
+	return response
 }
 
 func EncodeNoticeOfDisconnection(result Result) []byte {

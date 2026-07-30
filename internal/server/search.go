@@ -20,7 +20,10 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
-	controls, controlFailure := parseRequestControls(message.Controls)
+	controls, controlFailure := parseRequestControls(
+		message.Controls,
+		supportsAssertion,
+	)
 	if controlFailure != nil {
 		return server.writeSearchDone(
 			connection,
@@ -566,7 +569,11 @@ func (server *Server) rootDSE(
 	})
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedControl",
-		Values:      stringValues(assertionControlOID),
+		Values: stringValues(
+			assertionControlOID,
+			preReadControlOID,
+			postReadControlOID,
+		),
 	})
 	if hasExternalIdentity {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
