@@ -33,9 +33,11 @@ go test ./...
 The current server milestone supports atomic content-LDIF import/export,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
-subtree ModifyDN, Compare, and Unbind. Writes are root-only until the ordered
-OpenLDAP ACL evaluator lands. The compatibility matrix marks these as partial
-until the remaining schema, ACL, control, alias, and differential cases pass.
+subtree ModifyDN, Compare, and Unbind. It loads OpenLDAP schema, ordered ACLs,
+database roots, and selected operation settings from `cn=config`; supported
+online changes are validated transactionally and published as one runtime
+snapshot. The compatibility matrix marks these as partial until the remaining
+schema, ACL, control, alias, configuration, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \

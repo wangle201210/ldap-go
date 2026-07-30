@@ -48,6 +48,14 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			*result,
+		)
+	}
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
@@ -66,7 +74,11 @@ func (server *Server) handleAdd(
 	}
 
 	entry := request.Entry.Clone()
-	if err := server.applyCreateOperationalAttributes(&entry, state.boundDN); err != nil {
+	if err := server.applyCreateOperationalAttributes(
+		&entry,
+		state.boundDN,
+		lastModEnabled(state.runtime, dn),
+	); err != nil {
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
 	}
 	if !configurationWrite {
@@ -184,6 +196,14 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			*result,
+		)
+	}
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
@@ -233,7 +253,9 @@ func (server *Server) handleModify(
 				return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
 			}
 		}
-		server.applyModifyOperationalAttributes(&entry, state.boundDN)
+		if lastModEnabled(state.runtime, dn) {
+			server.applyModifyOperationalAttributes(&entry, state.boundDN)
+		}
 		if !configurationWrite {
 			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
@@ -275,6 +297,14 @@ func (server *Server) handleDelete(
 			message.ID,
 			ldapwire.ApplicationDeleteResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			*result,
 		)
 	}
 	if isSubschemaDN(dn) {
@@ -380,6 +410,18 @@ func (server *Server) handleModifyDN(
 			message.ID,
 			ldapwire.ApplicationModifyDNResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if result := updateOperationPrecondition(
+		state.runtime,
+		state.boundDN,
+		oldDN,
+	); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			*result,
 		)
 	}
 	if isSubschemaDN(oldDN) {
@@ -597,7 +639,9 @@ func (server *Server) handleModifyDN(
 					item.entry.DeleteRDNValues(oldDN)
 				}
 				item.entry.EnsureRDNValues(newDN)
-				server.applyModifyOperationalAttributes(&item.entry, state.boundDN)
+				if lastModEnabled(state.runtime, oldDN) {
+					server.applyModifyOperationalAttributes(&item.entry, state.boundDN)
+				}
 				if !configurationWrite {
 					if err := state.runtime.schema.ValidateEntry(item.entry); err != nil {
 						return operationFailureFromSchema(err)
@@ -810,9 +854,16 @@ func operationFailureFromSchema(err error) error {
 	return &operationFailure{result: result}
 }
 
-func (server *Server) applyCreateOperationalAttributes(entry *directory.Entry, actor string) error {
+func (server *Server) applyCreateOperationalAttributes(
+	entry *directory.Entry,
+	actor string,
+	lastMod bool,
+) error {
 	for _, description := range protectedOperationalAttributes {
 		entry.ReplaceValues(description, nil)
+	}
+	if !lastMod {
+		return nil
 	}
 	uuid, err := randomUUID()
 	if err != nil {

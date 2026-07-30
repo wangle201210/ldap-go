@@ -192,6 +192,17 @@ and concurrent searches during repeated ACL reloads. The complete OpenLDAP
 configuration schema, backend/module-specific mutation hooks, ordered-entry
 renumbering, and full differential error behavior remain pending.
 
+Runtime database settings also load `olcReadOnly` and `olcLastMod`, including
+the frontend read-only restriction, while global `olcAllows: update_anon`
+controls whether anonymous updates may reach ACL evaluation. Update
+restrictions run before ACL checks, and database root DNs do not bypass
+read-only mode. With `olcLastMod: FALSE`, Add, Modify, and ModifyDN stop
+generating UUID, CSN, creator, and timestamp metadata while schema operational
+attributes remain available. Online changes and invalid-value rollback are
+covered through TCP client tests. Other `olcAllows` behavior, `olcRestrict`,
+`olcRequires`, listener permissions, and SSF-based update requirements remain
+pending.
+
 Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,

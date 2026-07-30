@@ -16,6 +16,8 @@ type runtimeDatabase struct {
 	rootDN          *directory.DN
 	rootPassword    []byte
 	rootPasswordSet bool
+	readOnly        bool
+	lastMod         bool
 }
 
 func loadRuntimeDatabases(
@@ -54,7 +56,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if len(databaseValues) != 1 {
 			return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
 		}
-		database := runtimeDatabase{name: string(databaseValues[0])}
+		database := runtimeDatabase{
+			name:    string(databaseValues[0]),
+			lastMod: true,
+		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
 			suffix, err := directory.ParseDN(string(rawSuffix))
 			if err != nil {
@@ -98,6 +103,18 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			database.rootPasswordSet = true
 			database.rootPassword = bytes.Clone(rootPasswordValues[0])
 		}
+		database.readOnly, _, err = singleBoolean(
+			entry,
+			"olcReadOnly",
+		)
+		if err != nil {
+			return err
+		}
+		if lastMod, present, err := singleBoolean(entry, "olcLastMod"); err != nil {
+			return err
+		} else if present {
+			database.lastMod = lastMod
+		}
 		databases = append(databases, database)
 		return nil
 	}); err != nil {
@@ -122,9 +139,51 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		databases = append(databases, runtimeDatabase{
 			name:     "bootstrap",
 			suffixes: []directory.DN{contextDN},
+			lastMod:  true,
 		})
 	}
+	applyFrontendDatabaseDefaults(databases)
 	return databases, nil
+}
+
+func singleBoolean(
+	entry directory.Entry,
+	attribute string,
+) (value, present bool, err error) {
+	values := entry.Values(attribute)
+	if len(values) == 0 {
+		return false, false, nil
+	}
+	if len(values) != 1 {
+		return false, false, fmt.Errorf("%s %s must be single-valued", entry.DN, attribute)
+	}
+	switch {
+	case strings.EqualFold(string(values[0]), "TRUE"):
+		return true, true, nil
+	case strings.EqualFold(string(values[0]), "FALSE"):
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf(
+			"%s %s has invalid value %q",
+			entry.DN,
+			attribute,
+			values[0],
+		)
+	}
+}
+
+func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
+	frontendReadOnly := false
+	for _, database := range databases {
+		if strings.Contains(strings.ToLower(database.name), "frontend") &&
+			database.readOnly {
+			frontendReadOnly = database.readOnly
+			break
+		}
+	}
+	for index := range databases {
+		databases[index].readOnly = databases[index].readOnly || frontendReadOnly
+	}
 }
 
 func validateDatabaseSuffixes(databases []runtimeDatabase) error {

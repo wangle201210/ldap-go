@@ -82,10 +82,10 @@ directory behavior must be readable and writable through the config DIT.
 
 ### Replication
 
-Every committed write receives OpenLDAP-compatible CSN metadata and is appended
-to an ordered change stream. RFC 4533 provider and consumer support is built on
-that stream. Delta-syncrepl uses the same durable log through the accesslog
-overlay.
+When `olcLastMod` is enabled, committed writes receive OpenLDAP-compatible CSN
+metadata and are appended to an ordered change stream. RFC 4533 provider and
+consumer support is built on that stream. Delta-syncrepl uses the same durable
+log through the accesslog overlay.
 
 ### Security
 
@@ -112,4 +112,3 @@ Small, well-maintained libraries may be used for generic primitives such as BER
 and cryptography. LDAP semantics, storage contracts, schema behavior, and
 OpenLDAP compatibility remain owned by this repository. Every dependency must
 be replaceable behind an internal interface.
-

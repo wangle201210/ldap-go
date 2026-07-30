@@ -1090,6 +1090,285 @@ func TestLDAPClientOnlineConfigReloadsAtomically(t *testing.T) {
 	}
 }
 
+func TestLDAPClientAnonymousUpdateAllowanceReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	writeACL := ldap.NewModifyRequest("olcDatabase={1}mdb,cn=config", nil)
+	writeACL.Replace("olcAccess", []string{"{0}to * by * write"})
+	if err := configClient.Modify(writeACL); err != nil {
+		t.Fatalf("write ACL Modify(): %v", err)
+	}
+
+	anonymous, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(anonymous): %v", err)
+	}
+	defer anonymous.Close()
+	assertLDAPResultCode(
+		t,
+		anonymous.Add(newPersonAddRequest("anon-blocked")),
+		ldap.LDAPResultStrongAuthRequired,
+	)
+
+	enable := ldap.NewModifyRequest("cn=config", nil)
+	enable.Add("olcAllows", []string{"update_anon"})
+	if err := configClient.Modify(enable); err != nil {
+		t.Fatalf("enable update_anon Modify(): %v", err)
+	}
+	if err := anonymous.Add(newPersonAddRequest("anon-enabled")); err != nil {
+		t.Fatalf("anonymous Add() with update_anon: %v", err)
+	}
+
+	disable := ldap.NewModifyRequest("cn=config", nil)
+	disable.Delete("olcAllows", []string{})
+	if err := configClient.Modify(disable); err != nil {
+		t.Fatalf("disable update_anon Modify(): %v", err)
+	}
+	assertLDAPResultCode(
+		t,
+		anonymous.Add(newPersonAddRequest("anon-disabled")),
+		ldap.LDAPResultStrongAuthRequired,
+	)
+
+	invalid := ldap.NewModifyRequest("cn=config", nil)
+	invalid.Replace("olcAllows", []string{"unknown_feature"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalid),
+		ldap.LDAPResultConstraintViolation,
+	)
+	assertLDAPResultCode(
+		t,
+		anonymous.Add(newPersonAddRequest("anon-after-invalid")),
+		ldap.LDAPResultStrongAuthRequired,
+	)
+}
+
+func TestLDAPClientReadOnlyDatabaseReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	const dataRootDN = "cn=admin,dc=example,dc=com"
+	address, stop := startServer(t, store, Config{
+		RootDN:       dataRootDN,
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	dataRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(data root): %v", err)
+	}
+	defer dataRoot.Close()
+	if err := dataRoot.Bind(dataRootDN, "admin-secret"); err != nil {
+		t.Fatalf("data root Bind(): %v", err)
+	}
+
+	dataConfigDN := "olcDatabase={1}mdb,cn=config"
+	readOnly := ldap.NewModifyRequest(dataConfigDN, nil)
+	readOnly.Replace("olcReadOnly", []string{"TRUE"})
+	if err := configClient.Modify(readOnly); err != nil {
+		t.Fatalf("enable olcReadOnly Modify(): %v", err)
+	}
+
+	assertLDAPResultCode(
+		t,
+		dataRoot.Add(newPersonAddRequest("readonly-add")),
+		ldap.LDAPResultUnwillingToPerform,
+	)
+	modify := ldap.NewModifyRequest("uid=alice,ou=people,dc=example,dc=com", nil)
+	modify.Replace("mail", []string{"readonly@example.com"})
+	assertLDAPResultCode(t, dataRoot.Modify(modify), ldap.LDAPResultUnwillingToPerform)
+	assertLDAPResultCode(
+		t,
+		dataRoot.Del(ldap.NewDelRequest("ou=archive,dc=example,dc=com", nil)),
+		ldap.LDAPResultUnwillingToPerform,
+	)
+	rename := ldap.NewModifyDNRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		"uid=alice-renamed",
+		true,
+		"ou=people,dc=example,dc=com",
+	)
+	assertLDAPResultCode(t, dataRoot.ModifyDN(rename), ldap.LDAPResultUnwillingToPerform)
+
+	writable := ldap.NewModifyRequest(dataConfigDN, nil)
+	writable.Replace("olcReadOnly", []string{"FALSE"})
+	if err := configClient.Modify(writable); err != nil {
+		t.Fatalf("disable olcReadOnly Modify(): %v", err)
+	}
+	if err := dataRoot.Add(newPersonAddRequest("writable")); err != nil {
+		t.Fatalf("data root Add() after disabling olcReadOnly: %v", err)
+	}
+
+	invalid := ldap.NewModifyRequest(dataConfigDN, nil)
+	invalid.Replace("olcReadOnly", []string{"sometimes"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalid),
+		ldap.LDAPResultConstraintViolation,
+	)
+	if err := dataRoot.Add(newPersonAddRequest("writable-after-invalid")); err != nil {
+		t.Fatalf("rolled-back olcReadOnly changed behavior: %v", err)
+	}
+}
+
+func TestLDAPClientLastModReload(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+
+	const dataRootDN = "cn=admin,dc=example,dc=com"
+	address, stop := startServer(t, store, Config{
+		RootDN:       dataRootDN,
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("config root Bind(): %v", err)
+	}
+	dataRoot, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(data root): %v", err)
+	}
+	defer dataRoot.Close()
+	if err := dataRoot.Bind(dataRootDN, "admin-secret"); err != nil {
+		t.Fatalf("data root Bind(): %v", err)
+	}
+
+	dataConfigDN := "olcDatabase={1}mdb,cn=config"
+	disable := ldap.NewModifyRequest(dataConfigDN, nil)
+	disable.Replace("olcLastMod", []string{"FALSE"})
+	if err := configClient.Modify(disable); err != nil {
+		t.Fatalf("disable olcLastMod Modify(): %v", err)
+	}
+
+	withoutAuditDN := "uid=without-audit,ou=people,dc=example,dc=com"
+	if err := dataRoot.Add(newPersonAddRequest("without-audit")); err != nil {
+		t.Fatalf("Add() with olcLastMod FALSE: %v", err)
+	}
+	auditAttributes := []string{
+		"entryUUID",
+		"entryCSN",
+		"createTimestamp",
+		"modifyTimestamp",
+		"creatorsName",
+		"modifiersName",
+	}
+	withoutAudit := readStoredEntry(t, store, withoutAuditDN)
+	for _, attribute := range auditAttributes {
+		if withoutAudit.HasAttribute(attribute) {
+			t.Fatalf("olcLastMod FALSE generated %s", attribute)
+		}
+	}
+	if !withoutAudit.HasAttribute("structuralObjectClass") ||
+		!withoutAudit.HasAttribute("subschemaSubentry") {
+		t.Fatal("schema operational attributes were suppressed with olcLastMod")
+	}
+
+	modify := ldap.NewModifyRequest(withoutAuditDN, nil)
+	modify.Replace("mail", []string{"without-audit@example.com"})
+	if err := dataRoot.Modify(modify); err != nil {
+		t.Fatalf("Modify() with olcLastMod FALSE: %v", err)
+	}
+	withoutAudit = readStoredEntry(t, store, withoutAuditDN)
+	for _, attribute := range auditAttributes {
+		if withoutAudit.HasAttribute(attribute) {
+			t.Fatalf("Modify() with olcLastMod FALSE generated %s", attribute)
+		}
+	}
+	renamedWithoutAuditDN := "uid=without-audit-renamed,ou=people,dc=example,dc=com"
+	rename := ldap.NewModifyDNRequest(
+		withoutAuditDN,
+		"uid=without-audit-renamed",
+		true,
+		"ou=people,dc=example,dc=com",
+	)
+	if err := dataRoot.ModifyDN(rename); err != nil {
+		t.Fatalf("ModifyDN() with olcLastMod FALSE: %v", err)
+	}
+	withoutAudit = readStoredEntry(t, store, renamedWithoutAuditDN)
+	for _, attribute := range auditAttributes {
+		if withoutAudit.HasAttribute(attribute) {
+			t.Fatalf("ModifyDN() with olcLastMod FALSE generated %s", attribute)
+		}
+	}
+
+	enable := ldap.NewModifyRequest(dataConfigDN, nil)
+	enable.Replace("olcLastMod", []string{"TRUE"})
+	if err := configClient.Modify(enable); err != nil {
+		t.Fatalf("enable olcLastMod Modify(): %v", err)
+	}
+	if err := dataRoot.Add(newPersonAddRequest("with-audit")); err != nil {
+		t.Fatalf("Add() with olcLastMod TRUE: %v", err)
+	}
+	withAudit := readStoredEntry(
+		t,
+		store,
+		"uid=with-audit,ou=people,dc=example,dc=com",
+	)
+	for _, attribute := range auditAttributes {
+		if !withAudit.HasAttribute(attribute) {
+			t.Fatalf("olcLastMod TRUE did not generate %s", attribute)
+		}
+	}
+
+	invalid := ldap.NewModifyRequest(dataConfigDN, nil)
+	invalid.Replace("olcLastMod", []string{"sometimes"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalid),
+		ldap.LDAPResultConstraintViolation,
+	)
+	if err := dataRoot.Add(newPersonAddRequest("audit-after-invalid")); err != nil {
+		t.Fatalf("Add() after invalid olcLastMod: %v", err)
+	}
+	afterInvalid := readStoredEntry(
+		t,
+		store,
+		"uid=audit-after-invalid,ou=people,dc=example,dc=com",
+	)
+	for _, attribute := range auditAttributes {
+		if !afterInvalid.HasAttribute(attribute) {
+			t.Fatalf("rolled-back olcLastMod did not generate %s", attribute)
+		}
+	}
+}
+
 func TestLDAPClientConcurrentOnlineACLReload(t *testing.T) {
 	t.Parallel()
 
@@ -1451,6 +1730,36 @@ func seedDirectory(t *testing.T, store storage.Store) {
 	}); err != nil {
 		t.Fatalf("seed directory: %v", err)
 	}
+}
+
+func newPersonAddRequest(uid string) *ldap.AddRequest {
+	request := ldap.NewAddRequest(
+		"uid="+uid+",ou=people,dc=example,dc=com",
+		nil,
+	)
+	request.Attribute("objectClass", []string{"inetOrgPerson"})
+	request.Attribute("uid", []string{uid})
+	request.Attribute("cn", []string{"Test User"})
+	request.Attribute("sn", []string{"User"})
+	return request
+}
+
+func readStoredEntry(t *testing.T, store storage.Store, rawDN string) directory.Entry {
+	t.Helper()
+
+	dn, err := directory.ParseDN(rawDN)
+	if err != nil {
+		t.Fatalf("ParseDN(%q): %v", rawDN, err)
+	}
+	var entry directory.Entry
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		var err error
+		entry, err = reader.Get(dn)
+		return err
+	}); err != nil {
+		t.Fatalf("read stored entry %q: %v", rawDN, err)
+	}
+	return entry
 }
 
 func assertLDAPResultCode(t *testing.T, err error, want uint16) {
