@@ -201,6 +201,26 @@ func (registry *Registry) ObjectClass(name string) (ObjectClass, bool) {
 	return *objectClass, true
 }
 
+func (registry *Registry) EntryHasObjectClass(
+	entry directory.Entry,
+	name string,
+) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	target, ok := registry.objectClasses[schemaKey(name)]
+	if !ok {
+		return false
+	}
+	for _, value := range entry.Values("objectClass") {
+		candidate, ok := registry.objectClasses[schemaKey(string(value))]
+		if ok && registry.isSubclass(candidate, target, make(map[string]bool)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (registry *Registry) IsOperational(attributeName string) bool {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -430,6 +450,30 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 
 	if err := registry.validateStructuralClasses(classes); err != nil {
 		return err
+	}
+	hasReferralAttribute := false
+	for _, attribute := range entry.Attributes {
+		if schemaKey(baseAttributeDescription(attribute.Description)) == "ref" {
+			hasReferralAttribute = true
+			break
+		}
+	}
+	if hasReferralAttribute {
+		referralClass, ok := registry.objectClasses[schemaKey("referral")]
+		if !ok {
+			return &Violation{
+				Kind:      ViolationDisallowedAttribute,
+				Attribute: "ref",
+				Message:   "attribute requires the referral object class",
+			}
+		}
+		if _, ok := classes[schemaKey(referralClass.OID)]; !ok {
+			return &Violation{
+				Kind:      ViolationDisallowedAttribute,
+				Attribute: "ref",
+				Message:   "attribute requires the referral object class",
+			}
+		}
 	}
 	required := make(map[string]struct{})
 	allowed := map[string]struct{}{"objectclass": {}}

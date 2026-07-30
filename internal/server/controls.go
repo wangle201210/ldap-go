@@ -18,6 +18,7 @@ const (
 	sortResponseControlOID = "1.2.840.113556.1.4.474"
 	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
 	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
+	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
 )
 
 type requestControlSupport uint8
@@ -29,15 +30,17 @@ const (
 	supportsPagedResults
 	supportsServerSideSort
 	supportsVirtualListView
+	supportsManageDsaIT
 )
 
 type requestControls struct {
-	assertion *directory.Filter
-	preRead   *readControlRequest
-	postRead  *readControlRequest
-	paging    *pagedResultsRequest
-	sorting   *serverSideSortRequest
-	vlv       *virtualListViewRequest
+	assertion   *directory.Filter
+	preRead     *readControlRequest
+	postRead    *readControlRequest
+	paging      *pagedResultsRequest
+	sorting     *serverSideSortRequest
+	vlv         *virtualListViewRequest
+	manageDsaIT bool
 }
 
 type readControlRequest struct {
@@ -231,6 +234,26 @@ func parseRequestControls(
 				request:  request,
 				critical: control.Critical,
 			}
+		case manageDsaITControlOID:
+			if supported&supportsManageDsaIT == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.manageDsaIT {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"manageDSAit control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"manageDSAit control value not absent",
+				)
+			}
+			parsed.manageDsaIT = true
 		default:
 			if control.Critical {
 				return unsupportedCriticalControl()

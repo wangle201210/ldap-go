@@ -24,7 +24,8 @@ func (server *Server) handleExtended(
 	message ldapwire.Message,
 	request ldapwire.ExtendedRequest,
 ) error {
-	if hasUnsupportedCriticalControl(message.Controls) {
+	if request.Name != passwordModifyOID &&
+		hasUnsupportedCriticalControl(message.Controls) {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,

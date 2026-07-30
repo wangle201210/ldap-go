@@ -26,7 +26,9 @@ func (server *Server) handleSearch(
 		releaseServerSideSortLease(state, sortLease)
 	}()
 
-	controlSupport := supportsAssertion | supportsPagedResults
+	controlSupport := supportsAssertion |
+		supportsPagedResults |
+		supportsManageDsaIT
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
@@ -580,6 +582,7 @@ func (server *Server) handleSearch(
 	}
 
 	candidates := make([]searchCandidate, 0)
+	references := make([][]string, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	entryLimit := limit
 	if paging != nil {
@@ -602,6 +605,38 @@ func (server *Server) handleSearch(
 		baseEntry, err := primaryReader.Get(base)
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
+				ancestor, found, ancestorErr := closestExistingAncestor(
+					primaryReader,
+					base,
+				)
+				if ancestorErr != nil {
+					return ancestorErr
+				}
+				if found &&
+					state.runtime.schema.EntryHasObjectClass(
+						ancestor,
+						"referral",
+					) &&
+					server.allowed(
+						state.runtime,
+						primaryReader,
+						state.boundDN,
+						ancestor,
+						"entry",
+						nil,
+						acl.Disclose,
+					) {
+					referral, referralErr := referralResult(
+						ancestor,
+						&base,
+						referralScopeForSearch(request.Scope),
+					)
+					if referralErr != nil {
+						return referralErr
+					}
+					result = referral
+					return nil
+				}
 				result.Code = ldapwire.ResultNoSuchObject
 				result.MatchedDN = server.disclosedAncestor(
 					state.runtime,
@@ -614,16 +649,6 @@ func (server *Server) handleSearch(
 			return err
 		}
 		baseEntry = withSubschemaReference(baseEntry)
-		if err := server.checkAssertion(
-			state.runtime,
-			primaryReader,
-			state.boundDN,
-			baseEntry,
-			controls.assertion,
-		); err != nil {
-			result.Code = ldapwire.ResultAssertionFailed
-			return nil
-		}
 		if !server.allowed(
 			state.runtime,
 			primaryReader,
@@ -646,6 +671,32 @@ func (server *Server) handleSearch(
 			} else {
 				result.Code = ldapwire.ResultNoSuchObject
 			}
+			return nil
+		}
+		if !controls.manageDsaIT &&
+			state.runtime.schema.EntryHasObjectClass(
+				baseEntry,
+				"referral",
+			) {
+			referral, referralErr := referralResult(
+				baseEntry,
+				&base,
+				referralScopeForSearch(request.Scope),
+			)
+			if referralErr != nil {
+				return referralErr
+			}
+			result = referral
+			return nil
+		}
+		if err := server.checkAssertion(
+			state.runtime,
+			primaryReader,
+			state.boundDN,
+			baseEntry,
+			controls.assertion,
+		); err != nil {
+			result.Code = ldapwire.ResultAssertionFailed
 			return nil
 		}
 
@@ -698,6 +749,42 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				entry = withSubschemaReference(entry)
+				if !controls.manageDsaIT &&
+					state.runtime.schema.EntryHasObjectClass(
+						entry,
+						"referral",
+					) {
+					if server.allowed(
+						state.runtime,
+						tx,
+						state.boundDN,
+						entry,
+						"entry",
+						nil,
+						acl.Read,
+					) && server.allowed(
+						state.runtime,
+						tx,
+						state.boundDN,
+						entry,
+						"ref",
+						nil,
+						acl.Read,
+					) {
+						referrals, err := rewrittenReferralURLs(
+							entry,
+							nil,
+							referralScopeForReference(request.Scope),
+						)
+						if err != nil {
+							return err
+						}
+						if len(referrals) > 0 {
+							references = append(references, referrals)
+						}
+					}
+					return nil
+				}
 				matches, err := server.filterMatches(
 					state.runtime,
 					tx,
@@ -874,7 +961,7 @@ func (server *Server) handleSearch(
 			ContextID:      view.contextID,
 			HasContextID:   true,
 		}
-		return server.writeSearchResultWithControls(
+		return server.writeSearchResultWithReferencesAndControls(
 			connection,
 			message.ID,
 			state,
@@ -884,6 +971,7 @@ func (server *Server) handleSearch(
 			result,
 			pagedSearchCursor{},
 			false,
+			references,
 			virtualListViewResponseControl(response),
 		)
 	}
@@ -945,7 +1033,7 @@ func (server *Server) handleSearch(
 		result.Code == ldapwire.ResultSuccess {
 		paging.sortLease = sortLease
 	}
-	writeErr := server.writeSearchResult(
+	writeErr := server.writeSearchResultWithReferences(
 		connection,
 		message.ID,
 		state,
@@ -955,6 +1043,7 @@ func (server *Server) handleSearch(
 		result,
 		lastCursor,
 		hasMore,
+		references,
 	)
 	if sortLease != nil &&
 		state.pagedSearch != nil &&
@@ -1452,6 +1541,7 @@ func (server *Server) rootDSE(
 	})
 	supportedControls := []string{
 		assertionControlOID,
+		manageDsaITControlOID,
 		preReadControlOID,
 		postReadControlOID,
 		pagedResultsControlOID,
@@ -1599,7 +1689,7 @@ func (server *Server) writeSearchResult(
 	cursor pagedSearchCursor,
 	hasMore bool,
 ) error {
-	return server.writeSearchResultWithControls(
+	return server.writeSearchResultResponse(
 		connection,
 		messageID,
 		state,
@@ -1609,6 +1699,34 @@ func (server *Server) writeSearchResult(
 		result,
 		cursor,
 		hasMore,
+		nil,
+		nil,
+	)
+}
+
+func (server *Server) writeSearchResultWithReferences(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	references [][]string,
+) error {
+	return server.writeSearchResultResponse(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		references,
 		nil,
 	)
 }
@@ -1623,6 +1741,62 @@ func (server *Server) writeSearchResultWithControls(
 	result ldapwire.Result,
 	cursor pagedSearchCursor,
 	hasMore bool,
+	additionalControls []ldapwire.Control,
+) error {
+	return server.writeSearchResultResponse(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		nil,
+		additionalControls,
+	)
+}
+
+func (server *Server) writeSearchResultWithReferencesAndControls(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	references [][]string,
+	additionalControls []ldapwire.Control,
+) error {
+	return server.writeSearchResultResponse(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		references,
+		additionalControls,
+	)
+}
+
+func (server *Server) writeSearchResultResponse(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	references [][]string,
 	additionalControls []ldapwire.Control,
 ) error {
 	responseControls := serverSideSortResponseControl(
@@ -1647,6 +1821,18 @@ func (server *Server) writeSearchResultWithControls(
 		if err := ldapwire.Write(
 			connection,
 			ldapwire.EncodeSearchResultEntry(messageID, entry, nil),
+		); err != nil {
+			return err
+		}
+	}
+	for _, referral := range references {
+		if err := ldapwire.Write(
+			connection,
+			ldapwire.EncodeSearchResultReference(
+				messageID,
+				referral,
+				nil,
+			),
 		); err != nil {
 			return err
 		}

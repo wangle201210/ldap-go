@@ -261,6 +261,40 @@ func TestEncodeSearchResultEntryPreservesBinaryValues(t *testing.T) {
 	}
 }
 
+func TestEncodeSearchResultReference(t *testing.T) {
+	t.Parallel()
+
+	encoded := EncodeSearchResultReference(
+		7,
+		[]string{
+			"ldap://one.example/dc=example,dc=com??sub",
+			"ldaps://two.example/dc=example,dc=com??sub",
+		},
+		nil,
+	)
+	packet, err := ber.DecodePacketErr(encoded)
+	if err != nil {
+		t.Fatalf("DecodePacketErr(): %v", err)
+	}
+	if len(packet.Children) != 2 {
+		t.Fatalf("LDAPMessage children = %d, want 2", len(packet.Children))
+	}
+	response := packet.Children[1]
+	if response.ClassType != ber.ClassApplication ||
+		response.Tag != ApplicationSearchResultReference ||
+		len(response.Children) != 2 {
+		t.Fatalf("SearchResultReference = %#v", response)
+	}
+	if got := response.Children[0].Value; got !=
+		"ldap://one.example/dc=example,dc=com??sub" {
+		t.Fatalf("first URI = %q", got)
+	}
+	if got := response.Children[1].Value; got !=
+		"ldaps://two.example/dc=example,dc=com??sub" {
+		t.Fatalf("second URI = %q", got)
+	}
+}
+
 func testMessage(id int64, operation *ber.Packet) *ber.Packet {
 	message := ber.NewSequence("")
 	message.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, id, ""))

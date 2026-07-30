@@ -61,6 +61,24 @@ func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []
 	return encodeMessage(messageID, encodeSearchResultEntry(entry), controls)
 }
 
+func EncodeSearchResultReference(
+	messageID int64,
+	referrals []string,
+	controls []Control,
+) []byte {
+	response := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationSearchResultReference,
+		nil,
+		"SearchResultReference",
+	)
+	for _, referral := range referrals {
+		response.AppendChild(octetString([]byte(referral)))
+	}
+	return encodeMessage(messageID, response, controls)
+}
+
 func EncodeReadControlValue(entry directory.Entry) []byte {
 	return encodeSearchResultEntry(entry).Bytes()
 }

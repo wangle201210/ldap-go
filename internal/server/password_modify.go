@@ -26,6 +26,18 @@ func (server *Server) handlePasswordModify(
 	request ldapwire.ExtendedRequest,
 ) error {
 	defer clear(request.Value)
+	controls, controlFailure := parseRequestControls(
+		message.Controls,
+		supportsManageDsaIT,
+	)
+	if controlFailure != nil {
+		return server.writePasswordModifyResult(
+			connection,
+			message.ID,
+			*controlFailure,
+			nil,
+		)
+	}
 	if state.boundDN == "" {
 		return server.writePasswordModifyResult(
 			connection,
@@ -166,6 +178,7 @@ func (server *Server) handlePasswordModify(
 		target,
 		*database,
 		changes,
+		controls.manageDsaIT,
 		precondition,
 		nil,
 	)

@@ -37,7 +37,10 @@ subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
 also supports RFC 4528 Assertion, RFC 4527 pre-read/post-read, and RFC 2696
 simple paged-results controls on their applicable operations. RFC 4511
 Abandon and RFC 3909 Cancel can interrupt active Search operations on the same
-LDAP connection. RFC 2891 server-side sorting is available on databases
+LDAP connection. RFC 3296 named referrals and ManageDsaIT support base
+referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
+rewriting, and managed referral updates. RFC 2891 server-side sorting is
+available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
 context requests. It loads OpenLDAP schema, ordered ACLs, database roots,

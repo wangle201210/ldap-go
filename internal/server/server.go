@@ -609,6 +609,9 @@ func (server *Server) authenticate(
 		if err != nil {
 			return err
 		}
+		if runtime.schema.EntryHasObjectClass(entry, "referral") {
+			return nil
+		}
 		if !server.allowed(runtime, tx, "", entry, "userPassword", nil, acl.Auth) {
 			return nil
 		}

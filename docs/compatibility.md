@@ -19,7 +19,7 @@ No row may become `compatible` based only on unit tests.
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
 | Bind: SASL | partial | EXTERNAL over verified TLS/TLCP passes; other mechanisms remain |
-| Search and SearchResultReference | partial | scope, deref, limits, attributes, typesOnly |
+| Search and SearchResultReference | partial | scope, named-referral, limits, attributes, typesOnly; alias deref remains |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
 | Add | partial | parent/schema/ACL/operational-attribute tests |
@@ -28,8 +28,8 @@ No row may become `compatible` based only on unit tests.
 | Compare | partial | matching-rule and ACL disclosure tests |
 | Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
-| Referrals, aliases, and ManageDsaIT | planned | topology differential tests |
-| LDAP URLs and attribute options | planned | RFC 4516 and binary/language option tests |
+| Referrals, aliases, and ManageDsaIT | partial | RFC 3296 named referrals and OpenLDAP 2.6.13 differential pass; aliases remain |
+| LDAP URLs and attribute options | partial | referral DN/scope rewrite passes; full RFC 4516 and language options remain |
 
 ## Controls and extended operations
 
@@ -44,6 +44,7 @@ No row may become `compatible` based only on unit tests.
 | Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
 | Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
+| ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | planned | RFC 3672 visibility tests |
 | Don't Use Copy | planned | RFC 6171 topology tests |
 | LDAP Sync | planned | RFC 4533 refresh/persist interoperability |
@@ -168,6 +169,26 @@ registered matching rules for Search and Compare. Root DSE discovery and the
 read-only `cn=Subschema` entry publish built-in and imported definitions.
 Attribute selection distinguishes user attributes (`*`) from operational
 attributes (`+`).
+
+RFC 3296 `ref` and `referral` schema definitions are built in, and
+ManageDsaIT is advertised through Root DSE `supportedControl`. Without the
+control, a base referral returns result code 10 with matched DN and rewritten
+LDAP URLs; one-level and subtree searches emit application tag 19
+SearchResultReference responses independently of the search filter. Requests
+below a referral replace the local referral suffix with the URL DN, preserve
+an explicit URL scope, and otherwise add OpenLDAP-compatible `base`, `one`, or
+`sub` scope fields. URI labels are removed before transmission, while non-LDAP
+URIs are preserved.
+
+ManageDsaIT makes an exact referral entry visible to Search and manageable by
+Modify, Delete, ModifyDN, Compare, and Password Modify. Add, Modify, Delete,
+ModifyDN, Compare, base/subtree Search, missing descendants, one-level scope,
+duplicate controls, and forbidden control values have TCP or unit coverage.
+Adding a child below a referral still returns a referral because the referral
+DSE is not a naming context for local descendants. Process-level differential
+tests against OpenLDAP 2.6.13 cover result codes, matched DNs, URL DN/scope
+rewrites, SearchResultReference behavior, and managed updates. Alias
+dereferencing and referral chasing/chaining remain pending.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
@@ -384,7 +405,7 @@ Evidence currently consists of package tests, TCP interoperability tests using
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
 `ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
 `partial` because the complete RFC 4517 syntax/matching-rule set,
-aliases/referrals, controls, the remaining ACL grammar and differential suite,
+aliases, referral chaining, controls, the remaining ACL grammar and differential suite,
 SASL, subtree-delete control, and full differential fixtures are still
 pending.
 

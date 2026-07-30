@@ -84,6 +84,41 @@ func TestBuiltinSchemaValidatesEntries(t *testing.T) {
 		},
 	}
 	assertViolation(t, registry.ValidateEntry(singleValue), ViolationSingleValue)
+
+	referral := directory.Entry{
+		DN: "ou=remote,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      byteValues("referral", "extensibleObject"),
+			},
+			{Description: "ou", Values: byteValues("remote")},
+			{
+				Description: "ref",
+				Values:      byteValues("ldap://remote.example/dc=remote,dc=example"),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(referral); err != nil {
+		t.Fatalf("ValidateEntry(referral): %v", err)
+	}
+	if !registry.EntryHasObjectClass(referral, "referral") {
+		t.Fatal("referral object class was not identified")
+	}
+
+	refOnOrdinaryEntry := valid.Clone()
+	refOnOrdinaryEntry.Attributes = append(
+		refOnOrdinaryEntry.Attributes,
+		directory.Attribute{
+			Description: "ref",
+			Values:      byteValues("ldap://remote.example/"),
+		},
+	)
+	assertViolation(
+		t,
+		registry.ValidateEntry(refOnOrdinaryEntry),
+		ViolationDisallowedAttribute,
+	)
 }
 
 func TestRegistryIdentifiesDNValuedAttributes(t *testing.T) {

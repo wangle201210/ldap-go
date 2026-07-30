@@ -37,7 +37,7 @@ func (server *Server) handleAdd(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPostRead,
+		supportsAssertion|supportsPostRead|supportsManageDsaIT,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
@@ -113,7 +113,13 @@ func (server *Server) handleAdd(
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
-		if _, err := tx.Get(dn); err == nil {
+		if _, err := server.entryOrReferral(
+			state.runtime,
+			tx,
+			state.boundDN,
+			dn,
+			controls.manageDsaIT,
+		); err == nil {
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
 			return err
@@ -237,7 +243,10 @@ func (server *Server) handleModify(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPreRead|supportsPostRead,
+		supportsAssertion|
+			supportsPreRead|
+			supportsPostRead|
+			supportsManageDsaIT,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
@@ -287,6 +296,7 @@ func (server *Server) handleModify(
 		dn,
 		*database,
 		request.Changes,
+		controls.manageDsaIT,
 		func(reader storage.Reader, entry directory.Entry) error {
 			if err := server.checkAssertion(
 				state.runtime,
@@ -360,6 +370,7 @@ func (server *Server) modifyEntry(
 	dn directory.DN,
 	database runtimeDatabase,
 	changes []ldapwire.Modification,
+	manageDsaIT bool,
 	precondition entryModificationPrecondition,
 	postcondition entryModificationPostcondition,
 ) (*runtimeState, error) {
@@ -372,7 +383,13 @@ func (server *Server) modifyEntry(
 	var nextRuntime *runtimeState
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
-		entry, err := tx.Get(dn)
+		entry, err := server.entryOrReferral(
+			runtime,
+			tx,
+			boundDN,
+			dn,
+			manageDsaIT,
+		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
@@ -448,7 +465,7 @@ func (server *Server) handleDelete(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPreRead,
+		supportsAssertion|supportsPreRead|supportsManageDsaIT,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
@@ -502,7 +519,13 @@ func (server *Server) handleDelete(
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
-		entry, err := tx.Get(dn)
+		entry, err := server.entryOrReferral(
+			state.runtime,
+			tx,
+			state.boundDN,
+			dn,
+			controls.manageDsaIT,
+		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
@@ -610,7 +633,10 @@ func (server *Server) handleModifyDN(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPreRead|supportsPostRead,
+		supportsAssertion|
+			supportsPreRead|
+			supportsPostRead|
+			supportsManageDsaIT,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
@@ -733,7 +759,13 @@ func (server *Server) handleModifyDN(
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
-		sourceEntry, err := tx.Get(oldDN)
+		sourceEntry, err := server.entryOrReferral(
+			state.runtime,
+			tx,
+			state.boundDN,
+			oldDN,
+			controls.manageDsaIT,
+		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(
 				ldapwire.ResultNoSuchObject,
@@ -763,6 +795,15 @@ func (server *Server) handleModifyDN(
 			}
 			if err != nil {
 				return err
+			}
+			if state.runtime.schema.EntryHasObjectClass(
+				newParent,
+				"referral",
+			) {
+				return operationFailed(
+					ldapwire.ResultAffectsMultipleDSAs,
+					"new superior is a referral",
+				)
 			}
 		}
 		oldParent, err := parentEntry(tx, oldDN)
@@ -969,7 +1010,7 @@ func (server *Server) handleCompare(
 ) error {
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsAssertion,
+		supportsAssertion|supportsManageDsaIT,
 	)
 	if controlFailure != nil {
 		return server.writeOperationResult(
@@ -1012,7 +1053,13 @@ func (server *Server) handleCompare(
 			entry = server.subschemaEntry(state.runtime)
 		} else {
 			var getErr error
-			entry, getErr = tx.Get(dn)
+			entry, getErr = server.entryOrReferral(
+				state.runtime,
+				tx,
+				state.boundDN,
+				dn,
+				controls.manageDsaIT,
+			)
 			if errors.Is(getErr, storage.ErrEntryNotFound) {
 				return operationFailed(
 					ldapwire.ResultNoSuchObject,
