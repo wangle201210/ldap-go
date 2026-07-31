@@ -53,6 +53,42 @@ func EncodeExtendedResponse(
 	return encodeMessage(messageID, response, controls)
 }
 
+func EncodeIntermediateResponse(
+	messageID int64,
+	responseName string,
+	responseValue []byte,
+	controls []Control,
+) []byte {
+	response := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationIntermediateResponse,
+		nil,
+		"IntermediateResponse",
+	)
+	if responseName != "" {
+		response.AppendChild(ber.NewString(
+			ber.ClassContext,
+			ber.TypePrimitive,
+			0,
+			responseName,
+			"responseName",
+		))
+	}
+	if responseValue != nil {
+		value := ber.Encode(
+			ber.ClassContext,
+			ber.TypePrimitive,
+			1,
+			nil,
+			"responseValue",
+		)
+		_, _ = value.Data.Write(bytes.Clone(responseValue))
+		response.AppendChild(value)
+	}
+	return encodeMessage(messageID, response, controls)
+}
+
 func EncodeResultResponse(messageID int64, applicationTag uint64, result Result, controls []Control) []byte {
 	return encodeResultMessage(messageID, applicationTag, result, controls)
 }

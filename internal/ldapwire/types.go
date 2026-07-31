@@ -203,6 +203,7 @@ const (
 	ResultTooLate                      ResultCode = 120
 	ResultCannotCancel                 ResultCode = 121
 	ResultAssertionFailed              ResultCode = 122
+	ResultSyncRefreshRequired          ResultCode = 4096
 )
 
 type Result struct {
