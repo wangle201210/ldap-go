@@ -96,6 +96,7 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 			Attributes: []directory.Attribute{
 				{Description: "olcDatabase", Values: stringValues("{-1}frontend")},
 				{Description: "olcReadOnly", Values: stringValues("TRUE")},
+				{Description: "olcMaxDerefDepth", Values: stringValues("9")},
 			},
 		},
 		{
@@ -105,6 +106,7 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
 				{Description: "olcReadOnly", Values: stringValues("FALSE")},
 				{Description: "olcLastMod", Values: stringValues("FALSE")},
+				{Description: "olcMaxDerefDepth", Values: stringValues("3")},
 			},
 		},
 		{
@@ -145,6 +147,12 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 	if example.lastMod {
 		t.Fatal("database olcLastMod FALSE was ignored")
 	}
+	if example.maxDerefDepth != 3 {
+		t.Fatalf(
+			"database olcMaxDerefDepth = %d, want 3",
+			example.maxDerefDepth,
+		)
+	}
 
 	otherDN, err := directory.ParseDN("dc=other,dc=com")
 	if err != nil {
@@ -157,6 +165,13 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 	if !other.lastMod {
 		t.Fatal("olcLastMod did not default to TRUE")
 	}
+	if other.maxDerefDepth != defaultAliasDerefDepth {
+		t.Fatalf(
+			"default olcMaxDerefDepth = %d, want %d",
+			other.maxDerefDepth,
+			defaultAliasDerefDepth,
+		)
+	}
 
 	bootstrapDN, err := directory.ParseDN("dc=bootstrap,dc=com")
 	if err != nil {
@@ -165,6 +180,13 @@ func TestLoadRuntimeDatabasesAppliesOperationalSettings(t *testing.T) {
 	bootstrap := databases[databaseIndexForDN(databases, bootstrapDN)]
 	if !bootstrap.readOnly {
 		t.Fatal("frontend olcReadOnly was not inherited by a bootstrap database")
+	}
+	if bootstrap.maxDerefDepth != defaultAliasDerefDepth {
+		t.Fatalf(
+			"bootstrap olcMaxDerefDepth = %d, want %d",
+			bootstrap.maxDerefDepth,
+			defaultAliasDerefDepth,
+		)
 	}
 }
 
@@ -415,6 +437,7 @@ func TestLoadRuntimeDatabasesRejectsInvalidOperationalSettings(t *testing.T) {
 		"olcDisabled",
 		"olcHidden",
 		"olcLastMod",
+		"olcMaxDerefDepth",
 		"olcSubordinate",
 	} {
 		attribute := attribute

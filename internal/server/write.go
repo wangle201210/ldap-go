@@ -135,9 +135,36 @@ func (server *Server) handleAdd(
 		}
 
 		if parent, ok := dn.Parent(); ok && parent.Depth() > 0 {
-			if _, err := tx.Get(parent); err != nil {
+			storedParent, err := tx.Get(parent)
+			if err == nil {
+				if state.runtime.schema.EntryHasObjectClass(
+					storedParent,
+					"alias",
+				) {
+					return operationFailed(
+						ldapwire.ResultAliasProblem,
+						"parent is an alias",
+					)
+				}
+			} else {
 				if !errors.Is(err, storage.ErrEntryNotFound) {
 					return err
+				}
+				ancestor, found, ancestorErr := closestExistingAncestor(
+					tx,
+					dn,
+				)
+				if ancestorErr != nil {
+					return ancestorErr
+				}
+				if found && state.runtime.schema.EntryHasObjectClass(
+					ancestor,
+					"alias",
+				) {
+					return operationFailed(
+						ldapwire.ResultAliasProblem,
+						"parent is an alias",
+					)
 				}
 				if !databaseOwnsSuffix(*database, dn) {
 					belowContext, err := belowKnownNamingContext(tx, dn)
@@ -795,6 +822,15 @@ func (server *Server) handleModifyDN(
 			}
 			if err != nil {
 				return err
+			}
+			if state.runtime.schema.EntryHasObjectClass(
+				newParent,
+				"alias",
+			) {
+				return operationFailed(
+					ldapwire.ResultAliasProblem,
+					"new superior is an alias",
+				)
 			}
 			if state.runtime.schema.EntryHasObjectClass(
 				newParent,

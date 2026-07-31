@@ -451,27 +451,49 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 	if err := registry.validateStructuralClasses(classes); err != nil {
 		return err
 	}
-	hasReferralAttribute := false
-	for _, attribute := range entry.Attributes {
-		if schemaKey(baseAttributeDescription(attribute.Description)) == "ref" {
-			hasReferralAttribute = true
-			break
-		}
+	specialAttributes := []struct {
+		key         string
+		attribute   string
+		objectClass string
+	}{
+		{
+			key:         "aliasedobjectname",
+			attribute:   "aliasedObjectName",
+			objectClass: "alias",
+		},
+		{key: "ref", attribute: "ref", objectClass: "referral"},
 	}
-	if hasReferralAttribute {
-		referralClass, ok := registry.objectClasses[schemaKey("referral")]
+	for _, special := range specialAttributes {
+		present := false
+		for _, attribute := range entry.Attributes {
+			if schemaKey(baseAttributeDescription(attribute.Description)) ==
+				special.key {
+				present = true
+				break
+			}
+		}
+		if !present {
+			continue
+		}
+		objectClass, ok := registry.objectClasses[schemaKey(special.objectClass)]
 		if !ok {
 			return &Violation{
 				Kind:      ViolationDisallowedAttribute,
-				Attribute: "ref",
-				Message:   "attribute requires the referral object class",
+				Attribute: special.attribute,
+				Message: fmt.Sprintf(
+					"attribute requires the %s object class",
+					special.objectClass,
+				),
 			}
 		}
-		if _, ok := classes[schemaKey(referralClass.OID)]; !ok {
+		if _, ok := classes[schemaKey(objectClass.OID)]; !ok {
 			return &Violation{
 				Kind:      ViolationDisallowedAttribute,
-				Attribute: "ref",
-				Message:   "attribute requires the referral object class",
+				Attribute: special.attribute,
+				Message: fmt.Sprintf(
+					"attribute requires the %s object class",
+					special.objectClass,
+				),
 			}
 		}
 	}

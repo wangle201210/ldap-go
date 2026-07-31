@@ -390,6 +390,33 @@ func (server *Server) handleSearch(
 			}
 		}
 	}
+	base, routes, aliasFailure, err := server.prepareAliasSearch(
+		ctx,
+		state,
+		base,
+		request.Scope,
+		request.DerefAliases,
+		routes,
+	)
+	if err != nil {
+		if paging != nil {
+			clearPagedSearch(state)
+		}
+		return fmt.Errorf("prepare alias search: %w", err)
+	}
+	if aliasFailure != nil {
+		return server.writeSearchResult(
+			connection,
+			message.ID,
+			state,
+			paging,
+			sorting,
+			nil,
+			*aliasFailure,
+			pagedSearchCursor{},
+			false,
+		)
+	}
 
 	var virtualListView *virtualListViewContext
 	if vlvRequest != nil {
@@ -749,6 +776,15 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				entry = withSubschemaReference(entry)
+				if derefAliasesWhileSearching(request.DerefAliases) &&
+					state.runtime.schema.EntryHasObjectClass(
+						entry,
+						"alias",
+					) &&
+					(derefAliasesWhileFinding(request.DerefAliases) ||
+						!candidate.Equal(base)) {
+					return nil
+				}
 				if !controls.manageDsaIT &&
 					state.runtime.schema.EntryHasObjectClass(
 						entry,
@@ -1168,7 +1204,23 @@ func databaseSearchRoutes(
 	if primaryIndex < 0 {
 		return nil
 	}
+	return databaseSearchRoutesFromPrimary(
+		databases,
+		primaryIndex,
+		base,
+		scope,
+	)
+}
 
+func databaseSearchRoutesFromPrimary(
+	databases []runtimeDatabase,
+	primaryIndex int,
+	base directory.DN,
+	scope directory.Scope,
+) []databaseSearchRoute {
+	if primaryIndex < 0 || primaryIndex >= len(databases) {
+		return nil
+	}
 	superiorIndex := primaryIndex
 	if databases[primaryIndex].subordinate {
 		superiorIndex = glueSuperiorDatabaseIndex(databases, primaryIndex)

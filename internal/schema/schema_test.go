@@ -106,6 +106,44 @@ func TestBuiltinSchemaValidatesEntries(t *testing.T) {
 		t.Fatal("referral object class was not identified")
 	}
 
+	alias := directory.Entry{
+		DN: "cn=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      byteValues("alias", "extensibleObject"),
+			},
+			{Description: "cn", Values: byteValues("alice")},
+			{
+				Description: "aliasedObjectName",
+				Values:      byteValues("uid=alice,dc=example,dc=com"),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(alias); err != nil {
+		t.Fatalf("ValidateEntry(alias): %v", err)
+	}
+	if !registry.EntryHasObjectClass(alias, "alias") {
+		t.Fatal("alias object class was not identified")
+	}
+	if !registry.IsDNValued("aliasedEntryName") {
+		t.Fatal("aliasedObjectName alias was not identified as DN-valued")
+	}
+
+	aliasAttributeOnOrdinaryEntry := valid.Clone()
+	aliasAttributeOnOrdinaryEntry.Attributes = append(
+		aliasAttributeOnOrdinaryEntry.Attributes,
+		directory.Attribute{
+			Description: "aliasedObjectName",
+			Values:      byteValues("uid=bob,dc=example,dc=com"),
+		},
+	)
+	assertViolation(
+		t,
+		registry.ValidateEntry(aliasAttributeOnOrdinaryEntry),
+		ViolationDisallowedAttribute,
+	)
+
 	refOnOrdinaryEntry := valid.Clone()
 	refOnOrdinaryEntry.Attributes = append(
 		refOnOrdinaryEntry.Attributes,

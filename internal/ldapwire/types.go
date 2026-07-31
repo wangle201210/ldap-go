@@ -64,6 +64,13 @@ type SearchRequest struct {
 	Attributes   []string
 }
 
+const (
+	NeverDerefAliases = iota
+	DerefInSearching
+	DerefFindingBaseObject
+	DerefAlways
+)
+
 func (SearchRequest) ApplicationTag() uint64 { return ApplicationSearchRequest }
 
 type UnbindRequest struct{}

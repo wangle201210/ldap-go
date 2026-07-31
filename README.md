@@ -39,8 +39,10 @@ simple paged-results controls on their applicable operations. RFC 4511
 Abandon and RFC 3909 Cancel can interrupt active Search operations on the same
 LDAP connection. RFC 3296 named referrals and ManageDsaIT support base
 referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
-rewriting, and managed referral updates. RFC 2891 server-side sorting is
-available on databases
+rewriting, and managed referral updates. RFC 4511/4512 aliases support all four
+`derefAliases` modes, recursive base and search-scope dereferencing, loop and
+broken-target handling, and OpenLDAP's database-level `olcMaxDerefDepth`.
+RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
 context requests. It loads OpenLDAP schema, ordered ACLs, database roots,
@@ -50,7 +52,7 @@ runtime snapshot. Database entry partitions allow different OpenLDAP backends
 to hold the same DN without crossing authorization or search boundaries, while
 `olcSubordinate` databases participate in OpenLDAP-style glue searches. The
 compatibility matrix marks these as partial until the remaining schema, ACL,
-control, alias, configuration, and differential cases pass.
+control, configuration, and differential cases pass.
 
 ```sh
 go run ./cmd/ldap-go import \

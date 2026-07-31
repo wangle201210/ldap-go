@@ -54,6 +54,9 @@ association that created the target operation.
 The DSA implements Bind, Search, Modify, Add, Delete, ModifyDN, Compare,
 Abandon, Unbind, and Extended operations. It owns referrals, aliases,
 operational attributes, result codes, and transaction boundaries.
+Alias-aware Search resolves the effective base first, then represents
+dereferenced targets as stable additional database routes so ordinary ACL,
+filter, paging, sorting, and VLV processing remains shared.
 
 ### Schema and matching
 

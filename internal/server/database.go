@@ -24,6 +24,7 @@ type runtimeDatabase struct {
 	advertise       bool
 	readOnly        bool
 	lastMod         bool
+	maxDerefDepth   int
 	configDNKey     string
 	serverSideSort  bool
 	sortMaxKeys     int
@@ -77,10 +78,11 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			entryUUID = entryUUIDValues[0]
 		}
 		database := runtimeDatabase{
-			name:        string(databaseValues[0]),
-			partition:   storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
-			lastMod:     true,
-			configDNKey: entryDN.Key(),
+			name:          string(databaseValues[0]),
+			partition:     storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
+			lastMod:       true,
+			maxDerefDepth: defaultAliasDerefDepth,
+			configDNKey:   entryDN.Key(),
 		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
 			suffix, err := directory.ParseDN(string(rawSuffix))
@@ -158,6 +160,14 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		} else if present {
 			database.lastMod = lastMod
 		}
+		database.maxDerefDepth, err = singleNonnegativeInteger(
+			entry,
+			"olcMaxDerefDepth",
+			defaultAliasDerefDepth,
+		)
+		if err != nil {
+			return err
+		}
 		databases = append(databases, database)
 		return nil
 	}); err != nil {
@@ -186,10 +196,11 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			continue
 		}
 		databases = append(databases, runtimeDatabase{
-			name:      "bootstrap",
-			partition: storage.OpenLDAPBootstrapPartition(contextDN),
-			suffixes:  []directory.DN{contextDN},
-			lastMod:   true,
+			name:          "bootstrap",
+			partition:     storage.OpenLDAPBootstrapPartition(contextDN),
+			suffixes:      []directory.DN{contextDN},
+			lastMod:       true,
+			maxDerefDepth: defaultAliasDerefDepth,
 		})
 	}
 	applyFrontendDatabaseDefaults(databases)

@@ -19,7 +19,7 @@ No row may become `compatible` based only on unit tests.
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
 | Bind: SASL | partial | EXTERNAL over verified TLS/TLCP passes; other mechanisms remain |
-| Search and SearchResultReference | partial | scope, named-referral, limits, attributes, typesOnly; alias deref remains |
+| Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
 | Add | partial | parent/schema/ACL/operational-attribute tests |
@@ -28,7 +28,7 @@ No row may become `compatible` based only on unit tests.
 | Compare | partial | matching-rule and ACL disclosure tests |
 | Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
-| Referrals, aliases, and ManageDsaIT | partial | RFC 3296 named referrals and OpenLDAP 2.6.13 differential pass; aliases remain |
+| Referrals, aliases, and ManageDsaIT | partial | RFC 3296 referrals, RFC 4511/4512 aliases, and OpenLDAP 2.6.13 differentials pass; referral chaining remains |
 | LDAP URLs and attribute options | partial | referral DN/scope rewrite passes; full RFC 4516 and language options remain |
 
 ## Controls and extended operations
@@ -187,8 +187,28 @@ duplicate controls, and forbidden control values have TCP or unit coverage.
 Adding a child below a referral still returns a referral because the referral
 DSE is not a naming context for local descendants. Process-level differential
 tests against OpenLDAP 2.6.13 cover result codes, matched DNs, URL DN/scope
-rewrites, SearchResultReference behavior, and managed updates. Alias
-dereferencing and referral chasing/chaining remain pending.
+rewrites, SearchResultReference behavior, and managed updates.
+
+RFC 4512 `alias` and `aliasedObjectName` schema definitions are also built in.
+Search implements `neverDerefAliases`, `derefInSearching`,
+`derefFindingBaseObj`, and `derefAlways`, including recursive alias chains,
+base DNs below an alias, target-DN SearchResultEntry names, and expansion of
+one-level or subtree search scopes outside the original subtree. The base alias
+is retained when only searching aliases are dereferenced, matching OpenLDAP.
+Broken and circular aliases fail base resolution with alias result codes and
+matched DNs but are ignored while expanding search scopes. The per-database
+`olcMaxDerefDepth` setting is loaded from `cn=config` and defaults to 15.
+Exact target scopes are coalesced while overlapping target subtrees remain
+distinct, preserving OpenLDAP MDB's observable duplicate-entry behavior.
+Paging, server-side sorting, VLV, Add-parent, ModifyDN-superior, ordinary
+Modify/Compare/Delete, and Bind rejection have TCP coverage. Process-level
+OpenLDAP 2.6.13 differentials cover all four modes, base descendants, broken
+targets, loops, and overlapping scopes. One intentional edge-case difference
+is recorded: after a positive `olcMaxDerefDepth` is exceeded, OpenLDAP 2.6.13
+MDB can emit success with a matched DN and the diagnostic `maximum deref depth
+exceeded` because a successful intermediate lookup overwrites result code 36.
+`ldap-go` consistently returns `aliasDereferencingProblem` (36) for that
+failure. Referral chasing and the `chain` overlay remain pending.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
@@ -364,7 +384,8 @@ configuration schema, backend/module-specific mutation hooks, ordered-entry
 renumbering, and full differential error behavior remain pending.
 
 Runtime database settings also load `olcReadOnly` and `olcLastMod`, including
-the frontend read-only restriction, while global `olcAllows: update_anon`
+the frontend read-only restriction, plus database-local `olcMaxDerefDepth`,
+while global `olcAllows: update_anon`
 controls whether anonymous updates may reach ACL evaluation. Update
 restrictions run before ACL checks, and database root DNs do not bypass
 read-only mode. With `olcLastMod: FALSE`, Add, Modify, and ModifyDN stop
@@ -405,7 +426,7 @@ Evidence currently consists of package tests, TCP interoperability tests using
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
 `ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
 `partial` because the complete RFC 4517 syntax/matching-rule set,
-aliases, referral chaining, controls, the remaining ACL grammar and differential suite,
+referral chaining, controls, the remaining ACL grammar and differential suite,
 SASL, subtree-delete control, and full differential fixtures are still
 pending.
 
