@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,6 +19,7 @@ import (
 
 const (
 	syncContextCSNMetadataPrefix = "openldap/sync/context-csn/"
+	syncCheckpointMetadataPrefix = "openldap/sync/checkpoint/"
 	syncChangeBufferSize         = 256
 	openLDAPSyncRIDMax           = 999
 	openLDAPCSNCounterMax        = 0xffffff
@@ -39,6 +41,11 @@ type openLDAPSyncCookie struct {
 }
 
 type syncCSNState map[uint16]openLDAPCSN
+
+type syncCheckpointState struct {
+	Operations int   `json:"operations"`
+	LastUnix   int64 `json:"last_unix"`
+}
 
 type syncChange struct {
 	partition string
@@ -330,6 +337,11 @@ func syncContextCSNMetadataKey(partition string) string {
 		base64.RawURLEncoding.EncodeToString([]byte(partition))
 }
 
+func syncCheckpointMetadataKey(partition string) string {
+	return syncCheckpointMetadataPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(partition))
+}
+
 func withSyncProviderContextCSNs(
 	reader storage.Reader,
 	database runtimeDatabase,
@@ -449,6 +461,79 @@ func advanceSyncContextCSN(
 	return writer.SetMetadata(key, []byte(csn.raw))
 }
 
+func updateSyncCheckpoint(
+	writer storage.Writer,
+	database runtimeDatabase,
+	now time.Time,
+) error {
+	if database.syncCheckpointOps == 0 ||
+		database.syncCheckpointMinutes == 0 ||
+		len(database.suffixes) == 0 {
+		return nil
+	}
+
+	key := syncCheckpointMetadataKey(database.partition)
+	var state syncCheckpointState
+	rawState, err := writer.Metadata(key)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(rawState, &state); err != nil {
+			return fmt.Errorf("decode sync checkpoint state: %w", err)
+		}
+		if state.Operations < 0 || state.LastUnix <= 0 {
+			return errors.New("stored sync checkpoint state is invalid")
+		}
+	case errors.Is(err, storage.ErrMetadataNotFound):
+		state.LastUnix = now.Unix()
+	default:
+		return fmt.Errorf("read sync checkpoint state: %w", err)
+	}
+
+	state.Operations++
+	dueOperations := state.Operations >= database.syncCheckpointOps
+	dueTime := !now.Before(time.Unix(state.LastUnix, 0).Add(
+		time.Duration(database.syncCheckpointMinutes) * time.Minute,
+	))
+	if dueOperations || dueTime {
+		tx := storage.WriterInPartition(writer, database.partition)
+		suffix, getErr := tx.Get(database.suffixes[0])
+		switch {
+		case getErr == nil:
+			contextCSNs, contextErr := syncContextCSNs(
+				writer,
+				database.partition,
+			)
+			if contextErr != nil {
+				return contextErr
+			}
+			values := make([][]byte, 0, len(contextCSNs))
+			for _, rawCSN := range orderedSyncCSNs(contextCSNs) {
+				values = append(values, []byte(rawCSN))
+			}
+			suffix.ReplaceValues("contextCSN", values)
+			if err := tx.Put(suffix, true); err != nil {
+				return fmt.Errorf("write sync checkpoint contextCSN: %w", err)
+			}
+			state.Operations = 0
+			state.LastUnix = now.Unix()
+		case errors.Is(getErr, storage.ErrEntryNotFound):
+			// A deleted suffix cannot carry a checkpoint. Retain the
+			// counters so the next successful write retries it.
+		default:
+			return fmt.Errorf("read sync checkpoint suffix: %w", getErr)
+		}
+	}
+
+	rawState, err = json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encode sync checkpoint state: %w", err)
+	}
+	if err := writer.SetMetadata(key, rawState); err != nil {
+		return fmt.Errorf("store sync checkpoint state: %w", err)
+	}
+	return nil
+}
+
 func (server *Server) recordSyncChange(
 	writer storage.Writer,
 	database runtimeDatabase,
@@ -476,6 +561,9 @@ func (server *Server) recordSyncChange(
 		return nil, err
 	}
 	if err := advanceSyncContextCSN(writer, database.partition, csn); err != nil {
+		return nil, err
+	}
+	if err := updateSyncCheckpoint(writer, database, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	change := &syncChange{
