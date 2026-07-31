@@ -82,18 +82,29 @@ func loadRuntimeShadowSettings(
 }
 
 func validateShadowUpdateRef(raw string) (string, error) {
-	reference := referralURI(strings.TrimSpace(raw))
+	reference := strings.TrimSpace(raw)
 	if reference == "" {
 		return "", fmt.Errorf("empty referral URL")
 	}
 	parsed, err := url.Parse(reference)
-	if err != nil || parsed.Opaque != "" || parsed.Fragment != "" ||
-		parsed.User != nil {
+	if err != nil || parsed.Scheme == "" {
 		return "", fmt.Errorf("invalid referral URL %q", raw)
 	}
 	switch strings.ToLower(parsed.Scheme) {
-	case "ldap", "ldaps", "ldapi", "ldap+tlcp":
+	case "ldap", "ldaps", "ldapi", "ldap+tlcp", "pldap", "pldaps":
+		if parsed.Opaque != "" ||
+			parsed.Fragment != "" ||
+			parsed.User != nil ||
+			(parsed.Path != "" && parsed.Path != "/") ||
+			parsed.RawQuery != "" ||
+			parsed.ForceQuery {
+			return "", fmt.Errorf("invalid referral URL %q", raw)
+		}
 	default:
+		return reference, nil
+	}
+	schemeEnd := strings.IndexByte(reference, ':')
+	if schemeEnd < 0 || !strings.HasPrefix(reference[schemeEnd:], "://") {
 		return "", fmt.Errorf("invalid referral URL %q", raw)
 	}
 	return reference, nil
@@ -123,7 +134,7 @@ func shadowUpdateResult(
 	for _, reference := range database.updateRefs {
 		rewritten, ok := rewriteReferralURL(
 			reference,
-			base,
+			&base,
 			&target,
 			referralScopeDefault,
 		)
@@ -135,6 +146,42 @@ func shadowUpdateResult(
 		return ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
 			"shadow context; no update referral",
+		)
+	}
+	return ldapwire.Result{
+		Code:      ldapwire.ResultReferral,
+		Referrals: referrals,
+	}
+}
+
+func shadowSearchResult(
+	database runtimeDatabase,
+	target directory.DN,
+	scope directory.Scope,
+) ldapwire.Result {
+	if len(database.updateRefs) == 0 {
+		return ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"copy not used; no referral information available",
+		)
+	}
+
+	referrals := make([]string, 0, len(database.updateRefs))
+	for _, reference := range database.updateRefs {
+		rewritten, ok := rewriteReferralURL(
+			reference,
+			nil,
+			&target,
+			referralScopeForSearch(scope),
+		)
+		if ok {
+			referrals = append(referrals, rewritten)
+		}
+	}
+	if len(referrals) == 0 {
+		return ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"copy not used; no referral information available",
 		)
 	}
 	return ldapwire.Result{

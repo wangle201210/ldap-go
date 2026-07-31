@@ -29,7 +29,8 @@ func (server *Server) handleSearch(
 	controlSupport := supportsAssertion |
 		supportsPagedResults |
 		supportsManageDsaIT |
-		supportsSubentries
+		supportsSubentries |
+		supportsDontUseCopy
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
@@ -357,6 +358,25 @@ func (server *Server) handleSearch(
 			pagedSearchCursor{},
 			false,
 		)
+	}
+	if controls.dontUseCopy {
+		primary := state.runtime.databases[routes[0].databaseIndex]
+		if primary.shadow {
+			if paging != nil {
+				clearPagedSearch(state)
+			}
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				nil,
+				nil,
+				nil,
+				shadowSearchResult(primary, base, request.Scope),
+				pagedSearchCursor{},
+				false,
+			)
+		}
 	}
 	if controls.sorting != nil || vlvRequest != nil {
 		maxKeys, enabled := serverSideSortSettingsForDatabase(
@@ -1830,6 +1850,7 @@ func (server *Server) rootDSE(
 		postReadControlOID,
 		pagedResultsControlOID,
 		subentriesControlOID,
+		dontUseCopyControlOID,
 		transactionSpecificationControlOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {

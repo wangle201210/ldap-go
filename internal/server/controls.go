@@ -19,6 +19,7 @@ const (
 	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
 	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
 	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
+	dontUseCopyControlOID  = "1.3.6.1.1.22"
 	subentriesControlOID   = "1.3.6.1.4.1.4203.1.10.1"
 	syncRequestControlOID  = "1.3.6.1.4.1.4203.1.9.1.1"
 	syncStateControlOID    = "1.3.6.1.4.1.4203.1.9.1.2"
@@ -38,6 +39,7 @@ const (
 	supportsManageDsaIT
 	supportsSubentries
 	supportsSync
+	supportsDontUseCopy
 )
 
 type requestControls struct {
@@ -48,6 +50,7 @@ type requestControls struct {
 	sorting     *serverSideSortRequest
 	vlv         *virtualListViewRequest
 	manageDsaIT bool
+	dontUseCopy bool
 	subentries  *bool
 	sync        *syncRequestControl
 }
@@ -268,6 +271,26 @@ func parseRequestControls(
 				)
 			}
 			parsed.manageDsaIT = true
+		case dontUseCopyControlOID:
+			if supported&supportsDontUseCopy == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.dontUseCopy {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"dontUseCopy control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"dontUseCopy control value not absent",
+				)
+			}
+			parsed.dontUseCopy = true
 		case subentriesControlOID:
 			if supported&supportsSubentries == 0 {
 				if control.Critical {

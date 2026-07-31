@@ -174,7 +174,7 @@ func rewrittenReferralURLs(
 		if raw == "" {
 			continue
 		}
-		rewritten, ok := rewriteReferralURL(raw, base, target, scope)
+		rewritten, ok := rewriteReferralURL(raw, &base, target, scope)
 		if ok {
 			referrals = append(referrals, rewritten)
 		}
@@ -191,7 +191,7 @@ func referralURI(value string) string {
 
 func rewriteReferralURL(
 	raw string,
-	base directory.DN,
+	base *directory.DN,
 	target *directory.DN,
 	scope referralURLScope,
 ) (string, bool) {
@@ -310,9 +310,15 @@ func referralURLQuery(parsed *url.URL) ([]string, bool) {
 
 func rewriteReferralDN(
 	referralDN *directory.DN,
-	base directory.DN,
+	base *directory.DN,
 	target *directory.DN,
 ) (string, error) {
+	if base == nil {
+		if target == nil {
+			return "", nil
+		}
+		return target.String(), nil
+	}
 	if target == nil {
 		if referralDN != nil {
 			return referralDN.String(), nil
@@ -326,7 +332,7 @@ func rewriteReferralDN(
 		return target.String(), nil
 	}
 	if base.Equal(*target) || base.AncestorOf(*target) {
-		rewritten, err := target.ReplaceAncestor(base, *referralDN)
+		rewritten, err := target.ReplaceAncestor(*base, *referralDN)
 		if err != nil {
 			return "", err
 		}

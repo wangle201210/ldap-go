@@ -1194,7 +1194,7 @@ func (server *Server) handleCompare(
 ) error {
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsManageDsaIT,
+		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy,
 	)
 	if controlFailure != nil {
 		return server.writeOperationResult(
@@ -1245,6 +1245,12 @@ func (server *Server) handleCompare(
 				controls.manageDsaIT,
 			)
 			if errors.Is(getErr, storage.ErrEntryNotFound) {
+				if controls.dontUseCopy && database.shadow {
+					return operationFailed(
+						ldapwire.ResultUnwillingToPerform,
+						"copy not used",
+					)
+				}
 				return operationFailed(
 					ldapwire.ResultNoSuchObject,
 					server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
@@ -1252,6 +1258,12 @@ func (server *Server) handleCompare(
 			}
 			if getErr != nil {
 				return getErr
+			}
+			if controls.dontUseCopy && database.shadow {
+				return operationFailed(
+					ldapwire.ResultUnwillingToPerform,
+					"copy not used",
+				)
 			}
 			entry = withSubschemaReference(entry)
 			entry, getErr = withSyncProviderContextCSNs(

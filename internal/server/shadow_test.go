@@ -41,6 +41,15 @@ func TestLoadRuntimeShadowSettings(t *testing.T) {
 			wantShadow: true,
 		},
 		{
+			name: "non-LDAP update referral",
+			attributes: []directory.Attribute{{
+				Description: "olcUpdateRef",
+				Values:      stringValues("https://provider.example/directory"),
+			}},
+			consumers:  []syncConsumerConfig{{rid: 1}},
+			wantShadow: true,
+		},
+		{
 			name: "multi provider",
 			attributes: []directory.Attribute{
 				{
@@ -89,10 +98,12 @@ func TestLoadRuntimeShadowSettings(t *testing.T) {
 			wantError: "cannot combine",
 		},
 		{
-			name: "invalid update ref",
+			name: "LDAP update ref with DN",
 			attributes: []directory.Attribute{{
 				Description: "olcUpdateRef",
-				Values:      stringValues("https://provider.example"),
+				Values: stringValues(
+					"ldap://provider.example/dc=example,dc=com",
+				),
 			}},
 			consumers: []syncConsumerConfig{{rid: 1}},
 			wantError: "invalid referral",
@@ -140,6 +151,47 @@ func TestLoadRuntimeShadowSettings(t *testing.T) {
 	}
 }
 
+func TestValidateShadowUpdateRefMatchesOpenLDAPRules(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value string
+		valid bool
+	}{
+		{value: "ldap://provider.example", valid: true},
+		{value: "LDAP://provider.example", valid: true},
+		{value: "ldaps://provider.example/", valid: true},
+		{value: "ldap+tlcp://provider.example:1636", valid: true},
+		{value: "https://provider.example/directory", valid: true},
+		{value: "ldap://provider.example/dc=example,dc=com"},
+		{value: "ldap://provider.example/?cn"},
+		{value: "ldap://provider.example/??sub"},
+		{value: "ldap://provider.example/???(uid=alice)"},
+		{value: "ldap:provider.example"},
+		{value: "not-a-uri"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.value, func(t *testing.T) {
+			t.Parallel()
+			got, err := validateShadowUpdateRef(test.value)
+			if test.valid && (err != nil || got != test.value) {
+				t.Fatalf(
+					"validateShadowUpdateRef() = %q, %v; want valid",
+					got,
+					err,
+				)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf(
+					"validateShadowUpdateRef() = %q; want error",
+					got,
+				)
+			}
+		})
+	}
+}
+
 func TestShadowUpdatePrecondition(t *testing.T) {
 	t.Parallel()
 
@@ -156,7 +208,7 @@ func TestShadowUpdatePrecondition(t *testing.T) {
 		suffixes:   []directory.DN{suffix},
 		shadow:     true,
 		updateDN:   &updateDN,
-		updateRefs: []string{"ldap://provider.example/dc=remote,dc=com"},
+		updateRefs: []string{"ldap://provider.example"},
 	}
 	runtime := &runtimeState{databases: []runtimeDatabase{database}}
 
@@ -173,7 +225,7 @@ func TestShadowUpdatePrecondition(t *testing.T) {
 	}
 	if len(result.Referrals) != 1 ||
 		result.Referrals[0] !=
-			"ldap://provider.example/uid=alice,ou=people,dc=remote,dc=com" {
+			"ldap://provider.example/uid=alice,ou=people,dc=example,dc=com" {
 		t.Fatalf("shadow referrals = %q", result.Referrals)
 	}
 

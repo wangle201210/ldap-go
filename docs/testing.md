@@ -53,7 +53,7 @@ transaction, and replication differentials is enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -66,6 +66,9 @@ plugin is unavailable.
 The transaction cases run OpenLDAP `ldapmodify -E txn=commit/abort` against
 ldap-go, then send the same duplicate-Add raw BER sequence to the reference
 slapd to verify the failed message ID and atomic rollback semantics.
+The Don't Use Copy cases run `ldapsearch -E '!dontUseCopy'` against a ldap-go
+shadow database and compare the same critical, non-critical, malformed,
+alias, referral, and Compare requests with the reference slapd.
 
 The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
 Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM

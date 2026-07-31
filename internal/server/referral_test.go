@@ -112,7 +112,7 @@ func TestRewriteReferralURLMatchesOpenLDAPRules(t *testing.T) {
 			raw := referralURI(test.raw)
 			got, ok := rewriteReferralURL(
 				raw,
-				base,
+				&base,
 				test.target,
 				test.scope,
 			)

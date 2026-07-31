@@ -1180,7 +1180,7 @@ func TestSyncreplConsumerSuffixMassage(t *testing.T) {
 		consumer.Add(direct),
 		"",
 		"ldap://"+providerAddress+
-			"/uid=direct,ou=people,dc=example,dc=com",
+			"/uid=direct,ou=people,dc=local,dc=com",
 	)
 
 	provider := dialLDAPRoot(t, providerAddress)
@@ -1450,9 +1450,7 @@ func seedSyncConsumerSuffixDatabase(
 			},
 			{
 				Description: "olcUpdateRef",
-				Values: stringValues(
-					"ldap://" + providerAddress + "/dc=example,dc=com",
-				),
+				Values:      stringValues("ldap://" + providerAddress),
 			},
 		},
 	}

@@ -56,6 +56,11 @@ any failed operation rolls back the full queue and identifies its original
 message ID. Abort, Bind-triggered abort, one-database enforcement, Root DSE
 discovery, OpenLDAP `ldapmodify -E txn=commit/abort`, and a direct slapd
 rollback differential pass.
+RFC 6171 Don't Use Copy is available on Search and Compare. Authoritative
+databases answer normally; a single-provider shadow Search returns its
+OpenLDAP-rewritten `olcUpdateRef` or `unwillingToPerform`, while shadow Compare
+returns `unwillingToPerform` without consulting copied entry data. OpenLDAP
+`ldapsearch -E '!dontUseCopy'` and raw slapd differential cases pass.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed

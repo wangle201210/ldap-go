@@ -46,7 +46,7 @@ No row may become `compatible` based only on unit tests.
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
-| Don't Use Copy | planned | RFC 6171 topology tests |
+| Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining and `olcDisallows` remain |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
 | LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; proxy authorization, generated passwords, server abort notices, and resource limits remain |
 | Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
@@ -216,6 +216,23 @@ the current transaction path rejects pre-read and post-read controls. Proxied
 authorization on Start Transaction, generated Password Modify response values,
 server-initiated Aborted Transaction Notice, and explicit queued-resource
 limits remain pending.
+
+RFC 6171 Don't Use Copy is advertised in Root DSE and accepted on Search and
+Compare only. The control requires an absent value; duplicate or valued
+controls return `protocolError`. Matching OpenLDAP's default behavior,
+non-critical requests are also honored, while support for rejecting them
+through `olcDisallows: dontusecopy_non_critical` remains pending.
+Authoritative databases, including writable multi-provider databases, answer
+normally. A single-provider shadow Search rejects before alias dereferencing,
+filtering, Sync setup, or other copied-data processing and returns a
+request-DN/scope-rewritten `olcUpdateRef`; without one it returns
+`unwillingToPerform`. Shadow Compare returns `unwillingToPerform` with
+`copy not used`, matching slapd MDB. Imported LDAP-form `olcUpdateRef` values
+are validated with OpenLDAP's global-referral restriction: DN, attribute,
+scope, and filter URL components are forbidden, while non-LDAP URIs remain
+valid. OpenLDAP `ldapsearch -E '!dontUseCopy'` interoperability and raw BER
+differentials cover criticality, invalid values, broken aliases, named
+referrals, URL rewriting, and Compare. Server-side chaining remains pending.
 
 The schema registry parses OpenLDAP `{n}`-ordered `olcAttributeTypes` and
 `olcObjectClasses`, applies object-class and syntax checks to writes, and uses

@@ -176,6 +176,14 @@ Single-provider databases reject client updates or return their rewritten
 update referrals; internal replication bypasses that LDAP-operation
 precondition.
 
+RFC 6171 interrogation requests distinguish those single-provider shadow
+partitions from authoritative and writable multi-provider partitions. Don't
+Use Copy is checked before alias dereferencing, Sync snapshot setup, filtering,
+or entry reads. Shadow Search rewrites a configured update referral from the
+requested base and scope, while shadow Compare fails without consulting the
+copied assertion target. This ordering follows OpenLDAP MDB and prevents a
+control intended to reject copied information from first consuming it.
+
 Outbound consumer connections share one RFC 4533 engine across plain LDAP,
 LDAPS, StartTLS, and implicit TLCP. TCP keepalive and Linux user-timeout policy
 are applied before the secure handshake. TLS and TLCP peer verification share
