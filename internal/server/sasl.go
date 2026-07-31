@@ -19,11 +19,21 @@ func (server *Server) handleSASLBind(
 	request ldapwire.BindRequest,
 ) error {
 	mechanism := strings.ToUpper(request.Authentication.SASLMechanism)
+	session := state.saslSession
+	if session != nil && session.mechanism != mechanism {
+		clearSASLSession(state)
+		session = nil
+	}
+	runtime := state.runtime
+	if session != nil {
+		runtime = session.runtime
+	}
 	if failure := saslMechanismPolicyFailure(
-		state.runtime.sasl.securityProperties,
+		runtime.sasl.securityProperties,
 		mechanism,
 		state.externalSSF,
 	); failure != nil {
+		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			*failure,
@@ -33,6 +43,7 @@ func (server *Server) handleSASLBind(
 
 	switch mechanism {
 	case "EXTERNAL":
+		clearSASLSession(state)
 		return server.handleSASLExternalBind(
 			connection,
 			state,
@@ -40,14 +51,53 @@ func (server *Server) handleSASLBind(
 			request,
 		)
 	case "PLAIN":
+		if !request.Authentication.HasSASLCredentials {
+			if session != nil {
+				clearSASLSession(state)
+				return writeSASLInvalidCredentials(
+					connection,
+					message.ID,
+				)
+			}
+			state.saslSession = &serverSASLSession{
+				mechanism: mechanism,
+				runtime:   runtime,
+			}
+			return writeSASLChallenge(connection, message.ID, nil)
+		}
+		clearSASLSession(state)
 		return server.handleSASLPlainBind(
 			ctx,
 			connection,
 			state,
+			runtime,
+			message,
+			request,
+		)
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+		if session == nil {
+			session = &serverSASLSession{
+				mechanism: mechanism,
+				runtime:   runtime,
+			}
+			state.saslSession = session
+			if !request.Authentication.HasSASLCredentials {
+				return writeSASLChallenge(connection, message.ID, nil)
+			}
+		} else if !request.Authentication.HasSASLCredentials {
+			clearSASLSession(state)
+			return writeSASLInvalidCredentials(connection, message.ID)
+		}
+		return server.handleSASLSCRAMStep(
+			ctx,
+			connection,
+			state,
+			session,
 			message,
 			request,
 		)
 	default:
+		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			ldapwire.ResultError(
@@ -95,6 +145,7 @@ func (server *Server) handleSASLPlainBind(
 	ctx context.Context,
 	connection net.Conn,
 	state *connectionState,
+	runtime *runtimeState,
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) error {
@@ -119,7 +170,7 @@ func (server *Server) handleSASLPlainBind(
 
 	authenticationDN, err := server.saslAuthenticationDN(
 		ctx,
-		state.runtime,
+		runtime,
 		"PLAIN",
 		preparedAuthenticationID,
 	)
@@ -128,7 +179,7 @@ func (server *Server) handleSASLPlainBind(
 	}
 	authenticated, err := server.authenticate(
 		ctx,
-		state.runtime,
+		runtime,
 		authenticationDN.String(),
 		[]byte(preparedPassword),
 	)
@@ -141,7 +192,7 @@ func (server *Server) handleSASLPlainBind(
 
 	authorizationDN, err := server.resolveSASLAuthorizationDN(
 		ctx,
-		state.runtime,
+		runtime,
 		"PLAIN",
 		preparedAuthenticationID,
 		authenticationDN,
@@ -189,6 +240,62 @@ func writeSASLInvalidCredentials(
 	))
 }
 
+func writeSASLChallenge(
+	connection net.Conn,
+	messageID int64,
+	challenge []byte,
+) error {
+	return ldapwire.Write(connection, ldapwire.EncodeSASLBindResponse(
+		messageID,
+		ldapwire.Result{Code: ldapwire.ResultSASLBindInProgress},
+		challenge,
+		true,
+		nil,
+	))
+}
+
+func clearSASLSession(state *connectionState) {
+	state.saslSession = nil
+}
+
+func (server *Server) rejectOperationDuringSASLBind(
+	connection net.Conn,
+	message ldapwire.Message,
+) error {
+	result := ldapwire.ResultError(
+		ldapwire.ResultOperationsError,
+		"SASL bind in progress",
+	)
+	switch message.Request.(type) {
+	case ldapwire.SearchRequest:
+		return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
+			message.ID,
+			result,
+			nil,
+		))
+	case ldapwire.ExtendedRequest:
+		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			result,
+			nil,
+		))
+	default:
+		responseTag, responds := responseTagFor(
+			message.Request.ApplicationTag(),
+		)
+		if !responds {
+			return nil
+		}
+		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			responseTag,
+			result,
+			nil,
+		))
+	}
+}
+
 type saslMechanismSecurity struct {
 	noDictionary    bool
 	noPlain         bool
@@ -215,6 +322,12 @@ func saslMechanismPolicyFailure(
 		security = saslMechanismSecurity{
 			passCredentials: true,
 			noAnonymous:     true,
+		}
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+		security = saslMechanismSecurity{
+			noPlain:     true,
+			noActive:    true,
+			noAnonymous: true,
 		}
 	default:
 		result := ldapwire.ResultError(
@@ -271,6 +384,19 @@ func supportedSASLMechanisms(state *connectionState) []string {
 		state.externalSSF,
 	) == nil {
 		mechanisms = append(mechanisms, "PLAIN")
+	}
+	for _, mechanism := range []string{
+		"SCRAM-SHA-512",
+		"SCRAM-SHA-256",
+		"SCRAM-SHA-1",
+	} {
+		if saslMechanismPolicyFailure(
+			properties,
+			mechanism,
+			state.externalSSF,
+		) == nil {
+			mechanisms = append(mechanisms, mechanism)
+		}
 	}
 	return mechanisms
 }

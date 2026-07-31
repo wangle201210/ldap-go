@@ -123,7 +123,12 @@ func TestLDAPClientSASLExternalRequiresVerifiedIdentity(t *testing.T) {
 	if err != nil || len(rootDSE.Entries) != 1 {
 		t.Fatalf("Root DSE = %#v, %v", rootDSE, err)
 	}
-	if values := rootDSE.Entries[0].GetAttributeValues("supportedSASLMechanisms"); len(values) != 0 {
+	values := rootDSE.Entries[0].GetAttributeValues(
+		"supportedSASLMechanisms",
+	)
+	if !containsString(values, "SCRAM-SHA-256") ||
+		containsString(values, "EXTERNAL") ||
+		containsString(values, "PLAIN") {
 		t.Fatalf("unsecured supportedSASLMechanisms = %q", values)
 	}
 	assertLDAPResultCode(t, client.ExternalBind(), ldap.LDAPResultInvalidCredentials)

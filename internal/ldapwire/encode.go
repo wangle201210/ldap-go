@@ -13,6 +13,35 @@ func EncodeBindResponse(messageID int64, result Result, controls []Control) []by
 	return encodeResultMessage(messageID, ApplicationBindResponse, result, controls)
 }
 
+func EncodeSASLBindResponse(
+	messageID int64,
+	result Result,
+	serverCredentials []byte,
+	hasServerCredentials bool,
+	controls []Control,
+) []byte {
+	response := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationBindResponse,
+		nil,
+		"BindResponse",
+	)
+	appendLDAPResult(response, result)
+	if hasServerCredentials {
+		credentials := ber.Encode(
+			ber.ClassContext,
+			ber.TypePrimitive,
+			7,
+			nil,
+			"serverSaslCreds",
+		)
+		_, _ = credentials.Data.Write(bytes.Clone(serverCredentials))
+		response.AppendChild(credentials)
+	}
+	return encodeMessage(messageID, response, controls)
+}
+
 func EncodeSearchResultDone(messageID int64, result Result, controls []Control) []byte {
 	return encodeResultMessage(messageID, ApplicationSearchResultDone, result, controls)
 }

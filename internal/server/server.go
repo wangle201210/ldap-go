@@ -491,6 +491,16 @@ func (server *Server) dispatch(
 		clearSearchSessions(state)
 	}
 	state.runtime = runtime
+	if state.saslSession != nil {
+		switch message.Request.(type) {
+		case ldapwire.BindRequest, ldapwire.UnbindRequest:
+		default:
+			return false, server.rejectOperationDuringSASLBind(
+				connection,
+				message,
+			)
+		}
+	}
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
 		return true, nil
@@ -546,6 +556,7 @@ func (server *Server) handleBind(
 	state.boundDN = ""
 	clearSearchSessions(state)
 	if hasUnsupportedCriticalControl(message.Controls) {
+		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
@@ -553,6 +564,7 @@ func (server *Server) handleBind(
 		))
 	}
 	if request.Version != 3 {
+		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			ldapwire.ResultError(ldapwire.ResultProtocolError, "only LDAPv3 is supported"),
@@ -568,6 +580,7 @@ func (server *Server) handleBind(
 			request,
 		)
 	}
+	clearSASLSession(state)
 
 	authenticated, err := server.authenticate(
 		ctx,
@@ -663,6 +676,7 @@ type connectionState struct {
 	secure            bool
 	externalSSF       uint32
 	externalDN        string
+	saslSession       *serverSASLSession
 	pagedSearch       *pagedSearchState
 	virtualListViews  map[string]*virtualListViewState
 	sortSessionCounts map[*serverSideSortLimiter]int

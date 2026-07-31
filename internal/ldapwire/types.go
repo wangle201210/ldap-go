@@ -47,10 +47,11 @@ type BindRequest struct {
 func (BindRequest) ApplicationTag() uint64 { return ApplicationBindRequest }
 
 type Authentication struct {
-	Simple          []byte
-	SASLMechanism   string
-	SASLCredentials []byte
-	IsSASL          bool
+	Simple             []byte
+	SASLMechanism      string
+	SASLCredentials    []byte
+	IsSASL             bool
+	HasSASLCredentials bool
 }
 
 type SearchRequest struct {

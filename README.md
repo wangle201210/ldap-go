@@ -80,9 +80,12 @@ SM2 authentication. Syncrepl authentication supports simple bind,
 SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
 SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
 exercised when its Cyrus SASL plugin is available.
-Server-side SASL supports EXTERNAL and PLAIN. PLAIN verifies the mapped LDAP
-entry's existing `userPassword` values, and an OpenLDAP 2.6.13
-`ldapwhoami -Y PLAIN` interoperability case passes. Imported
+Server-side SASL supports EXTERNAL, PLAIN, and SCRAM-SHA-1/256/512. PLAIN
+verifies the mapped LDAP entry's existing `userPassword` values. SCRAM runs a
+connection-bound multi-round exchange and reads either cleartext
+`userPassword` or Cyrus-compatible `authPassword` verifiers imported from
+OpenLDAP. OpenLDAP 2.6.13 `ldapwhoami` PLAIN and SCRAM-SHA-256
+interoperability cases pass. Imported
 `olcSaslRealm`, `olcSaslSecProps`, and ordered `olcAuthzRegexp` values are
 loaded from `cn=config`; direct DN replacements and local LDAP URL mappings
 with exactly one ACL-visible result are supported.
@@ -196,7 +199,12 @@ searches run as the anonymous authentication identity and require `auth`
 access to the search base, candidate entries, and filter attributes. PLAIN
 authorization identities are limited to self and database-root proxy
 authorization until `olcAuthzPolicy`, `authzTo`, and `authzFrom` are
-implemented.
+implemented. SCRAM-SHA-1/256/512 use the same identity mapping and ACL rules.
+They accept raw or `{CLEARTEXT}` `userPassword` values, or Cyrus SCRAM
+verifiers in the OpenLDAP `authPassword` form
+`SCRAM-SHA-*$iterations:salt$StoredKey:ServerKey`. One-way `userPassword`
+hashes such as `{SSHA}` cannot be converted into SCRAM verifier keys; migrate
+an existing `authPassword` value or reset the password to enable SCRAM.
 
 For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
 `credentials` value is used as the Kerberos password. Without that field,

@@ -199,9 +199,13 @@ global `olcSaslRealm`, `olcSaslSecProps`, and ordered `olcAuthzRegexp`
 configuration. Server-side PLAIN is advertised only when those properties
 permit it, maps its authentication identity through direct or local LDAP URL
 rules, and verifies the resulting entry through the existing password and ACL
-path. LDAP URL mappings perform an internal anonymous auth-check search and
-require exactly one result, including `auth` access to the search base,
-candidate entry, and filter attributes.
+path. SCRAM-SHA-1/256/512 use the same mapping and a connection-scoped
+conversation that blocks interleaved operations until Bind succeeds or fails.
+They derive ephemeral verifiers from ACL-visible cleartext passwords or parse
+Cyrus `authPassword` salt, StoredKey, and ServerKey records without exposing
+those values to the client. LDAP URL mappings perform an internal anonymous
+auth-check search and require exactly one result, including `auth` access to
+the search base, candidate entry, and filter attributes.
 
 The syncrepl client uses Go TLS for LDAPS and StartTLS and the same TLCP adapter
 for `ldap+tlcp://` providers. OpenSSL cipher names and the common

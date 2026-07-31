@@ -72,6 +72,33 @@ func TestVerifyPassword(t *testing.T) {
 	}
 }
 
+func TestExtractCleartextPassword(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		stored string
+		want   string
+		ok     bool
+	}{
+		{stored: "secret", want: "secret", ok: true},
+		{stored: "{CLEARTEXT}secret", want: "secret", ok: true},
+		{stored: "{cleartext}secret", want: "secret", ok: true},
+		{stored: "{CLEARTEXT}"},
+		{stored: "{SSHA}not-cleartext"},
+		{stored: "{UNKNOWN}secret"},
+	} {
+		password, ok := ExtractCleartextPassword([]byte(test.stored))
+		if ok != test.ok || string(password) != test.want {
+			t.Fatalf(
+				"ExtractCleartextPassword(%q) = %q, %t",
+				test.stored,
+				password,
+				ok,
+			)
+		}
+	}
+}
+
 func TestHashPasswordSMPBKDF2(t *testing.T) {
 	t.Parallel()
 

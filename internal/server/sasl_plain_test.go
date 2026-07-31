@@ -185,6 +185,49 @@ func TestSASLPlainDefaultPolicyRequiresProtectedTransport(t *testing.T) {
 	}
 }
 
+func TestSASLPlainBindWithoutInitialResponse(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	seedSASLPlainConfiguration(t, store, "none")
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+	connection, err := net.DialTimeout("tcp", address, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial PLAIN server: %v", err)
+	}
+	defer connection.Close()
+	transport := &syncConsumerTransport{
+		connection:       connection,
+		context:          context.Background(),
+		operationTimeout: 2 * time.Second,
+	}
+	first, err := sendSyncConsumerSASLBind(
+		transport,
+		"PLAIN",
+		nil,
+		false,
+	)
+	if err != nil ||
+		first.code != ldap.LDAPResultSaslBindInProgress ||
+		!first.hasSASLCredentials ||
+		len(first.saslCredentials) != 0 {
+		t.Fatalf("empty PLAIN initial result = %#v, %v", first, err)
+	}
+	final, err := sendSyncConsumerSASLBind(
+		transport,
+		"PLAIN",
+		[]byte("\x00alice\x00secret"),
+		true,
+	)
+	if err != nil || final.code != ldap.LDAPResultSuccess {
+		t.Fatalf("continued PLAIN result = %#v, %v", final, err)
+	}
+}
+
 func TestLDAPClientSASLPlainBindOverTLSWithDefaultPolicy(t *testing.T) {
 	t.Parallel()
 

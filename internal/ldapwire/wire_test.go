@@ -32,6 +32,117 @@ func TestReadBindRequest(t *testing.T) {
 	}
 }
 
+func TestReadSASLBindRequestPreservesCredentialsPresence(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		include     bool
+		credentials []byte
+	}{
+		{name: "absent"},
+		{name: "present empty", include: true, credentials: []byte{}},
+		{name: "present value", include: true, credentials: []byte("step")},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			operation := ber.Encode(
+				ber.ClassApplication,
+				ber.TypeConstructed,
+				ApplicationBindRequest,
+				nil,
+				"BindRequest",
+			)
+			operation.AppendChild(ber.NewInteger(
+				ber.ClassUniversal,
+				ber.TypePrimitive,
+				ber.TagInteger,
+				3,
+				"version",
+			))
+			operation.AppendChild(ber.NewString(
+				ber.ClassUniversal,
+				ber.TypePrimitive,
+				ber.TagOctetString,
+				"",
+				"name",
+			))
+			authentication := ber.Encode(
+				ber.ClassContext,
+				ber.TypeConstructed,
+				3,
+				nil,
+				"sasl",
+			)
+			authentication.AppendChild(ber.NewString(
+				ber.ClassUniversal,
+				ber.TypePrimitive,
+				ber.TagOctetString,
+				"SCRAM-SHA-256",
+				"mechanism",
+			))
+			if test.include {
+				credentials := ber.Encode(
+					ber.ClassUniversal,
+					ber.TypePrimitive,
+					ber.TagOctetString,
+					nil,
+					"credentials",
+				)
+				_, _ = credentials.Data.Write(test.credentials)
+				authentication.AppendChild(credentials)
+			}
+			operation.AppendChild(authentication)
+
+			decoded, err := ReadMessage(
+				bytes.NewReader(testMessage(8, operation).Bytes()),
+				4096,
+			)
+			if err != nil {
+				t.Fatalf("ReadMessage(): %v", err)
+			}
+			request, ok := decoded.Request.(BindRequest)
+			if !ok ||
+				request.Authentication.HasSASLCredentials != test.include ||
+				!bytes.Equal(
+					request.Authentication.SASLCredentials,
+					test.credentials,
+				) {
+				t.Fatalf("decoded SASL Bind = %#v", decoded.Request)
+			}
+		})
+	}
+}
+
+func TestEncodeSASLBindResponsePreservesEmptyCredentials(t *testing.T) {
+	t.Parallel()
+
+	encoded := EncodeSASLBindResponse(
+		9,
+		Result{Code: ResultSASLBindInProgress},
+		[]byte{},
+		true,
+		nil,
+	)
+	packet, err := ber.ReadPacket(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("ReadPacket(): %v", err)
+	}
+	if len(packet.Children) != 2 ||
+		len(packet.Children[1].Children) != 4 {
+		t.Fatalf("encoded BindResponse = %#v", packet)
+	}
+	credentials := packet.Children[1].Children[3]
+	if credentials.ClassType != ber.ClassContext ||
+		credentials.TagType != ber.TypePrimitive ||
+		credentials.Tag != 7 ||
+		credentials.Data.Len() != 0 {
+		t.Fatalf("serverSaslCreds = %#v", credentials)
+	}
+}
+
 func TestReadSearchRequestWithFilter(t *testing.T) {
 	t.Parallel()
 

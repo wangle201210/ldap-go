@@ -181,6 +181,7 @@ func decodeBindRequest(packet *ber.Packet) (BindRequest, error) {
 				return BindRequest{}, malformed("invalid SASL credentials")
 			}
 			request.Authentication.SASLCredentials = credentials
+			request.Authentication.HasSASLCredentials = true
 		}
 	default:
 		return BindRequest{}, malformed("unknown authentication choice %d", authPacket.Tag)

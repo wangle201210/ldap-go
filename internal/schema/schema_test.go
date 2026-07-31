@@ -296,6 +296,12 @@ func TestSchemaAwareMatching(t *testing.T) {
 	if comparison == 0 {
 		t.Fatal("octetStringMatch ignored byte case")
 	}
+	authPassword, ok := registry.AttributeType("authPassword")
+	if !ok ||
+		authPassword.OID != "1.3.6.1.4.1.4203.1.3.4" ||
+		authPassword.Syntax != SyntaxAuthenticationPassword {
+		t.Fatalf("authPassword attribute = %#v, %t", authPassword, ok)
+	}
 	matches, err := registry.MatchSubstring(
 		"mail",
 		[]byte("Alice.Example@EXAMPLE.COM"),

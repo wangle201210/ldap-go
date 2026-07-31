@@ -77,6 +77,26 @@ func VerifyPassword(stored, supplied []byte) bool {
 	}
 }
 
+// ExtractCleartextPassword returns credentials that can be used by
+// challenge-response mechanisms which require the original password.
+func ExtractCleartextPassword(stored []byte) ([]byte, bool) {
+	if len(stored) == 0 {
+		return nil, false
+	}
+	scheme, payload := splitScheme(stored)
+	switch scheme {
+	case "":
+		return bytes.Clone(stored), true
+	case "CLEARTEXT":
+		if len(payload) == 0 {
+			return nil, false
+		}
+		return bytes.Clone(payload), true
+	default:
+		return nil, false
+	}
+}
+
 func NormalizePasswordHashScheme(value string) (string, error) {
 	scheme := strings.ToUpper(strings.TrimSpace(value))
 	switch scheme {

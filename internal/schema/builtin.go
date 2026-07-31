@@ -3,24 +3,25 @@ package schema
 import "fmt"
 
 const (
-	SyntaxBoolean              = "1.3.6.1.4.1.1466.115.121.1.7"
-	SyntaxAttributeType        = "1.3.6.1.4.1.1466.115.121.1.3"
-	SyntaxDistinguishedName    = "1.3.6.1.4.1.1466.115.121.1.12"
-	SyntaxDirectoryString      = "1.3.6.1.4.1.1466.115.121.1.15"
-	SyntaxFacsimileTelephone   = "1.3.6.1.4.1.1466.115.121.1.22"
-	SyntaxGeneralizedTime      = "1.3.6.1.4.1.1466.115.121.1.24"
-	SyntaxIA5String            = "1.3.6.1.4.1.1466.115.121.1.26"
-	SyntaxInteger              = "1.3.6.1.4.1.1466.115.121.1.27"
-	SyntaxNumericString        = "1.3.6.1.4.1.1466.115.121.1.36"
-	SyntaxObjectClass          = "1.3.6.1.4.1.1466.115.121.1.37"
-	SyntaxOID                  = "1.3.6.1.4.1.1466.115.121.1.38"
-	SyntaxOctetString          = "1.3.6.1.4.1.1466.115.121.1.40"
-	SyntaxPostalAddress        = "1.3.6.1.4.1.1466.115.121.1.41"
-	SyntaxSubtreeSpecification = "1.3.6.1.4.1.1466.115.121.1.45"
-	SyntaxTelephoneNumber      = "1.3.6.1.4.1.1466.115.121.1.50"
-	SyntaxTelexNumber          = "1.3.6.1.4.1.1466.115.121.1.52"
-	SyntaxUUID                 = "1.3.6.1.1.16.1"
-	SyntaxCSN                  = "1.3.6.1.4.1.4203.666.11.2.1"
+	SyntaxBoolean                = "1.3.6.1.4.1.1466.115.121.1.7"
+	SyntaxAttributeType          = "1.3.6.1.4.1.1466.115.121.1.3"
+	SyntaxAuthenticationPassword = "1.3.6.1.4.1.4203.1.1.2"
+	SyntaxDistinguishedName      = "1.3.6.1.4.1.1466.115.121.1.12"
+	SyntaxDirectoryString        = "1.3.6.1.4.1.1466.115.121.1.15"
+	SyntaxFacsimileTelephone     = "1.3.6.1.4.1.1466.115.121.1.22"
+	SyntaxGeneralizedTime        = "1.3.6.1.4.1.1466.115.121.1.24"
+	SyntaxIA5String              = "1.3.6.1.4.1.1466.115.121.1.26"
+	SyntaxInteger                = "1.3.6.1.4.1.1466.115.121.1.27"
+	SyntaxNumericString          = "1.3.6.1.4.1.1466.115.121.1.36"
+	SyntaxObjectClass            = "1.3.6.1.4.1.1466.115.121.1.37"
+	SyntaxOID                    = "1.3.6.1.4.1.1466.115.121.1.38"
+	SyntaxOctetString            = "1.3.6.1.4.1.1466.115.121.1.40"
+	SyntaxPostalAddress          = "1.3.6.1.4.1.1466.115.121.1.41"
+	SyntaxSubtreeSpecification   = "1.3.6.1.4.1.1466.115.121.1.45"
+	SyntaxTelephoneNumber        = "1.3.6.1.4.1.1466.115.121.1.50"
+	SyntaxTelexNumber            = "1.3.6.1.4.1.1466.115.121.1.52"
+	SyntaxUUID                   = "1.3.6.1.1.16.1"
+	SyntaxCSN                    = "1.3.6.1.4.1.4203.666.11.2.1"
 )
 
 func NewBuiltinRegistry() (*Registry, error) {
@@ -75,6 +76,7 @@ var builtinAttributeTypes = []string{
 	"( 0.9.2342.19200300.100.1.25 NAME ( 'dc' 'domainComponent' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
 	"( 0.9.2342.19200300.100.1.3 NAME ( 'mail' 'rfc822Mailbox' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " )",
 	"( 2.5.4.35 NAME 'userPassword' EQUALITY octetStringMatch SYNTAX " + SyntaxOctetString + " )",
+	"( 1.3.6.1.4.1.4203.1.3.4 NAME 'authPassword' DESC 'RFC3112: authentication password attribute' EQUALITY 1.3.6.1.4.1.4203.1.2.2 SYNTAX " + SyntaxAuthenticationPassword + " )",
 	"( 0.9.2342.19200300.100.1.60 NAME 'jpegPhoto' SYNTAX " + SyntaxOctetString + " )",
 	"( 1.3.6.1.1.1.1.0 NAME 'uidNumber' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE )",
 	"( 1.3.6.1.1.1.1.1 NAME 'gidNumber' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE )",

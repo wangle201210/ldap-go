@@ -53,13 +53,14 @@ enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. It skips when the local Cyrus SASL installation has
-no PLAIN plugin.
+no PLAIN plugin. The server-side SCRAM case invokes
+`ldapwhoami -Y SCRAM-SHA-256` and skips when that plugin is unavailable.
 
 The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
 Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM

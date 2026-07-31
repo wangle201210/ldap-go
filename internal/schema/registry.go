@@ -1058,7 +1058,7 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		return fmt.Errorf("value exceeds syntax length %d", maxLength)
 	}
 	switch syntax {
-	case "", SyntaxOctetString:
+	case "", SyntaxOctetString, SyntaxAuthenticationPassword:
 		return nil
 	case SyntaxDirectoryString:
 		if len(value) == 0 || !utf8.Valid(value) {
