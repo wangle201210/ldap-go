@@ -58,7 +58,9 @@ dynamic suffix `contextCSN` Search/Compare/read-control semantics,
 `olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, server-side Sort/VLV
 composition, and OpenLDAP-style syncprov coverage of glued subordinate
 databases. OpenLDAP 2.6.13 `ldapsearch` interoperability also passes.
-Syncrepl consumer and delta-syncrepl support remain separate pending
+An OpenLDAP 2.6.13 syncrepl consumer also converges through initial,
+refresh-and-persist, and stopped-consumer restart scenarios. The ldap-go
+syncrepl consumer and delta-syncrepl support remain separate pending
 milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction

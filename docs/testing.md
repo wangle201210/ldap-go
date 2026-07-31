@@ -52,5 +52,7 @@ enabled explicitly:
 
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
-  go test ./internal/server -run TestOpenLDAPReferenceSyncSortAndVLV -count=1
+  go test ./internal/server \
+    -run 'TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider' \
+    -count=1
 ```

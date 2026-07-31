@@ -120,7 +120,7 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Syncrepl consumer | planned | OpenLDAP provider interoperability |
-| Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch and overlay-order Sort/VLV fixtures pass; slapd syncrepl topology suite remains |
+| Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
 | Fractional and sparse replication | planned | filter/attribute convergence tests |
@@ -318,7 +318,10 @@ stop the operation; a changed search base or an overflowing bounded event
 queue terminates it with `syncRefreshRequired` (4096). Collective values are
 not synchronized onto member entries. TCP tests cover these paths, and an
 installed OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` is run as an optional
-process-level interoperability test.
+process-level interoperability test. A real OpenLDAP 2.6.13 syncrepl consumer
+also converges from an empty MDB, applies persistent Add/Modify/Delete events,
+and catches up through the same cookie after it is stopped, provider changes
+accumulate, and the consumer restarts.
 
 Sync composes with RFC 2891 sorting and VLV after candidates from all database
 routes have been collected. Refresh-only entries always carry Sync State, and
