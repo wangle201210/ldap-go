@@ -106,7 +106,7 @@ func (server *Server) runSyncConsumerCycle(
 	config syncConsumerConfig,
 	provider string,
 ) error {
-	if config.syncData != "default" {
+	if config.syncData == "changelog" {
 		return fmt.Errorf("syncdata=%s is not implemented", config.syncData)
 	}
 	cookie, err := server.loadSyncConsumerCookie(ctx, config)
@@ -152,6 +152,55 @@ func (server *Server) runSyncConsumerCycle(
 		return err
 	}
 
+	switch config.syncData {
+	case "default":
+		return server.runSyncConsumerStandardSearch(
+			ctx,
+			connection,
+			config,
+			config.mode,
+			cookie,
+		)
+	case "accesslog":
+		if len(cookie) == 0 {
+			if err := server.runSyncConsumerStandardSearch(
+				ctx,
+				connection,
+				config,
+				syncConsumerRefreshOnly,
+				nil,
+			); err != nil {
+				return fmt.Errorf("accesslog fallback refresh: %w", err)
+			}
+			cookie, err = server.loadSyncConsumerCookie(ctx, config)
+			if err != nil {
+				return err
+			}
+			if len(cookie) == 0 {
+				return errors.New(
+					"accesslog fallback refresh produced no sync cookie",
+				)
+			}
+		}
+		return server.runSyncConsumerAccesslogSearch(
+			ctx,
+			connection,
+			config,
+			config.mode,
+			cookie,
+		)
+	default:
+		return fmt.Errorf("unknown syncdata mode %q", config.syncData)
+	}
+}
+
+func (server *Server) runSyncConsumerStandardSearch(
+	ctx context.Context,
+	connection *ldap.Conn,
+	config syncConsumerConfig,
+	consumerMode syncConsumerMode,
+	cookie []byte,
+) error {
 	controls := []ldap.Control{ldap.NewControlManageDsaIT(true)}
 	if config.authorizationID != "" {
 		controls = append(controls, ldap.NewControlString(
@@ -172,7 +221,7 @@ func (server *Server) runSyncConsumerCycle(
 		controls,
 	)
 	mode := ldap.SyncRequestModeRefreshOnly
-	if config.mode == syncConsumerRefreshAndPersist {
+	if consumerMode == syncConsumerRefreshAndPersist {
 		mode = ldap.SyncRequestModeRefreshAndPersist
 	}
 	response := connection.Syncrepl(
@@ -201,7 +250,7 @@ func (server *Server) runSyncConsumerCycle(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if config.mode == syncConsumerRefreshOnly && !refresh.complete {
+	if consumerMode == syncConsumerRefreshOnly && !refresh.complete {
 		return errors.New("syncrepl refresh ended without Sync Done")
 	}
 	return nil

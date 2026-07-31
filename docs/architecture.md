@@ -153,9 +153,12 @@ DN-valued attribute values. Single-provider databases reject client updates or
 return their rewritten update referrals; internal replication bypasses that
 LDAP-operation precondition.
 
-A durable ordered accesslog and delta-syncrepl replay remain future layers.
-They must not treat the current process-local provider stream as a
-crash-recovery log.
+The consumer can replay a remote OpenLDAP accesslog as delta-syncrepl. Each
+audit operation and its cookie share a storage transaction; malformed or
+non-replayable history clears the consumer cookie and forces a conventional
+refresh before log streaming resumes. A local provider-side durable accesslog
+overlay remains a future layer and must not treat the current process-local
+provider stream as a crash-recovery log.
 
 ### Security
 

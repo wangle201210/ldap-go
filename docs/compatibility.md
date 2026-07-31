@@ -119,9 +119,9 @@ rebuilt by `ldap-go`.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Syncrepl consumer | partial | ordered olcSyncrepl loading plus ldap-go and OpenLDAP 2.6.13 provider initial/persist/restart topologies pass; advanced modes remain |
+| Syncrepl consumer | partial | ordered olcSyncrepl loading plus ldap-go, OpenLDAP 2.6.13 standard, and accesslog delta initial/persist/restart/recovery topologies pass; advanced modes remain |
 | Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
-| Delta-syncrepl | planned | accesslog replay and recovery tests |
+| Delta-syncrepl | partial | OpenLDAP accesslog `reqMod` replay, durable cookies, refresh fallback, and gap recovery pass; DSEE changelog and provider-side accesslog remain |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
 | Fractional and sparse replication | partial | attrs/exattrs, filter exit/reentry, mandatory UUID/CSN, and suffix-massage convergence pass; broader schema/topology cases remain |
 | Connection and operation monitoring | planned | `cn=Monitor` differential tests |
@@ -346,6 +346,18 @@ removal. A gated reverse process topology uses a real OpenLDAP 2.6.13
 syncprov/MDB provider and verifies the same initial, persistent, stopped
 consumer, and cookie-restart sequence.
 
+OpenLDAP accesslog delta-syncrepl uses the configured `logbase` and
+`logfilter` after an empty consumer completes a conventional refresh-only
+search. Audit add, modify, modrdn, and delete records are parsed from ordered
+`reqMod` values and applied with the corresponding cookie in one transaction.
+Single-valued add/delete compatibility, DN-valued suffix massage, operation
+CSN idempotency, and subtree rename are handled explicitly. A provider
+`syncRefreshRequired` result or a local replay conflict clears only that
+consumer RID's cookie; the next cycle performs a full standard refresh before
+returning to the log stream. A gated OpenLDAP 2.6.13 accesslog fixture verifies
+online replay, stopped-consumer catch-up, deliberate local-state loss,
+automatic full recovery, and continued modrdn/delete persistence.
+
 Single-provider consumer databases follow OpenLDAP shadow rules. External
 updates return rewritten `olcUpdateRef` referrals, or
 `shadow context; no update referral` when none is configured. Legacy
@@ -371,12 +383,12 @@ lost or misplaced controls and an incomplete persistent combination.
 `ldap-go` deliberately keeps one protocol-coherent response shape independent
 of configuration order.
 
-This provider does not yet implement accesslog replay,
-`olcSpSessionlogSource`, delta-syncrepl, the optional sync-provider subentry
-context, or a full `slapd` topology differential. The consumer still lacks
-delta/accesslog application, the remaining SASL and OpenSSL-specific TLS
-options, multi-provider conflict resolution, and broader OpenLDAP provider
-variants. The replication rows therefore remain `partial`.
+This provider does not yet implement an accesslog overlay,
+`olcSpSessionlogSource`, the optional sync-provider subentry context, or a full
+`slapd` topology differential. The consumer still lacks obsolete DSEE
+changelog delta mode, the remaining SASL and OpenSSL-specific TLS options,
+multi-provider conflict resolution, and broader OpenLDAP provider variants.
+The replication rows therefore remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
