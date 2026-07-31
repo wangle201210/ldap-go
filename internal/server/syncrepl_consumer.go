@@ -446,6 +446,23 @@ func syncConsumerDirectoryEntry(
 		values := make([][]byte, len(attribute.ByteValues))
 		for index := range attribute.ByteValues {
 			values[index] = bytes.Clone(attribute.ByteValues[index])
+			if config.suffixMap != nil &&
+				runtime != nil &&
+				runtime.schema.IsDNValued(attribute.Name) {
+				mapped, mapErr := mapSyncConsumerAttributeDN(
+					config,
+					values[index],
+				)
+				if mapErr != nil {
+					return directory.Entry{}, fmt.Errorf(
+						"map %s on %s: %w",
+						attribute.Name,
+						source.DN,
+						mapErr,
+					)
+				}
+				values[index] = mapped
+			}
 		}
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: attribute.Name,
@@ -524,6 +541,25 @@ func mapSyncConsumerDN(
 		return directory.DN{}, fmt.Errorf("apply suffixmassage: %w", err)
 	}
 	return local, nil
+}
+
+func mapSyncConsumerAttributeDN(
+	config syncConsumerConfig,
+	value []byte,
+) ([]byte, error) {
+	remote, err := directory.ParseDN(string(value))
+	if err != nil {
+		return nil, err
+	}
+	if !config.searchBase.Equal(remote) &&
+		!config.searchBase.AncestorOf(remote) {
+		return bytes.Clone(value), nil
+	}
+	local, err := remote.ReplaceAncestor(config.searchBase, config.localBase)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(local.String()), nil
 }
 
 func (server *Server) deleteSyncConsumerUUIDs(

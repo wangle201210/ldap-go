@@ -123,7 +123,7 @@ rebuilt by `ldap-go`.
 | Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
-| Fractional and sparse replication | planned | filter/attribute convergence tests |
+| Fractional and sparse replication | partial | attrs/exattrs, filter exit/reentry, mandatory UUID/CSN, and suffix-massage convergence pass; broader schema/topology cases remain |
 | Connection and operation monitoring | planned | `cn=Monitor` differential tests |
 | Dynamic logging and runtime limits | planned | `cn=config` behavior tests |
 | Graceful restart and zero-loss shutdown | planned | in-flight operation and durability tests |
@@ -329,7 +329,9 @@ retry, bind, timeout, TLS, suffix-massage, and delta-related fields. Duplicate
 RIDs, invalid local bases, malformed filters, and incomplete retry or delta
 settings fail `cn=config` validation. Workers start and stop with `Serve`, and
 online configuration replacement cancels the previous partition/RID worker
-before starting its replacement.
+before starting its replacement. Online tests add a consumer to a running
+database, reject and roll back an invalid replacement while the old worker
+continues, stop it by deleting `olcSyncrepl`, and re-enable it to catch up.
 
 Standard RFC 4533 consumption supports refresh-only and
 refresh-and-persist, provider URI failover, simple bind, StartTLS/LDAPS, SASL
@@ -343,6 +345,21 @@ provider changes, restart with the same store, cookie catch-up, and stale-entry
 removal. A gated reverse process topology uses a real OpenLDAP 2.6.13
 syncprov/MDB provider and verifies the same initial, persistent, stopped
 consumer, and cookie-restart sequence.
+
+Single-provider consumer databases follow OpenLDAP shadow rules. External
+updates return rewritten `olcUpdateRef` referrals, or
+`shadow context; no update referral` when none is configured. Legacy
+`olcUpdateDN` may write a shadow, while `olcMultiProvider` and its
+`olcMirrorMode` alias make the database externally writable. Conflicting
+shadow mechanisms and update referrals on non-shadow databases fail runtime
+validation.
+
+Fractional tests verify `attrs`/`exattrs`, mandatory entry UUID/CSN retrieval,
+and persistence of excluded binary/password attributes across provider
+modifications. Filter exit emits a delete and re-entry emits an add.
+Refresh-only polling converges on its configured interval. Suffix massage maps
+remote entry DNs and schema-recognized DN-valued attributes into the local
+suffix; update referrals map a local target back to the provider suffix.
 
 Sync composes with RFC 2891 sorting and VLV after candidates from all database
 routes have been collected. Refresh-only entries always carry Sync State, and
@@ -358,9 +375,8 @@ This provider does not yet implement accesslog replay,
 `olcSpSessionlogSource`, delta-syncrepl, the optional sync-provider subentry
 context, or a full `slapd` topology differential. The consumer still lacks
 delta/accesslog application, the remaining SASL and OpenSSL-specific TLS
-options, shadow update-referral behavior, multi-provider conflict resolution,
-and broader OpenLDAP provider variants. The replication rows therefore remain
-`partial`.
+options, multi-provider conflict resolution, and broader OpenLDAP provider
+variants. The replication rows therefore remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

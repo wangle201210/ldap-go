@@ -180,6 +180,16 @@ func updateOperationPrecondition(
 		)
 		return &result
 	}
+	if database := databaseForDN(runtime, target); database != nil && database.shadow {
+		if database.updateDN != nil && boundDN != "" {
+			bound, err := directory.ParseDN(boundDN)
+			if err == nil && database.updateDN.Equal(bound) {
+				return nil
+			}
+		}
+		result := shadowUpdateResult(*database, target)
+		return &result
+	}
 	return nil
 }
 

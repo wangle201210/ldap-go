@@ -23,6 +23,10 @@ type runtimeDatabase struct {
 	subordinate           bool
 	advertise             bool
 	readOnly              bool
+	shadow                bool
+	multiProvider         bool
+	updateDN              *directory.DN
+	updateRefs            []string
 	lastMod               bool
 	maxDerefDepth         int
 	configDNKey           string
@@ -177,6 +181,9 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		}
 		database.syncConsumers, err = loadSyncConsumerConfigs(entry, database)
 		if err != nil {
+			return err
+		}
+		if err := loadRuntimeShadowSettings(entry, &database); err != nil {
 			return err
 		}
 		databases = append(databases, database)

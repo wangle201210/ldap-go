@@ -66,7 +66,10 @@ changes and cookies atomically, applies Present/Delete UUID sets, and resumes
 from its durable cookie after restart. A ldap-go provider-to-consumer topology
 covers initial, persistent, and offline catch-up paths, and the same reverse
 topology passes against an OpenLDAP 2.6.13 provider. Broader provider variants
-and delta-syncrepl remain pending milestones.
+and delta-syncrepl remain pending milestones. Consumer databases enforce
+OpenLDAP shadow/update-referral rules, support online worker replacement,
+fractional and filtered result sets, refresh-only polling, and suffix massage
+for entry DNs and DN-valued attribute values.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

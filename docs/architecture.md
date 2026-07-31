@@ -143,8 +143,18 @@ resets it when a publication gap is detected. Sorting and VLV operate on the
 combined ACL-visible candidate set after all glue routes are read, then attach
 their result controls to Sync Done or the refresh-done intermediate response.
 
-A durable ordered accesslog, delta-syncrepl replay, and the syncrepl consumer
-remain future layers. They must not treat the current process-local stream as a
+Consumer workers are keyed by storage partition and replication ID. `Serve`
+owns their context; runtime activation publishes a desired immutable
+configuration, and the manager fully stops a changed worker before starting
+its replacement. RFC 4533 entry changes and opaque cookies commit in one
+storage transaction. Present completion scans only the configured local
+scope/filter, while suffix massage rewrites entry and schema-recognized
+DN-valued attribute values. Single-provider databases reject client updates or
+return their rewritten update referrals; internal replication bypasses that
+LDAP-operation precondition.
+
+A durable ordered accesslog and delta-syncrepl replay remain future layers.
+They must not treat the current process-local provider stream as a
 crash-recovery log.
 
 ### Security
