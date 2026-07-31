@@ -28,16 +28,6 @@ var errSASLSCRAMCredentialsUnavailable = errors.New(
 	"SCRAM credentials are unavailable",
 )
 
-type serverSASLSession struct {
-	mechanism             string
-	runtime               *runtimeState
-	conversation          *scram.ServerConversation
-	authenticationDN      directory.DN
-	authorizationDN       directory.DN
-	authorizationResolved bool
-	credentialLookupErr   error
-}
-
 func (server *Server) handleSASLSCRAMStep(
 	ctx context.Context,
 	connection net.Conn,
@@ -46,7 +36,7 @@ func (server *Server) handleSASLSCRAMStep(
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) error {
-	if session.conversation == nil {
+	if session.scramConversation == nil {
 		if err := server.initializeSASLSCRAMConversation(
 			ctx,
 			session,
@@ -56,7 +46,7 @@ func (server *Server) handleSASLSCRAMStep(
 		}
 	}
 
-	response, err := session.conversation.Step(
+	response, err := session.scramConversation.Step(
 		string(request.Authentication.SASLCredentials),
 	)
 	if err != nil {
@@ -77,9 +67,9 @@ func (server *Server) handleSASLSCRAMStep(
 			ctx,
 			session.runtime,
 			session.mechanism,
-			session.conversation.Username(),
+			session.scramConversation.Username(),
 			session.authenticationDN,
-			session.conversation.AuthzID(),
+			session.scramConversation.AuthzID(),
 		)
 		if err != nil {
 			clearSASLSession(state)
@@ -99,14 +89,14 @@ func (server *Server) handleSASLSCRAMStep(
 		session.authorizationResolved = true
 	}
 
-	if !session.conversation.Done() {
+	if !session.scramConversation.Done() {
 		return writeSASLChallenge(
 			connection,
 			message.ID,
 			[]byte(response),
 		)
 	}
-	if !session.conversation.Valid() {
+	if !session.scramConversation.Valid() {
 		clearSASLSession(state)
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
@@ -150,7 +140,7 @@ func (server *Server) initializeSASLSCRAMConversation(
 	if err != nil {
 		return err
 	}
-	session.conversation = scramServer.NewConversation()
+	session.scramConversation = scramServer.NewConversation()
 	return nil
 }
 

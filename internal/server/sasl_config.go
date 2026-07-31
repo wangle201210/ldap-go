@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -19,6 +20,7 @@ type saslAuthzRegexp struct {
 }
 
 type saslRuntimeConfiguration struct {
+	host               string
 	realm              string
 	securityProperties saslSecurityProperties
 	authzRegexps       []saslAuthzRegexp
@@ -28,6 +30,7 @@ func loadSASLRuntimeConfiguration(
 	reader storage.Reader,
 ) (saslRuntimeConfiguration, error) {
 	configuration := saslRuntimeConfiguration{
+		host:               defaultSASLHost(),
 		securityProperties: defaultSASLSecurityProperties(),
 	}
 	entry, err := reader.Get(configurationSuffix)
@@ -39,6 +42,24 @@ func loadSASLRuntimeConfiguration(
 			"load global SASL configuration: %w",
 			err,
 		)
+	}
+
+	hostValues := entry.Values("olcSaslHost")
+	if len(hostValues) > 1 {
+		return saslRuntimeConfiguration{}, fmt.Errorf(
+			"%s olcSaslHost has multiple values",
+			entry.DN,
+		)
+	}
+	if len(hostValues) == 1 {
+		host := strings.TrimSpace(string(hostValues[0]))
+		if host == "" {
+			return saslRuntimeConfiguration{}, fmt.Errorf(
+				"%s olcSaslHost is empty",
+				entry.DN,
+			)
+		}
+		configuration.host = host
 	}
 
 	realmValues := entry.Values("olcSaslRealm")
@@ -106,6 +127,14 @@ func loadSASLRuntimeConfiguration(
 		})
 	}
 	return configuration, nil
+}
+
+func defaultSASLHost() string {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "localhost"
+	}
+	return host
 }
 
 func parseSASLAuthzRegexp(value string) (saslAuthzRegexp, error) {

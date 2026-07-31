@@ -446,6 +446,10 @@ func TestLoadSASLRuntimeConfiguration(t *testing.T) {
 		DN: "cn=config",
 		Attributes: []directory.Attribute{
 			{
+				Description: "olcSaslHost",
+				Values:      stringValues("ldap.example.com"),
+			},
+			{
 				Description: "olcSaslRealm",
 				Values:      stringValues("example.com"),
 			},
@@ -484,7 +488,8 @@ func TestLoadSASLRuntimeConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("load SASL configuration: %v", err)
 	}
-	if configuration.realm != "example.com" ||
+	if configuration.host != "ldap.example.com" ||
+		configuration.realm != "example.com" ||
 		configuration.securityProperties.noPlain ||
 		!configuration.securityProperties.noAnonymous ||
 		configuration.securityProperties.minSSF != 64 ||

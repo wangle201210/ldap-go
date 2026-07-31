@@ -195,15 +195,17 @@ checks.
 The same connection abstraction reports an external security-strength factor:
 the effective standard TLS cipher strength, 128 bits for TLCP's SM4 suites,
 and OpenLDAP's 71-bit local-socket value. The immutable runtime snapshot loads
-global `olcSaslRealm`, `olcSaslSecProps`, and ordered `olcAuthzRegexp`
-configuration. Server-side PLAIN is advertised only when those properties
-permit it, maps its authentication identity through direct or local LDAP URL
-rules, and verifies the resulting entry through the existing password and ACL
-path. SCRAM-SHA-1/256/512 use the same mapping and a connection-scoped
-conversation that blocks interleaved operations until Bind succeeds or fails.
-They derive ephemeral verifiers from ACL-visible cleartext passwords or parse
-Cyrus `authPassword` salt, StoredKey, and ServerKey records without exposing
-those values to the client. LDAP URL mappings perform an internal anonymous
+global `olcSaslHost`, `olcSaslRealm`, `olcSaslSecProps`, and ordered
+`olcAuthzRegexp` configuration. Server-side PLAIN is advertised only when
+those properties permit it, maps its authentication identity through direct
+or local LDAP URL rules, and verifies the resulting entry through the existing
+password and ACL path. CRAM-MD5 creates a Cyrus-compatible hostname challenge
+and verifies it with an ACL-visible raw or `{CLEARTEXT}` password.
+SCRAM-SHA-1/256/512 use the same mapping and a connection-scoped conversation
+that blocks interleaved operations until Bind succeeds or fails. They derive
+ephemeral verifiers from ACL-visible cleartext passwords or parse Cyrus
+`authPassword` salt, StoredKey, and ServerKey records without exposing those
+values to the client. LDAP URL mappings perform an internal anonymous
 auth-check search and require exactly one result, including `auth` access to
 the search base, candidate entry, and filter attributes.
 
