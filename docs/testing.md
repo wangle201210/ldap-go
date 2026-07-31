@@ -56,3 +56,16 @@ LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
     -run 'TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
+
+The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
+Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM
+plugin. When plugins are installed outside the platform default directory,
+point Cyrus SASL at them for the gated run:
+
+```sh
+SASL_PATH=/path/to/cyrus-sasl/plugins \
+LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  go test ./internal/server \
+    -run TestLDAPGoSyncreplConsumesOpenLDAPProviderWithSCRAMSHA256 \
+    -count=1
+```

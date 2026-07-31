@@ -76,7 +76,10 @@ and filtered result sets, refresh-only polling, and suffix massage for entry
 DNs and DN-valued attribute values. Consumer transports support OpenLDAP
 StartTLS/LDAPS certificate policies, CA and CRL loading, socket keepalive,
 Linux TCP user timeouts, and implicit `ldap+tlcp://` replication with mutual
-SM2 authentication.
+SM2 authentication. Syncrepl authentication supports simple bind,
+SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-1/256/512; a real
+OpenLDAP SCRAM-SHA-256 provider topology is exercised when its Cyrus SASL
+plugin is available.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

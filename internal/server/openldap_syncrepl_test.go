@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -269,6 +271,204 @@ func TestLDAPGoSyncreplConsumesOpenLDAPProvider(t *testing.T) {
 		consumer,
 		"uid=carol,ou=people,dc=example,dc=com",
 	)
+}
+
+func TestLDAPGoSyncreplConsumesOpenLDAPProviderWithSCRAMSHA256(
+	t *testing.T,
+) {
+	tools := requireOpenLDAPReferenceTools(t)
+	const replicatorDN = "uid=replicator,ou=people,dc=example,dc=com"
+	const replicatorPassword = "replication-secret"
+	providerURI, stopProvider := startOpenLDAPReferenceServerWithConfig(
+		t,
+		tools,
+		[]string{"syncprov"},
+		`authz-regexp "^uid=replicator,.*cn=auth$" "`+
+			replicatorDN+`"`,
+		`access to dn.exact="`+replicatorDN+`"
+  by anonymous auth
+  by dn.exact="`+replicatorDN+`" read
+  by * none
+access to *
+  by dn.exact="`+replicatorDN+`" read
+  by * none`,
+		`
+dn: `+replicatorDN+`
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: replicator
+cn: Replication Account
+sn: Account
+userPassword: `+replicatorPassword+`
+`,
+	)
+	defer stopProvider()
+
+	provider, err := ldap.DialURL(providerURI)
+	if err != nil {
+		t.Fatalf("DialURL(OpenLDAP SASL provider): %v", err)
+	}
+	defer provider.Close()
+	rootDSE, err := provider.Search(ldap.NewSearchRequest(
+		"",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		1,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"supportedSASLMechanisms"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("read OpenLDAP supported SASL mechanisms: %v", err)
+	}
+	if len(rootDSE.Entries) != 1 ||
+		!slices.ContainsFunc(
+			rootDSE.Entries[0].GetAttributeValues(
+				"supportedSASLMechanisms",
+			),
+			func(value string) bool {
+				return strings.EqualFold(value, "SCRAM-SHA-256")
+			},
+		) {
+		t.Skip("OpenLDAP Cyrus SASL has no SCRAM-SHA-256 plugin")
+	}
+
+	providerAddress := strings.TrimPrefix(providerURI, "ldap://")
+	probeConfig := syncConsumerConfig{
+		bindMethod:         "sasl",
+		saslMechanism:      "SCRAM-SHA-256",
+		authenticationID:   "replicator",
+		credentials:        []byte(replicatorPassword),
+		securityProperties: defaultSyncConsumerSASLSecurityProperties(),
+	}
+	probeTransport, err := dialSyncConsumer(
+		context.Background(),
+		probeConfig,
+		providerURI,
+	)
+	if err != nil {
+		t.Fatalf("dial OpenLDAP SCRAM probe: %v", err)
+	}
+	defer probeTransport.close()
+	if err := bindSyncConsumerSASL(probeTransport, probeConfig); err != nil {
+		t.Fatalf("bind OpenLDAP SCRAM probe: %v", err)
+	}
+	if err := probeTransport.clearDeadline(); err != nil {
+		t.Fatalf("clear OpenLDAP SCRAM probe deadline: %v", err)
+	}
+	probe := ldap.NewConn(probeTransport.currentConnection(), false)
+	probe.Start()
+	defer probe.Close()
+	probeResult, err := probe.Search(ldap.NewSearchRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		1,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"cn"},
+		nil,
+	))
+	probeEntries := 0
+	if probeResult != nil {
+		probeEntries = len(probeResult.Entries)
+	}
+	if err != nil || probeEntries != 1 {
+		t.Fatalf(
+			"search through OpenLDAP SCRAM identity: entries=%d error=%v",
+			probeEntries,
+			err,
+		)
+	}
+
+	consumerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = consumerStore.Close() })
+	seedOpenLDAPSASLSyncConsumerDatabase(
+		t,
+		consumerStore,
+		providerAddress,
+		replicatorPassword,
+	)
+	consumerAddress, stopConsumer := startServer(t, consumerStore, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer stopConsumer()
+	consumer := dialLDAPRoot(t, consumerAddress)
+	defer consumer.Close()
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice",
+	)
+
+	if err := provider.Bind(syncTestRootDN, "secret"); err != nil {
+		t.Fatalf("Bind(OpenLDAP SASL provider root): %v", err)
+	}
+	modify := ldap.NewModifyRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		nil,
+	)
+	modify.Replace("cn", []string{"Alice SCRAM Streaming"})
+	if err := provider.Modify(modify); err != nil {
+		t.Fatalf("modify OpenLDAP SASL provider: %v", err)
+	}
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice SCRAM Streaming",
+	)
+}
+
+func seedOpenLDAPSASLSyncConsumerDatabase(
+	t *testing.T,
+	store storage.Store,
+	providerAddress,
+	password string,
+) {
+	t.Helper()
+	entry := directory.Entry{
+		DN: "olcDatabase={1}mdb,cn=config",
+		Attributes: []directory.Attribute{
+			{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+			{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+			{
+				Description: "olcSyncrepl",
+				Values: stringValues(
+					`{0}rid=001 provider=ldap://` + providerAddress +
+						` bindmethod=sasl saslmech=SCRAM-SHA-256` +
+						` authcid=replicator credentials="` + password + `"` +
+						` searchbase="dc=example,dc=com"` +
+						` filter="(objectClass=*)" scope=sub attrs="*,+"` +
+						` schemachecking=off type=refreshAndPersist` +
+						` retry="1 +"`,
+				),
+			},
+			{
+				Description: "olcUpdateRef",
+				Values:      stringValues("ldap://" + providerAddress),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(
+		writer storage.Writer,
+	) error {
+		if err := writer.Put(entry, false); err != nil {
+			return err
+		}
+		return writer.SetNamingContexts([]string{"dc=example,dc=com"})
+	}); err != nil {
+		t.Fatalf("seed SCRAM syncrepl consumer: %v", err)
+	}
 }
 
 func newOpenLDAPSyncreplConsumer(

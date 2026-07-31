@@ -70,6 +70,7 @@ No row may become `compatible` based only on unit tests.
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
+| SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI, SCRAM-PLUS, and SASL security layers remain |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
@@ -335,22 +336,28 @@ continues, stop it by deleting `olcSyncrepl`, and re-enable it to catch up.
 
 Standard RFC 4533 consumption supports refresh-only and
 refresh-and-persist, provider URI failover, simple bind, StartTLS/LDAPS, SASL
-EXTERNAL and DIGEST-MD5, Present/Delete UUID sets, DN suffix massage, and
-durable opaque cookies. Entry upserts, UUID-based renames/deletes, cookie
-updates, and derived context CSNs use storage transactions. Present completion
-removes only local entries in the configured scope and filter that were not
-reported by the provider. An in-process provider/consumer topology verifies
-initial convergence, persistent Add/Modify/Delete, consumer shutdown, offline
-provider changes, restart with the same store, cookie catch-up, and stale-entry
-removal. A gated reverse process topology uses a real OpenLDAP 2.6.13
-syncprov/MDB provider and verifies the same initial, persistent, stopped
-consumer, and cookie-restart sequence.
+EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-1/256/512,
+Present/Delete UUID sets, DN suffix massage, and durable opaque cookies.
+EXTERNAL and SCRAM carry `authzid`; SASL defaults and numeric `secprops` are
+enforced without silently enabling plaintext authentication. Options that
+require credential delegation, stronger mechanism classifications, channel
+binding, or a SASL security layer fail explicitly. Entry upserts, UUID-based
+renames/deletes, cookie updates, and derived context CSNs use storage
+transactions. Present completion removes only local entries in the configured
+scope and filter that were not reported by the provider. An in-process
+provider/consumer topology verifies initial convergence, persistent
+Add/Modify/Delete, consumer shutdown, offline provider changes, restart with
+the same store, cookie catch-up, and stale-entry removal. Gated reverse process
+topologies use real OpenLDAP 2.6.13 syncprov/MDB providers for both simple bind
+and SCRAM-SHA-256, with the SCRAM case enabled when its Cyrus SASL plugin is
+available.
 
 Consumer TCP setup honors `network-timeout`, `keepalive`, and, on Linux,
 `tcp-user-timeout`. A failed `starttls=critical` aborts the cycle;
-`starttls=yes` logs the failure and reconnects in plaintext because the Go LDAP
-client cannot reuse a connection after a rejected StartTLS operation. LDAPS and
-StartTLS support client certificates, CA files/directories, OpenLDAP
+`starttls=yes` continues on the same plaintext connection only when the LDAP
+server rejects the extension; network, framing, and TLS handshake failures
+still abort the cycle because connection state is no longer trustworthy.
+LDAPS and StartTLS support client certificates, CA files/directories, OpenLDAP
 `tls_reqcert` and `tls_reqsan` hostname policies, `peer`/`all` CRL checks,
 protocol minima, common OpenSSL cipher names and operators, and Go-supported
 curve selection. Go cannot configure TLS 1.3 cipher suites or reproduce the

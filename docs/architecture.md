@@ -198,6 +198,15 @@ for `ldap+tlcp://` providers. OpenSSL cipher names and the common
 configurable TLS 1.0-1.2 suites; TLS 1.3 suite selection and the complete
 OpenSSL cipher-expression language cannot be represented by `crypto/tls`.
 
+Before handing a provider socket to `go-ldap`, the consumer owns a bounded BER
+exchange layer for StartTLS and multi-round SASL Bind. This permits EXTERNAL
+with an authorization ID, PLAIN, CRAM-MD5, and SCRAM-SHA-1/256/512 while the
+existing DIGEST-MD5 path remains available. SCRAM derives and verifies both
+proofs through `xdg-go/scram`; LDAP framing, result validation, round limits,
+timeouts, and OpenLDAP `secprops` policy remain internal. GSSAPI,
+SCRAM channel-binding variants, and negotiated SASL integrity/privacy layers
+are not yet implemented.
+
 ## Data migration contract
 
 `ldap-go import` must accept unmodified LDIF emitted by OpenLDAP `slapcat` for

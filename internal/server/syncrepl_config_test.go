@@ -265,6 +265,19 @@ func TestParseSyncConsumerConfigRejectsInvalidValues(t *testing.T) {
 			want: "bindmethod=sasl",
 		},
 		{
+			name: "SASL mechanism required",
+			value: `rid=1 provider=ldap://provider ` +
+				`searchbase="dc=example,dc=com" bindmethod=sasl`,
+			want: "requires saslmech",
+		},
+		{
+			name: "invalid SASL security property",
+			value: `rid=1 provider=ldap://provider ` +
+				`searchbase="dc=example,dc=com" bindmethod=sasl ` +
+				`saslmech=SCRAM-SHA-256 secprops=mystery`,
+			want: "unknown SASL security property",
+		},
+		{
 			name: "delta log settings",
 			value: `rid=1 provider=ldap://provider ` +
 				`searchbase="dc=example,dc=com" syncdata=accesslog`,

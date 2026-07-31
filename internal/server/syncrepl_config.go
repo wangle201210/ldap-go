@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,14 +89,15 @@ type syncConsumerConfig struct {
 	logFilterText string
 	logFilter     *directory.Filter
 
-	bindMethod         string
-	bindDN             string
-	credentials        []byte
-	saslMechanism      string
-	authenticationID   string
-	authorizationID    string
-	realm              string
-	securityProperties string
+	bindMethod             string
+	bindDN                 string
+	credentials            []byte
+	saslMechanism          string
+	authenticationID       string
+	authorizationID        string
+	realm                  string
+	securityProperties     syncConsumerSASLSecurityProperties
+	securityPropertiesText string
 
 	startTLS         syncConsumerStartTLS
 	tls              syncConsumerTLSConfig
@@ -127,18 +127,19 @@ func parseSyncConsumerConfig(
 		return syncConsumerConfig{}, err
 	}
 	config := syncConsumerConfig{
-		order:      order,
-		rid:        -1,
-		partition:  partition,
-		filterText: defaultFilter,
-		filter:     parsedDefaultFilter,
-		scope:      directory.ScopeWholeSubtree,
-		attributes: []string{"*", "+"},
-		mode:       syncConsumerRefreshOnly,
-		interval:   24 * time.Hour,
-		retry:      []syncConsumerRetry{{interval: time.Hour, attempts: -1}},
-		bindMethod: "simple",
-		syncData:   "default",
+		order:              order,
+		rid:                -1,
+		partition:          partition,
+		filterText:         defaultFilter,
+		filter:             parsedDefaultFilter,
+		scope:              directory.ScopeWholeSubtree,
+		attributes:         []string{"*", "+"},
+		mode:               syncConsumerRefreshOnly,
+		interval:           24 * time.Hour,
+		retry:              []syncConsumerRetry{{interval: time.Hour, attempts: -1}},
+		bindMethod:         "simple",
+		syncData:           "default",
+		securityProperties: defaultSyncConsumerSASLSecurityProperties(),
 	}
 
 	var (
@@ -393,7 +394,17 @@ func parseSyncConsumerConfig(
 		case "realm":
 			config.realm = rawValue
 		case "secprops":
-			config.securityProperties = rawValue
+			properties, parseErr := parseSyncConsumerSASLSecurityProperties(
+				rawValue,
+			)
+			if parseErr != nil {
+				return syncConsumerConfig{}, fmt.Errorf(
+					"secprops: %w",
+					parseErr,
+				)
+			}
+			config.securityProperties = properties
+			config.securityPropertiesText = rawValue
 		case "starttls":
 			startTLS, parseErr := parseSyncConsumerStartTLS(rawValue)
 			if parseErr != nil {
@@ -534,9 +545,14 @@ func parseSyncConsumerConfig(
 			config.authenticationID != "" ||
 			config.authorizationID != "" ||
 			config.realm != "" ||
-			config.securityProperties != "") {
+			config.securityPropertiesText != "") {
 		return syncConsumerConfig{}, errors.New(
 			"SASL parameters require bindmethod=sasl",
+		)
+	}
+	if config.bindMethod == "sasl" && config.saslMechanism == "" {
+		return syncConsumerConfig{}, errors.New(
+			"bindmethod=sasl requires saslmech",
 		)
 	}
 	if config.syncData != "default" &&
@@ -635,7 +651,7 @@ func parseSyncConsumerProviders(value string) ([]string, error) {
 		return nil, errors.New("provider is empty")
 	}
 	for _, provider := range providers {
-		parsed, err := url.Parse(provider)
+		parsed, err := parseSyncConsumerProviderURL(provider)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", provider, err)
 		}

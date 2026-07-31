@@ -255,6 +255,25 @@ func startOpenLDAPReferenceServer(
 	overlays []string,
 ) (string, func()) {
 	t.Helper()
+	return startOpenLDAPReferenceServerWithConfig(
+		t,
+		tools,
+		overlays,
+		"",
+		"",
+		"",
+	)
+}
+
+func startOpenLDAPReferenceServerWithConfig(
+	t *testing.T,
+	tools openLDAPReferenceTools,
+	overlays []string,
+	globalConfig,
+	databaseConfig,
+	extraData string,
+) (string, func()) {
+	t.Helper()
 	root := t.TempDir()
 	databaseDir := filepath.Join(root, "db")
 	if err := os.Mkdir(databaseDir, 0o700); err != nil {
@@ -272,6 +291,7 @@ include %s
 include %s
 pidfile %s
 argsfile %s
+%s
 
 database mdb
 maxsize 1073741824
@@ -282,13 +302,16 @@ directory %s
 index objectClass eq
 index entryUUID,entryCSN eq
 %s
+%s
 `,
 		filepath.Join(tools.schemaDir, "core.schema"),
 		filepath.Join(tools.schemaDir, "cosine.schema"),
 		filepath.Join(tools.schemaDir, "inetorgperson.schema"),
 		filepath.Join(root, "slapd.pid"),
 		filepath.Join(root, "slapd.args"),
+		globalConfig,
 		databaseDir,
+		databaseConfig,
 		strings.Join(overlayConfig, "\n"),
 	)
 	data := `dn: dc=example,dc=com
@@ -327,7 +350,7 @@ objectClass: inetOrgPerson
 uid: bob
 cn: Bob
 sn: Bob
-`
+` + extraData
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatalf("write OpenLDAP config: %v", err)
 	}
@@ -350,7 +373,15 @@ sn: Bob
 	}
 	uri := "ldap://" + address
 	var logs bytes.Buffer
-	slapd := exec.Command(tools.slapd, "-f", configPath, "-h", uri, "-d", "0")
+	slapd := exec.Command(
+		tools.slapd,
+		"-f",
+		configPath,
+		"-h",
+		uri,
+		"-d",
+		"0",
+	)
 	slapd.Stdout = &logs
 	slapd.Stderr = &logs
 	if err := slapd.Start(); err != nil {

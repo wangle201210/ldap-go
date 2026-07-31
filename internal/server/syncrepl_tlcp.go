@@ -27,7 +27,7 @@ func dialSyncConsumerTLCP(
 	ctx context.Context,
 	config syncConsumerConfig,
 	provider *url.URL,
-) (*ldap.Conn, error) {
+) (*syncConsumerTransport, error) {
 	tlcpConfig, err := buildSyncConsumerTLCPConfig(config, provider)
 	if err != nil {
 		return nil, err
@@ -56,9 +56,13 @@ func dialSyncConsumerTLCP(
 		_ = raw.Close()
 		return nil, fmt.Errorf("TLCP handshake with %s: %w", provider.String(), err)
 	}
-	connection := ldap.NewConn(secured, true)
-	connection.Start()
-	return connection, nil
+	return &syncConsumerTransport{
+		connection:       secured,
+		context:          ctx,
+		operationTimeout: config.operationTimeout,
+		secure:           true,
+		ssf:              128,
+	}, nil
 }
 
 func buildSyncConsumerTLCPConfig(

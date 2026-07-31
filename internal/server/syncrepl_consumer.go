@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -34,11 +33,6 @@ type syncConsumerRetryCursor struct {
 	policy []syncConsumerRetry
 	index  int
 	used   int
-}
-
-type syncConsumerDialResult struct {
-	connection *ldap.Conn
-	err        error
 }
 
 func (server *Server) runSyncConsumer(
@@ -110,19 +104,31 @@ func (server *Server) runSyncConsumerCycle(
 	if err != nil {
 		return err
 	}
-	connection, err := dialSyncConsumer(ctx, config, provider)
+	transport, err := dialSyncConsumer(ctx, config, provider)
 	if err != nil {
 		return err
 	}
+	var connection *ldap.Conn
 	defer func() {
-		connection.Close()
+		if connection != nil {
+			_ = connection.Close()
+			return
+		}
+		_ = transport.close()
 	}()
 
-	if config.operationTimeout > 0 {
-		connection.SetTimeout(config.operationTimeout)
-	}
+	stopClose := make(chan struct{})
+	go func(active *syncConsumerTransport) {
+		select {
+		case <-ctx.Done():
+			_ = active.close()
+		case <-stopClose:
+		}
+	}(transport)
+	defer close(stopClose)
+
 	if config.startTLS != syncConsumerStartTLSOff {
-		parsed, parseErr := url.Parse(provider)
+		parsed, parseErr := parseSyncConsumerProviderURL(provider)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -132,17 +138,18 @@ func (server *Server) runSyncConsumerCycle(
 				"starttls cannot be combined with an implicit secure provider",
 			)
 		}
-		tlsConfig, tlsErr := buildSyncConsumerTLSConfig(config, parsed)
-		if tlsErr != nil {
-			return tlsErr
-		}
-		if startErr := connection.StartTLS(tlsConfig); startErr != nil {
-			if config.startTLS == syncConsumerStartTLSCritical {
-				connection.Close()
+		if startErr := performSyncConsumerStartTLS(
+			transport,
+			config,
+			parsed,
+		); startErr != nil {
+			var resultError *ldap.Error
+			if config.startTLS == syncConsumerStartTLSCritical ||
+				!errors.As(startErr, &resultError) {
 				return fmt.Errorf("start TLS: %w", startErr)
 			}
 			server.config.Logger.Warn(
-				"syncrepl StartTLS failed; continuing without TLS",
+				"syncrepl StartTLS was rejected; continuing without TLS",
 				"rid",
 				fmt.Sprintf("%03d", config.rid),
 				"provider",
@@ -150,30 +157,36 @@ func (server *Server) runSyncConsumerCycle(
 				"error",
 				startErr,
 			)
-			connection.Close()
-			connection, err = dialSyncConsumer(ctx, config, provider)
-			if err != nil {
-				return fmt.Errorf(
-					"reconnect after noncritical StartTLS failure: %w",
-					err,
-				)
-			}
-			if config.operationTimeout > 0 {
-				connection.SetTimeout(config.operationTimeout)
-			}
 		}
 	}
-	stopClose := make(chan struct{})
-	go func(active *ldap.Conn) {
-		select {
-		case <-ctx.Done():
-			active.Close()
-		case <-stopClose:
-		}
-	}(connection)
-	defer close(stopClose)
 
-	if err := bindSyncConsumer(connection, config, provider); err != nil {
+	rawSASL := config.bindMethod == "sasl" &&
+		!strings.EqualFold(config.saslMechanism, "DIGEST-MD5")
+	if rawSASL {
+		if err := bindSyncConsumerSASL(transport, config); err != nil {
+			return err
+		}
+	}
+	if err := transport.clearDeadline(); err != nil {
+		return fmt.Errorf("clear syncrepl connection deadline: %w", err)
+	}
+	connection = ldap.NewConn(transport.currentConnection(), transport.secure)
+	connection.Start()
+	if config.operationTimeout > 0 {
+		connection.SetTimeout(config.operationTimeout)
+	}
+	if !rawSASL {
+		if err := bindSyncConsumer(
+			connection,
+			config,
+			provider,
+			transport.ssf,
+		); err != nil {
+			return err
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -862,6 +875,7 @@ func bindSyncConsumer(
 	connection *ldap.Conn,
 	config syncConsumerConfig,
 	provider string,
+	externalSSF uint32,
 ) error {
 	switch config.bindMethod {
 	case "simple":
@@ -877,13 +891,23 @@ func bindSyncConsumer(
 		return nil
 	case "sasl":
 		switch strings.ToUpper(config.saslMechanism) {
-		case "EXTERNAL":
-			if err := connection.ExternalBind(); err != nil {
-				return fmt.Errorf("SASL EXTERNAL bind: %w", err)
-			}
-			return nil
 		case "DIGEST-MD5":
-			parsed, err := url.Parse(provider)
+			if config.authenticationID == "" {
+				return errors.New("SASL DIGEST-MD5 requires authcid")
+			}
+			if config.authorizationID != "" || config.realm != "" {
+				return errors.New(
+					"SASL DIGEST-MD5 authzid and realm are not implemented",
+				)
+			}
+			if err := validateSyncConsumerSASLSecurity(
+				config.securityProperties,
+				"DIGEST-MD5",
+				externalSSF,
+			); err != nil {
+				return err
+			}
+			parsed, err := parseSyncConsumerProviderURL(provider)
 			if err != nil {
 				return err
 			}
@@ -904,60 +928,6 @@ func bindSyncConsumer(
 		}
 	default:
 		return fmt.Errorf("unknown bind method %q", config.bindMethod)
-	}
-}
-
-func dialSyncConsumer(
-	ctx context.Context,
-	config syncConsumerConfig,
-	provider string,
-) (*ldap.Conn, error) {
-	parsed, err := url.Parse(provider)
-	if err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(parsed.Scheme, "ldap+tlcp") {
-		return dialSyncConsumerTLCP(ctx, config, parsed)
-	}
-	tlsConfig, err := buildSyncConsumerTLSConfig(config, parsed)
-	if err != nil {
-		return nil, err
-	}
-
-	timeout := config.networkTimeout
-	if timeout <= 0 {
-		timeout = ldap.DefaultTimeout
-	}
-	dialer := &net.Dialer{Timeout: timeout}
-	if err := configureSyncConsumerDialer(dialer, config); err != nil {
-		return nil, err
-	}
-	result := make(chan syncConsumerDialResult)
-	go func() {
-		connection, dialErr := ldap.DialURL(
-			provider,
-			ldap.DialWithDialer(dialer),
-			ldap.DialWithTLSConfig(tlsConfig),
-		)
-		select {
-		case result <- syncConsumerDialResult{
-			connection: connection,
-			err:        dialErr,
-		}:
-		case <-ctx.Done():
-			if connection != nil {
-				connection.Close()
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case dialed := <-result:
-		if dialed.err != nil {
-			return nil, fmt.Errorf("connect to %s: %w", provider, dialed.err)
-		}
-		return dialed.connection, nil
 	}
 }
 
