@@ -18,7 +18,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
-| Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, and multi-round SCRAM-SHA-1/256/512 pass; OpenLDAP 2.6.13 PLAIN, CRAM-MD5, and SCRAM-SHA-256 `ldapwhoami` pass; GSSAPI, security layers, and full proxy authorization remain |
+| Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, and multi-round SCRAM-SHA-1/256/512 pass; OpenLDAP 2.6.13 PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-256 `ldapwhoami` pass; GSSAPI, security layers, and full proxy authorization remain |
 | Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
@@ -70,7 +70,7 @@ No row may become `compatible` based only on unit tests.
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
-| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, Cyrus `authPassword`, and OpenLDAP CLI interoperability pass; DIGEST-MD5, GSSAPI, SCRAM-PLUS, security layers, and `olcAuthzPolicy` remain |
+| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, Cyrus credential forms, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, DIGEST security layers, and `olcAuthzPolicy` remain |
 | SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
 | Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, and PLAIN advertisement policy pass; SASL-layer and ACL SSF integration remain |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
@@ -176,6 +176,14 @@ requires a raw or `{CLEARTEXT}` password; one-way hashes cannot provide its
 HMAC key. Tests cover configured-host challenges, malformed initial data,
 wrong and hashed passwords, ACL denial, and OpenLDAP `ldapwhoami`
 interoperability.
+DIGEST-MD5 implements the bounded RFC 2831 directive grammar, Cyrus
+nonce/realm challenge, nonce-count and LDAP digest-URI validation, historical
+Latin-1 fallback, constant-time response verification, and mutual `rspauth`.
+Credential lookup accepts ACL-visible raw or `{CLEARTEXT}` passwords and the
+legacy binary `cmusaslsecretDIGEST-MD5` attribute. The RFC digest vector,
+malformed parser cases, all credential forms, ACL denial, independent
+`go-ldap`, and OpenLDAP Cyrus clients pass. Only `qop=auth` is advertised;
+`auth-int`, `auth-conf`, and fast reauthentication remain pending.
 SCRAM-SHA-1/256/512 use a connection-scoped multi-round Bind state and reject
 interleaved operations as OpenLDAP does. Credential lookup accepts ACL-visible
 raw or `{CLEARTEXT}` `userPassword` values and Cyrus-compatible

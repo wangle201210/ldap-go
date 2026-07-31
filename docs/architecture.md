@@ -201,6 +201,9 @@ those properties permit it, maps its authentication identity through direct
 or local LDAP URL rules, and verifies the resulting entry through the existing
 password and ACL path. CRAM-MD5 creates a Cyrus-compatible hostname challenge
 and verifies it with an ACL-visible raw or `{CLEARTEXT}` password.
+DIGEST-MD5 uses a bounded directive parser, the same anonymous `auth` ACL
+lookup, either cleartext or a legacy precomputed secret, and returns the
+mutual-authentication `rspauth`; it currently advertises only `qop=auth`.
 SCRAM-SHA-1/256/512 use the same mapping and a connection-scoped conversation
 that blocks interleaved operations until Bind succeeds or fails. They derive
 ephemeral verifiers from ACL-visible cleartext passwords or parse Cyrus

@@ -80,17 +80,19 @@ SM2 authentication. Syncrepl authentication supports simple bind,
 SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
 SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
 exercised when its Cyrus SASL plugin is available.
-Server-side SASL supports EXTERNAL, PLAIN, CRAM-MD5, and
+Server-side SASL supports EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and
 SCRAM-SHA-1/256/512. PLAIN verifies the mapped LDAP entry's existing
 `userPassword` values. CRAM-MD5 performs the Cyrus-compatible server-first
-challenge exchange with an ACL-visible cleartext password. SCRAM runs a
-connection-bound multi-round exchange and reads either cleartext
-`userPassword` or Cyrus-compatible `authPassword` verifiers imported from
-OpenLDAP. OpenLDAP 2.6.13 `ldapwhoami` PLAIN, CRAM-MD5, and SCRAM-SHA-256
-interoperability cases pass. Imported `olcSaslHost`, `olcSaslRealm`,
-`olcSaslSecProps`, and ordered `olcAuthzRegexp` values are loaded from
-`cn=config`; direct DN replacements and local LDAP URL mappings with exactly
-one ACL-visible result are supported.
+challenge exchange with an ACL-visible cleartext password. DIGEST-MD5
+supports the `qop=auth` exchange, mutual `rspauth`, and imported
+`cmusaslsecretDIGEST-MD5` values. SCRAM runs a connection-bound multi-round
+exchange and reads either cleartext `userPassword` or Cyrus-compatible
+`authPassword` verifiers imported from OpenLDAP. OpenLDAP 2.6.13
+`ldapwhoami` PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-256 interoperability
+cases pass. Imported `olcSaslHost`, `olcSaslRealm`, `olcSaslSecProps`, and
+ordered `olcAuthzRegexp` values are loaded from `cn=config`; direct DN
+replacements and local LDAP URL mappings with exactly one ACL-visible result
+are supported.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -212,6 +214,12 @@ the authenticated identity, and forms its challenge with `olcSaslHost` (or
 the local hostname). It requires a raw or `{CLEARTEXT}` `userPassword`;
 one-way OpenLDAP or national-cryptography password hashes cannot supply the
 original HMAC-MD5 key.
+DIGEST-MD5 shares that mapping and ACL path, emits a Cyrus-compatible
+nonce/realm challenge, verifies both historical Latin-1 and UTF-8 digest
+forms, and returns the required `rspauth`. It accepts raw or `{CLEARTEXT}`
+`userPassword`, or the legacy 16-byte `cmusaslsecretDIGEST-MD5` value.
+`qop=auth-int` and `qop=auth-conf` remain unavailable until the connection
+layer can apply negotiated SASL integrity and privacy framing.
 
 For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
 `credentials` value is used as the Kerberos password. Without that field,

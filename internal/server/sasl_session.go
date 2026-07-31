@@ -10,6 +10,7 @@ type serverSASLSession struct {
 	runtime               *runtimeState
 	scramConversation     *scram.ServerConversation
 	cramMD5Challenge      []byte
+	digestMD5Session      *serverSASLDigestMD5Session
 	authenticationDN      directory.DN
 	authorizationDN       directory.DN
 	authorizationResolved bool

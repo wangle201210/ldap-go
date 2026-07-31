@@ -106,6 +106,32 @@ func (server *Server) handleSASLBind(
 			message,
 			request,
 		)
+	case "DIGEST-MD5":
+		if session == nil {
+			var err error
+			session, err = startSASLDigestMD5Session(runtime)
+			if err != nil {
+				return err
+			}
+			state.saslSession = session
+			return writeSASLChallenge(
+				connection,
+				message.ID,
+				session.digestMD5Session.challenge,
+			)
+		}
+		if !request.Authentication.HasSASLCredentials {
+			clearSASLSession(state)
+			return writeSASLInvalidCredentials(connection, message.ID)
+		}
+		return server.handleSASLDigestMD5Step(
+			ctx,
+			connection,
+			state,
+			session,
+			message,
+			request,
+		)
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
 		if session == nil {
 			session = &serverSASLSession{
@@ -360,6 +386,11 @@ func saslMechanismPolicyFailure(
 			noPlain:     true,
 			noAnonymous: true,
 		}
+	case "DIGEST-MD5":
+		security = saslMechanismSecurity{
+			noPlain:     true,
+			noAnonymous: true,
+		}
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
 		security = saslMechanismSecurity{
 			noPlain:     true,
@@ -428,6 +459,13 @@ func supportedSASLMechanisms(state *connectionState) []string {
 		state.externalSSF,
 	) == nil {
 		mechanisms = append(mechanisms, "CRAM-MD5")
+	}
+	if saslMechanismPolicyFailure(
+		properties,
+		"DIGEST-MD5",
+		state.externalSSF,
+	) == nil {
+		mechanisms = append(mechanisms, "DIGEST-MD5")
 	}
 	for _, mechanism := range []string{
 		"SCRAM-SHA-512",
