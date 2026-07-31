@@ -19,11 +19,20 @@ type saslAuthzRegexp struct {
 	replacement string
 }
 
+type saslAuthorizationPolicy uint8
+
+const (
+	saslAuthorizationFrom saslAuthorizationPolicy = 1 << iota
+	saslAuthorizationTo
+	saslAuthorizationAll
+)
+
 type saslRuntimeConfiguration struct {
-	host               string
-	realm              string
-	securityProperties saslSecurityProperties
-	authzRegexps       []saslAuthzRegexp
+	host                string
+	realm               string
+	securityProperties  saslSecurityProperties
+	authzRegexps        []saslAuthzRegexp
+	authorizationPolicy saslAuthorizationPolicy
 }
 
 func loadSASLRuntimeConfiguration(
@@ -94,6 +103,27 @@ func loadSASLRuntimeConfiguration(
 		configuration.securityProperties = properties
 	}
 
+	policyValues := entry.Values("olcAuthzPolicy")
+	if len(policyValues) > 1 {
+		return saslRuntimeConfiguration{}, fmt.Errorf(
+			"%s olcAuthzPolicy has multiple values",
+			entry.DN,
+		)
+	}
+	if len(policyValues) == 1 {
+		policy, parseErr := parseSASLAuthorizationPolicy(
+			string(policyValues[0]),
+		)
+		if parseErr != nil {
+			return saslRuntimeConfiguration{}, fmt.Errorf(
+				"%s olcAuthzPolicy: %w",
+				entry.DN,
+				parseErr,
+			)
+		}
+		configuration.authorizationPolicy = policy
+	}
+
 	var indexedValues, unindexedValues bool
 	for _, rawValue := range entry.Values("olcAuthzRegexp") {
 		rule, parseErr := parseSASLAuthzRegexp(string(rawValue))
@@ -127,6 +157,27 @@ func loadSASLRuntimeConfiguration(
 		})
 	}
 	return configuration, nil
+}
+
+func parseSASLAuthorizationPolicy(
+	value string,
+) (saslAuthorizationPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return 0, nil
+	case "from":
+		return saslAuthorizationFrom, nil
+	case "to":
+		return saslAuthorizationTo, nil
+	case "any", "both":
+		return saslAuthorizationFrom | saslAuthorizationTo, nil
+	case "all":
+		return saslAuthorizationFrom |
+			saslAuthorizationTo |
+			saslAuthorizationAll, nil
+	default:
+		return 0, fmt.Errorf("unknown policy %q", value)
+	}
 }
 
 func defaultSASLHost() string {

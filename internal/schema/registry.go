@@ -1447,6 +1447,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if len(value) == 0 || !utf8.Valid(value) {
 			return errors.New("value is not a valid non-empty Directory String")
 		}
+	case SyntaxAuthz:
+		if err := validateAuthzSyntax(value); err != nil {
+			return err
+		}
 	case SyntaxIA5String:
 		for _, character := range value {
 			if character > 0x7f {
@@ -1612,7 +1616,7 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			normalizeNumericString(left),
 			normalizeNumericString(right),
 		), nil
-	case "octetstringmatch", "octetstringorderingmatch":
+	case "octetstringmatch", "octetstringorderingmatch", "authzmatch":
 		return bytes.Compare(left, right), nil
 	case "objectidentifiermatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
@@ -1669,6 +1673,7 @@ func supportedMatchingRule(rule string) bool {
 		"numericstringorderingmatch",
 		"octetstringmatch",
 		"octetstringorderingmatch",
+		"authzmatch",
 		"objectidentifiermatch",
 		"integermatch",
 		"integerorderingmatch",
@@ -1741,6 +1746,8 @@ func canonicalMatchingRule(rule string) string {
 		return "csnmatch"
 	case "1.3.6.1.4.1.4203.666.11.2.3":
 		return "csnorderingmatch"
+	case "1.3.6.1.4.1.4203.666.4.12":
+		return "authzmatch"
 	default:
 		return normalized
 	}

@@ -41,6 +41,24 @@ func (server *Server) saslUserDN(
 	user string,
 	realm string,
 ) (directory.DN, error) {
+	return server.saslUserDNAs(
+		ctx,
+		runtime,
+		mechanism,
+		user,
+		realm,
+		"",
+	)
+}
+
+func (server *Server) saslUserDNAs(
+	ctx context.Context,
+	runtime *runtimeState,
+	mechanism string,
+	user string,
+	realm string,
+	subjectDN string,
+) (directory.DN, error) {
 	rewrite, err := runtime.sasl.rewriteUserIdentity(
 		mechanism,
 		user,
@@ -55,6 +73,7 @@ func (server *Server) saslUserDN(
 			runtime,
 			rewrite.requestDN,
 			rewrite.value,
+			subjectDN,
 		)
 	}
 	mapped, err := directory.ParseDN(rewrite.value)
@@ -155,8 +174,13 @@ func (server *Server) resolveSASLAuthorizationDN(
 	if err != nil {
 		return directory.DN{}, errSASLAuthorizationDenied
 	}
-	if target.Equal(authenticationDN) ||
-		saslRootMayAuthorize(runtime, authenticationDN, target) {
+	authorized, err := server.saslAuthorized(
+		ctx,
+		runtime,
+		authenticationDN,
+		target,
+	)
+	if err == nil && authorized {
 		return target, nil
 	}
 	return directory.DN{}, errSASLAuthorizationDenied

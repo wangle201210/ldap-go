@@ -103,6 +103,7 @@ func (server *Server) handleSASLCRAMMD5Step(
 	}
 
 	state.boundDN = authenticationDN.String()
+	state.authMechanism = session.mechanism
 	clearSASLSession(state)
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,

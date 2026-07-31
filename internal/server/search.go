@@ -1864,6 +1864,7 @@ func (server *Server) rootDSE(
 		pagedResultsControlOID,
 		subentriesControlOID,
 		dontUseCopyControlOID,
+		proxyAuthorizationControlOID,
 		transactionSpecificationControlOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {

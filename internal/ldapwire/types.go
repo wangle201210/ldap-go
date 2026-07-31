@@ -204,6 +204,7 @@ const (
 	ResultTooLate                      ResultCode = 120
 	ResultCannotCancel                 ResultCode = 121
 	ResultAssertionFailed              ResultCode = 122
+	ResultProxiedAuthorizationDenied   ResultCode = 123
 	ResultSyncRefreshRequired          ResultCode = 4096
 	ResultTransactionIDInvalid         ResultCode = 0x4121
 )

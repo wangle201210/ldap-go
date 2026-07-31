@@ -3,10 +3,12 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/xdg-go/stringprep"
 )
@@ -45,8 +47,10 @@ func (server *Server) handleSASLBind(
 	case "EXTERNAL":
 		clearSASLSession(state)
 		return server.handleSASLExternalBind(
+			ctx,
 			connection,
 			state,
+			runtime,
 			message,
 			request,
 		)
@@ -168,21 +172,13 @@ func (server *Server) handleSASLBind(
 }
 
 func (server *Server) handleSASLExternalBind(
+	ctx context.Context,
 	connection net.Conn,
 	state *connectionState,
+	runtime *runtimeState,
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) error {
-	if len(request.Authentication.SASLCredentials) != 0 {
-		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
-			message.ID,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"proxy authorization is not supported",
-			),
-			nil,
-		))
-	}
 	if state.externalDN == "" {
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
@@ -191,7 +187,31 @@ func (server *Server) handleSASLExternalBind(
 		))
 	}
 
-	state.boundDN = state.externalDN
+	authenticationDN, err := directory.ParseDN(state.externalDN)
+	if err != nil {
+		return fmt.Errorf("parse external identity DN: %w", err)
+	}
+	authorizationDN, err := server.resolveSASLAuthorizationDN(
+		ctx,
+		runtime,
+		"EXTERNAL",
+		state.externalDN,
+		authenticationDN,
+		string(request.Authentication.SASLCredentials),
+	)
+	if err != nil {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultInappropriateAuthentication,
+				"",
+			),
+			nil,
+		))
+	}
+
+	state.boundDN = authorizationDN.String()
+	state.authMechanism = "EXTERNAL"
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
@@ -267,6 +287,7 @@ func (server *Server) handleSASLPlainBind(
 		))
 	}
 	state.boundDN = authorizationDN.String()
+	state.authMechanism = "PLAIN"
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},

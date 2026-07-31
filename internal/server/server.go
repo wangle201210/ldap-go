@@ -517,6 +517,22 @@ func (server *Server) dispatch(
 			)
 		}
 	}
+	originalBoundDN := state.boundDN
+	message, effectiveBoundDN, proxied, proxyFailure :=
+		server.applyProxyAuthorization(ctx, state, message)
+	if proxyFailure != nil {
+		return false, writeResultForMessage(
+			connection,
+			message,
+			*proxyFailure,
+		)
+	}
+	if proxied {
+		state.boundDN = effectiveBoundDN
+		defer func() {
+			state.boundDN = originalBoundDN
+		}()
+	}
 	if handled, err := server.handleTransactionSpecification(
 		connection,
 		state,
@@ -579,6 +595,7 @@ func (server *Server) handleBind(
 	clearLDAPTransaction(state.transaction)
 	state.transaction = nil
 	state.boundDN = ""
+	state.authMechanism = ""
 	clearSearchSessions(state)
 	if hasUnsupportedCriticalControl(message.Controls) {
 		clearSASLSession(state)
@@ -660,6 +677,9 @@ func (server *Server) handleBind(
 		default:
 			result = ldapwire.Result{Code: ldapwire.ResultSuccess}
 		}
+		if result.Code == ldapwire.ResultSuccess {
+			state.authMechanism = "SIMPLE"
+		}
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			result,
@@ -694,6 +714,7 @@ func (server *Server) handleBind(
 		))
 	}
 	state.boundDN = request.Name
+	state.authMechanism = "SIMPLE"
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
@@ -766,6 +787,7 @@ func (server *Server) closeConnections() {
 
 type connectionState struct {
 	boundDN           string
+	authMechanism     string
 	runtime           *runtimeState
 	connection        net.Conn
 	secure            bool

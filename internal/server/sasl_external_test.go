@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -91,6 +93,49 @@ func TestLDAPClientSASLExternalOverMutualTLS(t *testing.T) {
 	add.Attribute("sn", []string{"User"})
 	if err := client.Add(add); err != nil {
 		t.Fatalf("root Add() after ExternalBind: %v", err)
+	}
+}
+
+func TestLDAPSASLExternalDatabaseRootAuthorizationIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedExternalDirectory(t, store)
+	serverTLS, clientTLS := testMutualTLSConfigs(t)
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=external-admin,o=example",
+		RootPassword: []byte("unused-bootstrap-secret"),
+		TLSConfig:    serverTLS,
+		ImplicitTLS:  true,
+	})
+	defer stop()
+	connection, err := tls.Dial("tcp", address, clientTLS)
+	if err != nil {
+		t.Fatalf("tls.Dial(): %v", err)
+	}
+	defer connection.Close()
+
+	const targetDN = "cn=proxied-external,o=example"
+	response := sendRawLDAPOperation(
+		t,
+		connection,
+		1,
+		rawSASLBindRequest("EXTERNAL", []byte("dn:"+targetDN)),
+	)
+	assertRawLDAPResult(t, response, int64(ldapwire.ResultSuccess))
+
+	response = sendRawLDAPOperation(
+		t,
+		connection,
+		2,
+		rawExtendedRequest(whoAmIOID, nil, false),
+	)
+	assertRawLDAPResult(t, response, int64(ldapwire.ResultSuccess))
+	value, present := rawExtendedResponseValue(response)
+	if !present || string(value) != "dn:"+targetDN {
+		t.Fatalf("EXTERNAL proxy identity = %q, present %t", value, present)
 	}
 }
 
@@ -297,6 +342,35 @@ func generateECDSAKey(t *testing.T) *ecdsa.PrivateKey {
 		t.Fatalf("GenerateKey(): %v", err)
 	}
 	return key
+}
+
+func rawSASLBindRequest(mechanism string, credentials []byte) *ber.Packet {
+	request := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ldapwire.ApplicationBindRequest,
+		nil,
+		"BindRequest",
+	)
+	request.AppendChild(ber.NewInteger(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagInteger,
+		int64(3),
+		"version",
+	))
+	request.AppendChild(rawOctetString(nil))
+	authentication := ber.Encode(
+		ber.ClassContext,
+		ber.TypeConstructed,
+		3,
+		nil,
+		"SASL authentication",
+	)
+	authentication.AppendChild(rawOctetString([]byte(mechanism)))
+	authentication.AppendChild(rawOctetString(credentials))
+	request.AppendChild(authentication)
+	return request
 }
 
 func createCertificate(

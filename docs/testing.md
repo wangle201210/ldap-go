@@ -53,7 +53,7 @@ transaction, and replication differentials is enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceGlobalDisallows|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceProxyAuthorizationControls|TestOpenLDAPReferenceAuthorizationPolicy|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceGlobalDisallows|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -72,6 +72,9 @@ alias, referral, and Compare requests with the reference slapd.
 The global-disallow case compares anonymous and authenticated simple Bind plus
 critical and non-critical Don't Use Copy results and diagnostics against the
 same slapd configuration.
+The proxy-authorization cases compare absent, duplicate, malformed, critical,
+non-critical, anonymous-target, anonymous-authentication, database-root, and
+`authz-policy to` behavior and diagnostics with the reference slapd.
 The DDS cases run Add, live-TTL Search, Refresh, Modify, ModifyDN, object-count,
 disabled-overlay, and expiration-hierarchy checks against reference slapd.
 They also run OpenLDAP `ldapexop refresh` against ldap-go and verify the

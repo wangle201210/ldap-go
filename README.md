@@ -133,7 +133,13 @@ exchange and reads either cleartext `userPassword` or Cyrus-compatible
 cases pass. Imported `olcSaslHost`, `olcSaslRealm`, `olcSaslSecProps`, and
 ordered `olcAuthzRegexp` values are loaded from `cn=config`; direct DN
 replacements and local LDAP URL mappings with exactly one ACL-visible result
-are supported.
+are supported. RFC 4370 proxied authorization is advertised for Search,
+Compare, Add, Modify, Delete, ModifyDN, Password Modify, Who Am I?, and
+Dynamic Refresh. It implements `olcAuthzPolicy` values `none`, `from`, `to`,
+`any`/`both`, and `all`; hidden ordered `authzTo`/`authzFrom` attributes; DN,
+user, group, wildcard, and local LDAP URL rules; database-root and anonymous
+targets; and OpenLDAP's `proxy_authz_anon` and
+`proxy_authz_non_critical` switches.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -229,10 +235,11 @@ LDAPTLS_CACERT=./server-ca.crt \
   ldapwhoami -Y EXTERNAL -ZZ -H ldap://127.0.0.1:1389
 ```
 
-An unverified certificate never produces an EXTERNAL identity. The current
-implementation accepts an empty SASL authorization identity only; proxy
-authorization through EXTERNAL remains pending. TLCP requires a client that
-implements GB/T 38636 rather than a stock TLS-only OpenLDAP client.
+An unverified certificate never produces an EXTERNAL identity. EXTERNAL
+authorization identities use the same self, database-root,
+`olcAuthzPolicy`, `authzTo`, and `authzFrom` checks as the other SASL
+mechanisms. TLCP requires a client that implements GB/T 38636 rather than a
+stock TLS-only OpenLDAP client.
 
 SASL PLAIN follows OpenLDAP/Cyrus security properties. The default
 `noplain,noanonymous` policy suppresses PLAIN on an unprotected TCP
@@ -242,17 +249,17 @@ endpoint, `olcSaslSecProps: none` enables PLAIN. Authentication identity
 mapping uses the first matching `olcAuthzRegexp`; LDAP URL replacement
 searches run as the anonymous authentication identity and require `auth`
 access to the search base, candidate entries, and filter attributes. PLAIN
-authorization identities are limited to self and database-root proxy
-authorization until `olcAuthzPolicy`, `authzTo`, and `authzFrom` are
-implemented. SCRAM-SHA-1/256/512 use the same identity mapping and ACL rules.
+authorization identities use self and database-root authorization plus
+OpenLDAP `olcAuthzPolicy`, `authzTo`, and `authzFrom` rules.
+SCRAM-SHA-1/256/512 use the same identity mapping and ACL rules.
 They accept raw or `{CLEARTEXT}` `userPassword` values, or Cyrus SCRAM
 verifiers in the OpenLDAP `authPassword` form
 `SCRAM-SHA-*$iterations:salt$StoredKey:ServerKey`. One-way `userPassword`
 hashes such as `{SSHA}` cannot be converted into SCRAM verifier keys; migrate
 an existing `authPassword` value or reset the password to enable SCRAM.
-CRAM-MD5 uses the same identity mapping and `auth` ACL check, authorizes only
-the authenticated identity, and forms its challenge with `olcSaslHost` (or
-the local hostname). It requires a raw or `{CLEARTEXT}` `userPassword`;
+CRAM-MD5 uses the same identity mapping, `auth` ACL check, and proxy
+authorization policy, and forms its challenge with `olcSaslHost` (or the local
+hostname). It requires a raw or `{CLEARTEXT}` `userPassword`;
 one-way OpenLDAP or national-cryptography password hashes cannot supply the
 original HMAC-MD5 key.
 DIGEST-MD5 shares that mapping and ACL path, emits a Cyrus-compatible

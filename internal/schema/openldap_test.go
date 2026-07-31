@@ -247,6 +247,65 @@ func TestBuiltinDITContentRulesAttribute(t *testing.T) {
 	}
 }
 
+func TestBuiltinOpenLDAPAuthorizationSchema(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	for _, name := range []string{
+		"authzTo",
+		"saslAuthzTo",
+		"authzFrom",
+		"saslAuthzFrom",
+	} {
+		attribute, found := registry.AttributeType(name)
+		if !found ||
+			attribute.Syntax != SyntaxAuthz ||
+			attribute.Equality != "authzMatch" ||
+			attribute.Usage != UsageDistributedOperation ||
+			!attribute.Hidden ||
+			len(attribute.Extensions["X-ORDERED"]) != 1 ||
+			attribute.Extensions["X-ORDERED"][0] != "VALUES" {
+			t.Fatalf("%s = %#v, found %t", name, attribute, found)
+		}
+	}
+
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("inetOrgPerson")},
+			{Description: "uid", Values: byteValues("alice")},
+			{Description: "cn", Values: byteValues("Alice")},
+			{Description: "sn", Values: byteValues("Example")},
+			{
+				Description: "authzTo",
+				Values: byteValues(
+					"{0}dn.subtree:ou=people,dc=example,dc=com",
+					"{1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)",
+				),
+			},
+			{
+				Description: "saslAuthzFrom",
+				Values:      byteValues("group:cn=operators,dc=example,dc=com"),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(entry); err != nil {
+		t.Fatalf("ValidateEntry(authz rules): %v", err)
+	}
+	invalid := entry.Clone()
+	invalid.ReplaceValues("authzTo", byteValues("not an authz rule"))
+	assertViolation(t, registry.ValidateEntry(invalid), ViolationSyntax)
+
+	descriptions := strings.Join(registry.AttributeTypeDescriptions(), "\n")
+	if strings.Contains(descriptions, "1.3.6.1.4.1.4203.666.1.8") ||
+		strings.Contains(descriptions, "1.3.6.1.4.1.4203.666.1.9") {
+		t.Fatalf("published authorization attributes:\n%s", descriptions)
+	}
+}
+
 func TestBuiltinDynamicDirectorySchema(t *testing.T) {
 	t.Parallel()
 

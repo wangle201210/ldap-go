@@ -256,6 +256,18 @@ values to the client. LDAP URL mappings perform an internal anonymous
 auth-check search and require exactly one result, including `auth` access to
 the search base, candidate entry, and filter attributes.
 
+RFC 4370 controls are resolved before operation dispatch and removed before
+operation-specific control parsing. The connection's authenticated DN is
+retained while a request-local effective DN drives ACL, root, operational
+attribute, and extended-operation checks; it is restored when dispatch
+returns. Queued RFC 5805 updates clone that effective DN with the request so
+commit replay cannot regain the connection's root identity. Authorization
+uses the same engine as SASL Bind: anonymous target, self, database-local
+root, then `olcAuthzPolicy` checks over ACL-visible `authzTo` and `authzFrom`
+values. User and LDAP URL rule searches run with the original authentication
+DN for RFC 4370 requests and with the anonymous pre-Bind identity during SASL
+authentication mapping.
+
 The syncrepl client uses Go TLS for LDAPS and StartTLS and the same TLCP adapter
 for `ldap+tlcp://` providers. OpenSSL cipher names and the common
 `DEFAULT`/`HIGH`/`ALL` selection and exclusion operators are mapped to Go's

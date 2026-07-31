@@ -234,6 +234,70 @@ olcDitContentRules: {0}( 2.16.840.1.113730.3.2.2 NAME 'migrationPersonRule' AUX 
 	}
 }
 
+func TestImportLDIFPreservesOpenLDAPAuthorizationRules(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	input := `dn: uid=alice,ou=people,dc=example,dc=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice
+sn: Alice
+authzTo: {0}dn.subtree:ou=services,dc=example,dc=com
+authzTo: {1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)
+authzFrom: group:cn=proxy users,ou=groups,dc=example,dc=com
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(input),
+		ImportOptions{Replace: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(authorization rules): %v", err)
+	}
+
+	entryDN := mustDN(t, "uid=alice,ou=people,dc=example,dc=com")
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		entry, err := reader.Get(entryDN)
+		if err != nil {
+			return err
+		}
+		assertValues(t, entry.Values("authzTo"), [][]byte{
+			[]byte("{0}dn.subtree:ou=services,dc=example,dc=com"),
+			[]byte("{1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)"),
+		})
+		assertValues(t, entry.Values("authzFrom"), [][]byte{
+			[]byte("group:cn=proxy users,ou=groups,dc=example,dc=com"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("read imported authorization rules: %v", err)
+	}
+
+	var output bytes.Buffer
+	if _, err := ExportLDIF(context.Background(), store, &output); err != nil {
+		t.Fatalf("ExportLDIF(authorization rules): %v", err)
+	}
+	for _, line := range []string{
+		"authzTo: {0}dn.subtree:ou=services,dc=example,dc=com",
+		"authzTo: {1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)",
+		"authzFrom: group:cn=proxy users,ou=groups,dc=example,dc=com",
+	} {
+		if !strings.Contains(output.String(), line) {
+			t.Fatalf(
+				"exported authorization rules have no %q:\n%s",
+				line,
+				output.String(),
+			)
+		}
+	}
+}
+
 func assertValues(t *testing.T, got, want [][]byte) {
 	t.Helper()
 	if len(got) != len(want) {

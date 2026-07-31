@@ -18,7 +18,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513, `olcAllows` LDAPv2/anonymous forms, `olcDisallows`, and OpenLDAP differential tests pass |
-| Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, and multi-round SCRAM-SHA-1/256/512 pass; OpenLDAP 2.6.13 PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-256 `ldapwhoami` pass; GSSAPI, security layers, and full proxy authorization remain |
+| Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, multi-round SCRAM-SHA-1/256/512, and `olcAuthzPolicy` proxy identities pass; OpenLDAP 2.6.13 PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-256 `ldapwhoami` pass; GSSAPI and security layers remain |
 | Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
@@ -45,10 +45,11 @@ No row may become `compatible` based only on unit tests.
 | Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
+| Proxied Authorization | partial | RFC 4370 operation scope, BER/error handling, per-operation ACL identity, transaction identity capture, `olcAuthzPolicy`, all documented rule forms, global allow/disallow flags, restart/rollback, and OpenLDAP 2.6.13 differentials pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining remains |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
-| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; proxy authorization, generated passwords, server abort notices, and resource limits remain |
+| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; generated passwords, server abort notices, and resource limits remain |
 | Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
 
 ## Data model and schema
@@ -70,7 +71,7 @@ No row may become `compatible` based only on unit tests.
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
-| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, Cyrus credential forms, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, DIGEST security layers, and `olcAuthzPolicy` remain |
+| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, Cyrus credential forms, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
 | SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
 | Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, and PLAIN advertisement policy pass; SASL-layer and ACL SSF integration remain |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
@@ -158,17 +159,19 @@ compatibility.
 Verified standard TLS and TLCP client certificate chains expose their
 normalized Subject DN to SASL EXTERNAL. Root DSE publishes EXTERNAL only on a
 connection with such an identity. Empty authorization identities bind as the
-certificate DN; non-empty proxy authorization identities are currently
-rejected. Tests cover EXTERNAL root authorization, Who Am I, simple-Bind state
-replacement, and both implicit TLCP and StartTLS-to-TLCP paths.
+certificate DN; non-empty authorization identities use the shared OpenLDAP
+proxy authorization policy. Tests cover EXTERNAL root authorization, Who Am
+I, simple-Bind state replacement, and both implicit TLCP and
+StartTLS-to-TLCP paths.
 SASL PLAIN authenticates mapped directory entries through the same
 `userPassword` and `auth` ACL path as simple Bind. Root DSE publishes it only
 when `olcSaslSecProps` permits it for the connection's TLS, TLCP, or Unix
 external SSF, or when `noplain` is disabled. `olcSaslRealm` and ordered
 `olcAuthzRegexp` rules support direct DN and local LDAP URL mappings; URL
 searches require exactly one result and OpenLDAP-compatible `auth` access.
-Self authorization and database-root proxy authorization pass, while
-`olcAuthzPolicy`, `authzTo`, and `authzFrom` remain pending.
+Self and database-root authorization plus `olcAuthzPolicy`, hidden ordered
+`authzTo`, and `authzFrom` rules are shared by all implemented SASL
+mechanisms.
 CRAM-MD5 follows Cyrus SASL's server-first exchange, 1024-byte input bound,
 lowercase HMAC-MD5 response, self authorization, and `olcSaslHost` challenge
 format. It shares the identity mapping and anonymous `auth` ACL path but
@@ -212,10 +215,11 @@ configuration writes and cross-database operations are rejected.
 OpenLDAP 2.6.13 `ldapmodify -E txn=commit/abort` interoperates with ldap-go.
 A raw BER differential against slapd also verifies duplicate-Add failure
 ordering, failed message ID reporting, and full rollback. Like OpenLDAP 2.6.13,
-the current transaction path rejects pre-read and post-read controls. Proxied
-authorization on Start Transaction, generated Password Modify response values,
-server-initiated Aborted Transaction Notice, and explicit queued-resource
-limits remain pending.
+the current transaction path rejects pre-read and post-read controls. Each
+queued update captures its effective proxied identity; the proxy control is
+unavailable on Start and End Transaction themselves. Generated Password
+Modify response values, server-initiated Aborted Transaction Notice, and
+explicit queued-resource limits remain pending.
 
 RFC 6171 Don't Use Copy is advertised in Root DSE and accepted on Search and
 Compare only. The control requires an absent value; duplicate or valued
@@ -750,8 +754,9 @@ attributes remain available. Online changes and invalid-value rollback are
 covered through TCP client tests. `olcAllows: bind_v2`, `bind_anon_cred`, and
 `bind_anon_dn` enable OpenLDAP's historical LDAPv2 Bind and two deprecated
 anonymous Bind forms. Unsupported protocol versions and malformed Bind DNs
-use slapd's result ordering and diagnostics. Anonymous proxy authorization
-remains pending.
+use slapd's result ordering and diagnostics. `proxy_authz_anon` permits an
+anonymous connection to send the RFC 4370 control; ordinary authorization
+still prevents that identity from assuming a non-anonymous DN.
 
 Global `olcDisallows` loads case-insensitive, whitespace-separated feature
 sets from an imported `cn=config`. `bind_anon` and `bind_simple` follow
@@ -762,8 +767,10 @@ required to reject it without dropping the identity. This ordering also runs
 before TLS availability is checked. `dontusecopy_non_critical` rejects a
 non-critical RFC 6171 control. Online replacement/deletion, unknown-feature
 rollback, restart, and a process-level slapd differential pass.
-`proxy_authz_non_critical` is accepted during configuration loading, but its
-behavior remains pending with the RFC 4370 proxied authorization control.
+`proxy_authz_non_critical` requires RFC 4370 controls to be critical and uses
+slapd's protocol-error diagnostic. Proxy controls otherwise follow
+OpenLDAP's default acceptance of non-critical requests. Both proxy switches
+support online replacement, rollback, and restart.
 `olcRestrict`, `olcRequires`, listener permissions, and SSF-based update
 requirements also remain pending.
 

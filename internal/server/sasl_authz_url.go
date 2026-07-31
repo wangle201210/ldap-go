@@ -27,6 +27,7 @@ func (server *Server) searchSASLAuthzLDAPURL(
 	runtime *runtimeState,
 	requestDN directory.DN,
 	rawURL string,
+	subjectDN string,
 ) (directory.DN, error) {
 	search, err := parseSASLAuthzLDAPURL(rawURL)
 	if err != nil {
@@ -60,7 +61,7 @@ func (server *Server) searchSASLAuthzLDAPURL(
 		if !server.allowed(
 			runtime,
 			primaryReader,
-			"",
+			subjectDN,
 			baseEntry,
 			"entry",
 			nil,
@@ -87,7 +88,7 @@ func (server *Server) searchSASLAuthzLDAPURL(
 				if !server.allowed(
 					runtime,
 					tx,
-					"",
+					subjectDN,
 					entry,
 					"entry",
 					nil,
@@ -98,7 +99,7 @@ func (server *Server) searchSASLAuthzLDAPURL(
 				matches, err := server.filterMatchesWithPrivilege(
 					runtime,
 					tx,
-					"",
+					subjectDN,
 					entry,
 					search.filter,
 					acl.Auth,
@@ -178,6 +179,11 @@ func parseSASLAuthzLDAPURL(value string) (saslAuthzLDAPURL, error) {
 	}
 	for len(components) < 4 {
 		components = append(components, "")
+	}
+	if components[0] != "" {
+		return saslAuthzLDAPURL{}, errors.New(
+			"authz-regexp LDAP URL attributes are not supported",
+		)
 	}
 	if components[3] != "" {
 		return saslAuthzLDAPURL{}, errors.New(

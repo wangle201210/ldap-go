@@ -22,8 +22,13 @@ type ldapTransaction struct {
 	identifier []byte
 	runtime    *runtimeState
 	partition  string
-	operations []ldapwire.Message
+	operations []ldapTransactionOperation
 	messageIDs map[int64]struct{}
+}
+
+type ldapTransactionOperation struct {
+	message ldapwire.Message
+	boundDN string
 }
 
 type transactionExecutionContextKey struct{}
@@ -338,7 +343,10 @@ func (server *Server) handleTransactionSpecification(
 	state.transaction.messageIDs[message.ID] = struct{}{}
 	state.transaction.operations = append(
 		state.transaction.operations,
-		cloneTransactionMessage(message, controlIndex),
+		ldapTransactionOperation{
+			message: cloneTransactionMessage(message, controlIndex),
+			boundDN: state.boundDN,
+		},
 	)
 	return true, server.writeTransactionOperationResult(
 		connection,
@@ -645,7 +653,9 @@ func (server *Server) commitLDAPTransaction(
 		transactionState.runtime = transaction.runtime
 		transactionState.transaction = nil
 
-		for _, message := range transaction.operations {
+		for _, operation := range transaction.operations {
+			message := operation.message
+			transactionState.boundDN = operation.boundDN
 			capture := &transactionResultCapture{}
 			if err := server.executeTransactionOperation(
 				transactionContext,
@@ -781,7 +791,8 @@ func clearLDAPTransaction(transaction *ldapTransaction) {
 	}
 	clear(transaction.identifier)
 	for messageIndex := range transaction.operations {
-		message := &transaction.operations[messageIndex]
+		operation := &transaction.operations[messageIndex]
+		message := &operation.message
 		for controlIndex := range message.Controls {
 			clear(message.Controls[controlIndex].Value)
 		}
@@ -798,6 +809,7 @@ func clearLDAPTransaction(transaction *ldapTransaction) {
 			clear(request.Value)
 		}
 		*message = ldapwire.Message{}
+		operation.boundDN = ""
 	}
 	transaction.identifier = nil
 	transaction.operations = nil

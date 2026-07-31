@@ -6,6 +6,7 @@ const (
 	SyntaxBoolean                = "1.3.6.1.4.1.1466.115.121.1.7"
 	SyntaxAttributeType          = "1.3.6.1.4.1.1466.115.121.1.3"
 	SyntaxAuthenticationPassword = "1.3.6.1.4.1.4203.1.1.2"
+	SyntaxAuthz                  = "1.3.6.1.4.1.4203.666.2.7"
 	SyntaxDITContentRule         = "1.3.6.1.4.1.1466.115.121.1.16"
 	SyntaxDistinguishedName      = "1.3.6.1.4.1.1466.115.121.1.12"
 	SyntaxDirectoryString        = "1.3.6.1.4.1.1466.115.121.1.15"
@@ -118,6 +119,8 @@ var builtinAttributeTypes = []string{
 }
 
 var builtinHiddenAttributeTypes = []string{
+	"( 1.3.6.1.4.1.4203.666.1.8 NAME ( 'authzTo' 'saslAuthzTo' ) DESC 'proxy authorization targets' EQUALITY authzMatch SYNTAX " + SyntaxAuthz + " X-ORDERED 'VALUES' USAGE distributedOperation )",
+	"( 1.3.6.1.4.1.4203.666.1.9 NAME ( 'authzFrom' 'saslAuthzFrom' ) DESC 'proxy authorization sources' EQUALITY authzMatch SYNTAX " + SyntaxAuthz + " X-ORDERED 'VALUES' USAGE distributedOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.57 NAME 'entryExpireTimestamp' DESC 'OpenLDAP DDS expiration timestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
 }
 

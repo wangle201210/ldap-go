@@ -201,6 +201,7 @@ func (server *Server) handleSASLDigestMD5Step(
 	}
 
 	state.boundDN = authorizationDN.String()
+	state.authMechanism = session.mechanism
 	clearSASLSession(state)
 	return ldapwire.Write(connection, ldapwire.EncodeSASLBindResponse(
 		message.ID,
