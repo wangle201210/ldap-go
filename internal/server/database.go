@@ -35,6 +35,7 @@ type runtimeDatabase struct {
 	syncSessionLogSize    int
 	syncNoPresent         bool
 	syncReloadHint        bool
+	syncConsumers         []syncConsumerConfig
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -174,6 +175,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		database.syncConsumers, err = loadSyncConsumerConfigs(entry, database)
+		if err != nil {
+			return err
+		}
 		databases = append(databases, database)
 		return nil
 	}); err != nil {
@@ -187,6 +192,9 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		return nil, err
 	}
 	if err := validateDatabasePartitions(databases); err != nil {
+		return nil, err
+	}
+	if err := validateSyncConsumerRIDs(databases); err != nil {
 		return nil, err
 	}
 	if err := loadRuntimeDatabaseOverlays(reader, databases); err != nil {

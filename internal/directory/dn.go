@@ -119,6 +119,7 @@ const (
 	ScopeBase Scope = iota
 	ScopeSingleLevel
 	ScopeWholeSubtree
+	ScopeChildren
 )
 
 func InScope(base, candidate DN, scope Scope) bool {
@@ -129,6 +130,8 @@ func InScope(base, candidate DN, scope Scope) bool {
 		return base.AncestorOf(candidate) && candidate.Depth() == base.Depth()+1
 	case ScopeWholeSubtree:
 		return base.Equal(candidate) || base.AncestorOf(candidate)
+	case ScopeChildren:
+		return base.AncestorOf(candidate)
 	default:
 		return false
 	}

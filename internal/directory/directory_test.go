@@ -23,6 +23,13 @@ func TestDNScopes(t *testing.T) {
 	if !InScope(base, grandchild, ScopeWholeSubtree) {
 		t.Fatal("grandchild DN must be in subtree scope")
 	}
+	if InScope(base, base, ScopeChildren) {
+		t.Fatal("base DN must not be in children scope")
+	}
+	if !InScope(base, child, ScopeChildren) ||
+		!InScope(base, grandchild, ScopeChildren) {
+		t.Fatal("descendants must be in children scope")
+	}
 }
 
 func TestComposeLocalName(t *testing.T) {
