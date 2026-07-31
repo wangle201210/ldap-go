@@ -12,24 +12,29 @@ import (
 )
 
 type runtimeDatabase struct {
-	name            string
-	partition       string
-	suffixes        []directory.DN
-	rootDN          *directory.DN
-	rootPassword    []byte
-	rootPasswordSet bool
-	disabled        bool
-	hidden          bool
-	subordinate     bool
-	advertise       bool
-	readOnly        bool
-	lastMod         bool
-	maxDerefDepth   int
-	configDNKey     string
-	serverSideSort  bool
-	sortMaxKeys     int
-	sortLimiter     *serverSideSortLimiter
-	syncProvider    bool
+	name                  string
+	partition             string
+	suffixes              []directory.DN
+	rootDN                *directory.DN
+	rootPassword          []byte
+	rootPasswordSet       bool
+	disabled              bool
+	hidden                bool
+	subordinate           bool
+	advertise             bool
+	readOnly              bool
+	lastMod               bool
+	maxDerefDepth         int
+	configDNKey           string
+	serverSideSort        bool
+	sortMaxKeys           int
+	sortLimiter           *serverSideSortLimiter
+	syncProvider          bool
+	syncCheckpointOps     int
+	syncCheckpointMinutes int
+	syncSessionLogSize    int
+	syncNoPresent         bool
+	syncReloadHint        bool
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -318,10 +323,67 @@ func loadRuntimeDatabaseOverlays(
 					database.name,
 				)
 			}
+			checkpointOps, checkpointMinutes, err := syncCheckpointSetting(
+				entry,
+			)
+			if err != nil {
+				return err
+			}
+			sessionLogSize, err := singleNonnegativeInteger(
+				entry,
+				"olcSpSessionlog",
+				0,
+			)
+			if err != nil {
+				return err
+			}
+			noPresent, _, err := singleBoolean(entry, "olcSpNoPresent")
+			if err != nil {
+				return err
+			}
+			reloadHint, _, err := singleBoolean(entry, "olcSpReloadHint")
+			if err != nil {
+				return err
+			}
 			database.syncProvider = true
+			database.syncCheckpointOps = checkpointOps
+			database.syncCheckpointMinutes = checkpointMinutes
+			database.syncSessionLogSize = sessionLogSize
+			database.syncNoPresent = noPresent
+			database.syncReloadHint = reloadHint
 		}
 		return nil
 	})
+}
+
+func syncCheckpointSetting(entry directory.Entry) (ops, minutes int, err error) {
+	values := entry.Values("olcSpCheckpoint")
+	if len(values) == 0 {
+		return 0, 0, nil
+	}
+	if len(values) != 1 {
+		return 0, 0, fmt.Errorf(
+			"%s olcSpCheckpoint must be single-valued",
+			entry.DN,
+		)
+	}
+	fields := strings.Fields(string(values[0]))
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf(
+			"%s olcSpCheckpoint must contain operations and minutes",
+			entry.DN,
+		)
+	}
+	ops, opsErr := strconv.Atoi(fields[0])
+	minutes, minutesErr := strconv.Atoi(fields[1])
+	if opsErr != nil || ops <= 0 || minutesErr != nil || minutes <= 0 {
+		return 0, 0, fmt.Errorf(
+			"%s olcSpCheckpoint has invalid value %q",
+			entry.DN,
+			values[0],
+		)
+	}
+	return ops, minutes, nil
 }
 
 func runtimeSupportsServerSideSort(databases []runtimeDatabase) bool {

@@ -277,6 +277,162 @@ func TestLoadRuntimeDatabasesLoadsServerSideSortOverlay(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeDatabasesLoadsSyncProviderSettings(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: stringValues("{1}mdb")},
+				{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+				{Description: "olcLastMod", Values: stringValues("TRUE")},
+			},
+		},
+		{
+			DN: "olcOverlay={0}syncprov,olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcOverlay", Values: stringValues("{0}syncprov")},
+				{Description: "olcSpCheckpoint", Values: stringValues("100 10")},
+				{Description: "olcSpSessionlog", Values: stringValues("250")},
+				{Description: "olcSpNoPresent", Values: stringValues("TRUE")},
+				{Description: "olcSpReloadHint", Values: stringValues("TRUE")},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, entry := range entries {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed syncprov settings: %v", err)
+	}
+
+	databases, err := loadRuntimeDatabases(context.Background(), store)
+	if err != nil {
+		t.Fatalf("loadRuntimeDatabases(): %v", err)
+	}
+	suffix, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	database := databases[databaseIndexForDN(databases, suffix)]
+	if !database.syncProvider ||
+		database.syncCheckpointOps != 100 ||
+		database.syncCheckpointMinutes != 10 ||
+		database.syncSessionLogSize != 250 ||
+		!database.syncNoPresent ||
+		!database.syncReloadHint {
+		t.Fatalf("sync provider settings = %#v", database)
+	}
+}
+
+func TestLoadRuntimeDatabasesRejectsInvalidSyncProviderSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		attribute string
+		values    []string
+	}{
+		{
+			name:      "checkpoint field count",
+			attribute: "olcSpCheckpoint",
+			values:    []string{"100"},
+		},
+		{
+			name:      "checkpoint zero operations",
+			attribute: "olcSpCheckpoint",
+			values:    []string{"0 10"},
+		},
+		{
+			name:      "checkpoint zero minutes",
+			attribute: "olcSpCheckpoint",
+			values:    []string{"100 0"},
+		},
+		{
+			name:      "checkpoint duplicate",
+			attribute: "olcSpCheckpoint",
+			values:    []string{"100 10", "200 20"},
+		},
+		{
+			name:      "negative sessionlog",
+			attribute: "olcSpSessionlog",
+			values:    []string{"-1"},
+		},
+		{
+			name:      "invalid nopresent",
+			attribute: "olcSpNoPresent",
+			values:    []string{"sometimes"},
+		},
+		{
+			name:      "invalid reloadhint",
+			attribute: "olcSpReloadHint",
+			values:    []string{"sometimes"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			overlay := directory.Entry{
+				DN: "olcOverlay={0}syncprov,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcOverlay",
+						Values:      stringValues("{0}syncprov"),
+					},
+					{
+						Description: test.attribute,
+						Values:      stringValues(test.values...),
+					},
+				},
+			}
+			if err := store.Update(
+				context.Background(),
+				func(writer storage.Writer) error {
+					if err := writer.Put(directory.Entry{
+						DN: "olcDatabase={1}mdb,cn=config",
+						Attributes: []directory.Attribute{
+							{
+								Description: "olcDatabase",
+								Values:      stringValues("{1}mdb"),
+							},
+							{
+								Description: "olcSuffix",
+								Values: stringValues(
+									"dc=example,dc=com",
+								),
+							},
+						},
+					}, false); err != nil {
+						return err
+					}
+					return writer.Put(overlay, false)
+				},
+			); err != nil {
+				t.Fatalf("seed invalid syncprov setting: %v", err)
+			}
+			if _, err := loadRuntimeDatabases(
+				context.Background(),
+				store,
+			); err == nil {
+				t.Fatalf(
+					"invalid %s values %q were accepted",
+					test.attribute,
+					test.values,
+				)
+			}
+		})
+	}
+}
+
 func TestServerSideSortSettingsFollowTargetAndFrontend(t *testing.T) {
 	t.Parallel()
 
