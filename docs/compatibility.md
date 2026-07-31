@@ -48,7 +48,7 @@ No row may become `compatible` based only on unit tests.
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | planned | RFC 6171 topology tests |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
-| OpenLDAP transaction extension | planned | multi-operation atomicity tests |
+| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; proxy authorization, generated passwords, server abort notices, and resource limits remain |
 | Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
 
 ## Data model and schema
@@ -195,6 +195,27 @@ integrity/privacy layers remain pending.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
 create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
 Modify and ModifyDN update modification metadata.
+
+RFC 5805 transactions advertise the Start Transaction and End Transaction
+extended operations plus the Transaction Specification control. The wire codec
+accepts OpenLDAP's explicitly present zero-length transaction identifier and
+strictly validates transaction end request and response values. A connection
+queues Add, Modify, Delete, ModifyDN, and Password Modify with an explicit new
+password without holding a database lock. End Transaction commit replays the
+ordered queue through one storage writer, so later operations observe earlier
+ones and any operation failure rolls back entries, metadata, runtime changes,
+and Sync publication. The failure result and original update message ID are
+returned in `txnEndRes`. Abort discards the queue, and Bind or connection close
+aborts outstanding work. A transaction is restricted to one storage partition;
+configuration writes and cross-database operations are rejected.
+
+OpenLDAP 2.6.13 `ldapmodify -E txn=commit/abort` interoperates with ldap-go.
+A raw BER differential against slapd also verifies duplicate-Add failure
+ordering, failed message ID reporting, and full rollback. Like OpenLDAP 2.6.13,
+the current transaction path rejects pre-read and post-read controls. Proxied
+authorization on Start Transaction, generated Password Modify response values,
+server-initiated Aborted Transaction Notice, and explicit queued-resource
+limits remain pending.
 
 The schema registry parses OpenLDAP `{n}`-ordered `olcAttributeTypes` and
 `olcObjectClasses`, applies object-class and syntax checks to writes, and uses

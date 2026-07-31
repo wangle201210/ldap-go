@@ -39,6 +39,10 @@ func (server *Server) handleExtended(
 	switch request.Name {
 	case startTLSOID:
 		return server.handleStartTLS(ctx, connection, state, message, request)
+	case transactionStartOID:
+		return server.handleTransactionStart(connection, state, message, request)
+	case transactionEndOID:
+		return server.handleTransactionEnd(ctx, connection, state, message, request)
 	case passwordModifyOID:
 		return server.handlePasswordModify(ctx, connection, state, message, request)
 	case whoAmIOID:
@@ -63,6 +67,20 @@ func (server *Server) handleStartTLS(
 	message ldapwire.Message,
 	request ldapwire.ExtendedRequest,
 ) error {
+	if state.transaction != nil {
+		return server.writeLDAPResultResponse(
+			connection,
+			message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultOperationsError,
+				"cannot start TLS during a transaction",
+			),
+			"",
+			nil,
+			nil,
+		)
+	}
 	if request.HasValue {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,

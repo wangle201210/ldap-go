@@ -49,6 +49,12 @@ response races with Search output. The registry establishes an atomic
 final-response boundary for `tooLate` and limits cancellation to the LDAP
 association that created the target operation.
 
+RFC 5805 transaction state is connection-local. Update requests carrying the
+Transaction Specification control are cloned into an ordered queue, including
+their original message IDs, without opening a storage transaction. End
+Transaction settles the state exactly once; Bind and connection teardown
+discard an outstanding queue.
+
 ### Directory service agent
 
 The DSA implements Bind, Search, Modify, Add, Delete, ModifyDN, Compare,
@@ -96,6 +102,13 @@ published in Root DSE to match slapd. Subordinate databases form glue
 hierarchies under the nearest non-subordinate naming context. Base searches
 stay in the most-specific partition, while one-level and subtree searches build
 a deterministic multi-partition plan with one shared size/time budget.
+
+An LDAP transaction may target one partition. Commit opens one backend write
+transaction and reuses its writer while replaying every queued operation, so
+authorization, assertions, schema checks, operational metadata, and later
+operations see a single evolving view. A failed LDAP result aborts that
+backend transaction. Runtime activation and Sync change publication are
+collected during replay and released only after durable commit.
 
 ### Overlays
 

@@ -49,6 +49,13 @@ subtree-specification scopes, in-memory value propagation and merging,
 collective exclusions, source references, and logical-entry behavior across
 Search, Compare, assertions, read controls, paging, sorting/VLV, and ACL
 evaluation.
+RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
+Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
+connection. Commit replays the queue in one memory or bbolt write transaction;
+any failed operation rolls back the full queue and identifies its original
+message ID. Abort, Bind-triggered abort, one-database enforcement, Root DSE
+discovery, OpenLDAP `ldapmodify -E txn=commit/abort`, and a direct slapd
+rollback differential pass.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed

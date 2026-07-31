@@ -223,6 +223,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		_ = connection.Close()
 		<-workerDone
 		clearSearchSessions(&state)
+		clearLDAPTransaction(state.transaction)
 	}()
 
 	for {
@@ -503,6 +504,13 @@ func (server *Server) dispatch(
 			)
 		}
 	}
+	if handled, err := server.handleTransactionSpecification(
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
 		return true, nil
@@ -555,6 +563,8 @@ func (server *Server) handleBind(
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) error {
+	clearLDAPTransaction(state.transaction)
+	state.transaction = nil
 	state.boundDN = ""
 	clearSearchSessions(state)
 	if hasUnsupportedCriticalControl(message.Controls) {
@@ -682,6 +692,7 @@ type connectionState struct {
 	pagedSearch       *pagedSearchState
 	virtualListViews  map[string]*virtualListViewState
 	sortSessionCounts map[*serverSideSortLimiter]int
+	transaction       *ldapTransaction
 }
 
 func clearSearchSessions(state *connectionState) {

@@ -185,10 +185,7 @@ func (server *Server) handlePasswordModify(
 	if err != nil {
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
-	if nextRuntime != nil {
-		server.activateRuntime(nextRuntime)
-	}
-	server.publishSyncChange(syncChange)
+	server.finishWriteEffects(ctx, nextRuntime, syncChange)
 
 	var responseValue []byte
 	if generated {
@@ -287,11 +284,13 @@ func (server *Server) writePasswordModifyResult(
 	result ldapwire.Result,
 	responseValue []byte,
 ) error {
-	return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+	return server.writeLDAPResultResponse(
+		connection,
 		messageID,
+		ldapwire.ApplicationExtendedResponse,
 		result,
 		"",
 		responseValue,
 		nil,
-	))
+	)
 }

@@ -108,7 +108,7 @@ func (server *Server) handleAdd(
 		responseControls []ldapwire.Control
 		syncChange       *syncChange
 	)
-	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		if _, err := server.entryOrReferral(
 			state.runtime,
@@ -297,11 +297,8 @@ func (server *Server) handleAdd(
 		)
 		return changeErr
 	})
-	if err == nil && nextRuntime != nil {
-		server.activateRuntime(nextRuntime)
-	}
 	if err == nil {
-		server.publishSyncChange(syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -419,11 +416,8 @@ func (server *Server) handleModify(
 			return nil
 		},
 	)
-	if err == nil && nextRuntime != nil {
-		server.activateRuntime(nextRuntime)
-	}
 	if err == nil {
-		server.publishSyncChange(syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -465,7 +459,7 @@ func (server *Server) modifyEntry(
 		nextRuntime *runtimeState
 		syncChange  *syncChange
 	)
-	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	err := server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := server.entryOrReferral(
 			runtime,
@@ -638,7 +632,7 @@ func (server *Server) handleDelete(
 		responseControls []ldapwire.Control
 		syncChange       *syncChange
 	)
-	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := server.entryOrReferral(
 			state.runtime,
@@ -755,11 +749,8 @@ func (server *Server) handleDelete(
 		)
 		return changeErr
 	})
-	if err == nil && nextRuntime != nil {
-		server.activateRuntime(nextRuntime)
-	}
 	if err == nil {
-		server.publishSyncChange(syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -904,7 +895,7 @@ func (server *Server) handleModifyDN(
 		responseControls []ldapwire.Control
 		syncChange       *syncChange
 	)
-	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		sourceEntry, err := server.entryOrReferral(
 			state.runtime,
@@ -1182,11 +1173,8 @@ func (server *Server) handleModifyDN(
 		)
 		return changeErr
 	})
-	if err == nil && nextRuntime != nil {
-		server.activateRuntime(nextRuntime)
-	}
 	if err == nil {
-		server.publishSyncChange(syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -1636,6 +1624,45 @@ func (server *Server) writeOperationResultWithControls(
 	result ldapwire.Result,
 	controls []ldapwire.Control,
 ) error {
+	return server.writeLDAPResultResponse(
+		connection,
+		messageID,
+		responseTag,
+		result,
+		"",
+		nil,
+		controls,
+	)
+}
+
+func (server *Server) writeLDAPResultResponse(
+	connection net.Conn,
+	messageID int64,
+	responseTag uint64,
+	result ldapwire.Result,
+	responseName string,
+	responseValue []byte,
+	controls []ldapwire.Control,
+) error {
+	if writer, ok := connection.(ldapResultResponseWriter); ok {
+		return writer.writeLDAPResultResponse(
+			messageID,
+			responseTag,
+			result,
+			responseName,
+			responseValue,
+			controls,
+		)
+	}
+	if responseTag == ldapwire.ApplicationExtendedResponse {
+		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+			messageID,
+			result,
+			responseName,
+			responseValue,
+			controls,
+		))
+	}
 	return ldapwire.Write(
 		connection,
 		ldapwire.EncodeResultResponse(messageID, responseTag, result, controls),

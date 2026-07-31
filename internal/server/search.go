@@ -1809,7 +1809,13 @@ func (server *Server) rootDSE(
 			Values:      stringValues(monitorContexts...),
 		})
 	}
-	supportedExtensions := []string{cancelOID, passwordModifyOID, whoAmIOID}
+	supportedExtensions := []string{
+		cancelOID,
+		passwordModifyOID,
+		transactionStartOID,
+		transactionEndOID,
+		whoAmIOID,
+	}
 	if server.secureTransport != nil {
 		supportedExtensions = append([]string{startTLSOID}, supportedExtensions...)
 	}
@@ -1824,6 +1830,7 @@ func (server *Server) rootDSE(
 		postReadControlOID,
 		pagedResultsControlOID,
 		subentriesControlOID,
+		transactionSpecificationControlOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {
 		supportedControls = append(

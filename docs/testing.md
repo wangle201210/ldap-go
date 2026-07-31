@@ -47,13 +47,13 @@ Network interoperability milestones additionally run OpenLDAP CLI and
 differential tests. Fuzz targets run for a bounded period in CI and for an
 extended period before a compatibility row is promoted.
 
-The optional local OpenLDAP 2.6 reference fixture for Sync plus Sort/VLV is
-enabled explicitly:
+The optional local OpenLDAP 2.6 reference fixture for protocol, SASL,
+transaction, and replication differentials is enabled explicitly:
 
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -62,6 +62,10 @@ The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `ldapwhoami -Y CRAM-MD5`, `ldapwhoami -Y DIGEST-MD5`, and
 `ldapwhoami -Y SCRAM-SHA-256`. Each case skips when its local Cyrus SASL
 plugin is unavailable.
+
+The transaction cases run OpenLDAP `ldapmodify -E txn=commit/abort` against
+ldap-go, then send the same duplicate-Add raw BER sequence to the reference
+slapd to verify the failed message ID and atomic rollback semantics.
 
 The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
 Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM
