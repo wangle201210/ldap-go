@@ -28,7 +28,7 @@ func (server *Server) handlePasswordModify(
 	defer clear(request.Value)
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsManageDsaIT,
+		supportsManageDsaIT|supportsPasswordPolicy,
 	)
 	if controlFailure != nil {
 		return server.writePasswordModifyResult(
@@ -165,6 +165,14 @@ func (server *Server) handlePasswordModify(
 			) {
 				return nil
 			}
+			if database.ppolicy != nil && !database.ppolicy.disableWrite {
+				return passwordPolicyOperationFailed(
+					ldapwire.ResultUnwillingToPerform,
+					"Must supply correct old password to change to new one",
+					controls.passwordPolicy,
+					passwordPolicyMustSupplyOldPassword,
+				)
+			}
 			return operationFailed(
 				ldapwire.ResultUnwillingToPerform,
 				"unwilling to verify old password",
@@ -180,12 +188,25 @@ func (server *Server) handlePasswordModify(
 		changes,
 		controls.manageDsaIT,
 		precondition,
+		server.passwordPolicyModificationProcessor(
+			state.runtime,
+			state.boundDN,
+			*database,
+			passwordPolicyModificationOptions{
+				requestControl: controls.passwordPolicy,
+				passwordModify: true,
+				hasOldPassword: passwordRequest.HasOldPassword,
+				oldPassword:    passwordRequest.OldPassword,
+				newPassword:    newPassword,
+			},
+		),
 		nil,
 	)
 	if err != nil {
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
 	server.finishWriteEffects(ctx, nextRuntime, syncChange)
+	state.passwordPolicyRestrictedDN = ""
 
 	var responseValue []byte
 	if generated {
@@ -243,11 +264,12 @@ func (server *Server) finishPasswordModify(
 	err error,
 ) error {
 	if failure := asOperationFailure(err); failure != nil {
-		return server.writePasswordModifyResult(
+		return server.writePasswordModifyResultWithControls(
 			connection,
 			messageID,
 			failure.result,
 			nil,
+			failure.controls,
 		)
 	}
 	if err != nil {
@@ -284,6 +306,22 @@ func (server *Server) writePasswordModifyResult(
 	result ldapwire.Result,
 	responseValue []byte,
 ) error {
+	return server.writePasswordModifyResultWithControls(
+		connection,
+		messageID,
+		result,
+		responseValue,
+		nil,
+	)
+}
+
+func (server *Server) writePasswordModifyResultWithControls(
+	connection net.Conn,
+	messageID int64,
+	result ldapwire.Result,
+	responseValue []byte,
+	controls []ldapwire.Control,
+) error {
 	return server.writeLDAPResultResponse(
 		connection,
 		messageID,
@@ -291,6 +329,6 @@ func (server *Server) writePasswordModifyResult(
 		result,
 		"",
 		responseValue,
-		nil,
+		controls,
 	)
 }

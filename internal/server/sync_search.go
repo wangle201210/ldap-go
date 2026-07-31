@@ -488,12 +488,21 @@ func (server *Server) writeSyncSearch(
 				EntryUUID: candidate.syncUUID,
 			},
 		)
+		entryControls := []ldapwire.Control{control}
+		entryControls = append(
+			entryControls,
+			server.passwordPolicySearchEntryControls(
+				ctx,
+				state,
+				candidate.selected,
+			)...,
+		)
 		if err := ldapwire.Write(
 			connection,
 			ldapwire.EncodeSearchResultEntry(
 				messageID,
 				candidate.selected,
-				[]ldapwire.Control{control},
+				entryControls,
 			),
 		); err != nil {
 			return err
@@ -736,12 +745,21 @@ func (server *Server) persistSyncSearch(
 					HasCookie: true,
 				},
 			)
+			entryControls := []ldapwire.Control{control}
+			entryControls = append(
+				entryControls,
+				server.passwordPolicySearchEntryControls(
+					ctx,
+					state,
+					entry,
+				)...,
+			)
 			if err := ldapwire.Write(
 				connection,
 				ldapwire.EncodeSearchResultEntry(
 					messageID,
 					entry,
-					[]ldapwire.Control{control},
+					entryControls,
 				),
 			); err != nil {
 				return err

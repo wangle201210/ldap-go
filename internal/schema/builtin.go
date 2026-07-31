@@ -33,6 +33,14 @@ func NewBuiltinRegistry() (*Registry, error) {
 			return nil, fmt.Errorf("register built-in attribute type: %w", err)
 		}
 	}
+	for _, description := range builtinPasswordPolicyAttributeTypes {
+		if err := registry.ParseAndRegisterAttributeType(description); err != nil {
+			return nil, fmt.Errorf(
+				"register password policy attribute type: %w",
+				err,
+			)
+		}
+	}
 	for _, description := range builtinHiddenAttributeTypes {
 		attribute, err := ParseAttributeType(description)
 		if err != nil {
@@ -46,6 +54,14 @@ func NewBuiltinRegistry() (*Registry, error) {
 	for _, description := range builtinObjectClasses {
 		if err := registry.ParseAndRegisterObjectClass(description); err != nil {
 			return nil, fmt.Errorf("register built-in object class: %w", err)
+		}
+	}
+	for _, description := range builtinPasswordPolicyObjectClasses {
+		if err := registry.ParseAndRegisterObjectClass(description); err != nil {
+			return nil, fmt.Errorf(
+				"register password policy object class: %w",
+				err,
+			)
 		}
 	}
 	return registry, nil

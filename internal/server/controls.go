@@ -40,19 +40,23 @@ const (
 	supportsSubentries
 	supportsSync
 	supportsDontUseCopy
+	supportsPasswordPolicy
+	supportsAccountUsability
 )
 
 type requestControls struct {
-	assertion   *directory.Filter
-	preRead     *readControlRequest
-	postRead    *readControlRequest
-	paging      *pagedResultsRequest
-	sorting     *serverSideSortRequest
-	vlv         *virtualListViewRequest
-	manageDsaIT bool
-	dontUseCopy bool
-	subentries  *bool
-	sync        *syncRequestControl
+	assertion        *directory.Filter
+	preRead          *readControlRequest
+	postRead         *readControlRequest
+	paging           *pagedResultsRequest
+	sorting          *serverSideSortRequest
+	vlv              *virtualListViewRequest
+	manageDsaIT      bool
+	dontUseCopy      bool
+	subentries       *bool
+	sync             *syncRequestControl
+	passwordPolicy   bool
+	accountUsability bool
 }
 
 type readControlRequest struct {
@@ -369,6 +373,46 @@ func parseRequestControlsWithDisallows(
 				request:  request,
 				critical: control.Critical,
 			}
+		case passwordPolicyControlOID:
+			if supported&supportsPasswordPolicy == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.passwordPolicy {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"passwordPolicyRequest control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"passwordPolicyRequest control value not absent",
+				)
+			}
+			parsed.passwordPolicy = true
+		case accountUsabilityControlOID:
+			if supported&supportsAccountUsability == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.accountUsability {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"account usability control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"account usability control value not absent",
+				)
+			}
+			parsed.accountUsability = true
 		default:
 			if control.Critical {
 				return unsupportedCriticalControl()

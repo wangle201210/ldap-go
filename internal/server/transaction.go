@@ -436,12 +436,16 @@ func validateTransactionOperationControls(
 	var supported requestControlSupport
 	switch request := message.Request.(type) {
 	case ldapwire.AddRequest:
-		supported = supportsAssertion | supportsPostRead | supportsManageDsaIT
+		supported = supportsAssertion |
+			supportsPostRead |
+			supportsManageDsaIT |
+			supportsPasswordPolicy
 	case ldapwire.ModifyRequest:
 		supported = supportsAssertion |
 			supportsPreRead |
 			supportsPostRead |
-			supportsManageDsaIT
+			supportsManageDsaIT |
+			supportsPasswordPolicy
 	case ldapwire.DeleteRequest:
 		supported = supportsAssertion | supportsPreRead | supportsManageDsaIT
 	case ldapwire.ModifyDNRequest:
@@ -451,7 +455,7 @@ func validateTransactionOperationControls(
 			supportsManageDsaIT
 	case ldapwire.ExtendedRequest:
 		if request.Name == passwordModifyOID {
-			supported = supportsManageDsaIT
+			supported = supportsManageDsaIT | supportsPasswordPolicy
 		}
 	}
 	_, result := parseRequestControls(controls, supported)
@@ -639,8 +643,9 @@ func (server *Server) commitLDAPTransaction(
 	transaction *ldapTransaction,
 ) (ldapwire.Result, ldapwire.TransactionEndResponseValue) {
 	var (
-		execution   transactionExecution
-		endResponse ldapwire.TransactionEndResponseValue
+		execution                          transactionExecution
+		endResponse                        ldapwire.TransactionEndResponseValue
+		committedPasswordPolicyRestriction string
 	)
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		execution.writer = writer
@@ -694,6 +699,8 @@ func (server *Server) commitLDAPTransaction(
 				}
 			}
 		}
+		committedPasswordPolicyRestriction =
+			transactionState.passwordPolicyRestrictedDN
 		return nil
 	})
 	if err != nil {
@@ -714,6 +721,7 @@ func (server *Server) commitLDAPTransaction(
 	for _, change := range execution.syncChanges {
 		server.publishSyncChange(change)
 	}
+	state.passwordPolicyRestrictedDN = committedPasswordPolicyRestriction
 	return ldapwire.Result{Code: ldapwire.ResultSuccess}, endResponse
 }
 

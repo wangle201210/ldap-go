@@ -1503,10 +1503,8 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 			return errors.New("value is not an object identifier")
 		}
 	case SyntaxGeneralizedTime:
-		if _, err := time.Parse("20060102150405Z", string(value)); err != nil {
-			if _, fractionalErr := time.Parse("20060102150405.000000Z", string(value)); fractionalErr != nil {
-				return errors.New("value is not generalized time")
-			}
+		if !validGeneralizedTime(value) {
+			return errors.New("value is not generalized time")
 		}
 	case SyntaxCSN:
 		if _, ok := normalizeCSN(value); !ok {
@@ -1514,6 +1512,20 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		}
 	}
 	return nil
+}
+
+func validGeneralizedTime(value []byte) bool {
+	raw := string(value)
+	for _, layout := range []string{
+		"20060102150405Z",
+		"20060102150405.000000Z",
+		"200601021504Z",
+	} {
+		if _, err := time.Parse(layout, raw); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCSN(value []byte) (string, bool) {

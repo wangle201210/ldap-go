@@ -30,7 +30,8 @@ func (server *Server) handleSearch(
 		supportsPagedResults |
 		supportsManageDsaIT |
 		supportsSubentries |
-		supportsDontUseCopy
+		supportsDontUseCopy |
+		supportsAccountUsability
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
@@ -47,6 +48,17 @@ func (server *Server) handleSearch(
 			connection,
 			message.ID,
 			*controlFailure,
+		)
+	}
+	state.accountUsabilityRequested = controls.accountUsability
+	defer func() {
+		state.accountUsabilityRequested = false
+	}()
+	if state.passwordPolicyRestrictedDN != "" {
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			passwordPolicyRestrictionResult(),
 		)
 	}
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
@@ -1866,6 +1878,10 @@ func (server *Server) rootDSE(
 		dontUseCopyControlOID,
 		proxyAuthorizationControlOID,
 		transactionSpecificationControlOID,
+		passwordPolicyControlOID,
+		accountUsabilityControlOID,
+		netscapePasswordExpiredOID,
+		netscapePasswordExpiringOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {
 		supportedControls = append(
@@ -2183,9 +2199,18 @@ func (server *Server) writeSearchResultResponse(
 	}
 	responseControls = append(responseControls, pagingControls...)
 	for _, entry := range entries {
+		entryControls := server.passwordPolicySearchEntryControls(
+			context.Background(),
+			state,
+			entry,
+		)
 		if err := ldapwire.Write(
 			connection,
-			ldapwire.EncodeSearchResultEntry(messageID, entry, nil),
+			ldapwire.EncodeSearchResultEntry(
+				messageID,
+				entry,
+				entryControls,
+			),
 		); err != nil {
 			return err
 		}

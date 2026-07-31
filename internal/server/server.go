@@ -507,6 +507,7 @@ func (server *Server) dispatch(
 		clearSearchSessions(state)
 	}
 	state.runtime = runtime
+	refreshPasswordPolicyRestriction(state)
 	if state.saslSession != nil {
 		switch message.Request.(type) {
 		case ldapwire.BindRequest, ldapwire.UnbindRequest:
@@ -596,12 +597,17 @@ func (server *Server) handleBind(
 	state.transaction = nil
 	state.boundDN = ""
 	state.authMechanism = ""
+	state.passwordPolicyRestrictedDN = ""
 	clearSearchSessions(state)
-	if hasUnsupportedCriticalControl(message.Controls) {
+	controls, controlFailure := parseRequestControls(
+		message.Controls,
+		supportsPasswordPolicy,
+	)
+	if controlFailure != nil {
 		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
-			ldapwire.ResultError(ldapwire.ResultUnavailableCriticalExtension, "unsupported critical control"),
+			*controlFailure,
 			nil,
 		))
 	}
@@ -697,28 +703,32 @@ func (server *Server) handleBind(
 		))
 	}
 
-	authenticated, err := server.authenticate(
+	bindResult, err := server.authenticatePasswordBind(
 		ctx,
 		state.runtime,
 		request.Name,
 		password,
+		controls.passwordPolicy,
 	)
 	if err != nil {
 		return err
 	}
-	if !authenticated {
+	if !bindResult.authenticated {
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
 			ldapwire.ResultError(ldapwire.ResultInvalidCredentials, ""),
-			nil,
+			bindResult.controls,
 		))
 	}
 	state.boundDN = request.Name
 	state.authMechanism = "SIMPLE"
+	if bindResult.restricted {
+		state.passwordPolicyRestrictedDN = request.Name
+	}
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
-		nil,
+		bindResult.controls,
 	))
 }
 
@@ -786,18 +796,20 @@ func (server *Server) closeConnections() {
 }
 
 type connectionState struct {
-	boundDN           string
-	authMechanism     string
-	runtime           *runtimeState
-	connection        net.Conn
-	secure            bool
-	externalSSF       uint32
-	externalDN        string
-	saslSession       *serverSASLSession
-	pagedSearch       *pagedSearchState
-	virtualListViews  map[string]*virtualListViewState
-	sortSessionCounts map[*serverSideSortLimiter]int
-	transaction       *ldapTransaction
+	boundDN                    string
+	authMechanism              string
+	runtime                    *runtimeState
+	connection                 net.Conn
+	secure                     bool
+	externalSSF                uint32
+	externalDN                 string
+	saslSession                *serverSASLSession
+	pagedSearch                *pagedSearchState
+	virtualListViews           map[string]*virtualListViewState
+	sortSessionCounts          map[*serverSideSortLimiter]int
+	transaction                *ldapTransaction
+	passwordPolicyRestrictedDN string
+	accountUsabilityRequested  bool
 }
 
 func clearSearchSessions(state *connectionState) {

@@ -36,7 +36,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | StartTLS | partial | RFC 4511/4513 state machine plus OpenLDAP `tls_2_anon`/`tls_authc` identity ordering tests pass; broader slapd TLS differentials remain |
-| Password Modify | partial | RFC 3062 core passes; password policy integration remains |
+| Password Modify | partial | RFC 3062 core plus ppolicy old-password, quality, minimum-age, history, reset, hashing, and response-control integration pass; remaining transaction/generated-password edge cases remain |
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | partial | RFC 3909 BER, result, ordering, isolation, and OpenLDAP 2.6.13 differential tests pass |
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
@@ -69,7 +69,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
-| Password policy overlay | planned | lockout, expiry, grace, history, controls |
+| Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules and chain-backed forwarded state updates remain |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, Cyrus credential forms, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
 | SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
@@ -108,7 +108,7 @@ rebuilt by `ldap-go`.
 | memberof and refint | planned | transactional referential-integrity tests |
 | pbind and remoteauth | planned | remote authentication tests |
 | pcache | planned | cache correctness and invalidation tests |
-| ppolicy | planned | full password policy suite |
+| ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, and OpenLDAP 2.6.13 differentials pass; native checker-module execution and `ppolicy_forward_updates` through chain remain |
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
@@ -594,8 +594,29 @@ frontend database's `olcPasswordHash` values select one or more output hashes;
 the OpenLDAP default is `{SSHA}`, while `{PBKDF2-SM3}` enables the costed SM3
 format. Legacy placement on `cn=config` is also accepted. Online changes are
 validated as part of the runtime snapshot and unsupported schemes roll back.
-Password policy controls, history, quality checks, expiry, and lockout remain
-pending with the ppolicy overlay.
+
+An imported OpenLDAP `ppolicy` overlay applies its default or per-entry
+`pwdPolicySubentry` policy to simple Bind, Add, Modify, and Password Modify.
+Implemented policy behavior includes start/end validity, permanent and timed
+lockout, exponential temporary delay, failure intervals, password expiry and
+warnings, grace login limits/expiry, reset-only sessions, minimum age,
+minimum/maximum byte length, history, user-change/safe-modify rules,
+`ppolicy_hash_cleartext`, `olcLastBind` precision, and `pwdMaxIdle`. Password
+changes maintain the OpenLDAP operational state attributes, and administrator
+changes honor `pwdMustChange`. Root DSE and operation handling include the
+Behera password-policy control, SunDS account-usability control, and optional
+Netscape expired/expiring controls. Configuration, policy, and account state
+survive `slapcat`-style LDIF import/export/reimport, and online overlay changes
+replace the runtime atomically.
+
+Two extension paths remain. OpenLDAP native `check_password()` shared objects
+use slapd's C `Entry` ABI and are preserved during migration but are not loaded
+by the Go server. A configured `olcPPolicyCheckModule` therefore fails closed
+when `pwdUseCheckModule` requests it; `pwdUseCheckModule` without a configured
+module follows the tested OpenLDAP build and is ignored. On a shadow database,
+`olcPPolicyForwardUpdates` suppresses local policy-state writes, but forwarding
+the internal Modify through `updateref` still requires the pending `chain`
+overlay implementation.
 
 RFC 4528 Assertion is published through Root DSE `supportedControl`. The BER
 filter is decoded strictly and evaluated inside the same storage transaction

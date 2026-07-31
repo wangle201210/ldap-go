@@ -28,6 +28,8 @@ type runtimeDatabase struct {
 	updateDN              *directory.DN
 	updateRefs            []string
 	lastMod               bool
+	lastBind              bool
+	lastBindPrecision     int
 	maxDerefDepth         int
 	configDNKey           string
 	serverSideSort        bool
@@ -41,6 +43,7 @@ type runtimeDatabase struct {
 	syncReloadHint        bool
 	syncConsumers         []syncConsumerConfig
 	dds                   *ddsRuntimeConfiguration
+	ppolicy               *passwordPolicyRuntimeConfiguration
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -172,6 +175,18 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		} else if present {
 			database.lastMod = lastMod
 		}
+		database.lastBind, _, err = singleBoolean(entry, "olcLastBind")
+		if err != nil {
+			return err
+		}
+		database.lastBindPrecision, err = singleNonnegativeInteger(
+			entry,
+			"olcLastBindPrecision",
+			0,
+		)
+		if err != nil {
+			return err
+		}
 		database.maxDerefDepth, err = singleNonnegativeInteger(
 			entry,
 			"olcMaxDerefDepth",
@@ -256,7 +271,8 @@ func loadRuntimeDatabaseOverlays(
 		overlayType := databaseType(string(overlayValues[0]))
 		if overlayType != "sssvlv" &&
 			overlayType != "syncprov" &&
-			overlayType != "dds" {
+			overlayType != "dds" &&
+			overlayType != "ppolicy" {
 			return nil
 		}
 
@@ -339,6 +355,27 @@ func loadRuntimeDatabaseOverlays(
 				max:        maximum,
 				maxPerConn: maxPerConn,
 			}
+		case "ppolicy":
+			if database.ppolicy != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate ppolicy overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if databaseType(database.name) == "frontend" {
+				return fmt.Errorf(
+					"%s ppolicy overlay cannot be global",
+					entry.DN,
+				)
+			}
+			configuration, err := loadPasswordPolicyRuntimeConfiguration(
+				entry,
+			)
+			if err != nil {
+				return err
+			}
+			database.ppolicy = &configuration
 		case "syncprov":
 			if database.syncProvider {
 				return fmt.Errorf(

@@ -30,6 +30,12 @@ var protectedOperationalAttributes = map[string]string{
 	"1.3.6.1.4.1.4203.666.1.7":      "entryCSN",
 	"1.3.6.1.4.1.4203.666.1.25":     "contextCSN",
 	"1.3.6.1.4.1.4203.666.1.57":     "entryExpireTimestamp",
+	"1.3.6.1.4.1.42.2.27.8.1.16":    "pwdChangedTime",
+	"1.3.6.1.4.1.42.2.27.8.1.19":    "pwdFailureTime",
+	"1.3.6.1.4.1.42.2.27.8.1.20":    "pwdHistory",
+	"1.3.6.1.4.1.42.2.27.8.1.21":    "pwdGraceUseTime",
+	"1.3.6.1.4.1.42.2.27.8.1.29":    "pwdLastSuccess",
+	"1.3.6.1.4.1.42.2.27.8.1.33":    "pwdAccountTmpLockoutEnd",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
@@ -40,8 +46,23 @@ var protectedOperationalAttributes = map[string]string{
 	"entryuuid":                     "entryUUID",
 	"modifiersname":                 "modifiersName",
 	"modifytimestamp":               "modifyTimestamp",
+	"pwdaccounttmplockoutend":       "pwdAccountTmpLockoutEnd",
+	"pwdchangedtime":                "pwdChangedTime",
+	"pwdfailuretime":                "pwdFailureTime",
+	"pwdgraceusetime":               "pwdGraceUseTime",
+	"pwdhistory":                    "pwdHistory",
+	"pwdlastsuccess":                "pwdLastSuccess",
 	"structuralobjectclass":         "structuralObjectClass",
 	"subschemasubentry":             "subschemaSubentry",
+}
+
+var manageablePasswordPolicyOperationalAttributes = map[string]struct{}{
+	"1.3.6.1.4.1.42.2.27.8.1.16": {},
+	"1.3.6.1.4.1.42.2.27.8.1.19": {},
+	"1.3.6.1.4.1.42.2.27.8.1.20": {},
+	"1.3.6.1.4.1.42.2.27.8.1.21": {},
+	"1.3.6.1.4.1.42.2.27.8.1.29": {},
+	"1.3.6.1.4.1.42.2.27.8.1.33": {},
 }
 
 func (server *Server) handleAdd(
@@ -53,10 +74,21 @@ func (server *Server) handleAdd(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPostRead|supportsManageDsaIT,
+		supportsAssertion|
+			supportsPostRead|
+			supportsManageDsaIT|
+			supportsPasswordPolicy,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
+	}
+	if state.passwordPolicyRestrictedDN != "" {
+		return server.writePasswordPolicyRestriction(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			controls.passwordPolicy,
+		)
 	}
 
 	dn, err := directory.ParseDN(request.Entry.DN)
@@ -140,6 +172,19 @@ func (server *Server) handleAdd(
 				*database,
 				&entry,
 				time.Now(),
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
+			if err := server.applyPasswordPolicyAdd(
+				state.runtime,
+				writer,
+				tx,
+				state.boundDN,
+				*database,
+				&entry,
+				controls.passwordPolicy,
 			); err != nil {
 				return err
 			}
@@ -356,7 +401,8 @@ func (server *Server) handleModify(
 		supportsAssertion|
 			supportsPreRead|
 			supportsPostRead|
-			supportsManageDsaIT,
+			supportsManageDsaIT|
+			supportsPasswordPolicy,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
@@ -388,6 +434,20 @@ func (server *Server) handleModify(
 				ldapwire.ResultUnwillingToPerform,
 				"no global superior knowledge",
 			),
+		)
+	}
+	if state.passwordPolicyRestrictedDN != "" &&
+		(database.ppolicy == nil ||
+			!database.ppolicy.disableWrite) &&
+		!passwordPolicyModificationAllowedWhileRestricted(
+			state.runtime,
+			request.Changes,
+		) {
+		return server.writePasswordPolicyRestriction(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			controls.passwordPolicy,
 		)
 	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
@@ -433,6 +493,14 @@ func (server *Server) handleModify(
 			}
 			return nil
 		},
+		server.passwordPolicyModificationProcessor(
+			state.runtime,
+			state.boundDN,
+			*database,
+			passwordPolicyModificationOptions{
+				requestControl: controls.passwordPolicy,
+			},
+		),
 		func(reader storage.Reader, entry directory.Entry) error {
 			postRead, err := server.readResponseControl(
 				state.runtime,
@@ -453,6 +521,12 @@ func (server *Server) handleModify(
 	)
 	if err == nil {
 		server.finishWriteEffects(ctx, nextRuntime, syncChange)
+		if passwordPolicyModifiesPassword(
+			state.runtime,
+			request.Changes,
+		) {
+			state.passwordPolicyRestrictedDN = ""
+		}
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -473,6 +547,14 @@ type entryModificationPostcondition func(
 	entry directory.Entry,
 ) error
 
+type entryModificationMutation func(entry *directory.Entry) error
+
+type entryModificationProcessor func(
+	reader storage.Reader,
+	entry directory.Entry,
+	changes []ldapwire.Modification,
+) ([]ldapwire.Modification, entryModificationMutation, error)
+
 func (server *Server) modifyEntry(
 	ctx context.Context,
 	runtime *runtimeState,
@@ -482,6 +564,7 @@ func (server *Server) modifyEntry(
 	changes []ldapwire.Modification,
 	manageDsaIT bool,
 	precondition entryModificationPrecondition,
+	processor entryModificationProcessor,
 	postcondition entryModificationPostcondition,
 ) (*runtimeState, *syncChange, error) {
 	configurationWrite := isConfigurationDN(dn)
@@ -527,16 +610,28 @@ func (server *Server) modifyEntry(
 			}
 		}
 
+		processedChanges := changes
+		var mutation entryModificationMutation
+		if processor != nil {
+			processedChanges, mutation, err = processor(
+				tx,
+				entry,
+				changes,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		if !server.canApplyModifications(
 			runtime,
 			tx,
 			boundDN,
 			logicalEntry,
-			changes,
+			processedChanges,
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
-		for _, change := range changes {
+		for _, change := range processedChanges {
 			if runtime.schema.IsCollective(change.Attribute.Description) &&
 				!runtime.schema.EntryHasObjectClass(
 					entry,
@@ -550,11 +645,27 @@ func (server *Server) modifyEntry(
 			if isProtectedOperationalAttribute(
 				runtime.schema,
 				change.Attribute.Description,
-			) {
+			) && (!isManageablePasswordPolicyOperationalAttribute(
+				runtime.schema,
+				change.Attribute.Description,
+			) || !server.allowed(
+				runtime,
+				tx,
+				boundDN,
+				logicalEntry,
+				change.Attribute.Description,
+				nil,
+				acl.Manage,
+			)) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
 			}
 			if failure := applyModification(&entry, change); failure != nil {
 				return failure
+			}
+		}
+		if mutation != nil {
+			if err := mutation(&entry); err != nil {
+				return err
 			}
 		}
 		for _, rdnValue := range dn.RDNValues() {
@@ -628,6 +739,14 @@ func (server *Server) handleDelete(
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
+	}
+	if state.passwordPolicyRestrictedDN != "" {
+		return server.writePasswordPolicyRestriction(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			false,
+		)
 	}
 	dn, err := directory.ParseDN(request.DN)
 	if err != nil || dn.Depth() == 0 {
@@ -1263,6 +1382,14 @@ func (server *Server) handleCompare(
 			*controlFailure,
 		)
 	}
+	if state.passwordPolicyRestrictedDN != "" {
+		return server.writePasswordPolicyRestriction(
+			connection,
+			message.ID,
+			ldapwire.ApplicationCompareResponse,
+			false,
+		)
+	}
 	dn, err := directory.ParseDN(request.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
@@ -1596,6 +1723,22 @@ func isProtectedOperationalAttribute(
 	return protected
 }
 
+func isManageablePasswordPolicyOperationalAttribute(
+	registry *schema.Registry,
+	description string,
+) bool {
+	base := description
+	if index := strings.IndexByte(base, ';'); index >= 0 {
+		base = base[:index]
+	}
+	key := strings.ToLower(strings.TrimSpace(base))
+	if attributeType, ok := registry.AttributeType(base); ok {
+		key = strings.ToLower(attributeType.OID)
+	}
+	_, manageable := manageablePasswordPolicyOperationalAttributes[key]
+	return manageable
+}
+
 func belowKnownNamingContext(reader storage.Reader, dn directory.DN) (bool, error) {
 	contexts, err := reader.NamingContexts()
 	if err != nil {
@@ -1644,7 +1787,17 @@ func (server *Server) finishOperationWithControls(
 	controls []ldapwire.Control,
 ) error {
 	if failure := asOperationFailure(err); failure != nil {
-		return server.writeOperationResult(connection, messageID, responseTag, failure.result)
+		responseControls := append(
+			append([]ldapwire.Control(nil), controls...),
+			failure.controls...,
+		)
+		return server.writeOperationResultWithControls(
+			connection,
+			messageID,
+			responseTag,
+			failure.result,
+			responseControls,
+		)
 	}
 	if err != nil {
 		return server.internalOperationError(connection, messageID, responseTag, err)
@@ -1741,7 +1894,8 @@ func (server *Server) writeLDAPResultResponse(
 }
 
 type operationFailure struct {
-	result ldapwire.Result
+	result   ldapwire.Result
+	controls []ldapwire.Control
 }
 
 func (failure *operationFailure) Error() string {

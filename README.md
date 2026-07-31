@@ -80,6 +80,16 @@ leaf-first hierarchies with syncprov delete publication. Root DSE publishes
 not listed in `supportedExtension`. DDS state, limits, online configuration,
 restart persistence, slapd differentials, and OpenLDAP `ldapexop refresh`
 interoperability pass.
+OpenLDAP's `ppolicy` overlay is loaded from `cn=config` and supports default or
+per-entry policies across Bind, Add, Modify, and Password Modify. It enforces
+validity windows, lockout and exponential delay, expiry warnings and grace
+logins, reset-only sessions, password age/length/history rules, safe modify,
+cleartext hashing, and `olcLastBind`/`pwdMaxIdle`. The Behera password-policy,
+SunDS account-usability, and optional Netscape controls match OpenLDAP 2.6.13
+in differential tests. Policy configuration and all operational state survive
+`slapcat` LDIF round trips. Native C `check_password()` modules and
+chain-backed `ppolicy_forward_updates` remain pending; configured native
+checker paths fail closed.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed
