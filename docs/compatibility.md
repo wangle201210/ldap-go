@@ -109,7 +109,7 @@ rebuilt by `ldap-go`.
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
-| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, durable and dynamically published contextCSN, and OpenLDAP CLI interoperability pass |
+| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, contextCSN checkpointing, session-log replay policies, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
 | valsort | planned | value sorting tests |
@@ -272,6 +272,23 @@ The local SID 000 context is committed atomically with each successful
 Add/Modify/Password Modify/Delete/ModifyDN and survives restart, including
 delete-only progress.
 
+`olcSpCheckpoint` writes the current SID-sorted context vector to the first
+database suffix after either its committed-operation threshold or elapsed
+minute threshold. The counter and timestamp are transactional metadata, and
+the internal suffix update does not create another CSN or Sync event.
+`olcSpSessionlog` retains the configured number of committed non-Add changes
+in a partition-local memory window. A covered cookie receives disappearing
+UUIDs with `refreshDeletes=TRUE`, including filter and scope exits, while Adds
+are recovered from the normal entry scan. An evicted, incomplete, or
+not-yet-published window falls back to Present processing.
+
+Without a configured session log, `olcSpNoPresent: TRUE` suppresses Present
+processing and marks the refresh as delete-based, matching the upstream
+setting's documented log-database-only contract. With
+`olcSpReloadHint: TRUE`, a stale cookie that cannot be anchored by any retained
+entry CSN receives `syncRefreshRequired` unless the request sets `reloadHint`;
+with the hint, the cookie is discarded and a full refresh is returned.
+
 For ordinary operations, the provider dynamically replaces any stored
 `contextCSN` copy on the first database suffix with the current, SID-sorted
 vector. Search exposes it when explicitly requested or selected by `+`;
@@ -292,10 +309,9 @@ not synchronized onto member entries. TCP tests cover these paths, and an
 installed OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` is run as an optional
 process-level interoperability test.
 
-This provider does not yet implement the `olcSpCheckpoint`,
-`olcSpSessionlog`, `olcSpNoPresent`, or `olcSpReloadHint` variants,
-server-side sort/VLV combinations, accesslog replay, delta-syncrepl, the
-optional sync-provider subentry context, or a full `slapd` syncrepl topology
+This provider does not yet implement server-side sort/VLV combinations,
+accesslog replay, `olcSpSessionlogSource`, delta-syncrepl, the optional
+sync-provider subentry context, or a full `slapd` syncrepl topology
 differential. The syncrepl consumer is also still planned, so the rows remain
 `partial`.
 

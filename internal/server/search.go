@@ -683,6 +683,19 @@ func (server *Server) handleSearch(
 				result = *failure
 				return nil
 			}
+			failure, err := server.prepareSyncRefresh(
+				state,
+				request,
+				reader,
+				syncSearch,
+			)
+			if err != nil {
+				return err
+			}
+			if failure != nil {
+				result = *failure
+				return nil
+			}
 		}
 		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		primary := routes[0]
@@ -953,11 +966,14 @@ func (server *Server) handleSearch(
 						result.DiagnosticMessage = err.Error()
 						return errStopSearch
 					}
+					syncSearch.observeCurrent(syncUUID)
 					if !syncSearch.entryChanged(storedEntry) {
-						syncSearch.present = append(
-							syncSearch.present,
-							syncUUID,
-						)
+						if !syncSearch.refreshDeletes {
+							syncSearch.present = append(
+								syncSearch.present,
+								syncUUID,
+							)
+						}
 						return nil
 					}
 				} else {

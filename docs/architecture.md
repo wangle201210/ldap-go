@@ -127,6 +127,14 @@ values in responses without rewriting them. Sync responses omit
 `dSAOperation` attributes so provider-local state is not replicated as entry
 content.
 
+`olcSpCheckpoint` transactionally persists that context vector on the suffix
+after its operation or elapsed-time threshold. `olcSpSessionlog` retains a
+bounded, partition-local window of committed non-Add changes. A refresh uses
+the window only when the consumer cookie covers its baseline and publication
+has reached the storage snapshot; otherwise it falls back to the Present
+phase. Runtime configuration activation preserves a complete existing window
+and resets it when a publication gap is detected.
+
 A durable ordered accesslog, delta-syncrepl replay, and the syncrepl consumer
 remain future layers. They must not treat the current process-local stream as a
 crash-recovery log.

@@ -60,6 +60,14 @@ type syncChangeHub struct {
 	mu            sync.Mutex
 	nextID        uint64
 	subscriptions map[uint64]*syncChangeSubscription
+	logs          map[string]*syncSessionLog
+}
+
+type syncSessionLog struct {
+	size    int
+	base    syncCSNState
+	latest  syncCSNState
+	changes []syncChange
 }
 
 type syncChangeSubscription struct {
@@ -73,6 +81,7 @@ type syncChangeSubscription struct {
 func newSyncChangeHub() *syncChangeHub {
 	return &syncChangeHub{
 		subscriptions: make(map[uint64]*syncChangeSubscription),
+		logs:          make(map[string]*syncSessionLog),
 	}
 }
 
@@ -99,6 +108,9 @@ func (hub *syncChangeHub) subscribe(
 func (hub *syncChangeHub) publish(change syncChange) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	if log := hub.logs[change.partition]; log != nil {
+		log.append(change)
+	}
 	for id, subscription := range hub.subscriptions {
 		if _, subscribed := subscription.partitions[change.partition]; !subscribed {
 			continue
@@ -111,6 +123,129 @@ func (hub *syncChangeHub) publish(change syncChange) {
 			delete(hub.subscriptions, id)
 		}
 	}
+}
+
+func (hub *syncChangeHub) configure(runtime *runtimeState) {
+	type desiredLog struct {
+		size    int
+		context syncCSNState
+	}
+	desired := make(map[string]desiredLog)
+	if runtime != nil {
+		for _, database := range runtime.databases {
+			if !database.syncProvider || database.syncSessionLogSize == 0 {
+				continue
+			}
+			desired[database.partition] = desiredLog{
+				size:    database.syncSessionLogSize,
+				context: cloneSyncCSNState(runtime.syncContexts[database.partition]),
+			}
+		}
+	}
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	for partition := range hub.logs {
+		if _, keep := desired[partition]; !keep {
+			delete(hub.logs, partition)
+		}
+	}
+	for partition, configuration := range desired {
+		log := hub.logs[partition]
+		if log == nil ||
+			!syncCSNStateCovers(log.latest, configuration.context) {
+			hub.logs[partition] = &syncSessionLog{
+				size:   configuration.size,
+				base:   cloneSyncCSNState(configuration.context),
+				latest: cloneSyncCSNState(configuration.context),
+			}
+			continue
+		}
+		log.size = configuration.size
+		log.trim()
+	}
+}
+
+func (hub *syncChangeHub) replay(
+	partition string,
+	cookie syncCSNState,
+	snapshot syncCSNState,
+) ([]syncChange, bool) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	log := hub.logs[partition]
+	if log == nil ||
+		!syncCSNStateCovers(log.latest, snapshot) ||
+		!syncCSNStateCovers(cookie, log.base) {
+		return nil, false
+	}
+	changes := make([]syncChange, 0, len(log.changes))
+	for _, change := range log.changes {
+		snapshotCSN, exists := snapshot[change.csn.serverID]
+		if !exists || compareOpenLDAPCSN(change.csn, snapshotCSN) > 0 {
+			continue
+		}
+		consumerCSN, exists := cookie[change.csn.serverID]
+		if exists && compareOpenLDAPCSN(change.csn, consumerCSN) <= 0 {
+			continue
+		}
+		changes = append(changes, cloneSyncChange(change))
+	}
+	return changes, true
+}
+
+func (log *syncSessionLog) append(change syncChange) {
+	if current, exists := log.latest[change.csn.serverID]; exists &&
+		compareOpenLDAPCSN(change.csn, current) <= 0 {
+		return
+	}
+	log.latest[change.csn.serverID] = change.csn
+	if !change.hasBefore && change.hasAfter {
+		return
+	}
+	log.changes = append(log.changes, cloneSyncChange(change))
+	log.trim()
+}
+
+func (log *syncSessionLog) trim() {
+	for len(log.changes) > log.size {
+		expired := log.changes[0]
+		log.changes[0] = syncChange{}
+		log.changes = log.changes[1:]
+		current, exists := log.base[expired.csn.serverID]
+		if !exists || compareOpenLDAPCSN(expired.csn, current) > 0 {
+			log.base[expired.csn.serverID] = expired.csn
+		}
+	}
+}
+
+func cloneSyncChange(change syncChange) syncChange {
+	cloned := change
+	if change.hasBefore {
+		cloned.before = change.before.Clone()
+	}
+	if change.hasAfter {
+		cloned.after = change.after.Clone()
+	}
+	return cloned
+}
+
+func cloneSyncCSNState(state syncCSNState) syncCSNState {
+	cloned := make(syncCSNState, len(state))
+	for serverID, csn := range state {
+		cloned[serverID] = csn
+	}
+	return cloned
+}
+
+func syncCSNStateCovers(candidate, required syncCSNState) bool {
+	for serverID, requiredCSN := range required {
+		candidateCSN, exists := candidate[serverID]
+		if !exists || compareOpenLDAPCSN(candidateCSN, requiredCSN) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (subscription *syncChangeSubscription) unsubscribe() {
@@ -601,6 +736,7 @@ func (server *Server) observeRuntimeCSNs(
 	reader storage.Reader,
 	runtime *runtimeState,
 ) error {
+	runtime.syncContexts = make(map[string]syncCSNState)
 	seenPartitions := make(map[string]struct{})
 	for _, database := range runtime.databases {
 		if !database.syncProvider {
@@ -614,11 +750,17 @@ func (server *Server) observeRuntimeCSNs(
 		if err != nil {
 			return err
 		}
+		runtime.syncContexts[database.partition] = cloneSyncCSNState(state)
 		for _, csn := range state {
 			server.observeCSN(csn)
 		}
 	}
 	return nil
+}
+
+func (server *Server) activateRuntime(runtime *runtimeState) {
+	server.syncChanges.configure(runtime)
+	server.runtime.Store(runtime)
 }
 
 func (server *Server) observeCSN(csn openLDAPCSN) {

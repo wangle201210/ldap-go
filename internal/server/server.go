@@ -124,7 +124,7 @@ func New(config Config) (*Server, error) {
 	if err := server.seedCSNClock(runtime); err != nil {
 		return nil, fmt.Errorf("initialize CSN clock: %w", err)
 	}
-	server.runtime.Store(runtime)
+	server.activateRuntime(runtime)
 	return server, nil
 }
 

@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -20,15 +22,25 @@ const syncIDSetChunkSize = 128
 var errSyncSearchBaseChanged = errors.New("Sync search base has changed")
 
 type syncSearchContext struct {
-	control      *syncRequestControl
-	cookie       openLDAPSyncCookie
-	partitions   []string
-	routes       []syncSearchRoute
-	manageDsaIT  bool
-	subentries   *bool
-	snapshot     syncCSNState
-	present      []ldapwire.SyncUUID
-	subscription *syncChangeSubscription
+	control            *syncRequestControl
+	cookie             openLDAPSyncCookie
+	partitions         []string
+	partitionSnapshots map[string]syncCSNState
+	policies           map[string]syncSearchPolicy
+	routes             []syncSearchRoute
+	manageDsaIT        bool
+	subentries         *bool
+	snapshot           syncCSNState
+	present            []ldapwire.SyncUUID
+	deleted            map[ldapwire.SyncUUID]struct{}
+	refreshDeletes     bool
+	subscription       *syncChangeSubscription
+}
+
+type syncSearchPolicy struct {
+	sessionLogSize int
+	noPresent      bool
+	reloadHint     bool
 }
 
 type syncSearchRoute struct {
@@ -58,6 +70,7 @@ func (server *Server) prepareSyncSearch(
 
 	partitionSet := make(map[string]struct{})
 	partitions := make([]string, 0, len(routes))
+	policies := make(map[string]syncSearchPolicy)
 	syncRoutes := make([]syncSearchRoute, 0, len(routes))
 	for _, route := range routes {
 		database := state.runtime.databases[route.databaseIndex]
@@ -74,6 +87,11 @@ func (server *Server) prepareSyncSearch(
 		if _, exists := partitionSet[database.partition]; !exists {
 			partitionSet[database.partition] = struct{}{}
 			partitions = append(partitions, database.partition)
+			policies[database.partition] = syncSearchPolicy{
+				sessionLogSize: database.syncSessionLogSize,
+				noPresent:      database.syncNoPresent,
+				reloadHint:     database.syncReloadHint,
+			}
 		}
 		syncRoutes = append(syncRoutes, syncSearchRoute{
 			partition: database.partition,
@@ -85,6 +103,7 @@ func (server *Server) prepareSyncSearch(
 		control:     control,
 		cookie:      emptyOpenLDAPSyncCookie(0, false),
 		partitions:  partitions,
+		policies:    policies,
 		routes:      syncRoutes,
 		manageDsaIT: controls.manageDsaIT,
 		subentries:  controls.subentries,
@@ -108,29 +127,210 @@ func (syncSearch *syncSearchContext) captureSnapshot(
 	reader storage.Reader,
 ) error {
 	syncSearch.snapshot = make(syncCSNState)
+	syncSearch.partitionSnapshots = make(map[string]syncCSNState)
 	for _, partition := range syncSearch.partitions {
 		state, err := syncContextCSNs(reader, partition)
 		if err != nil {
 			return err
 		}
+		syncSearch.partitionSnapshots[partition] = cloneSyncCSNState(state)
 		mergeSyncCSNState(syncSearch.snapshot, state)
 	}
 	return nil
 }
 
 func (syncSearch *syncSearchContext) snapshotFailure() *ldapwire.Result {
-	requestCSN, requestHasCSN := syncSearch.cookie.csns[0]
-	providerCSN, providerHasCSN := syncSearch.snapshot[0]
-	if requestHasCSN &&
-		(!providerHasCSN ||
-			compareOpenLDAPCSN(requestCSN, providerCSN) > 0) {
+	if len(syncSearch.cookie.csns) == 0 {
+		return nil
+	}
+	if len(syncSearch.snapshot) == 0 {
 		result := ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
-			"consumer state is newer than provider",
+			"consumer has state but provider does not",
 		)
 		return &result
 	}
+	for serverID, requestCSN := range syncSearch.cookie.csns {
+		providerCSN, providerHasCSN := syncSearch.snapshot[serverID]
+		if !providerHasCSN {
+			delete(syncSearch.cookie.csns, serverID)
+			continue
+		}
+		if serverID == 0 &&
+			compareOpenLDAPCSN(requestCSN, providerCSN) > 0 {
+			result := ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"consumer state is newer than provider",
+			)
+			return &result
+		}
+	}
+	if len(syncSearch.cookie.csns) != len(syncSearch.snapshot) {
+		syncSearch.cookie.csns = make(syncCSNState)
+	}
 	return nil
+}
+
+func (server *Server) prepareSyncRefresh(
+	state *connectionState,
+	request ldapwire.SearchRequest,
+	reader storage.Reader,
+	syncSearch *syncSearchContext,
+) (*ldapwire.Result, error) {
+	if len(syncSearch.cookie.csns) == 0 {
+		return nil, nil
+	}
+
+	allSessionLogs := len(syncSearch.partitions) > 0
+	anySessionLog := false
+	allNoPresent := len(syncSearch.partitions) > 0
+	reloadHint := false
+	var replay []syncChange
+	for _, partition := range syncSearch.partitions {
+		policy := syncSearch.policies[partition]
+		allNoPresent = allNoPresent && policy.noPresent
+		reloadHint = reloadHint || policy.reloadHint
+		if policy.sessionLogSize == 0 {
+			allSessionLogs = false
+			continue
+		}
+		anySessionLog = true
+		changes, usable := server.syncChanges.replay(
+			partition,
+			syncSearch.cookie.csns,
+			syncSearch.partitionSnapshots[partition],
+		)
+		if !usable {
+			allSessionLogs = false
+			continue
+		}
+		replay = append(replay, changes...)
+	}
+
+	switch {
+	case allSessionLogs:
+		sort.SliceStable(replay, func(i, j int) bool {
+			comparison := compareOpenLDAPCSN(replay[i].csn, replay[j].csn)
+			if comparison != 0 {
+				return comparison < 0
+			}
+			if replay[i].partition != replay[j].partition {
+				return replay[i].partition < replay[j].partition
+			}
+			return replay[i].before.DN < replay[j].before.DN
+		})
+		syncSearch.refreshDeletes = true
+		syncSearch.deleted = make(map[ldapwire.SyncUUID]struct{})
+		for _, change := range replay {
+			if syncSearchBaseChanged(syncSearch, change) {
+				result := ldapwire.ResultError(
+					ldapwire.ResultSyncRefreshRequired,
+					errSyncSearchBaseChanged.Error(),
+				)
+				return &result, nil
+			}
+			var (
+				beforeUUID  ldapwire.SyncUUID
+				beforeMatch bool
+				afterUUID   ldapwire.SyncUUID
+				afterMatch  bool
+				err         error
+			)
+			if change.hasBefore {
+				_, beforeUUID, beforeMatch, err = server.syncEventEntry(
+					state.runtime,
+					state.boundDN,
+					request,
+					syncSearch,
+					reader,
+					change.partition,
+					change.before,
+				)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if change.hasAfter {
+				_, afterUUID, afterMatch, err = server.syncEventEntry(
+					state.runtime,
+					state.boundDN,
+					request,
+					syncSearch,
+					reader,
+					change.partition,
+					change.after,
+				)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if beforeMatch && !afterMatch {
+				syncSearch.deleted[beforeUUID] = struct{}{}
+			}
+			if afterMatch {
+				delete(syncSearch.deleted, afterUUID)
+			}
+		}
+		return nil, nil
+	case !anySessionLog && allNoPresent:
+		syncSearch.refreshDeletes = true
+		return nil, nil
+	}
+
+	exists, err := syncCookieStateExists(reader, syncSearch)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, nil
+	}
+	if reloadHint && !syncSearch.control.request.ReloadHint {
+		result := ldapwire.ResultError(
+			ldapwire.ResultSyncRefreshRequired,
+			"sync cookie is stale",
+		)
+		return &result, nil
+	}
+	syncSearch.cookie.csns = make(syncCSNState)
+	return nil, nil
+}
+
+func syncCookieStateExists(
+	reader storage.Reader,
+	syncSearch *syncSearchContext,
+) (bool, error) {
+	var minimum openLDAPCSN
+	hasMinimum := false
+	for _, csn := range syncSearch.cookie.csns {
+		if !hasMinimum || compareOpenLDAPCSN(csn, minimum) < 0 {
+			minimum = csn
+			hasMinimum = true
+		}
+	}
+	if !hasMinimum {
+		return false, nil
+	}
+	found := false
+	for _, partition := range syncSearch.partitions {
+		tx := storage.ReaderInPartition(reader, partition)
+		if err := tx.ForEach(func(entry directory.Entry) error {
+			values := entry.Values("entryCSN")
+			if len(values) != 1 {
+				return nil
+			}
+			csn, err := parseOpenLDAPCSN(string(values[0]))
+			if err == nil && compareOpenLDAPCSN(csn, minimum) <= 0 {
+				found = true
+			}
+			return nil
+		}); err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func mergeSyncCSNState(destination, source syncCSNState) {
@@ -155,6 +355,23 @@ func (syncSearch *syncSearchContext) entryChanged(
 	}
 	consumerCSN, exists := syncSearch.cookie.csns[csn.serverID]
 	return !exists || compareOpenLDAPCSN(csn, consumerCSN) > 0
+}
+
+func (syncSearch *syncSearchContext) observeCurrent(uuid ldapwire.SyncUUID) {
+	if syncSearch.deleted != nil {
+		delete(syncSearch.deleted, uuid)
+	}
+}
+
+func (syncSearch *syncSearchContext) deletedUUIDs() []ldapwire.SyncUUID {
+	uuids := make([]ldapwire.SyncUUID, 0, len(syncSearch.deleted))
+	for uuid := range syncSearch.deleted {
+		uuids = append(uuids, uuid)
+	}
+	sort.Slice(uuids, func(i, j int) bool {
+		return bytes.Compare(uuids[i][:], uuids[j][:]) < 0
+	})
+	return uuids
 }
 
 func syncUUIDFromEntry(entry directory.Entry) (ldapwire.SyncUUID, error) {
@@ -226,6 +443,22 @@ func (server *Server) writeSyncSearch(
 	result ldapwire.Result,
 ) error {
 	if result.Code == ldapwire.ResultSuccess {
+		deleted := syncSearch.deletedUUIDs()
+		for start := 0; start < len(deleted); start += syncIDSetChunkSize {
+			end := min(start+syncIDSetChunkSize, len(deleted))
+			info := ldapwire.SyncInfoValue{
+				Kind:           ldapwire.SyncInfoIDSet,
+				RefreshDeletes: true,
+				UUIDs:          deleted[start:end],
+			}
+			if err := server.writeSyncInfo(
+				connection,
+				messageID,
+				info,
+			); err != nil {
+				return err
+			}
+		}
 		for start := 0; start < len(syncSearch.present); start += syncIDSetChunkSize {
 			end := min(start+syncIDSetChunkSize, len(syncSearch.present))
 			info := ldapwire.SyncInfoValue{
@@ -271,8 +504,9 @@ func (server *Server) writeSyncSearch(
 	)
 	if syncSearch.control.request.Mode == ldapwire.SyncRefreshOnly {
 		done := ldapwire.SyncDoneValue{
-			Cookie:    cookie,
-			HasCookie: len(syncSearch.snapshot) > 0,
+			Cookie:         cookie,
+			HasCookie:      len(syncSearch.snapshot) > 0,
+			RefreshDeletes: syncSearch.refreshDeletes,
 		}
 		return server.writeSearchDoneWithControls(
 			connection,
@@ -287,11 +521,15 @@ func (server *Server) writeSyncSearch(
 		)
 	}
 
+	refreshKind := ldapwire.SyncInfoRefreshPresent
+	if syncSearch.refreshDeletes {
+		refreshKind = ldapwire.SyncInfoRefreshDelete
+	}
 	if err := server.writeSyncInfo(
 		connection,
 		messageID,
 		ldapwire.SyncInfoValue{
-			Kind:        ldapwire.SyncInfoRefreshPresent,
+			Kind:        refreshKind,
 			Cookie:      cookie,
 			HasCookie:   len(syncSearch.snapshot) > 0,
 			RefreshDone: true,

@@ -296,7 +296,7 @@ func (server *Server) handleAdd(
 		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
+		server.activateRuntime(nextRuntime)
 	}
 	if err == nil {
 		server.publishSyncChange(syncChange)
@@ -418,7 +418,7 @@ func (server *Server) handleModify(
 		},
 	)
 	if err == nil && nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
+		server.activateRuntime(nextRuntime)
 	}
 	if err == nil {
 		server.publishSyncChange(syncChange)
@@ -748,7 +748,7 @@ func (server *Server) handleDelete(
 		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
+		server.activateRuntime(nextRuntime)
 	}
 	if err == nil {
 		server.publishSyncChange(syncChange)
@@ -1170,7 +1170,7 @@ func (server *Server) handleModifyDN(
 		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
+		server.activateRuntime(nextRuntime)
 	}
 	if err == nil {
 		server.publishSyncChange(syncChange)

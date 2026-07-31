@@ -21,6 +21,7 @@ type runtimeState struct {
 	databases             []runtimeDatabase
 	allowAnonymousUpdates bool
 	passwordHashSchemes   []string
+	syncContexts          map[string]syncCSNState
 }
 
 func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, error) {

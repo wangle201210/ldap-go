@@ -186,7 +186,7 @@ func (server *Server) handlePasswordModify(
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
 	if nextRuntime != nil {
-		server.runtime.Store(nextRuntime)
+		server.activateRuntime(nextRuntime)
 	}
 	server.publishSyncChange(syncChange)
 

@@ -54,8 +54,10 @@ RFC 4533 LDAP Sync provider support is enabled by an imported
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed
 add/modify/modDN/delete notifications, durable delete progress across restart,
 dynamic suffix `contextCSN` Search/Compare/read-control semantics,
-Abandon/Cancel, and OpenLDAP 2.6.13 `ldapsearch` interoperability. Syncrepl
-consumer and delta-syncrepl support remain separate pending milestones.
+`olcSpCheckpoint`, bounded `olcSpSessionlog` delete replay,
+`olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, and OpenLDAP 2.6.13
+`ldapsearch` interoperability. Syncrepl consumer and delta-syncrepl support
+remain separate pending milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
