@@ -93,3 +93,89 @@ func TestLoadOpenLDAPConfigSchemaIgnoresBusinessEntries(t *testing.T) {
 		t.Fatalf("LoadResult = %#v", result)
 	}
 }
+
+func TestBuiltinOpenLDAPCSNAttributes(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	entryCSN, ok := registry.AttributeType("entryCSN")
+	if !ok ||
+		entryCSN.Syntax != SyntaxCSN ||
+		entryCSN.SyntaxLength != 64 ||
+		!entryCSN.SingleValue ||
+		!entryCSN.NoUserModification ||
+		entryCSN.Usage != UsageDirectoryOperation {
+		t.Fatalf("entryCSN = %#v, found %t", entryCSN, ok)
+	}
+	contextCSN, ok := registry.AttributeType("contextCSN")
+	if !ok ||
+		contextCSN.Syntax != SyntaxCSN ||
+		contextCSN.SyntaxLength != 64 ||
+		contextCSN.SingleValue ||
+		!contextCSN.NoUserModification ||
+		contextCSN.Usage != UsageDSAOperation {
+		t.Fatalf("contextCSN = %#v, found %t", contextCSN, ok)
+	}
+
+	modern := "20260730010101.000001Z#00000A#001#00000B"
+	legacy := "20260730010101Z#00000a#01#00000b"
+	leapSecond := "20161231235960.000000Z#000001#001#000001"
+	entry := directory.Entry{
+		DN: "dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("domain")},
+			{Description: "dc", Values: byteValues("example")},
+			{Description: "entryCSN", Values: byteValues(modern)},
+			{
+				Description: "contextCSN",
+				Values:      byteValues(modern, legacy, leapSecond),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(entry); err != nil {
+		t.Fatalf("ValidateEntry(valid CSNs): %v", err)
+	}
+
+	comparison, err := registry.Compare(
+		"contextCSN",
+		"",
+		[]byte(legacy),
+		[]byte("20260730010101.000000Z#00000a#001#00000b"),
+	)
+	if err != nil || comparison != 0 {
+		t.Fatalf("legacy CSN equality = %d, %v", comparison, err)
+	}
+	comparison, err = registry.CompareOrdering(
+		"contextCSN",
+		"",
+		[]byte(modern),
+		[]byte(legacy),
+	)
+	if err != nil || comparison <= 0 {
+		t.Fatalf("CSN ordering = %d, %v", comparison, err)
+	}
+	comparison, err = registry.CompareOrdering(
+		"contextCSN",
+		"",
+		[]byte(leapSecond),
+		[]byte("20170101000000.000000Z#000001#001#000001"),
+	)
+	if err != nil || comparison >= 0 {
+		t.Fatalf("leap-second CSN ordering = %d, %v", comparison, err)
+	}
+
+	for _, malformed := range []string{
+		"20260730010101.000001Z#+00001#001#00000b",
+		"20260730010101.000001Z#000001#0+1#00000b",
+		"20260730010101.000001Z#000001#001#0000+1",
+		"20260730010101.00001Z#000001#001#000001",
+		"20260230010101.000001Z#000001#001#000001",
+	} {
+		invalid := entry.Clone()
+		invalid.ReplaceValues("contextCSN", byteValues(malformed))
+		assertViolation(t, registry.ValidateEntry(invalid), ViolationSyntax)
+	}
+}

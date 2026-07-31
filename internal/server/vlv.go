@@ -347,6 +347,14 @@ func (server *Server) virtualListViewEntries(
 			if err != nil {
 				return err
 			}
+			entry, err = withSyncProviderContextCSNs(
+				reader,
+				*database,
+				entry,
+			)
+			if err != nil {
+				return err
+			}
 			if !server.allowed(
 				state.runtime,
 				tx,

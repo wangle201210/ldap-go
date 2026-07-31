@@ -191,17 +191,23 @@ func syncUUIDFromEntry(entry directory.Entry) (ldapwire.SyncUUID, error) {
 	return uuid, nil
 }
 
-func stripSyncCollectiveAttributes(
+func stripSyncExcludedAttributes(
 	registry *schema.Registry,
 	entry directory.Entry,
 ) directory.Entry {
-	if registry.EntryHasObjectClass(entry, "collectiveAttributeSubentry") {
-		return entry
-	}
+	collectiveSource := registry.EntryHasObjectClass(
+		entry,
+		"collectiveAttributeSubentry",
+	)
 	filtered := entry.Clone()
-	filtered.Attributes = filtered.Attributes[:0]
-	for _, attribute := range entry.Clone().Attributes {
-		if registry.IsCollective(attribute.Description) {
+	attributes := filtered.Attributes
+	filtered.Attributes = attributes[:0]
+	for _, attribute := range attributes {
+		attributeType, known := registry.AttributeType(attribute.Description)
+		if known && attributeType.Usage == schema.UsageDSAOperation {
+			continue
+		}
+		if !collectiveSource && registry.IsCollective(attribute.Description) {
 			continue
 		}
 		filtered.Attributes = append(filtered.Attributes, attribute)
@@ -619,7 +625,7 @@ func (server *Server) syncEventEntry(
 		acl.Read,
 		request.TypesOnly,
 	)
-	readable = stripSyncCollectiveAttributes(runtime.schema, readable)
+	readable = stripSyncExcludedAttributes(runtime.schema, readable)
 	selected := server.selectEntry(
 		runtime,
 		readable,

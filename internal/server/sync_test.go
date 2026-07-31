@@ -90,6 +90,9 @@ func TestSyncRefreshOnlyInitialAndIncrementalRefresh(t *testing.T) {
 			entry.state.HasCookie {
 			t.Fatalf("initial Sync entry = %#v", entry)
 		}
+		if syncContainsString(entry.attributeNames, "contextCSN") {
+			t.Fatalf("Sync entry exposed contextCSN: %#v", entry)
+		}
 	}
 	initialCookie := bytes.Clone(initial.done.Cookie)
 
@@ -131,6 +134,144 @@ func TestSyncRefreshOnlyInitialAndIncrementalRefresh(t *testing.T) {
 		bytes.Equal(incremental.done.Cookie, initialCookie) {
 		t.Fatalf("incremental Sync refresh = %#v", incremental)
 	}
+}
+
+func TestSyncProviderPublishesOperationalContextCSN(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSyncProviderDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer stop()
+
+	client := dialLDAPRoot(t, address)
+	defer client.Close()
+	searchContext := func(attributes ...string) *ldap.Entry {
+		t.Helper()
+		result, err := client.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			attributes,
+			nil,
+		))
+		if err != nil {
+			t.Fatalf("Search(contextCSN): %v", err)
+		}
+		if len(result.Entries) != 1 {
+			t.Fatalf("Search(contextCSN) entries = %#v", result.Entries)
+		}
+		return result.Entries[0]
+	}
+
+	initialEntry := searchContext("contextCSN")
+	initial := initialEntry.GetAttributeValues("contextCSN")
+	if len(initial) != 1 {
+		t.Fatalf("initial contextCSN = %q", initial)
+	}
+	storedInitial := readStoredEntry(t, store, "dc=example,dc=com")
+	if values := storedInitial.Values("contextCSN"); len(values) != 1 ||
+		string(values[0]) != initial[0] {
+		t.Fatalf("stored initial contextCSN = %q, want %q", values, initial)
+	}
+
+	connection := dialAndBindRawLDAP(
+		t,
+		address,
+		syncTestRootDN,
+		syncTestRootPassword,
+	)
+	defer connection.Close()
+	response := sendRawLDAPOperation(
+		t,
+		connection,
+		2,
+		rawModifyReplaceRequest(
+			"dc=example,dc=com",
+			"description",
+			"updated sync context",
+		),
+		rawReadControl(preReadControlOID, true, "contextCSN"),
+		rawReadControl(postReadControlOID, true, "contextCSN"),
+	)
+	assertRawLDAPResult(t, response, int64(ldap.LDAPResultSuccess))
+	preRead := singleRawValue(
+		t,
+		rawReadControlEntry(t, response, preReadControlOID),
+		"contextCSN",
+	)
+	postRead := singleRawValue(
+		t,
+		rawReadControlEntry(t, response, postReadControlOID),
+		"contextCSN",
+	)
+	if preRead != initial[0] || postRead == preRead {
+		t.Fatalf(
+			"contextCSN read controls = pre %q, post %q, initial %q",
+			preRead,
+			postRead,
+			initial,
+		)
+	}
+
+	if err := client.Del(ldap.NewDelRequest(
+		"ou=archive,dc=example,dc=com",
+		nil,
+	)); err != nil {
+		t.Fatalf("Delete(archive): %v", err)
+	}
+	operational := searchContext("+")
+	current := operational.GetAttributeValues("contextCSN")
+	if len(current) != 1 || current[0] == postRead {
+		t.Fatalf("current contextCSN = %q, post-read %q", current, postRead)
+	}
+	if userAttributes := searchContext("*"); len(
+		userAttributes.GetAttributeValues("contextCSN"),
+	) != 0 {
+		t.Fatalf("contextCSN returned by *: %#v", userAttributes)
+	}
+
+	matched, err := client.Compare(
+		"dc=example,dc=com",
+		"contextCSN",
+		current[0],
+	)
+	if err != nil || !matched {
+		t.Fatalf("Compare(current contextCSN) = %t, %v", matched, err)
+	}
+	matched, err = client.Compare(
+		"dc=example,dc=com",
+		"contextCSN",
+		initial[0],
+	)
+	if err != nil || matched {
+		t.Fatalf("Compare(stale contextCSN) = %t, %v", matched, err)
+	}
+
+	storedAfter := readStoredEntry(t, store, "dc=example,dc=com")
+	if values := storedAfter.Values("contextCSN"); len(values) != 1 ||
+		string(values[0]) != initial[0] {
+		t.Fatalf(
+			"stored contextCSN was rewritten = %q, want static %q",
+			values,
+			initial,
+		)
+	}
+	modifyContext := ldap.NewModifyRequest("dc=example,dc=com", nil)
+	modifyContext.Replace("contextCSN", current)
+	assertLDAPResultCode(
+		t,
+		client.Modify(modifyContext),
+		ldap.LDAPResultConstraintViolation,
+	)
 }
 
 func TestOpenLDAPLDAPSearchSyncInteroperability(t *testing.T) {
@@ -633,6 +774,43 @@ func TestSyncControlValidationAndDatabaseConfiguration(t *testing.T) {
 		compareOpenLDAPCSN(parsedCookie.csns[1], second) != 0 {
 		t.Fatalf("parsed multi-SID cookie = %#v from %q", parsedCookie, cookie)
 	}
+
+	legacy, err := parseOpenLDAPCSN(
+		"20260730010101Z#00000A#01#00000B",
+	)
+	if err != nil {
+		t.Fatalf("parse OpenLDAP 2.3 CSN: %v", err)
+	}
+	if legacy.raw != "20260730010101.000000Z#00000a#001#00000b" ||
+		legacy.serverID != 1 {
+		t.Fatalf("normalized OpenLDAP 2.3 CSN = %#v", legacy)
+	}
+	leapSecond, err := parseOpenLDAPCSN(
+		"20161231235960.000000Z#000001#001#000001",
+	)
+	if err != nil ||
+		leapSecond.raw != "20161231235960.000000Z#000001#001#000001" {
+		t.Fatalf("parse leap-second CSN = %#v, %v", leapSecond, err)
+	}
+	afterLeapSecond, err := parseOpenLDAPCSN(
+		"20170101000000.000000Z#000001#001#000001",
+	)
+	if err != nil || compareOpenLDAPCSN(leapSecond, afterLeapSecond) >= 0 {
+		t.Fatalf(
+			"leap-second ordering = %d, %v",
+			compareOpenLDAPCSN(leapSecond, afterLeapSecond),
+			err,
+		)
+	}
+	for _, malformed := range []string{
+		"20260730010101.000001Z#+00001#001#000001",
+		"20260730010101.000001Z#000001#0+1#000001",
+		" 20260730010101.000001Z#000001#001#000001",
+	} {
+		if _, err := parseOpenLDAPCSN(malformed); err == nil {
+			t.Fatalf("parseOpenLDAPCSN(%q) succeeded", malformed)
+		}
+	}
 }
 
 func TestSyncProviderConfigurationRejectsInvalidOverlay(t *testing.T) {
@@ -790,6 +968,7 @@ type rawSyncRefresh struct {
 type rawSyncEntry struct {
 	dn             string
 	attributeCount int
+	attributeNames []string
 	state          ldapwire.SyncStateValue
 }
 
@@ -882,6 +1061,20 @@ func readRawSyncMessage(
 		if len(operation.Children) != 2 {
 			t.Fatalf("malformed SearchResultEntry: %#v", operation)
 		}
+		attributeNames := make(
+			[]string,
+			0,
+			len(operation.Children[1].Children),
+		)
+		for _, attribute := range operation.Children[1].Children {
+			if len(attribute.Children) != 2 {
+				t.Fatalf("malformed PartialAttribute: %#v", attribute)
+			}
+			attributeNames = append(
+				attributeNames,
+				string(attribute.Children[0].Data.Bytes()),
+			)
+		}
 		control := rawLDAPResponseControl(t, packet, syncStateControlOID)
 		state, err := ldapwire.DecodeSyncStateValue(control)
 		if err != nil {
@@ -890,6 +1083,7 @@ func readRawSyncMessage(
 		message.entry = &rawSyncEntry{
 			dn:             string(operation.Children[0].Data.Bytes()),
 			attributeCount: len(operation.Children[1].Children),
+			attributeNames: attributeNames,
 			state:          state,
 		}
 	case ldapwire.ApplicationIntermediateResponse:

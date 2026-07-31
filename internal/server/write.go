@@ -27,9 +27,11 @@ var protectedOperationalAttributes = map[string]string{
 	"2.5.21.9":                      "structuralObjectClass",
 	"1.3.6.1.1.16.4":                "entryUUID",
 	"1.3.6.1.4.1.4203.666.1.7":      "entryCSN",
+	"1.3.6.1.4.1.4203.666.1.25":     "contextCSN",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
+	"contextcsn":                    "contextCSN",
 	"entrycsn":                      "entryCSN",
 	"entryuuid":                     "entryUUID",
 	"modifiersname":                 "modifiersName",
@@ -1251,6 +1253,14 @@ func (server *Server) handleCompare(
 				return getErr
 			}
 			entry = withSubschemaReference(entry)
+			entry, getErr = withSyncProviderContextCSNs(
+				reader,
+				*database,
+				entry,
+			)
+			if getErr != nil {
+				return getErr
+			}
 			entry, getErr = withCollectiveAttributes(
 				state.runtime.schema,
 				tx,

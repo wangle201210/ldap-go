@@ -120,6 +120,13 @@ snapshot plus present UUIDs, so reconnects recover deletions without relying
 on process-local history; refresh-and-persist consumes the stream after
 subscribing before its snapshot.
 
+The provider projects the current, SID-sorted context vector as a dynamic
+`contextCSN` operational attribute on the first database suffix for ordinary
+Search, Compare, and read controls. This replaces stale imported checkpoint
+values in responses without rewriting them. Sync responses omit
+`dSAOperation` attributes so provider-local state is not replicated as entry
+content.
+
 A durable ordered accesslog, delta-syncrepl replay, and the syncrepl consumer
 remain future layers. They must not treat the current process-local stream as a
 crash-recovery log.

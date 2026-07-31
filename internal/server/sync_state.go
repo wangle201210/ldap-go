@@ -24,11 +24,12 @@ const (
 )
 
 type openLDAPCSN struct {
-	timestamp time.Time
-	counter   uint32
-	serverID  uint16
-	modifier  uint32
-	raw       string
+	timestamp    time.Time
+	timestampRaw string
+	counter      uint32
+	serverID     uint16
+	modifier     uint32
+	raw          string
 }
 
 type openLDAPSyncCookie struct {
@@ -115,17 +116,26 @@ func (subscription *syncChangeSubscription) unsubscribe() {
 }
 
 func parseOpenLDAPCSN(value string) (openLDAPCSN, error) {
-	value = strings.TrimSpace(value)
 	parts := strings.Split(value, "#")
 	if len(parts) != 4 ||
 		len(parts[1]) != 6 ||
-		len(parts[2]) != 3 ||
+		(len(parts[2]) != 2 && len(parts[2]) != 3) ||
 		len(parts[3]) != 6 {
 		return openLDAPCSN{}, fmt.Errorf("invalid CSN %q", value)
 	}
-	timestamp, err := time.Parse("20060102150405.000000Z", parts[0])
+	timestamp, timestampRaw, err := parseOpenLDAPCSNTimestamp(parts[0])
 	if err != nil {
 		return openLDAPCSN{}, fmt.Errorf("invalid CSN timestamp %q", value)
+	}
+	for _, field := range parts[1:] {
+		for index := range field {
+			if !isOpenLDAPHexDigit(field[index]) {
+				return openLDAPCSN{}, fmt.Errorf(
+					"invalid CSN hexadecimal field %q",
+					value,
+				)
+			}
+		}
 	}
 	counter, err := strconv.ParseUint(parts[1], 16, 24)
 	if err != nil {
@@ -140,19 +150,80 @@ func parseOpenLDAPCSN(value string) (openLDAPCSN, error) {
 		return openLDAPCSN{}, fmt.Errorf("invalid CSN modifier %q", value)
 	}
 	return openLDAPCSN{
-		timestamp: timestamp,
-		counter:   uint32(counter),
-		serverID:  uint16(serverID),
-		modifier:  uint32(modifier),
-		raw:       value,
+		timestamp:    timestamp,
+		timestampRaw: timestampRaw,
+		counter:      uint32(counter),
+		serverID:     uint16(serverID),
+		modifier:     uint32(modifier),
+		raw: fmt.Sprintf(
+			"%s#%06x#%03x#%06x",
+			timestampRaw,
+			counter,
+			serverID,
+			modifier,
+		),
 	}, nil
+}
+
+func parseOpenLDAPCSNTimestamp(value string) (time.Time, string, error) {
+	var fraction string
+	switch len(value) {
+	case len("20060102150405Z"):
+		if value[len(value)-1] != 'Z' {
+			return time.Time{}, "", errors.New("CSN timestamp is not UTC")
+		}
+		fraction = "000000"
+	case len("20060102150405.000000Z"):
+		if (value[14] != '.' && value[14] != ',') ||
+			value[len(value)-1] != 'Z' {
+			return time.Time{}, "", errors.New("invalid CSN timestamp delimiter")
+		}
+		fraction = value[15 : len(value)-1]
+		for index := range fraction {
+			if fraction[index] < '0' || fraction[index] > '9' {
+				return time.Time{}, "", errors.New(
+					"invalid CSN timestamp fraction",
+				)
+			}
+		}
+	default:
+		return time.Time{}, "", errors.New("invalid CSN timestamp length")
+	}
+	base := value[:14]
+	for index := range base {
+		if base[index] < '0' || base[index] > '9' {
+			return time.Time{}, "", errors.New("invalid CSN timestamp digit")
+		}
+	}
+	parseBase := base
+	leapSecond := base[12:] == "60"
+	if leapSecond {
+		parseBase = base[:12] + "59"
+	}
+	timestamp, err := time.Parse(
+		"20060102150405.000000Z",
+		parseBase+"."+fraction+"Z",
+	)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	if leapSecond {
+		timestamp = timestamp.Add(time.Second)
+	}
+	return timestamp, base + "." + fraction + "Z", nil
+}
+
+func isOpenLDAPHexDigit(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'a' && value <= 'f' ||
+		value >= 'A' && value <= 'F'
 }
 
 func compareOpenLDAPCSN(left, right openLDAPCSN) int {
 	switch {
-	case left.timestamp.Before(right.timestamp):
+	case left.timestampRaw < right.timestampRaw:
 		return -1
-	case left.timestamp.After(right.timestamp):
+	case left.timestampRaw > right.timestampRaw:
 		return 1
 	case left.counter < right.counter:
 		return -1
@@ -233,6 +304,15 @@ func composeOpenLDAPSyncCookie(rid int, state syncCSNState) []byte {
 	if len(state) == 0 {
 		return []byte(fmt.Sprintf("rid=%03d", rid))
 	}
+	rawCSNs := orderedSyncCSNs(state)
+	return []byte(fmt.Sprintf(
+		"rid=%03d,csn=%s",
+		rid,
+		strings.Join(rawCSNs, ";"),
+	))
+}
+
+func orderedSyncCSNs(state syncCSNState) []string {
 	serverIDs := make([]int, 0, len(state))
 	for serverID := range state {
 		serverIDs = append(serverIDs, int(serverID))
@@ -242,16 +322,40 @@ func composeOpenLDAPSyncCookie(rid int, state syncCSNState) []byte {
 	for _, serverID := range serverIDs {
 		rawCSNs = append(rawCSNs, state[uint16(serverID)].raw)
 	}
-	return []byte(fmt.Sprintf(
-		"rid=%03d,csn=%s",
-		rid,
-		strings.Join(rawCSNs, ";"),
-	))
+	return rawCSNs
 }
 
 func syncContextCSNMetadataKey(partition string) string {
 	return syncContextCSNMetadataPrefix +
 		base64.RawURLEncoding.EncodeToString([]byte(partition))
+}
+
+func withSyncProviderContextCSNs(
+	reader storage.Reader,
+	database runtimeDatabase,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	if !database.syncProvider || len(database.suffixes) == 0 {
+		return entry, nil
+	}
+	entryDN, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if !database.suffixes[0].Equal(entryDN) {
+		return entry, nil
+	}
+	state, err := syncContextCSNs(reader, database.partition)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	values := make([][]byte, 0, len(state))
+	for _, rawCSN := range orderedSyncCSNs(state) {
+		values = append(values, []byte(rawCSN))
+	}
+	entry = entry.Clone()
+	entry.ReplaceValues("contextCSN", values)
+	return entry, nil
 }
 
 func syncContextCSNs(

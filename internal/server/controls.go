@@ -438,6 +438,18 @@ func (server *Server) readResponseControl(
 	if err != nil {
 		return nil, err
 	}
+	if dn, parseErr := directory.ParseDN(entry.DN); parseErr == nil {
+		if database := databaseForDN(runtime, dn); database != nil {
+			entry, err = withSyncProviderContextCSNs(
+				reader,
+				*database,
+				entry,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	if !server.allowed(
 		runtime,
 		reader,

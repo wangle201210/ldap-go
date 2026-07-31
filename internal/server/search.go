@@ -960,6 +960,15 @@ func (server *Server) handleSearch(
 						)
 						return nil
 					}
+				} else {
+					entry, err = withSyncProviderContextCSNs(
+						reader,
+						*database,
+						entry,
+					)
+					if err != nil {
+						return err
+					}
 				}
 				readable := server.attributesWithPrivilege(
 					state.runtime,
@@ -970,7 +979,7 @@ func (server *Server) handleSearch(
 					request.TypesOnly && !sorting.active(),
 				)
 				if syncSearch != nil {
-					readable = stripSyncCollectiveAttributes(
+					readable = stripSyncExcludedAttributes(
 						state.runtime.schema,
 						readable,
 					)
@@ -1284,6 +1293,14 @@ func (server *Server) continueSortedPagedSearch(
 			}
 			entry = withSubschemaReference(entry)
 			entry, err = collectivePlans.apply(database.partition, tx, entry)
+			if err != nil {
+				return err
+			}
+			entry, err = withSyncProviderContextCSNs(
+				reader,
+				*database,
+				entry,
+			)
 			if err != nil {
 				return err
 			}

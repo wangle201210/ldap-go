@@ -47,7 +47,7 @@ No row may become `compatible` based only on unit tests.
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | planned | RFC 6171 topology tests |
-| LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present sets, cancellation, restart, and OpenLDAP 2.6.13 ldapsearch pass |
+| LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present sets, dynamic contextCSN, cancellation, restart, and OpenLDAP 2.6.13 ldapsearch pass |
 | OpenLDAP transaction extension | planned | multi-operation atomicity tests |
 | Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
 
@@ -109,7 +109,7 @@ rebuilt by `ldap-go`.
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
-| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, durable contextCSN, and OpenLDAP CLI interoperability pass |
+| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, durable and dynamically published contextCSN, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
 | valsort | planned | value sorting tests |
@@ -272,6 +272,16 @@ The local SID 000 context is committed atomically with each successful
 Add/Modify/Password Modify/Delete/ModifyDN and survives restart, including
 delete-only progress.
 
+For ordinary operations, the provider dynamically replaces any stored
+`contextCSN` copy on the first database suffix with the current, SID-sorted
+vector. Search exposes it when explicitly requested or selected by `+`;
+Compare and RFC 4527 pre/post-read controls use the same live value. `*` does
+not select it, and clients cannot add or modify it. RFC 4533 responses strip
+`dSAOperation` attributes, including `contextCSN`, so provider-local state is
+not synchronized as entry content. The built-in OpenLDAP CSN syntax validates
+both `entryCSN` and `contextCSN`, including normalization of the OpenLDAP 2.3
+no-fraction/two-digit-SID form.
+
 `refreshAndPersist` subscribes before taking its refresh snapshot, then emits
 full add/modify entries, empty delete entries, and new-cookie intermediate
 responses for changes outside the filter. Filter-entry and filter-exit
@@ -284,8 +294,8 @@ process-level interoperability test.
 
 This provider does not yet implement the `olcSpCheckpoint`,
 `olcSpSessionlog`, `olcSpNoPresent`, or `olcSpReloadHint` variants,
-server-side sort/VLV combinations, operational `contextCSN` synthesis,
-accesslog replay, delta-syncrepl, or a full `slapd` syncrepl topology
+server-side sort/VLV combinations, accesslog replay, delta-syncrepl, the
+optional sync-provider subentry context, or a full `slapd` syncrepl topology
 differential. The syncrepl consumer is also still planned, so the rows remain
 `partial`.
 

@@ -1117,8 +1117,85 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 				return errors.New("value is not generalized time")
 			}
 		}
+	case SyntaxCSN:
+		if _, ok := normalizeCSN(value); !ok {
+			return errors.New("value is not a CSN")
+		}
 	}
 	return nil
+}
+
+func normalizeCSN(value []byte) (string, bool) {
+	parts := strings.Split(string(value), "#")
+	if len(parts) != 4 ||
+		len(parts[1]) != 6 ||
+		(len(parts[2]) != 2 && len(parts[2]) != 3) ||
+		len(parts[3]) != 6 {
+		return "", false
+	}
+	timestamp, ok := normalizeCSNTimestamp(parts[0])
+	if !ok {
+		return "", false
+	}
+	for _, field := range parts[1:] {
+		for index := range field {
+			if !isHexDigit(field[index]) {
+				return "", false
+			}
+		}
+	}
+	sid := strings.ToLower(parts[2])
+	if len(sid) == 2 {
+		sid = "0" + sid
+	}
+	return timestamp +
+		"#" + strings.ToLower(parts[1]) +
+		"#" + sid +
+		"#" + strings.ToLower(parts[3]), true
+}
+
+func normalizeCSNTimestamp(value string) (string, bool) {
+	var fraction string
+	switch len(value) {
+	case len("20060102150405Z"):
+		if value[len(value)-1] != 'Z' {
+			return "", false
+		}
+		fraction = "000000"
+	case len("20060102150405.000000Z"):
+		if (value[14] != '.' && value[14] != ',') ||
+			value[len(value)-1] != 'Z' {
+			return "", false
+		}
+		fraction = value[15 : len(value)-1]
+		for index := range fraction {
+			if fraction[index] < '0' || fraction[index] > '9' {
+				return "", false
+			}
+		}
+	default:
+		return "", false
+	}
+	base := value[:14]
+	for index := range base {
+		if base[index] < '0' || base[index] > '9' {
+			return "", false
+		}
+	}
+	parseBase := base
+	if base[12:] == "60" {
+		parseBase = base[:12] + "59"
+	}
+	if _, err := time.Parse("20060102150405", parseBase); err != nil {
+		return "", false
+	}
+	return base + "." + fraction + "Z", true
+}
+
+func isHexDigit(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'a' && value <= 'f' ||
+		value >= 'A' && value <= 'F'
 }
 
 func compareWithRule(rule string, left, right []byte) (int, error) {
@@ -1175,9 +1252,15 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			return 0, errors.New("distinguishedNameMatch received invalid DN")
 		}
 		return strings.Compare(leftDN.Key(), rightDN.Key()), nil
-	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch",
-		"csnmatch", "csnorderingmatch":
+	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
+	case "csnmatch", "csnorderingmatch":
+		normalizedLeft, leftOK := normalizeCSN(left)
+		normalizedRight, rightOK := normalizeCSN(right)
+		if !leftOK || !rightOK {
+			return 0, errors.New("CSN matching received an invalid value")
+		}
+		return strings.Compare(normalizedLeft, normalizedRight), nil
 	default:
 		return 0, fmt.Errorf("unsupported matching rule %q", rule)
 	}

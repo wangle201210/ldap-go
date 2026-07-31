@@ -20,6 +20,7 @@ const (
 	SyntaxTelephoneNumber      = "1.3.6.1.4.1.1466.115.121.1.50"
 	SyntaxTelexNumber          = "1.3.6.1.4.1.1466.115.121.1.52"
 	SyntaxUUID                 = "1.3.6.1.1.16.1"
+	SyntaxCSN                  = "1.3.6.1.4.1.4203.666.11.2.1"
 )
 
 func NewBuiltinRegistry() (*Registry, error) {
@@ -92,7 +93,8 @@ var builtinAttributeTypes = []string{
 	"( 2.5.18.10 NAME 'subschemaSubentry' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.16.840.1.113730.3.1.34 NAME 'ref' DESC 'RFC3296: subordinate referral URL' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " USAGE distributedOperation )",
 	"( 1.3.6.1.1.16.4 NAME 'entryUUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX " + SyntaxUUID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
-	"( 1.3.6.1.4.1.4203.666.1.7 NAME 'entryCSN' EQUALITY CSNMatch ORDERING CSNOrderingMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 1.3.6.1.4.1.4203.666.1.7 NAME 'entryCSN' DESC 'change sequence number of the entry content' EQUALITY CSNMatch ORDERING CSNOrderingMatch SYNTAX " + SyntaxCSN + "{64} SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 1.3.6.1.4.1.4203.666.1.25 NAME 'contextCSN' DESC 'the largest committed CSN of a context' EQUALITY CSNMatch ORDERING CSNOrderingMatch SYNTAX " + SyntaxCSN + "{64} NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.120.5 NAME 'namingContexts' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.120.15 NAME 'supportedLDAPVersion' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " USAGE dSAOperation )",
 	"( 1.3.6.1.1.4 NAME 'vendorName' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE USAGE dSAOperation )",
