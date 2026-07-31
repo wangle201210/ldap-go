@@ -1250,9 +1250,10 @@ func (server *Server) handleCompare(
 	message ldapwire.Message,
 	request ldapwire.CompareRequest,
 ) error {
-	controls, controlFailure := parseRequestControls(
+	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
 		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy,
+		state.runtime.disallows,
 	)
 	if controlFailure != nil {
 		return server.writeOperationResult(

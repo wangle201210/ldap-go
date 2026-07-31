@@ -16,14 +16,32 @@ import (
 var configurationSuffix = staticRuntimeDN("cn=config")
 
 type runtimeState struct {
-	schema                *schema.Registry
-	access                *acl.Policy
-	databases             []runtimeDatabase
-	serverID              uint16
-	allowAnonymousUpdates bool
-	passwordHashSchemes   []string
-	sasl                  saslRuntimeConfiguration
-	syncContexts          map[string]syncCSNState
+	schema              *schema.Registry
+	access              *acl.Policy
+	databases           []runtimeDatabase
+	serverID            uint16
+	allows              allowsRuntimeConfiguration
+	disallows           disallowsRuntimeConfiguration
+	passwordHashSchemes []string
+	sasl                saslRuntimeConfiguration
+	syncContexts        map[string]syncCSNState
+}
+
+type allowsRuntimeConfiguration struct {
+	bindV2                   bool
+	bindAnonymousCredentials bool
+	bindAnonymousDN          bool
+	anonymousUpdates         bool
+	anonymousProxyAuthz      bool
+}
+
+type disallowsRuntimeConfiguration struct {
+	anonymousBind                 bool
+	simpleBind                    bool
+	tlsToAnonymous                bool
+	tlsAuthenticated              bool
+	noncriticalProxyAuthorization bool
+	noncriticalDontUseCopy        bool
 }
 
 func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, error) {
@@ -57,7 +75,11 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 			)
 		}
 	}
-	allowAnonymousUpdates, err := loadAnonymousUpdateAllowance(reader)
+	allows, err := loadAllowsRuntimeConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
+	disallows, err := loadDisallowsRuntimeConfiguration(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -79,13 +101,14 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		}
 	}
 	return &runtimeState{
-		schema:                registry,
-		access:                access,
-		databases:             databases,
-		serverID:              serverID,
-		allowAnonymousUpdates: allowAnonymousUpdates,
-		passwordHashSchemes:   passwordHashSchemes,
-		sasl:                  sasl,
+		schema:              registry,
+		access:              access,
+		databases:           databases,
+		serverID:            serverID,
+		allows:              allows,
+		disallows:           disallows,
+		passwordHashSchemes: passwordHashSchemes,
+		sasl:                sasl,
 	}, nil
 }
 
@@ -152,25 +175,36 @@ func loadPasswordHashSchemes(reader storage.Reader) ([]string, error) {
 	return schemes, nil
 }
 
-func loadAnonymousUpdateAllowance(reader storage.Reader) (bool, error) {
+func loadAllowsRuntimeConfiguration(
+	reader storage.Reader,
+) (allowsRuntimeConfiguration, error) {
 	entry, err := reader.Get(configurationSuffix)
 	if errors.Is(err, storage.ErrEntryNotFound) {
-		return false, nil
+		return allowsRuntimeConfiguration{}, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("load global configuration: %w", err)
+		return allowsRuntimeConfiguration{}, fmt.Errorf(
+			"load global configuration: %w",
+			err,
+		)
 	}
 
-	allowAnonymousUpdates := false
+	var configuration allowsRuntimeConfiguration
 	for _, rawValue := range entry.Values("olcAllows") {
 		for _, feature := range strings.Fields(string(rawValue)) {
 			switch strings.ToLower(feature) {
+			case "bind_v2":
+				configuration.bindV2 = true
+			case "bind_anon_cred":
+				configuration.bindAnonymousCredentials = true
+			case "bind_anon_dn":
+				configuration.bindAnonymousDN = true
 			case "update_anon":
-				allowAnonymousUpdates = true
-			case "bind_v2", "bind_anon_cred", "bind_anon_dn", "proxy_authz_anon":
-				// These OpenLDAP features do not alter update authorization.
+				configuration.anonymousUpdates = true
+			case "proxy_authz_anon":
+				configuration.anonymousProxyAuthz = true
 			default:
-				return false, fmt.Errorf(
+				return allowsRuntimeConfiguration{}, fmt.Errorf(
 					"%s olcAllows has unknown feature %q",
 					entry.DN,
 					feature,
@@ -178,7 +212,49 @@ func loadAnonymousUpdateAllowance(reader storage.Reader) (bool, error) {
 			}
 		}
 	}
-	return allowAnonymousUpdates, nil
+	return configuration, nil
+}
+
+func loadDisallowsRuntimeConfiguration(
+	reader storage.Reader,
+) (disallowsRuntimeConfiguration, error) {
+	entry, err := reader.Get(configurationSuffix)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return disallowsRuntimeConfiguration{}, nil
+	}
+	if err != nil {
+		return disallowsRuntimeConfiguration{}, fmt.Errorf(
+			"load global configuration: %w",
+			err,
+		)
+	}
+
+	var configuration disallowsRuntimeConfiguration
+	for _, rawValue := range entry.Values("olcDisallows") {
+		for _, feature := range strings.Fields(string(rawValue)) {
+			switch strings.ToLower(feature) {
+			case "bind_anon":
+				configuration.anonymousBind = true
+			case "bind_simple":
+				configuration.simpleBind = true
+			case "tls_2_anon":
+				configuration.tlsToAnonymous = true
+			case "tls_authc":
+				configuration.tlsAuthenticated = true
+			case "proxy_authz_non_critical":
+				configuration.noncriticalProxyAuthorization = true
+			case "dontusecopy_non_critical":
+				configuration.noncriticalDontUseCopy = true
+			default:
+				return disallowsRuntimeConfiguration{}, fmt.Errorf(
+					"%s olcDisallows has unknown feature %q",
+					entry.DN,
+					feature,
+				)
+			}
+		}
+	}
+	return configuration, nil
 }
 
 func updateOperationPrecondition(
@@ -186,7 +262,7 @@ func updateOperationPrecondition(
 	boundDN string,
 	target directory.DN,
 ) *ldapwire.Result {
-	if boundDN == "" && !runtime.allowAnonymousUpdates {
+	if boundDN == "" && !runtime.allows.anonymousUpdates {
 		result := ldapwire.ResultError(
 			ldapwire.ResultStrongerAuthRequired,
 			"modifications require authentication",

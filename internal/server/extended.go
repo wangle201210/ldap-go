@@ -105,6 +105,22 @@ func (server *Server) handleStartTLS(
 			nil,
 		))
 	}
+	if !state.runtime.disallows.tlsToAnonymous && state.boundDN != "" {
+		state.boundDN = ""
+		clearSASLSession(state)
+		clearSearchSessions(state)
+	}
+	if state.runtime.disallows.tlsAuthenticated && state.boundDN != "" {
+		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultOperationsError,
+				"cannot start TLS after authentication",
+			),
+			nil,
+		))
+	}
 	if server.secureTransport == nil {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
@@ -125,7 +141,6 @@ func (server *Server) handleStartTLS(
 		return err
 	}
 
-	state.boundDN = ""
 	clearSearchSessions(state)
 	secured, err := server.secureHandshake(ctx, state.connection)
 	if err != nil {

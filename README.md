@@ -65,7 +65,12 @@ RFC 6171 Don't Use Copy is available on Search and Compare. Authoritative
 databases answer normally; a single-provider shadow Search returns its
 OpenLDAP-rewritten `olcUpdateRef` or `unwillingToPerform`, while shadow Compare
 returns `unwillingToPerform` without consulting copied entry data. OpenLDAP
-`ldapsearch -E '!dontUseCopy'` and raw slapd differential cases pass.
+`ldapsearch -E '!dontUseCopy'` and raw slapd differential cases pass. Imported
+global `olcDisallows` policies enforce `bind_anon`, `bind_simple`,
+`tls_2_anon`, `tls_authc`, and `dontusecopy_non_critical`; the related
+`olcAllows` LDAPv2, anonymous-DN, and anonymous-credential Bind exceptions
+follow OpenLDAP's precedence. Online changes, invalid-value rollback, restart,
+and slapd differential cases pass.
 RFC 2589 dynamic directory services are enabled by an imported
 `olcOverlay=dds`. Dynamic Add generates `entryTtl` and the OpenLDAP
 `entryExpireTimestamp`, Refresh enforces configured min/max TTL and `manage`

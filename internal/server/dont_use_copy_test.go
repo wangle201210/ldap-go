@@ -70,6 +70,29 @@ func TestParseDontUseCopyControl(t *testing.T) {
 		failure.Code != ldapwire.ResultUnavailableCriticalExtension {
 		t.Fatalf("inappropriate dontUseCopy result = %#v", failure)
 	}
+
+	_, failure = parseRequestControlsWithDisallows(
+		[]ldapwire.Control{{OID: dontUseCopyControlOID}},
+		supportsDontUseCopy,
+		disallowsRuntimeConfiguration{noncriticalDontUseCopy: true},
+	)
+	if failure == nil ||
+		failure.Code != ldapwire.ResultProtocolError ||
+		failure.DiagnosticMessage !=
+			"dontUseCopy criticality of FALSE not allowed" {
+		t.Fatalf("noncritical dontUseCopy result = %#v", failure)
+	}
+	parsed, failure := parseRequestControlsWithDisallows(
+		[]ldapwire.Control{{
+			OID:      dontUseCopyControlOID,
+			Critical: true,
+		}},
+		supportsDontUseCopy,
+		disallowsRuntimeConfiguration{noncriticalDontUseCopy: true},
+	)
+	if failure != nil || !parsed.dontUseCopy {
+		t.Fatalf("critical dontUseCopy result = %#v, %#v", parsed, failure)
+	}
 }
 
 func TestLDAPDontUseCopyDiscoveryAndAuthoritativeSearch(t *testing.T) {

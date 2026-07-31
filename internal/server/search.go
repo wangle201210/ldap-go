@@ -37,9 +37,10 @@ func (server *Server) handleSearch(
 	if runtimeSupportsSyncProvider(state.runtime.databases) {
 		controlSupport |= supportsSync
 	}
-	controls, controlFailure := parseRequestControls(
+	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
 		controlSupport,
+		state.runtime.disallows,
 	)
 	if controlFailure != nil {
 		return server.writeSearchDone(

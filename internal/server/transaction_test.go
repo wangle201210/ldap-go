@@ -926,6 +926,13 @@ func rawExtendedResponseValue(response *ber.Packet) ([]byte, bool) {
 }
 
 func rawSimpleBindRequest(dn, password string) *ber.Packet {
+	return rawSimpleBindRequestVersion(3, dn, password)
+}
+
+func rawSimpleBindRequestVersion(
+	version int64,
+	dn, password string,
+) *ber.Packet {
 	request := ber.Encode(
 		ber.ClassApplication,
 		ber.TypeConstructed,
@@ -937,7 +944,7 @@ func rawSimpleBindRequest(dn, password string) *ber.Packet {
 		ber.ClassUniversal,
 		ber.TypePrimitive,
 		ber.TagInteger,
-		int64(3),
+		version,
 		"version",
 	))
 	request.AppendChild(rawOctetString([]byte(dn)))

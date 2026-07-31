@@ -53,7 +53,7 @@ transaction, and replication differentials is enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceGlobalDisallows|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -69,6 +69,9 @@ slapd to verify the failed message ID and atomic rollback semantics.
 The Don't Use Copy cases run `ldapsearch -E '!dontUseCopy'` against a ldap-go
 shadow database and compare the same critical, non-critical, malformed,
 alias, referral, and Compare requests with the reference slapd.
+The global-disallow case compares anonymous and authenticated simple Bind plus
+critical and non-critical Don't Use Copy results and diagnostics against the
+same slapd configuration.
 The DDS cases run Add, live-TTL Search, Refresh, Modify, ModifyDN, object-count,
 disabled-overlay, and expiration-hierarchy checks against reference slapd.
 They also run OpenLDAP `ldapexop refresh` against ldap-go and verify the

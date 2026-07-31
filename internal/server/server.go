@@ -588,11 +588,37 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
-	if request.Version != 3 {
+	requestDN, err := directory.ParseDN(request.Name)
+	if err != nil {
 		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
-			ldapwire.ResultError(ldapwire.ResultProtocolError, "only LDAPv3 is supported"),
+			ldapwire.ResultError(
+				ldapwire.ResultInvalidDNSyntax,
+				"invalid DN",
+			),
+			nil,
+		))
+	}
+	switch {
+	case request.Version < 2 || request.Version > 3:
+		clearSASLSession(state)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"requested protocol version not supported",
+			),
+			nil,
+		))
+	case request.Version == 2 && !state.runtime.allows.bindV2:
+		clearSASLSession(state)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"historical protocol version requested, use LDAPv3 instead",
+			),
 			nil,
 		))
 	}
@@ -607,11 +633,55 @@ func (server *Server) handleBind(
 	}
 	clearSASLSession(state)
 
+	password := request.Authentication.Simple
+	anonymous := requestDN.Depth() == 0 || len(password) == 0
+	if anonymous {
+		var result ldapwire.Result
+		switch {
+		case requestDN.Depth() == 0 &&
+			len(password) != 0 &&
+			!state.runtime.allows.bindAnonymousCredentials:
+			result = ldapwire.ResultError(
+				ldapwire.ResultInvalidCredentials,
+				"",
+			)
+		case requestDN.Depth() != 0 &&
+			len(password) == 0 &&
+			!state.runtime.allows.bindAnonymousDN:
+			result = ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unauthenticated bind (DN with no password) disallowed",
+			)
+		case state.runtime.disallows.anonymousBind:
+			result = ldapwire.ResultError(
+				ldapwire.ResultInappropriateAuthentication,
+				"anonymous bind disallowed",
+			)
+		default:
+			result = ldapwire.Result{Code: ldapwire.ResultSuccess}
+		}
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			result,
+			nil,
+		))
+	}
+	if state.runtime.disallows.simpleBind {
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unwilling to perform simple authentication",
+			),
+			nil,
+		))
+	}
+
 	authenticated, err := server.authenticate(
 		ctx,
 		state.runtime,
 		request.Name,
-		request.Authentication.Simple,
+		password,
 	)
 	if err != nil {
 		return err

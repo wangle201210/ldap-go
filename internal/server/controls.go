@@ -69,6 +69,18 @@ func parseRequestControls(
 	controls []ldapwire.Control,
 	supported requestControlSupport,
 ) (requestControls, *ldapwire.Result) {
+	return parseRequestControlsWithDisallows(
+		controls,
+		supported,
+		disallowsRuntimeConfiguration{},
+	)
+}
+
+func parseRequestControlsWithDisallows(
+	controls []ldapwire.Control,
+	supported requestControlSupport,
+	disallows disallowsRuntimeConfiguration,
+) (requestControls, *ldapwire.Result) {
 	var parsed requestControls
 	for _, control := range controls {
 		switch control.OID {
@@ -288,6 +300,12 @@ func parseRequestControls(
 				return requestControls{}, controlResult(
 					ldapwire.ResultProtocolError,
 					"dontUseCopy control value not absent",
+				)
+			}
+			if disallows.noncriticalDontUseCopy && !control.Critical {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"dontUseCopy criticality of FALSE not allowed",
 				)
 			}
 			parsed.dontUseCopy = true

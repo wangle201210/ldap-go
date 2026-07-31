@@ -17,7 +17,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
-| Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
+| Bind: anonymous and simple | partial | RFC 4511/4513, `olcAllows` LDAPv2/anonymous forms, `olcDisallows`, and OpenLDAP differential tests pass |
 | Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, and multi-round SCRAM-SHA-1/256/512 pass; OpenLDAP 2.6.13 PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-256 `ldapwhoami` pass; GSSAPI, security layers, and full proxy authorization remain |
 | Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
@@ -35,7 +35,7 @@ No row may become `compatible` based only on unit tests.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| StartTLS | partial | RFC 4511/4513 state machine, TLS tests, and OpenLDAP differential |
+| StartTLS | partial | RFC 4511/4513 state machine plus OpenLDAP `tls_2_anon`/`tls_authc` identity ordering tests pass; broader slapd TLS differentials remain |
 | Password Modify | partial | RFC 3062 core passes; password policy integration remains |
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | partial | RFC 3909 BER, result, ordering, isolation, and OpenLDAP 2.6.13 differential tests pass |
@@ -46,7 +46,7 @@ No row may become `compatible` based only on unit tests.
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
-| Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining and `olcDisallows` remain |
+| Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining remains |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
 | LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; proxy authorization, generated passwords, server abort notices, and resource limits remain |
 | Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
@@ -220,8 +220,9 @@ limits remain pending.
 RFC 6171 Don't Use Copy is advertised in Root DSE and accepted on Search and
 Compare only. The control requires an absent value; duplicate or valued
 controls return `protocolError`. Matching OpenLDAP's default behavior,
-non-critical requests are also honored, while support for rejecting them
-through `olcDisallows: dontusecopy_non_critical` remains pending.
+non-critical requests are also honored unless
+`olcDisallows: dontusecopy_non_critical` rejects them with OpenLDAP's
+`protocolError` diagnostic.
 Authoritative databases, including writable multi-provider databases, answer
 normally. A single-provider shadow Search rejects before alias dereferencing,
 filtering, Sync setup, or other copied-data processing and returns a
@@ -746,9 +747,25 @@ restrictions run before ACL checks, and database root DNs do not bypass
 read-only mode. With `olcLastMod: FALSE`, Add, Modify, and ModifyDN stop
 generating UUID, CSN, creator, and timestamp metadata while schema operational
 attributes remain available. Online changes and invalid-value rollback are
-covered through TCP client tests. Other `olcAllows` behavior, `olcRestrict`,
-`olcRequires`, listener permissions, and SSF-based update requirements remain
-pending.
+covered through TCP client tests. `olcAllows: bind_v2`, `bind_anon_cred`, and
+`bind_anon_dn` enable OpenLDAP's historical LDAPv2 Bind and two deprecated
+anonymous Bind forms. Unsupported protocol versions and malformed Bind DNs
+use slapd's result ordering and diagnostics. Anonymous proxy authorization
+remains pending.
+
+Global `olcDisallows` loads case-insensitive, whitespace-separated feature
+sets from an imported `cn=config`. `bind_anon` and `bind_simple` follow
+OpenLDAP's result-code, diagnostic, and `olcAllows` precedence.
+`tls_2_anon` and `tls_authc` preserve OpenLDAP's ordering: by default an
+authenticated StartTLS request first becomes anonymous, while both flags are
+required to reject it without dropping the identity. This ordering also runs
+before TLS availability is checked. `dontusecopy_non_critical` rejects a
+non-critical RFC 6171 control. Online replacement/deletion, unknown-feature
+rollback, restart, and a process-level slapd differential pass.
+`proxy_authz_non_critical` is accepted during configuration loading, but its
+behavior remains pending with the RFC 4370 proxied authorization control.
+`olcRestrict`, `olcRequires`, listener permissions, and SSF-based update
+requirements also remain pending.
 
 Every configured database now has an isolated storage partition, keyed by its
 imported configuration-entry UUID when available. Existing single-namespace
