@@ -60,8 +60,12 @@ composition, and OpenLDAP-style syncprov coverage of glued subordinate
 databases. OpenLDAP 2.6.13 `ldapsearch` interoperability also passes.
 An OpenLDAP 2.6.13 syncrepl consumer also converges through initial,
 refresh-and-persist, and stopped-consumer restart scenarios. The ldap-go
-syncrepl consumer and delta-syncrepl support remain separate pending
-milestones.
+syncrepl consumer now loads ordered `olcSyncrepl` values, runs refresh-only or
+refresh-and-persist workers under the server lifecycle, commits RFC 4533 entry
+changes and cookies atomically, applies Present/Delete UUID sets, and resumes
+from its durable cookie after restart. A ldap-go provider-to-consumer topology
+covers initial, persistent, and offline catch-up paths. OpenLDAP-provider
+differentials and delta-syncrepl remain pending milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

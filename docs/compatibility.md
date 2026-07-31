@@ -119,7 +119,7 @@ rebuilt by `ldap-go`.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Syncrepl consumer | planned | OpenLDAP provider interoperability |
+| Syncrepl consumer | partial | ordered olcSyncrepl loading and ldap-go provider initial/persist/restart topology pass; OpenLDAP provider differential remains |
 | Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
@@ -323,6 +323,25 @@ also converges from an empty MDB, applies persistent Add/Modify/Delete events,
 and catches up through the same cookie after it is stopped, provider changes
 accumulate, and the consumer restarts.
 
+The ldap-go syncrepl consumer parses ordered `olcSyncrepl` values into an
+immutable runtime configuration, including search, fractional attribute,
+retry, bind, timeout, TLS, suffix-massage, and delta-related fields. Duplicate
+RIDs, invalid local bases, malformed filters, and incomplete retry or delta
+settings fail `cn=config` validation. Workers start and stop with `Serve`, and
+online configuration replacement cancels the previous partition/RID worker
+before starting its replacement.
+
+Standard RFC 4533 consumption supports refresh-only and
+refresh-and-persist, provider URI failover, simple bind, StartTLS/LDAPS, SASL
+EXTERNAL and DIGEST-MD5, Present/Delete UUID sets, DN suffix massage, and
+durable opaque cookies. Entry upserts, UUID-based renames/deletes, cookie
+updates, and derived context CSNs use storage transactions. Present completion
+removes only local entries in the configured scope and filter that were not
+reported by the provider. An in-process provider/consumer topology verifies
+initial convergence, persistent Add/Modify/Delete, consumer shutdown, offline
+provider changes, restart with the same store, cookie catch-up, and stale-entry
+removal.
+
 Sync composes with RFC 2891 sorting and VLV after candidates from all database
 routes have been collected. Refresh-only entries always carry Sync State, and
 SearchResultDone carries Sync Done plus Sort/VLV result controls.
@@ -335,8 +354,11 @@ of configuration order.
 
 This provider does not yet implement accesslog replay,
 `olcSpSessionlogSource`, delta-syncrepl, the optional sync-provider subentry
-context, or a full `slapd` syncrepl topology differential. The syncrepl
-consumer is also still planned, so the rows remain `partial`.
+context, or a full `slapd` topology differential. The consumer still lacks
+delta/accesslog application, the remaining SASL and OpenSSL-specific TLS
+options, shadow update-referral behavior, multi-provider conflict resolution,
+and a real OpenLDAP-provider process differential. The replication rows
+therefore remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

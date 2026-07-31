@@ -48,10 +48,11 @@ type Server struct {
 	wg          sync.WaitGroup
 	configMu    sync.Mutex
 
-	csnMu       sync.Mutex
-	lastCSN     time.Time
-	csnCounter  uint32
-	syncChanges *syncChangeHub
+	csnMu         sync.Mutex
+	lastCSN       time.Time
+	csnCounter    uint32
+	syncChanges   *syncChangeHub
+	syncConsumers *syncConsumerManager
 }
 
 func New(config Config) (*Server, error) {
@@ -101,6 +102,7 @@ func New(config Config) (*Server, error) {
 		connections:     make(map[net.Conn]struct{}),
 		syncChanges:     newSyncChangeHub(),
 	}
+	server.syncConsumers = newSyncConsumerManager(server)
 	var runtime *runtimeState
 	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
 		var err error
@@ -132,6 +134,10 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener == nil {
 		return errors.New("listener is required")
 	}
+	if err := server.syncConsumers.start(ctx); err != nil {
+		return err
+	}
+	defer server.syncConsumers.stop()
 
 	stop := make(chan struct{})
 	go func() {

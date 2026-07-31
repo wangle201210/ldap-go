@@ -765,6 +765,7 @@ func (server *Server) observeRuntimeCSNs(
 func (server *Server) activateRuntime(runtime *runtimeState) {
 	server.syncChanges.configure(runtime)
 	server.runtime.Store(runtime)
+	server.syncConsumers.configure(runtime)
 }
 
 func (server *Server) observeCSN(csn openLDAPCSN) {
