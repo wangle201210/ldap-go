@@ -139,6 +139,15 @@ func (server *Server) handleAdd(
 			if err == nil {
 				if state.runtime.schema.EntryHasObjectClass(
 					storedParent,
+					"subentry",
+				) {
+					return operationFailed(
+						ldapwire.ResultObjectClassViolation,
+						"parent is a subentry",
+					)
+				}
+				if state.runtime.schema.EntryHasObjectClass(
+					storedParent,
 					"alias",
 				) {
 					return operationFailed(

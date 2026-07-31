@@ -42,6 +42,8 @@ referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
 rewriting, and managed referral updates. RFC 4511/4512 aliases support all four
 `derefAliases` modes, recursive base and search-scope dereferencing, loop and
 broken-target handling, and OpenLDAP's database-level `olcMaxDerefDepth`.
+RFC 3672 subentries include the built-in schema, base/one/subtree visibility,
+the Subentries control, paging, and OpenLDAP-compatible write and Bind rules.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

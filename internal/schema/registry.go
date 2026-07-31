@@ -462,6 +462,11 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			objectClass: "alias",
 		},
 		{key: "ref", attribute: "ref", objectClass: "referral"},
+		{
+			key:         "subtreespecification",
+			attribute:   "subtreeSpecification",
+			objectClass: "subentry",
+		},
 	}
 	for _, special := range specialAttributes {
 		present := false
@@ -716,6 +721,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	case SyntaxDistinguishedName:
 		if _, err := directory.ParseDN(string(value)); err != nil {
 			return errors.New("value is not a distinguished name")
+		}
+	case SyntaxSubtreeSpecification:
+		if len(value) == 0 || !utf8.Valid(value) {
+			return errors.New("value is not a valid subtree specification")
 		}
 	case SyntaxGeneralizedTime:
 		if _, err := time.Parse("20060102150405Z", string(value)); err != nil {

@@ -45,7 +45,7 @@ No row may become `compatible` based only on unit tests.
 | Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
-| Subentries | planned | RFC 3672 visibility tests |
+| Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | planned | RFC 6171 topology tests |
 | LDAP Sync | planned | RFC 4533 refresh/persist interoperability |
 | OpenLDAP transaction extension | planned | multi-operation atomicity tests |
@@ -60,7 +60,7 @@ No row may become `compatible` based only on unit tests.
 | Standard operational attributes | partial | create/modify/rename differential tests |
 | Subschema subentry | partial | discovery and schema publication tests |
 | Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
-| Collective attributes and subentries | planned | RFC 3671/3672 tests |
+| Collective attributes | planned | RFC 3671 propagation, exclusions, administrative-area, and subtree-specification tests |
 | DIT content/name/structure rules | planned | schema enforcement differential tests |
 
 ## Authentication, authorization, and security
@@ -209,6 +209,30 @@ MDB can emit success with a matched DN and the diagnostic `maximum deref depth
 exceeded` because a successful intermediate lookup overwrites result code 36.
 `ldap-go` consistently returns `aliasDereferencingProblem` (36) for that
 failure. Referral chasing and the `chain` overlay remain pending.
+
+RFC 3672 `subentry`, `subtreeSpecification`, and `administrativeRole` schema
+definitions are built in, and the Subentries control is advertised through
+Root DSE. Without the control, one-level and subtree searches omit subentries
+while base searches retain them. A TRUE value returns only subentries and a
+FALSE value only normal entries for all ordinary database searches. Control
+values use OpenLDAP-compatible strict three-octet BER validation; absent,
+malformed, and duplicate values return `protocolError`.
+
+Visibility is enforced before the user filter, referral handling, and read
+ACLs, and therefore composes with alias routes, RFC 2696 paging, sorting, and
+VLV candidate construction. Subentries cannot be used for Bind, and Add
+rejects a subentry parent with `objectClassViolation`. Modify, Compare,
+ModifyDN, and Delete of the subentry itself remain ordinary operations.
+OpenLDAP 2.6.13 MDB also permits ModifyDN to move an existing normal entry
+under a subentry even though direct Add at the same DN is rejected; `ldap-go`
+preserves that observable edge behavior. The synthetic `cn=Subschema` entry
+publishes `subentry` and `structuralObjectClass: subentry`, and, like OpenLDAP's
+frontend special entry, remains base-searchable regardless of a FALSE
+Subentries control. Process-level differentials cover base, one-level, and
+subtree visibility, TRUE/FALSE values, special entries, malformed values,
+Bind, and parent rules. RFC 3671 collective-attribute propagation and the full
+administrative-area interpretation of subtree specifications remain pending,
+so this row remains `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

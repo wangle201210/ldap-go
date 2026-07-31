@@ -609,7 +609,8 @@ func (server *Server) authenticate(
 		if err != nil {
 			return err
 		}
-		if runtime.schema.EntryHasObjectClass(entry, "alias") ||
+		if runtime.schema.EntryHasObjectClass(entry, "subentry") ||
+			runtime.schema.EntryHasObjectClass(entry, "alias") ||
 			runtime.schema.EntryHasObjectClass(entry, "referral") {
 			return nil
 		}

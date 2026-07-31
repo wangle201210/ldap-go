@@ -57,6 +57,10 @@ operational attributes, result codes, and transaction boundaries.
 Alias-aware Search resolves the effective base first, then represents
 dereferenced targets as stable additional database routes so ordinary ACL,
 filter, paging, sorting, and VLV processing remains shared.
+Subentry visibility is applied to candidates before user filters, referrals,
+and read ACLs. This keeps hidden administrative entries out of filter
+evaluation and makes paging, sorting, VLV, and alias-expanded routes share the
+same RFC 3672 behavior.
 
 ### Schema and matching
 

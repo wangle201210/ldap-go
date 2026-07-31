@@ -19,9 +19,10 @@ const (
 	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
 	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
 	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
+	subentriesControlOID   = "1.3.6.1.4.1.4203.1.10.1"
 )
 
-type requestControlSupport uint8
+type requestControlSupport uint16
 
 const (
 	supportsAssertion requestControlSupport = 1 << iota
@@ -31,6 +32,7 @@ const (
 	supportsServerSideSort
 	supportsVirtualListView
 	supportsManageDsaIT
+	supportsSubentries
 )
 
 type requestControls struct {
@@ -41,6 +43,7 @@ type requestControls struct {
 	sorting     *serverSideSortRequest
 	vlv         *virtualListViewRequest
 	manageDsaIT bool
+	subentries  *bool
 }
 
 type readControlRequest struct {
@@ -254,6 +257,30 @@ func parseRequestControls(
 				)
 			}
 			parsed.manageDsaIT = true
+		case subentriesControlOID:
+			if supported&supportsSubentries == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.subentries != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"subentries control specified multiple times",
+				)
+			}
+			if !control.HasValue ||
+				len(control.Value) != 3 ||
+				control.Value[0] != 0x01 ||
+				control.Value[1] != 0x01 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"subentries control value encoding is bogus",
+				)
+			}
+			visible := control.Value[2] != 0
+			parsed.subentries = &visible
 		default:
 			if control.Critical {
 				return unsupportedCriticalControl()

@@ -3,17 +3,18 @@ package schema
 import "fmt"
 
 const (
-	SyntaxBoolean           = "1.3.6.1.4.1.1466.115.121.1.7"
-	SyntaxAttributeType     = "1.3.6.1.4.1.1466.115.121.1.3"
-	SyntaxDistinguishedName = "1.3.6.1.4.1.1466.115.121.1.12"
-	SyntaxDirectoryString   = "1.3.6.1.4.1.1466.115.121.1.15"
-	SyntaxGeneralizedTime   = "1.3.6.1.4.1.1466.115.121.1.24"
-	SyntaxIA5String         = "1.3.6.1.4.1.1466.115.121.1.26"
-	SyntaxInteger           = "1.3.6.1.4.1.1466.115.121.1.27"
-	SyntaxObjectClass       = "1.3.6.1.4.1.1466.115.121.1.37"
-	SyntaxOID               = "1.3.6.1.4.1.1466.115.121.1.38"
-	SyntaxOctetString       = "1.3.6.1.4.1.1466.115.121.1.40"
-	SyntaxUUID              = "1.3.6.1.1.16.1"
+	SyntaxBoolean              = "1.3.6.1.4.1.1466.115.121.1.7"
+	SyntaxAttributeType        = "1.3.6.1.4.1.1466.115.121.1.3"
+	SyntaxDistinguishedName    = "1.3.6.1.4.1.1466.115.121.1.12"
+	SyntaxDirectoryString      = "1.3.6.1.4.1.1466.115.121.1.15"
+	SyntaxGeneralizedTime      = "1.3.6.1.4.1.1466.115.121.1.24"
+	SyntaxIA5String            = "1.3.6.1.4.1.1466.115.121.1.26"
+	SyntaxInteger              = "1.3.6.1.4.1.1466.115.121.1.27"
+	SyntaxObjectClass          = "1.3.6.1.4.1.1466.115.121.1.37"
+	SyntaxOID                  = "1.3.6.1.4.1.1466.115.121.1.38"
+	SyntaxOctetString          = "1.3.6.1.4.1.1466.115.121.1.40"
+	SyntaxSubtreeSpecification = "1.3.6.1.4.1.1466.115.121.1.45"
+	SyntaxUUID                 = "1.3.6.1.1.16.1"
 )
 
 func NewBuiltinRegistry() (*Registry, error) {
@@ -53,6 +54,8 @@ var builtinAttributeTypes = []string{
 	"( 2.5.18.2 NAME 'modifyTimestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.3 NAME 'creatorsName' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.4 NAME 'modifiersName' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 2.5.18.5 NAME 'administrativeRole' DESC 'RFC3672: administrative role' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " USAGE directoryOperation )",
+	"( 2.5.18.6 NAME 'subtreeSpecification' DESC 'RFC3672: subtree specification' SYNTAX " + SyntaxSubtreeSpecification + " SINGLE-VALUE USAGE directoryOperation )",
 	"( 2.5.21.9 NAME 'structuralObjectClass' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.10 NAME 'subschemaSubentry' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.16.840.1.113730.3.1.34 NAME 'ref' DESC 'RFC3296: subordinate referral URL' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " USAGE distributedOperation )",
@@ -74,6 +77,7 @@ var builtinObjectClasses = []string{
 	"( 2.5.6.8 NAME 'organizationalRole' SUP top STRUCTURAL MUST cn MAY ( ou $ description ) )",
 	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ description ) )",
 	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes ) )",
+	"( 2.5.17.0 NAME 'subentry' DESC 'RFC3672: subentry' SUP top STRUCTURAL MUST ( cn $ subtreeSpecification ) )",
 	"( 2.5.6.1 NAME 'alias' DESC 'RFC4512: an alias' SUP top STRUCTURAL MUST aliasedObjectName )",
 	"( 2.16.840.1.113730.3.2.6 NAME 'referral' DESC 'namedref: named subordinate referral' SUP top STRUCTURAL MUST ref )",
 	"( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject' SUP top AUXILIARY )",

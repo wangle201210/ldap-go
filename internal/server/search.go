@@ -28,7 +28,8 @@ func (server *Server) handleSearch(
 
 	controlSupport := supportsAssertion |
 		supportsPagedResults |
-		supportsManageDsaIT
+		supportsManageDsaIT |
+		supportsSubentries
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
@@ -776,6 +777,14 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				entry = withSubschemaReference(entry)
+				if !subentrySearchVisible(
+					state.runtime,
+					entry,
+					request.Scope,
+					controls.subentries,
+				) {
+					return nil
+				}
 				if derefAliasesWhileSearching(request.DerefAliases) &&
 					state.runtime.schema.EntryHasObjectClass(
 						entry,
@@ -1597,6 +1606,7 @@ func (server *Server) rootDSE(
 		preReadControlOID,
 		postReadControlOID,
 		pagedResultsControlOID,
+		subentriesControlOID,
 	}
 	if runtimeSupportsServerSideSort(runtime.databases) {
 		supportedControls = append(
@@ -1623,8 +1633,20 @@ func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 	return directory.Entry{
 		DN: "cn=Subschema",
 		Attributes: []directory.Attribute{
-			{Description: "objectClass", Values: stringValues("top", "subschema")},
+			{
+				Description: "objectClass",
+				Values: stringValues(
+					"top",
+					"subentry",
+					"subschema",
+					"extensibleObject",
+				),
+			},
 			{Description: "cn", Values: stringValues("Subschema")},
+			{
+				Description: "structuralObjectClass",
+				Values:      stringValues("subentry"),
+			},
 			{
 				Description: "attributeTypes",
 				Values:      stringValues(registry.AttributeTypeDescriptions()...),
@@ -1644,6 +1666,19 @@ func (server *Server) selectEntry(
 	typesOnly bool,
 ) directory.Entry {
 	return entry.SelectWith(requested, typesOnly, runtime.schema.IsOperational)
+}
+
+func subentrySearchVisible(
+	runtime *runtimeState,
+	entry directory.Entry,
+	scope directory.Scope,
+	visibility *bool,
+) bool {
+	subentry := runtime.schema.EntryHasObjectClass(entry, "subentry")
+	if visibility != nil {
+		return subentry == *visibility
+	}
+	return scope == directory.ScopeBase || !subentry
 }
 
 func withSubschemaReference(entry directory.Entry) directory.Entry {

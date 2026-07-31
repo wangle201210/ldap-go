@@ -157,6 +157,43 @@ func TestBuiltinSchemaValidatesEntries(t *testing.T) {
 		registry.ValidateEntry(refOnOrdinaryEntry),
 		ViolationDisallowedAttribute,
 	)
+
+	subentry := directory.Entry{
+		DN: "cn=policy,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("subentry")},
+			{Description: "cn", Values: byteValues("policy")},
+			{Description: "subtreeSpecification", Values: byteValues("{}")},
+		},
+	}
+	if err := registry.ValidateEntry(subentry); err != nil {
+		t.Fatalf("ValidateEntry(subentry): %v", err)
+	}
+	if !registry.EntryHasObjectClass(subentry, "subentry") {
+		t.Fatal("subentry object class was not identified")
+	}
+
+	missingSubtreeSpecification := subentry.Clone()
+	missingSubtreeSpecification.ReplaceValues("subtreeSpecification", nil)
+	assertViolation(
+		t,
+		registry.ValidateEntry(missingSubtreeSpecification),
+		ViolationMissingRequiredAttribute,
+	)
+
+	subtreeSpecificationOnOrdinaryEntry := valid.Clone()
+	subtreeSpecificationOnOrdinaryEntry.Attributes = append(
+		subtreeSpecificationOnOrdinaryEntry.Attributes,
+		directory.Attribute{
+			Description: "subtreeSpecification",
+			Values:      byteValues("{}"),
+		},
+	)
+	assertViolation(
+		t,
+		registry.ValidateEntry(subtreeSpecificationOnOrdinaryEntry),
+		ViolationDisallowedAttribute,
+	)
 }
 
 func TestRegistryIdentifiesDNValuedAttributes(t *testing.T) {
