@@ -27,6 +27,10 @@ func (secured *identityConnection) ExternalIdentity() (string, bool) {
 	return state.PeerCertificates[0].Subject.String(), true
 }
 
+func (*identityConnection) SecurityStrengthFactor() uint32 {
+	return 128
+}
+
 func NewTLCP(config *tlcp.Config) (*TLCP, error) {
 	if config == nil {
 		return nil, errors.New("TLCP config is required")

@@ -80,6 +80,12 @@ SM2 authentication. Syncrepl authentication supports simple bind,
 SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
 SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
 exercised when its Cyrus SASL plugin is available.
+Server-side SASL supports EXTERNAL and PLAIN. PLAIN verifies the mapped LDAP
+entry's existing `userPassword` values, and an OpenLDAP 2.6.13
+`ldapwhoami -Y PLAIN` interoperability case passes. Imported
+`olcSaslRealm`, `olcSaslSecProps`, and ordered `olcAuthzRegexp` values are
+loaded from `cn=config`; direct DN replacements and local LDAP URL mappings
+with exactly one ACL-visible result are supported.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -179,6 +185,18 @@ An unverified certificate never produces an EXTERNAL identity. The current
 implementation accepts an empty SASL authorization identity only; proxy
 authorization through EXTERNAL remains pending. TLCP requires a client that
 implements GB/T 38636 rather than a stock TLS-only OpenLDAP client.
+
+SASL PLAIN follows OpenLDAP/Cyrus security properties. The default
+`noplain,noanonymous` policy suppresses PLAIN on an unprotected TCP
+connection, while TLS, TLCP, and local Unix sockets provide an external
+security-strength factor. For an intentionally unprotected development
+endpoint, `olcSaslSecProps: none` enables PLAIN. Authentication identity
+mapping uses the first matching `olcAuthzRegexp`; LDAP URL replacement
+searches run as the anonymous authentication identity and require `auth`
+access to the search base, candidate entries, and filter attributes. PLAIN
+authorization identities are limited to self and database-root proxy
+authorization until `olcAuthzPolicy`, `authzTo`, and `authzFrom` are
+implemented.
 
 For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
 `credentials` value is used as the Kerberos password. Without that field,

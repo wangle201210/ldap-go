@@ -20,7 +20,7 @@ import (
 const (
 	syncConsumerStartTLSOID       = "1.3.6.1.4.1.1466.20037"
 	syncConsumerMaxLDAPPacketSize = 16 << 20
-	syncConsumerLocalSSF          = 71
+	syncConsumerLocalSSF          = localSecurityStrengthFactor
 )
 
 type syncConsumerTransport struct {
@@ -570,19 +570,5 @@ func syncConsumerOctetString(value []byte, description string) *ber.Packet {
 }
 
 func syncConsumerTLSStateSSF(state tls.ConnectionState) uint32 {
-	name := tls.CipherSuiteName(state.CipherSuite)
-	switch {
-	case strings.Contains(name, "CHACHA20"):
-		return 256
-	case strings.Contains(name, "AES_256"):
-		return 256
-	case strings.Contains(name, "AES_128"):
-		return 128
-	case strings.Contains(name, "3DES"):
-		return 112
-	case strings.Contains(name, "RC4"):
-		return 128
-	default:
-		return 0
-	}
+	return tlsConnectionSecurityStrength(state)
 }

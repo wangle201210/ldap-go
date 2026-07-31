@@ -18,7 +18,7 @@ import (
 
 const syncConsumerMaxSASLRounds = 16
 
-type syncConsumerSASLSecurityProperties struct {
+type saslSecurityProperties struct {
 	noDictionary    bool
 	noPlain         bool
 	noActive        bool
@@ -29,6 +29,8 @@ type syncConsumerSASLSecurityProperties struct {
 	maxSSF          uint32
 	maxBufferSize   uint32
 }
+
+type syncConsumerSASLSecurityProperties = saslSecurityProperties
 
 type syncConsumerSASLConversation interface {
 	Initial() ([]byte, bool, error)
@@ -55,6 +57,10 @@ type syncConsumerSCRAM struct {
 }
 
 func defaultSyncConsumerSASLSecurityProperties() syncConsumerSASLSecurityProperties {
+	return defaultSASLSecurityProperties()
+}
+
+func defaultSASLSecurityProperties() saslSecurityProperties {
 	return syncConsumerSASLSecurityProperties{
 		noPlain:       true,
 		noAnonymous:   true,
@@ -66,6 +72,12 @@ func defaultSyncConsumerSASLSecurityProperties() syncConsumerSASLSecurityPropert
 func parseSyncConsumerSASLSecurityProperties(
 	value string,
 ) (syncConsumerSASLSecurityProperties, error) {
+	return parseSASLSecurityProperties(value)
+}
+
+func parseSASLSecurityProperties(
+	value string,
+) (saslSecurityProperties, error) {
 	properties := defaultSyncConsumerSASLSecurityProperties()
 	if value == "" {
 		return syncConsumerSASLSecurityProperties{}, errors.New(
@@ -83,7 +95,7 @@ func parseSyncConsumerSASLSecurityProperties(
 		noAnonymous     bool
 	)
 	for _, rawProperty := range strings.Split(value, ",") {
-		property := strings.ToLower(rawProperty)
+		property := strings.ToLower(strings.TrimSpace(rawProperty))
 		switch property {
 		case "none":
 			flagsSeen = true

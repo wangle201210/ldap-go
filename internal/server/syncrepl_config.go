@@ -638,7 +638,7 @@ func tokenizeOpenLDAPConfig(value string) ([]string, error) {
 			position++
 		}
 		if quote != 0 {
-			return nil, errors.New("unterminated quoted syncrepl value")
+			return nil, errors.New("unterminated quoted configuration value")
 		}
 		if started {
 			tokens = append(tokens, token.String())

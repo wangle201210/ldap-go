@@ -21,6 +21,7 @@ type runtimeState struct {
 	databases             []runtimeDatabase
 	allowAnonymousUpdates bool
 	passwordHashSchemes   []string
+	sasl                  saslRuntimeConfiguration
 	syncContexts          map[string]syncCSNState
 }
 
@@ -51,6 +52,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	sasl, err := loadSASLRuntimeConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -66,6 +71,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		databases:             databases,
 		allowAnonymousUpdates: allowAnonymousUpdates,
 		passwordHashSchemes:   passwordHashSchemes,
+		sasl:                  sasl,
 	}, nil
 }
 

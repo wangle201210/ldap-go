@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
 const defaultSecureHandshakeTimeout = 10 * time.Second
+const localSecurityStrengthFactor uint32 = 71
 
 type SecureTransport interface {
 	ServerHandshake(context.Context, net.Conn) (net.Conn, error)
@@ -24,6 +26,11 @@ type externalIdentityConnection interface {
 	ExternalIdentity() (string, bool)
 }
 
+type securityStrengthConnection interface {
+	net.Conn
+	SecurityStrengthFactor() uint32
+}
+
 type standardTLSConnection struct {
 	*tls.Conn
 }
@@ -34,6 +41,10 @@ func (connection *standardTLSConnection) ExternalIdentity() (string, bool) {
 		return "", false
 	}
 	return state.PeerCertificates[0].Subject.String(), true
+}
+
+func (connection *standardTLSConnection) SecurityStrengthFactor() uint32 {
+	return tlsConnectionSecurityStrength(connection.ConnectionState())
 }
 
 func (transport standardTLSTransport) ServerHandshake(
@@ -76,4 +87,39 @@ func externalIdentityDN(connection net.Conn) string {
 		return ""
 	}
 	return dn.String()
+}
+
+func connectionSecurityStrength(
+	connection net.Conn,
+	secure bool,
+) uint32 {
+	if provider, ok := connection.(securityStrengthConnection); ok {
+		return provider.SecurityStrengthFactor()
+	}
+	if secure {
+		return 1
+	}
+	if address := connection.LocalAddr(); address != nil &&
+		address.Network() == "unix" {
+		return localSecurityStrengthFactor
+	}
+	return 0
+}
+
+func tlsConnectionSecurityStrength(state tls.ConnectionState) uint32 {
+	name := tls.CipherSuiteName(state.CipherSuite)
+	switch {
+	case strings.Contains(name, "CHACHA20"):
+		return 256
+	case strings.Contains(name, "AES_256"):
+		return 256
+	case strings.Contains(name, "AES_128"):
+		return 128
+	case strings.Contains(name, "3DES"):
+		return 112
+	case strings.Contains(name, "RC4"):
+		return 128
+	default:
+		return 0
+	}
 }

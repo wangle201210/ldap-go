@@ -167,7 +167,11 @@ func TestLDAPClientSASLExternalRejectsUnverifiedCertificate(t *testing.T) {
 	if err != nil || len(rootDSE.Entries) != 1 {
 		t.Fatalf("Root DSE = %#v, %v", rootDSE, err)
 	}
-	if values := rootDSE.Entries[0].GetAttributeValues("supportedSASLMechanisms"); len(values) != 0 {
+	values := rootDSE.Entries[0].GetAttributeValues(
+		"supportedSASLMechanisms",
+	)
+	if !containsString(values, "PLAIN") ||
+		containsString(values, "EXTERNAL") {
 		t.Fatalf("unverified supportedSASLMechanisms = %q", values)
 	}
 	assertLDAPResultCode(t, client.ExternalBind(), ldap.LDAPResultInvalidCredentials)

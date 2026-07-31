@@ -18,7 +18,7 @@ No row may become `compatible` based only on unit tests.
 | --- | --- | --- |
 | BER framing and LDAPMessage | partial | RFC malformed-input corpus and client interoperability |
 | Bind: anonymous and simple | partial | RFC 4511/4513 plus OpenLDAP differential tests |
-| Bind: SASL | partial | EXTERNAL over verified TLS/TLCP passes; other mechanisms remain |
+| Bind: SASL | partial | EXTERNAL and PLAIN pass Go-client tests; OpenLDAP 2.6.13 `ldapwhoami -Y PLAIN` passes; server-side multi-round mechanisms and full proxy authorization remain |
 | Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, typesOnly |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests |
 | Modify | partial | atomic modification and error-order differential tests |
@@ -70,8 +70,9 @@ No row may become `compatible` based only on unit tests.
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
+| SASL server authentication | partial | EXTERNAL and PLAIN, transport SSF policy, direct/LDAP-URL `olcAuthzRegexp`, and OpenLDAP PLAIN CLI interoperability pass; SCRAM/GSSAPI and `olcAuthzPolicy` remain |
 | SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
-| Security strength factors | planned | transport/SASL/ACL integration tests |
+| Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, and PLAIN advertisement policy pass; SASL-layer and ACL SSF integration remain |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
 | Audit and security logging | planned | redaction, integrity, and operation coverage |
@@ -160,6 +161,14 @@ connection with such an identity. Empty authorization identities bind as the
 certificate DN; non-empty proxy authorization identities are currently
 rejected. Tests cover EXTERNAL root authorization, Who Am I, simple-Bind state
 replacement, and both implicit TLCP and StartTLS-to-TLCP paths.
+SASL PLAIN authenticates mapped directory entries through the same
+`userPassword` and `auth` ACL path as simple Bind. Root DSE publishes it only
+when `olcSaslSecProps` permits it for the connection's TLS, TLCP, or Unix
+external SSF, or when `noplain` is disabled. `olcSaslRealm` and ordered
+`olcAuthzRegexp` rules support direct DN and local LDAP URL mappings; URL
+searches require exactly one result and OpenLDAP-compatible `auth` access.
+Self authorization and database-root proxy authorization pass, while
+`olcAuthzPolicy`, `authzTo`, and `authzFrom` remain pending.
 Network Add generates `entryUUID`, `entryCSN`, creator/modifier names, and
 create/modify timestamps, `structuralObjectClass`, and `subschemaSubentry`.
 Modify and ModifyDN update modification metadata.

@@ -1514,7 +1514,7 @@ func (server *Server) searchRootDSE(
 	paging *pagedSearchContext,
 	sorting *serverSideSortContext,
 ) error {
-	entry := server.rootDSE(state.runtime, state.externalDN != "")
+	entry := server.rootDSE(state)
 	var selected *directory.Entry
 	assertionFailed := false
 	err := server.config.Store.View(ctx, func(tx storage.Reader) error {
@@ -1749,9 +1749,9 @@ func (server *Server) searchSubschema(
 }
 
 func (server *Server) rootDSE(
-	runtime *runtimeState,
-	hasExternalIdentity bool,
+	state *connectionState,
 ) directory.Entry {
+	runtime := state.runtime
 	var namingContexts []string
 	var configContexts []string
 	var monitorContexts []string
@@ -1839,10 +1839,10 @@ func (server *Server) rootDSE(
 		Description: "supportedControl",
 		Values:      stringValues(supportedControls...),
 	})
-	if hasExternalIdentity {
+	if mechanisms := supportedSASLMechanisms(state); len(mechanisms) > 0 {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "supportedSASLMechanisms",
-			Values:      stringValues("EXTERNAL"),
+			Values:      stringValues(mechanisms...),
 		})
 	}
 	return entry

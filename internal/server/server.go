@@ -170,7 +170,10 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
-	state := connectionState{connection: connection}
+	state := connectionState{
+		connection:  connection,
+		externalSSF: connectionSecurityStrength(connection, false),
+	}
 	defer func() {
 		_ = state.connection.Close()
 		server.mu.Lock()
@@ -190,6 +193,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		}
 		state.connection = secured
 		state.secure = true
+		state.externalSSF = connectionSecurityStrength(secured, true)
 		state.externalDN = externalIdentityDN(secured)
 	}
 
@@ -556,7 +560,13 @@ func (server *Server) handleBind(
 		))
 	}
 	if request.Authentication.IsSASL {
-		return server.handleSASLBind(connection, state, message, request)
+		return server.handleSASLBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+		)
 	}
 
 	authenticated, err := server.authenticate(
@@ -651,6 +661,7 @@ type connectionState struct {
 	runtime           *runtimeState
 	connection        net.Conn
 	secure            bool
+	externalSSF       uint32
 	externalDN        string
 	pagedSearch       *pagedSearchState
 	virtualListViews  map[string]*virtualListViewState

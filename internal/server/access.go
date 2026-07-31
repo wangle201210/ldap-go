@@ -108,7 +108,32 @@ func (server *Server) filterMatches(
 	entry directory.Entry,
 	filter directory.Filter,
 ) (bool, error) {
-	result, err := server.evaluateFilter(runtime, reader, subjectDN, entry, filter)
+	return server.filterMatchesWithPrivilege(
+		runtime,
+		reader,
+		subjectDN,
+		entry,
+		filter,
+		acl.Search,
+	)
+}
+
+func (server *Server) filterMatchesWithPrivilege(
+	runtime *runtimeState,
+	reader storage.Reader,
+	subjectDN string,
+	entry directory.Entry,
+	filter directory.Filter,
+	privilege acl.Privilege,
+) (bool, error) {
+	result, err := server.evaluateFilterWithPrivilege(
+		runtime,
+		reader,
+		subjectDN,
+		entry,
+		filter,
+		privilege,
+	)
 	return result == filterTrue, err
 }
 
@@ -119,11 +144,36 @@ func (server *Server) evaluateFilter(
 	entry directory.Entry,
 	filter directory.Filter,
 ) (filterResult, error) {
+	return server.evaluateFilterWithPrivilege(
+		runtime,
+		reader,
+		subjectDN,
+		entry,
+		filter,
+		acl.Search,
+	)
+}
+
+func (server *Server) evaluateFilterWithPrivilege(
+	runtime *runtimeState,
+	reader storage.Reader,
+	subjectDN string,
+	entry directory.Entry,
+	filter directory.Filter,
+	privilege acl.Privilege,
+) (filterResult, error) {
 	switch filter.Kind {
 	case directory.FilterAnd:
 		result := filterTrue
 		for _, child := range filter.Children {
-			childResult, err := server.evaluateFilter(runtime, reader, subjectDN, entry, child)
+			childResult, err := server.evaluateFilterWithPrivilege(
+				runtime,
+				reader,
+				subjectDN,
+				entry,
+				child,
+				privilege,
+			)
 			if err != nil {
 				return filterUndefined, err
 			}
@@ -138,7 +188,14 @@ func (server *Server) evaluateFilter(
 	case directory.FilterOr:
 		result := filterFalse
 		for _, child := range filter.Children {
-			childResult, err := server.evaluateFilter(runtime, reader, subjectDN, entry, child)
+			childResult, err := server.evaluateFilterWithPrivilege(
+				runtime,
+				reader,
+				subjectDN,
+				entry,
+				child,
+				privilege,
+			)
 			if err != nil {
 				return filterUndefined, err
 			}
@@ -154,12 +211,13 @@ func (server *Server) evaluateFilter(
 		if len(filter.Children) != 1 {
 			return filterUndefined, errors.New("not filter requires exactly one child")
 		}
-		result, err := server.evaluateFilter(
+		result, err := server.evaluateFilterWithPrivilege(
 			runtime,
 			reader,
 			subjectDN,
 			entry,
 			filter.Children[0],
+			privilege,
 		)
 		switch result {
 		case filterTrue:
@@ -180,7 +238,7 @@ func (server *Server) evaluateFilter(
 			entry,
 			filter.Attribute,
 			filter.Assertion,
-			acl.Search,
+			privilege,
 		) {
 			return filterUndefined, nil
 		}
@@ -192,7 +250,7 @@ func (server *Server) evaluateFilter(
 			entry,
 			filter.Attribute,
 			nil,
-			acl.Search,
+			privilege,
 		) {
 			return filterUndefined, nil
 		}
@@ -207,7 +265,7 @@ func (server *Server) evaluateFilter(
 					entry,
 					attribute.Description,
 					filter.Assertion,
-					acl.Search,
+					privilege,
 				) {
 					filtered.Attributes = append(filtered.Attributes, attribute)
 				}
@@ -222,7 +280,7 @@ func (server *Server) evaluateFilter(
 			entry,
 			filter.Attribute,
 			filter.Assertion,
-			acl.Search,
+			privilege,
 		) {
 			return filterUndefined, nil
 		}
