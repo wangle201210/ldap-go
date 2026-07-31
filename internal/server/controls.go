@@ -20,6 +20,10 @@ const (
 	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
 	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
 	subentriesControlOID   = "1.3.6.1.4.1.4203.1.10.1"
+	syncRequestControlOID  = "1.3.6.1.4.1.4203.1.9.1.1"
+	syncStateControlOID    = "1.3.6.1.4.1.4203.1.9.1.2"
+	syncDoneControlOID     = "1.3.6.1.4.1.4203.1.9.1.3"
+	syncInfoOID            = "1.3.6.1.4.1.4203.1.9.1.4"
 )
 
 type requestControlSupport uint16
@@ -33,6 +37,7 @@ const (
 	supportsVirtualListView
 	supportsManageDsaIT
 	supportsSubentries
+	supportsSync
 )
 
 type requestControls struct {
@@ -44,11 +49,17 @@ type requestControls struct {
 	vlv         *virtualListViewRequest
 	manageDsaIT bool
 	subentries  *bool
+	sync        *syncRequestControl
 }
 
 type readControlRequest struct {
 	attributes []string
 	critical   bool
+}
+
+type syncRequestControl struct {
+	request  ldapwire.SyncRequestValue
+	critical bool
 }
 
 func parseRequestControls(
@@ -281,11 +292,53 @@ func parseRequestControls(
 			}
 			visible := control.Value[2] != 0
 			parsed.subentries = &visible
+		case syncRequestControlOID:
+			if supported&supportsSync == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.sync != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Sync control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Sync control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Sync control value is empty",
+				)
+			}
+			request, err := ldapwire.DecodeSyncRequestValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Sync control value could not be decoded",
+				)
+			}
+			parsed.sync = &syncRequestControl{
+				request:  request,
+				critical: control.Critical,
+			}
 		default:
 			if control.Critical {
 				return unsupportedCriticalControl()
 			}
 		}
+	}
+	if parsed.sync != nil && parsed.paging != nil {
+		return requestControls{}, controlResult(
+			ldapwire.ResultProtocolError,
+			"Sync control specified with pagedResults control",
+		)
 	}
 	return parsed, nil
 }

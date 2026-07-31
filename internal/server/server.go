@@ -48,9 +48,10 @@ type Server struct {
 	wg          sync.WaitGroup
 	configMu    sync.Mutex
 
-	csnMu      sync.Mutex
-	lastCSN    time.Time
-	csnCounter uint32
+	csnMu       sync.Mutex
+	lastCSN     time.Time
+	csnCounter  uint32
+	syncChanges *syncChangeHub
 }
 
 func New(config Config) (*Server, error) {
@@ -98,6 +99,7 @@ func New(config Config) (*Server, error) {
 		baseSchema:      baseSchema.Clone(),
 		secureTransport: secureTransport,
 		connections:     make(map[net.Conn]struct{}),
+		syncChanges:     newSyncChangeHub(),
 	}
 	var runtime *runtimeState
 	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
@@ -118,6 +120,9 @@ func New(config Config) (*Server, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if err := server.seedCSNClock(runtime); err != nil {
+		return nil, fmt.Errorf("initialize CSN clock: %w", err)
 	}
 	server.runtime.Store(runtime)
 	return server, nil

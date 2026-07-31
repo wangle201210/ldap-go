@@ -47,7 +47,7 @@ No row may become `compatible` based only on unit tests.
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | planned | RFC 6171 topology tests |
-| LDAP Sync | planned | RFC 4533 refresh/persist interoperability |
+| LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present sets, cancellation, restart, and OpenLDAP 2.6.13 ldapsearch pass |
 | OpenLDAP transaction extension | planned | multi-operation atomicity tests |
 | Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
 
@@ -109,7 +109,7 @@ rebuilt by `ldap-go`.
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
-| syncprov | planned | RFC 4533 provider suite |
+| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, durable contextCSN, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
 | valsort | planned | value sorting tests |
@@ -120,7 +120,7 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Syncrepl consumer | planned | OpenLDAP provider interoperability |
-| Syncprov provider | planned | OpenLDAP consumer interoperability |
+| Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch refreshOnly interoperability passes; slapd syncrepl topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
 | Fractional and sparse replication | planned | filter/attribute convergence tests |
@@ -255,6 +255,39 @@ does not provide mainline value propagation suitable for process
 differentials. X.501 specific/inner administrative-area boundary nesting and
 DIT content-rule interaction also remain pending. The feature therefore
 remains `partial`.
+
+RFC 4533 LDAP Sync is advertised only when the target runtime contains an
+OpenLDAP `syncprov` overlay. Overlay loading follows the database parent in
+`cn=config`, rejects duplicates, and requires `olcLastMod: TRUE`. The request,
+state, done, and info values use strict BER codecs, including default Boolean
+handling and exact 16-byte wire UUIDs. Sync searches reject
+`derefInSearching` and `derefAlways`, paged-results combinations, duplicate or
+malformed controls, and unsupported critical target contexts.
+
+`refreshOnly` takes one storage snapshot. A new consumer receives entries with
+Sync State `add`; a returning consumer receives changed entries plus chunked
+`syncIdSet` present UUIDs, allowing it to infer deletions. Cookies use
+OpenLDAP's `rid=...,csn=...` layout and preserve one context CSN per server ID.
+The local SID 000 context is committed atomically with each successful
+Add/Modify/Password Modify/Delete/ModifyDN and survives restart, including
+delete-only progress.
+
+`refreshAndPersist` subscribes before taking its refresh snapshot, then emits
+full add/modify entries, empty delete entries, and new-cookie intermediate
+responses for changes outside the filter. Filter-entry and filter-exit
+transitions become add and delete respectively. Abandon and RFC 3909 Cancel
+stop the operation; a changed search base or an overflowing bounded event
+queue terminates it with `syncRefreshRequired` (4096). Collective values are
+not synchronized onto member entries. TCP tests cover these paths, and an
+installed OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` is run as an optional
+process-level interoperability test.
+
+This provider does not yet implement the `olcSpCheckpoint`,
+`olcSpSessionlog`, `olcSpNoPresent`, or `olcSpReloadHint` variants,
+server-side sort/VLV combinations, operational `contextCSN` synthesis,
+accesslog replay, delta-syncrepl, or a full `slapd` syncrepl topology
+differential. The syncrepl consumer is also still planned, so the rows remain
+`partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

@@ -49,6 +49,12 @@ subtree-specification scopes, in-memory value propagation and merging,
 collective exclusions, source references, and logical-entry behavior across
 Search, Compare, assertions, read controls, paging, sorting/VLV, and ACL
 evaluation.
+RFC 4533 LDAP Sync provider support is enabled by an imported
+`olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
+OpenLDAP-compatible multi-SID cookies, present UUID sets, committed
+add/modify/modDN/delete notifications, durable delete progress across restart,
+Abandon/Cancel, and OpenLDAP 2.6.13 `ldapsearch` interoperability. Syncrepl
+consumer and delta-syncrepl support remain separate pending milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -73,6 +79,9 @@ go run ./cmd/ldap-go serve \
 
 ldapsearch -x -H ldap://127.0.0.1:1389 \
   -b dc=example,dc=com '(objectClass=*)'
+
+ldapsearch -x -H ldap://127.0.0.1:1389 \
+  -E '!sync=ro' -b dc=example,dc=com '(objectClass=*)'
 
 go run ./cmd/ldap-go export \
   -db ./data/ldap-go.db \

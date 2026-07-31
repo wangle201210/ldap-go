@@ -171,7 +171,7 @@ func (server *Server) handlePasswordModify(
 			)
 		}
 	}
-	nextRuntime, err := server.modifyEntry(
+	nextRuntime, syncChange, err := server.modifyEntry(
 		ctx,
 		state.runtime,
 		state.boundDN,
@@ -188,6 +188,7 @@ func (server *Server) handlePasswordModify(
 	if nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
+	server.publishSyncChange(syncChange)
 
 	var responseValue []byte
 	if generated {

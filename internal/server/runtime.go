@@ -197,6 +197,12 @@ func (server *Server) validateRuntimeConfiguration(
 			"invalid cn=config: "+err.Error(),
 		)
 	}
+	if err := server.observeRuntimeCSNs(reader, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid sync provider state: "+err.Error(),
+		)
+	}
 	return runtime, nil
 }
 

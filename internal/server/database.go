@@ -29,6 +29,7 @@ type runtimeDatabase struct {
 	serverSideSort  bool
 	sortMaxKeys     int
 	sortLimiter     *serverSideSortLimiter
+	syncProvider    bool
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -231,13 +232,18 @@ func loadRuntimeDatabaseOverlays(
 		if len(overlayValues) != 1 {
 			return fmt.Errorf("%s olcOverlay must be single-valued", entry.DN)
 		}
-		if databaseType(string(overlayValues[0])) != "sssvlv" {
+		overlayType := databaseType(string(overlayValues[0]))
+		if overlayType != "sssvlv" && overlayType != "syncprov" {
 			return nil
 		}
 
 		parent, ok := entryDN.Parent()
 		if !ok {
-			return fmt.Errorf("%s sssvlv overlay has no database parent", entry.DN)
+			return fmt.Errorf(
+				"%s %s overlay has no database parent",
+				entry.DN,
+				overlayType,
+			)
 		}
 		databaseIndex := -1
 		for index := range databases {
@@ -248,51 +254,71 @@ func loadRuntimeDatabaseOverlays(
 		}
 		if databaseIndex < 0 {
 			return fmt.Errorf(
-				"%s sssvlv overlay parent is not a configured database",
+				"%s %s overlay parent is not a configured database",
 				entry.DN,
+				overlayType,
 			)
 		}
 		database := &databases[databaseIndex]
-		if database.serverSideSort {
-			return fmt.Errorf(
-				"%s configures a duplicate sssvlv overlay for %s",
-				entry.DN,
-				database.name,
-			)
-		}
+		switch overlayType {
+		case "sssvlv":
+			if database.serverSideSort {
+				return fmt.Errorf(
+					"%s configures a duplicate sssvlv overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
 
-		maximum, err := singleNonnegativeInteger(
-			entry,
-			"olcSssVlvMax",
-			defaultServerSideSortMax,
-		)
-		if err != nil {
-			return err
-		}
-		if maximum == 0 {
-			maximum = defaultServerSideSortMax
-		}
-		maxKeys, err := singleNonnegativeInteger(
-			entry,
-			"olcSssVlvMaxKeys",
-			defaultServerSideSortMaxKeys,
-		)
-		if err != nil {
-			return err
-		}
-		maxPerConn, err := singleNonnegativeInteger(
-			entry,
-			"olcSssVlvMaxPerConn",
-			defaultServerSideSortMaxPerConn,
-		)
-		if err != nil {
-			return err
-		}
-		database.serverSideSort = true
-		database.sortMaxKeys = maxKeys
-		database.sortLimiter = &serverSideSortLimiter{
-			max:        maximum,
-			maxPerConn: maxPerConn,
+			maximum, err := singleNonnegativeInteger(
+				entry,
+				"olcSssVlvMax",
+				defaultServerSideSortMax,
+			)
+			if err != nil {
+				return err
+			}
+			if maximum == 0 {
+				maximum = defaultServerSideSortMax
+			}
+			maxKeys, err := singleNonnegativeInteger(
+				entry,
+				"olcSssVlvMaxKeys",
+				defaultServerSideSortMaxKeys,
+			)
+			if err != nil {
+				return err
+			}
+			maxPerConn, err := singleNonnegativeInteger(
+				entry,
+				"olcSssVlvMaxPerConn",
+				defaultServerSideSortMaxPerConn,
+			)
+			if err != nil {
+				return err
+			}
+			database.serverSideSort = true
+			database.sortMaxKeys = maxKeys
+			database.sortLimiter = &serverSideSortLimiter{
+				max:        maximum,
+				maxPerConn: maxPerConn,
+			}
+		case "syncprov":
+			if database.syncProvider {
+				return fmt.Errorf(
+					"%s configures a duplicate syncprov overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if !database.lastMod {
+				return fmt.Errorf(
+					"%s syncprov overlay requires olcLastMod TRUE for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			database.syncProvider = true
 		}
 		return nil
 	})
@@ -301,6 +327,15 @@ func loadRuntimeDatabaseOverlays(
 func runtimeSupportsServerSideSort(databases []runtimeDatabase) bool {
 	for _, database := range databases {
 		if database.serverSideSort {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeSupportsSyncProvider(databases []runtimeDatabase) bool {
+	for _, database := range databases {
+		if database.syncProvider {
 			return true
 		}
 	}

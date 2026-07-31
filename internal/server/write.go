@@ -100,27 +100,11 @@ func (server *Server) handleAdd(
 	}
 
 	entry := request.Entry.Clone()
-	if err := server.applyCreateOperationalAttributes(
-		&entry,
-		state.boundDN,
-		lastModEnabled(state.runtime, dn),
-		state.runtime.schema,
-	); err != nil {
-		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
-	}
-	if !configurationWrite {
-		if err := state.runtime.schema.ValidateEntry(entry); err != nil {
-			result := schemaValidationResult(err)
-			return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, result)
-		}
-		if err := server.applySchemaOperationalAttributes(state.runtime, &entry); err != nil {
-			return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
-		}
-	}
 
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
+		syncChange       *syncChange
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
@@ -134,6 +118,25 @@ func (server *Server) handleAdd(
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
 			return err
+		}
+		if err := server.applyCreateOperationalAttributes(
+			&entry,
+			state.boundDN,
+			lastModEnabled(state.runtime, dn),
+			state.runtime.schema,
+		); err != nil {
+			return err
+		}
+		if !configurationWrite {
+			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
+				return operationFailureFromSchema(err)
+			}
+			if err := server.applySchemaOperationalAttributes(
+				state.runtime,
+				&entry,
+			); err != nil {
+				return err
+			}
 		}
 		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
 		if err != nil {
@@ -277,12 +280,24 @@ func (server *Server) handleAdd(
 		if configurationWrite {
 			var validationErr error
 			nextRuntime, validationErr = server.validateRuntimeConfiguration(writer)
-			return validationErr
+			if validationErr != nil {
+				return validationErr
+			}
 		}
-		return nil
+		var changeErr error
+		syncChange, changeErr = server.recordSyncChange(
+			writer,
+			*database,
+			nil,
+			&entry,
+		)
+		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
+	}
+	if err == nil {
+		server.publishSyncChange(syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -348,7 +363,7 @@ func (server *Server) handleModify(
 		)
 	}
 	var responseControls []ldapwire.Control
-	nextRuntime, err := server.modifyEntry(
+	nextRuntime, syncChange, err := server.modifyEntry(
 		ctx,
 		state.runtime,
 		state.boundDN,
@@ -403,6 +418,9 @@ func (server *Server) handleModify(
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
 	}
+	if err == nil {
+		server.publishSyncChange(syncChange)
+	}
 	return server.finishOperationWithControls(
 		connection,
 		message.ID,
@@ -432,14 +450,17 @@ func (server *Server) modifyEntry(
 	manageDsaIT bool,
 	precondition entryModificationPrecondition,
 	postcondition entryModificationPostcondition,
-) (*runtimeState, error) {
+) (*runtimeState, *syncChange, error) {
 	configurationWrite := isConfigurationDN(dn)
 	if configurationWrite {
 		server.configMu.Lock()
 		defer server.configMu.Unlock()
 	}
 
-	var nextRuntime *runtimeState
+	var (
+		nextRuntime *runtimeState
+		syncChange  *syncChange
+	)
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := server.entryOrReferral(
@@ -458,6 +479,7 @@ func (server *Server) modifyEntry(
 		if err != nil {
 			return err
 		}
+		before := entry.Clone()
 		collectivePlan, err := buildCollectiveAttributePlan(runtime.schema, tx)
 		if err != nil {
 			return err
@@ -529,11 +551,20 @@ func (server *Server) modifyEntry(
 		if configurationWrite {
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
-			return err
+			if err != nil {
+				return err
+			}
 		}
-		return nil
+		var changeErr error
+		syncChange, changeErr = server.recordSyncChange(
+			writer,
+			database,
+			&before,
+			&entry,
+		)
+		return changeErr
 	})
-	return nextRuntime, err
+	return nextRuntime, syncChange, err
 }
 
 func (server *Server) handleDelete(
@@ -596,6 +627,7 @@ func (server *Server) handleDelete(
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
+		syncChange       *syncChange
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
@@ -700,12 +732,24 @@ func (server *Server) handleDelete(
 		if configurationWrite {
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
-			return err
+			if err != nil {
+				return err
+			}
 		}
-		return nil
+		var changeErr error
+		syncChange, changeErr = server.recordSyncChange(
+			writer,
+			*database,
+			&entry,
+			nil,
+		)
+		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
+	}
+	if err == nil {
+		server.publishSyncChange(syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -848,6 +892,7 @@ func (server *Server) handleModifyDN(
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
+		syncChange       *syncChange
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
@@ -867,6 +912,7 @@ func (server *Server) handleModifyDN(
 		if err != nil {
 			return err
 		}
+		sourceBefore := sourceEntry.Clone()
 		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
 		if err != nil {
 			return err
@@ -1053,6 +1099,7 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 		}
+		var renamedEntry *directory.Entry
 		for i := range moves {
 			item := &moves[i]
 			item.entry.DN = item.newDN.String()
@@ -1080,6 +1127,8 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 			if item.oldDN.Equal(oldDN) {
+				renamed := item.entry.Clone()
+				renamedEntry = &renamed
 				postRead, err := server.readResponseControl(
 					state.runtime,
 					tx,
@@ -1102,12 +1151,27 @@ func (server *Server) handleModifyDN(
 		if configurationWrite {
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
-			return err
+			if err != nil {
+				return err
+			}
 		}
-		return nil
+		if renamedEntry == nil {
+			return errors.New("renamed entry is missing from move set")
+		}
+		var changeErr error
+		syncChange, changeErr = server.recordSyncChange(
+			writer,
+			*database,
+			&sourceBefore,
+			renamedEntry,
+		)
+		return changeErr
 	})
 	if err == nil && nextRuntime != nil {
 		server.runtime.Store(nextRuntime)
+	}
+	if err == nil {
+		server.publishSyncChange(syncChange)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -1397,7 +1461,12 @@ func (server *Server) nextCSN() string {
 		server.lastCSN = now
 		server.csnCounter = 0
 	} else {
-		server.csnCounter++
+		if server.csnCounter == openLDAPCSNCounterMax {
+			server.lastCSN = server.lastCSN.Add(time.Microsecond)
+			server.csnCounter = 0
+		} else {
+			server.csnCounter++
+		}
 	}
 	return fmt.Sprintf(
 		"%s#%06x#000#000000",

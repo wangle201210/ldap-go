@@ -113,9 +113,16 @@ directory behavior must be readable and writable through the config DIT.
 ### Replication
 
 When `olcLastMod` is enabled, committed writes receive OpenLDAP-compatible CSN
-metadata and are appended to an ordered change stream. RFC 4533 provider and
-consumer support is built on that stream. Delta-syncrepl uses the same durable
-log through the accesslog overlay.
+metadata. A `syncprov` database atomically advances durable per-partition
+`contextCSN` metadata and publishes an after-commit before/after record to a
+bounded process-local stream. RFC 4533 refresh uses a consistent directory
+snapshot plus present UUIDs, so reconnects recover deletions without relying
+on process-local history; refresh-and-persist consumes the stream after
+subscribing before its snapshot.
+
+A durable ordered accesslog, delta-syncrepl replay, and the syncrepl consumer
+remain future layers. They must not treat the current process-local stream as a
+crash-recovery log.
 
 ### Security
 

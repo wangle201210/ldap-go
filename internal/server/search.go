@@ -33,6 +33,9 @@ func (server *Server) handleSearch(
 	if runtimeSupportsServerSideSort(state.runtime.databases) {
 		controlSupport |= supportsServerSideSort | supportsVirtualListView
 	}
+	if runtimeSupportsSyncProvider(state.runtime.databases) {
+		controlSupport |= supportsSync
+	}
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
 		controlSupport,
@@ -44,7 +47,6 @@ func (server *Server) handleSearch(
 			*controlFailure,
 		)
 	}
-
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
 	paging, pagingFailure := preparePagedSearch(
 		state,
@@ -104,6 +106,19 @@ func (server *Server) handleSearch(
 	rootDSESearch := base.Depth() == 0 &&
 		request.Scope == directory.ScopeBase
 	subschemaSearch := isSubschemaDN(base)
+	if (rootDSESearch || subschemaSearch) && controls.sync != nil {
+		if controls.sync.critical {
+			return server.writeSearchDone(
+				connection,
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"Sync is not enabled for this search target",
+				),
+			)
+		}
+		controls.sync = nil
+	}
 	vlvRequest := controls.vlv
 	if (rootDSESearch || subschemaSearch) &&
 		(controls.sorting != nil || vlvRequest != nil) {
@@ -419,6 +434,39 @@ func (server *Server) handleSearch(
 		)
 	}
 
+	syncSearch, syncFailure := server.prepareSyncSearch(
+		state,
+		request,
+		routes,
+		controls,
+	)
+	if syncFailure != nil {
+		return server.writeSearchResult(
+			connection,
+			message.ID,
+			state,
+			nil,
+			nil,
+			nil,
+			*syncFailure,
+			pagedSearchCursor{},
+			false,
+		)
+	}
+	if syncSearch != nil {
+		defer syncSearch.close()
+		if controls.sorting != nil || controls.vlv != nil {
+			return server.writeSearchDone(
+				connection,
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultProtocolError,
+					"Sync control is incompatible with sort and VLV controls",
+				),
+			)
+		}
+	}
+
 	var virtualListView *virtualListViewContext
 	if vlvRequest != nil {
 		if controls.paging != nil {
@@ -627,6 +675,15 @@ func (server *Server) handleSearch(
 	)
 
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		if syncSearch != nil {
+			if err := syncSearch.captureSnapshot(reader); err != nil {
+				return err
+			}
+			if failure := syncSearch.snapshotFailure(); failure != nil {
+				result = *failure
+				return nil
+			}
+		}
 		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		primary := routes[0]
 		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
@@ -785,6 +842,7 @@ func (server *Server) handleSearch(
 			}
 
 			err := tx.ForEach(func(entry directory.Entry) error {
+				storedEntry := entry.Clone()
 				candidate, err := directory.ParseDN(entry.DN)
 				if err != nil {
 					return err
@@ -887,6 +945,22 @@ func (server *Server) handleSearch(
 				) {
 					return nil
 				}
+				var syncUUID ldapwire.SyncUUID
+				if syncSearch != nil {
+					syncUUID, err = syncUUIDFromEntry(storedEntry)
+					if err != nil {
+						result.Code = ldapwire.ResultOperationsError
+						result.DiagnosticMessage = err.Error()
+						return errStopSearch
+					}
+					if !syncSearch.entryChanged(storedEntry) {
+						syncSearch.present = append(
+							syncSearch.present,
+							syncUUID,
+						)
+						return nil
+					}
+				}
 				readable := server.attributesWithPrivilege(
 					state.runtime,
 					tx,
@@ -895,6 +969,12 @@ func (server *Server) handleSearch(
 					acl.Read,
 					request.TypesOnly && !sorting.active(),
 				)
+				if syncSearch != nil {
+					readable = stripSyncCollectiveAttributes(
+						state.runtime.schema,
+						readable,
+					)
+				}
 				selected := server.selectEntry(
 					state.runtime,
 					readable,
@@ -915,6 +995,7 @@ func (server *Server) handleSearch(
 					readable: readable,
 					route:    routeIndex,
 					dn:       entry.DN,
+					syncUUID: syncUUID,
 				})
 				if !sorting.active() {
 					lastCursor = pagedSearchCursor{
@@ -1108,6 +1189,18 @@ func (server *Server) handleSearch(
 		hasMore &&
 		result.Code == ldapwire.ResultSuccess {
 		paging.sortLease = sortLease
+	}
+	if syncSearch != nil {
+		return server.writeSyncSearch(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			request,
+			syncSearch,
+			candidates,
+			result,
+		)
 	}
 	writeErr := server.writeSearchResultWithReferences(
 		connection,
@@ -1650,6 +1743,9 @@ func (server *Server) rootDSE(
 			sortRequestControlOID,
 			vlvRequestControlOID,
 		)
+	}
+	if runtimeSupportsSyncProvider(runtime.databases) {
+		supportedControls = append(supportedControls, syncRequestControlOID)
 	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedControl",

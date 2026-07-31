@@ -52,6 +52,7 @@ type searchCandidate struct {
 	route    int
 	dn       string
 	values   []sortValue
+	syncUUID ldapwire.SyncUUID
 }
 
 type sortValue struct {
