@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +135,139 @@ func TestOpenLDAPSyncreplConsumesLDAPGoProvider(t *testing.T) {
 			"uid=alice,ou=people,dc=example,dc=com": "Alice Reconnected",
 			"uid=carol,ou=people,dc=example,dc=com": "Test User",
 		},
+	)
+}
+
+func TestLDAPGoSyncreplConsumesOpenLDAPProvider(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	providerURI, stopProvider := startOpenLDAPReferenceServer(
+		t,
+		tools,
+		[]string{"syncprov"},
+	)
+	defer stopProvider()
+	providerAddress := strings.TrimPrefix(providerURI, "ldap://")
+
+	consumerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = consumerStore.Close() })
+	seedSyncConsumerDatabase(t, consumerStore, providerAddress, "secret")
+	consumerAddress, stopConsumer := startServer(t, consumerStore, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer func() {
+		if stopConsumer != nil {
+			stopConsumer()
+		}
+	}()
+
+	consumer := dialLDAPRoot(t, consumerAddress)
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice",
+	)
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=bob,ou=people,dc=example,dc=com",
+		"cn",
+		"Bob",
+	)
+
+	provider, err := ldap.DialURL(providerURI)
+	if err != nil {
+		t.Fatalf("DialURL(OpenLDAP provider): %v", err)
+	}
+	defer provider.Close()
+	if err := provider.Bind(syncTestRootDN, "secret"); err != nil {
+		t.Fatalf("Bind(OpenLDAP provider): %v", err)
+	}
+	streaming := ldap.NewModifyRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		nil,
+	)
+	streaming.Replace("cn", []string{"Alice Streaming"})
+	if err := provider.Modify(streaming); err != nil {
+		t.Fatalf("OpenLDAP provider modify: %v", err)
+	}
+	if err := provider.Add(newPersonAddRequest("dave")); err != nil {
+		t.Fatalf("OpenLDAP provider add: %v", err)
+	}
+	if err := provider.Del(ldap.NewDelRequest(
+		"uid=bob,ou=people,dc=example,dc=com",
+		nil,
+	)); err != nil {
+		t.Fatalf("OpenLDAP provider delete: %v", err)
+	}
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice Streaming",
+	)
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=dave,ou=people,dc=example,dc=com",
+		"uid",
+		"dave",
+	)
+	waitForSyncConsumerMissing(
+		t,
+		consumer,
+		"uid=bob,ou=people,dc=example,dc=com",
+	)
+
+	consumer.Close()
+	stopConsumer()
+	stopConsumer = nil
+
+	offline := ldap.NewModifyRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		nil,
+	)
+	offline.Replace("cn", []string{"Alice Reconnected"})
+	if err := provider.Modify(offline); err != nil {
+		t.Fatalf("OpenLDAP provider offline modify: %v", err)
+	}
+	if err := provider.Del(ldap.NewDelRequest(
+		"uid=carol,ou=people,dc=example,dc=com",
+		nil,
+	)); err != nil {
+		t.Fatalf("OpenLDAP provider offline delete: %v", err)
+	}
+	if err := provider.Add(newPersonAddRequest("erin")); err != nil {
+		t.Fatalf("OpenLDAP provider offline add: %v", err)
+	}
+
+	consumerAddress, stopConsumer = startServer(t, consumerStore, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	consumer = dialLDAPRoot(t, consumerAddress)
+	defer consumer.Close()
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice Reconnected",
+	)
+	waitForSyncConsumerAttribute(
+		t,
+		consumer,
+		"uid=erin,ou=people,dc=example,dc=com",
+		"uid",
+		"erin",
+	)
+	waitForSyncConsumerMissing(
+		t,
+		consumer,
+		"uid=carol,ou=people,dc=example,dc=com",
 	)
 }
 

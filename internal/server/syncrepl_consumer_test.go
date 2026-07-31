@@ -313,7 +313,12 @@ func TestSyncreplConsumerConvergesWithLDAPGoProvider(t *testing.T) {
 
 	consumerStore := storage.NewMemory()
 	t.Cleanup(func() { _ = consumerStore.Close() })
-	seedSyncConsumerDatabase(t, consumerStore, providerAddress)
+	seedSyncConsumerDatabase(
+		t,
+		consumerStore,
+		providerAddress,
+		syncTestRootPassword,
+	)
 	consumerAddress, stopConsumer := startServer(t, consumerStore, Config{
 		RootDN:       syncTestRootDN,
 		RootPassword: []byte(syncTestRootPassword),
@@ -448,7 +453,8 @@ func newSyncConsumerUnitServer(
 func seedSyncConsumerDatabase(
 	t *testing.T,
 	store storage.Store,
-	providerAddress string,
+	providerAddress,
+	providerPassword string,
 ) {
 	t.Helper()
 	entry := directory.Entry{
@@ -461,7 +467,7 @@ func seedSyncConsumerDatabase(
 				Values: stringValues(
 					`{0}rid=001 provider=ldap://` + providerAddress +
 						` bindmethod=simple binddn="` + syncTestRootDN +
-						`" credentials="` + syncTestRootPassword +
+						`" credentials="` + providerPassword +
 						`" searchbase="dc=example,dc=com"` +
 						` filter="(objectClass=*)" scope=sub attrs="*,+"` +
 						` schemachecking=off type=refreshAndPersist` +

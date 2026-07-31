@@ -64,8 +64,9 @@ syncrepl consumer now loads ordered `olcSyncrepl` values, runs refresh-only or
 refresh-and-persist workers under the server lifecycle, commits RFC 4533 entry
 changes and cookies atomically, applies Present/Delete UUID sets, and resumes
 from its durable cookie after restart. A ldap-go provider-to-consumer topology
-covers initial, persistent, and offline catch-up paths. OpenLDAP-provider
-differentials and delta-syncrepl remain pending milestones.
+covers initial, persistent, and offline catch-up paths, and the same reverse
+topology passes against an OpenLDAP 2.6.13 provider. Broader provider variants
+and delta-syncrepl remain pending milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

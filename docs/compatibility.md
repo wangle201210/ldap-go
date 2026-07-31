@@ -119,7 +119,7 @@ rebuilt by `ldap-go`.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Syncrepl consumer | partial | ordered olcSyncrepl loading and ldap-go provider initial/persist/restart topology pass; OpenLDAP provider differential remains |
+| Syncrepl consumer | partial | ordered olcSyncrepl loading plus ldap-go and OpenLDAP 2.6.13 provider initial/persist/restart topologies pass; advanced modes remain |
 | Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
@@ -340,7 +340,9 @@ removes only local entries in the configured scope and filter that were not
 reported by the provider. An in-process provider/consumer topology verifies
 initial convergence, persistent Add/Modify/Delete, consumer shutdown, offline
 provider changes, restart with the same store, cookie catch-up, and stale-entry
-removal.
+removal. A gated reverse process topology uses a real OpenLDAP 2.6.13
+syncprov/MDB provider and verifies the same initial, persistent, stopped
+consumer, and cookie-restart sequence.
 
 Sync composes with RFC 2891 sorting and VLV after candidates from all database
 routes have been collected. Refresh-only entries always carry Sync State, and
@@ -357,8 +359,8 @@ This provider does not yet implement accesslog replay,
 context, or a full `slapd` topology differential. The consumer still lacks
 delta/accesslog application, the remaining SASL and OpenSSL-specific TLS
 options, shadow update-referral behavior, multi-provider conflict resolution,
-and a real OpenLDAP-provider process differential. The replication rows
-therefore remain `partial`.
+and broader OpenLDAP provider variants. The replication rows therefore remain
+`partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
