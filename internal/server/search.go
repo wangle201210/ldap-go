@@ -1890,7 +1890,7 @@ func (server *Server) rootDSE(
 
 func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 	registry := runtime.schema
-	return directory.Entry{
+	entry := directory.Entry{
 		DN: "cn=Subschema",
 		Attributes: []directory.Attribute{
 			{
@@ -1917,6 +1917,13 @@ func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 			},
 		},
 	}
+	if descriptions := registry.DITContentRuleDescriptions(); len(descriptions) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "dITContentRules",
+			Values:      stringValues(descriptions...),
+		})
+	}
+	return entry
 }
 
 func (server *Server) selectEntry(

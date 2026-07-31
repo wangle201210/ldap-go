@@ -18,12 +18,14 @@ type Registry struct {
 	mu            sync.RWMutex
 	attributes    map[string]*AttributeType
 	objectClasses map[string]*ObjectClass
+	contentRules  map[string]*DITContentRule
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		attributes:    make(map[string]*AttributeType),
 		objectClasses: make(map[string]*ObjectClass),
+		contentRules:  make(map[string]*DITContentRule),
 	}
 }
 
@@ -51,6 +53,16 @@ func (registry *Registry) Clone() *Registry {
 			objectClassCopies[objectClass] = copy
 		}
 		cloned.objectClasses[key] = copy
+	}
+	contentRuleCopies := make(map[*DITContentRule]*DITContentRule)
+	for key, contentRule := range registry.contentRules {
+		copy, exists := contentRuleCopies[contentRule]
+		if !exists {
+			value := cloneDITContentRule(*contentRule)
+			copy = &value
+			contentRuleCopies[contentRule] = copy
+		}
+		cloned.contentRules[key] = copy
 	}
 	return cloned
 }
@@ -96,6 +108,16 @@ func cloneObjectClass(objectClass ObjectClass) ObjectClass {
 	return objectClass
 }
 
+func cloneDITContentRule(contentRule DITContentRule) DITContentRule {
+	contentRule.Names = append([]string(nil), contentRule.Names...)
+	contentRule.Auxiliary = append([]string(nil), contentRule.Auxiliary...)
+	contentRule.Must = append([]string(nil), contentRule.Must...)
+	contentRule.May = append([]string(nil), contentRule.May...)
+	contentRule.Not = append([]string(nil), contentRule.Not...)
+	contentRule.Extensions = cloneExtensions(contentRule.Extensions)
+	return contentRule
+}
+
 func cloneExtensions(extensions map[string][]string) map[string][]string {
 	if extensions == nil {
 		return nil
@@ -126,6 +148,46 @@ func (registry *Registry) RegisterObjectClass(objectClass ObjectClass) error {
 	copy := objectClass
 	for _, key := range keys {
 		registry.objectClasses[key] = &copy
+	}
+	return nil
+}
+
+func (registry *Registry) RegisterDITContentRule(
+	contentRule DITContentRule,
+) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if structural, ok := registry.objectClasses[schemaKey(contentRule.OID)]; ok {
+		contentRule.OID = structural.OID
+	}
+	keys := schemaKeys(contentRule.OID, contentRule.Names)
+	if len(keys) == 0 {
+		return errors.New("DIT content rule requires an OID")
+	}
+	seenKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if _, duplicate := seenKeys[key]; duplicate {
+			return fmt.Errorf(
+				"DIT content rule %q repeats identifier %q",
+				contentRule.Name(),
+				key,
+			)
+		}
+		seenKeys[key] = struct{}{}
+		if _, exists := registry.contentRules[key]; exists {
+			return fmt.Errorf(
+				"DIT content rule %q is already registered",
+				key,
+			)
+		}
+	}
+	if err := registry.validateDITContentRule(contentRule); err != nil {
+		return err
+	}
+	copy := cloneDITContentRule(contentRule)
+	for _, key := range keys {
+		registry.contentRules[key] = &copy
 	}
 	return nil
 }
@@ -199,6 +261,53 @@ func (registry *Registry) UpsertObjectClass(objectClass ObjectClass) error {
 	return nil
 }
 
+func (registry *Registry) UpsertDITContentRule(
+	contentRule DITContentRule,
+) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	if structural, ok := registry.objectClasses[schemaKey(contentRule.OID)]; ok {
+		contentRule.OID = structural.OID
+	}
+	keys := schemaKeys(contentRule.OID, contentRule.Names)
+	if len(keys) == 0 {
+		return errors.New("DIT content rule requires an OID")
+	}
+	seenKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if _, duplicate := seenKeys[key]; duplicate {
+			return fmt.Errorf(
+				"DIT content rule %q repeats identifier %q",
+				contentRule.Name(),
+				key,
+			)
+		}
+		seenKeys[key] = struct{}{}
+		if existing, ok := registry.contentRules[key]; ok &&
+			!strings.EqualFold(existing.OID, contentRule.OID) {
+			return fmt.Errorf(
+				"DIT content rule name %q conflicts with OID %q",
+				key,
+				existing.OID,
+			)
+		}
+	}
+	if err := registry.validateDITContentRule(contentRule); err != nil {
+		return err
+	}
+	for key, existing := range registry.contentRules {
+		if strings.EqualFold(existing.OID, contentRule.OID) {
+			delete(registry.contentRules, key)
+		}
+	}
+	copy := cloneDITContentRule(contentRule)
+	for _, key := range keys {
+		registry.contentRules[key] = &copy
+	}
+	return nil
+}
+
 func (registry *Registry) AttributeType(name string) (AttributeType, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -227,6 +336,13 @@ func (registry *Registry) AttributeValues(
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
+	return registry.attributeValues(entry, description)
+}
+
+func (registry *Registry) attributeValues(
+	entry directory.Entry,
+	description string,
+) [][]byte {
 	var values [][]byte
 	for _, attribute := range entry.Attributes {
 		if !registry.attributeDescriptionSubtype(
@@ -270,6 +386,16 @@ func (registry *Registry) ObjectClass(name string) (ObjectClass, bool) {
 	return *objectClass, true
 }
 
+func (registry *Registry) DITContentRule(name string) (DITContentRule, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	contentRule, ok := registry.contentRules[schemaKey(name)]
+	if !ok {
+		return DITContentRule{}, false
+	}
+	return cloneDITContentRule(*contentRule), true
+}
+
 func (registry *Registry) EntryHasObjectClass(
 	entry directory.Entry,
 	name string,
@@ -281,7 +407,7 @@ func (registry *Registry) EntryHasObjectClass(
 	if !ok {
 		return false
 	}
-	for _, value := range entry.Values("objectClass") {
+	for _, value := range registry.attributeValues(entry, "objectClass") {
 		candidate, ok := registry.objectClasses[schemaKey(string(value))]
 		if ok && registry.isSubclass(candidate, target, make(map[string]bool)) {
 			return true
@@ -368,12 +494,24 @@ func (registry *Registry) ObjectClassDescriptions() []string {
 	return result
 }
 
+func (registry *Registry) DITContentRuleDescriptions() []string {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	contentRules := uniqueDITContentRules(registry.contentRules)
+	result := make([]string, len(contentRules))
+	for i := range contentRules {
+		result[i] = FormatDITContentRule(contentRules[i])
+	}
+	return result
+}
+
 func (registry *Registry) StructuralObjectClass(entry directory.Entry) (string, error) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
 	classes := make(map[string]*ObjectClass)
-	for _, value := range entry.Values("objectClass") {
+	for _, value := range registry.attributeValues(entry, "objectClass") {
 		objectClass, ok := registry.objectClasses[schemaKey(string(value))]
 		if !ok {
 			return "", &Violation{
@@ -425,6 +563,16 @@ func (registry *Registry) ParseAndRegisterObjectClass(description string) error 
 		return err
 	}
 	return registry.RegisterObjectClass(objectClass)
+}
+
+func (registry *Registry) ParseAndRegisterDITContentRule(
+	description string,
+) error {
+	contentRule, err := ParseDITContentRule(description)
+	if err != nil {
+		return err
+	}
+	return registry.RegisterDITContentRule(contentRule)
 }
 
 func (registry *Registry) Compare(
@@ -520,7 +668,7 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
-	classValues := entry.Values("objectClass")
+	classValues := registry.attributeValues(entry, "objectClass")
 	if len(classValues) == 0 {
 		return &Violation{
 			Kind:      ViolationMissingRequiredAttribute,
@@ -546,6 +694,77 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 
 	if err := registry.validateStructuralClasses(classes); err != nil {
 		return err
+	}
+	structuralClass, err := registry.mostSpecificStructuralClass(classes)
+	if err != nil {
+		return err
+	}
+	contentRule := registry.contentRules[schemaKey(structuralClass.OID)]
+	if contentRule != nil {
+		if contentRule.Obsolete {
+			return &Violation{
+				Kind: ViolationStructuralObjectClass,
+				Message: fmt.Sprintf(
+					"content rule '%s' is obsolete",
+					contentRule.Name(),
+				),
+			}
+		}
+		presentAttributes := make(map[string]struct{}, len(entry.Attributes))
+		for _, attribute := range entry.Attributes {
+			if attributeType, ok := registry.attributes[schemaKey(
+				baseAttributeDescription(attribute.Description),
+			)]; ok {
+				presentAttributes[schemaKey(attributeType.OID)] = struct{}{}
+			}
+		}
+		for _, name := range contentRule.Must {
+			key := registry.attributeIdentifierKey(name)
+			if _, present := presentAttributes[key]; !present {
+				return &Violation{
+					Kind: ViolationMissingRequiredAttribute,
+					Message: fmt.Sprintf(
+						"content rule '%s' requires attribute '%s'",
+						contentRule.Name(),
+						registry.attributeTypeName(name),
+					),
+				}
+			}
+		}
+		for _, name := range contentRule.Not {
+			key := registry.attributeIdentifierKey(name)
+			if _, present := presentAttributes[key]; present {
+				return &Violation{
+					Kind: ViolationDisallowedAttribute,
+					Message: fmt.Sprintf(
+						"content rule '%s' precluded attribute '%s'",
+						contentRule.Name(),
+						registry.attributeTypeName(name),
+					),
+				}
+			}
+		}
+		allowedAuxiliary := make(map[string]struct{}, len(contentRule.Auxiliary))
+		for _, name := range contentRule.Auxiliary {
+			objectClass := registry.objectClasses[schemaKey(name)]
+			allowedAuxiliary[schemaKey(objectClass.OID)] = struct{}{}
+		}
+		for _, value := range classValues {
+			objectClass := registry.objectClasses[schemaKey(string(value))]
+			if objectClass.Kind != ObjectClassAuxiliary {
+				continue
+			}
+			if _, ok := allowedAuxiliary[schemaKey(objectClass.OID)]; !ok {
+				return &Violation{
+					Kind: ViolationStructuralObjectClass,
+					Message: fmt.Sprintf(
+						"class '%s' not allowed by content rule '%s'",
+						objectClass.Name(),
+						contentRule.Name(),
+					),
+				}
+			}
+		}
 	}
 	subentry := registry.hasCollectedObjectClass(classes, "subentry")
 	collectiveSubentry := registry.hasCollectedObjectClass(
@@ -610,27 +829,47 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			}
 		}
 	}
-	required := make(map[string]struct{})
-	allowed := map[string]struct{}{"objectclass": {}}
+	type requiredAttribute struct {
+		name        string
+		contentRule *DITContentRule
+	}
+	required := make(map[string]requiredAttribute)
+	allowed := map[string]struct{}{
+		registry.attributeIdentifierKey("objectClass"): {},
+	}
 	extensible := false
 	for _, objectClass := range classes {
 		if strings.EqualFold(objectClass.Name(), "extensibleObject") {
 			extensible = true
 		}
 		for _, name := range objectClass.Must {
-			required[schemaKey(name)] = struct{}{}
-			allowed[schemaKey(name)] = struct{}{}
+			key := registry.attributeIdentifierKey(name)
+			required[key] = requiredAttribute{name: name}
+			allowed[key] = struct{}{}
 		}
 		for _, name := range objectClass.May {
-			allowed[schemaKey(name)] = struct{}{}
+			allowed[registry.attributeIdentifierKey(name)] = struct{}{}
+		}
+	}
+	if contentRule != nil {
+		for _, name := range contentRule.Must {
+			key := registry.attributeIdentifierKey(name)
+			required[key] = requiredAttribute{
+				name:        registry.attributeTypeName(name),
+				contentRule: contentRule,
+			}
+			allowed[key] = struct{}{}
+		}
+		for _, name := range contentRule.May {
+			allowed[registry.attributeIdentifierKey(name)] = struct{}{}
 		}
 	}
 
 	present := make(map[string]struct{}, len(entry.Attributes))
 	for _, attribute := range entry.Attributes {
 		baseName := baseAttributeDescription(attribute.Description)
-		key := schemaKey(baseName)
-		attributeType, ok := registry.attributes[key]
+		lookupKey := schemaKey(baseName)
+		attributeType, ok := registry.attributes[lookupKey]
 		if !ok {
 			return &Violation{
 				Kind:      ViolationUndefinedAttribute,
@@ -638,6 +877,7 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 				Message:   "undefined attribute type",
 			}
 		}
+		key := schemaKey(attributeType.OID)
 		present[key] = struct{}{}
 		collective, err := registry.attributeTypeIsCollective(
 			attributeType,
@@ -658,9 +898,11 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			attributeType.Usage == UsageUserApplications {
 			if _, ok := allowed[key]; !ok {
 				return &Violation{
-					Kind:      ViolationDisallowedAttribute,
-					Attribute: attribute.Description,
-					Message:   "attribute is not allowed by the entry object classes",
+					Kind: ViolationDisallowedAttribute,
+					Message: fmt.Sprintf(
+						"attribute '%s' not allowed",
+						attributeType.Name(),
+					),
 				}
 			}
 		}
@@ -710,11 +952,21 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			}
 		}
 	}
-	for name := range required {
-		if _, ok := present[name]; !ok {
+	for key, requiredAttribute := range required {
+		if _, ok := present[key]; !ok {
+			if requiredAttribute.contentRule != nil {
+				return &Violation{
+					Kind: ViolationMissingRequiredAttribute,
+					Message: fmt.Sprintf(
+						"content rule '%s' requires attribute '%s'",
+						requiredAttribute.contentRule.Name(),
+						requiredAttribute.name,
+					),
+				}
+			}
 			return &Violation{
 				Kind:      ViolationMissingRequiredAttribute,
-				Attribute: name,
+				Attribute: requiredAttribute.name,
 				Message:   "required attribute is missing",
 			}
 		}
@@ -831,6 +1083,93 @@ func (registry *Registry) validateObjectClassCollectiveAttributes(
 	return nil
 }
 
+func (registry *Registry) validateDITContentRule(
+	contentRule DITContentRule,
+) error {
+	structural, ok := registry.objectClasses[schemaKey(contentRule.OID)]
+	if !ok {
+		return fmt.Errorf(
+			"DIT content rule %q references unknown structural object class %q",
+			contentRule.Name(),
+			contentRule.OID,
+		)
+	}
+	if structural.Kind != ObjectClassStructural {
+		return fmt.Errorf(
+			"DIT content rule %q references non-structural object class %q",
+			contentRule.Name(),
+			structural.Name(),
+		)
+	}
+
+	for _, name := range contentRule.Auxiliary {
+		auxiliary, ok := registry.objectClasses[schemaKey(name)]
+		if !ok {
+			return fmt.Errorf(
+				"DIT content rule %q references unknown auxiliary object class %q",
+				contentRule.Name(),
+				name,
+			)
+		}
+		if auxiliary.Kind != ObjectClassAuxiliary {
+			return fmt.Errorf(
+				"DIT content rule %q references non-auxiliary object class %q",
+				contentRule.Name(),
+				auxiliary.Name(),
+			)
+		}
+	}
+
+	seen := make(map[string]string)
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "MUST", values: contentRule.Must},
+		{name: "MAY", values: contentRule.May},
+		{name: "NOT", values: contentRule.Not},
+	} {
+		for _, name := range field.values {
+			attribute, ok := registry.attributes[schemaKey(name)]
+			if !ok {
+				return fmt.Errorf(
+					"DIT content rule %q %s references unknown attribute type %q",
+					contentRule.Name(),
+					field.name,
+					name,
+				)
+			}
+			effective, err := registry.effectiveAttributeType(
+				attribute,
+				make(map[string]bool),
+			)
+			if err != nil {
+				return err
+			}
+			if effective.Usage != UsageUserApplications {
+				return fmt.Errorf(
+					"DIT content rule %q %s references operational attribute type %q",
+					contentRule.Name(),
+					field.name,
+					attribute.Name(),
+				)
+			}
+			key := schemaKey(attribute.OID)
+			if previous, duplicate := seen[key]; duplicate {
+				return fmt.Errorf(
+					"DIT content rule %q repeats attribute type %q in %s and %s",
+					contentRule.Name(),
+					attribute.Name(),
+					previous,
+					field.name,
+				)
+			}
+			seen[key] = field.name
+		}
+	}
+	return nil
+}
+
 func attributeTypeIdentifierMatches(attribute AttributeType, identifier string) bool {
 	identifier = schemaKey(identifier)
 	for _, key := range schemaKeys(attribute.OID, attribute.Names) {
@@ -922,6 +1261,47 @@ func (registry *Registry) validateStructuralClasses(classes map[string]*ObjectCl
 		}
 	}
 	return nil
+}
+
+func (registry *Registry) mostSpecificStructuralClass(
+	classes map[string]*ObjectClass,
+) (*ObjectClass, error) {
+	for _, candidate := range classes {
+		if candidate.Kind != ObjectClassStructural {
+			continue
+		}
+		mostSpecific := true
+		for _, other := range classes {
+			if other.Kind == ObjectClassStructural &&
+				!registry.isSubclass(candidate, other, make(map[string]bool)) {
+				mostSpecific = false
+				break
+			}
+		}
+		if mostSpecific {
+			return candidate, nil
+		}
+	}
+	return nil, &Violation{
+		Kind:    ViolationStructuralObjectClass,
+		Message: "entry has no structural object class",
+	}
+}
+
+func (registry *Registry) attributeIdentifierKey(name string) string {
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(name))]
+	if !ok {
+		return schemaKey(baseAttributeDescription(name))
+	}
+	return schemaKey(attribute.OID)
+}
+
+func (registry *Registry) attributeTypeName(name string) string {
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(name))]
+	if !ok {
+		return baseAttributeDescription(name)
+	}
+	return attribute.Name()
 }
 
 func (registry *Registry) isSubclass(
@@ -1109,6 +1489,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	case SyntaxSubtreeSpecification:
 		if _, err := ParseSubtreeSpecification(string(value)); err != nil {
 			return fmt.Errorf("value is not a valid subtree specification: %w", err)
+		}
+	case SyntaxDITContentRule:
+		if _, err := ParseDITContentRule(string(value)); err != nil {
+			return fmt.Errorf("value is not a DIT content rule description: %w", err)
 		}
 	case SyntaxOID:
 		if !validObjectIdentifier(string(value)) {
@@ -1658,6 +2042,25 @@ func uniqueObjectClasses(objectClasses map[string]*ObjectClass) []ObjectClass {
 		}
 		seen[key] = struct{}{}
 		result = append(result, *objectClass)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].OID < result[j].OID
+	})
+	return result
+}
+
+func uniqueDITContentRules(
+	contentRules map[string]*DITContentRule,
+) []DITContentRule {
+	seen := make(map[string]struct{})
+	result := make([]DITContentRule, 0)
+	for _, contentRule := range contentRules {
+		key := schemaKey(contentRule.OID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, cloneDITContentRule(*contentRule))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].OID < result[j].OID

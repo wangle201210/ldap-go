@@ -123,6 +123,59 @@ func ParseObjectClass(description string) (ObjectClass, error) {
 	return objectClass, nil
 }
 
+func ParseDITContentRule(description string) (DITContentRule, error) {
+	parser, err := newDescriptionParser(description)
+	if err != nil {
+		return DITContentRule{}, err
+	}
+	contentRule := DITContentRule{
+		OID:        parser.take(),
+		Extensions: make(map[string][]string),
+	}
+	if contentRule.OID == "" {
+		return DITContentRule{}, parser.errorf("missing DIT content rule OID")
+	}
+
+	seen := make(map[string]struct{})
+	for !parser.atEnd() {
+		keyword := strings.ToUpper(parser.take())
+		if _, duplicate := seen[keyword]; duplicate {
+			return DITContentRule{}, parser.errorf(
+				"duplicate DIT content rule field %q",
+				keyword,
+			)
+		}
+		seen[keyword] = struct{}{}
+		switch {
+		case keyword == "NAME":
+			contentRule.Names, err = parser.readList()
+		case keyword == "DESC":
+			contentRule.Description, err = parser.readOne()
+		case keyword == "OBSOLETE":
+			contentRule.Obsolete = true
+		case keyword == "AUX":
+			contentRule.Auxiliary, err = parser.readList()
+		case keyword == "MUST":
+			contentRule.Must, err = parser.readList()
+		case keyword == "MAY":
+			contentRule.May, err = parser.readList()
+		case keyword == "NOT":
+			contentRule.Not, err = parser.readList()
+		case strings.HasPrefix(keyword, "X-"):
+			contentRule.Extensions[keyword], err = parser.readList()
+		default:
+			err = fmt.Errorf("unknown DIT content rule field %q", keyword)
+		}
+		if err != nil {
+			return DITContentRule{}, parser.wrap(err)
+		}
+	}
+	if err := parser.finish(); err != nil {
+		return DITContentRule{}, err
+	}
+	return contentRule, nil
+}
+
 type descriptionParser struct {
 	input  string
 	tokens []string

@@ -64,6 +64,25 @@ func (objectClass ObjectClass) Name() string {
 	return objectClass.OID
 }
 
+type DITContentRule struct {
+	OID         string
+	Names       []string
+	Description string
+	Obsolete    bool
+	Auxiliary   []string
+	Must        []string
+	May         []string
+	Not         []string
+	Extensions  map[string][]string
+}
+
+func (contentRule DITContentRule) Name() string {
+	if len(contentRule.Names) > 0 {
+		return contentRule.Names[0]
+	}
+	return contentRule.OID
+}
+
 type ViolationKind uint8
 
 const (

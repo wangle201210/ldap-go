@@ -77,8 +77,13 @@ source references are never persisted.
 ### Schema and matching
 
 DN parsing, attribute descriptions, syntaxes, matching rules, object classes,
-name forms, content rules, and schema validation are centralized. Stored values
+implemented schema rules, and schema validation are centralized. Stored values
 retain their original representation while indexes use normalized values.
+DIT content rules are loaded only after their attribute-type and object-class
+dependencies. The registry indexes each rule by its structural class OID and
+names, publishes canonical descriptions through the subschema subentry, and
+applies only the rule for the entry's exact structural class. Runtime
+replacement makes online schema changes atomic with the `cn=config` write.
 
 ### Backends
 

@@ -61,7 +61,7 @@ No row may become `compatible` based only on unit tests.
 | Subschema subentry | partial | discovery and schema publication tests |
 | Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
 | Collective attributes | partial | RFC 3671 schema, propagation, merge/exclusions, filtering, Compare, controls, paging, sorting/VLV, and ACL tests pass; X.501 administrative-area boundaries and OpenLDAP differential remain |
-| DIT content/name/structure rules | planned | schema enforcement differential tests |
+| DIT content/name/structure rules | partial | OpenLDAP `olcDitContentRules` parsing, publication, enforcement, online/restart, real slapcat import, and slapd differentials pass; name forms and DIT structure rules remain |
 
 ## Authentication, authorization, and security
 
@@ -271,6 +271,19 @@ registered matching rules for Search and Compare. Root DSE discovery and the
 read-only `cn=Subschema` entry publish built-in and imported definitions.
 Attribute selection distinguishes user attributes (`*`) from operational
 attributes (`+`).
+
+OpenLDAP `{n}`-ordered `olcDitContentRules` values load after their custom
+attribute types and object classes. Rules are indexed by the exact structural
+object class, published as `dITContentRules` in `cn=Subschema`, and enforce
+their auxiliary-class allowlist plus `MUST`, `MAY`, `NOT`, and `OBSOLETE`
+semantics on Add and Modify. Registration rejects unknown/non-auxiliary classes,
+unknown or operational attributes, conflicting lists, and duplicate rules.
+Online replacement is atomic and rolls back invalid configuration; restart
+reloads the persisted rule. A generated OpenLDAP
+`slaptest -> slapcat -n 0` entry imports unchanged, and process-level
+differentials match slapd result codes and diagnostics. OpenLDAP 2.6 does not
+expose writable `cn=config` fields for name forms or DIT structure rules; those
+schema elements and `governingStructureRule` enforcement remain pending.
 
 RFC 3296 `ref` and `referral` schema definitions are built in, and
 ManageDsaIT is advertised through Root DSE `supportedControl`. Without the

@@ -30,6 +30,13 @@ func TestLoadOpenLDAPConfigSchema(t *testing.T) {
 					"{0}( 1.2.3.5 NAME 'appUser' SUP top AUXILIARY MUST appID )",
 				),
 			},
+			{
+				Description: "olcDitContentRules",
+				Values: byteValues(
+					"{0}( 2.16.840.1.113730.3.2.2 " +
+						"NAME 'appPersonRule' AUX appUser MUST uid NOT jpegPhoto )",
+				),
+			},
 		},
 	}
 	if err := store.Update(context.Background(), func(tx storage.Writer) error {
@@ -46,8 +53,14 @@ func TestLoadOpenLDAPConfigSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
 	}
-	if result.AttributeTypes != 1 || result.ObjectClasses != 1 {
+	if result.AttributeTypes != 1 ||
+		result.ObjectClasses != 1 ||
+		result.ContentRules != 1 {
 		t.Fatalf("LoadResult = %#v", result)
+	}
+	if contentRule, ok := registry.DITContentRule("appPersonRule"); !ok ||
+		contentRule.OID != "2.16.840.1.113730.3.2.2" {
+		t.Fatalf("appPersonRule = %#v, found %t", contentRule, ok)
 	}
 
 	entry := directory.Entry{
@@ -90,8 +103,45 @@ func TestLoadOpenLDAPConfigSchemaIgnoresBusinessEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
 	}
-	if result.AttributeTypes != 0 || result.ObjectClasses != 0 {
+	if result.AttributeTypes != 0 ||
+		result.ObjectClasses != 0 ||
+		result.ContentRules != 0 {
 		t.Fatalf("LoadResult = %#v", result)
+	}
+}
+
+func TestLoadOpenLDAPConfigRejectsDuplicateDITContentRules(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entry := directory.Entry{
+		DN: "cn={1}rules,cn=schema,cn=config",
+		Attributes: []directory.Attribute{
+			{
+				Description: "olcDitContentRules",
+				Values: byteValues(
+					"{0}( 2.5.6.6 NAME 'firstPersonRule' )",
+					"{1}( 2.5.6.6 NAME 'secondPersonRule' )",
+				),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.Put(entry, false)
+	}); err != nil {
+		t.Fatalf("seed duplicate content rules: %v", err)
+	}
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(
+		context.Background(),
+		store,
+		registry,
+	); err == nil {
+		t.Fatal("LoadOpenLDAPConfig() accepted duplicate DIT content rules")
 	}
 }
 
@@ -178,6 +228,22 @@ func TestBuiltinOpenLDAPCSNAttributes(t *testing.T) {
 		invalid := entry.Clone()
 		invalid.ReplaceValues("contextCSN", byteValues(malformed))
 		assertViolation(t, registry.ValidateEntry(invalid), ViolationSyntax)
+	}
+}
+
+func TestBuiltinDITContentRulesAttribute(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	attribute, found := registry.AttributeType("dITContentRules")
+	if !found ||
+		attribute.OID != "2.5.21.2" ||
+		attribute.Syntax != SyntaxDITContentRule ||
+		attribute.Usage != UsageDirectoryOperation {
+		t.Fatalf("dITContentRules = %#v, found %t", attribute, found)
 	}
 }
 

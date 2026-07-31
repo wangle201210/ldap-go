@@ -79,6 +79,37 @@ func FormatObjectClass(objectClass ObjectClass) string {
 	return strings.Join(append(fields, ")"), " ")
 }
 
+func FormatDITContentRule(contentRule DITContentRule) string {
+	fields := []string{"(", contentRule.OID}
+	if len(contentRule.Names) > 0 {
+		fields = append(fields, "NAME", formatQuotedList(contentRule.Names))
+	}
+	if contentRule.Description != "" {
+		fields = append(
+			fields,
+			"DESC",
+			quoteSchemaValue(contentRule.Description),
+		)
+	}
+	if contentRule.Obsolete {
+		fields = append(fields, "OBSOLETE")
+	}
+	if len(contentRule.Auxiliary) > 0 {
+		fields = append(fields, "AUX", formatOIDList(contentRule.Auxiliary))
+	}
+	if len(contentRule.Must) > 0 {
+		fields = append(fields, "MUST", formatOIDList(contentRule.Must))
+	}
+	if len(contentRule.May) > 0 {
+		fields = append(fields, "MAY", formatOIDList(contentRule.May))
+	}
+	if len(contentRule.Not) > 0 {
+		fields = append(fields, "NOT", formatOIDList(contentRule.Not))
+	}
+	fields = appendExtensions(fields, contentRule.Extensions)
+	return strings.Join(append(fields, ")"), " ")
+}
+
 func formatQuotedList(values []string) string {
 	quoted := make([]string, len(values))
 	for i := range values {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -163,6 +164,72 @@ entryCSN: 20260731130000.000000Z#000001#001#000000
 	} {
 		if !strings.Contains(output.String(), line) {
 			t.Fatalf("exported dynamicObject has no %q:\n%s", line, output.String())
+		}
+	}
+}
+
+func TestImportLDIFPreservesOpenLDAPDITContentRules(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	input := `dn: cn={8}content-rule,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: {8}content-rule
+olcAttributeTypes: {0}( 1.3.6.1.4.1.99999.20 NAME 'migrationCode' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcObjectClasses: {0}( 1.3.6.1.4.1.99999.21 NAME 'migrationAux' SUP top AUXILIARY MUST migrationCode )
+olcDitContentRules: {0}( 2.16.840.1.113730.3.2.2 NAME 'migrationPersonRule' AUX migrationAux MUST uid NOT description )
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(input),
+		ImportOptions{Replace: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(DIT content rule): %v", err)
+	}
+
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	result, err := schema.LoadOpenLDAPConfig(
+		context.Background(),
+		store,
+		registry,
+	)
+	if err != nil {
+		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
+	}
+	if result.AttributeTypes != 1 ||
+		result.ObjectClasses != 1 ||
+		result.ContentRules != 1 {
+		t.Fatalf("schema LoadResult = %#v", result)
+	}
+	contentRule, found := registry.DITContentRule("migrationPersonRule")
+	if !found ||
+		contentRule.OID != "2.16.840.1.113730.3.2.2" ||
+		len(contentRule.Auxiliary) != 1 ||
+		contentRule.Auxiliary[0] != "migrationAux" {
+		t.Fatalf("migrationPersonRule = %#v, found %t", contentRule, found)
+	}
+
+	var output bytes.Buffer
+	if _, err := ExportLDIF(
+		context.Background(),
+		store,
+		&output,
+	); err != nil {
+		t.Fatalf("ExportLDIF(DIT content rule): %v", err)
+	}
+	for _, fragment := range []string{
+		"olcAttributeTypes: {0}( 1.3.6.1.4.1.99999.20",
+		"olcObjectClasses: {0}( 1.3.6.1.4.1.99999.21",
+		"olcDitContentRules: {0}( 2.16.840.1.113730.3.2.2",
+	} {
+		if !strings.Contains(output.String(), fragment) {
+			t.Fatalf("exported schema has no %q:\n%s", fragment, output.String())
 		}
 	}
 }

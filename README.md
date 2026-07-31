@@ -49,6 +49,11 @@ subtree-specification scopes, in-memory value propagation and merging,
 collective exclusions, source references, and logical-entry behavior across
 Search, Compare, assertions, read controls, paging, sorting/VLV, and ACL
 evaluation.
+OpenLDAP `olcDitContentRules` schema is loaded from `cn=config`, published
+through `cn=Subschema`, and enforced on Add and Modify. Auxiliary-class
+allowlists plus `MUST`, `MAY`, `NOT`, and obsolete-rule behavior match slapd
+diagnostics. Online updates, restart, and direct import of a real
+`slapcat -n 0` schema entry pass.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

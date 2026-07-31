@@ -53,7 +53,7 @@ transaction, and replication differentials is enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -73,6 +73,11 @@ The DDS cases run Add, live-TTL Search, Refresh, Modify, ModifyDN, object-count,
 disabled-overlay, and expiration-hierarchy checks against reference slapd.
 They also run OpenLDAP `ldapexop refresh` against ldap-go and verify the
 persisted TTL selected by the server.
+The DIT content-rule cases execute the same auxiliary-class and
+`MUST`/`MAY`/`NOT` Add/Modify sequence against slapd and ldap-go, comparing
+result codes and diagnostics. A second case generates `slapd.d` with
+`slaptest`, exports the matching schema entry with `slapcat -n 0`, imports that
+LDIF directly, and boots ldap-go from it.
 
 The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
 Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM

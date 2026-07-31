@@ -11,6 +11,7 @@ import (
 type LoadResult struct {
 	AttributeTypes int
 	ObjectClasses  int
+	ContentRules   int
 }
 
 // LoadOpenLDAPConfig loads schema descriptions from cn=config-style entries.
@@ -44,6 +45,7 @@ func LoadOpenLDAPConfigReader(
 
 	var attributeDescriptions []string
 	var objectClassDescriptions []string
+	var contentRuleDescriptions []string
 	if err := reader.ForEach(func(entry directory.Entry) error {
 		entryDN, err := directory.ParseDN(entry.DN)
 		if err != nil {
@@ -57,6 +59,12 @@ func LoadOpenLDAPConfigReader(
 		}
 		for _, value := range entry.Values("olcObjectClasses") {
 			objectClassDescriptions = append(objectClassDescriptions, string(value))
+		}
+		for _, value := range entry.Values("olcDitContentRules") {
+			contentRuleDescriptions = append(
+				contentRuleDescriptions,
+				string(value),
+			)
 		}
 		return nil
 	}); err != nil {
@@ -83,6 +91,23 @@ func LoadOpenLDAPConfigReader(
 			return LoadResult{}, fmt.Errorf("register olcObjectClasses %q: %w", objectClass.Name(), err)
 		}
 		result.ObjectClasses++
+	}
+	for _, description := range contentRuleDescriptions {
+		contentRule, err := ParseDITContentRule(description)
+		if err != nil {
+			return LoadResult{}, fmt.Errorf(
+				"parse olcDitContentRules: %w",
+				err,
+			)
+		}
+		if err := registry.RegisterDITContentRule(contentRule); err != nil {
+			return LoadResult{}, fmt.Errorf(
+				"register olcDitContentRules %q: %w",
+				contentRule.Name(),
+				err,
+			)
+		}
+		result.ContentRules++
 	}
 	return result, nil
 }
