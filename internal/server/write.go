@@ -26,13 +26,17 @@ var protectedOperationalAttributes = map[string]string{
 	"2.5.18.12":                     "collectiveAttributeSubentries",
 	"2.5.21.9":                      "structuralObjectClass",
 	"1.3.6.1.1.16.4":                "entryUUID",
+	"1.3.6.1.4.1.1466.101.119.3":    "entryTtl",
 	"1.3.6.1.4.1.4203.666.1.7":      "entryCSN",
 	"1.3.6.1.4.1.4203.666.1.25":     "contextCSN",
+	"1.3.6.1.4.1.4203.666.1.57":     "entryExpireTimestamp",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
 	"contextcsn":                    "contextCSN",
 	"entrycsn":                      "entryCSN",
+	"entryexpiretimestamp":          "entryExpireTimestamp",
+	"entryttl":                      "entryTtl",
 	"entryuuid":                     "entryUUID",
 	"modifiersname":                 "modifiersName",
 	"modifytimestamp":               "modifyTimestamp",
@@ -131,6 +135,16 @@ func (server *Server) handleAdd(
 			return err
 		}
 		if !configurationWrite {
+			if err := prepareDDSAdd(
+				state.runtime,
+				*database,
+				&entry,
+				time.Now(),
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
 			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
 			}
@@ -226,6 +240,27 @@ func (server *Server) handleAdd(
 		logicalParent, err := collectivePlan.apply(parent)
 		if err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := server.validateDDSAddParent(
+				state.runtime,
+				tx,
+				state.boundDN,
+				*database,
+				logicalEntry,
+				logicalParent,
+			); err != nil {
+				return err
+			}
+			if err := enforceDDSDynamicObjectLimit(
+				state.runtime,
+				tx,
+				*database,
+				dn,
+				entry,
+			); err != nil {
+				return err
+			}
 		}
 		if !server.allowed(
 			state.runtime,
@@ -525,6 +560,16 @@ func (server *Server) modifyEntry(
 		for _, rdnValue := range dn.RDNValues() {
 			if !entry.HasValue(rdnValue.Type, rdnValue.Value) {
 				return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
+			}
+		}
+		if !configurationWrite {
+			if err := validateDDSModification(
+				runtime,
+				database,
+				before,
+				entry,
+			); err != nil {
+				return err
 			}
 		}
 		if lastModEnabled(runtime, dn) {
@@ -965,6 +1010,19 @@ func (server *Server) handleModifyDN(
 		logicalNewParent, err := collectivePlan.apply(newParent)
 		if err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := server.validateDDSRename(
+				state.runtime,
+				tx,
+				state.boundDN,
+				*database,
+				logicalSourceEntry,
+				logicalNewParent,
+				request.HasNewSuperior,
+			); err != nil {
+				return err
+			}
 		}
 		oldParent, err := parentEntry(tx, oldDN)
 		if err != nil {

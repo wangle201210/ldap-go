@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -374,6 +375,7 @@ func (server *Server) virtualListViewEntries(
 				acl.Read,
 				false,
 			)
+			readable = projectDDSRemainingTTL(readable, entry, time.Now())
 			entries = append(entries, server.selectEntry(
 				state.runtime,
 				readable,

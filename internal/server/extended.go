@@ -45,6 +45,8 @@ func (server *Server) handleExtended(
 		return server.handleTransactionEnd(ctx, connection, state, message, request)
 	case passwordModifyOID:
 		return server.handlePasswordModify(ctx, connection, state, message, request)
+	case dynamicRefreshOID:
+		return server.handleDynamicRefresh(ctx, connection, state, message, request)
 	case whoAmIOID:
 		return server.handleWhoAmI(connection, state, message, request)
 	default:

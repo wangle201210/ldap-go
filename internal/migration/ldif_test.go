@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -98,6 +99,71 @@ dc: duplicate
 		return err
 	}); err != nil {
 		t.Fatalf("replace import did not roll back: %v", err)
+	}
+}
+
+func TestImportLDIFPreservesOpenLDAPDynamicObjectState(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	input := `dn: cn=lease,dc=example,dc=com
+objectClass: top
+objectClass: organizationalRole
+objectClass: dynamicObject
+cn: lease
+entryTtl: 3600
+entryExpireTimestamp: 20260731140000Z
+entryUUID: 10000000-0000-4000-8000-000000000001
+entryCSN: 20260731130000.000000Z#000001#001#000000
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(input),
+		ImportOptions{Replace: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(dynamicObject): %v", err)
+	}
+	entryDN := mustDN(t, "cn=lease,dc=example,dc=com")
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		entry, err := reader.Get(entryDN)
+		if err != nil {
+			return err
+		}
+		assertValues(t, entry.Values("objectClass"), [][]byte{
+			[]byte("top"),
+			[]byte("organizationalRole"),
+			[]byte("dynamicObject"),
+		})
+		assertValues(t, entry.Values("entryTtl"), [][]byte{[]byte("3600")})
+		assertValues(
+			t,
+			entry.Values("entryExpireTimestamp"),
+			[][]byte{[]byte("20260731140000Z")},
+		)
+		return nil
+	}); err != nil {
+		t.Fatalf("read imported dynamicObject: %v", err)
+	}
+
+	var output bytes.Buffer
+	if _, err := ExportLDIF(
+		context.Background(),
+		store,
+		&output,
+	); err != nil {
+		t.Fatalf("ExportLDIF(dynamicObject): %v", err)
+	}
+	for _, line := range []string{
+		"objectClass: dynamicObject",
+		"entryTtl: 3600",
+		"entryExpireTimestamp: 20260731140000Z",
+	} {
+		if !strings.Contains(output.String(), line) {
+			t.Fatalf("exported dynamicObject has no %q:\n%s", line, output.String())
+		}
 	}
 }
 

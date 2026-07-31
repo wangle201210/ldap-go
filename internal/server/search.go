@@ -1005,6 +1005,11 @@ func (server *Server) handleSearch(
 					acl.Read,
 					request.TypesOnly && !sorting.active(),
 				)
+				readable = projectDDSRemainingTTL(
+					readable,
+					entry,
+					time.Now(),
+				)
 				if syncSearch != nil {
 					readable = stripSyncExcludedAttributes(
 						state.runtime.schema,
@@ -1419,6 +1424,7 @@ func (server *Server) continueSortedPagedSearch(
 				acl.Read,
 				false,
 			)
+			readable = projectDDSRemainingTTL(readable, entry, time.Now())
 			entries = append(entries, server.selectEntry(
 				state.runtime,
 				readable,
@@ -1843,6 +1849,12 @@ func (server *Server) rootDSE(
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),
 	})
+	if subtrees := dynamicSubtrees(runtime.databases); len(subtrees) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "dynamicSubtrees",
+			Values:      stringValues(subtrees...),
+		})
+	}
 	supportedControls := []string{
 		assertionControlOID,
 		manageDsaITControlOID,

@@ -985,6 +985,10 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	server.syncChanges.configure(runtime)
 	server.runtime.Store(runtime)
 	server.syncConsumers.configure(runtime)
+	select {
+	case server.ddsWake <- struct{}{}:
+	default:
+	}
 }
 
 func (server *Server) observeCSN(csn openLDAPCSN) {

@@ -49,7 +49,7 @@ No row may become `compatible` based only on unit tests.
 | Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining and `olcDisallows` remain |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
 | LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; proxy authorization, generated passwords, server abort notices, and resource limits remain |
-| Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
+| Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
 
 ## Data model and schema
 
@@ -101,7 +101,7 @@ rebuilt by `ldap-go`.
 | accesslog and auditlog | planned | LDIF/result differential tests |
 | chain | planned | referral chaining tests |
 | constraint | planned | rule and error differential tests |
-| DDS | planned | TTL lifecycle and refresh tests |
+| DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
 | dynlist and dynid | planned | expansion/update tests |
 | homedir | planned | lifecycle hook tests |
 | memberof and refint | planned | transactional referential-integrity tests |
@@ -233,6 +233,37 @@ scope, and filter URL components are forbidden, while non-LDAP URIs remain
 valid. OpenLDAP `ldapsearch -E '!dontUseCopy'` interoperability and raw BER
 differentials cover criticality, invalid values, broken aliases, named
 referrals, URL rewriting, and Compare. Server-side chaining remains pending.
+
+RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
+`olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default
+TTL, expiration interval and tolerance, and the dynamic-object count limit.
+Dynamic Add rejects aliases and referrals, prevents static children below a
+dynamic parent, generates `entryTtl` plus the hidden
+`entryExpireTimestamp`, and enforces the count limit in the storage write
+transaction. Modify cannot convert between static and dynamic entries, direct
+client modification of lifetime attributes is rejected, and ModifyDN cannot
+move a static entry below a dynamic new superior.
+
+Refresh uses strict RFC 2589 BER, applies the configured min/max TTL, requires
+`manage` access to `entryTtl`, updates LastMod/CSN metadata atomically, and
+returns the effective client refresh period. Search projects remaining TTL
+without rewriting the stored refresh value. A server-lifecycle worker honors
+the configured interval and tolerance, deletes expired entries deepest-first,
+defers non-leaf parents, resumes from persisted expiration timestamps after
+restart, and publishes syncprov deletes. Canonical slapcat LDIF preserves
+`dynamicObject`, `entryTtl`, and OpenLDAP's private
+`entryExpireTimestamp`; the private attribute is accepted by schema but omitted
+from Subschema publication.
+
+Root DSE publishes enabled suffixes through `dynamicSubtrees`. OpenLDAP loads
+Refresh with `SLAP_EXOP_HIDE`, so neither slapd nor ldap-go lists its OID in
+`supportedExtension`; clients can issue the operation directly. With
+`olcDDSstate: FALSE`, the object class remains accepted but no lifetime is
+generated or managed. OpenLDAP 2.6.13 differential tests cover Add, Search,
+Refresh, Modify, ModifyDN, limits, disabled state, and parent/child expiration;
+the OpenLDAP `ldapexop refresh` client interoperates with ldap-go. Complex
+ordering with other overlays and replicated DDS exclusion topologies remain
+pending.
 
 The schema registry parses OpenLDAP `{n}`-ordered `olcAttributeTypes` and
 `olcObjectClasses`, applies object-class and syntax checks to writes, and uses

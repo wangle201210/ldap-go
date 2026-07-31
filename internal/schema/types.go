@@ -15,6 +15,7 @@ type AttributeType struct {
 	OID                string
 	Names              []string
 	Description        string
+	Hidden             bool
 	Obsolete           bool
 	Superior           string
 	Equality           string

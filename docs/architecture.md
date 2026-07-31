@@ -117,6 +117,14 @@ They can inspect or transform requests, execute transactional side effects, add
 response controls, and observe final outcomes. Ordering is explicit and
 configuration-backed.
 
+The database-local DDS runtime treats `entryTtl` as a projected operational
+value and persists OpenLDAP's hidden `entryExpireTimestamp` as the durable
+expiration authority. Add and Refresh update both values inside the same
+storage transaction as LastMod and syncprov state. A context-bound scheduler
+keeps one deadline per enabled database, is awakened by runtime replacement,
+rechecks active configuration inside each write transaction, and publishes
+committed expiration deletes only after storage success.
+
 ### Configuration
 
 The canonical runtime configuration is represented as LDAP entries under

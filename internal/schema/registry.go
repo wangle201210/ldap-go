@@ -346,9 +346,12 @@ func (registry *Registry) AttributeTypeDescriptions() []string {
 	defer registry.mu.RUnlock()
 
 	attributes := uniqueAttributeTypes(registry.attributes)
-	result := make([]string, len(attributes))
+	result := make([]string, 0, len(attributes))
 	for i := range attributes {
-		result[i] = FormatAttributeType(attributes[i])
+		if attributes[i].Hidden {
+			continue
+		}
+		result = append(result, FormatAttributeType(attributes[i]))
 	}
 	return result
 }

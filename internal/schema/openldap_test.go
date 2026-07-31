@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -177,5 +178,80 @@ func TestBuiltinOpenLDAPCSNAttributes(t *testing.T) {
 		invalid := entry.Clone()
 		invalid.ReplaceValues("contextCSN", byteValues(malformed))
 		assertViolation(t, registry.ValidateEntry(invalid), ViolationSyntax)
+	}
+}
+
+func TestBuiltinDynamicDirectorySchema(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	entryTTL, ok := registry.AttributeType("entryTtl")
+	if !ok ||
+		entryTTL.OID != "1.3.6.1.4.1.1466.101.119.3" ||
+		entryTTL.Syntax != SyntaxInteger ||
+		!entryTTL.SingleValue ||
+		!entryTTL.NoUserModification ||
+		entryTTL.Usage != UsageDSAOperation ||
+		entryTTL.Hidden {
+		t.Fatalf("entryTtl = %#v, found %t", entryTTL, ok)
+	}
+	dynamicSubtrees, ok := registry.AttributeType("dynamicSubtrees")
+	if !ok ||
+		dynamicSubtrees.OID != "1.3.6.1.4.1.1466.101.119.4" ||
+		dynamicSubtrees.Syntax != SyntaxDistinguishedName ||
+		dynamicSubtrees.SingleValue ||
+		!dynamicSubtrees.NoUserModification ||
+		dynamicSubtrees.Usage != UsageDSAOperation ||
+		dynamicSubtrees.Hidden {
+		t.Fatalf(
+			"dynamicSubtrees = %#v, found %t",
+			dynamicSubtrees,
+			ok,
+		)
+	}
+	expiration, ok := registry.AttributeType("entryExpireTimestamp")
+	if !ok ||
+		expiration.OID != "1.3.6.1.4.1.4203.666.1.57" ||
+		expiration.Syntax != SyntaxGeneralizedTime ||
+		!expiration.SingleValue ||
+		!expiration.NoUserModification ||
+		expiration.Usage != UsageDSAOperation ||
+		!expiration.Hidden {
+		t.Fatalf("entryExpireTimestamp = %#v, found %t", expiration, ok)
+	}
+	dynamicObject, ok := registry.ObjectClass("dynamicObject")
+	if !ok ||
+		dynamicObject.OID != "1.3.6.1.4.1.1466.101.119.2" ||
+		dynamicObject.Kind != ObjectClassAuxiliary {
+		t.Fatalf("dynamicObject = %#v, found %t", dynamicObject, ok)
+	}
+
+	descriptions := strings.Join(registry.AttributeTypeDescriptions(), "\n")
+	if !strings.Contains(descriptions, "1.3.6.1.4.1.1466.101.119.3") ||
+		!strings.Contains(descriptions, "1.3.6.1.4.1.1466.101.119.4") ||
+		strings.Contains(descriptions, "1.3.6.1.4.1.4203.666.1.57") {
+		t.Fatalf("published DDS attribute descriptions:\n%s", descriptions)
+	}
+
+	entry := directory.Entry{
+		DN: "cn=lease,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      byteValues("organizationalRole", "dynamicObject"),
+			},
+			{Description: "cn", Values: byteValues("lease")},
+			{Description: "entryTtl", Values: byteValues("60")},
+			{
+				Description: "entryExpireTimestamp",
+				Values:      byteValues("20260731120000Z"),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(entry); err != nil {
+		t.Fatalf("ValidateEntry(dynamicObject): %v", err)
 	}
 }

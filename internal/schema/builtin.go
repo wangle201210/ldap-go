@@ -31,6 +31,16 @@ func NewBuiltinRegistry() (*Registry, error) {
 			return nil, fmt.Errorf("register built-in attribute type: %w", err)
 		}
 	}
+	for _, description := range builtinHiddenAttributeTypes {
+		attribute, err := ParseAttributeType(description)
+		if err != nil {
+			return nil, fmt.Errorf("parse hidden built-in attribute type: %w", err)
+		}
+		attribute.Hidden = true
+		if err := registry.RegisterAttributeType(attribute); err != nil {
+			return nil, fmt.Errorf("register hidden built-in attribute type: %w", err)
+		}
+	}
 	for _, description := range builtinObjectClasses {
 		if err := registry.ParseAndRegisterObjectClass(description); err != nil {
 			return nil, fmt.Errorf("register built-in object class: %w", err)
@@ -97,10 +107,16 @@ var builtinAttributeTypes = []string{
 	"( 1.3.6.1.1.16.4 NAME 'entryUUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX " + SyntaxUUID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.7 NAME 'entryCSN' DESC 'change sequence number of the entry content' EQUALITY CSNMatch ORDERING CSNOrderingMatch SYNTAX " + SyntaxCSN + "{64} SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.25 NAME 'contextCSN' DESC 'the largest committed CSN of a context' EQUALITY CSNMatch ORDERING CSNOrderingMatch SYNTAX " + SyntaxCSN + "{64} NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.1466.101.119.3 NAME 'entryTtl' DESC 'RFC2589: remaining lifetime of a dynamic entry' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.1466.101.119.4 NAME 'dynamicSubtrees' DESC 'RFC2589: naming contexts supporting dynamic entries' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.120.5 NAME 'namingContexts' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.120.15 NAME 'supportedLDAPVersion' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " USAGE dSAOperation )",
 	"( 1.3.6.1.1.4 NAME 'vendorName' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE USAGE dSAOperation )",
 	"( 1.3.6.1.1.5 NAME 'vendorVersion' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE USAGE dSAOperation )",
+}
+
+var builtinHiddenAttributeTypes = []string{
+	"( 1.3.6.1.4.1.4203.666.1.57 NAME 'entryExpireTimestamp' DESC 'OpenLDAP DDS expiration timestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
 }
 
 var builtinObjectClasses = []string{
@@ -117,5 +133,6 @@ var builtinObjectClasses = []string{
 	"( 2.5.17.2 NAME 'collectiveAttributeSubentry' DESC 'RFC3671: collective attribute subentry' AUXILIARY )",
 	"( 2.5.6.1 NAME 'alias' DESC 'RFC4512: an alias' SUP top STRUCTURAL MUST aliasedObjectName )",
 	"( 2.16.840.1.113730.3.2.6 NAME 'referral' DESC 'namedref: named subordinate referral' SUP top STRUCTURAL MUST ref )",
+	"( 1.3.6.1.4.1.1466.101.119.2 NAME 'dynamicObject' DESC 'RFC2589: entry with a limited lifetime' SUP top AUXILIARY )",
 	"( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject' SUP top AUXILIARY )",
 }

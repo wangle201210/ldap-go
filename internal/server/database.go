@@ -40,6 +40,7 @@ type runtimeDatabase struct {
 	syncNoPresent         bool
 	syncReloadHint        bool
 	syncConsumers         []syncConsumerConfig
+	dds                   *ddsRuntimeConfiguration
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -253,7 +254,9 @@ func loadRuntimeDatabaseOverlays(
 			return fmt.Errorf("%s olcOverlay must be single-valued", entry.DN)
 		}
 		overlayType := databaseType(string(overlayValues[0]))
-		if overlayType != "sssvlv" && overlayType != "syncprov" {
+		if overlayType != "sssvlv" &&
+			overlayType != "syncprov" &&
+			overlayType != "dds" {
 			return nil
 		}
 
@@ -281,6 +284,19 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "dds":
+			if database.dds != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate dds overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			dds, err := loadDDSRuntimeConfiguration(entry, *database)
+			if err != nil {
+				return err
+			}
+			database.dds = &dds
 		case "sssvlv":
 			if database.serverSideSort {
 				return fmt.Errorf(

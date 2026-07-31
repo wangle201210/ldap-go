@@ -61,6 +61,15 @@ databases answer normally; a single-provider shadow Search returns its
 OpenLDAP-rewritten `olcUpdateRef` or `unwillingToPerform`, while shadow Compare
 returns `unwillingToPerform` without consulting copied entry data. OpenLDAP
 `ldapsearch -E '!dontUseCopy'` and raw slapd differential cases pass.
+RFC 2589 dynamic directory services are enabled by an imported
+`olcOverlay=dds`. Dynamic Add generates `entryTtl` and the OpenLDAP
+`entryExpireTimestamp`, Refresh enforces configured min/max TTL and `manage`
+ACLs, searches project remaining TTL, and a lifecycle worker removes expired
+leaf-first hierarchies with syncprov delete publication. Root DSE publishes
+`dynamicSubtrees`; matching OpenLDAP, the hidden Refresh extended operation is
+not listed in `supportedExtension`. DDS state, limits, online configuration,
+restart persistence, slapd differentials, and OpenLDAP `ldapexop refresh`
+interoperability pass.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed

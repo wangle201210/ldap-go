@@ -54,6 +54,7 @@ type Server struct {
 	csnCounter    uint32
 	syncChanges   *syncChangeHub
 	syncConsumers *syncConsumerManager
+	ddsWake       chan struct{}
 }
 
 func New(config Config) (*Server, error) {
@@ -103,6 +104,7 @@ func New(config Config) (*Server, error) {
 		secureTransport: secureTransport,
 		connections:     make(map[net.Conn]struct{}),
 		syncChanges:     newSyncChangeHub(),
+		ddsWake:         make(chan struct{}, 1),
 	}
 	server.syncConsumers = newSyncConsumerManager(server)
 	var runtime *runtimeState
@@ -140,6 +142,17 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	defer server.syncConsumers.stop()
+
+	ddsContext, stopDDS := context.WithCancel(ctx)
+	ddsDone := make(chan struct{})
+	go func() {
+		defer close(ddsDone)
+		server.runDDSExpiration(ddsContext)
+	}()
+	defer func() {
+		stopDDS()
+		<-ddsDone
+	}()
 
 	stop := make(chan struct{})
 	go func() {
