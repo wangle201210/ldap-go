@@ -71,8 +71,8 @@ No row may become `compatible` based only on unit tests.
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
-| TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; reload and CRL remain |
-| National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert and mutual-client-cert matrix |
+| TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
+| National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
 | Audit and security logging | planned | redaction, integrity, and operation coverage |
 
 ## Storage, configuration, and migration
@@ -346,6 +346,24 @@ removal. A gated reverse process topology uses a real OpenLDAP 2.6.13
 syncprov/MDB provider and verifies the same initial, persistent, stopped
 consumer, and cookie-restart sequence.
 
+Consumer TCP setup honors `network-timeout`, `keepalive`, and, on Linux,
+`tcp-user-timeout`. A failed `starttls=critical` aborts the cycle;
+`starttls=yes` logs the failure and reconnects in plaintext because the Go LDAP
+client cannot reuse a connection after a rejected StartTLS operation. LDAPS and
+StartTLS support client certificates, CA files/directories, OpenLDAP
+`tls_reqcert` and `tls_reqsan` hostname policies, `peer`/`all` CRL checks,
+protocol minima, common OpenSSL cipher names and operators, and Go-supported
+curve selection. Go cannot configure TLS 1.3 cipher suites or reproduce the
+complete OpenSSL cipher-expression grammar.
+
+Implicit `ldap+tlcp://` providers run the same RFC 4533 consumer over GB/T 38636.
+Both server signing and encryption certificates are chain-checked, including
+hostname and CRL policy. Mutual authentication uses `tls_cert`/`tls_key` as the
+client signing pair; the ldap-go extensions `tlcp_enc_cert`/`tlcp_enc_key`
+supply the second client pair required by ECDHE SM4/SM3 suites. An end-to-end
+topology verifies SASL EXTERNAL, initial refresh, and persistent modification
+over mutual ECDHE TLCP.
+
 OpenLDAP accesslog delta-syncrepl uses the configured `logbase` and
 `logfilter` after an empty consumer completes a conventional refresh-only
 search. Audit add, modify, modrdn, and delete records are parsed from ordered
@@ -386,9 +404,10 @@ of configuration order.
 This provider does not yet implement an accesslog overlay,
 `olcSpSessionlogSource`, the optional sync-provider subentry context, or a full
 `slapd` topology differential. The consumer still lacks obsolete DSEE
-changelog delta mode, the remaining SASL and OpenSSL-specific TLS options,
-multi-provider conflict resolution, and broader OpenLDAP provider variants.
-The replication rows therefore remain `partial`.
+changelog delta mode, the remaining SASL mechanisms, full OpenSSL
+cipher-expression compatibility, multi-provider conflict resolution, and
+broader OpenLDAP provider variants. The replication rows therefore remain
+`partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

@@ -153,6 +153,13 @@ DN-valued attribute values. Single-provider databases reject client updates or
 return their rewritten update referrals; internal replication bypasses that
 LDAP-operation precondition.
 
+Outbound consumer connections share one RFC 4533 engine across plain LDAP,
+LDAPS, StartTLS, and implicit TLCP. TCP keepalive and Linux user-timeout policy
+are applied before the secure handshake. TLS and TLCP peer verification share
+OpenLDAP-style certificate/SAN requirements and CRL policy, while TLCP verifies
+both server certificates and can present separate SM2 signing and encryption
+client certificates for ECDHE.
+
 The consumer can replay a remote OpenLDAP accesslog as delta-syncrepl. Each
 audit operation and its cookie share a storage transaction; malformed or
 non-replayable history clears the consumer cookie and forces a conventional
@@ -184,6 +191,12 @@ certificate Subject as an LDAP DN through the same connection interface. SASL
 EXTERNAL is advertised per connection, never globally, and a successful Bind
 copies that DN into the ordinary authorization state used by ACL and root
 checks.
+
+The syncrepl client uses Go TLS for LDAPS and StartTLS and the same TLCP adapter
+for `ldap+tlcp://` providers. OpenSSL cipher names and the common
+`DEFAULT`/`HIGH`/`ALL` selection and exclusion operators are mapped to Go's
+configurable TLS 1.0-1.2 suites; TLS 1.3 suite selection and the complete
+OpenSSL cipher-expression language cannot be represented by `crypto/tls`.
 
 ## Data migration contract
 

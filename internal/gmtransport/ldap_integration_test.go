@@ -119,8 +119,16 @@ func handshakeTLCPClient(
 	if err := secured.HandshakeContext(handshakeContext); err != nil {
 		t.Fatalf("TLCP HandshakeContext(): %v", err)
 	}
-	if state := secured.ConnectionState(); state.CipherSuite != tlcp.ECC_SM4_GCM_SM3 {
-		t.Fatalf("TLCP cipher suite = %#x", state.CipherSuite)
+	wantCipherSuite := uint16(tlcp.ECC_SM4_GCM_SM3)
+	if len(config.CipherSuites) > 0 {
+		wantCipherSuite = config.CipherSuites[0]
+	}
+	if state := secured.ConnectionState(); state.CipherSuite != wantCipherSuite {
+		t.Fatalf(
+			"TLCP cipher suite = %#x, want %#x",
+			state.CipherSuite,
+			wantCipherSuite,
+		)
 	}
 	return secured
 }

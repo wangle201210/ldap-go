@@ -238,7 +238,7 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 			t.Fatalf("ParseCertificate(%s): %v", commonName, err)
 		}
 		return tlcp.Certificate{
-			Certificate: [][]byte{der},
+			Certificate: [][]byte{der, rootDER},
 			PrivateKey:  key,
 			Leaf:        parsed,
 		}
@@ -264,6 +264,14 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 		smx509.KeyUsageDigitalSignature,
 		smx509.ExtKeyUsageClientAuth,
 	)
+	clientEncryption := leaf(
+		5,
+		"ldap-go TLCP client encryption",
+		smx509.KeyUsageKeyEncipherment|
+			smx509.KeyUsageDataEncipherment|
+			smx509.KeyUsageKeyAgreement,
+		smx509.ExtKeyUsageClientAuth,
+	)
 	rootPool := smx509.NewCertPool()
 	rootPool.AddCert(rootCertificate)
 	return &tlcp.Config{
@@ -272,7 +280,7 @@ func testTLCPConfigs(t *testing.T) (*tlcp.Config, *tlcp.Config) {
 			ClientAuth:   tlcp.RequireAndVerifyClientCert,
 			ClientCAs:    rootPool,
 		}, &tlcp.Config{
-			Certificates:       []tlcp.Certificate{client},
+			Certificates:       []tlcp.Certificate{client, clientEncryption},
 			InsecureSkipVerify: true,
 			CipherSuites:       []uint16{tlcp.ECC_SM4_GCM_SM3},
 		}

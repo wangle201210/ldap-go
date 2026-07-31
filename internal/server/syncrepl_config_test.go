@@ -155,6 +155,30 @@ func TestParseSyncConsumerConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestParseSyncConsumerConfigTLCPClientEncryptionPair(t *testing.T) {
+	t.Parallel()
+
+	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
+	config, err := parseSyncConsumerConfig(
+		`rid=1 provider=ldap+tlcp://provider.example `+
+			`searchbase="dc=example,dc=com" `+
+			`tls_cert=/run/ldap/client-sign.crt `+
+			`tls_key=/run/ldap/client-sign.key `+
+			`tlcp_enc_cert=/run/ldap/client-enc.crt `+
+			`tlcp_enc_key=/run/ldap/client-enc.key`,
+		"database/example",
+		[]directory.DN{suffix},
+	)
+	if err != nil {
+		t.Fatalf("parse TLCP client certificate pair: %v", err)
+	}
+	if config.tls.tlcpEncryptionCertificate !=
+		"/run/ldap/client-enc.crt" ||
+		config.tls.tlcpEncryptionKey != "/run/ldap/client-enc.key" {
+		t.Fatalf("TLCP client encryption pair = %#v", config.tls)
+	}
+}
+
 func TestParseSyncConsumerConfigSuffixMassage(t *testing.T) {
 	t.Parallel()
 

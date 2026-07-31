@@ -217,6 +217,7 @@ func rewriteReferralURL(
 	if scheme != "ldap" &&
 		scheme != "ldaps" &&
 		scheme != "ldapi" &&
+		scheme != "ldap+tlcp" &&
 		scheme != "pldap" &&
 		scheme != "pldaps" {
 		return raw, true

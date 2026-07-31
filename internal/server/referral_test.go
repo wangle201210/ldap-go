@@ -84,6 +84,14 @@ func TestRewriteReferralURLMatchesOpenLDAPRules(t *testing.T) {
 			ok:     true,
 		},
 		{
+			name:   "TLCP LDAP scheme is supported",
+			raw:    "ldap+tlcp://remote.example/dc=remote,dc=example",
+			target: &base,
+			scope:  referralScopeBase,
+			want:   "ldap+tlcp://remote.example/dc=remote,dc=example??base",
+			ok:     true,
+		},
+		{
 			name:   "non LDAP URI is preserved without label",
 			raw:    "https://directory.example/lookup Directory",
 			target: &child,

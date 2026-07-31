@@ -30,6 +30,17 @@ func TestLoadRuntimeShadowSettings(t *testing.T) {
 			wantShadow: true,
 		},
 		{
+			name: "TLCP update referral",
+			attributes: []directory.Attribute{{
+				Description: "olcUpdateRef",
+				Values: stringValues(
+					"ldap+tlcp://provider.example:1636",
+				),
+			}},
+			consumers:  []syncConsumerConfig{{rid: 1}},
+			wantShadow: true,
+		},
+		{
 			name: "multi provider",
 			attributes: []directory.Attribute{
 				{

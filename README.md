@@ -73,7 +73,10 @@ cannot be replayed safely. The obsolete DSEE changelog mode and a provider-side
 accesslog overlay remain pending. Consumer databases enforce OpenLDAP
 shadow/update-referral rules, support online worker replacement, fractional
 and filtered result sets, refresh-only polling, and suffix massage for entry
-DNs and DN-valued attribute values.
+DNs and DN-valued attribute values. Consumer transports support OpenLDAP
+StartTLS/LDAPS certificate policies, CA and CRL loading, socket keepalive,
+Linux TCP user timeouts, and implicit `ldap+tlcp://` replication with mutual
+SM2 authentication.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -148,6 +151,15 @@ support that profile. TLCP and RFC 8998 TLS 1.3 cipher suites are distinct;
 this milestone implements TLCP only. The corresponding optional client
 authentication flags are `-tlcp-client-ca` and
 `-tlcp-require-client-cert`.
+
+An imported `olcSyncrepl` can use the same implicit TLCP scheme. `tls_cert` and
+`tls_key` identify the client signing pair. ECDHE suites additionally require
+the ldap-go extension fields `tlcp_enc_cert` and `tlcp_enc_key` for the client
+encryption pair:
+
+```text
+olcSyncrepl: {0}rid=001 provider=ldap+tlcp://provider.example:1636 bindmethod=sasl saslmech=EXTERNAL searchbase="dc=example,dc=com" tls_reqcert=demand tls_reqsan=demand tls_cacert=/etc/ldap/tlcp-ca.crt tls_cert=/etc/ldap/client-sign.crt tls_key=/etc/ldap/client-sign.key tlcp_enc_cert=/etc/ldap/client-enc.crt tlcp_enc_key=/etc/ldap/client-enc.key tls_cipher_suite=ECDHE_SM4_GCM_SM3 type=refreshAndPersist
+```
 
 After a standard TLS or TLCP client certificate chain is verified, the
 certificate Subject is normalized as an LDAP DN and the connection advertises

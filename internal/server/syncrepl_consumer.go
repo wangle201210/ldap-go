@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -117,17 +114,9 @@ func (server *Server) runSyncConsumerCycle(
 	if err != nil {
 		return err
 	}
-	defer connection.Close()
-
-	stopClose := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			connection.Close()
-		case <-stopClose:
-		}
+	defer func() {
+		connection.Close()
 	}()
-	defer close(stopClose)
 
 	if config.operationTimeout > 0 {
 		connection.SetTimeout(config.operationTimeout)
@@ -137,17 +126,53 @@ func (server *Server) runSyncConsumerCycle(
 		if parseErr != nil {
 			return parseErr
 		}
-		if strings.EqualFold(parsed.Scheme, "ldaps") {
-			return errors.New("starttls cannot be combined with an ldaps provider")
+		if strings.EqualFold(parsed.Scheme, "ldaps") ||
+			strings.EqualFold(parsed.Scheme, "ldap+tlcp") {
+			return errors.New(
+				"starttls cannot be combined with an implicit secure provider",
+			)
 		}
 		tlsConfig, tlsErr := buildSyncConsumerTLSConfig(config, parsed)
 		if tlsErr != nil {
 			return tlsErr
 		}
 		if startErr := connection.StartTLS(tlsConfig); startErr != nil {
-			return fmt.Errorf("start TLS: %w", startErr)
+			if config.startTLS == syncConsumerStartTLSCritical {
+				connection.Close()
+				return fmt.Errorf("start TLS: %w", startErr)
+			}
+			server.config.Logger.Warn(
+				"syncrepl StartTLS failed; continuing without TLS",
+				"rid",
+				fmt.Sprintf("%03d", config.rid),
+				"provider",
+				provider,
+				"error",
+				startErr,
+			)
+			connection.Close()
+			connection, err = dialSyncConsumer(ctx, config, provider)
+			if err != nil {
+				return fmt.Errorf(
+					"reconnect after noncritical StartTLS failure: %w",
+					err,
+				)
+			}
+			if config.operationTimeout > 0 {
+				connection.SetTimeout(config.operationTimeout)
+			}
 		}
 	}
+	stopClose := make(chan struct{})
+	go func(active *ldap.Conn) {
+		select {
+		case <-ctx.Done():
+			active.Close()
+		case <-stopClose:
+		}
+	}(connection)
+	defer close(stopClose)
+
 	if err := bindSyncConsumer(connection, config, provider); err != nil {
 		return err
 	}
@@ -891,12 +916,12 @@ func dialSyncConsumer(
 	if err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(parsed.Scheme, "ldap+tlcp") {
+		return dialSyncConsumerTLCP(ctx, config, parsed)
+	}
 	tlsConfig, err := buildSyncConsumerTLSConfig(config, parsed)
 	if err != nil {
 		return nil, err
-	}
-	if config.tcpUserTimeout > 0 {
-		return nil, errors.New("tcp-user-timeout is not implemented")
 	}
 
 	timeout := config.networkTimeout
@@ -904,8 +929,8 @@ func dialSyncConsumer(
 		timeout = ldap.DefaultTimeout
 	}
 	dialer := &net.Dialer{Timeout: timeout}
-	if config.keepalive.set {
-		dialer.KeepAlive = time.Duration(config.keepalive.interval) * time.Second
+	if err := configureSyncConsumerDialer(dialer, config); err != nil {
+		return nil, err
 	}
 	result := make(chan syncConsumerDialResult)
 	go func() {
@@ -940,24 +965,31 @@ func buildSyncConsumerTLSConfig(
 	config syncConsumerConfig,
 	provider *url.URL,
 ) (*tls.Config, error) {
-	if config.tls.cipherSuite != "" {
-		return nil, errors.New("tls_cipher_suite is not implemented")
+	if config.tls.tlcpEncryptionCertificate != "" ||
+		config.tls.tlcpEncryptionKey != "" {
+		return nil, errors.New(
+			"tlcp_enc_cert and tlcp_enc_key require an ldap+tlcp provider",
+		)
 	}
-	if config.tls.ecName != "" {
-		return nil, errors.New("tls_ecname is not implemented")
-	}
-	if config.tls.crlCheck != "" && config.tls.crlCheck != "none" {
-		return nil, errors.New("TLS CRL checking is not implemented")
-	}
-
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		ServerName: provider.Hostname(),
 	}
-	switch config.tls.requireCert {
-	case "never", "allow":
-		// OpenLDAP permits an unverified peer for these policies.
-		tlsConfig.InsecureSkipVerify = true
+	if config.tls.cipherSuite != "" {
+		cipherSuites, err := parseSyncConsumerCipherSuites(
+			config.tls.cipherSuite,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.CipherSuites = cipherSuites
+	}
+	if config.tls.ecName != "" {
+		curves, err := parseSyncConsumerCurvePreferences(config.tls.ecName)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.CurvePreferences = curves
 	}
 	if config.tls.protocolMinimum != "" {
 		version, err := parseSyncConsumerTLSVersion(
@@ -968,35 +1000,17 @@ func buildSyncConsumerTLSConfig(
 		}
 		tlsConfig.MinVersion = version
 	}
-	if config.tls.caCertificate != "" || config.tls.caDirectory != "" {
-		roots, err := x509.SystemCertPool()
-		if err != nil || roots == nil {
-			roots = x509.NewCertPool()
-		}
-		if config.tls.caCertificate != "" {
-			if err := appendSyncConsumerCAFile(
-				roots,
-				config.tls.caCertificate,
-			); err != nil {
-				return nil, err
-			}
-		}
-		if config.tls.caDirectory != "" {
-			entries, err := os.ReadDir(config.tls.caDirectory)
-			if err != nil {
-				return nil, fmt.Errorf("read TLS CA directory: %w", err)
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				path := filepath.Join(config.tls.caDirectory, entry.Name())
-				if err := appendSyncConsumerCAFile(roots, path); err != nil {
-					continue
-				}
-			}
-		}
-		tlsConfig.RootCAs = roots
+	material, err := loadSyncConsumerTLSMaterial(config.tls)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.RootCAs = material.roots
+	if err := configureSyncConsumerTLSVerification(
+		tlsConfig,
+		config.tls,
+		material.crls,
+	); err != nil {
+		return nil, err
 	}
 	if config.tls.certificateFile != "" || config.tls.keyFile != "" {
 		if config.tls.certificateFile == "" || config.tls.keyFile == "" {
@@ -1014,17 +1028,6 @@ func buildSyncConsumerTLSConfig(
 		tlsConfig.Certificates = []tls.Certificate{certificate}
 	}
 	return tlsConfig, nil
-}
-
-func appendSyncConsumerCAFile(pool *x509.CertPool, path string) error {
-	pem, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read TLS CA file %q: %w", path, err)
-	}
-	if !pool.AppendCertsFromPEM(pem) {
-		return fmt.Errorf("TLS CA file %q contains no certificates", path)
-	}
-	return nil
 }
 
 func parseSyncConsumerTLSVersion(value string) (uint16, error) {

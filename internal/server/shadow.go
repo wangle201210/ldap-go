@@ -92,7 +92,7 @@ func validateShadowUpdateRef(raw string) (string, error) {
 		return "", fmt.Errorf("invalid referral URL %q", raw)
 	}
 	switch strings.ToLower(parsed.Scheme) {
-	case "ldap", "ldaps", "ldapi":
+	case "ldap", "ldaps", "ldapi", "ldap+tlcp":
 	default:
 		return "", fmt.Errorf("invalid referral URL %q", raw)
 	}

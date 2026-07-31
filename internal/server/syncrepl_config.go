@@ -46,16 +46,18 @@ type syncConsumerKeepalive struct {
 }
 
 type syncConsumerTLSConfig struct {
-	certificateFile string
-	keyFile         string
-	caCertificate   string
-	caDirectory     string
-	requireCert     string
-	requireSAN      string
-	cipherSuite     string
-	ecName          string
-	crlCheck        string
-	protocolMinimum string
+	certificateFile           string
+	keyFile                   string
+	tlcpEncryptionCertificate string
+	tlcpEncryptionKey         string
+	caCertificate             string
+	caDirectory               string
+	requireCert               string
+	requireSAN                string
+	cipherSuite               string
+	ecName                    string
+	crlCheck                  string
+	protocolMinimum           string
 }
 
 type syncConsumerConfig struct {
@@ -402,6 +404,10 @@ func parseSyncConsumerConfig(
 			config.tls.certificateFile = rawValue
 		case "tls_key":
 			config.tls.keyFile = rawValue
+		case "tlcp_enc_cert":
+			config.tls.tlcpEncryptionCertificate = rawValue
+		case "tlcp_enc_key":
+			config.tls.tlcpEncryptionKey = rawValue
 		case "tls_cacert":
 			config.tls.caCertificate = rawValue
 		case "tls_cacertdir":
@@ -634,7 +640,7 @@ func parseSyncConsumerProviders(value string) ([]string, error) {
 			return nil, fmt.Errorf("provider %q: %w", provider, err)
 		}
 		switch strings.ToLower(parsed.Scheme) {
-		case "ldap", "ldaps", "ldapi":
+		case "ldap", "ldaps", "ldapi", "ldap+tlcp":
 		default:
 			return nil, fmt.Errorf(
 				"provider %q uses unsupported scheme %q",
