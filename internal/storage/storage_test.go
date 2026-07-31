@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -65,7 +66,10 @@ func runStoreContract(t *testing.T, store Store) {
 		if err := tx.Put(entry, false); err != nil {
 			return err
 		}
-		return tx.SetNamingContexts([]string{"dc=example,dc=com"})
+		if err := tx.SetNamingContexts([]string{"dc=example,dc=com"}); err != nil {
+			return err
+		}
+		return tx.SetMetadata("sync/context", []byte{0x00, 0xff, 0x10})
 	}); err != nil {
 		t.Fatalf("initial Update(): %v", err)
 	}
@@ -86,6 +90,14 @@ func runStoreContract(t *testing.T, store Store) {
 		if len(contexts) != 1 || contexts[0] != "dc=example,dc=com" {
 			t.Fatalf("NamingContexts() = %v", contexts)
 		}
+		metadata, err := tx.Metadata("sync/context")
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(metadata, []byte{0x00, 0xff, 0x10}) {
+			t.Fatalf("Metadata() = %x", metadata)
+		}
+		metadata[0] = 0xff
 		return nil
 	}); err != nil {
 		t.Fatalf("View(): %v", err)
@@ -96,6 +108,9 @@ func runStoreContract(t *testing.T, store Store) {
 		if err := tx.Delete(dn); err != nil {
 			return err
 		}
+		if err := tx.SetMetadata("sync/context", []byte("rolled back")); err != nil {
+			return err
+		}
 		return rollback
 	}); !errors.Is(err, rollback) {
 		t.Fatalf("rollback Update() error = %v", err)
@@ -103,7 +118,23 @@ func runStoreContract(t *testing.T, store Store) {
 
 	if err := store.View(ctx, func(tx Reader) error {
 		_, err := tx.Get(dn)
-		return err
+		if err != nil {
+			return err
+		}
+		metadata, err := tx.Metadata("sync/context")
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(metadata, []byte{0x00, 0xff, 0x10}) {
+			t.Fatalf("metadata changed after rollback: %x", metadata)
+		}
+		if _, err := tx.Metadata("missing"); !errors.Is(
+			err,
+			ErrMetadataNotFound,
+		) {
+			t.Fatalf("missing Metadata() error = %v", err)
+		}
+		return nil
 	}); err != nil {
 		t.Fatalf("entry disappeared after rollback: %v", err)
 	}

@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	ErrEntryNotFound  = errors.New("entry not found")
-	ErrEntryExists    = errors.New("entry already exists")
-	ErrEntryAmbiguous = errors.New("entry exists in multiple storage partitions")
+	ErrEntryNotFound    = errors.New("entry not found")
+	ErrEntryExists      = errors.New("entry already exists")
+	ErrEntryAmbiguous   = errors.New("entry exists in multiple storage partitions")
+	ErrMetadataNotFound = errors.New("metadata not found")
 )
 
 type Reader interface {
@@ -23,6 +24,7 @@ type Reader interface {
 	ForEachIn(partition string, fn func(directory.Entry) error) error
 	ForEachPartition(fn func(string, directory.Entry) error) error
 	NamingContexts() ([]string, error)
+	Metadata(key string) ([]byte, error)
 }
 
 type Writer interface {
@@ -33,6 +35,8 @@ type Writer interface {
 	DeleteIn(partition string, dn directory.DN) error
 	Clear() error
 	SetNamingContexts(contexts []string) error
+	SetMetadata(key string, value []byte) error
+	DeleteMetadata(key string) error
 }
 
 type Store interface {

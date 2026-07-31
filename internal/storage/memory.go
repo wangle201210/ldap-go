@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"sync"
@@ -12,11 +13,15 @@ type Memory struct {
 	mu             sync.RWMutex
 	entries        map[string]directory.Entry
 	namingContexts []string
+	metadata       map[string][]byte
 	closed         bool
 }
 
 func NewMemory() *Memory {
-	return &Memory{entries: make(map[string]directory.Entry)}
+	return &Memory{
+		entries:  make(map[string]directory.Entry),
+		metadata: make(map[string][]byte),
+	}
 }
 
 func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
@@ -33,6 +38,7 @@ func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
 		ctx:            ctx,
 		entries:        store.entries,
 		namingContexts: store.namingContexts,
+		metadata:       store.metadata,
 		readOnly:       true,
 	})
 }
@@ -52,6 +58,7 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 		ctx:            ctx,
 		entries:        cloneEntryMap(store.entries),
 		namingContexts: append([]string(nil), store.namingContexts...),
+		metadata:       cloneMetadataMap(store.metadata),
 	}
 	if err := fn(tx); err != nil {
 		return err
@@ -62,6 +69,7 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 
 	store.entries = tx.entries
 	store.namingContexts = tx.namingContexts
+	store.metadata = tx.metadata
 	return nil
 }
 
@@ -71,6 +79,7 @@ func (store *Memory) Close() error {
 	store.closed = true
 	store.entries = nil
 	store.namingContexts = nil
+	store.metadata = nil
 	return nil
 }
 
@@ -78,6 +87,7 @@ type memoryTx struct {
 	ctx            context.Context
 	entries        map[string]directory.Entry
 	namingContexts []string
+	metadata       map[string][]byte
 	readOnly       bool
 }
 
@@ -187,6 +197,17 @@ func (tx *memoryTx) NamingContexts() ([]string, error) {
 	return append([]string(nil), tx.namingContexts...), nil
 }
 
+func (tx *memoryTx) Metadata(key string) ([]byte, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, ok := tx.metadata[key]
+	if !ok {
+		return nil, ErrMetadataNotFound
+	}
+	return bytes.Clone(value), nil
+}
+
 func (tx *memoryTx) Put(entry directory.Entry, replace bool) error {
 	return tx.PutIn("", entry, replace)
 }
@@ -256,6 +277,7 @@ func (tx *memoryTx) Clear() error {
 	}
 	tx.entries = make(map[string]directory.Entry)
 	tx.namingContexts = nil
+	tx.metadata = make(map[string][]byte)
 	return nil
 }
 
@@ -267,10 +289,43 @@ func (tx *memoryTx) SetNamingContexts(contexts []string) error {
 	return nil
 }
 
+func (tx *memoryTx) SetMetadata(key string, value []byte) error {
+	if tx.readOnly {
+		return errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return err
+	}
+	tx.metadata[key] = bytes.Clone(value)
+	return nil
+}
+
+func (tx *memoryTx) DeleteMetadata(key string) error {
+	if tx.readOnly {
+		return errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := tx.metadata[key]; !ok {
+		return ErrMetadataNotFound
+	}
+	delete(tx.metadata, key)
+	return nil
+}
+
 func cloneEntryMap(entries map[string]directory.Entry) map[string]directory.Entry {
 	cloned := make(map[string]directory.Entry, len(entries))
 	for key, entry := range entries {
 		cloned[key] = entry.Clone()
+	}
+	return cloned
+}
+
+func cloneMetadataMap(metadata map[string][]byte) map[string][]byte {
+	cloned := make(map[string][]byte, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = bytes.Clone(value)
 	}
 	return cloned
 }

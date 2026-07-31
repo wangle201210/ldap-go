@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,10 @@ import (
 )
 
 var (
-	entriesBucket = []byte("entries")
-	metaBucket    = []byte("metadata")
-	contextsKey   = []byte("naming-contexts")
+	entriesBucket  = []byte("entries")
+	metaBucket     = []byte("metadata")
+	contextsKey    = []byte("naming-contexts")
+	metadataPrefix = []byte("value:")
 )
 
 type Bolt struct {
@@ -193,6 +195,17 @@ func (tx *boltTx) NamingContexts() ([]string, error) {
 	return contexts, nil
 }
 
+func (tx *boltTx) Metadata(key string) ([]byte, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return nil, err
+	}
+	value := tx.meta.Get(genericMetadataKey(key))
+	if value == nil {
+		return nil, ErrMetadataNotFound
+	}
+	return bytes.Clone(value), nil
+}
+
 func (tx *boltTx) Put(entry directory.Entry, replace bool) error {
 	return tx.PutIn("", entry, replace)
 }
@@ -294,7 +307,15 @@ func (tx *boltTx) Clear() error {
 		return err
 	}
 	tx.entries = bucket
-	return tx.meta.Delete(contextsKey)
+	if err := tx.tx.DeleteBucket(metaBucket); err != nil {
+		return err
+	}
+	meta, err := tx.tx.CreateBucket(metaBucket)
+	if err != nil {
+		return err
+	}
+	tx.meta = meta
+	return nil
 }
 
 func (tx *boltTx) SetNamingContexts(contexts []string) error {
@@ -306,6 +327,37 @@ func (tx *boltTx) SetNamingContexts(contexts []string) error {
 		return fmt.Errorf("encode naming contexts: %w", err)
 	}
 	return tx.meta.Put(contextsKey, value)
+}
+
+func (tx *boltTx) SetMetadata(key string, value []byte) error {
+	if !tx.tx.Writable() {
+		return errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return err
+	}
+	return tx.meta.Put(genericMetadataKey(key), bytes.Clone(value))
+}
+
+func (tx *boltTx) DeleteMetadata(key string) error {
+	if !tx.tx.Writable() {
+		return errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return err
+	}
+	encodedKey := genericMetadataKey(key)
+	if tx.meta.Get(encodedKey) == nil {
+		return ErrMetadataNotFound
+	}
+	return tx.meta.Delete(encodedKey)
+}
+
+func genericMetadataKey(key string) []byte {
+	encoded := make([]byte, 0, len(metadataPrefix)+len(key))
+	encoded = append(encoded, metadataPrefix...)
+	encoded = append(encoded, key...)
+	return encoded
 }
 
 func decodeEntry(value []byte) (directory.Entry, error) {
