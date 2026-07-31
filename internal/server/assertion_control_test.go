@@ -431,7 +431,8 @@ func writeRawLDAPRequest(
 	t *testing.T,
 	connection net.Conn,
 	messageID int64,
-	operation, control *ber.Packet,
+	operation *ber.Packet,
+	requestControls ...*ber.Packet,
 ) {
 	t.Helper()
 
@@ -444,15 +445,19 @@ func writeRawLDAPRequest(
 		"messageID",
 	))
 	message.AppendChild(operation)
-	if control != nil {
-		controls := ber.Encode(
-			ber.ClassContext,
-			ber.TypeConstructed,
-			0,
-			nil,
-			"controls",
-		)
-		controls.AppendChild(control)
+	controls := ber.Encode(
+		ber.ClassContext,
+		ber.TypeConstructed,
+		0,
+		nil,
+		"controls",
+	)
+	for _, control := range requestControls {
+		if control != nil {
+			controls.AppendChild(control)
+		}
+	}
+	if len(controls.Children) > 0 {
 		message.AppendChild(controls)
 	}
 	if err := ldapwire.Write(connection, message.Bytes()); err != nil {

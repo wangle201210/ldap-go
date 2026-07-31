@@ -113,12 +113,17 @@ directory behavior must be readable and writable through the config DIT.
 ### Replication
 
 When `olcLastMod` is enabled, committed writes receive OpenLDAP-compatible CSN
-metadata. A `syncprov` database atomically advances durable per-partition
-`contextCSN` metadata and publishes an after-commit before/after record to a
-bounded process-local stream. RFC 4533 refresh uses a consistent directory
-snapshot plus present UUIDs, so reconnects recover deletions without relying
-on process-local history; refresh-and-persist consumes the stream after
-subscribing before its snapshot.
+metadata. A Sync change carries both its actual data partition and its
+effective provider partition. Direct subordinate syncprov overlays take
+precedence; otherwise the nearest provider in the same glue hierarchy owns the
+context, with the primary database commonly covering the whole glued tree.
+Independent naming contexts cannot inherit through a different glue root. The
+effective provider atomically advances durable `contextCSN` metadata and
+publishes an after-commit before/after record to a bounded process-local
+stream. RFC 4533 refresh uses a consistent directory snapshot plus present
+UUIDs, so reconnects recover deletions without relying on process-local
+history; refresh-and-persist subscribes to provider partitions before its
+snapshot while reading entries from their data partitions.
 
 The provider projects the current, SID-sorted context vector as a dynamic
 `contextCSN` operational attribute on the first database suffix for ordinary
@@ -129,11 +134,14 @@ content.
 
 `olcSpCheckpoint` transactionally persists that context vector on the suffix
 after its operation or elapsed-time threshold. `olcSpSessionlog` retains a
-bounded, partition-local window of committed non-Add changes. A refresh uses
-the window only when the consumer cookie covers its baseline and publication
-has reached the storage snapshot; otherwise it falls back to the Present
-phase. Runtime configuration activation preserves a complete existing window
-and resets it when a publication gap is detected.
+bounded, provider-local window of committed non-Add changes, including the
+actual source partition needed for glue scope evaluation. A refresh uses the
+window only when the consumer cookie covers its baseline and publication has
+reached the storage snapshot; otherwise it falls back to the Present phase.
+Runtime configuration activation preserves a complete existing window and
+resets it when a publication gap is detected. Sorting and VLV operate on the
+combined ACL-visible candidate set after all glue routes are read, then attach
+their result controls to Sync Done or the refresh-done intermediate response.
 
 A durable ordered accesslog, delta-syncrepl replay, and the syncrepl consumer
 remain future layers. They must not treat the current process-local stream as a

@@ -48,12 +48,13 @@ type syncCheckpointState struct {
 }
 
 type syncChange struct {
-	partition string
-	csn       openLDAPCSN
-	before    directory.Entry
-	hasBefore bool
-	after     directory.Entry
-	hasAfter  bool
+	partition         string
+	providerPartition string
+	csn               openLDAPCSN
+	before            directory.Entry
+	hasBefore         bool
+	after             directory.Entry
+	hasAfter          bool
 }
 
 type syncChangeHub struct {
@@ -108,11 +109,11 @@ func (hub *syncChangeHub) subscribe(
 func (hub *syncChangeHub) publish(change syncChange) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
-	if log := hub.logs[change.partition]; log != nil {
+	if log := hub.logs[change.providerPartition]; log != nil {
 		log.append(change)
 	}
 	for id, subscription := range hub.subscriptions {
-		if _, subscribed := subscription.partitions[change.partition]; !subscribed {
+		if _, subscribed := subscription.partitions[change.providerPartition]; !subscribed {
 			continue
 		}
 		select {
@@ -671,11 +672,13 @@ func updateSyncCheckpoint(
 
 func (server *Server) recordSyncChange(
 	writer storage.Writer,
+	runtime *runtimeState,
 	database runtimeDatabase,
 	before *directory.Entry,
 	after *directory.Entry,
 ) (*syncChange, error) {
-	if !database.syncProvider {
+	provider := effectiveSyncProviderDatabase(runtime, database)
+	if provider == nil {
 		return nil, nil
 	}
 	var rawCSN string
@@ -695,15 +698,16 @@ func (server *Server) recordSyncChange(
 	if err != nil {
 		return nil, err
 	}
-	if err := advanceSyncContextCSN(writer, database.partition, csn); err != nil {
+	if err := advanceSyncContextCSN(writer, provider.partition, csn); err != nil {
 		return nil, err
 	}
-	if err := updateSyncCheckpoint(writer, database, time.Now().UTC()); err != nil {
+	if err := updateSyncCheckpoint(writer, *provider, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	change := &syncChange{
-		partition: database.partition,
-		csn:       csn,
+		partition:         database.partition,
+		providerPartition: provider.partition,
+		csn:               csn,
 	}
 	if before != nil {
 		change.before = before.Clone()

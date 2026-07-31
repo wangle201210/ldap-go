@@ -74,7 +74,11 @@ func (server *Server) prepareSyncSearch(
 	syncRoutes := make([]syncSearchRoute, 0, len(routes))
 	for _, route := range routes {
 		database := state.runtime.databases[route.databaseIndex]
-		if !database.syncProvider {
+		providerIndex := effectiveSyncProviderDatabaseIndex(
+			state.runtime.databases,
+			route.databaseIndex,
+		)
+		if providerIndex < 0 {
 			if !control.critical {
 				return nil, nil
 			}
@@ -84,13 +88,14 @@ func (server *Server) prepareSyncSearch(
 			)
 			return nil, &result
 		}
-		if _, exists := partitionSet[database.partition]; !exists {
-			partitionSet[database.partition] = struct{}{}
-			partitions = append(partitions, database.partition)
-			policies[database.partition] = syncSearchPolicy{
-				sessionLogSize: database.syncSessionLogSize,
-				noPresent:      database.syncNoPresent,
-				reloadHint:     database.syncReloadHint,
+		provider := state.runtime.databases[providerIndex]
+		if _, exists := partitionSet[provider.partition]; !exists {
+			partitionSet[provider.partition] = struct{}{}
+			partitions = append(partitions, provider.partition)
+			policies[provider.partition] = syncSearchPolicy{
+				sessionLogSize: provider.syncSessionLogSize,
+				noPresent:      provider.syncNoPresent,
+				reloadHint:     provider.syncReloadHint,
 			}
 		}
 		syncRoutes = append(syncRoutes, syncSearchRoute{
@@ -311,8 +316,13 @@ func syncCookieStateExists(
 		return false, nil
 	}
 	found := false
-	for _, partition := range syncSearch.partitions {
-		tx := storage.ReaderInPartition(reader, partition)
+	seenPartitions := make(map[string]struct{}, len(syncSearch.routes))
+	for _, route := range syncSearch.routes {
+		if _, seen := seenPartitions[route.partition]; seen {
+			continue
+		}
+		seenPartitions[route.partition] = struct{}{}
+		tx := storage.ReaderInPartition(reader, route.partition)
 		if err := tx.ForEach(func(entry directory.Entry) error {
 			values := entry.Values("entryCSN")
 			if len(values) != 1 {
@@ -441,6 +451,7 @@ func (server *Server) writeSyncSearch(
 	syncSearch *syncSearchContext,
 	candidates []searchCandidate,
 	result ldapwire.Result,
+	responseControls []ldapwire.Control,
 ) error {
 	if result.Code == ldapwire.ResultSuccess {
 		deleted := syncSearch.deletedUUIDs()
@@ -495,7 +506,12 @@ func (server *Server) writeSyncSearch(
 		}
 	}
 	if result.Code != ldapwire.ResultSuccess {
-		return server.writeSearchDone(connection, messageID, result)
+		return server.writeSearchDoneWithControls(
+			connection,
+			messageID,
+			result,
+			responseControls,
+		)
 	}
 
 	cookie := composeOpenLDAPSyncCookie(
@@ -508,16 +524,18 @@ func (server *Server) writeSyncSearch(
 			HasCookie:      len(syncSearch.snapshot) > 0,
 			RefreshDeletes: syncSearch.refreshDeletes,
 		}
+		controls := []ldapwire.Control{{
+			OID:      syncDoneControlOID,
+			Critical: syncSearch.control.critical,
+			Value:    ldapwire.EncodeSyncDoneValue(done),
+			HasValue: true,
+		}}
+		controls = append(controls, responseControls...)
 		return server.writeSearchDoneWithControls(
 			connection,
 			messageID,
 			result,
-			[]ldapwire.Control{{
-				OID:      syncDoneControlOID,
-				Critical: syncSearch.control.critical,
-				Value:    ldapwire.EncodeSyncDoneValue(done),
-				HasValue: true,
-			}},
+			controls,
 		)
 	}
 
@@ -525,7 +543,7 @@ func (server *Server) writeSyncSearch(
 	if syncSearch.refreshDeletes {
 		refreshKind = ldapwire.SyncInfoRefreshDelete
 	}
-	if err := server.writeSyncInfo(
+	if err := server.writeSyncInfoWithControls(
 		connection,
 		messageID,
 		ldapwire.SyncInfoValue{
@@ -534,6 +552,7 @@ func (server *Server) writeSyncSearch(
 			HasCookie:   len(syncSearch.snapshot) > 0,
 			RefreshDone: true,
 		},
+		responseControls,
 	); err != nil {
 		return err
 	}
@@ -564,13 +583,27 @@ func (server *Server) writeSyncInfo(
 	messageID int64,
 	info ldapwire.SyncInfoValue,
 ) error {
+	return server.writeSyncInfoWithControls(
+		connection,
+		messageID,
+		info,
+		nil,
+	)
+}
+
+func (server *Server) writeSyncInfoWithControls(
+	connection net.Conn,
+	messageID int64,
+	info ldapwire.SyncInfoValue,
+	controls []ldapwire.Control,
+) error {
 	return ldapwire.Write(
 		connection,
 		ldapwire.EncodeIntermediateResponse(
 			messageID,
 			syncInfoOID,
 			ldapwire.EncodeSyncInfoValue(info),
-			nil,
+			controls,
 		),
 	)
 }

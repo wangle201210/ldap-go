@@ -47,3 +47,10 @@ Network interoperability milestones additionally run OpenLDAP CLI and
 differential tests. Fuzz targets run for a bounded period in CI and for an
 extended period before a compatibility row is promoted.
 
+The optional local OpenLDAP 2.6 reference fixture for Sync plus Sort/VLV is
+enabled explicitly:
+
+```sh
+LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  go test ./internal/server -run TestOpenLDAPReferenceSyncSortAndVLV -count=1
+```

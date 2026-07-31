@@ -431,18 +431,20 @@ func TestSyncSessionLogConfigurationPreservesAndTrimsWindow(t *testing.T) {
 	hub := newSyncChangeHub()
 	hub.configure(runtime)
 	hub.publish(syncChange{
-		partition: partition,
-		csn:       first,
-		before:    directory.Entry{DN: "uid=one,dc=example,dc=com"},
-		hasBefore: true,
-		after:     directory.Entry{DN: "uid=one,dc=example,dc=com"},
-		hasAfter:  true,
+		partition:         partition,
+		providerPartition: partition,
+		csn:               first,
+		before:            directory.Entry{DN: "uid=one,dc=example,dc=com"},
+		hasBefore:         true,
+		after:             directory.Entry{DN: "uid=one,dc=example,dc=com"},
+		hasAfter:          true,
 	})
 	hub.publish(syncChange{
-		partition: partition,
-		csn:       second,
-		before:    directory.Entry{DN: "uid=two,dc=example,dc=com"},
-		hasBefore: true,
+		partition:         partition,
+		providerPartition: partition,
+		csn:               second,
+		before:            directory.Entry{DN: "uid=two,dc=example,dc=com"},
+		hasBefore:         true,
 	})
 
 	cookie := syncCSNState{0: baseline}

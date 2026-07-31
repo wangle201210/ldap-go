@@ -47,7 +47,7 @@ No row may become `compatible` based only on unit tests.
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | planned | RFC 6171 topology tests |
-| LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present sets, dynamic contextCSN, cancellation, restart, and OpenLDAP 2.6.13 ldapsearch pass |
+| LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
 | OpenLDAP transaction extension | planned | multi-operation atomicity tests |
 | Dynamic refresh | planned | OpenLDAP DDS interoperability tests |
 
@@ -80,7 +80,7 @@ No row may become `compatible` based only on unit tests.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Transactional durable backend | partial | crash, atomicity, recovery, race tests |
-| Multiple suffixes and subordinate DBs | partial | partition, hidden, and glue routing tests |
+| Multiple suffixes and subordinate DBs | partial | partition, hidden, glue routing, paging, and syncprov inheritance tests pass |
 | `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
 | `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
 | `slapcat` `cn=config` import | partial | boot from imported configuration |
@@ -109,7 +109,7 @@ rebuilt by `ldap-go`.
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
-| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, contextCSN checkpointing, session-log replay policies, and OpenLDAP CLI interoperability pass |
+| syncprov | partial | cn=config gating, refresh/persist stream, multi-SID cookies, contextCSN checkpointing, session-log policies, Sort/VLV, glue providers, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
 | unique | planned | concurrent uniqueness tests |
 | valsort | planned | value sorting tests |
@@ -120,7 +120,7 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Syncrepl consumer | planned | OpenLDAP provider interoperability |
-| Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch refreshOnly interoperability passes; slapd syncrepl topology suite remains |
+| Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch and overlay-order Sort/VLV fixtures pass; slapd syncrepl topology suite remains |
 | Delta-syncrepl | planned | accesslog replay and recovery tests |
 | Multi-provider and mirror mode | planned | conflict/topology/failover tests |
 | Fractional and sparse replication | planned | filter/attribute convergence tests |
@@ -277,7 +277,8 @@ database suffix after either its committed-operation threshold or elapsed
 minute threshold. The counter and timestamp are transactional metadata, and
 the internal suffix update does not create another CSN or Sync event.
 `olcSpSessionlog` retains the configured number of committed non-Add changes
-in a partition-local memory window. A covered cookie receives disappearing
+in a provider-local memory window while retaining each change's actual data
+partition. A covered cookie receives disappearing
 UUIDs with `refreshDeletes=TRUE`, including filter and scope exits, while Adds
 are recovered from the normal entry scan. An evicted, incomplete, or
 not-yet-published window falls back to Present processing.
@@ -299,6 +300,16 @@ not synchronized as entry content. The built-in OpenLDAP CSN syntax validates
 both `entryCSN` and `contextCSN`, including normalization of the OpenLDAP 2.3
 no-fraction/two-digit-SID form.
 
+For a glued tree, every data route resolves an effective provider within its
+own glue hierarchy. A syncprov directly attached to a subordinate database
+wins; otherwise the nearest syncprov ancestor, including the primary database,
+owns the context, checkpoint, session log, and persistent subscription. This
+matches OpenLDAP's common single-primary-provider and per-branch-provider
+layouts. Independent naming contexts do not inherit a provider merely because
+their suffix is textually below another database. Entry reads and scope checks
+continue to use the actual data partition, so a primary provider can refresh
+and stream the complete glued tree without merging backend storage.
+
 `refreshAndPersist` subscribes before taking its refresh snapshot, then emits
 full add/modify entries, empty delete entries, and new-cookie intermediate
 responses for changes outside the filter. Filter-entry and filter-exit
@@ -309,11 +320,20 @@ not synchronized onto member entries. TCP tests cover these paths, and an
 installed OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` is run as an optional
 process-level interoperability test.
 
-This provider does not yet implement server-side sort/VLV combinations,
-accesslog replay, `olcSpSessionlogSource`, delta-syncrepl, the optional
-sync-provider subentry context, or a full `slapd` syncrepl topology
-differential. The syncrepl consumer is also still planned, so the rows remain
-`partial`.
+Sync composes with RFC 2891 sorting and VLV after candidates from all database
+routes have been collected. Refresh-only entries always carry Sync State, and
+SearchResultDone carries Sync Done plus Sort/VLV result controls.
+Refresh-and-persist places Sort/VLV result controls on the refresh-done
+intermediate response. A gated OpenLDAP 2.6.13 fixture records that slapd's
+observable response changes with `syncprov`/`sssvlv` overlay order, including
+lost or misplaced controls and an incomplete persistent combination.
+`ldap-go` deliberately keeps one protocol-coherent response shape independent
+of configuration order.
+
+This provider does not yet implement accesslog replay,
+`olcSpSessionlogSource`, delta-syncrepl, the optional sync-provider subentry
+context, or a full `slapd` syncrepl topology differential. The syncrepl
+consumer is also still planned, so the rows remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

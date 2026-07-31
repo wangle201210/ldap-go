@@ -455,16 +455,6 @@ func (server *Server) handleSearch(
 	}
 	if syncSearch != nil {
 		defer syncSearch.close()
-		if controls.sorting != nil || controls.vlv != nil {
-			return server.writeSearchDone(
-				connection,
-				message.ID,
-				ldapwire.ResultError(
-					ldapwire.ResultProtocolError,
-					"Sync control is incompatible with sort and VLV controls",
-				),
-			)
-		}
 	}
 
 	var virtualListView *virtualListViewContext
@@ -527,7 +517,7 @@ func (server *Server) handleSearch(
 				virtualListViewResponseControl(failure.response),
 			)
 		}
-		if virtualListView.state != nil {
+		if virtualListView.state != nil && syncSearch == nil {
 			view := virtualListView.state
 			start, end, target, code, windowErr := virtualListViewWindow(
 				state.runtime.schema,
@@ -636,7 +626,8 @@ func (server *Server) handleSearch(
 			hasMore,
 		)
 	}
-	if sorting.active() {
+	if sorting.active() &&
+		(virtualListView == nil || virtualListView.state == nil) {
 		lease, ok := acquireServerSideSortLease(
 			state,
 			routes[0].databaseIndex,
@@ -1089,16 +1080,20 @@ func (server *Server) handleSearch(
 				virtualListViewResponseControl(failure.response),
 			)
 		}
-		view, err := startVirtualListView(
-			state,
-			virtualListView,
-			candidates,
-			sortLease,
-		)
-		if err != nil {
-			return fmt.Errorf("create VLV context: %w", err)
+		view := virtualListView.state
+		if view == nil {
+			var err error
+			view, err = startVirtualListView(
+				state,
+				virtualListView,
+				candidates,
+				sortLease,
+			)
+			if err != nil {
+				return fmt.Errorf("create VLV context: %w", err)
+			}
+			sortLease = nil
 		}
-		sortLease = nil
 		start, end, target, code, windowErr := virtualListViewWindow(
 			state.runtime.schema,
 			virtualListView.request,
@@ -1129,9 +1124,12 @@ func (server *Server) handleSearch(
 				virtualListViewResponseControl(failure.response),
 			)
 		}
-		entries := selectedSearchEntries(candidates[start:end])
-		if len(entries) > limit {
-			entries = entries[:limit]
+		windowCandidates := virtualListViewSearchCandidates(
+			candidates,
+			view.items[start:end],
+		)
+		if len(windowCandidates) > limit {
+			windowCandidates = windowCandidates[:limit]
 			if result.Code == ldapwire.ResultSuccess {
 				result.Code = ldapwire.ResultSizeLimitExceeded
 			}
@@ -1143,6 +1141,29 @@ func (server *Server) handleSearch(
 			ContextID:      view.contextID,
 			HasContextID:   true,
 		}
+		if syncSearch != nil {
+			responseControls := serverSideSortResponseControl(
+				sorting,
+				result,
+				len(windowCandidates),
+			)
+			responseControls = append(
+				responseControls,
+				virtualListViewResponseControl(response)...,
+			)
+			return server.writeSyncSearch(
+				ctx,
+				connection,
+				state,
+				message.ID,
+				request,
+				syncSearch,
+				windowCandidates,
+				result,
+				responseControls,
+			)
+		}
+		entries := selectedSearchEntries(windowCandidates)
 		return server.writeSearchResultWithReferencesAndControls(
 			connection,
 			message.ID,
@@ -1216,6 +1237,11 @@ func (server *Server) handleSearch(
 		paging.sortLease = sortLease
 	}
 	if syncSearch != nil {
+		responseControls := serverSideSortResponseControl(
+			sorting,
+			result,
+			len(candidates),
+		)
 		return server.writeSyncSearch(
 			ctx,
 			connection,
@@ -1225,6 +1251,7 @@ func (server *Server) handleSearch(
 			syncSearch,
 			candidates,
 			result,
+			responseControls,
 		)
 	}
 	writeErr := server.writeSearchResultWithReferences(
@@ -1253,6 +1280,34 @@ func selectedSearchEntries(candidates []searchCandidate) []directory.Entry {
 		entries[index] = candidates[index].selected
 	}
 	return entries
+}
+
+func virtualListViewSearchCandidates(
+	candidates []searchCandidate,
+	items []virtualListViewItem,
+) []searchCandidate {
+	type candidateKey struct {
+		route int
+		dn    string
+	}
+	byKey := make(map[candidateKey]searchCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byKey[candidateKey{
+			route: candidate.route,
+			dn:    candidate.dn,
+		}] = candidate
+	}
+	window := make([]searchCandidate, 0, len(items))
+	for _, item := range items {
+		candidate, exists := byKey[candidateKey{
+			route: item.route,
+			dn:    item.dn,
+		}]
+		if exists {
+			window = append(window, candidate)
+		}
+	}
+	return window
 }
 
 func pagedSortedItems(candidates []searchCandidate) []pagedSortedItem {

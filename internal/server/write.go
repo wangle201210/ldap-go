@@ -289,6 +289,7 @@ func (server *Server) handleAdd(
 		var changeErr error
 		syncChange, changeErr = server.recordSyncChange(
 			writer,
+			state.runtime,
 			*database,
 			nil,
 			&entry,
@@ -560,6 +561,7 @@ func (server *Server) modifyEntry(
 		var changeErr error
 		syncChange, changeErr = server.recordSyncChange(
 			writer,
+			runtime,
 			database,
 			&before,
 			&entry,
@@ -741,6 +743,7 @@ func (server *Server) handleDelete(
 		var changeErr error
 		syncChange, changeErr = server.recordSyncChange(
 			writer,
+			state.runtime,
 			*database,
 			&entry,
 			nil,
@@ -1163,6 +1166,7 @@ func (server *Server) handleModifyDN(
 		var changeErr error
 		syncChange, changeErr = server.recordSyncChange(
 			writer,
+			state.runtime,
 			*database,
 			&sourceBefore,
 			renamedEntry,

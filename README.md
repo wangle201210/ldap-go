@@ -55,9 +55,11 @@ OpenLDAP-compatible multi-SID cookies, present UUID sets, committed
 add/modify/modDN/delete notifications, durable delete progress across restart,
 dynamic suffix `contextCSN` Search/Compare/read-control semantics,
 `olcSpCheckpoint`, bounded `olcSpSessionlog` delete replay,
-`olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, and OpenLDAP 2.6.13
-`ldapsearch` interoperability. Syncrepl consumer and delta-syncrepl support
-remain separate pending milestones.
+`olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, server-side Sort/VLV
+composition, and OpenLDAP-style syncprov coverage of glued subordinate
+databases. OpenLDAP 2.6.13 `ldapsearch` interoperability also passes.
+Syncrepl consumer and delta-syncrepl support remain separate pending
+milestones.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

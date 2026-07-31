@@ -659,6 +659,81 @@ func glueSuperiorDatabaseIndex(
 	return bestIndex
 }
 
+func effectiveSyncProviderDatabaseIndex(
+	databases []runtimeDatabase,
+	databaseIndex int,
+) int {
+	if databaseIndex < 0 || databaseIndex >= len(databases) {
+		return -1
+	}
+	database := &databases[databaseIndex]
+	if database.hidden || database.disabled {
+		return -1
+	}
+	if database.syncProvider {
+		return databaseIndex
+	}
+	if !database.subordinate || len(database.suffixes) != 1 {
+		return -1
+	}
+
+	superiorIndex := glueSuperiorDatabaseIndex(databases, databaseIndex)
+	if superiorIndex < 0 {
+		return -1
+	}
+	targetSuffix := database.suffixes[0]
+	bestIndex := -1
+	bestDepth := -1
+	for index := range databases {
+		candidate := &databases[index]
+		if candidate.hidden ||
+			candidate.disabled ||
+			!candidate.syncProvider {
+			continue
+		}
+		if index != superiorIndex &&
+			(!candidate.subordinate ||
+				len(candidate.suffixes) != 1 ||
+				glueSuperiorDatabaseIndex(databases, index) != superiorIndex) {
+			continue
+		}
+		for _, suffix := range candidate.suffixes {
+			if !suffix.AncestorOf(targetSuffix) {
+				continue
+			}
+			if suffix.Depth() > bestDepth {
+				bestIndex = index
+				bestDepth = suffix.Depth()
+			}
+		}
+	}
+	return bestIndex
+}
+
+func effectiveSyncProviderDatabase(
+	runtime *runtimeState,
+	database runtimeDatabase,
+) *runtimeDatabase {
+	if runtime == nil {
+		return nil
+	}
+	databaseIndex := -1
+	for index := range runtime.databases {
+		if runtime.databases[index].partition == database.partition {
+			databaseIndex = index
+			break
+		}
+	}
+	providerIndex := effectiveSyncProviderDatabaseIndex(
+		runtime.databases,
+		databaseIndex,
+	)
+	if providerIndex < 0 {
+		return nil
+	}
+	return &runtime.databases[providerIndex]
+}
+
 func databaseIndexForRootOverride(
 	databases []runtimeDatabase,
 	dn directory.DN,

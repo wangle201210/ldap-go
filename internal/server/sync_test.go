@@ -959,10 +959,11 @@ func TestSyncSearchRejectsIllegalContext(t *testing.T) {
 }
 
 type rawSyncRefresh struct {
-	entries    []rawSyncEntry
-	infos      []ldapwire.SyncInfoValue
-	done       *ldapwire.SyncDoneValue
-	resultCode int64
+	entries      []rawSyncEntry
+	infos        []ldapwire.SyncInfoValue
+	done         *ldapwire.SyncDoneValue
+	doneControls map[string][]byte
+	resultCode   int64
 }
 
 type rawSyncEntry struct {
@@ -970,6 +971,7 @@ type rawSyncEntry struct {
 	attributeCount int
 	attributeNames []string
 	state          ldapwire.SyncStateValue
+	controls       map[string][]byte
 }
 
 type rawSyncMessage struct {
@@ -978,6 +980,7 @@ type rawSyncMessage struct {
 	entry          *rawSyncEntry
 	info           *ldapwire.SyncInfoValue
 	done           *ldapwire.SyncDoneValue
+	controls       map[string][]byte
 	resultCode     int64
 }
 
@@ -1007,6 +1010,7 @@ func readRawSyncRefresh(
 			refresh.infos = append(refresh.infos, *message.info)
 		case message.applicationTag == ldapwire.ApplicationSearchResultDone:
 			refresh.done = message.done
+			refresh.doneControls = message.controls
 			refresh.resultCode = message.resultCode
 			return refresh
 		default:
@@ -1055,6 +1059,7 @@ func readRawSyncMessage(
 	message := rawSyncMessage{
 		messageID:      messageID,
 		applicationTag: uint64(operation.Tag),
+		controls:       rawLDAPResponseControls(packet),
 	}
 	switch uint64(operation.Tag) {
 	case ldapwire.ApplicationSearchResultEntry:
@@ -1085,6 +1090,7 @@ func readRawSyncMessage(
 			attributeCount: len(operation.Children[1].Children),
 			attributeNames: attributeNames,
 			state:          state,
+			controls:       message.controls,
 		}
 	case ldapwire.ApplicationIntermediateResponse:
 		var name string
@@ -1141,22 +1147,32 @@ func rawLDAPResponseControl(
 	oid string,
 ) []byte {
 	t.Helper()
-	if len(message.Children) != 3 {
-		t.Fatalf("LDAP message has no controls: %#v", message)
-	}
-	for _, control := range message.Children[2].Children {
-		if len(control.Children) < 2 ||
-			string(control.Children[0].Data.Bytes()) != oid {
-			continue
-		}
-		value := control.Children[len(control.Children)-1]
-		if value.Tag != ber.TagOctetString {
-			t.Fatalf("control %s has no value: %#v", oid, control)
-		}
-		return bytes.Clone(value.Data.Bytes())
+	value, exists := rawLDAPResponseControls(message)[oid]
+	if exists {
+		return value
 	}
 	t.Fatalf("LDAP response control %s not found", oid)
 	return nil
+}
+
+func rawLDAPResponseControls(message *ber.Packet) map[string][]byte {
+	if len(message.Children) != 3 {
+		return nil
+	}
+	controls := make(map[string][]byte, len(message.Children[2].Children))
+	for _, control := range message.Children[2].Children {
+		if len(control.Children) == 0 {
+			continue
+		}
+		oid := string(control.Children[0].Data.Bytes())
+		for _, child := range control.Children[1:] {
+			if child.ClassType == ber.ClassUniversal &&
+				child.Tag == ber.TagOctetString {
+				controls[oid] = bytes.Clone(child.Data.Bytes())
+			}
+		}
+	}
+	return controls
 }
 
 func rawSyncSearchRequest(t *testing.T, derefAliases int) *ber.Packet {
