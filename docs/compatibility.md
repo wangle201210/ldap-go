@@ -70,7 +70,7 @@ No row may become `compatible` based only on unit tests.
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
 | Password policy overlay | planned | lockout, expiry, grace, history, controls |
 | OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
-| SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI, SCRAM-PLUS, and SASL security layers remain |
+| SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
 | Security strength factors | planned | transport/SASL/ACL integration tests |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
@@ -336,7 +336,7 @@ continues, stop it by deleting `olcSyncrepl`, and re-enable it to catch up.
 
 Standard RFC 4533 consumption supports refresh-only and
 refresh-and-persist, provider URI failover, simple bind, StartTLS/LDAPS, SASL
-EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-1/256/512,
+EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and SCRAM-SHA-1/256/512,
 Present/Delete UUID sets, DN suffix massage, and durable opaque cookies.
 EXTERNAL and SCRAM carry `authzid`; SASL defaults and numeric `secprops` are
 enforced without silently enabling plaintext authentication. Options that
@@ -351,6 +351,16 @@ the same store, cookie catch-up, and stale-entry removal. Gated reverse process
 topologies use real OpenLDAP 2.6.13 syncprov/MDB providers for both simple bind
 and SCRAM-SHA-256, with the SCRAM case enabled when its Cyrus SASL plugin is
 available.
+
+GSSAPI uses the provider hostname as `ldap/<host>`. An explicitly present
+`credentials` field supplies a password, including an intentionally empty
+password. Without it, `KRB5_CLIENT_KTNAME`/`KRB5_KTNAME` select a keytab or
+`KRB5CCNAME` selects a credential cache; the Unix default is
+`/tmp/krb5cc_<uid>`. The pure-Go Kerberos implementation accepts bare or
+`FILE:` paths (and `WRFILE:` keytabs), rejects unsupported KCM/API/KEYRING/DIR
+cache types explicitly, and obtains Kerberos configuration from `KRB5_CONFIG`
+or the platform file default. It currently selects the RFC 4752 no-security
+layer, so `minssf` must already be met by TLS, TLCP, or ldapi.
 
 Consumer TCP setup honors `network-timeout`, `keepalive`, and, on Linux,
 `tcp-user-timeout`. A failed `starttls=critical` aborts the cycle;
@@ -411,9 +421,9 @@ of configuration order.
 This provider does not yet implement an accesslog overlay,
 `olcSpSessionlogSource`, the optional sync-provider subentry context, or a full
 `slapd` topology differential. The consumer still lacks obsolete DSEE
-changelog delta mode, the remaining SASL mechanisms, full OpenSSL
-cipher-expression compatibility, multi-provider conflict resolution, and
-broader OpenLDAP provider variants. The replication rows therefore remain
+changelog delta mode, the remaining SASL mechanisms and security layers, full
+OpenSSL cipher-expression compatibility, multi-provider conflict resolution,
+and broader OpenLDAP provider variants. The replication rows therefore remain
 `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,

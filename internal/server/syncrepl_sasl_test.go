@@ -159,6 +159,20 @@ func TestSyncConsumerSASLSecurityProperties(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "minssf=128") {
 		t.Fatalf("minimum SSF error = %v", err)
 	}
+
+	gssapiProperties, err := parseSyncConsumerSASLSecurityProperties(
+		"nodict,noactive,noanonymous",
+	)
+	if err != nil {
+		t.Fatalf("parse GSSAPI security properties: %v", err)
+	}
+	if err := validateSyncConsumerSASLSecurity(
+		gssapiProperties,
+		"GSSAPI",
+		0,
+	); err != nil {
+		t.Fatalf("GSSAPI security properties: %v", err)
+	}
 }
 
 func TestParseSyncConsumerLDAPResultRejectsMalformedResponses(t *testing.T) {

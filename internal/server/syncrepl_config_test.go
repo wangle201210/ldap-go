@@ -46,11 +46,13 @@ func TestParseSyncConsumerConfigOpenLDAPValue(t *testing.T) {
 		t.Fatalf("partition = %q", config.partition)
 	}
 	if config.bindDN != "cn=replicator,dc=example,dc=com" ||
-		string(config.credentials) != "space secret" {
+		string(config.credentials) != "space secret" ||
+		!config.credentialsSet {
 		t.Fatalf(
-			"bind identity = %q/%q",
+			"bind identity = %q/%q (credentials set %t)",
 			config.bindDN,
 			config.credentials,
+			config.credentialsSet,
 		)
 	}
 	if config.filterText != `(&(objectClass=inetOrgPerson)(cn=literal\2a))` {
@@ -151,6 +153,29 @@ func TestParseSyncConsumerConfigDefaults(t *testing.T) {
 			config.mode,
 			config.interval,
 			config.retry,
+		)
+	}
+}
+
+func TestParseSyncConsumerConfigPreservesEmptyCredentials(t *testing.T) {
+	t.Parallel()
+
+	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
+	config, err := parseSyncConsumerConfig(
+		`rid=8 provider=ldap://provider.example `+
+			`searchbase="dc=example,dc=com" bindmethod=sasl `+
+			`saslmech=GSSAPI authcid=replicator credentials=""`,
+		"database/example",
+		[]directory.DN{suffix},
+	)
+	if err != nil {
+		t.Fatalf("parse empty GSSAPI credentials: %v", err)
+	}
+	if !config.credentialsSet || len(config.credentials) != 0 {
+		t.Fatalf(
+			"empty credentials = %q (set %t)",
+			config.credentials,
+			config.credentialsSet,
 		)
 	}
 }

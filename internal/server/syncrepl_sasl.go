@@ -350,11 +350,11 @@ func validateSyncConsumerSASLSecurity(
 	externalSSF uint32,
 ) error {
 	switch {
-	case properties.noDictionary:
+	case properties.noDictionary && mechanism != "GSSAPI":
 		return errors.New(
 			"SASL secprops=nodict is not supported by the implemented mechanisms",
 		)
-	case properties.noActive:
+	case properties.noActive && mechanism != "GSSAPI":
 		return errors.New(
 			"SASL secprops=noactive is not supported by the implemented mechanisms",
 		)

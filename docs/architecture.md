@@ -203,9 +203,11 @@ exchange layer for StartTLS and multi-round SASL Bind. This permits EXTERNAL
 with an authorization ID, PLAIN, CRAM-MD5, and SCRAM-SHA-1/256/512 while the
 existing DIGEST-MD5 path remains available. SCRAM derives and verifies both
 proofs through `xdg-go/scram`; LDAP framing, result validation, round limits,
-timeouts, and OpenLDAP `secprops` policy remain internal. GSSAPI,
-SCRAM channel-binding variants, and negotiated SASL integrity/privacy layers
-are not yet implemented.
+timeouts, and OpenLDAP `secprops` policy remain internal. GSSAPI is handed to
+`go-ldap` after transport negotiation and uses its pure-Go Kerberos client
+with password, keytab, or FILE credential-cache acquisition. That client
+selects no RFC 4752 security layer. SCRAM channel-binding variants and
+negotiated SASL integrity/privacy layers are not yet implemented.
 
 ## Data migration contract
 

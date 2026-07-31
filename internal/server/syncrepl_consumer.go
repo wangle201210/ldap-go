@@ -161,7 +161,8 @@ func (server *Server) runSyncConsumerCycle(
 	}
 
 	rawSASL := config.bindMethod == "sasl" &&
-		!strings.EqualFold(config.saslMechanism, "DIGEST-MD5")
+		!strings.EqualFold(config.saslMechanism, "DIGEST-MD5") &&
+		!strings.EqualFold(config.saslMechanism, "GSSAPI")
 	if rawSASL {
 		if err := bindSyncConsumerSASL(transport, config); err != nil {
 			return err
@@ -920,6 +921,15 @@ func bindSyncConsumer(
 				return fmt.Errorf("SASL DIGEST-MD5 bind: %w", err)
 			}
 			return nil
+		case "GSSAPI":
+			if err := validateSyncConsumerSASLSecurity(
+				config.securityProperties,
+				"GSSAPI",
+				externalSSF,
+			); err != nil {
+				return err
+			}
+			return bindSyncConsumerGSSAPI(connection, config, provider)
 		default:
 			return fmt.Errorf(
 				"SASL mechanism %q is not implemented",

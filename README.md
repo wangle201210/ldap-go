@@ -77,9 +77,9 @@ DNs and DN-valued attribute values. Consumer transports support OpenLDAP
 StartTLS/LDAPS certificate policies, CA and CRL loading, socket keepalive,
 Linux TCP user timeouts, and implicit `ldap+tlcp://` replication with mutual
 SM2 authentication. Syncrepl authentication supports simple bind,
-SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM-SHA-1/256/512; a real
-OpenLDAP SCRAM-SHA-256 provider topology is exercised when its Cyrus SASL
-plugin is available.
+SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
+SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
+exercised when its Cyrus SASL plugin is available.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque
@@ -179,6 +179,17 @@ An unverified certificate never produces an EXTERNAL identity. The current
 implementation accepts an empty SASL authorization identity only; proxy
 authorization through EXTERNAL remains pending. TLCP requires a client that
 implements GB/T 38636 rather than a stock TLS-only OpenLDAP client.
+
+For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
+`credentials` value is used as the Kerberos password. Without that field,
+ldap-go checks `KRB5_CLIENT_KTNAME`, then `KRB5_KTNAME`, and finally
+`KRB5CCNAME`; keytabs require `authcid`, while a credential cache supplies its
+own principal. `FILE:` keytabs and caches are supported, and the Unix default
+cache is `/tmp/krb5cc_<uid>`. KCM, KEYRING, DIR, and macOS API caches are not
+read by the pure-Go Kerberos client. `KRB5_CONFIG` selects the Kerberos
+configuration file. The current GSSAPI implementation negotiates no SASL
+integrity or privacy layer, so TLS, TLCP, or another protected transport is
+required when replication traffic itself must be encrypted.
 
 For a complete multi-database OpenLDAP migration, import `cn=config` first and
 then select each database using the same numeric index accepted by `slapcat`:

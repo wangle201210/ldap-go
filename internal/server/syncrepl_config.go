@@ -92,6 +92,7 @@ type syncConsumerConfig struct {
 	bindMethod             string
 	bindDN                 string
 	credentials            []byte
+	credentialsSet         bool
 	saslMechanism          string
 	authenticationID       string
 	authorizationID        string
@@ -385,6 +386,7 @@ func parseSyncConsumerConfig(
 			config.bindDN = rawValue
 		case "credentials":
 			config.credentials = []byte(rawValue)
+			config.credentialsSet = true
 		case "saslmech":
 			config.saslMechanism = rawValue
 		case "authcid":
