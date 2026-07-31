@@ -73,6 +73,7 @@ const (
 	ViolationSingleValue
 	ViolationSyntax
 	ViolationStructuralObjectClass
+	ViolationNaming
 )
 
 type Violation struct {

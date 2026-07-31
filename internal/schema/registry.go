@@ -59,6 +59,9 @@ func (registry *Registry) RegisterAttributeType(attribute AttributeType) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
+	if attribute.Usage == "" {
+		attribute.Usage = UsageUserApplications
+	}
 	keys := schemaKeys(attribute.OID, attribute.Names)
 	if len(keys) == 0 {
 		return errors.New("attribute type requires an OID")
@@ -67,6 +70,9 @@ func (registry *Registry) RegisterAttributeType(attribute AttributeType) error {
 		if _, exists := registry.attributes[key]; exists {
 			return fmt.Errorf("attribute type %q is already registered", key)
 		}
+	}
+	if err := registry.validateCollectiveAttributeType(attribute); err != nil {
+		return err
 	}
 	copy := attribute
 	for _, key := range keys {
@@ -114,6 +120,9 @@ func (registry *Registry) RegisterObjectClass(objectClass ObjectClass) error {
 			return fmt.Errorf("object class %q is already registered", key)
 		}
 	}
+	if err := registry.validateObjectClassCollectiveAttributes(objectClass); err != nil {
+		return err
+	}
 	copy := objectClass
 	for _, key := range keys {
 		registry.objectClasses[key] = &copy
@@ -125,6 +134,9 @@ func (registry *Registry) UpsertAttributeType(attribute AttributeType) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
+	if attribute.Usage == "" {
+		attribute.Usage = UsageUserApplications
+	}
 	keys := schemaKeys(attribute.OID, attribute.Names)
 	if len(keys) == 0 {
 		return errors.New("attribute type requires an OID")
@@ -138,6 +150,9 @@ func (registry *Registry) UpsertAttributeType(attribute AttributeType) error {
 				existing.OID,
 			)
 		}
+	}
+	if err := registry.validateCollectiveAttributeType(attribute); err != nil {
+		return err
 	}
 	for key, existing := range registry.attributes {
 		if strings.EqualFold(existing.OID, attribute.OID) {
@@ -168,6 +183,9 @@ func (registry *Registry) UpsertObjectClass(objectClass ObjectClass) error {
 				existing.OID,
 			)
 		}
+	}
+	if err := registry.validateObjectClassCollectiveAttributes(objectClass); err != nil {
+		return err
 	}
 	for key, existing := range registry.objectClasses {
 		if strings.EqualFold(existing.OID, objectClass.OID) {
@@ -246,6 +264,18 @@ func (registry *Registry) IsDNValued(attributeName string) bool {
 	}
 	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
 	return err == nil && effective.Syntax == SyntaxDistinguishedName
+}
+
+func (registry *Registry) IsCollective(attributeName string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return false
+	}
+	collective, err := registry.attributeTypeIsCollective(attribute, make(map[string]bool))
+	return err == nil && collective
 }
 
 func (registry *Registry) AttributeTypeDescriptions() []string {
@@ -451,6 +481,18 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 	if err := registry.validateStructuralClasses(classes); err != nil {
 		return err
 	}
+	subentry := registry.hasCollectedObjectClass(classes, "subentry")
+	collectiveSubentry := registry.hasCollectedObjectClass(
+		classes,
+		"collectiveAttributeSubentry",
+	)
+	if collectiveSubentry && !subentry {
+		return &Violation{
+			Kind:      ViolationStructuralObjectClass,
+			Attribute: "objectClass",
+			Message:   "collectiveAttributeSubentry requires the subentry object class",
+		}
+	}
 	specialAttributes := []struct {
 		key         string
 		attribute   string
@@ -531,7 +573,23 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			}
 		}
 		present[key] = struct{}{}
-		if !extensible && attributeType.Usage == UsageUserApplications {
+		collective, err := registry.attributeTypeIsCollective(
+			attributeType,
+			make(map[string]bool),
+		)
+		if err != nil {
+			return err
+		}
+		if collective && !collectiveSubentry {
+			return &Violation{
+				Kind:      ViolationDisallowedAttribute,
+				Attribute: attribute.Description,
+				Message:   "collective attribute requires a collectiveAttributeSubentry",
+			}
+		}
+		if !collective &&
+			!extensible &&
+			attributeType.Usage == UsageUserApplications {
 			if _, ok := allowed[key]; !ok {
 				return &Violation{
 					Kind:      ViolationDisallowedAttribute,
@@ -561,6 +619,31 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 			}
 		}
 	}
+	if entry.DN != "" {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err == nil {
+			for _, namingValue := range entryDN.RDNValues() {
+				attributeType, ok := registry.attributes[schemaKey(namingValue.Type)]
+				if !ok {
+					continue
+				}
+				collective, err := registry.attributeTypeIsCollective(
+					attributeType,
+					make(map[string]bool),
+				)
+				if err != nil {
+					return err
+				}
+				if collective {
+					return &Violation{
+						Kind:      ViolationNaming,
+						Attribute: namingValue.Type,
+						Message:   "collective attribute cannot be used for naming",
+					}
+				}
+			}
+		}
+	}
 	for name := range required {
 		if _, ok := present[name]; !ok {
 			return &Violation{
@@ -571,6 +654,150 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 		}
 	}
 	return nil
+}
+
+func (registry *Registry) hasCollectedObjectClass(
+	classes map[string]*ObjectClass,
+	name string,
+) bool {
+	objectClass, ok := registry.objectClasses[schemaKey(name)]
+	if !ok {
+		return false
+	}
+	_, ok = classes[schemaKey(objectClass.OID)]
+	return ok
+}
+
+func (registry *Registry) validateCollectiveAttributeType(attribute AttributeType) error {
+	if attribute.Collective {
+		if attribute.Usage != UsageUserApplications {
+			return fmt.Errorf(
+				"collective attribute type %q must have userApplications usage",
+				attribute.Name(),
+			)
+		}
+		if attribute.SingleValue {
+			return fmt.Errorf(
+				"collective attribute type %q cannot be single-valued",
+				attribute.Name(),
+			)
+		}
+		for _, objectClass := range uniqueObjectClasses(registry.objectClasses) {
+			for _, name := range append(
+				append([]string(nil), objectClass.Must...),
+				objectClass.May...,
+			) {
+				if attributeTypeIdentifierMatches(attribute, name) {
+					return fmt.Errorf(
+						"collective attribute type %q is referenced by object class %q",
+						attribute.Name(),
+						objectClass.Name(),
+					)
+				}
+			}
+		}
+	}
+
+	if attribute.Superior != "" {
+		superior, ok := registry.attributes[schemaKey(attribute.Superior)]
+		if ok {
+			collective, err := registry.attributeTypeIsCollective(
+				superior,
+				make(map[string]bool),
+			)
+			if err != nil {
+				return err
+			}
+			if collective && !attribute.Collective {
+				return fmt.Errorf(
+					"non-collective attribute type %q cannot subtype collective attribute %q",
+					attribute.Name(),
+					superior.Name(),
+				)
+			}
+		}
+	}
+	if !attribute.Collective {
+		return nil
+	}
+	candidateKeys := schemaKeys(attribute.OID, attribute.Names)
+	for _, existing := range uniqueAttributeTypes(registry.attributes) {
+		if existing.Collective {
+			continue
+		}
+		for _, key := range candidateKeys {
+			if schemaKey(existing.Superior) == key {
+				return fmt.Errorf(
+					"collective attribute type %q has non-collective subtype %q",
+					attribute.Name(),
+					existing.Name(),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (registry *Registry) validateObjectClassCollectiveAttributes(
+	objectClass ObjectClass,
+) error {
+	attributes := append(append([]string(nil), objectClass.Must...), objectClass.May...)
+	for _, name := range attributes {
+		attribute, ok := registry.attributes[schemaKey(name)]
+		if !ok {
+			continue
+		}
+		collective, err := registry.attributeTypeIsCollective(
+			attribute,
+			make(map[string]bool),
+		)
+		if err != nil {
+			return err
+		}
+		if collective {
+			return fmt.Errorf(
+				"object class %q cannot reference collective attribute type %q",
+				objectClass.Name(),
+				attribute.Name(),
+			)
+		}
+	}
+	return nil
+}
+
+func attributeTypeIdentifierMatches(attribute AttributeType, identifier string) bool {
+	identifier = schemaKey(identifier)
+	for _, key := range schemaKeys(attribute.OID, attribute.Names) {
+		if key == identifier {
+			return true
+		}
+	}
+	return false
+}
+
+func (registry *Registry) attributeTypeIsCollective(
+	attribute *AttributeType,
+	visiting map[string]bool,
+) (bool, error) {
+	if attribute.Collective {
+		return true, nil
+	}
+	if attribute.Superior == "" {
+		return false, nil
+	}
+	key := schemaKey(attribute.OID)
+	if visiting[key] {
+		return false, fmt.Errorf(
+			"attribute type inheritance cycle at %q",
+			attribute.Name(),
+		)
+	}
+	visiting[key] = true
+	superior, ok := registry.attributes[schemaKey(attribute.Superior)]
+	if !ok {
+		return false, nil
+	}
+	return registry.attributeTypeIsCollective(superior, visiting)
 }
 
 func (registry *Registry) collectObjectClass(
@@ -723,8 +950,12 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 			return errors.New("value is not a distinguished name")
 		}
 	case SyntaxSubtreeSpecification:
-		if len(value) == 0 || !utf8.Valid(value) {
-			return errors.New("value is not a valid subtree specification")
+		if _, err := ParseSubtreeSpecification(string(value)); err != nil {
+			return fmt.Errorf("value is not a valid subtree specification: %w", err)
+		}
+	case SyntaxOID:
+		if !validObjectIdentifier(string(value)) {
+			return errors.New("value is not an object identifier")
 		}
 	case SyntaxGeneralizedTime:
 		if _, err := time.Parse("20060102150405Z", string(value)); err != nil {

@@ -74,6 +74,16 @@ func ComposeDN(rdn string, superior DN) (DN, error) {
 	return ParseDN(parsedRDN.String() + "," + superior.String())
 }
 
+func ComposeLocalName(localName, superior DN) (DN, error) {
+	if localName.Depth() == 0 {
+		return superior, nil
+	}
+	if superior.Depth() == 0 {
+		return localName, nil
+	}
+	return ParseDN(localName.String() + "," + superior.String())
+}
+
 func (dn DN) ReplaceAncestor(oldBase, newBase DN) (DN, error) {
 	if !oldBase.Equal(dn) && !oldBase.AncestorOf(dn) {
 		return DN{}, errors.New("DN is outside the old naming subtree")

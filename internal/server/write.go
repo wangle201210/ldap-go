@@ -18,14 +18,15 @@ import (
 )
 
 var protectedOperationalAttributes = map[string]string{
-	"createtimestamp":       "createTimestamp",
-	"creatorsname":          "creatorsName",
-	"entrycsn":              "entryCSN",
-	"entryuuid":             "entryUUID",
-	"modifiersname":         "modifiersName",
-	"modifytimestamp":       "modifyTimestamp",
-	"structuralobjectclass": "structuralObjectClass",
-	"subschemasubentry":     "subschemaSubentry",
+	"createtimestamp":               "createTimestamp",
+	"creatorsname":                  "creatorsName",
+	"collectiveattributesubentries": "collectiveAttributeSubentries",
+	"entrycsn":                      "entryCSN",
+	"entryuuid":                     "entryUUID",
+	"modifiersname":                 "modifiersName",
+	"modifytimestamp":               "modifyTimestamp",
+	"structuralobjectclass":         "structuralObjectClass",
+	"subschemasubentry":             "subschemaSubentry",
 }
 
 func (server *Server) handleAdd(
@@ -1240,6 +1241,8 @@ func schemaValidationResult(err error) ldapwire.Result {
 		return ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, violation.Error())
 	case schema.ViolationSingleValue:
 		return ldapwire.ResultError(ldapwire.ResultConstraintViolation, violation.Error())
+	case schema.ViolationNaming:
+		return ldapwire.ResultError(ldapwire.ResultNamingViolation, violation.Error())
 	default:
 		return ldapwire.ResultError(ldapwire.ResultObjectClassViolation, violation.Error())
 	}

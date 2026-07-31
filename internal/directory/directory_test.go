@@ -25,6 +25,34 @@ func TestDNScopes(t *testing.T) {
 	}
 }
 
+func TestComposeLocalName(t *testing.T) {
+	t.Parallel()
+
+	administrativePoint := mustDN(t, "dc=example,dc=com")
+	localName := mustDN(t, "ou=People,ou=West")
+	composed, err := ComposeLocalName(localName, administrativePoint)
+	if err != nil {
+		t.Fatalf("ComposeLocalName(): %v", err)
+	}
+	want := mustDN(t, "ou=People,ou=West,dc=example,dc=com")
+	if !composed.Equal(want) {
+		t.Fatalf("composed DN = %q, want %q", composed.String(), want.String())
+	}
+
+	empty := mustDN(t, "")
+	composed, err = ComposeLocalName(empty, administrativePoint)
+	if err != nil {
+		t.Fatalf("ComposeLocalName(empty): %v", err)
+	}
+	if !composed.Equal(administrativePoint) {
+		t.Fatalf(
+			"empty local name produced %q, want %q",
+			composed.String(),
+			administrativePoint.String(),
+		)
+	}
+}
+
 func TestFilterMatch(t *testing.T) {
 	t.Parallel()
 
