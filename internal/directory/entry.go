@@ -67,6 +67,15 @@ func (e Entry) SelectWith(
 	typesOnly bool,
 	isOperational func(string) bool,
 ) Entry {
+	return e.SelectWithMatcher(requested, typesOnly, isOperational, nil)
+}
+
+func (e Entry) SelectWithMatcher(
+	requested []string,
+	typesOnly bool,
+	isOperational func(string) bool,
+	isDescriptionSubtype func(candidate, requested string) bool,
+) Entry {
 	out := Entry{DN: e.DN}
 	if selectsNoAttributes(requested) {
 		return out
@@ -81,6 +90,9 @@ func (e Entry) SelectWith(
 
 	for _, attribute := range e.Attributes {
 		explicitlyRequested := slices.ContainsFunc(requested, func(value string) bool {
+			if isDescriptionSubtype != nil {
+				return isDescriptionSubtype(attribute.Description, value)
+			}
 			return equalAttributeDescription(value, attribute.Description)
 		})
 		operational := isOperational != nil && isOperational(attribute.Description)

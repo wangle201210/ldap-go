@@ -381,6 +381,10 @@ func (server *Server) readResponseControl(
 	}
 
 	entry = withSubschemaReference(entry)
+	entry, err := withCollectiveAttributes(runtime.schema, reader, entry)
+	if err != nil {
+		return nil, err
+	}
 	if !server.allowed(
 		runtime,
 		reader,

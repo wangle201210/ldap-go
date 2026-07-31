@@ -78,11 +78,14 @@ func (server *Server) prepareAliasSearch(
 				return err
 			}
 			if failure != nil {
-				result := server.aliasSearchFailureResult(
+				result, err := server.aliasSearchFailureResult(
 					state,
 					tx,
 					*failure,
 				)
+				if err != nil {
+					return err
+				}
 				failureResult = &result
 				return nil
 			}
@@ -301,23 +304,31 @@ func (server *Server) aliasSearchFailureResult(
 	state *connectionState,
 	reader storage.Reader,
 	failure aliasDerefFailure,
-) ldapwire.Result {
+) (ldapwire.Result, error) {
+	logicalEntry, err := withCollectiveAttributes(
+		state.runtime.schema,
+		reader,
+		failure.matched,
+	)
+	if err != nil {
+		return ldapwire.Result{}, err
+	}
 	if !server.allowed(
 		state.runtime,
 		reader,
 		state.boundDN,
-		failure.matched,
+		logicalEntry,
 		"entry",
 		nil,
 		acl.Disclose,
 	) {
-		return ldapwire.Result{Code: ldapwire.ResultNoSuchObject}
+		return ldapwire.Result{Code: ldapwire.ResultNoSuchObject}, nil
 	}
 	return ldapwire.Result{
 		Code:              failure.code,
 		MatchedDN:         failure.matched.DN,
 		DiagnosticMessage: failure.diagnostic,
-	}
+	}, nil
 }
 
 func expandAliasSearchRoutes(

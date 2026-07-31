@@ -60,7 +60,7 @@ No row may become `compatible` based only on unit tests.
 | Standard operational attributes | partial | create/modify/rename differential tests |
 | Subschema subentry | partial | discovery and schema publication tests |
 | Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
-| Collective attributes | planned | RFC 3671 propagation, exclusions, administrative-area, and subtree-specification tests |
+| Collective attributes | partial | RFC 3671 schema, propagation, merge/exclusions, filtering, Compare, controls, paging, sorting/VLV, and ACL tests pass; X.501 administrative-area boundaries and OpenLDAP differential remain |
 | DIT content/name/structure rules | planned | schema enforcement differential tests |
 
 ## Authentication, authorization, and security
@@ -230,9 +230,31 @@ publishes `subentry` and `structuralObjectClass: subentry`, and, like OpenLDAP's
 frontend special entry, remains base-searchable regardless of a FALSE
 Subentries control. Process-level differentials cover base, one-level, and
 subtree visibility, TRUE/FALSE values, special entries, malformed values,
-Bind, and parent rules. RFC 3671 collective-attribute propagation and the full
-administrative-area interpretation of subtree specifications remain pending,
-so this row remains `partial`.
+Bind, and parent rules.
+
+RFC 3671 support builds on a strict RFC 3672 GSER parser for subtree bases,
+specific exclusions, minimum/maximum depth, and object-class refinements. The
+13 standard `c-*` attribute types and the collective system schema are built
+in. A collective-attribute subentry contributes values to normal entries in
+its scope; values from multiple sources are merged and deduplicated using
+schema equality rules. `collectiveExclusions`, including
+`excludeAllCollectiveAttributes`, suppress values without hiding the generated
+`collectiveAttributeSubentries` source references.
+
+Derived values exist only on the logical entry assembled inside a read
+transaction. They are evaluated before filters, Compare, Assertion, read
+controls, paging, sorting, and ACL `dnattr` checks, and are never written back
+to member entries. Members cannot add or modify collective values or generated
+source references, while a source-subentry update becomes visible
+immediately. TCP tests cover these paths as well as multi-source propagation
+and optioned attributes. An imported malformed subtree specification remains
+readable but cannot define a propagation scope.
+
+OpenLDAP 2.6 keeps its collective schema behind a development build option and
+does not provide mainline value propagation suitable for process
+differentials. X.501 specific/inner administrative-area boundary nesting and
+DIT content-rule interaction also remain pending. The feature therefore
+remains `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New

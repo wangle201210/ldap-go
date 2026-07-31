@@ -43,6 +43,11 @@ type ValueMatcher interface {
 	MatchSubstring(attribute string, value []byte, substring Substring) (bool, error)
 }
 
+type AttributeResolver interface {
+	AttributeValues(entry Entry, description string) [][]byte
+	HasAttributeDescription(entry Entry, description string) bool
+}
+
 func (filter Filter) Match(entry Entry) (bool, error) {
 	return filter.MatchWith(entry, BasicMatcher{})
 }
@@ -78,10 +83,10 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 		return !matches, err
 
 	case FilterPresent:
-		return entry.HasAttribute(filter.Attribute), nil
+		return resolvedHasAttribute(matcher, entry, filter.Attribute), nil
 
 	case FilterEquality, FilterApprox, FilterGreaterOrEqual, FilterLessOrEqual:
-		values := entry.Values(filter.Attribute)
+		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
 		for _, value := range values {
 			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
 			if err != nil {
@@ -105,7 +110,7 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 		return false, nil
 
 	case FilterSubstrings:
-		for _, value := range entry.Values(filter.Attribute) {
+		for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
 			matches, err := matcher.MatchSubstring(filter.Attribute, value, filter.Substring)
 			if err != nil {
 				return false, err
@@ -118,7 +123,7 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 
 	case FilterExtensible:
 		if filter.Attribute != "" {
-			for _, value := range entry.Values(filter.Attribute) {
+			for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
 				comparison, err := matcher.Compare(
 					filter.Attribute,
 					filter.MatchingRule,
@@ -155,6 +160,28 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 	default:
 		return false, fmt.Errorf("unknown filter kind %d", filter.Kind)
 	}
+}
+
+func resolvedAttributeValues(
+	matcher ValueMatcher,
+	entry Entry,
+	description string,
+) [][]byte {
+	if resolver, ok := matcher.(AttributeResolver); ok {
+		return resolver.AttributeValues(entry, description)
+	}
+	return entry.Values(description)
+}
+
+func resolvedHasAttribute(
+	matcher ValueMatcher,
+	entry Entry,
+	description string,
+) bool {
+	if resolver, ok := matcher.(AttributeResolver); ok {
+		return resolver.HasAttributeDescription(entry, description)
+	}
+	return entry.HasAttribute(description)
 }
 
 type BasicMatcher struct{}

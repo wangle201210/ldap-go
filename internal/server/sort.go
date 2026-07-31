@@ -2,7 +2,6 @@ package server
 
 import (
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -299,27 +298,7 @@ func sortAttributeValues(
 	entry directory.Entry,
 	description string,
 ) [][]byte {
-	if values := entry.Values(description); len(values) > 0 {
-		return values
-	}
-	if strings.Contains(description, ";") {
-		return nil
-	}
-	target, ok := registry.AttributeType(description)
-	if !ok {
-		return nil
-	}
-	var values [][]byte
-	for _, attribute := range entry.Attributes {
-		if strings.Contains(attribute.Description, ";") {
-			continue
-		}
-		candidate, ok := registry.AttributeType(attribute.Description)
-		if ok && strings.EqualFold(candidate.OID, target.OID) {
-			values = append(values, attribute.Values...)
-		}
-	}
-	return values
+	return registry.AttributeValues(entry, description)
 }
 
 func compareSearchCandidates(

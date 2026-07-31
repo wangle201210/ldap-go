@@ -209,6 +209,57 @@ func (registry *Registry) AttributeType(name string) (AttributeType, bool) {
 	return *attribute, true
 }
 
+// AttributeDescriptionSubtype reports whether candidate is the requested
+// description itself or one of its attribute-type or tagging-option subtypes.
+func (registry *Registry) AttributeDescriptionSubtype(
+	candidate,
+	requested string,
+) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.attributeDescriptionSubtype(candidate, requested)
+}
+
+func (registry *Registry) AttributeValues(
+	entry directory.Entry,
+	description string,
+) [][]byte {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	var values [][]byte
+	for _, attribute := range entry.Attributes {
+		if !registry.attributeDescriptionSubtype(
+			attribute.Description,
+			description,
+		) {
+			continue
+		}
+		for _, value := range attribute.Values {
+			values = append(values, bytes.Clone(value))
+		}
+	}
+	return values
+}
+
+func (registry *Registry) HasAttributeDescription(
+	entry directory.Entry,
+	description string,
+) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	for _, attribute := range entry.Attributes {
+		if registry.attributeDescriptionSubtype(
+			attribute.Description,
+			description,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
 func (registry *Registry) ObjectClass(name string) (ObjectClass, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -276,6 +327,18 @@ func (registry *Registry) IsCollective(attributeName string) bool {
 	}
 	collective, err := registry.attributeTypeIsCollective(attribute, make(map[string]bool))
 	return err == nil && collective
+}
+
+func (registry *Registry) HasCollectiveAttributeTypes() bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	for _, attribute := range uniqueAttributeTypes(registry.attributes) {
+		if attribute.Collective {
+			return true
+		}
+	}
+	return false
 }
 
 func (registry *Registry) AttributeTypeDescriptions() []string {
@@ -920,6 +983,76 @@ func (registry *Registry) effectiveAttributeType(
 	return result, nil
 }
 
+func (registry *Registry) attributeDescriptionSubtype(
+	candidate,
+	requested string,
+) bool {
+	candidateTypeName, candidateOptions := splitAttributeDescription(candidate)
+	requestedTypeName, requestedOptions := splitAttributeDescription(requested)
+	candidateType, candidateKnown := registry.attributes[schemaKey(candidateTypeName)]
+	requestedType, requestedKnown := registry.attributes[schemaKey(requestedTypeName)]
+	if !candidateKnown || !requestedKnown {
+		return schemaKey(candidateTypeName) == schemaKey(requestedTypeName) &&
+			sameAttributeOptions(candidateOptions, requestedOptions)
+	}
+	if !registry.attributeTypeSubtype(
+		candidateType,
+		requestedType,
+		make(map[string]bool),
+	) {
+		return false
+	}
+	for option := range requestedOptions {
+		if _, present := candidateOptions[option]; !present {
+			return false
+		}
+	}
+	return true
+}
+
+func sameAttributeOptions(
+	left,
+	right map[string]struct{},
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for option := range left {
+		if _, present := right[option]; !present {
+			return false
+		}
+	}
+	return true
+}
+
+func (registry *Registry) attributeTypeSubtype(
+	candidate,
+	ancestor *AttributeType,
+	visiting map[string]bool,
+) bool {
+	if strings.EqualFold(candidate.OID, ancestor.OID) {
+		return true
+	}
+	key := schemaKey(candidate.OID)
+	if visiting[key] || candidate.Superior == "" {
+		return false
+	}
+	visiting[key] = true
+	superior, ok := registry.attributes[schemaKey(candidate.Superior)]
+	return ok && registry.attributeTypeSubtype(superior, ancestor, visiting)
+}
+
+func splitAttributeDescription(
+	description string,
+) (string, map[string]struct{}) {
+	parts := strings.Split(strings.TrimSpace(description), ";")
+	options := make(map[string]struct{}, len(parts)-1)
+	for _, option := range parts[1:] {
+		options[schemaKey(option)] = struct{}{}
+	}
+	return parts[0], options
+}
+
 func validateSyntax(syntax string, maxLength int, value []byte) error {
 	if maxLength > 0 && len(value) > maxLength {
 		return fmt.Errorf("value exceeds syntax length %d", maxLength)
@@ -936,6 +1069,27 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 			if character > 0x7f {
 				return errors.New("value is not IA5")
 			}
+		}
+	case SyntaxNumericString:
+		if len(value) == 0 {
+			return errors.New("value is not a non-empty Numeric String")
+		}
+		for _, character := range value {
+			if character != ' ' && (character < '0' || character > '9') {
+				return errors.New("value is not a Numeric String")
+			}
+		}
+	case SyntaxPostalAddress:
+		if !validPostalAddress(value) {
+			return errors.New("value is not a postal address")
+		}
+	case SyntaxTelephoneNumber:
+		if !validPrintableString(value) {
+			return errors.New("value is not a telephone number")
+		}
+	case SyntaxTelexNumber, SyntaxFacsimileTelephone:
+		if !validPrintableStringList(value) {
+			return errors.New("value is not a printable string list")
 		}
 	case SyntaxInteger:
 		if _, err := strconv.ParseInt(string(value), 10, 64); err != nil {
@@ -979,6 +1133,21 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 		"caseexactorderingmatch",
 		"caseexactia5orderingmatch":
 		return bytes.Compare(normalizeSpace(left), normalizeSpace(right)), nil
+	case "caseignorelistmatch":
+		return bytes.Compare(
+			normalizeCaseIgnoreList(left),
+			normalizeCaseIgnoreList(right),
+		), nil
+	case "telephonenumbermatch":
+		return bytes.Compare(
+			normalizeTelephoneNumber(left),
+			normalizeTelephoneNumber(right),
+		), nil
+	case "numericstringmatch", "numericstringorderingmatch":
+		return bytes.Compare(
+			normalizeNumericString(left),
+			normalizeNumericString(right),
+		), nil
 	case "octetstringmatch", "octetstringorderingmatch":
 		return bytes.Compare(left, right), nil
 	case "objectidentifiermatch":
@@ -1024,6 +1193,10 @@ func supportedMatchingRule(rule string) bool {
 		"caseexactia5match",
 		"caseexactorderingmatch",
 		"caseexactia5orderingmatch",
+		"caseignorelistmatch",
+		"telephonenumbermatch",
+		"numericstringmatch",
+		"numericstringorderingmatch",
 		"octetstringmatch",
 		"octetstringorderingmatch",
 		"objectidentifiermatch",
@@ -1058,6 +1231,16 @@ func canonicalMatchingRule(rule string) string {
 		return "caseexactmatch"
 	case "2.5.13.6":
 		return "caseexactorderingmatch"
+	case "2.5.13.8":
+		return "numericstringmatch"
+	case "2.5.13.9":
+		return "numericstringorderingmatch"
+	case "2.5.13.10":
+		return "numericstringsubstringsmatch"
+	case "2.5.13.11":
+		return "caseignorelistmatch"
+	case "2.5.13.12":
+		return "caseignorelistsubstringsmatch"
 	case "2.5.13.13":
 		return "booleanmatch"
 	case "2.5.13.14":
@@ -1068,6 +1251,10 @@ func canonicalMatchingRule(rule string) string {
 		return "octetstringmatch"
 	case "2.5.13.18":
 		return "octetstringorderingmatch"
+	case "2.5.13.20":
+		return "telephonenumbermatch"
+	case "2.5.13.21":
+		return "telephonenumbersubstringsmatch"
 	case "2.5.13.27":
 		return "generalizedtimematch"
 	case "2.5.13.28":
@@ -1098,8 +1285,14 @@ func matchSubstringWithRule(
 	switch strings.ToLower(rule) {
 	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
 		normalize = normalizeCaseIgnore
+	case "caseignorelistsubstringsmatch":
+		return matchCaseIgnoreListSubstring(value, substring)
 	case "caseexactsubstringsmatch", "caseexactia5substringsmatch":
 		normalize = normalizeSpace
+	case "telephonenumbersubstringsmatch":
+		normalize = normalizeTelephoneNumber
+	case "numericstringsubstringsmatch":
+		normalize = normalizeNumericString
 	default:
 		return false, fmt.Errorf("unsupported substring matching rule %q", rule)
 	}
@@ -1133,6 +1326,201 @@ func normalizeCaseIgnore(value []byte) []byte {
 
 func normalizeSpace(value []byte) []byte {
 	return []byte(strings.Join(strings.Fields(string(value)), " "))
+}
+
+func normalizeCaseIgnoreList(value []byte) []byte {
+	lines, ok := parsePostalAddress(value)
+	if !ok {
+		return bytes.Clone(value)
+	}
+	var normalized []byte
+	for _, line := range lines {
+		line = normalizeCaseIgnore(line)
+		normalized = strconv.AppendInt(normalized, int64(len(line)), 10)
+		normalized = append(normalized, ':')
+		normalized = append(normalized, line...)
+	}
+	return normalized
+}
+
+func normalizeTelephoneNumber(value []byte) []byte {
+	normalized := make([]byte, 0, len(value))
+	for _, character := range bytes.ToLower(value) {
+		if character != ' ' && character != '-' {
+			normalized = append(normalized, character)
+		}
+	}
+	return normalized
+}
+
+func normalizeNumericString(value []byte) []byte {
+	normalized := make([]byte, 0, len(value))
+	for _, character := range value {
+		if character != ' ' {
+			normalized = append(normalized, character)
+		}
+	}
+	return normalized
+}
+
+func validPostalAddress(value []byte) bool {
+	_, ok := parsePostalAddress(value)
+	return ok
+}
+
+func parsePostalAddress(value []byte) ([][]byte, bool) {
+	if len(value) == 0 {
+		return nil, false
+	}
+	var (
+		lines   [][]byte
+		current []byte
+	)
+	for index := 0; index < len(value); index++ {
+		switch value[index] {
+		case '$':
+			if len(current) == 0 || !utf8.Valid(current) {
+				return nil, false
+			}
+			lines = append(lines, bytes.Clone(current))
+			current = nil
+		case '\\':
+			if index+2 >= len(value) {
+				return nil, false
+			}
+			escape := strings.ToLower(string(value[index+1 : index+3]))
+			switch escape {
+			case "24":
+				current = append(current, '$')
+			case "5c":
+				current = append(current, '\\')
+			default:
+				return nil, false
+			}
+			index += 2
+		default:
+			current = append(current, value[index])
+		}
+	}
+	if len(current) == 0 || !utf8.Valid(current) {
+		return nil, false
+	}
+	lines = append(lines, bytes.Clone(current))
+	return lines, true
+}
+
+type byteRange struct {
+	start int
+	end   int
+}
+
+func matchCaseIgnoreListSubstring(
+	value []byte,
+	substring directory.Substring,
+) (bool, error) {
+	lines, ok := parsePostalAddress(value)
+	if !ok {
+		return false, errors.New("value is not a postal address")
+	}
+	var (
+		candidate []byte
+		ranges    []byteRange
+	)
+	for _, line := range lines {
+		start := len(candidate)
+		candidate = append(candidate, normalizeCaseIgnore(line)...)
+		ranges = append(ranges, byteRange{start: start, end: len(candidate)})
+	}
+
+	position := 0
+	if substring.Initial != nil {
+		initial := normalizeCaseIgnore(substring.Initial)
+		if !bytes.HasPrefix(candidate, initial) ||
+			!rangeContains(ranges[0], 0, len(initial)) {
+			return false, nil
+		}
+		position = len(initial)
+	}
+	for _, rawPart := range substring.Any {
+		part := normalizeCaseIgnore(rawPart)
+		start, found := findContainedSubstring(
+			candidate,
+			ranges,
+			part,
+			position,
+		)
+		if !found {
+			return false, nil
+		}
+		position = start + len(part)
+	}
+	if substring.Final == nil {
+		return true, nil
+	}
+	final := normalizeCaseIgnore(substring.Final)
+	start := len(candidate) - len(final)
+	if start < position || start < 0 ||
+		!bytes.Equal(candidate[start:], final) ||
+		!rangeContains(ranges[len(ranges)-1], start, len(candidate)) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func findContainedSubstring(
+	candidate []byte,
+	ranges []byteRange,
+	part []byte,
+	position int,
+) (int, bool) {
+	for position <= len(candidate) {
+		index := bytes.Index(candidate[position:], part)
+		if index < 0 {
+			return 0, false
+		}
+		start := position + index
+		end := start + len(part)
+		for _, candidateRange := range ranges {
+			if rangeContains(candidateRange, start, end) {
+				return start, true
+			}
+		}
+		position = start + 1
+	}
+	return 0, false
+}
+
+func rangeContains(candidate byteRange, start, end int) bool {
+	return start >= candidate.start && end <= candidate.end
+}
+
+func validPrintableStringList(value []byte) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, item := range bytes.Split(value, []byte{'$'}) {
+		if !validPrintableString(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPrintableString(value []byte) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, character := range value {
+		switch {
+		case character >= 'A' && character <= 'Z',
+			character >= 'a' && character <= 'z',
+			character >= '0' && character <= '9':
+		case strings.ContainsRune(" '()+,-./:=?", rune(character)):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func schemaKeys(oid string, names []string) []string {

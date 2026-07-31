@@ -18,6 +18,15 @@ import (
 )
 
 var protectedOperationalAttributes = map[string]string{
+	"2.5.18.1":                      "createTimestamp",
+	"2.5.18.2":                      "modifyTimestamp",
+	"2.5.18.3":                      "creatorsName",
+	"2.5.18.4":                      "modifiersName",
+	"2.5.18.10":                     "subschemaSubentry",
+	"2.5.18.12":                     "collectiveAttributeSubentries",
+	"2.5.21.9":                      "structuralObjectClass",
+	"1.3.6.1.1.16.4":                "entryUUID",
+	"1.3.6.1.4.1.4203.666.1.7":      "entryCSN",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
@@ -95,6 +104,7 @@ func (server *Server) handleAdd(
 		&entry,
 		state.boundDN,
 		lastModEnabled(state.runtime, dn),
+		state.runtime.schema,
 	); err != nil {
 		return server.internalOperationError(connection, message.ID, ldapwire.ApplicationAddResponse, err)
 	}
@@ -125,11 +135,19 @@ func (server *Server) handleAdd(
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
 			return err
 		}
+		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		if err != nil {
+			return err
+		}
+		logicalEntry, err := collectivePlan.apply(entry)
+		if err != nil {
+			return err
+		}
 		if err := server.checkAssertion(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			logicalEntry,
 			controls.assertion,
 		); err != nil {
 			return err
@@ -199,11 +217,15 @@ func (server *Server) handleAdd(
 				return getErr
 			}
 		}
+		logicalParent, err := collectivePlan.apply(parent)
+		if err != nil {
+			return err
+		}
 		if !server.allowed(
 			state.runtime,
 			tx,
 			state.boundDN,
-			parent,
+			logicalParent,
 			"children",
 			nil,
 			acl.WriteAdd,
@@ -211,7 +233,7 @@ func (server *Server) handleAdd(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			logicalEntry,
 			"entry",
 			nil,
 			acl.WriteAdd,
@@ -224,7 +246,7 @@ func (server *Server) handleAdd(
 					state.runtime,
 					tx,
 					state.boundDN,
-					entry,
+					logicalEntry,
 					attribute,
 					acl.WriteAdd,
 				) {
@@ -436,8 +458,16 @@ func (server *Server) modifyEntry(
 		if err != nil {
 			return err
 		}
+		collectivePlan, err := buildCollectiveAttributePlan(runtime.schema, tx)
+		if err != nil {
+			return err
+		}
+		logicalEntry, err := collectivePlan.apply(entry)
+		if err != nil {
+			return err
+		}
 		if precondition != nil {
-			if err := precondition(tx, entry); err != nil {
+			if err := precondition(tx, logicalEntry); err != nil {
 				return err
 			}
 		}
@@ -446,13 +476,26 @@ func (server *Server) modifyEntry(
 			runtime,
 			tx,
 			boundDN,
-			entry,
+			logicalEntry,
 			changes,
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		for _, change := range changes {
-			if isProtectedOperationalAttribute(change.Attribute.Description) {
+			if runtime.schema.IsCollective(change.Attribute.Description) &&
+				!runtime.schema.EntryHasObjectClass(
+					entry,
+					"collectiveAttributeSubentry",
+				) {
+				return operationFailed(
+					ldapwire.ResultObjectClassViolation,
+					"collective attributes are modified through a collectiveAttributeSubentry",
+				)
+			}
+			if isProtectedOperationalAttribute(
+				runtime.schema,
+				change.Attribute.Description,
+			) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
 			}
 			if failure := applyModification(&entry, change); failure != nil {
@@ -572,11 +615,19 @@ func (server *Server) handleDelete(
 		if err != nil {
 			return err
 		}
+		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		if err != nil {
+			return err
+		}
+		logicalEntry, err := collectivePlan.apply(entry)
+		if err != nil {
+			return err
+		}
 		if err := server.checkAssertion(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			logicalEntry,
 			controls.assertion,
 		); err != nil {
 			return err
@@ -586,11 +637,15 @@ func (server *Server) handleDelete(
 		if err != nil {
 			return err
 		}
+		logicalParent, err := collectivePlan.apply(parent)
+		if err != nil {
+			return err
+		}
 		if !server.allowed(
 			state.runtime,
 			tx,
 			state.boundDN,
-			parent,
+			logicalParent,
 			"children",
 			nil,
 			acl.WriteDelete,
@@ -598,7 +653,7 @@ func (server *Server) handleDelete(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			logicalEntry,
 			"entry",
 			nil,
 			acl.WriteDelete,
@@ -609,7 +664,7 @@ func (server *Server) handleDelete(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			logicalEntry,
 			controls.preRead,
 			preReadControlOID,
 		)
@@ -812,11 +867,19 @@ func (server *Server) handleModifyDN(
 		if err != nil {
 			return err
 		}
+		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		if err != nil {
+			return err
+		}
+		logicalSourceEntry, err := collectivePlan.apply(sourceEntry)
+		if err != nil {
+			return err
+		}
 		if err := server.checkAssertion(
 			state.runtime,
 			tx,
 			state.boundDN,
-			sourceEntry,
+			logicalSourceEntry,
 			controls.assertion,
 		); err != nil {
 			return err
@@ -852,7 +915,15 @@ func (server *Server) handleModifyDN(
 				)
 			}
 		}
+		logicalNewParent, err := collectivePlan.apply(newParent)
+		if err != nil {
+			return err
+		}
 		oldParent, err := parentEntry(tx, oldDN)
+		if err != nil {
+			return err
+		}
+		logicalOldParent, err := collectivePlan.apply(oldParent)
 		if err != nil {
 			return err
 		}
@@ -874,7 +945,7 @@ func (server *Server) handleModifyDN(
 			state.runtime,
 			tx,
 			state.boundDN,
-			sourceEntry,
+			logicalSourceEntry,
 			"entry",
 			nil,
 			acl.Write,
@@ -882,7 +953,7 @@ func (server *Server) handleModifyDN(
 			state.runtime,
 			tx,
 			state.boundDN,
-			oldParent,
+			logicalOldParent,
 			"children",
 			nil,
 			acl.WriteDelete,
@@ -890,7 +961,7 @@ func (server *Server) handleModifyDN(
 			state.runtime,
 			tx,
 			state.boundDN,
-			newParent,
+			logicalNewParent,
 			"children",
 			nil,
 			acl.WriteAdd,
@@ -902,7 +973,7 @@ func (server *Server) handleModifyDN(
 				state.runtime,
 				tx,
 				state.boundDN,
-				sourceEntry,
+				logicalSourceEntry,
 				attribute,
 				acl.WriteAdd,
 			) {
@@ -915,7 +986,7 @@ func (server *Server) handleModifyDN(
 					state.runtime,
 					tx,
 					state.boundDN,
-					sourceEntry,
+					logicalSourceEntry,
 					attribute,
 					acl.WriteDelete,
 				) {
@@ -927,7 +998,7 @@ func (server *Server) handleModifyDN(
 			state.runtime,
 			tx,
 			state.boundDN,
-			sourceEntry,
+			logicalSourceEntry,
 			controls.preRead,
 			preReadControlOID,
 		)
@@ -1116,6 +1187,14 @@ func (server *Server) handleCompare(
 				return getErr
 			}
 			entry = withSubschemaReference(entry)
+			entry, getErr = withCollectiveAttributes(
+				state.runtime.schema,
+				tx,
+				entry,
+			)
+			if getErr != nil {
+				return getErr
+			}
 		}
 		if err := server.checkAssertion(
 			state.runtime,
@@ -1137,10 +1216,16 @@ func (server *Server) handleCompare(
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
-		if !entry.HasAttribute(request.Attribute) {
+		if !state.runtime.schema.HasAttributeDescription(
+			entry,
+			request.Attribute,
+		) {
 			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
 		}
-		for _, value := range entry.Values(request.Attribute) {
+		for _, value := range state.runtime.schema.AttributeValues(
+			entry,
+			request.Attribute,
+		) {
 			comparison, compareErr := state.runtime.schema.Compare(
 				request.Attribute,
 				"",
@@ -1257,10 +1342,15 @@ func (server *Server) applyCreateOperationalAttributes(
 	entry *directory.Entry,
 	actor string,
 	lastMod bool,
+	registry *schema.Registry,
 ) error {
-	for _, description := range protectedOperationalAttributes {
-		entry.ReplaceValues(description, nil)
+	attributes := entry.Attributes[:0]
+	for _, attribute := range entry.Attributes {
+		if !isProtectedOperationalAttribute(registry, attribute.Description) {
+			attributes = append(attributes, attribute)
+		}
 	}
+	entry.Attributes = attributes
 	if !lastMod {
 		return nil
 	}
@@ -1333,8 +1423,19 @@ func randomUUID() (string, error) {
 	), nil
 }
 
-func isProtectedOperationalAttribute(description string) bool {
-	_, protected := protectedOperationalAttributes[strings.ToLower(description)]
+func isProtectedOperationalAttribute(
+	registry *schema.Registry,
+	description string,
+) bool {
+	base := description
+	if index := strings.IndexByte(base, ';'); index >= 0 {
+		base = base[:index]
+	}
+	key := strings.ToLower(strings.TrimSpace(base))
+	if attributeType, ok := registry.AttributeType(base); ok {
+		key = strings.ToLower(attributeType.OID)
+	}
+	_, protected := protectedOperationalAttributes[key]
 	return protected
 }
 

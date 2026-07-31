@@ -1,0 +1,304 @@
+package server
+
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/schema"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+const excludeAllCollectiveAttributesOID = "2.5.18.0"
+
+type collectiveAttributePlan struct {
+	registry *schema.Registry
+	sources  []collectiveAttributeSource
+}
+
+type collectiveAttributePlanCache struct {
+	registry *schema.Registry
+	plans    map[string]*collectiveAttributePlan
+}
+
+type collectiveAttributeSource struct {
+	dn                  directory.DN
+	administrativePoint directory.DN
+	specification       schema.SubtreeSpecification
+	attributes          []collectiveSourceAttribute
+}
+
+type collectiveSourceAttribute struct {
+	description string
+	oid         string
+	key         string
+	values      [][]byte
+}
+
+type collectiveDerivedAttribute struct {
+	description string
+	values      [][]byte
+}
+
+func newCollectiveAttributePlanCache(
+	registry *schema.Registry,
+) *collectiveAttributePlanCache {
+	return &collectiveAttributePlanCache{
+		registry: registry,
+		plans:    make(map[string]*collectiveAttributePlan),
+	}
+}
+
+func (cache *collectiveAttributePlanCache) apply(
+	partition string,
+	reader storage.Reader,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	plan := cache.plans[partition]
+	if plan == nil {
+		var err error
+		plan, err = buildCollectiveAttributePlan(cache.registry, reader)
+		if err != nil {
+			return directory.Entry{}, err
+		}
+		cache.plans[partition] = plan
+	}
+	return plan.apply(entry)
+}
+
+func withCollectiveAttributes(
+	registry *schema.Registry,
+	reader storage.Reader,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	plan, err := buildCollectiveAttributePlan(registry, reader)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	return plan.apply(entry)
+}
+
+func buildCollectiveAttributePlan(
+	registry *schema.Registry,
+	reader storage.Reader,
+) (*collectiveAttributePlan, error) {
+	plan := &collectiveAttributePlan{registry: registry}
+	if registry == nil || !registry.HasCollectiveAttributeTypes() {
+		return plan, nil
+	}
+
+	if err := reader.ForEach(func(entry directory.Entry) error {
+		if !registry.EntryHasObjectClass(entry, "collectiveAttributeSubentry") ||
+			!registry.EntryHasObjectClass(entry, "subentry") {
+			return nil
+		}
+		values := registry.AttributeValues(entry, "subtreeSpecification")
+		if len(values) != 1 {
+			return nil
+		}
+		specification, err := schema.ParseSubtreeSpecification(string(values[0]))
+		if err != nil {
+			// Imported OpenLDAP data can contain values accepted by slapd's
+			// UTF-8-only validator. Such a source remains readable but cannot
+			// safely define a collection.
+			return nil
+		}
+		dn, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse collective attribute subentry DN %q: %w", entry.DN, err)
+		}
+		administrativePoint, ok := dn.Parent()
+		if !ok {
+			return nil
+		}
+		source := collectiveAttributeSource{
+			dn:                  dn,
+			administrativePoint: administrativePoint,
+			specification:       specification,
+		}
+		for _, attribute := range entry.Attributes {
+			if !registry.IsCollective(attribute.Description) {
+				continue
+			}
+			attributeType, ok := registry.AttributeType(attribute.Description)
+			if !ok {
+				continue
+			}
+			source.attributes = append(source.attributes, collectiveSourceAttribute{
+				description: canonicalCollectiveDescription(
+					attributeType.Name(),
+					attribute.Description,
+				),
+				oid:    attributeType.OID,
+				key:    collectiveAttributeKey(attributeType.OID, attribute.Description),
+				values: cloneCollectiveValues(attribute.Values),
+			})
+		}
+		plan.sources = append(plan.sources, source)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("scan collective attribute subentries: %w", err)
+	}
+	sort.Slice(plan.sources, func(left, right int) bool {
+		return plan.sources[left].dn.Key() < plan.sources[right].dn.Key()
+	})
+	return plan, nil
+}
+
+func (plan *collectiveAttributePlan) apply(entry directory.Entry) (directory.Entry, error) {
+	if plan == nil || plan.registry == nil ||
+		plan.registry.EntryHasObjectClass(entry, "subentry") {
+		return entry, nil
+	}
+	entryDN, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf("parse collective attribute target DN %q: %w", entry.DN, err)
+	}
+
+	result := directory.Entry{DN: entry.DN}
+	for _, attribute := range entry.Attributes {
+		if plan.registry.IsCollective(attribute.Description) ||
+			plan.registry.AttributeDescriptionSubtype(
+				attribute.Description,
+				"collectiveAttributeSubentries",
+			) {
+			continue
+		}
+		result.Attributes = append(result.Attributes, directory.Attribute{
+			Description: attribute.Description,
+			Values:      cloneCollectiveValues(attribute.Values),
+		})
+	}
+
+	excludeAll, excludedOIDs := collectiveExclusions(plan.registry, entry)
+	derived := make(map[string]*collectiveDerivedAttribute)
+	var sourceDNs [][]byte
+	for _, source := range plan.sources {
+		matches, err := plan.registry.SubtreeSpecificationMatches(
+			source.specification,
+			source.administrativePoint,
+			entryDN,
+			entry,
+		)
+		if err != nil {
+			return directory.Entry{}, err
+		}
+		if !matches {
+			continue
+		}
+		sourceDNs = append(sourceDNs, []byte(source.dn.String()))
+		if excludeAll {
+			continue
+		}
+		for _, attribute := range source.attributes {
+			if _, excluded := excludedOIDs[strings.ToLower(attribute.oid)]; excluded {
+				continue
+			}
+			target := derived[attribute.key]
+			if target == nil {
+				target = &collectiveDerivedAttribute{
+					description: attribute.description,
+				}
+				derived[attribute.key] = target
+			}
+			for _, value := range attribute.values {
+				if collectiveValueExists(
+					plan.registry,
+					target.description,
+					target.values,
+					value,
+				) {
+					continue
+				}
+				target.values = append(target.values, bytes.Clone(value))
+			}
+		}
+	}
+
+	keys := make([]string, 0, len(derived))
+	for key := range derived {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		attribute := derived[key]
+		if len(attribute.values) == 0 {
+			continue
+		}
+		result.Attributes = append(result.Attributes, directory.Attribute{
+			Description: attribute.description,
+			Values:      cloneCollectiveValues(attribute.values),
+		})
+	}
+	if len(sourceDNs) > 0 {
+		result.Attributes = append(result.Attributes, directory.Attribute{
+			Description: "collectiveAttributeSubentries",
+			Values:      sourceDNs,
+		})
+	}
+	return result, nil
+}
+
+func collectiveExclusions(
+	registry *schema.Registry,
+	entry directory.Entry,
+) (bool, map[string]struct{}) {
+	excluded := make(map[string]struct{})
+	for _, value := range registry.AttributeValues(entry, "collectiveExclusions") {
+		identifier := string(value)
+		if strings.EqualFold(identifier, "excludeAllCollectiveAttributes") ||
+			identifier == excludeAllCollectiveAttributesOID {
+			return true, excluded
+		}
+		attributeType, ok := registry.AttributeType(identifier)
+		if ok {
+			excluded[strings.ToLower(attributeType.OID)] = struct{}{}
+		}
+	}
+	return false, excluded
+}
+
+func collectiveValueExists(
+	registry *schema.Registry,
+	description string,
+	existing [][]byte,
+	candidate []byte,
+) bool {
+	for _, value := range existing {
+		comparison, err := registry.Compare(description, "", value, candidate)
+		if err == nil && comparison == 0 {
+			return true
+		}
+		if err != nil && bytes.Equal(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectiveAttributeKey(oid, description string) string {
+	parts := strings.Split(description, ";")
+	options := make([]string, 0, len(parts)-1)
+	for _, option := range parts[1:] {
+		options = append(options, strings.ToLower(option))
+	}
+	sort.Strings(options)
+	return strings.ToLower(oid) + ";" + strings.Join(options, ";")
+}
+
+func canonicalCollectiveDescription(name, source string) string {
+	if index := strings.IndexByte(source, ';'); index >= 0 {
+		return name + source[index:]
+	}
+	return name
+}
+
+func cloneCollectiveValues(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for index := range values {
+		cloned[index] = bytes.Clone(values[index])
+	}
+	return cloned
+}

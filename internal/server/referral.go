@@ -54,11 +54,15 @@ func (server *Server) entryOrReferral(
 		if manageDsaIT || !runtime.schema.EntryHasObjectClass(entry, "referral") {
 			return entry, nil
 		}
+		logicalEntry, err := withCollectiveAttributes(runtime.schema, reader, entry)
+		if err != nil {
+			return directory.Entry{}, err
+		}
 		if !server.allowed(
 			runtime,
 			reader,
 			boundDN,
-			entry,
+			logicalEntry,
 			"entry",
 			nil,
 			acl.Disclose,
@@ -83,11 +87,15 @@ func (server *Server) entryOrReferral(
 		!runtime.schema.EntryHasObjectClass(ancestor, "referral") {
 		return directory.Entry{}, storage.ErrEntryNotFound
 	}
+	logicalAncestor, err := withCollectiveAttributes(runtime.schema, reader, ancestor)
+	if err != nil {
+		return directory.Entry{}, err
+	}
 	if !server.allowed(
 		runtime,
 		reader,
 		boundDN,
-		ancestor,
+		logicalAncestor,
 		"entry",
 		nil,
 		acl.Disclose,

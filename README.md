@@ -44,6 +44,11 @@ rewriting, and managed referral updates. RFC 4511/4512 aliases support all four
 broken-target handling, and OpenLDAP's database-level `olcMaxDerefDepth`.
 RFC 3672 subentries include the built-in schema, base/one/subtree visibility,
 the Subentries control, paging, and OpenLDAP-compatible write and Bind rules.
+RFC 3671 collective attributes include the standard `c-*` schema, strict
+subtree-specification scopes, in-memory value propagation and merging,
+collective exclusions, source references, and logical-entry behavior across
+Search, Compare, assertions, read controls, paging, sorting/VLV, and ACL
+evaluation.
 RFC 2891 server-side sorting is available on databases
 configured with OpenLDAP's `sssvlv` overlay, including paged-search interaction
 and virtual list views with offset, proportional, assertion-value, and opaque

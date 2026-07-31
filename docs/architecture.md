@@ -61,6 +61,12 @@ Subentry visibility is applied to candidates before user filters, referrals,
 and read ACLs. This keeps hidden administrative entries out of filter
 evaluation and makes paging, sorting, VLV, and alias-expanded routes share the
 same RFC 3672 behavior.
+Collective attributes are another logical-entry projection. The DSA discovers
+collective-attribute subentries once per partition and read transaction,
+evaluates their subtree specifications, merges schema-normalized values, and
+applies member exclusions before filters and authorization. Storage and write
+validation continue to use the raw entry, so derived values and generated
+source references are never persisted.
 
 ### Schema and matching
 

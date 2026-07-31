@@ -324,6 +324,7 @@ func (server *Server) virtualListViewEntries(
 	}
 	entries := make([]directory.Entry, 0, end-start)
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		for _, item := range view.items[start:end] {
 			if item.route < 0 || item.route >= len(routes) {
 				return fmt.Errorf("VLV route %d is invalid", item.route)
@@ -342,6 +343,10 @@ func (server *Server) virtualListViewEntries(
 				return err
 			}
 			entry = withSubschemaReference(entry)
+			entry, err = collectivePlans.apply(database.partition, tx, entry)
+			if err != nil {
+				return err
+			}
 			if !server.allowed(
 				state.runtime,
 				tx,

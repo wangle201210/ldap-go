@@ -627,6 +627,7 @@ func (server *Server) handleSearch(
 	)
 
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		primary := routes[0]
 		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
 		primaryReader := storage.ReaderInPartition(reader, primaryDatabase.partition)
@@ -639,6 +640,16 @@ func (server *Server) handleSearch(
 				)
 				if ancestorErr != nil {
 					return ancestorErr
+				}
+				if found {
+					ancestor, ancestorErr = collectivePlans.apply(
+						primaryDatabase.partition,
+						primaryReader,
+						ancestor,
+					)
+					if ancestorErr != nil {
+						return ancestorErr
+					}
 				}
 				if found &&
 					state.runtime.schema.EntryHasObjectClass(
@@ -677,6 +688,14 @@ func (server *Server) handleSearch(
 			return err
 		}
 		baseEntry = withSubschemaReference(baseEntry)
+		baseEntry, err = collectivePlans.apply(
+			primaryDatabase.partition,
+			primaryReader,
+			baseEntry,
+		)
+		if err != nil {
+			return err
+		}
 		if !server.allowed(
 			state.runtime,
 			primaryReader,
@@ -744,6 +763,14 @@ func (server *Server) handleSearch(
 					return err
 				}
 				routeBaseEntry = withSubschemaReference(routeBaseEntry)
+				routeBaseEntry, err = collectivePlans.apply(
+					database.partition,
+					tx,
+					routeBaseEntry,
+				)
+				if err != nil {
+					return err
+				}
 				if !server.allowed(
 					state.runtime,
 					tx,
@@ -777,6 +804,10 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				entry = withSubschemaReference(entry)
+				entry, err = collectivePlans.apply(database.partition, tx, entry)
+				if err != nil {
+					return err
+				}
 				if !subentrySearchVisible(
 					state.runtime,
 					entry,
@@ -1134,6 +1165,7 @@ func (server *Server) continueSortedPagedSearch(
 	}
 
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		for sorted.offset < len(sorted.items) {
 			if expired(deadline) {
 				result.Code = ldapwire.ResultTimeLimitExceeded
@@ -1158,6 +1190,10 @@ func (server *Server) continueSortedPagedSearch(
 				return err
 			}
 			entry = withSubschemaReference(entry)
+			entry, err = collectivePlans.apply(database.partition, tx, entry)
+			if err != nil {
+				return err
+			}
 			if !server.allowed(
 				state.runtime,
 				tx,
@@ -1665,7 +1701,12 @@ func (server *Server) selectEntry(
 	requested []string,
 	typesOnly bool,
 ) directory.Entry {
-	return entry.SelectWith(requested, typesOnly, runtime.schema.IsOperational)
+	return entry.SelectWithMatcher(
+		requested,
+		typesOnly,
+		runtime.schema.IsOperational,
+		runtime.schema.AttributeDescriptionSubtype,
+	)
 }
 
 func subentrySearchVisible(
@@ -1716,6 +1757,10 @@ func (server *Server) disclosedAncestor(
 			return ""
 		}
 		if entry, err := reader.Get(parent); err == nil {
+			entry, err = withCollectiveAttributes(runtime.schema, reader, entry)
+			if err != nil {
+				return ""
+			}
 			if server.allowed(
 				runtime,
 				reader,

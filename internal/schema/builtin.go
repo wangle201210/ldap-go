@@ -7,13 +7,18 @@ const (
 	SyntaxAttributeType        = "1.3.6.1.4.1.1466.115.121.1.3"
 	SyntaxDistinguishedName    = "1.3.6.1.4.1.1466.115.121.1.12"
 	SyntaxDirectoryString      = "1.3.6.1.4.1.1466.115.121.1.15"
+	SyntaxFacsimileTelephone   = "1.3.6.1.4.1.1466.115.121.1.22"
 	SyntaxGeneralizedTime      = "1.3.6.1.4.1.1466.115.121.1.24"
 	SyntaxIA5String            = "1.3.6.1.4.1.1466.115.121.1.26"
 	SyntaxInteger              = "1.3.6.1.4.1.1466.115.121.1.27"
+	SyntaxNumericString        = "1.3.6.1.4.1.1466.115.121.1.36"
 	SyntaxObjectClass          = "1.3.6.1.4.1.1466.115.121.1.37"
 	SyntaxOID                  = "1.3.6.1.4.1.1466.115.121.1.38"
 	SyntaxOctetString          = "1.3.6.1.4.1.1466.115.121.1.40"
+	SyntaxPostalAddress        = "1.3.6.1.4.1.1466.115.121.1.41"
 	SyntaxSubtreeSpecification = "1.3.6.1.4.1.1466.115.121.1.45"
+	SyntaxTelephoneNumber      = "1.3.6.1.4.1.1466.115.121.1.50"
+	SyntaxTelexNumber          = "1.3.6.1.4.1.1466.115.121.1.52"
 	SyntaxUUID                 = "1.3.6.1.1.16.1"
 )
 
@@ -39,6 +44,31 @@ var builtinAttributeTypes = []string{
 	"( 2.5.4.4 NAME 'sn' SUP name )",
 	"( 2.5.4.11 NAME 'ou' SUP name )",
 	"( 2.5.4.13 NAME 'description' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( 2.5.4.7 NAME ( 'l' 'localityName' ) SUP name )",
+	"( 2.5.4.8 NAME ( 'st' 'stateOrProvinceName' ) SUP name )",
+	"( 2.5.4.9 NAME ( 'street' 'streetAddress' ) EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{128} )",
+	"( 2.5.4.10 NAME ( 'o' 'organizationName' ) SUP name )",
+	"( 2.5.4.16 NAME 'postalAddress' EQUALITY caseIgnoreListMatch SUBSTR caseIgnoreListSubstringsMatch SYNTAX " + SyntaxPostalAddress + " )",
+	"( 2.5.4.17 NAME 'postalCode' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{40} )",
+	"( 2.5.4.18 NAME 'postOfficeBox' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{40} )",
+	"( 2.5.4.19 NAME 'physicalDeliveryOfficeName' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{128} )",
+	"( 2.5.4.20 NAME 'telephoneNumber' EQUALITY telephoneNumberMatch SUBSTR telephoneNumberSubstringsMatch SYNTAX " + SyntaxTelephoneNumber + "{32} )",
+	"( 2.5.4.21 NAME 'telexNumber' SYNTAX " + SyntaxTelexNumber + " )",
+	"( 2.5.4.23 NAME ( 'facsimileTelephoneNumber' 'fax' ) SYNTAX " + SyntaxFacsimileTelephone + " )",
+	"( 2.5.4.25 NAME 'internationalISDNNumber' EQUALITY numericStringMatch SUBSTR numericStringSubstringsMatch SYNTAX " + SyntaxNumericString + "{16} )",
+	"( 2.5.4.7.1 NAME 'c-l' SUP l COLLECTIVE )",
+	"( 2.5.4.8.1 NAME 'c-st' SUP st COLLECTIVE )",
+	"( 2.5.4.9.1 NAME 'c-street' SUP street COLLECTIVE )",
+	"( 2.5.4.10.1 NAME 'c-o' SUP o COLLECTIVE )",
+	"( 2.5.4.11.1 NAME 'c-ou' SUP ou COLLECTIVE )",
+	"( 2.5.4.16.1 NAME 'c-PostalAddress' SUP postalAddress COLLECTIVE )",
+	"( 2.5.4.17.1 NAME 'c-PostalCode' SUP postalCode COLLECTIVE )",
+	"( 2.5.4.18.1 NAME 'c-PostOfficeBox' SUP postOfficeBox COLLECTIVE )",
+	"( 2.5.4.19.1 NAME 'c-PhysicalDeliveryOfficeName' SUP physicalDeliveryOfficeName COLLECTIVE )",
+	"( 2.5.4.20.1 NAME 'c-TelephoneNumber' SUP telephoneNumber COLLECTIVE )",
+	"( 2.5.4.21.1 NAME 'c-TelexNumber' SUP telexNumber COLLECTIVE )",
+	"( 2.5.4.23.1 NAME 'c-FacsimileTelephoneNumber' SUP facsimileTelephoneNumber COLLECTIVE )",
+	"( 2.5.4.25.1 NAME 'c-InternationalISDNNumber' SUP internationalISDNNumber COLLECTIVE )",
 	"( 2.5.4.1 NAME ( 'aliasedObjectName' 'aliasedEntryName' ) DESC 'RFC4512: name of aliased object' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE )",
 	"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' ) EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " )",
 	"( 0.9.2342.19200300.100.1.25 NAME ( 'dc' 'domainComponent' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
