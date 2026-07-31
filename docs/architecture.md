@@ -138,6 +138,9 @@ bounded, provider-local window of committed non-Add changes, including the
 actual source partition needed for glue scope evaluation. A refresh uses the
 window only when the consumer cookie covers its baseline and publication has
 reached the storage snapshot; otherwise it falls back to the Present phase.
+Delete ID sets carry the exact operation CSN in OpenLDAP's `delcsn` cookie
+field, preventing an unrelated newer context CSN from changing conflict
+ordering.
 Runtime configuration activation preserves a complete existing window and
 resets it when a publication gap is detected. Sorting and VLV operate on the
 combined ACL-visible candidate set after all glue routes are read, then attach
@@ -147,11 +150,18 @@ Consumer workers are keyed by storage partition and replication ID. `Serve`
 owns their context; runtime activation publishes a desired immutable
 configuration, and the manager fully stops a changed worker before starting
 its replacement. RFC 4533 entry changes and opaque cookies commit in one
-storage transaction. Present completion scans only the configured local
-scope/filter, while suffix massage rewrites entry and schema-recognized
-DN-valued attribute values. Single-provider databases reject client updates or
-return their rewritten update referrals; internal replication bypasses that
-LDAP-operation precondition.
+storage transaction. In multi-provider mode, `olcServerID` selects the local
+non-zero CSN SID, durable context metadata stores a vector across all observed
+SIDs, and incoming whole entries or deletes are rejected when their CSN is
+older than the current entry. Durable UUID tombstones retain deletion CSNs
+after entry removal, reject stale re-adds, and are cleared by a newer re-add.
+Applied remote changes and context-only cookie advances are republished after
+commit, allowing a node to relay changes without creating a new local CSN.
+Present completion scans only the configured local scope/filter, while suffix
+massage rewrites entry and schema-recognized DN-valued attribute values.
+Single-provider databases reject client updates or return their rewritten
+update referrals; internal replication bypasses that LDAP-operation
+precondition.
 
 Outbound consumer connections share one RFC 4533 engine across plain LDAP,
 LDAPS, StartTLS, and implicit TLCP. TCP keepalive and Linux user-timeout policy
@@ -226,8 +236,13 @@ proofs through `xdg-go/scram`; LDAP framing, result validation, round limits,
 timeouts, and OpenLDAP `secprops` policy remain internal. GSSAPI is handed to
 `go-ldap` after transport negotiation and uses its pure-Go Kerberos client
 with password, keytab, or FILE credential-cache acquisition. That client
-selects no RFC 4752 security layer. SCRAM channel-binding variants and
-negotiated SASL integrity/privacy layers are not yet implemented.
+selects no RFC 4752 security layer. During RFC 4533 streaming, a bounded
+response adapter normalizes Sync Info optional fields by ASN.1 tag before
+`go-ldap` decodes them; this preserves legal OpenLDAP encodings with an omitted
+cookie or default Boolean. The consumer's operation timeout covers initial
+refresh only and is removed after refresh-done for persistent searches. SCRAM
+channel-binding variants and negotiated SASL integrity/privacy layers are not
+yet implemented.
 
 ## Data migration contract
 

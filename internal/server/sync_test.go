@@ -774,6 +774,16 @@ func TestSyncControlValidationAndDatabaseConfiguration(t *testing.T) {
 		compareOpenLDAPCSN(parsedCookie.csns[1], second) != 0 {
 		t.Fatalf("parsed multi-SID cookie = %#v from %q", parsedCookie, cookie)
 	}
+	deleteCookie := composeOpenLDAPSyncDeleteCookie(42, state, first)
+	parsedDeleteCookie := parseOpenLDAPSyncCookie(deleteCookie)
+	if !parsedDeleteCookie.hasDeletion ||
+		compareOpenLDAPCSN(parsedDeleteCookie.deletionCSN, first) != 0 {
+		t.Fatalf(
+			"parsed delete cookie = %#v from %q",
+			parsedDeleteCookie,
+			deleteCookie,
+		)
+	}
 
 	legacy, err := parseOpenLDAPCSN(
 		"20260730010101Z#00000A#01#00000B",

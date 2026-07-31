@@ -379,8 +379,34 @@ func runServe(
 	}
 	defer store.Close()
 
+	listener, err := net.Listen("tcp", *listenAddress)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", *listenAddress, err)
+	}
+	defer listener.Close()
+
+	scheme := "ldap"
+	if *implicitTLS {
+		scheme = "ldaps"
+	} else if *implicitTLCP {
+		scheme = "ldap+tlcp"
+	}
+	listenerHost, _, err := net.SplitHostPort(*listenAddress)
+	if err != nil {
+		return fmt.Errorf("parse listen address %s: %w", *listenAddress, err)
+	}
+	_, listenerPort, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return fmt.Errorf("parse bound listen address %s: %w", listener.Addr(), err)
+	}
+	listenerURL := fmt.Sprintf(
+		"%s://%s/",
+		scheme,
+		net.JoinHostPort(listenerHost, listenerPort),
+	)
 	instance, err := server.New(server.Config{
 		Store:                  store,
+		ListenerURLs:           []string{listenerURL},
 		MaxMessageSize:         *maxMessageSize,
 		MaxSearchEntries:       *searchLimit,
 		RootDN:                 *rootDN,
@@ -395,18 +421,6 @@ func runServe(
 		return err
 	}
 
-	listener, err := net.Listen("tcp", *listenAddress)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", *listenAddress, err)
-	}
-	defer listener.Close()
-
-	scheme := "ldap"
-	if *implicitTLS {
-		scheme = "ldaps"
-	} else if *implicitTLCP {
-		scheme = "ldap+tlcp"
-	}
 	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
 		return err
 	}

@@ -125,6 +125,7 @@ func (server *Server) handleAdd(
 			&entry,
 			state.boundDN,
 			lastModEnabled(state.runtime, dn),
+			state.runtime.serverID,
 			state.runtime.schema,
 		); err != nil {
 			return err
@@ -533,7 +534,11 @@ func (server *Server) modifyEntry(
 			}
 		}
 		if lastModEnabled(runtime, dn) {
-			server.applyModifyOperationalAttributes(&entry, boundDN)
+			server.applyModifyOperationalAttributes(
+				&entry,
+				boundDN,
+				runtime.serverID,
+			)
 		}
 		if !configurationWrite {
 			if err := runtime.schema.ValidateEntry(entry); err != nil {
@@ -1114,7 +1119,11 @@ func (server *Server) handleModifyDN(
 				}
 				item.entry.EnsureRDNValues(newDN)
 				if lastModEnabled(state.runtime, oldDN) {
-					server.applyModifyOperationalAttributes(&item.entry, state.boundDN)
+					server.applyModifyOperationalAttributes(
+						&item.entry,
+						state.boundDN,
+						state.runtime.serverID,
+					)
 				}
 				if !configurationWrite {
 					if err := state.runtime.schema.ValidateEntry(item.entry); err != nil {
@@ -1420,6 +1429,7 @@ func (server *Server) applyCreateOperationalAttributes(
 	entry *directory.Entry,
 	actor string,
 	lastMod bool,
+	serverID uint16,
 	registry *schema.Registry,
 ) error {
 	attributes := entry.Attributes[:0]
@@ -1438,7 +1448,7 @@ func (server *Server) applyCreateOperationalAttributes(
 	}
 	timestamp := time.Now().UTC().Format("20060102150405Z")
 	entry.ReplaceValues("entryUUID", [][]byte{[]byte(uuid)})
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN())})
+	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN(serverID))})
 	entry.ReplaceValues("createTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("creatorsName", [][]byte{[]byte(actor)})
@@ -1446,9 +1456,13 @@ func (server *Server) applyCreateOperationalAttributes(
 	return nil
 }
 
-func (server *Server) applyModifyOperationalAttributes(entry *directory.Entry, actor string) {
+func (server *Server) applyModifyOperationalAttributes(
+	entry *directory.Entry,
+	actor string,
+	serverID uint16,
+) {
 	timestamp := time.Now().UTC().Format("20060102150405Z")
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN())})
+	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN(serverID))})
 	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
 }
@@ -1466,7 +1480,7 @@ func (server *Server) applySchemaOperationalAttributes(
 	return nil
 }
 
-func (server *Server) nextCSN() string {
+func (server *Server) nextCSN(serverID uint16) string {
 	server.csnMu.Lock()
 	defer server.csnMu.Unlock()
 
@@ -1483,9 +1497,10 @@ func (server *Server) nextCSN() string {
 		}
 	}
 	return fmt.Sprintf(
-		"%s#%06x#000#000000",
+		"%s#%06x#%03x#000000",
 		server.lastCSN.Format("20060102150405.000000Z"),
 		server.csnCounter,
+		serverID,
 	)
 }
 

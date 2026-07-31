@@ -54,10 +54,17 @@ RFC 4533 LDAP Sync provider support is enabled by an imported
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed
 add/modify/modDN/delete notifications, durable delete progress across restart,
 dynamic suffix `contextCSN` Search/Compare/read-control semantics,
-`olcSpCheckpoint`, bounded `olcSpSessionlog` delete replay,
+`olcSpCheckpoint`, bounded `olcSpSessionlog` delete replay with exact `delcsn`,
 `olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, server-side Sort/VLV
 composition, and OpenLDAP-style syncprov coverage of glued subordinate
 databases. OpenLDAP 2.6.13 `ldapsearch` interoperability also passes.
+OpenLDAP `olcServerID` drives local CSN SIDs, and writable
+`olcMultiProvider`/`olcMirrorMode` databases relay remote changes with
+whole-entry/delete CSN conflict protection and durable UUID tombstones. A
+three-node topology passes bidirectional writes, concurrent convergence,
+middle-node restart catch-up, offline writes, and delete-versus-stale-modify
+convergence; bidirectional OpenLDAP 2.6 multi-provider interoperability also
+passes.
 An OpenLDAP 2.6.13 syncrepl consumer also converges through initial,
 refresh-and-persist, and stopped-consumer restart scenarios. The ldap-go
 syncrepl consumer now loads ordered `olcSyncrepl` values, runs refresh-only or
@@ -76,7 +83,10 @@ and filtered result sets, refresh-only polling, and suffix massage for entry
 DNs and DN-valued attribute values. Consumer transports support OpenLDAP
 StartTLS/LDAPS certificate policies, CA and CRL loading, socket keepalive,
 Linux TCP user timeouts, and implicit `ldap+tlcp://` replication with mutual
-SM2 authentication. Syncrepl authentication supports simple bind,
+SM2 authentication. For refresh-and-persist, `timeout=` bounds the initial
+refresh without imposing a lifetime on the persistent stream. Legal RFC 4533
+Sync Info variants are normalized by ASN.1 tag before `go-ldap` decoding.
+Syncrepl authentication supports simple bind,
 SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
 SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
 exercised when its Cyrus SASL plugin is available.

@@ -24,6 +24,7 @@ const defaultSearchLimit = 1000
 
 type Config struct {
 	Store                  storage.Store
+	ListenerURLs           []string
 	MaxMessageSize         int64
 	MaxSearchEntries       int
 	RootDN                 string
@@ -91,6 +92,7 @@ func New(config Config) (*Server, error) {
 	if config.ImplicitTLS && secureTransport == nil {
 		return nil, errors.New("implicit TLS requires a secure transport")
 	}
+	config.ListenerURLs = append([]string(nil), config.ListenerURLs...)
 	if secureTransport != nil && config.SecureHandshakeTimeout <= 0 {
 		config.SecureHandshakeTimeout = defaultSecureHandshakeTimeout
 	}

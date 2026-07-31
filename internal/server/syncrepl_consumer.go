@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -29,10 +31,68 @@ type syncConsumerRefreshState struct {
 	complete bool
 }
 
+type syncConsumerRefreshWatchdog struct {
+	timeout  time.Duration
+	cancel   context.CancelFunc
+	timer    *time.Timer
+	finished atomic.Bool
+	timedOut atomic.Bool
+}
+
 type syncConsumerRetryCursor struct {
 	policy []syncConsumerRetry
 	index  int
 	used   int
+}
+
+func startSyncConsumerRefreshWatchdog(
+	parent context.Context,
+	mode syncConsumerMode,
+	timeout time.Duration,
+) (context.Context, *syncConsumerRefreshWatchdog) {
+	if mode != syncConsumerRefreshAndPersist || timeout <= 0 {
+		return parent, nil
+	}
+	ctx, cancel := context.WithCancel(parent)
+	watchdog := &syncConsumerRefreshWatchdog{
+		timeout: timeout,
+		cancel:  cancel,
+	}
+	watchdog.timer = time.AfterFunc(timeout, func() {
+		if watchdog.finished.CompareAndSwap(false, true) {
+			watchdog.timedOut.Store(true)
+			cancel()
+		}
+	})
+	return ctx, watchdog
+}
+
+func (watchdog *syncConsumerRefreshWatchdog) markComplete() {
+	if watchdog == nil {
+		return
+	}
+	if watchdog.finished.CompareAndSwap(false, true) {
+		watchdog.timer.Stop()
+	}
+}
+
+func (watchdog *syncConsumerRefreshWatchdog) stop() {
+	if watchdog == nil {
+		return
+	}
+	watchdog.finished.Store(true)
+	watchdog.timer.Stop()
+	watchdog.cancel()
+}
+
+func (watchdog *syncConsumerRefreshWatchdog) timeoutError() error {
+	if watchdog == nil || !watchdog.timedOut.Load() {
+		return nil
+	}
+	return fmt.Errorf(
+		"syncrepl refresh timed out after %s",
+		watchdog.timeout,
+	)
 }
 
 func (server *Server) runSyncConsumer(
@@ -171,7 +231,9 @@ func (server *Server) runSyncConsumerCycle(
 	if err := transport.clearDeadline(); err != nil {
 		return fmt.Errorf("clear syncrepl connection deadline: %w", err)
 	}
-	connection = ldap.NewConn(transport.currentConnection(), transport.secure)
+	connection = ldap.NewConn(&syncConsumerResponseConn{
+		Conn: transport.currentConnection(),
+	}, transport.secure)
 	connection.Start()
 	if config.operationTimeout > 0 {
 		connection.SetTimeout(config.operationTimeout)
@@ -240,6 +302,19 @@ func (server *Server) runSyncConsumerStandardSearch(
 	consumerMode syncConsumerMode,
 	cookie []byte,
 ) error {
+	connection.SetTimeout(config.operationTimeout)
+	searchContext := ctx
+	var watchdog *syncConsumerRefreshWatchdog
+	if consumerMode == syncConsumerRefreshAndPersist {
+		connection.SetTimeout(0)
+		searchContext, watchdog = startSyncConsumerRefreshWatchdog(
+			ctx,
+			consumerMode,
+			config.operationTimeout,
+		)
+		defer watchdog.stop()
+	}
+
 	controls := []ldap.Control{ldap.NewControlManageDsaIT(true)}
 	if config.authorizationID != "" {
 		controls = append(controls, ldap.NewControlString(
@@ -264,7 +339,7 @@ func (server *Server) runSyncConsumerStandardSearch(
 		mode = ldap.SyncRequestModeRefreshAndPersist
 	}
 	response := connection.Syncrepl(
-		ctx,
+		searchContext,
 		request,
 		syncConsumerResponseBuffer,
 		mode,
@@ -274,7 +349,7 @@ func (server *Server) runSyncConsumerStandardSearch(
 	refresh := syncConsumerRefreshState{seen: make(map[string]struct{})}
 	for response.Next() {
 		if err := server.processSyncConsumerResponse(
-			ctx,
+			searchContext,
 			config,
 			&refresh,
 			response.Entry(),
@@ -282,12 +357,21 @@ func (server *Server) runSyncConsumerStandardSearch(
 		); err != nil {
 			return err
 		}
+		if refresh.complete {
+			watchdog.markComplete()
+		}
+	}
+	if err := watchdog.timeoutError(); err != nil {
+		return err
 	}
 	if err := response.Err(); err != nil {
 		return fmt.Errorf("syncrepl search: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err := connection.GetLastError(); err != nil {
+		return fmt.Errorf("syncrepl connection: %w", err)
 	}
 	if consumerMode == syncConsumerRefreshOnly && !refresh.complete {
 		return errors.New("syncrepl refresh ended without Sync Done")
@@ -479,7 +563,56 @@ func (server *Server) applySyncConsumerEntry(
 	if err != nil {
 		return err
 	}
-	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	incomingCSN, hasIncomingCSN, err := syncConsumerEntryCSN(entry)
+	if err != nil {
+		return err
+	}
+	database := runtimeDatabaseForPartition(runtime, config.partition)
+	if database != nil && database.multiProvider && !hasIncomingCSN {
+		return fmt.Errorf(
+			"replicated entry %s has no single-valued entryCSN",
+			entry.DN,
+		)
+	}
+
+	var changes []syncChange
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		cookieAdvances, err := syncConsumerCookieAdvances(
+			writer,
+			config,
+			state.Cookie,
+		)
+		if err != nil {
+			return err
+		}
+		if hasIncomingCSN {
+			tombstone, exists, err := syncTombstoneCSN(
+				writer,
+				config.partition,
+				state.EntryUUID.String(),
+			)
+			if err != nil {
+				return err
+			}
+			if exists &&
+				compareOpenLDAPCSN(incomingCSN, tombstone) <= 0 {
+				if err := updateSyncConsumerCookie(
+					writer,
+					config,
+					state.Cookie,
+				); err != nil {
+					return err
+				}
+				return server.recordSyncConsumerContextChanges(
+					writer,
+					runtime,
+					database,
+					cookieAdvances,
+					nil,
+					&changes,
+				)
+			}
+		}
 		existing, found, findErr := syncConsumerEntryByUUID(
 			writer,
 			config.partition,
@@ -488,12 +621,62 @@ func (server *Server) applySyncConsumerEntry(
 		if findErr != nil {
 			return findErr
 		}
+		nextDN, parseErr := directory.ParseDN(entry.DN)
+		if parseErr != nil {
+			return parseErr
+		}
+		target, targetErr := writer.GetIn(config.partition, nextDN)
+		targetFound := targetErr == nil
+		if targetErr != nil && !errors.Is(targetErr, storage.ErrEntryNotFound) {
+			return targetErr
+		}
+
+		current := directory.Entry{}
+		currentFound := false
+		if found {
+			current = existing
+			currentFound = true
+		}
+		if targetFound &&
+			(!found || !syncConsumerEntriesHaveSameUUID(existing, target)) {
+			if !currentFound ||
+				syncConsumerEntryIsNewer(target, current) {
+				current = target
+				currentFound = true
+			}
+		}
+		if currentFound && hasIncomingCSN {
+			currentCSN, hasCurrentCSN, csnErr := syncConsumerEntryCSN(current)
+			if csnErr != nil {
+				return csnErr
+			}
+			if hasCurrentCSN &&
+				compareOpenLDAPCSN(incomingCSN, currentCSN) <= 0 {
+				if err := updateSyncConsumerCookie(
+					writer,
+					config,
+					state.Cookie,
+				); err != nil {
+					return err
+				}
+				return server.recordSyncConsumerContextChanges(
+					writer,
+					runtime,
+					database,
+					cookieAdvances,
+					nil,
+					&changes,
+				)
+			}
+		}
+
+		var before *directory.Entry
+		if currentFound {
+			cloned := current.Clone()
+			before = &cloned
+		}
 		if found {
 			existingDN, parseErr := directory.ParseDN(existing.DN)
-			if parseErr != nil {
-				return parseErr
-			}
-			nextDN, parseErr := directory.ParseDN(entry.DN)
 			if parseErr != nil {
 				return parseErr
 			}
@@ -509,8 +692,165 @@ func (server *Server) applySyncConsumerEntry(
 		if err := writer.PutIn(config.partition, entry, true); err != nil {
 			return err
 		}
-		return updateSyncConsumerCookie(writer, config, state.Cookie)
+		if hasIncomingCSN {
+			if err := clearSyncTombstoneBefore(
+				writer,
+				config.partition,
+				state.EntryUUID.String(),
+				incomingCSN,
+			); err != nil {
+				return err
+			}
+		}
+		if err := updateSyncConsumerCookie(writer, config, state.Cookie); err != nil {
+			return err
+		}
+		if database != nil && hasIncomingCSN {
+			change, changeErr := server.recordSyncChangeCSN(
+				writer,
+				runtime,
+				*database,
+				before,
+				&entry,
+				incomingCSN,
+			)
+			if changeErr != nil {
+				return changeErr
+			}
+			if change != nil {
+				changes = append(changes, *change)
+			}
+		}
+		var visibleCSN *openLDAPCSN
+		if hasIncomingCSN {
+			visibleCSN = &incomingCSN
+		}
+		return server.recordSyncConsumerContextChanges(
+			writer,
+			runtime,
+			database,
+			cookieAdvances,
+			visibleCSN,
+			&changes,
+		)
 	})
+	if err == nil {
+		for index := range changes {
+			server.publishSyncChange(&changes[index])
+		}
+	}
+	return err
+}
+
+func syncConsumerCookieAdvances(
+	reader storage.Reader,
+	config syncConsumerConfig,
+	cookie []byte,
+) ([]openLDAPCSN, error) {
+	if len(cookie) == 0 {
+		return nil, nil
+	}
+	current := make(syncCSNState)
+	rawCurrent, err := reader.Metadata(syncConsumerCookieMetadataKey(config))
+	switch {
+	case err == nil:
+		current = parseOpenLDAPSyncCookie(rawCurrent).csns
+	case errors.Is(err, storage.ErrMetadataNotFound):
+	default:
+		return nil, err
+	}
+	var advances []openLDAPCSN
+	for serverID, candidate := range parseOpenLDAPSyncCookie(cookie).csns {
+		known, exists := current[serverID]
+		if !exists || compareOpenLDAPCSN(candidate, known) > 0 {
+			advances = append(advances, candidate)
+		}
+	}
+	sort.Slice(advances, func(i, j int) bool {
+		return compareOpenLDAPCSN(advances[i], advances[j]) < 0
+	})
+	return advances, nil
+}
+
+func (server *Server) recordSyncConsumerContextChanges(
+	writer storage.Writer,
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	csns []openLDAPCSN,
+	visibleCSN *openLDAPCSN,
+	changes *[]syncChange,
+) error {
+	if database == nil {
+		return nil
+	}
+	for _, csn := range csns {
+		if visibleCSN != nil && compareOpenLDAPCSN(csn, *visibleCSN) == 0 {
+			continue
+		}
+		change, err := server.recordSyncChangeCSN(
+			writer,
+			runtime,
+			*database,
+			nil,
+			nil,
+			csn,
+		)
+		if err != nil {
+			return err
+		}
+		if change != nil {
+			*changes = append(*changes, *change)
+		}
+	}
+	return nil
+}
+
+func syncConsumerEntryCSN(
+	entry directory.Entry,
+) (openLDAPCSN, bool, error) {
+	values := entry.Values("entryCSN")
+	if len(values) == 0 {
+		return openLDAPCSN{}, false, nil
+	}
+	if len(values) != 1 {
+		return openLDAPCSN{}, false, fmt.Errorf(
+			"%s has multiple entryCSN values",
+			entry.DN,
+		)
+	}
+	csn, err := parseOpenLDAPCSN(string(values[0]))
+	if err != nil {
+		return openLDAPCSN{}, false, fmt.Errorf(
+			"%s entryCSN: %w",
+			entry.DN,
+			err,
+		)
+	}
+	return csn, true, nil
+}
+
+func syncConsumerEntriesHaveSameUUID(
+	left,
+	right directory.Entry,
+) bool {
+	leftValues := left.Values("entryUUID")
+	rightValues := right.Values("entryUUID")
+	return len(leftValues) == 1 &&
+		len(rightValues) == 1 &&
+		strings.EqualFold(string(leftValues[0]), string(rightValues[0]))
+}
+
+func syncConsumerEntryIsNewer(left, right directory.Entry) bool {
+	leftCSN, leftFound, leftErr := syncConsumerEntryCSN(left)
+	rightCSN, rightFound, rightErr := syncConsumerEntryCSN(right)
+	switch {
+	case leftErr != nil || !leftFound:
+		return false
+	case rightErr != nil || !rightFound:
+		return true
+	default:
+		return compareOpenLDAPCSN(leftCSN, rightCSN) > 0
+	}
 }
 
 func syncConsumerDirectoryEntry(
@@ -660,8 +1000,35 @@ func (server *Server) deleteSyncConsumerUUIDs(
 	for _, identifier := range identifiers {
 		wanted[strings.ToLower(identifier)] = struct{}{}
 	}
-	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
-		var deleteDNs []directory.DN
+	runtime := server.runtime.Load()
+	database := runtimeDatabaseForPartition(runtime, config.partition)
+	var changes []syncChange
+	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		cookieAdvances, err := syncConsumerCookieAdvances(
+			writer,
+			config,
+			cookie,
+		)
+		if err != nil {
+			return err
+		}
+		parsedCookie := parseOpenLDAPSyncCookie(cookie)
+		var deletionCSN *openLDAPCSN
+		if parsedCookie.hasDeletion {
+			candidate := parsedCookie.deletionCSN
+			deletionCSN = &candidate
+		} else if len(cookieAdvances) > 0 {
+			candidate := cookieAdvances[len(cookieAdvances)-1]
+			deletionCSN = &candidate
+		} else if len(cookie) > 0 {
+			return updateSyncConsumerCookie(writer, config, cookie)
+		}
+
+		type deletion struct {
+			dn    directory.DN
+			entry directory.Entry
+		}
+		var deletions []deletion
 		if err := writer.ForEachIn(
 			config.partition,
 			func(entry directory.Entry) error {
@@ -676,19 +1043,83 @@ func (server *Server) deleteSyncConsumerUUIDs(
 				if err != nil {
 					return err
 				}
-				deleteDNs = append(deleteDNs, dn)
+				if deletionCSN != nil {
+					entryCSN, found, err := syncConsumerEntryCSN(entry)
+					if err != nil {
+						return err
+					}
+					if found &&
+						compareOpenLDAPCSN(entryCSN, *deletionCSN) > 0 {
+						return nil
+					}
+				}
+				deletions = append(deletions, deletion{
+					dn:    dn,
+					entry: entry,
+				})
 				return nil
 			},
 		); err != nil {
 			return err
 		}
-		for _, dn := range deleteDNs {
-			if err := writer.DeleteIn(config.partition, dn); err != nil {
+		for _, item := range deletions {
+			if err := writer.DeleteIn(config.partition, item.dn); err != nil {
 				return err
 			}
 		}
-		return updateSyncConsumerCookie(writer, config, cookie)
+		if err := updateSyncConsumerCookie(writer, config, cookie); err != nil {
+			return err
+		}
+		if deletionCSN != nil {
+			for identifier := range wanted {
+				if err := advanceSyncTombstone(
+					writer,
+					config.partition,
+					identifier,
+					*deletionCSN,
+				); err != nil {
+					return err
+				}
+			}
+		}
+		if database != nil && deletionCSN != nil {
+			for index := range deletions {
+				before := deletions[index].entry
+				change, err := server.recordSyncChangeCSN(
+					writer,
+					runtime,
+					*database,
+					&before,
+					nil,
+					*deletionCSN,
+				)
+				if err != nil {
+					return err
+				}
+				if change != nil {
+					changes = append(changes, *change)
+				}
+			}
+		}
+		var visibleCSN *openLDAPCSN
+		if len(deletions) > 0 {
+			visibleCSN = deletionCSN
+		}
+		return server.recordSyncConsumerContextChanges(
+			writer,
+			runtime,
+			database,
+			cookieAdvances,
+			visibleCSN,
+			&changes,
+		)
 	})
+	if err == nil {
+		for index := range changes {
+			server.publishSyncChange(&changes[index])
+		}
+	}
+	return err
 }
 
 func (server *Server) finishSyncConsumerRefresh(
@@ -701,10 +1132,34 @@ func (server *Server) finishSyncConsumerRefresh(
 	if refresh.complete {
 		return server.storeSyncConsumerCookie(ctx, config, cookie)
 	}
+	runtime := server.runtime.Load()
+	database := runtimeDatabaseForPartition(runtime, config.partition)
+	var changes []syncChange
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		cookieAdvances, err := syncConsumerCookieAdvances(
+			writer,
+			config,
+			cookie,
+		)
+		if err != nil {
+			return err
+		}
+		cookieState := parseOpenLDAPSyncCookie(cookie).csns
+		var deletionCSN *openLDAPCSN
+		for _, candidate := range cookieState {
+			if deletionCSN == nil ||
+				compareOpenLDAPCSN(candidate, *deletionCSN) > 0 {
+				value := candidate
+				deletionCSN = &value
+			}
+		}
+
+		type deletion struct {
+			dn    directory.DN
+			entry directory.Entry
+		}
+		var deletions []deletion
 		if !refreshDeletes {
-			runtime := server.runtime.Load()
-			var deleteDNs []directory.DN
 			if err := writer.ForEachIn(
 				config.partition,
 				func(entry directory.Entry) error {
@@ -729,22 +1184,78 @@ func (server *Server) finishSyncConsumerRefresh(
 							return nil
 						}
 					}
-					deleteDNs = append(deleteDNs, dn)
+					entryCSN, found, err := syncConsumerEntryCSN(entry)
+					if err != nil {
+						return err
+					}
+					if found {
+						covered, exists := cookieState[entryCSN.serverID]
+						if !exists ||
+							compareOpenLDAPCSN(entryCSN, covered) > 0 {
+							return nil
+						}
+					}
+					deletions = append(deletions, deletion{
+						dn:    dn,
+						entry: entry,
+					})
 					return nil
 				},
 			); err != nil {
 				return err
 			}
-			for _, dn := range deleteDNs {
-				if err := writer.DeleteIn(config.partition, dn); err != nil {
+			sort.Slice(deletions, func(i, j int) bool {
+				return deletions[i].dn.Depth() > deletions[j].dn.Depth()
+			})
+			for _, item := range deletions {
+				if err := writer.DeleteIn(
+					config.partition,
+					item.dn,
+				); err != nil {
 					return err
 				}
 			}
 		}
-		return updateSyncConsumerCookie(writer, config, cookie)
+		if err := updateSyncConsumerCookie(writer, config, cookie); err != nil {
+			return err
+		}
+		if database != nil && deletionCSN != nil {
+			for index := range deletions {
+				before := deletions[index].entry
+				change, err := server.recordSyncChangeCSN(
+					writer,
+					runtime,
+					*database,
+					&before,
+					nil,
+					*deletionCSN,
+				)
+				if err != nil {
+					return err
+				}
+				if change != nil {
+					changes = append(changes, *change)
+				}
+			}
+		}
+		var visibleCSN *openLDAPCSN
+		if len(deletions) > 0 {
+			visibleCSN = deletionCSN
+		}
+		return server.recordSyncConsumerContextChanges(
+			writer,
+			runtime,
+			database,
+			cookieAdvances,
+			visibleCSN,
+			&changes,
+		)
 	})
 	if err != nil {
 		return err
+	}
+	for index := range changes {
+		server.publishSyncChange(&changes[index])
 	}
 	refresh.complete = true
 	return nil
@@ -781,9 +1292,32 @@ func (server *Server) storeSyncConsumerCookie(
 	if len(cookie) == 0 {
 		return nil
 	}
-	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
-		return updateSyncConsumerCookie(writer, config, cookie)
+	runtime := server.runtime.Load()
+	database := runtimeDatabaseForPartition(runtime, config.partition)
+	var changes []syncChange
+	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		advances, err := syncConsumerCookieAdvances(writer, config, cookie)
+		if err != nil {
+			return err
+		}
+		if err := updateSyncConsumerCookie(writer, config, cookie); err != nil {
+			return err
+		}
+		return server.recordSyncConsumerContextChanges(
+			writer,
+			runtime,
+			database,
+			advances,
+			nil,
+			&changes,
+		)
 	})
+	if err == nil {
+		for index := range changes {
+			server.publishSyncChange(&changes[index])
+		}
+	}
+	return err
 }
 
 func updateSyncConsumerCookie(

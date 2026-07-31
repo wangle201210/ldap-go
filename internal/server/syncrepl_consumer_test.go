@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -260,6 +261,447 @@ func TestSyncConsumerRollsBackCookieOnEntryConflict(t *testing.T) {
 	}
 }
 
+func TestSyncConsumerMultiProviderIgnoresOlderEntryCSN(t *testing.T) {
+	t.Parallel()
+
+	server, store, firstConfig := newSyncConsumerUnitServer(t)
+	secondConfig := firstConfig
+	secondConfig.rid = 2
+	identifier := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	newerCSN := "20260730010102.000001Z#000000#002#000000"
+	olderCSN := "20260730010101.000001Z#000000#001#000000"
+
+	apply := func(
+		config syncConsumerConfig,
+		commonName,
+		csn string,
+	) error {
+		return server.applySyncConsumerEntry(
+			context.Background(),
+			config,
+			ldap.NewEntry(
+				"uid=alice,dc=example,dc=com",
+				map[string][]string{
+					"objectClass": {"inetOrgPerson"},
+					"cn":          {commonName},
+					"sn":          {"Example"},
+					"uid":         {"alice"},
+					"entryCSN":    {csn},
+				},
+			),
+			&ldap.ControlSyncState{
+				State:     ldap.SyncStateModify,
+				EntryUUID: identifier,
+				Cookie: []byte(
+					fmt.Sprintf("rid=%03d,csn=%s", config.rid, csn),
+				),
+			},
+		)
+	}
+	if err := apply(secondConfig, "Newer", newerCSN); err != nil {
+		t.Fatalf("apply newer entry: %v", err)
+	}
+	if err := apply(firstConfig, "Older", olderCSN); err != nil {
+		t.Fatalf("apply older entry: %v", err)
+	}
+
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		firstConfig.partition,
+		"uid=alice,dc=example,dc=com",
+		identifier.String(),
+		"Newer",
+	)
+	assertSyncConsumerCookie(
+		t,
+		store,
+		firstConfig,
+		[]byte("rid=001,csn="+olderCSN),
+	)
+}
+
+func TestSyncConsumerMultiProviderResolvesSameDNByEntryCSN(t *testing.T) {
+	t.Parallel()
+
+	server, store, config := newSyncConsumerUnitServer(t)
+	firstUUID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	secondUUID := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	apply := func(
+		identifier uuid.UUID,
+		commonName,
+		csn string,
+	) error {
+		return server.applySyncConsumerEntry(
+			context.Background(),
+			config,
+			ldap.NewEntry(
+				"uid=shared,dc=example,dc=com",
+				map[string][]string{
+					"objectClass": {"inetOrgPerson"},
+					"cn":          {commonName},
+					"sn":          {"Example"},
+					"uid":         {"shared"},
+					"entryCSN":    {csn},
+				},
+			),
+			&ldap.ControlSyncState{
+				State:     ldap.SyncStateAdd,
+				EntryUUID: identifier,
+			},
+		)
+	}
+	if err := apply(
+		firstUUID,
+		"First",
+		"20260730010102.000001Z#000000#002#000000",
+	); err != nil {
+		t.Fatalf("apply first entry: %v", err)
+	}
+	if err := apply(
+		secondUUID,
+		"Older collision",
+		"20260730010101.000001Z#000000#001#000000",
+	); err != nil {
+		t.Fatalf("apply older collision: %v", err)
+	}
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		config.partition,
+		"uid=shared,dc=example,dc=com",
+		firstUUID.String(),
+		"First",
+	)
+
+	if err := apply(
+		secondUUID,
+		"Winning collision",
+		"20260730010103.000001Z#000000#001#000000",
+	); err != nil {
+		t.Fatalf("apply newer collision: %v", err)
+	}
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		config.partition,
+		"uid=shared,dc=example,dc=com",
+		secondUUID.String(),
+		"Winning collision",
+	)
+}
+
+func TestSyncConsumerPublishesAppliedProviderChange(t *testing.T) {
+	t.Parallel()
+
+	server, _, config := newSyncConsumerUnitServer(t)
+	runtime := server.runtime.Load()
+	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
+	runtime.databases = []runtimeDatabase{{
+		name:          "{1}mdb",
+		partition:     config.partition,
+		suffixes:      []directory.DN{suffix},
+		syncProvider:  true,
+		multiProvider: true,
+	}}
+	server.activateRuntime(runtime)
+	subscription := server.syncChanges.subscribe([]string{config.partition})
+	defer subscription.unsubscribe()
+
+	identifier := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	csn := "20260730010101.000001Z#000000#001#000000"
+	err := server.applySyncConsumerEntry(
+		context.Background(),
+		config,
+		ldap.NewEntry(
+			"uid=alice,dc=example,dc=com",
+			map[string][]string{
+				"objectClass": {"inetOrgPerson"},
+				"cn":          {"Alice"},
+				"sn":          {"Example"},
+				"uid":         {"alice"},
+				"entryCSN":    {csn},
+			},
+		),
+		&ldap.ControlSyncState{
+			State:     ldap.SyncStateAdd,
+			EntryUUID: identifier,
+			Cookie:    []byte("rid=001,csn=" + csn),
+		},
+	)
+	if err != nil {
+		t.Fatalf("apply replicated entry: %v", err)
+	}
+	select {
+	case change := <-subscription.events:
+		if !change.hasAfter ||
+			change.after.DN != "uid=alice,dc=example,dc=com" ||
+			change.csn.raw != csn {
+			t.Fatalf("published change = %#v", change)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replicated change was not published")
+	}
+}
+
+func TestSyncConsumerMultiProviderIgnoresOlderDeleteCSN(t *testing.T) {
+	t.Parallel()
+
+	server, store, addConfig := newSyncConsumerUnitServer(t)
+	addConfig.rid = 2
+	deleteConfig := addConfig
+	deleteConfig.rid = 1
+	identifier := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	newerCSN := "20260730010103.000001Z#000000#002#000000"
+	err := server.applySyncConsumerEntry(
+		context.Background(),
+		addConfig,
+		ldap.NewEntry(
+			"uid=alice,dc=example,dc=com",
+			map[string][]string{
+				"objectClass": {"inetOrgPerson"},
+				"cn":          {"Newer"},
+				"sn":          {"Example"},
+				"uid":         {"alice"},
+				"entryCSN":    {newerCSN},
+			},
+		),
+		&ldap.ControlSyncState{
+			State:     ldap.SyncStateAdd,
+			EntryUUID: identifier,
+			Cookie:    []byte("rid=002,csn=" + newerCSN),
+		},
+	)
+	if err != nil {
+		t.Fatalf("apply newer entry: %v", err)
+	}
+
+	olderDeleteCSN := "20260730010102.000001Z#000000#001#000000"
+	unrelatedNewerCSN := "20260730010104.000001Z#000000#003#000000"
+	deleteCookie := []byte(
+		"rid=001,csn=" + olderDeleteCSN + ";" + unrelatedNewerCSN +
+			",delcsn=" + olderDeleteCSN,
+	)
+	err = server.deleteSyncConsumerUUIDs(
+		context.Background(),
+		deleteConfig,
+		[]string{identifier.String()},
+		deleteCookie,
+	)
+	if err != nil {
+		t.Fatalf("apply older delete: %v", err)
+	}
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		addConfig.partition,
+		"uid=alice,dc=example,dc=com",
+		identifier.String(),
+		"Newer",
+	)
+	assertSyncConsumerCookie(
+		t,
+		store,
+		deleteConfig,
+		deleteCookie,
+	)
+}
+
+func TestSyncConsumerTombstoneRejectsStaleReadd(t *testing.T) {
+	t.Parallel()
+
+	server, store, addConfig := newSyncConsumerUnitServer(t)
+	addConfig.rid = 1
+	deleteConfig := addConfig
+	deleteConfig.rid = 2
+	readdConfig := addConfig
+	readdConfig.rid = 3
+	identifier := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	apply := func(
+		config syncConsumerConfig,
+		commonName,
+		csn string,
+	) error {
+		return server.applySyncConsumerEntry(
+			context.Background(),
+			config,
+			ldap.NewEntry(
+				"uid=alice,dc=example,dc=com",
+				map[string][]string{
+					"objectClass": {"inetOrgPerson"},
+					"cn":          {commonName},
+					"sn":          {"Example"},
+					"uid":         {"alice"},
+					"entryCSN":    {csn},
+				},
+			),
+			&ldap.ControlSyncState{
+				State:     ldap.SyncStateAdd,
+				EntryUUID: identifier,
+				Cookie: []byte(
+					fmt.Sprintf("rid=%03d,csn=%s", config.rid, csn),
+				),
+			},
+		)
+	}
+	initialCSN := "20260730010101.000001Z#000000#001#000000"
+	if err := apply(addConfig, "Initial", initialCSN); err != nil {
+		t.Fatalf("apply initial entry: %v", err)
+	}
+	deleteCSN := "20260730010103.000001Z#000000#002#000000"
+	if err := server.deleteSyncConsumerUUIDs(
+		context.Background(),
+		deleteConfig,
+		[]string{identifier.String()},
+		[]byte("rid=002,csn="+deleteCSN),
+	); err != nil {
+		t.Fatalf("apply delete: %v", err)
+	}
+	assertSyncConsumerMissingEntry(
+		t,
+		store,
+		addConfig.partition,
+		"uid=alice,dc=example,dc=com",
+	)
+
+	staleCSN := "20260730010102.000001Z#000000#003#000000"
+	if err := apply(readdConfig, "Stale", staleCSN); err != nil {
+		t.Fatalf("apply stale re-add: %v", err)
+	}
+	assertSyncConsumerMissingEntry(
+		t,
+		store,
+		addConfig.partition,
+		"uid=alice,dc=example,dc=com",
+	)
+
+	freshCSN := "20260730010104.000001Z#000000#003#000000"
+	if err := apply(readdConfig, "Fresh", freshCSN); err != nil {
+		t.Fatalf("apply fresh re-add: %v", err)
+	}
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		addConfig.partition,
+		"uid=alice,dc=example,dc=com",
+		identifier.String(),
+		"Fresh",
+	)
+	var tombstoneFound bool
+	if err := store.View(
+		context.Background(),
+		func(reader storage.Reader) error {
+			var err error
+			_, tombstoneFound, err = syncTombstoneCSN(
+				reader,
+				addConfig.partition,
+				identifier.String(),
+			)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("inspect cleared tombstone: %v", err)
+	}
+	if tombstoneFound {
+		t.Fatal("fresh re-add did not clear the older tombstone")
+	}
+}
+
+func TestSyncConsumerMultiProviderRefreshPreservesUncoveredSID(t *testing.T) {
+	t.Parallel()
+
+	server, store, config := newSyncConsumerUnitServer(t)
+	coveredUUID := "11111111-2222-3333-4444-555555555555"
+	uncoveredUUID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	covered := syncConsumerTestEntry(
+		"uid=covered,dc=example,dc=com",
+		coveredUUID,
+		"Covered",
+	)
+	covered.ReplaceValues(
+		"entryCSN",
+		stringValues("20260730010101.000001Z#000000#001#000000"),
+	)
+	uncovered := syncConsumerTestEntry(
+		"uid=uncovered,dc=example,dc=com",
+		uncoveredUUID,
+		"Uncovered",
+	)
+	uncovered.ReplaceValues(
+		"entryCSN",
+		stringValues("20260730010101.000001Z#000000#002#000000"),
+	)
+	seedSyncConsumerEntries(
+		t,
+		store,
+		config.partition,
+		[]directory.Entry{covered, uncovered},
+	)
+
+	refresh := syncConsumerRefreshState{seen: make(map[string]struct{})}
+	err := server.finishSyncConsumerRefresh(
+		context.Background(),
+		config,
+		&refresh,
+		false,
+		[]byte(
+			"rid=001,csn=20260730010102.000001Z#000000#001#000000",
+		),
+	)
+	if err != nil {
+		t.Fatalf("finish refreshPresent: %v", err)
+	}
+	assertSyncConsumerMissingEntry(
+		t,
+		store,
+		config.partition,
+		"uid=covered,dc=example,dc=com",
+	)
+	assertSyncConsumerStoredEntry(
+		t,
+		store,
+		config.partition,
+		"uid=uncovered,dc=example,dc=com",
+		uncoveredUUID,
+		"Uncovered",
+	)
+}
+
+func TestSyncConsumerPublishesContextOnlyAdvance(t *testing.T) {
+	t.Parallel()
+
+	server, _, config := newSyncConsumerUnitServer(t)
+	runtime := server.runtime.Load()
+	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
+	runtime.databases = []runtimeDatabase{{
+		name:          "{1}mdb",
+		partition:     config.partition,
+		suffixes:      []directory.DN{suffix},
+		syncProvider:  true,
+		multiProvider: true,
+	}}
+	server.activateRuntime(runtime)
+	subscription := server.syncChanges.subscribe([]string{config.partition})
+	defer subscription.unsubscribe()
+
+	csn := "20260730010101.000001Z#000000#002#000000"
+	if err := server.storeSyncConsumerCookie(
+		context.Background(),
+		config,
+		[]byte("rid=001,csn="+csn),
+	); err != nil {
+		t.Fatalf("store cookie: %v", err)
+	}
+	select {
+	case change := <-subscription.events:
+		if change.hasBefore || change.hasAfter || change.csn.raw != csn {
+			t.Fatalf("published context change = %#v", change)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("context-only advance was not published")
+	}
+}
+
 func TestSyncConsumerRequestedAttributesIncludeProtocolRequirements(t *testing.T) {
 	t.Parallel()
 
@@ -477,6 +919,99 @@ func TestSyncreplConsumerConvergesWithLDAPGoProvider(t *testing.T) {
 		t,
 		consumer,
 		"uid=bob,ou=people,dc=example,dc=com",
+	)
+}
+
+func TestSyncreplConsumerPersistSurvivesOperationTimeout(t *testing.T) {
+	providerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = providerStore.Close() })
+	seedSyncProviderDirectory(t, providerStore)
+	providerAddress, stopProvider := startServer(t, providerStore, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer stopProvider()
+
+	consumerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = consumerStore.Close() })
+	seedSyncConsumerDatabase(
+		t,
+		consumerStore,
+		providerAddress,
+		syncTestRootPassword,
+	)
+	consumer, err := New(Config{Store: consumerStore})
+	if err != nil {
+		t.Fatalf("New(consumer): %v", err)
+	}
+	runtime := consumer.runtime.Load()
+	var (
+		config syncConsumerConfig
+		found  bool
+	)
+	for _, database := range runtime.databases {
+		if len(database.syncConsumers) != 1 {
+			continue
+		}
+		config = database.syncConsumers[0]
+		found = true
+		break
+	}
+	if !found {
+		t.Fatalf("consumer runtime databases = %#v", runtime.databases)
+	}
+	config.operationTimeout = 500 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cycleDone := make(chan error, 1)
+	go func() {
+		cycleDone <- consumer.runSyncConsumerCycle(
+			ctx,
+			config,
+			config.providerURLs[0],
+		)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-cycleDone:
+		case <-time.After(5 * time.Second):
+			t.Error("persistent consumer cycle did not stop")
+		}
+	}()
+
+	waitForSyncConsumerStoredAttribute(
+		t,
+		consumerStore,
+		config.partition,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice Example",
+	)
+	time.Sleep(750 * time.Millisecond)
+	select {
+	case err := <-cycleDone:
+		t.Fatalf("persistent consumer ended after operation timeout: %v", err)
+	default:
+	}
+
+	provider := dialLDAPRoot(t, providerAddress)
+	defer provider.Close()
+	modify := ldap.NewModifyRequest(
+		"uid=alice,ou=people,dc=example,dc=com",
+		nil,
+	)
+	modify.Replace("cn", []string{"Alice After Timeout"})
+	if err := provider.Modify(modify); err != nil {
+		t.Fatalf("provider modify after timeout: %v", err)
+	}
+	waitForSyncConsumerStoredAttribute(
+		t,
+		consumerStore,
+		config.partition,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice After Timeout",
 	)
 }
 
@@ -1240,6 +1775,52 @@ func assertSyncConsumerStoredEntry(
 		string(values[0]) != commonName {
 		t.Fatalf("%s cn = %q", rawDN, values)
 	}
+}
+
+func waitForSyncConsumerStoredAttribute(
+	t *testing.T,
+	store storage.Store,
+	partition,
+	rawDN,
+	attribute,
+	want string,
+) {
+	t.Helper()
+	dn := mustSyncConsumerDN(t, rawDN)
+	deadline := time.Now().Add(8 * time.Second)
+	var (
+		last    string
+		lastErr error
+	)
+	for time.Now().Before(deadline) {
+		lastErr = store.View(
+			context.Background(),
+			func(reader storage.Reader) error {
+				entry, err := reader.GetIn(partition, dn)
+				if err != nil {
+					return err
+				}
+				values := entry.Values(attribute)
+				last = ""
+				if len(values) > 0 {
+					last = string(values[0])
+				}
+				return nil
+			},
+		)
+		if lastErr == nil && last == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf(
+		"stored consumer %s %s = %q, want %q (last error %v)",
+		rawDN,
+		attribute,
+		last,
+		want,
+		lastErr,
+	)
 }
 
 func assertSyncConsumerMissingEntry(

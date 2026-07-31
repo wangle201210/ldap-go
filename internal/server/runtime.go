@@ -19,6 +19,7 @@ type runtimeState struct {
 	schema                *schema.Registry
 	access                *acl.Policy
 	databases             []runtimeDatabase
+	serverID              uint16
 	allowAnonymousUpdates bool
 	passwordHashSchemes   []string
 	sasl                  saslRuntimeConfiguration
@@ -43,6 +44,18 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	databases, err := loadRuntimeDatabasesReader(reader)
 	if err != nil {
 		return nil, err
+	}
+	serverID, err := loadServerID(reader, server.config.ListenerURLs)
+	if err != nil {
+		return nil, err
+	}
+	for _, database := range databases {
+		if database.multiProvider && serverID == 0 {
+			return nil, fmt.Errorf(
+				"%s olcMultiProvider requires a non-zero olcServerID",
+				database.name,
+			)
+		}
 	}
 	allowAnonymousUpdates, err := loadAnonymousUpdateAllowance(reader)
 	if err != nil {
@@ -69,6 +82,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		schema:                registry,
 		access:                access,
 		databases:             databases,
+		serverID:              serverID,
 		allowAnonymousUpdates: allowAnonymousUpdates,
 		passwordHashSchemes:   passwordHashSchemes,
 		sasl:                  sasl,

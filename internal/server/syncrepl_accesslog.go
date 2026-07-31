@@ -51,6 +51,19 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 	if config.logBase == nil || config.logFilter == nil {
 		return errors.New("accesslog search requires logbase and logfilter")
 	}
+	connection.SetTimeout(config.operationTimeout)
+	searchContext := ctx
+	var watchdog *syncConsumerRefreshWatchdog
+	if consumerMode == syncConsumerRefreshAndPersist {
+		connection.SetTimeout(0)
+		searchContext, watchdog = startSyncConsumerRefreshWatchdog(
+			ctx,
+			consumerMode,
+			config.operationTimeout,
+		)
+		defer watchdog.stop()
+	}
+
 	controls := []ldap.Control{ldap.NewControlManageDsaIT(true)}
 	if config.authorizationID != "" {
 		controls = append(controls, ldap.NewControlString(
@@ -84,7 +97,7 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 		mode = ldap.SyncRequestModeRefreshAndPersist
 	}
 	response := connection.Syncrepl(
-		ctx,
+		searchContext,
 		request,
 		syncConsumerResponseBuffer,
 		mode,
@@ -94,7 +107,7 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 	refresh := syncConsumerRefreshState{}
 	for response.Next() {
 		if err := server.processSyncConsumerAccesslogResponse(
-			ctx,
+			searchContext,
 			config,
 			&refresh,
 			response.Entry(),
@@ -106,6 +119,12 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 				resetErr,
 			)
 		}
+		if refresh.complete {
+			watchdog.markComplete()
+		}
+	}
+	if err := watchdog.timeoutError(); err != nil {
+		return err
 	}
 	if err := response.Err(); err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultSyncRefreshRequired) {
@@ -119,6 +138,9 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err := connection.GetLastError(); err != nil {
+		return fmt.Errorf("accesslog syncrepl connection: %w", err)
 	}
 	if consumerMode == syncConsumerRefreshOnly && !refresh.complete {
 		return errors.New("accesslog refresh ended without Sync Done")

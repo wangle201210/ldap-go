@@ -28,6 +28,204 @@ type openLDAPSyncreplConsumer struct {
 	uri        string
 }
 
+func TestOpenLDAPAndLDAPGoMultiProviderReplication(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+
+	goListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen ldap-go multi-provider: %v", err)
+	}
+	goAddress := goListener.Addr().String()
+	goURI := "ldap://" + goAddress
+
+	openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
+		t,
+		tools,
+		[]string{"syncprov"},
+		"serverID 2",
+		fmt.Sprintf(
+			`syncrepl rid=001
+  provider=%s
+  type=refreshAndPersist
+  retry="1 10 5 +"
+  searchbase="dc=example,dc=com"
+  scope=sub
+  attrs="*,+"
+  schemachecking=off
+  bindmethod=simple
+  binddn="%s"
+  credentials=%s
+multiprovider TRUE`,
+			goURI,
+			syncTestRootDN,
+			syncTestRootPassword,
+		),
+		"",
+	)
+	defer stopOpenLDAP()
+
+	store := storage.NewMemory()
+	defer store.Close()
+	seedOpenLDAPMultiProviderConsumer(
+		t,
+		store,
+		strings.TrimPrefix(openLDAPURI, "ldap://"),
+	)
+	instance, err := New(Config{
+		Store:        store,
+		ListenerURLs: []string{goURI + "/"},
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	if err != nil {
+		t.Fatalf("create ldap-go multi-provider: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- instance.Serve(ctx, goListener)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("serve ldap-go multi-provider: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("ldap-go multi-provider did not stop")
+		}
+	}()
+
+	goClient := dialLDAPRoot(t, goAddress)
+	defer goClient.Close()
+	waitForSyncConsumerAttribute(
+		t,
+		goClient,
+		"uid=alice,ou=people,dc=example,dc=com",
+		"cn",
+		"Alice",
+	)
+	assertMultiProviderEntrySID(
+		t,
+		store,
+		"uid=alice,ou=people,dc=example,dc=com",
+		0,
+	)
+
+	openLDAPClient, err := ldap.DialURL(openLDAPURI)
+	if err != nil {
+		t.Fatalf("dial OpenLDAP multi-provider: %v", err)
+	}
+	defer openLDAPClient.Close()
+	if err := openLDAPClient.Bind(syncTestRootDN, "secret"); err != nil {
+		t.Fatalf("bind OpenLDAP multi-provider: %v", err)
+	}
+	if err := goClient.Add(newPersonAddRequest("from-go")); err != nil {
+		t.Fatalf("ldap-go add: %v", err)
+	}
+	waitForSyncConsumerAttribute(
+		t,
+		openLDAPClient,
+		"uid=from-go,ou=people,dc=example,dc=com",
+		"uid",
+		"from-go",
+	)
+
+	if err := openLDAPClient.Add(newPersonAddRequest("from-openldap")); err != nil {
+		t.Fatalf("OpenLDAP add: %v", err)
+	}
+	waitForSyncConsumerAttribute(
+		t,
+		goClient,
+		"uid=from-openldap,ou=people,dc=example,dc=com",
+		"uid",
+		"from-openldap",
+	)
+	assertMultiProviderEntrySID(
+		t,
+		store,
+		"uid=from-openldap,ou=people,dc=example,dc=com",
+		2,
+	)
+	waitForMultiProviderContextSIDs(t, store, []uint16{1, 2})
+}
+
+func seedOpenLDAPMultiProviderConsumer(
+	t *testing.T,
+	store storage.Store,
+	providerAddress string,
+) {
+	t.Helper()
+	err := store.Update(
+		context.Background(),
+		func(writer storage.Writer) error {
+			if err := writer.Put(directory.Entry{
+				DN: "cn=config",
+				Attributes: []directory.Attribute{{
+					Description: "olcServerID",
+					Values:      stringValues("1"),
+				}},
+			}, false); err != nil {
+				return err
+			}
+			if err := writer.Put(directory.Entry{
+				DN: "olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcDatabase",
+						Values:      stringValues("{1}mdb"),
+					},
+					{
+						Description: "olcSuffix",
+						Values:      stringValues("dc=example,dc=com"),
+					},
+					{
+						Description: "olcSyncrepl",
+						Values: stringValues(
+							`{0}rid=002 provider=ldap://` +
+								providerAddress +
+								` bindmethod=simple binddn="` +
+								syncTestRootDN +
+								`" credentials="` +
+								"secret" +
+								`" searchbase="dc=example,dc=com"` +
+								` scope=sub filter="(objectClass=*)"` +
+								` attrs="*,+" schemachecking=off` +
+								` type=refreshAndPersist retry="1 +"`,
+						),
+					},
+					{
+						Description: "olcMultiProvider",
+						Values:      stringValues("TRUE"),
+					},
+				},
+			}, false); err != nil {
+				return err
+			}
+			if err := writer.Put(directory.Entry{
+				DN: "olcOverlay={0}syncprov,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcOverlay",
+						Values:      stringValues("{0}syncprov"),
+					},
+					{
+						Description: "olcSpSessionlog",
+						Values:      stringValues("100"),
+					},
+				},
+			}, false); err != nil {
+				return err
+			}
+			return writer.SetNamingContexts([]string{"dc=example,dc=com"})
+		},
+	)
+	if err != nil {
+		t.Fatalf("seed ldap-go multi-provider consumer: %v", err)
+	}
+}
+
 func TestOpenLDAPSyncreplConsumesLDAPGoProvider(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
 

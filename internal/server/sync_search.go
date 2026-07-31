@@ -31,8 +31,9 @@ type syncSearchContext struct {
 	manageDsaIT        bool
 	subentries         *bool
 	snapshot           syncCSNState
+	liveCSNs           syncCSNState
 	present            []ldapwire.SyncUUID
-	deleted            map[ldapwire.SyncUUID]struct{}
+	deleted            map[ldapwire.SyncUUID]openLDAPCSN
 	refreshDeletes     bool
 	subscription       *syncChangeSubscription
 }
@@ -47,6 +48,11 @@ type syncSearchRoute struct {
 	partition string
 	base      directory.DN
 	scope     directory.Scope
+}
+
+type syncDeletedUUID struct {
+	uuid ldapwire.SyncUUID
+	csn  openLDAPCSN
 }
 
 func (server *Server) prepareSyncSearch(
@@ -225,7 +231,7 @@ func (server *Server) prepareSyncRefresh(
 			return replay[i].before.DN < replay[j].before.DN
 		})
 		syncSearch.refreshDeletes = true
-		syncSearch.deleted = make(map[ldapwire.SyncUUID]struct{})
+		syncSearch.deleted = make(map[ldapwire.SyncUUID]openLDAPCSN)
 		for _, change := range replay {
 			if syncSearchBaseChanged(syncSearch, change) {
 				result := ldapwire.ResultError(
@@ -270,7 +276,7 @@ func (server *Server) prepareSyncRefresh(
 				}
 			}
 			if beforeMatch && !afterMatch {
-				syncSearch.deleted[beforeUUID] = struct{}{}
+				syncSearch.deleted[beforeUUID] = change.csn
 			}
 			if afterMatch {
 				delete(syncSearch.deleted, afterUUID)
@@ -373,13 +379,17 @@ func (syncSearch *syncSearchContext) observeCurrent(uuid ldapwire.SyncUUID) {
 	}
 }
 
-func (syncSearch *syncSearchContext) deletedUUIDs() []ldapwire.SyncUUID {
-	uuids := make([]ldapwire.SyncUUID, 0, len(syncSearch.deleted))
-	for uuid := range syncSearch.deleted {
-		uuids = append(uuids, uuid)
+func (syncSearch *syncSearchContext) deletedUUIDs() []syncDeletedUUID {
+	uuids := make([]syncDeletedUUID, 0, len(syncSearch.deleted))
+	for uuid, csn := range syncSearch.deleted {
+		uuids = append(uuids, syncDeletedUUID{uuid: uuid, csn: csn})
 	}
 	sort.Slice(uuids, func(i, j int) bool {
-		return bytes.Compare(uuids[i][:], uuids[j][:]) < 0
+		comparison := compareOpenLDAPCSN(uuids[i].csn, uuids[j].csn)
+		if comparison != 0 {
+			return comparison < 0
+		}
+		return bytes.Compare(uuids[i].uuid[:], uuids[j].uuid[:]) < 0
 	})
 	return uuids
 }
@@ -454,22 +464,6 @@ func (server *Server) writeSyncSearch(
 	responseControls []ldapwire.Control,
 ) error {
 	if result.Code == ldapwire.ResultSuccess {
-		deleted := syncSearch.deletedUUIDs()
-		for start := 0; start < len(deleted); start += syncIDSetChunkSize {
-			end := min(start+syncIDSetChunkSize, len(deleted))
-			info := ldapwire.SyncInfoValue{
-				Kind:           ldapwire.SyncInfoIDSet,
-				RefreshDeletes: true,
-				UUIDs:          deleted[start:end],
-			}
-			if err := server.writeSyncInfo(
-				connection,
-				messageID,
-				info,
-			); err != nil {
-				return err
-			}
-		}
 		for start := 0; start < len(syncSearch.present); start += syncIDSetChunkSize {
 			end := min(start+syncIDSetChunkSize, len(syncSearch.present))
 			info := ldapwire.SyncInfoValue{
@@ -503,6 +497,46 @@ func (server *Server) writeSyncSearch(
 			),
 		); err != nil {
 			return err
+		}
+	}
+	if result.Code == ldapwire.ResultSuccess {
+		deleted := syncSearch.deletedUUIDs()
+		cookieState := cloneSyncCSNState(syncSearch.cookie.csns)
+		for start := 0; start < len(deleted); {
+			csn := deleted[start].csn
+			end := start + 1
+			for end < len(deleted) &&
+				end-start < syncIDSetChunkSize &&
+				compareOpenLDAPCSN(deleted[end].csn, csn) == 0 {
+				end++
+			}
+			current, exists := cookieState[csn.serverID]
+			if !exists || compareOpenLDAPCSN(csn, current) > 0 {
+				cookieState[csn.serverID] = csn
+			}
+			identifiers := make([]ldapwire.SyncUUID, 0, end-start)
+			for _, deletion := range deleted[start:end] {
+				identifiers = append(identifiers, deletion.uuid)
+			}
+			info := ldapwire.SyncInfoValue{
+				Kind: ldapwire.SyncInfoIDSet,
+				Cookie: composeOpenLDAPSyncDeleteCookie(
+					syncSearch.cookie.rid,
+					cookieState,
+					csn,
+				),
+				HasCookie:      true,
+				RefreshDeletes: true,
+				UUIDs:          identifiers,
+			}
+			if err := server.writeSyncInfo(
+				connection,
+				messageID,
+				info,
+			); err != nil {
+				return err
+			}
+			start = end
 		}
 	}
 	if result.Code != ldapwire.ResultSuccess {
@@ -619,6 +653,7 @@ func (server *Server) persistSyncSearch(
 	if syncSearch.subscription == nil {
 		return errors.New("persistent Sync subscription is absent")
 	}
+	syncSearch.liveCSNs = make(syncCSNState)
 	for {
 		select {
 		case <-ctx.Done():
@@ -637,11 +672,21 @@ func (server *Server) persistSyncSearch(
 				}
 				return nil
 			}
-			if current, exists := syncSearch.snapshot[change.csn.serverID]; exists &&
-				compareOpenLDAPCSN(change.csn, current) <= 0 {
-				continue
+			if current, exists := syncSearch.snapshot[change.csn.serverID]; exists {
+				comparison := compareOpenLDAPCSN(change.csn, current)
+				if comparison < 0 {
+					continue
+				}
+				if comparison == 0 {
+					live, seenLive := syncSearch.liveCSNs[change.csn.serverID]
+					if !seenLive ||
+						compareOpenLDAPCSN(change.csn, live) != 0 {
+						continue
+					}
+				}
 			}
 			syncSearch.snapshot[change.csn.serverID] = change.csn
+			syncSearch.liveCSNs[change.csn.serverID] = change.csn
 
 			entry, syncState, uuid, visible, err := server.syncChangeResponse(
 				ctx,

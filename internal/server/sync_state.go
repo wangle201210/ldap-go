@@ -19,6 +19,7 @@ import (
 
 const (
 	syncContextCSNMetadataPrefix = "openldap/sync/context-csn/"
+	syncTombstoneMetadataPrefix  = "openldap/sync/tombstone/"
 	syncCheckpointMetadataPrefix = "openldap/sync/checkpoint/"
 	syncChangeBufferSize         = 256
 	openLDAPSyncRIDMax           = 999
@@ -35,9 +36,11 @@ type openLDAPCSN struct {
 }
 
 type openLDAPSyncCookie struct {
-	rid    int
-	hasRID bool
-	csns   syncCSNState
+	rid         int
+	hasRID      bool
+	csns        syncCSNState
+	deletionCSN openLDAPCSN
+	hasDeletion bool
 }
 
 type syncCSNState map[uint16]openLDAPCSN
@@ -197,7 +200,7 @@ func (hub *syncChangeHub) replay(
 
 func (log *syncSessionLog) append(change syncChange) {
 	if current, exists := log.latest[change.csn.serverID]; exists &&
-		compareOpenLDAPCSN(change.csn, current) <= 0 {
+		compareOpenLDAPCSN(change.csn, current) < 0 {
 		return
 	}
 	log.latest[change.csn.serverID] = change.csn
@@ -420,11 +423,14 @@ func parseOpenLDAPSyncCookie(value []byte) openLDAPSyncCookie {
 				}
 			}
 		case strings.HasPrefix(field, "delcsn="):
-			if _, err := parseOpenLDAPCSN(
+			deletionCSN, err := parseOpenLDAPCSN(
 				strings.TrimPrefix(field, "delcsn="),
-			); err != nil {
+			)
+			if err != nil {
 				return emptyOpenLDAPSyncCookie(cookie.rid, cookie.hasRID)
 			}
+			cookie.deletionCSN = deletionCSN
+			cookie.hasDeletion = true
 		default:
 			return emptyOpenLDAPSyncCookie(cookie.rid, cookie.hasRID)
 		}
@@ -455,6 +461,18 @@ func composeOpenLDAPSyncCookie(rid int, state syncCSNState) []byte {
 	))
 }
 
+func composeOpenLDAPSyncDeleteCookie(
+	rid int,
+	state syncCSNState,
+	deletionCSN openLDAPCSN,
+) []byte {
+	cookie := composeOpenLDAPSyncCookie(rid, state)
+	return append(
+		cookie,
+		[]byte(",delcsn="+deletionCSN.raw)...,
+	)
+}
+
 func orderedSyncCSNs(state syncCSNState) []string {
 	serverIDs := make([]int, 0, len(state))
 	for serverID := range state {
@@ -476,6 +494,120 @@ func syncContextCSNMetadataKey(partition string) string {
 func syncCheckpointMetadataKey(partition string) string {
 	return syncCheckpointMetadataPrefix +
 		base64.RawURLEncoding.EncodeToString([]byte(partition))
+}
+
+func syncTombstoneMetadataKey(partition, identifier string) string {
+	return syncTombstoneMetadataPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(partition)) + "/" +
+		base64.RawURLEncoding.EncodeToString(
+			[]byte(strings.ToLower(identifier)),
+		)
+}
+
+func syncTombstoneCSN(
+	reader storage.Reader,
+	partition,
+	identifier string,
+) (openLDAPCSN, bool, error) {
+	raw, err := reader.Metadata(syncTombstoneMetadataKey(partition, identifier))
+	if errors.Is(err, storage.ErrMetadataNotFound) {
+		return openLDAPCSN{}, false, nil
+	}
+	if err != nil {
+		return openLDAPCSN{}, false, err
+	}
+	csn, err := parseOpenLDAPCSN(string(raw))
+	if err != nil {
+		return openLDAPCSN{}, false, fmt.Errorf(
+			"parse sync tombstone for %s: %w",
+			identifier,
+			err,
+		)
+	}
+	return csn, true, nil
+}
+
+func advanceSyncTombstone(
+	writer storage.Writer,
+	partition,
+	identifier string,
+	csn openLDAPCSN,
+) error {
+	current, exists, err := syncTombstoneCSN(writer, partition, identifier)
+	if err != nil {
+		return err
+	}
+	if exists && compareOpenLDAPCSN(csn, current) <= 0 {
+		return nil
+	}
+	return writer.SetMetadata(
+		syncTombstoneMetadataKey(partition, identifier),
+		[]byte(csn.raw),
+	)
+}
+
+func clearSyncTombstoneBefore(
+	writer storage.Writer,
+	partition,
+	identifier string,
+	csn openLDAPCSN,
+) error {
+	current, exists, err := syncTombstoneCSN(writer, partition, identifier)
+	if err != nil || !exists {
+		return err
+	}
+	if compareOpenLDAPCSN(csn, current) <= 0 {
+		return nil
+	}
+	err = writer.DeleteMetadata(
+		syncTombstoneMetadataKey(partition, identifier),
+	)
+	if errors.Is(err, storage.ErrMetadataNotFound) {
+		return nil
+	}
+	return err
+}
+
+func syncEntryUUID(entry *directory.Entry) (string, bool) {
+	if entry == nil {
+		return "", false
+	}
+	values := entry.Values("entryUUID")
+	if len(values) != 1 {
+		return "", false
+	}
+	return strings.ToLower(string(values[0])), true
+}
+
+func updateSyncChangeTombstones(
+	writer storage.Writer,
+	partition string,
+	before,
+	after *directory.Entry,
+	csn openLDAPCSN,
+) error {
+	beforeUUID, hasBeforeUUID := syncEntryUUID(before)
+	afterUUID, hasAfterUUID := syncEntryUUID(after)
+	if hasBeforeUUID &&
+		(!hasAfterUUID || !strings.EqualFold(beforeUUID, afterUUID)) {
+		if err := advanceSyncTombstone(
+			writer,
+			partition,
+			beforeUUID,
+			csn,
+		); err != nil {
+			return err
+		}
+	}
+	if hasAfterUUID {
+		return clearSyncTombstoneBefore(
+			writer,
+			partition,
+			afterUUID,
+			csn,
+		)
+	}
+	return nil
 }
 
 func withSyncProviderContextCSNs(
@@ -514,17 +646,13 @@ func syncContextCSNs(
 	rawMetadata, err := reader.Metadata(syncContextCSNMetadataKey(partition))
 	switch {
 	case err == nil:
-		csn, parseErr := parseOpenLDAPCSN(string(rawMetadata))
+		stored, parseErr := parseStoredSyncContextCSNs(rawMetadata)
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse stored sync contextCSN: %w", parseErr)
 		}
-		if csn.serverID != 0 {
-			return nil, fmt.Errorf(
-				"stored sync contextCSN has server ID %03x, want 000",
-				csn.serverID,
-			)
+		for serverID, csn := range stored {
+			state[serverID] = csn
 		}
-		state[csn.serverID] = csn
 	case errors.Is(err, storage.ErrMetadataNotFound):
 	default:
 		return nil, fmt.Errorf("read stored sync contextCSN: %w", err)
@@ -565,25 +693,22 @@ func advanceSyncContextCSN(
 	csn openLDAPCSN,
 ) error {
 	key := syncContextCSNMetadataKey(partition)
+	state := make(syncCSNState)
 	rawCurrent, err := writer.Metadata(key)
 	switch {
 	case err == nil:
-		current, parseErr := parseOpenLDAPCSN(string(rawCurrent))
+		stored, parseErr := parseStoredSyncContextCSNs(rawCurrent)
 		if parseErr != nil {
 			return fmt.Errorf("parse stored sync contextCSN: %w", parseErr)
 		}
-		if current.serverID != csn.serverID {
-			return fmt.Errorf(
-				"stored sync contextCSN has server ID %03x, want %03x",
-				current.serverID,
-				csn.serverID,
-			)
-		}
-		if compareOpenLDAPCSN(csn, current) <= 0 {
+		state = stored
+		if current, exists := state[csn.serverID]; exists &&
+			compareOpenLDAPCSN(csn, current) <= 0 {
 			return nil
 		}
 	case errors.Is(err, storage.ErrMetadataNotFound):
-		state, currentErr := syncContextCSNs(writer, partition)
+		var currentErr error
+		state, currentErr = syncContextCSNs(writer, partition)
 		if currentErr != nil {
 			return currentErr
 		}
@@ -594,7 +719,55 @@ func advanceSyncContextCSN(
 	default:
 		return fmt.Errorf("read stored sync contextCSN: %w", err)
 	}
-	return writer.SetMetadata(key, []byte(csn.raw))
+	state[csn.serverID] = csn
+	encoded, err := encodeStoredSyncContextCSNs(state)
+	if err != nil {
+		return err
+	}
+	return writer.SetMetadata(key, encoded)
+}
+
+func parseStoredSyncContextCSNs(raw []byte) (syncCSNState, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("empty contextCSN metadata")
+	}
+	rawValues := []string{string(raw)}
+	if len(raw) > 0 && raw[0] == '[' {
+		if err := json.Unmarshal(raw, &rawValues); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawValues) == 0 {
+		return nil, errors.New("empty contextCSN vector")
+	}
+	state := make(syncCSNState, len(rawValues))
+	for _, rawValue := range rawValues {
+		csn, err := parseOpenLDAPCSN(rawValue)
+		if err != nil {
+			return nil, err
+		}
+		if current, exists := state[csn.serverID]; exists &&
+			compareOpenLDAPCSN(csn, current) <= 0 {
+			continue
+		}
+		state[csn.serverID] = csn
+	}
+	return state, nil
+}
+
+func encodeStoredSyncContextCSNs(state syncCSNState) ([]byte, error) {
+	values := orderedSyncCSNs(state)
+	if len(values) == 0 {
+		return nil, errors.New("cannot encode an empty contextCSN vector")
+	}
+	if len(values) == 1 {
+		return []byte(values[0]), nil
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encode stored sync contextCSN: %w", err)
+	}
+	return encoded, nil
 }
 
 func updateSyncCheckpoint(
@@ -692,10 +865,41 @@ func (server *Server) recordSyncChange(
 		}
 		rawCSN = string(values[0])
 	} else {
-		rawCSN = server.nextCSN()
+		rawCSN = server.nextCSN(runtime.serverID)
 	}
 	csn, err := parseOpenLDAPCSN(rawCSN)
 	if err != nil {
+		return nil, err
+	}
+	return server.recordSyncChangeCSN(
+		writer,
+		runtime,
+		database,
+		before,
+		after,
+		csn,
+	)
+}
+
+func (server *Server) recordSyncChangeCSN(
+	writer storage.Writer,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	before *directory.Entry,
+	after *directory.Entry,
+	csn openLDAPCSN,
+) (*syncChange, error) {
+	provider := effectiveSyncProviderDatabase(runtime, database)
+	if provider == nil {
+		return nil, nil
+	}
+	if err := updateSyncChangeTombstones(
+		writer,
+		database.partition,
+		before,
+		after,
+		csn,
+	); err != nil {
 		return nil, err
 	}
 	if err := advanceSyncContextCSN(writer, provider.partition, csn); err != nil {
@@ -718,6 +922,21 @@ func (server *Server) recordSyncChange(
 		change.hasAfter = true
 	}
 	return change, nil
+}
+
+func runtimeDatabaseForPartition(
+	runtime *runtimeState,
+	partition string,
+) *runtimeDatabase {
+	if runtime == nil {
+		return nil
+	}
+	for index := range runtime.databases {
+		if runtime.databases[index].partition == partition {
+			return &runtime.databases[index]
+		}
+	}
+	return nil
 }
 
 func (server *Server) publishSyncChange(change *syncChange) {
