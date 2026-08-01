@@ -65,6 +65,16 @@ func (server *Server) handleSearch(
 			passwordPolicyRestrictionResult(),
 		)
 	}
+	if handled, err := server.tryRetcodeSearch(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		controls.manageDsaIT,
+	); handled {
+		return err
+	}
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
 	paging, pagingFailure := preparePagedSearch(
 		state,
@@ -721,9 +731,10 @@ func (server *Server) handleSearch(
 		entryLimit = min(paging.size, remaining)
 	}
 	var (
-		hasMore       bool
-		lastCursor    pagedSearchCursor
-		sortTruncated bool
+		hasMore                  bool
+		lastCursor               pagedSearchCursor
+		sortTruncated            bool
+		inDirectoryRetcodeResult *retcodeItem
 	)
 
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
@@ -1010,6 +1021,25 @@ func (server *Server) handleSearch(
 				) {
 					return nil
 				}
+				if !controls.manageDsaIT &&
+					retcodeInDirectoryEnabled(
+						state.runtime.databases,
+						*database,
+					) {
+					item, applies := retcodeItemFromDirectoryEntry(
+						state.runtime,
+						entry,
+						retcodeOperationSearch,
+					)
+					if applies {
+						if item.code == ldapwire.ResultSuccess && !item.preDisconnect {
+							retcodeSleep(item.sleepSeconds)
+						} else {
+							inDirectoryRetcodeResult = &item
+							return errStopSearch
+						}
+					}
+				}
 				var syncUUID ldapwire.SyncUUID
 				if syncSearch != nil {
 					syncUUID, err = syncUUIDFromEntry(storedEntry)
@@ -1110,6 +1140,15 @@ func (server *Server) handleSearch(
 			clearPagedSearch(state)
 		}
 		return fmt.Errorf("search directory: %w", err)
+	}
+	if inDirectoryRetcodeResult != nil {
+		return server.writeRetcodeInDirectorySearch(
+			connection,
+			state,
+			message,
+			candidates,
+			*inDirectoryRetcodeResult,
+		)
 	}
 	chainedPackets, references, chainFailure := server.chainSearchContinuations(
 		ctx,

@@ -717,9 +717,12 @@ func (registry *Registry) ObjectClassDescriptions() []string {
 	defer registry.mu.RUnlock()
 
 	objectClasses := uniqueObjectClasses(registry.objectClasses)
-	result := make([]string, len(objectClasses))
+	result := make([]string, 0, len(objectClasses))
 	for i := range objectClasses {
-		result[i] = FormatObjectClass(objectClasses[i])
+		if objectClasses[i].Hidden {
+			continue
+		}
+		result = append(result, FormatObjectClass(objectClasses[i]))
 	}
 	return result
 }

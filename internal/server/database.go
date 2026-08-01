@@ -48,6 +48,7 @@ type runtimeDatabase struct {
 	constraint            *constraintRuntimeConfiguration
 	unique                *uniqueRuntimeConfiguration
 	valueSort             *valueSortRuntimeConfiguration
+	retcodes              []retcodeRuntimeConfiguration
 	memberOf              []memberOfRuntimeConfiguration
 	refint                []refintRuntimeConfiguration
 }
@@ -288,6 +289,7 @@ func loadRuntimeDatabaseOverlays(
 			overlayType != "constraint" &&
 			overlayType != "unique" &&
 			overlayType != "valsort" &&
+			overlayType != "retcode" &&
 			overlayType != "memberof" &&
 			overlayType != "refint" {
 			return nil
@@ -317,6 +319,12 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "retcode":
+			configuration, err := loadRetcodeRuntimeConfiguration(entry, *database)
+			if err != nil {
+				return err
+			}
+			database.retcodes = append(database.retcodes, configuration)
 		case "valsort":
 			if database.valueSort != nil {
 				return fmt.Errorf(

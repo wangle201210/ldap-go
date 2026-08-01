@@ -50,6 +50,7 @@ type ObjectClass struct {
 	Names       []string
 	Description string
 	Obsolete    bool
+	Hidden      bool
 	Superiors   []string
 	Kind        ObjectClassKind
 	Must        []string

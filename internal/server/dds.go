@@ -572,6 +572,26 @@ func (server *Server) handleDynamicRefresh(
 			0,
 		)
 	}
+	if len(retcodeConfigurationsForDatabase(state.runtime.databases, *database)) > 0 {
+		retcodeTargetExists, err := server.retcodeStoredEntryExists(ctx, *database, dn)
+		if err != nil {
+			return fmt.Errorf("read dynamic refresh retcode target: %w", err)
+		}
+		if retcodeTargetExists {
+			if handled, err := server.tryRetcodeOperation(
+				ctx,
+				connection,
+				state,
+				message,
+				dn,
+				retcodeOperationExtended,
+				false,
+				nil,
+			); handled {
+				return err
+			}
+		}
+	}
 	if database.dds == nil {
 		return server.writeDynamicRefreshResult(
 			connection,

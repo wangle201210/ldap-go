@@ -123,6 +123,26 @@ func (server *Server) handlePasswordModify(
 			nil,
 		)
 	}
+	if len(retcodeConfigurationsForDatabase(state.runtime.databases, *database)) > 0 {
+		retcodeTargetExists, err := server.retcodeStoredEntryExists(ctx, *database, target)
+		if err != nil {
+			return server.internalPasswordModifyError(connection, message.ID, err)
+		}
+		if retcodeTargetExists {
+			if handled, err := server.tryRetcodeOperation(
+				ctx,
+				connection,
+				state,
+				message,
+				target,
+				retcodeOperationExtended,
+				controls.manageDsaIT,
+				nil,
+			); handled {
+				return err
+			}
+		}
+	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, target); result != nil {
 		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
 	}

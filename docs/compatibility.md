@@ -119,7 +119,7 @@ rebuilt by `ldap-go`.
 | pbind and remoteauth | planned | remote authentication tests |
 | pcache | planned | cache correctness and invalidation tests |
 | ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, chain-backed `ppolicy_forward_updates`, and OpenLDAP 2.6.13 differentials pass; native checker-module execution remains |
-| retcode | planned | configured result behavior |
+| retcode | partial | static/in-directory results, hidden schema, ACL, wire effects, online/restart, real config import, and slapd differentials pass; default-referral and cross-overlay matrices remain |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
 | syncprov | partial | cn=config gating, refresh/persist stream, configured SIDs, multi-SID cookies, `delcsn`, contextCSN checkpointing, session-log policies, Sort/VLV, glue providers, and OpenLDAP CLI interoperability pass |
@@ -312,6 +312,36 @@ imports the generated `olcValSortConfig` entry unchanged and verifies runtime
 behavior. Global/frontend overlays, glued multi-database searches, and ordering
 against other response-rewriting overlays still need broader differentials, so
 the row remains `partial`.
+
+OpenLDAP's `retcode` overlay loads `olcRetcodeParent`, ordered
+`olcRetcodeItem`, `olcRetcodeInDir`, and `olcRetcodeSleep` configuration. Static
+items accept OpenLDAP's C base-zero result codes, operation masks and aliases,
+diagnostic text, matched DNs, referrals, fixed or randomized delays,
+unsolicited responses, and pre/post-response disconnects. Their synthetic
+`errObject` entries support base, one-level, and subtree behavior, schema-aware
+filters, size limits, entry/attribute/filter ACLs, requested attributes, and
+`typesOnly`. Successful synthetic Bind also establishes the requested
+authorization identity, matching slapd.
+
+The hidden `errAbsObject`, `errObject`, and `errAuxObject` schema plus all eight
+`err*` attribute types are available for stored in-directory responses without
+being published by `cn=Subschema`. Add, Bind, Compare, Delete, Modify,
+ModifyDN, Search, Password Modify, and Dynamic Refresh exercise the same
+stored-entry response path. Result-zero fallthrough, referral precedence,
+ManageDsaIT's operation-specific OpenLDAP behavior, base-zero stored codes,
+unsolicited data, and abrupt disconnects are covered. Online configuration
+updates validate and roll back atomically, survive restart, and accept a real
+`slaptest -> slapcat -n 0` `olcRetcodeConfig` entry unchanged. Process-level
+OpenLDAP 2.6.13 differentials cover static and in-directory operation results,
+synthetic-search ACLs, successful Bind identity, and stored-value parsing.
+
+OpenLDAP 2.6.13 emits an invalid duplicate response sequence for an
+in-directory Extended operation; common Go clients report an unexpected
+response. ldap-go intentionally returns one protocol-valid ExtendedResponse
+instead. Global `olcReferral` fallback for a referral item without `ref`,
+multiple/frontend instance ordering, glued searches, and composition with
+other controls and overlays still need broader parity tests, so the row remains
+`partial`.
 
 OpenLDAP's database-local `memberof` overlay loads multiple
 `olcMemberOfConfig` instances and supports `olcMemberOfDN`, all three dangling

@@ -114,6 +114,16 @@ func (server *Server) updateStorage(
 	return server.config.Store.Update(ctx, update)
 }
 
+func (server *Server) viewStorage(
+	ctx context.Context,
+	view func(storage.Reader) error,
+) error {
+	if execution, ok := ctx.Value(transactionExecutionContextKey{}).(*transactionExecution); ok {
+		return view(execution.writer)
+	}
+	return server.config.Store.View(ctx, view)
+}
+
 func (server *Server) finishWriteEffects(
 	ctx context.Context,
 	nextRuntime *runtimeState,

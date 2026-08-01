@@ -59,6 +59,16 @@ func NewBuiltinRegistry() (*Registry, error) {
 			return nil, fmt.Errorf("register built-in object class: %w", err)
 		}
 	}
+	for _, description := range builtinHiddenObjectClasses {
+		objectClass, err := ParseObjectClass(description)
+		if err != nil {
+			return nil, fmt.Errorf("parse hidden built-in object class: %w", err)
+		}
+		objectClass.Hidden = true
+		if err := registry.RegisterObjectClass(objectClass); err != nil {
+			return nil, fmt.Errorf("register hidden built-in object class: %w", err)
+		}
+	}
 	for _, description := range builtinPasswordPolicyObjectClasses {
 		if err := registry.ParseAndRegisterObjectClass(description); err != nil {
 			return nil, fmt.Errorf(
@@ -151,6 +161,20 @@ var builtinHiddenAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.666.1.8 NAME ( 'authzTo' 'saslAuthzTo' ) DESC 'proxy authorization targets' EQUALITY authzMatch SYNTAX " + SyntaxAuthz + " X-ORDERED 'VALUES' USAGE distributedOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.9 NAME ( 'authzFrom' 'saslAuthzFrom' ) DESC 'proxy authorization sources' EQUALITY authzMatch SYNTAX " + SyntaxAuthz + " X-ORDERED 'VALUES' USAGE distributedOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.57 NAME 'entryExpireTimestamp' DESC 'OpenLDAP DDS expiration timestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.1 NAME 'errCode' DESC 'LDAP error code' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.2 NAME 'errOp' DESC 'Operations the errObject applies to' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.3 NAME 'errText' DESC 'LDAP error textual description' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.4 NAME 'errSleepTime' DESC 'Time to wait before returning the error' EQUALITY integerMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.5 NAME 'errMatchedDN' DESC 'Value to be returned as matched DN' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.6 NAME 'errUnsolicitedOID' DESC 'OID to be returned within unsolicited response' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.7 NAME 'errUnsolicitedData' DESC 'Data to be returned within unsolicited response' SYNTAX " + SyntaxOctetString + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.666.11.4.1.8 NAME 'errDisconnect' DESC 'Disconnect without notice' SYNTAX " + SyntaxBoolean + " SINGLE-VALUE )",
+}
+
+var builtinHiddenObjectClasses = []string{
+	"( 1.3.6.1.4.1.4203.666.11.4.3.0 NAME 'errAbsObject' SUP top ABSTRACT MUST errCode MAY ( cn $ description $ errOp $ errText $ errSleepTime $ errMatchedDN $ errUnsolicitedOID $ errUnsolicitedData $ errDisconnect ) )",
+	"( 1.3.6.1.4.1.4203.666.11.4.3.1 NAME 'errObject' SUP errAbsObject STRUCTURAL )",
+	"( 1.3.6.1.4.1.4203.666.11.4.3.2 NAME 'errAuxObject' SUP errAbsObject AUXILIARY )",
 }
 
 var builtinObjectClasses = []string{

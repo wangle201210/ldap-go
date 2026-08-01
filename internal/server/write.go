@@ -126,6 +126,18 @@ func (server *Server) handleAdd(
 			),
 		)
 	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		retcodeOperationAdd,
+		controls.manageDsaIT,
+		&request.Entry,
+	); handled {
+		return err
+	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
 		return server.writeOperationResult(
 			connection,
@@ -513,6 +525,18 @@ func (server *Server) handleModify(
 				"no global superior knowledge",
 			),
 		)
+	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		retcodeOperationModify,
+		controls.manageDsaIT,
+		nil,
+	); handled {
+		return err
 	}
 	if state.passwordPolicyRestrictedDN != "" &&
 		(database.ppolicy == nil ||
@@ -931,6 +955,18 @@ func (server *Server) handleDelete(
 			),
 		)
 	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		retcodeOperationDelete,
+		controls.manageDsaIT,
+		nil,
+	); handled {
+		return err
+	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
 		return server.writeOperationResult(
 			connection,
@@ -1172,6 +1208,18 @@ func (server *Server) handleModifyDN(
 				"no global superior knowledge",
 			),
 		)
+	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		oldDN,
+		retcodeOperationRename,
+		controls.manageDsaIT,
+		nil,
+	); handled {
+		return err
 	}
 	if destinationDatabase == nil ||
 		destinationDatabase.partition != database.partition {
@@ -1673,6 +1721,18 @@ func (server *Server) handleCompare(
 				ldapwire.Result{Code: ldapwire.ResultReferral},
 			)
 		}
+	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		retcodeOperationCompare,
+		controls.manageDsaIT,
+		nil,
+	); handled {
+		return err
 	}
 
 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}

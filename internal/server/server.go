@@ -662,6 +662,19 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
+	if handled, err := server.tryRetcodeOperation(
+		ctx,
+		connection,
+		state,
+		message,
+		requestDN,
+		retcodeOperationBind,
+		false,
+		nil,
+	); handled {
+		clearSASLSession(state)
+		return err
+	}
 	if request.Authentication.IsSASL {
 		return server.handleSASLBind(
 			ctx,

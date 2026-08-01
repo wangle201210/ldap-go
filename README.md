@@ -86,6 +86,15 @@ returned values while preserving stored values, the hidden raw-value control
 is accepted without being advertised, and Sync responses bypass value sorting.
 Paging, server-side Sort, VLV continuation, online changes, restart, real
 `slapcat -n 0` import, and a same-sequence OpenLDAP 2.6.13 differential pass.
+OpenLDAP's `retcode` overlay supports ordered static result items and stored
+`errObject`/`errAuxObject` entries for Add, Bind, Compare, Delete, Modify,
+ModifyDN, Search, Password Modify, and Dynamic Refresh. Operation masks,
+result metadata, referrals, delays, unsolicited responses, disconnects,
+ManageDsaIT behavior, ACL-filtered synthetic searches, online changes,
+restart, real `slapcat -n 0` import, and static/in-directory slapd
+differentials pass. It remains partial where OpenLDAP itself produces an
+invalid in-directory Extended response and for untested default-referral,
+glue, and cross-overlay ordering combinations.
 OpenLDAP's database-local `memberof` and `refint` overlays load their current
 `cn=config` attributes, including multiple instances. Group Add/Modify/Delete,
 individual group and member ModifyDN, dangling-reference modes, AddCheck,
