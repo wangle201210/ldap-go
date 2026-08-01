@@ -74,6 +74,16 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 				err,
 			)
 		}
+		if err := validateUniqueSchema(
+			registry,
+			databases[index].unique,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s unique overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
 	}
 	serverID, err := loadServerID(reader, server.config.ListenerURLs)
 	if err != nil {

@@ -60,6 +60,7 @@ type parsedConstraintLDAPURL struct {
 	scope      directory.Scope
 	attributes []string
 	filter     *directory.Filter
+	filterText string
 	extensions string
 }
 
@@ -358,6 +359,7 @@ func parseConstraintLDAPURL(raw string) (parsedConstraintLDAPURL, error) {
 			)
 		}
 		result.filter = &filter
+		result.filterText = filterText
 	}
 	result.extensions, err = url.PathUnescape(components[3])
 	if err != nil {

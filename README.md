@@ -73,6 +73,12 @@ from `cn=config` and enforces `regex`, `negregex`, `size`, `count`, local LDAP
 URI, and ACL set rules on Add, Modify, and ModifyDN. Optional `restrict=` URLs,
 requester-authorized URI searches, normalized set paths, Relax bypass, atomic
 online updates, restart persistence, and a direct slapd differential pass.
+OpenLDAP's `unique` overlay accepts `olcUniqueURI` domains and legacy unique
+configuration, including multiple URIs plus `strict`, `ignore`, and
+`serialize`. It enforces schema-aware uniqueness on Add, Modify, and ModifyDN,
+requires `manage` access for Relax bypass, validates online changes atomically,
+survives restart, and imports real `slapcat -n 0` configuration LDIF. The
+storage transaction makes concurrent uniqueness checks atomic.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

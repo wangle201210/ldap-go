@@ -206,6 +206,18 @@ func (server *Server) handleAdd(
 			}
 		}
 		if !configurationWrite {
+			if err := server.validateUniqueAdd(
+				state.runtime,
+				writer,
+				state.boundDN,
+				*database,
+				entry,
+				controls.relax,
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
 			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
 			}
@@ -716,6 +728,19 @@ func (server *Server) modifyEntry(
 				database,
 				before,
 				entry,
+				processedChanges,
+				relax,
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
+			if err := server.validateUniqueModify(
+				runtime,
+				writer,
+				boundDN,
+				database,
+				before,
 				processedChanges,
 				relax,
 			); err != nil {
@@ -1329,6 +1354,22 @@ func (server *Server) handleModifyDN(
 				sourceBefore,
 				constraintEntry,
 				constraintChanges,
+				controls.relax,
+			); err != nil {
+				return err
+			}
+			var uniqueNewSuperior *directory.DN
+			if request.HasNewSuperior {
+				uniqueNewSuperior = &superior
+			}
+			if err := server.validateUniqueModifyDN(
+				state.runtime,
+				writer,
+				state.boundDN,
+				*database,
+				sourceBefore,
+				uniqueNewSuperior,
+				newRDNAttributes,
 				controls.relax,
 			); err != nil {
 				return err

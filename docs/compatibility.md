@@ -12,6 +12,16 @@ Status values:
 
 No row may become `compatible` based only on unit tests.
 
+## Completeness audit
+
+As of 2026-08-02, the official current LTS baseline is OpenLDAP 2.6.13 and
+ldap-go is not a complete drop-in replacement. No matrix row is currently
+marked `compatible`; planned backends, overlays, operational tooling, SASL
+security layers, monitoring, and protocol edge cases remain. The supported
+migration boundary is semantic `slapcat` LDIF, not OpenLDAP MDB binary files.
+Content and `cn=config` values can be preserved by the importer, but only the
+features explicitly listed below have matching runtime behavior.
+
 ## LDAPv3 protocol
 
 | Area | Status | Required evidence |
@@ -114,7 +124,7 @@ rebuilt by `ldap-go`.
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
 | syncprov | partial | cn=config gating, refresh/persist stream, configured SIDs, multi-SID cookies, `delcsn`, contextCSN checkpointing, session-log policies, Sort/VLV, glue providers, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
-| unique | planned | concurrent uniqueness tests |
+| unique | partial | URI and legacy config, independent domains/multiple URIs, `strict`/`ignore`/`serialize`, Add/Modify/ModifyDN, managed Relax, atomic concurrency, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering and auditing pre-existing duplicates remain |
 | valsort | planned | value sorting tests |
 | autoca and OTP-related contrib modules | planned | module-specific compatibility tests |
 
@@ -259,6 +269,24 @@ transaction rollback, Rename and Relax; a gated OpenLDAP 2.6.13 fixture runs
 the same operation sequence against both servers. Ordering interactions with
 other overlays and locale-specific POSIX regular-expression behavior remain
 for a broader differential matrix.
+
+OpenLDAP's database-local `unique` overlay loads both current
+`olcUniqueURI` domains and the legacy `olcUniqueBase`, `olcUniqueAttribute`,
+`olcUniqueIgnore`, and `olcUniqueStrict` attributes. Local LDAP URLs support
+base selection, one/subtree/children scope, attribute lists, multiple URLs per
+domain, and schema-aware filters. `strict`, `ignore`, and `serialize` keywords
+follow slapd's accepted ordering; configuration rejects remote URLs, base
+scope, out-of-database DNs, undefined schema references, legacy/URI mixing,
+and noncanonical filters. Add, non-delete Modify values, and new ModifyDN RDN
+values are checked using equality matching rules while operational attributes
+are excluded. Relax bypass requires `manage` access, and replicated shadow
+updates use the replication path that bypasses client overlays. Memory and
+bbolt writes already serialize their transaction boundary, so uniqueness is
+atomic even without the optional `serialize` keyword. Online changes roll back
+on validation errors and survive restart. Concurrent TCP writes, real
+`slapcat -n 0` configuration import, and a same-sequence OpenLDAP 2.6.13 slapd
+differential pass. Like slapd, enabling the overlay does not retroactively scan
+or repair duplicate values already present.
 
 RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
 `olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default
