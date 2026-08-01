@@ -68,6 +68,11 @@ relationships on Add, Modify, and ModifyDN, and maintains the protected
 subschema metadata and client-side parsers, not writable `cn=config` schema, so
 ldap-go accepts such additive definitions through its base schema registry and
 does not invent incompatible OpenLDAP configuration attributes.
+OpenLDAP's `constraint` overlay loads ordered `olcConstraintAttribute` values
+from `cn=config` and enforces `regex`, `negregex`, `size`, `count`, local LDAP
+URI, and ACL set rules on Add, Modify, and ModifyDN. Optional `restrict=` URLs,
+requester-authorized URI searches, normalized set paths, Relax bypass, atomic
+online updates, restart persistence, and a direct slapd differential pass.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

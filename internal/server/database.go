@@ -45,6 +45,7 @@ type runtimeDatabase struct {
 	dds                   *ddsRuntimeConfiguration
 	ppolicy               *passwordPolicyRuntimeConfiguration
 	chain                 *chainRuntimeConfiguration
+	constraint            *constraintRuntimeConfiguration
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -279,7 +280,8 @@ func loadRuntimeDatabaseOverlays(
 			overlayType != "syncprov" &&
 			overlayType != "dds" &&
 			overlayType != "ppolicy" &&
-			overlayType != "chain" {
+			overlayType != "chain" &&
+			overlayType != "constraint" {
 			return nil
 		}
 
@@ -307,6 +309,22 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "constraint":
+			if database.constraint != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate constraint overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadConstraintRuntimeConfiguration(
+				entry,
+				*database,
+			)
+			if err != nil {
+				return err
+			}
+			database.constraint = &configuration
 		case "chain":
 			if database.chain != nil {
 				return fmt.Errorf(

@@ -101,7 +101,7 @@ rebuilt by `ldap-go`.
 | --- | --- | --- |
 | accesslog and auditlog | planned | LDIF/result differential tests |
 | chain | partial | imported `olcChainConfig`/child back-ldap entries; Search continuation, Compare, writes, Password Modify, Dynamic Refresh, identity assertion, TLS/TLCP, chaining behavior, schema/filter policies, session tracking, nested referrals, and ppolicy forwarding pass; connection pooling/quarantine scheduling, full SASL rebind coverage, and OpenLDAP differential fixtures remain |
-| constraint | planned | rule and error differential tests |
+| constraint | partial | all six rule types, `restrict=`, Add/Modify/ModifyDN, Relax, online/restart, rollback, and slapd differential pass; cross-overlay ordering and locale-dependent regex edges remain |
 | DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
 | dynlist and dynid | planned | expansion/update tests |
 | homedir | planned | lifecycle hook tests |
@@ -239,6 +239,26 @@ valid. OpenLDAP `ldapsearch -E '!dontUseCopy'` interoperability and raw BER
 differentials cover criticality, invalid values, broken aliases, named
 referrals, URL rewriting, and Compare. With an active chain overlay, shadow
 referrals are sent through its configured remote backend.
+
+OpenLDAP's database-local `constraint` overlay loads ordered
+`olcConstraintAttribute` values and rejects duplicate or frontend instances.
+The `regex`, `negregex`, and byte-oriented `size` rules validate Add values and
+Modify/ModifyDN add-or-replace values; `count` evaluates the complete value
+count after a modification sequence. Local `ldap:///` URI rules run an
+unlimited internal search with the requester's ACL identity, while
+`restrict=` base/scope/filter matching is evaluated as the database root.
+ACL set expressions support `this`, `user`, literals, union, intersection,
+concatenation, parent traversal, `/` and `->` attribute paths, transitive
+chasing, numeric OIDs/options, and local LDAP URL gathers. Chased values use
+their equality-rule normalized forms, matching slapd's `a_nvals` behavior.
+Operational attributes, pure deletes outside count bookkeeping, Relax
+operations, and replicated shadow updates bypass the same checks as slapd.
+Configuration changes validate schema/filter references atomically, roll back
+on error, and survive restart. TCP tests cover all rule types, restrictions,
+transaction rollback, Rename and Relax; a gated OpenLDAP 2.6.13 fixture runs
+the same operation sequence against both servers. Ordering interactions with
+other overlays and locale-specific POSIX regular-expression behavior remain
+for a broader differential matrix.
 
 RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
 `olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default

@@ -63,6 +63,18 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	for index := range databases {
+		if err := validateConstraintSchema(
+			registry,
+			databases[index].constraint,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s constraint overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+	}
 	serverID, err := loadServerID(reader, server.config.ListenerURLs)
 	if err != nil {
 		return nil, err

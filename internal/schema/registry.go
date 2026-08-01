@@ -1016,6 +1016,30 @@ func (registry *Registry) Compare(
 	return compareWithRule(rule, left, right)
 }
 
+// NormalizeEqualityValue returns the normalized value used by an attribute's
+// equality matching rule. Attributes without an equality rule retain their
+// wire value, matching OpenLDAP's a_nvals behavior.
+func (registry *Registry) NormalizeEqualityValue(
+	attributeName string,
+	value []byte,
+) ([]byte, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return nil, fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return nil, err
+	}
+	if effective.Equality == "" {
+		return bytes.Clone(value), nil
+	}
+	return normalizeWithRule(effective.Equality, value)
+}
+
 func (registry *Registry) OrderingRule(
 	attributeName,
 	matchingRule string,
@@ -2320,6 +2344,56 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 		return strings.Compare(normalizedLeft, normalizedRight), nil
 	default:
 		return 0, fmt.Errorf("unsupported matching rule %q", rule)
+	}
+}
+
+func normalizeWithRule(rule string, value []byte) ([]byte, error) {
+	switch canonicalMatchingRule(rule) {
+	case "caseignorematch",
+		"caseignoreia5match",
+		"caseignoreorderingmatch",
+		"caseignoreia5orderingmatch":
+		return normalizeCaseIgnore(value), nil
+	case "caseexactmatch",
+		"caseexactia5match",
+		"caseexactorderingmatch",
+		"caseexactia5orderingmatch":
+		return normalizeSpace(value), nil
+	case "caseignorelistmatch":
+		return normalizeCaseIgnoreList(value), nil
+	case "telephonenumbermatch":
+		return normalizeTelephoneNumber(value), nil
+	case "numericstringmatch", "numericstringorderingmatch":
+		return normalizeNumericString(value), nil
+	case "octetstringmatch", "octetstringorderingmatch", "authzmatch",
+		"objectidentifierfirstcomponentmatch", "integerfirstcomponentmatch":
+		return bytes.Clone(value), nil
+	case "objectidentifiermatch":
+		return bytes.ToLower(value), nil
+	case "integermatch", "integerorderingmatch":
+		integer, err := strconv.ParseInt(string(value), 10, 64)
+		if err != nil {
+			return nil, errors.New("integer matching rule received invalid integer")
+		}
+		return []byte(strconv.FormatInt(integer, 10)), nil
+	case "booleanmatch":
+		return bytes.ToUpper(value), nil
+	case "distinguishednamematch":
+		dn, err := directory.ParseDN(string(value))
+		if err != nil {
+			return nil, errors.New("distinguishedNameMatch received invalid DN")
+		}
+		return []byte(dn.Key()), nil
+	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
+		return bytes.ToLower(value), nil
+	case "csnmatch", "csnorderingmatch":
+		normalized, ok := normalizeCSN(value)
+		if !ok {
+			return nil, errors.New("CSN matching received an invalid value")
+		}
+		return []byte(normalized), nil
+	default:
+		return nil, fmt.Errorf("unsupported matching rule %q", rule)
 	}
 }
 

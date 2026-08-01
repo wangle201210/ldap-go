@@ -194,6 +194,18 @@ func (server *Server) handleAdd(
 			}
 		}
 		if !configurationWrite {
+			if err := server.validateConstraintAdd(
+				state.runtime,
+				writer,
+				state.boundDN,
+				*database,
+				entry,
+				controls.relax,
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
 			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
 			}
@@ -694,6 +706,20 @@ func (server *Server) modifyEntry(
 		for _, rdnValue := range dn.RDNValues() {
 			if !entry.HasValue(rdnValue.Type, rdnValue.Value) {
 				return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
+			}
+		}
+		if !configurationWrite {
+			if err := server.validateConstraintModify(
+				runtime,
+				writer,
+				boundDN,
+				database,
+				before,
+				entry,
+				processedChanges,
+				relax,
+			); err != nil {
+				return err
 			}
 		}
 		if !configurationWrite {
@@ -1267,6 +1293,46 @@ func (server *Server) handleModifyDN(
 		}
 		if preRead != nil {
 			responseControls = append(responseControls, *preRead)
+		}
+		if !configurationWrite {
+			constraintEntry := sourceEntry.Clone()
+			constraintEntry.DN = newDN.String()
+			constraintChanges := make([]ldapwire.Modification, 0,
+				len(oldRDNAttributes)+len(newRDNAttributes))
+			if request.DeleteOldRDN {
+				constraintEntry.DeleteRDNValues(oldDN)
+				for _, attribute := range oldRDNAttributes {
+					constraintChanges = append(
+						constraintChanges,
+						ldapwire.Modification{
+							Operation: ldapwire.ModificationDelete,
+							Attribute: attribute,
+						},
+					)
+				}
+			}
+			constraintEntry.EnsureRDNValues(newDN)
+			for _, attribute := range newRDNAttributes {
+				constraintChanges = append(
+					constraintChanges,
+					ldapwire.Modification{
+						Operation: ldapwire.ModificationAdd,
+						Attribute: attribute,
+					},
+				)
+			}
+			if err := server.validateConstraintModify(
+				state.runtime,
+				writer,
+				state.boundDN,
+				*database,
+				sourceBefore,
+				constraintEntry,
+				constraintChanges,
+				controls.relax,
+			); err != nil {
+				return err
+			}
 		}
 
 		type move struct {

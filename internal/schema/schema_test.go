@@ -438,6 +438,32 @@ func TestStructuralObjectClassUsesMostSpecificClass(t *testing.T) {
 	}
 }
 
+func TestNormalizeEqualityValue(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	normalized, err := registry.NormalizeEqualityValue(
+		"cn",
+		[]byte("  Alice   EXAMPLE "),
+	)
+	if err != nil {
+		t.Fatalf("NormalizeEqualityValue(cn): %v", err)
+	}
+	if string(normalized) != "alice example" {
+		t.Fatalf("normalized cn = %q", normalized)
+	}
+	opaque, err := registry.NormalizeEqualityValue("jpegPhoto", []byte{0, 1, 2})
+	if err != nil {
+		t.Fatalf("NormalizeEqualityValue(jpegPhoto): %v", err)
+	}
+	if len(opaque) != 3 || opaque[0] != 0 || opaque[1] != 1 || opaque[2] != 2 {
+		t.Fatalf("normalized jpegPhoto = %v", opaque)
+	}
+}
+
 func assertViolation(t *testing.T, err error, kind ViolationKind) {
 	t.Helper()
 	var violation *Violation
