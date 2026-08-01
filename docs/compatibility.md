@@ -115,7 +115,7 @@ rebuilt by `ldap-go`.
 | DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
 | dynlist and dynid | planned | expansion/update tests |
 | homedir | planned | lifecycle hook tests |
-| memberof and refint | planned | transactional referential-integrity tests |
+| memberof and refint | partial | current `cn=config` forms, multiple instances, custom DN attributes/group classes, dangling ignore/drop/error, Relax, AddCheck, member refint, refint exact/subtree repair and Nothing placeholders, Add/Modify/Delete/ModifyDN, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; global overlays, nameAndOptionalUID attributes, cross-overlay ordering, replication topologies, and fault-path parity remain |
 | pbind and remoteauth | planned | remote authentication tests |
 | pcache | planned | cache correctness and invalidation tests |
 | ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, chain-backed `ppolicy_forward_updates`, and OpenLDAP 2.6.13 differentials pass; native checker-module execution remains |
@@ -287,6 +287,34 @@ on validation errors and survive restart. Concurrent TCP writes, real
 `slapcat -n 0` configuration import, and a same-sequence OpenLDAP 2.6.13 slapd
 differential pass. Like slapd, enabling the overlay does not retroactively scan
 or repair duplicate values already present.
+
+OpenLDAP's database-local `memberof` overlay loads multiple
+`olcMemberOfConfig` instances and supports `olcMemberOfDN`, all three dangling
+reference modes and configurable result codes, `olcMemberOfRefInt`,
+`olcMemberOfAddCheck`, and custom group/member/memberOf schema identifiers.
+The standard `memberOf` operational attribute is built in and protected from
+client writes. Group Add and Modify maintain reverse membership; group Delete
+and individual group/member ModifyDN repair the corresponding references.
+Member Delete and ModifyDN update groups when `olcMemberOfRefInt` is enabled.
+Relax bypasses dangling checks, self references are ignored, and AddCheck
+discovers groups that predate a newly added member.
+
+The database-local `refint` overlay loads multiple `olcRefintConfig` instances,
+tokenizes all `olcRefintAttribute` values, and honors `olcRefintNothing` and
+`olcRefintModifiersName`. Delete and ModifyDN repair exact references, while a
+non-leaf ModifyDN also preserves relative names below the renamed subtree.
+Unlike slapd's queued best-effort repair, ldap-go performs these dependent
+updates in the initiating storage transaction, so a storage failure rolls the
+whole write back. Internal repairs do not create separate CSNs or Sync events,
+matching the overlay's non-replicated internal modifications.
+
+Online configuration validation is atomic, survives restart, and accepts real
+`slapcat -n 0` entries unchanged. TCP lifecycle tests and same-operation
+OpenLDAP 2.6.13 differentials cover the normal result and data states. Global
+overlay instances and the name-and-optional-UID syntax used by attributes such
+as `uniqueMember` are not implemented. Cross-overlay order, replicated
+provider/consumer configurations, and injected dependent-update failures need
+broader parity tests, so this row remains `partial`.
 
 RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
 `olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default

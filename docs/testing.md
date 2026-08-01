@@ -53,7 +53,7 @@ transaction, and replication differentials is enabled explicitly:
 ```sh
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
-    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceProxyAuthorizationControls|TestOpenLDAPReferenceAuthorizationPolicy|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceGlobalDisallows|TestOpenLDAPReferenceConstraintOverlay|TestOpenLDAPReferenceUniqueOverlay|TestOpenLDAPSlapcatUniqueConfigImport|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
+    -run 'TestOpenLDAPClientSASLPlainBind|TestOpenLDAPClientSASLCRAMMD5Bind|TestOpenLDAPClientSASLDigestMD5Bind|TestOpenLDAPClientSASLSCRAMSHA256Bind|TestOpenLDAPReferenceProxyAuthorizationControls|TestOpenLDAPReferenceAuthorizationPolicy|TestOpenLDAPReferenceTransactionRollback|TestOpenLDAPLDAPModifyTransactionInteroperability|TestOpenLDAPLDAPSearchDontUseCopyInteroperability|TestOpenLDAPReferenceDontUseCopy|TestOpenLDAPReferenceGlobalDisallows|TestOpenLDAPReferenceConstraintOverlay|TestOpenLDAPReferenceUniqueOverlay|TestOpenLDAPSlapcatUniqueConfigImport|TestOpenLDAPReferenceMemberOfOverlay|TestOpenLDAPReferenceRefintOverlay|TestOpenLDAPSlapcatMemberOfAndRefintConfigImport|TestOpenLDAPReferenceDynamicDirectoryServices|TestOpenLDAPReferenceDisabledDDS|TestOpenLDAPReferenceDDSExpirationHierarchy|TestOpenLDAPLDAPExopDynamicRefreshInterop|TestOpenLDAPReferenceDITContentRules|TestOpenLDAPSlapcatDITContentRuleImport|TestOpenLDAPReferenceSyncSortAndVLV|TestOpenLDAPSyncreplConsumesLDAPGoProvider|TestLDAPGoSyncreplConsumesOpenLDAPProvider|TestLDAPGoDeltaSyncreplConsumesOpenLDAPAccesslog' \
     -count=1
 ```
 
@@ -83,6 +83,11 @@ The unique cases compare normalized duplicate values, independent URI domains,
 slapd. A second case converts a real slapd configuration, exports its
 `olcUniqueConfig` entry with `slapcat -n 0`, imports the LDIF unchanged, and
 verifies that uniqueness is enforced after ldap-go starts.
+The memberof/refint cases compare group and member Add/Modify/Delete/ModifyDN,
+dangling errors, Relax, AddCheck, exact reference repair, subtree rename, and
+Nothing placeholders with slapd. A third case exports real
+`olcMemberOfConfig` and `olcRefintConfig` entries with `slapcat -n 0`, imports
+them unchanged, and verifies both overlays after ldap-go starts.
 The DDS cases run Add, live-TTL Search, Refresh, Modify, ModifyDN, object-count,
 disabled-overlay, and expiration-hierarchy checks against reference slapd.
 They also run OpenLDAP `ldapexop refresh` against ldap-go and verify the

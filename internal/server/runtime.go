@@ -84,6 +84,26 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 				err,
 			)
 		}
+		if err := validateMemberOfSchema(
+			registry,
+			databases[index].memberOf,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s memberof overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateRefintSchema(
+			registry,
+			databases[index].refint,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s refint overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
 	}
 	serverID, err := loadServerID(reader, server.config.ListenerURLs)
 	if err != nil {

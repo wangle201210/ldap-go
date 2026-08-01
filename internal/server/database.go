@@ -47,6 +47,8 @@ type runtimeDatabase struct {
 	chain                 *chainRuntimeConfiguration
 	constraint            *constraintRuntimeConfiguration
 	unique                *uniqueRuntimeConfiguration
+	memberOf              []memberOfRuntimeConfiguration
+	refint                []refintRuntimeConfiguration
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -283,7 +285,9 @@ func loadRuntimeDatabaseOverlays(
 			overlayType != "ppolicy" &&
 			overlayType != "chain" &&
 			overlayType != "constraint" &&
-			overlayType != "unique" {
+			overlayType != "unique" &&
+			overlayType != "memberof" &&
+			overlayType != "refint" {
 			return nil
 		}
 
@@ -311,6 +315,24 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "memberof":
+			configuration, err := loadMemberOfRuntimeConfiguration(
+				entry,
+				*database,
+			)
+			if err != nil {
+				return err
+			}
+			database.memberOf = append(database.memberOf, configuration)
+		case "refint":
+			configuration, err := loadRefintRuntimeConfiguration(
+				entry,
+				*database,
+			)
+			if err != nil {
+				return err
+			}
+			database.refint = append(database.refint, configuration)
 		case "unique":
 			if database.unique != nil {
 				return fmt.Errorf(

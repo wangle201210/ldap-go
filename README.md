@@ -79,6 +79,14 @@ configuration, including multiple URIs plus `strict`, `ignore`, and
 requires `manage` access for Relax bypass, validates online changes atomically,
 survives restart, and imports real `slapcat -n 0` configuration LDIF. The
 storage transaction makes concurrent uniqueness checks atomic.
+OpenLDAP's database-local `memberof` and `refint` overlays load their current
+`cn=config` attributes, including multiple instances. Group Add/Modify/Delete,
+individual group and member ModifyDN, dangling-reference modes, AddCheck,
+member-side referential integrity, exact and subtree refint repair, and
+`olcRefintNothing` run in the same storage transaction as the initiating
+write. Online changes, rollback, restart, real `slapcat -n 0` import, and
+same-sequence OpenLDAP 2.6.13 differentials pass. Global instances and
+name-and-optional-UID attributes remain pending.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

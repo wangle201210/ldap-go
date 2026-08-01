@@ -38,6 +38,7 @@ var protectedOperationalAttributes = map[string]string{
 	"1.3.6.1.4.1.42.2.27.8.1.21":    "pwdGraceUseTime",
 	"1.3.6.1.4.1.42.2.27.8.1.29":    "pwdLastSuccess",
 	"1.3.6.1.4.1.42.2.27.8.1.33":    "pwdAccountTmpLockoutEnd",
+	"1.2.840.113556.1.2.102":        "memberOf",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
@@ -48,6 +49,7 @@ var protectedOperationalAttributes = map[string]string{
 	"entryuuid":                     "entryUUID",
 	"governingstructurerule":        "governingStructureRule",
 	"modifiersname":                 "modifiersName",
+	"memberof":                      "memberOf",
 	"modifytimestamp":               "modifyTimestamp",
 	"pwdaccounttmplockoutend":       "pwdAccountTmpLockoutEnd",
 	"pwdchangedtime":                "pwdChangedTime",
@@ -189,6 +191,18 @@ func (server *Server) handleAdd(
 				*database,
 				&entry,
 				controls.passwordPolicy,
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
+			if err := prepareMemberOfAdd(
+				state.runtime,
+				tx,
+				*database,
+				dn,
+				&entry,
+				controls.relax,
 			); err != nil {
 				return err
 			}
@@ -386,6 +400,16 @@ func (server *Server) handleAdd(
 		}
 		if err := tx.Put(entry, false); err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := applyMemberOfAdd(
+				state.runtime,
+				tx,
+				*database,
+				entry,
+			); err != nil {
+				return err
+			}
 		}
 		postRead, err := server.readResponseControl(
 			state.runtime,
@@ -669,6 +693,20 @@ func (server *Server) modifyEntry(
 				return err
 			}
 		}
+		if !configurationWrite {
+			processedChanges, err = prepareMemberOfModify(
+				runtime,
+				tx,
+				database,
+				dn,
+				before,
+				processedChanges,
+				relax,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		if !server.canApplyModifications(
 			runtime,
 			tx,
@@ -786,6 +824,17 @@ func (server *Server) modifyEntry(
 		}
 		if err := tx.Put(entry, true); err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := applyMemberOfModify(
+				runtime,
+				tx,
+				database,
+				before,
+				entry,
+			); err != nil {
+				return err
+			}
 		}
 		if postcondition != nil {
 			if err := postcondition(tx, entry); err != nil {
@@ -978,6 +1027,24 @@ func (server *Server) handleDelete(
 		}
 		if err := tx.Delete(dn); err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := applyMemberOfDelete(
+				state.runtime,
+				tx,
+				*database,
+				entry,
+			); err != nil {
+				return err
+			}
+			if err := applyRefintDelete(
+				state.runtime,
+				tx,
+				*database,
+				dn,
+			); err != nil {
+				return err
+			}
 		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
@@ -1482,6 +1549,31 @@ func (server *Server) handleModifyDN(
 				}
 			}
 		}
+		if renamedEntry == nil {
+			return errors.New("renamed entry is missing from move set")
+		}
+		if !configurationWrite {
+			if err := applyMemberOfModifyDN(
+				state.runtime,
+				tx,
+				*database,
+				oldDN,
+				newDN,
+				*renamedEntry,
+			); err != nil {
+				return err
+			}
+			if err := applyRefintModifyDN(
+				state.runtime,
+				tx,
+				*database,
+				oldDN,
+				newDN,
+				len(moves) > 1,
+			); err != nil {
+				return err
+			}
+		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
@@ -1491,9 +1583,6 @@ func (server *Server) handleModifyDN(
 			if err != nil {
 				return err
 			}
-		}
-		if renamedEntry == nil {
-			return errors.New("renamed entry is missing from move set")
 		}
 		var changeErr error
 		syncChange, changeErr = server.recordSyncChange(

@@ -125,6 +125,7 @@ var builtinAttributeTypes = []string{
 	"( 2.5.18.6 NAME 'subtreeSpecification' DESC 'RFC3672: subtree specification' SYNTAX " + SyntaxSubtreeSpecification + " SINGLE-VALUE USAGE directoryOperation )",
 	"( 2.5.18.7 NAME 'collectiveExclusions' DESC 'RFC3671: collective attribute exclusions' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " USAGE directoryOperation )",
 	"( 2.5.18.12 NAME 'collectiveAttributeSubentries' DESC 'RFC3671: collective attribute subentries' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 1.2.840.113556.1.2.102 NAME 'memberOf' DESC 'Group that the entry belongs to' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " NO-USER-MODIFICATION USAGE dSAOperation X-ORIGIN 'iPlanet Delegated Administrator' )",
 	"( 2.5.21.9 NAME 'structuralObjectClass' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.21.10 NAME 'governingStructureRule' EQUALITY integerMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.10 NAME 'subschemaSubentry' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
