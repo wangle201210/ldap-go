@@ -77,7 +77,8 @@ func (server *Server) handleAdd(
 		supportsAssertion|
 			supportsPostRead|
 			supportsManageDsaIT|
-			supportsPasswordPolicy,
+			supportsPasswordPolicy|
+			supportsRelax,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
@@ -402,7 +403,8 @@ func (server *Server) handleModify(
 			supportsPreRead|
 			supportsPostRead|
 			supportsManageDsaIT|
-			supportsPasswordPolicy,
+			supportsPasswordPolicy|
+			supportsRelax,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
@@ -735,7 +737,7 @@ func (server *Server) handleDelete(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPreRead|supportsManageDsaIT,
+		supportsAssertion|supportsPreRead|supportsManageDsaIT|supportsRelax,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
@@ -937,7 +939,8 @@ func (server *Server) handleModifyDN(
 		supportsAssertion|
 			supportsPreRead|
 			supportsPostRead|
-			supportsManageDsaIT,
+			supportsManageDsaIT|
+			supportsRelax,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)

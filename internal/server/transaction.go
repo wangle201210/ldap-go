@@ -439,20 +439,23 @@ func validateTransactionOperationControls(
 		supported = supportsAssertion |
 			supportsPostRead |
 			supportsManageDsaIT |
-			supportsPasswordPolicy
+			supportsPasswordPolicy |
+			supportsRelax
 	case ldapwire.ModifyRequest:
 		supported = supportsAssertion |
 			supportsPreRead |
 			supportsPostRead |
 			supportsManageDsaIT |
-			supportsPasswordPolicy
+			supportsPasswordPolicy |
+			supportsRelax
 	case ldapwire.DeleteRequest:
-		supported = supportsAssertion | supportsPreRead | supportsManageDsaIT
+		supported = supportsAssertion | supportsPreRead | supportsManageDsaIT | supportsRelax
 	case ldapwire.ModifyDNRequest:
 		supported = supportsAssertion |
 			supportsPreRead |
 			supportsPostRead |
-			supportsManageDsaIT
+			supportsManageDsaIT |
+			supportsRelax
 	case ldapwire.ExtendedRequest:
 		if request.Name == passwordModifyOID {
 			supported = supportsManageDsaIT | supportsPasswordPolicy

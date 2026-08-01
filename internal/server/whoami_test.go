@@ -49,7 +49,7 @@ func TestLDAPClientWhoAmI(t *testing.T) {
 		0,
 		false,
 		"(objectClass=*)",
-		[]string{"supportedExtension"},
+		[]string{"supportedExtension", "supportedFeatures"},
 		nil,
 	))
 	if err != nil || len(rootDSE.Entries) != 1 ||
@@ -60,6 +60,10 @@ func TestLDAPClientWhoAmI(t *testing.T) {
 		!containsString(
 			rootDSE.Entries[0].GetAttributeValues("supportedExtension"),
 			cancelOID,
+		) ||
+		!containsString(
+			rootDSE.Entries[0].GetAttributeValues("supportedFeatures"),
+			absoluteFiltersFeatureOID,
 		) {
 		t.Fatalf("Who Am I Root DSE = %#v, %v", rootDSE, err)
 	}

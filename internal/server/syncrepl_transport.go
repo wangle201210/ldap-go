@@ -216,19 +216,27 @@ func parseSyncConsumerProviderURL(value string) (*url.URL, error) {
 		return url.Parse(value)
 	}
 	rest := value[len(prefix):]
-	host, path := rest, ""
-	if index := strings.IndexByte(rest, '/'); index >= 0 {
+	host, suffix := rest, ""
+	if index := strings.IndexAny(rest, "/?#"); index >= 0 {
 		host = rest[:index]
-		path = rest[index:]
+		suffix = rest[index:]
 	}
 	decodedHost, err := url.PathUnescape(host)
 	if err != nil {
 		return nil, fmt.Errorf("ldapi provider host %q: %w", host, err)
 	}
+	relative, err := url.Parse(suffix)
+	if err != nil {
+		return nil, fmt.Errorf("ldapi provider URL %q: %w", value, err)
+	}
 	return &url.URL{
-		Scheme: "ldapi",
-		Host:   decodedHost,
-		Path:   path,
+		Scheme:     "ldapi",
+		Host:       decodedHost,
+		Path:       relative.Path,
+		RawPath:    relative.RawPath,
+		ForceQuery: relative.ForceQuery,
+		RawQuery:   relative.RawQuery,
+		Fragment:   relative.Fragment,
 	}, nil
 }
 

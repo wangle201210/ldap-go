@@ -108,6 +108,7 @@ func (server *Server) handleStartTLS(
 	if !state.runtime.disallows.tlsToAnonymous && state.boundDN != "" {
 		state.boundDN = ""
 		state.authMechanism = ""
+		clearBindCredentials(state)
 		clearSASLSession(state)
 		clearSearchSessions(state)
 	}

@@ -28,7 +28,7 @@ No row may become `compatible` based only on unit tests.
 | Compare | partial | matching-rule and ACL disclosure tests |
 | Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
-| Referrals, aliases, and ManageDsaIT | partial | RFC 3296 referrals, RFC 4511/4512 aliases, and OpenLDAP 2.6.13 differentials pass; referral chaining remains |
+| Referrals, aliases, and ManageDsaIT | partial | RFC 3296 referrals, RFC 4511/4512 aliases, OpenLDAP 2.6.13 differentials, and chain-overlay integration tests pass |
 | LDAP URLs and attribute options | partial | referral DN/scope rewrite passes; full RFC 4516 and language options remain |
 
 ## Controls and extended operations
@@ -47,7 +47,7 @@ No row may become `compatible` based only on unit tests.
 | ManageDsaIT | partial | RFC 3296 Search/write/Password Modify and OpenLDAP 2.6.13 referral differential tests pass |
 | Proxied Authorization | partial | RFC 4370 operation scope, BER/error handling, per-operation ACL identity, transaction identity capture, `olcAuthzPolicy`, all documented rule forms, global allow/disallow flags, restart/rollback, and OpenLDAP 2.6.13 differentials pass |
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
-| Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass; chaining remains |
+| Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, chain routing, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
 | LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; generated passwords, server abort notices, and resource limits remain |
 | Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
@@ -100,7 +100,7 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | accesslog and auditlog | planned | LDIF/result differential tests |
-| chain | planned | referral chaining tests |
+| chain | partial | imported `olcChainConfig`/child back-ldap entries; Search continuation, Compare, writes, Password Modify, Dynamic Refresh, identity assertion, TLS/TLCP, chaining behavior, schema/filter policies, session tracking, nested referrals, and ppolicy forwarding pass; connection pooling/quarantine scheduling, full SASL rebind coverage, and OpenLDAP differential fixtures remain |
 | constraint | planned | rule and error differential tests |
 | DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
 | dynlist and dynid | planned | expansion/update tests |
@@ -108,7 +108,7 @@ rebuilt by `ldap-go`.
 | memberof and refint | planned | transactional referential-integrity tests |
 | pbind and remoteauth | planned | remote authentication tests |
 | pcache | planned | cache correctness and invalidation tests |
-| ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, and OpenLDAP 2.6.13 differentials pass; native checker-module execution and `ppolicy_forward_updates` through chain remain |
+| ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, chain-backed `ppolicy_forward_updates`, and OpenLDAP 2.6.13 differentials pass; native checker-module execution remains |
 | retcode | planned | configured result behavior |
 | rwm | planned | DN/attribute rewrite differential tests |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
@@ -237,7 +237,8 @@ are validated with OpenLDAP's global-referral restriction: DN, attribute,
 scope, and filter URL components are forbidden, while non-LDAP URIs remain
 valid. OpenLDAP `ldapsearch -E '!dontUseCopy'` interoperability and raw BER
 differentials cover criticality, invalid values, broken aliases, named
-referrals, URL rewriting, and Compare. Server-side chaining remains pending.
+referrals, URL rewriting, and Compare. With an active chain overlay, shadow
+referrals are sent through its configured remote backend.
 
 RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
 `olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default
@@ -328,7 +329,7 @@ is recorded: after a positive `olcMaxDerefDepth` is exceeded, OpenLDAP 2.6.13
 MDB can emit success with a matched DN and the diagnostic `maximum deref depth
 exceeded` because a successful intermediate lookup overwrites result code 36.
 `ldap-go` consistently returns `aliasDereferencingProblem` (36) for that
-failure. Referral chasing and the `chain` overlay remain pending.
+failure. Referral chasing is handled by an imported `chain` overlay.
 
 RFC 3672 `subentry`, `subtreeSpecification`, and `administrativeRole` schema
 definitions are built in, and the Subentries control is advertised through
@@ -614,9 +615,10 @@ use slapd's C `Entry` ABI and are preserved during migration but are not loaded
 by the Go server. A configured `olcPPolicyCheckModule` therefore fails closed
 when `pwdUseCheckModule` requests it; `pwdUseCheckModule` without a configured
 module follows the tested OpenLDAP build and is ignored. On a shadow database,
-`olcPPolicyForwardUpdates` suppresses local policy-state writes, but forwarding
-the internal Modify through `updateref` still requires the pending `chain`
-overlay implementation.
+`olcPPolicyForwardUpdates` suppresses local policy-state writes and forwards an
+internal Relax-rules Modify through `olcUpdateRef` and the active chain overlay.
+Failed and successful Bind state updates are applied only at the provider in
+the two-server integration topology.
 
 RFC 4528 Assertion is published through Root DSE `supportedControl`. The BER
 filter is decoded strictly and evaluated inside the same storage transaction

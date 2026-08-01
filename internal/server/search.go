@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -1072,6 +1073,15 @@ func (server *Server) handleSearch(
 		}
 		return fmt.Errorf("search directory: %w", err)
 	}
+	chainedPackets, references, chainFailure := server.chainSearchContinuations(
+		ctx,
+		state,
+		message,
+		references,
+	)
+	if chainFailure != nil && result.Code == ldapwire.ResultSuccess {
+		result = *chainFailure
+	}
 
 	if sorting.active() {
 		if err := sortSearchCandidates(
@@ -1202,7 +1212,7 @@ func (server *Server) handleSearch(
 			)
 		}
 		entries := selectedSearchEntries(windowCandidates)
-		return server.writeSearchResultWithReferencesAndControls(
+		return server.writeSearchResultWithChainedReferencesAndControls(
 			connection,
 			message.ID,
 			state,
@@ -1214,6 +1224,7 @@ func (server *Server) handleSearch(
 			false,
 			references,
 			virtualListViewResponseControl(response),
+			chainedPackets,
 		)
 	}
 
@@ -1292,7 +1303,7 @@ func (server *Server) handleSearch(
 			responseControls,
 		)
 	}
-	writeErr := server.writeSearchResultWithReferences(
+	writeErr := server.writeSearchResultWithChainedReferences(
 		connection,
 		message.ID,
 		state,
@@ -1303,6 +1314,7 @@ func (server *Server) handleSearch(
 		lastCursor,
 		hasMore,
 		references,
+		chainedPackets,
 	)
 	if sortLease != nil &&
 		state.pagedSearch != nil &&
@@ -1862,6 +1874,10 @@ func (server *Server) rootDSE(
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),
 	})
+	entry.Attributes = append(entry.Attributes, directory.Attribute{
+		Description: "supportedFeatures",
+		Values:      stringValues(absoluteFiltersFeatureOID),
+	})
 	if subtrees := dynamicSubtrees(runtime.databases); len(subtrees) > 0 {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "dynamicSubtrees",
@@ -1870,7 +1886,9 @@ func (server *Server) rootDSE(
 	}
 	supportedControls := []string{
 		assertionControlOID,
+		chainingBehaviorControlOID,
 		manageDsaITControlOID,
+		relaxControlOID,
 		preReadControlOID,
 		postReadControlOID,
 		pagedResultsControlOID,
@@ -2082,6 +2100,7 @@ func (server *Server) writeSearchResult(
 		hasMore,
 		nil,
 		nil,
+		nil,
 	)
 }
 
@@ -2109,6 +2128,36 @@ func (server *Server) writeSearchResultWithReferences(
 		hasMore,
 		references,
 		nil,
+		nil,
+	)
+}
+
+func (server *Server) writeSearchResultWithChainedReferences(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	references [][]string,
+	chainedPackets []*ber.Packet,
+) error {
+	return server.writeSearchResultResponse(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		references,
+		nil,
+		chainedPackets,
 	)
 }
 
@@ -2136,6 +2185,7 @@ func (server *Server) writeSearchResultWithControls(
 		hasMore,
 		nil,
 		additionalControls,
+		nil,
 	)
 }
 
@@ -2164,6 +2214,37 @@ func (server *Server) writeSearchResultWithReferencesAndControls(
 		hasMore,
 		references,
 		additionalControls,
+		nil,
+	)
+}
+
+func (server *Server) writeSearchResultWithChainedReferencesAndControls(
+	connection net.Conn,
+	messageID int64,
+	state *connectionState,
+	paging *pagedSearchContext,
+	sorting *serverSideSortContext,
+	entries []directory.Entry,
+	result ldapwire.Result,
+	cursor pagedSearchCursor,
+	hasMore bool,
+	references [][]string,
+	additionalControls []ldapwire.Control,
+	chainedPackets []*ber.Packet,
+) error {
+	return server.writeSearchResultResponse(
+		connection,
+		messageID,
+		state,
+		paging,
+		sorting,
+		entries,
+		result,
+		cursor,
+		hasMore,
+		references,
+		additionalControls,
+		chainedPackets,
 	)
 }
 
@@ -2179,6 +2260,7 @@ func (server *Server) writeSearchResultResponse(
 	hasMore bool,
 	references [][]string,
 	additionalControls []ldapwire.Control,
+	chainedPackets []*ber.Packet,
 ) error {
 	responseControls := serverSideSortResponseControl(
 		sorting,
@@ -2214,6 +2296,13 @@ func (server *Server) writeSearchResultResponse(
 		); err != nil {
 			return err
 		}
+	}
+	if err := server.writeChainedPackets(
+		connection,
+		ldapwire.Message{ID: messageID},
+		chainedPackets,
+	); err != nil {
+		return err
 	}
 	for _, referral := range references {
 		if err := ldapwire.Write(

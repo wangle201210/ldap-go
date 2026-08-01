@@ -473,6 +473,11 @@ func (server *Server) authenticatePasswordBind(
 		graceAuthentications: -1,
 	}
 	var syncChange *syncChange
+	var (
+		forwardPolicyState bool
+		forwardBefore      directory.Entry
+		forwardAfter       directory.Entry
+	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := storage.WriterInPartition(writer, database.partition)
 		entry, err := tx.Get(dn)
@@ -497,6 +502,15 @@ func (server *Server) authenticatePasswordBind(
 		)
 		overlayEnabled := database.ppolicy != nil
 		writePolicyState := passwordPolicyWritesLocally(*database)
+		forwardPolicyState = overlayEnabled && hasPolicy &&
+			database.shadow && database.ppolicy.forwardUpdates &&
+			!database.ppolicy.disableWrite
+		policyStateEntry := &entry
+		if forwardPolicyState {
+			forwardBefore = entry.Clone()
+			forwardAfter = entry.Clone()
+			policyStateEntry = &forwardAfter
+		}
 		var clearExpiredLock bool
 		if overlayEnabled && hasPolicy {
 			var locked bool
@@ -506,8 +520,8 @@ func (server *Server) authenticatePasswordBind(
 				*database,
 				time.Now(),
 			)
-			if clearExpiredLock && writePolicyState {
-				entry.ReplaceValues("pwdAccountLockedTime", nil)
+			if clearExpiredLock && (writePolicyState || forwardPolicyState) {
+				policyStateEntry.ReplaceValues("pwdAccountLockedTime", nil)
 			}
 			if locked {
 				evaluation.policyError = passwordPolicyAccountLocked
@@ -539,16 +553,16 @@ func (server *Server) authenticatePasswordBind(
 		if overlayEnabled && passwordPresent {
 			now := time.Now()
 			if !evaluation.authenticated {
-				if hasPolicy && writePolicyState {
-					applyPasswordPolicyBindFailure(&entry, policy, now)
+				if hasPolicy && (writePolicyState || forwardPolicyState) {
+					applyPasswordPolicyBindFailure(policyStateEntry, policy, now)
 				}
 			} else if hasPolicy {
 				evaluateSuccessfulPasswordPolicyBind(
-					&entry,
+					policyStateEntry,
 					policy,
 					now,
 					&evaluation,
-					writePolicyState,
+					writePolicyState || forwardPolicyState,
 				)
 			}
 		}
@@ -572,6 +586,23 @@ func (server *Server) authenticatePasswordBind(
 		return passwordBindResult{}, err
 	}
 	server.finishWriteEffects(ctx, nil, syncChange)
+	if forwardPolicyState && !forwardBefore.Equal(forwardAfter) {
+		if err := server.forwardPasswordPolicyBindState(
+			ctx,
+			runtime,
+			*database,
+			forwardBefore,
+			forwardAfter,
+		); err != nil {
+			server.config.Logger.Debug(
+				"forward password policy state update failed",
+				"dn",
+				rawDN,
+				"error",
+				err,
+			)
+		}
+	}
 
 	result.authenticated = evaluation.authenticated
 	result.restricted = evaluation.restricted
@@ -654,6 +685,120 @@ func (server *Server) finishPasswordBindStateWrite(
 	}
 	*syncChange = change
 	return nil
+}
+
+func (server *Server) forwardPasswordPolicyBindState(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	before directory.Entry,
+	after directory.Entry,
+) error {
+	changes := passwordPolicyBindStateChanges(before, after)
+	if len(changes) == 0 {
+		return nil
+	}
+	if len(database.updateRefs) == 0 {
+		return errors.New("shadow database has no update referral")
+	}
+	chain := effectiveChainConfiguration(runtime, &database)
+	if chain == nil {
+		return errors.New("shadow database has no chain overlay")
+	}
+	if database.rootDN == nil {
+		return errors.New("shadow database has no root DN for policy updates")
+	}
+	state := &connectionState{
+		boundDN:       database.rootDN.String(),
+		authMechanism: "INTERNAL",
+		runtime:       runtime,
+	}
+	message := ldapwire.Message{
+		ID: 1,
+		Request: ldapwire.ModifyRequest{
+			DN:      after.DN,
+			Changes: changes,
+		},
+		Controls: []ldapwire.Control{{
+			OID:      relaxControlOID,
+			Critical: true,
+		}},
+	}
+	attempt := server.executeChainReferrals(
+		ctx,
+		state,
+		*chain,
+		message,
+		database.updateRefs,
+		0,
+		false,
+		nil,
+	)
+	if attempt.localResult != nil {
+		return fmt.Errorf(
+			"identity assertion failed with LDAP result %d: %s",
+			attempt.localResult.Code,
+			attempt.localResult.DiagnosticMessage,
+		)
+	}
+	if attempt.transportErr != nil && !attempt.hasResult {
+		return attempt.transportErr
+	}
+	if !attempt.hasResult {
+		return errors.New("policy update returned no LDAP result")
+	}
+	if attempt.result.Code != ldapwire.ResultSuccess {
+		return fmt.Errorf(
+			"policy update returned LDAP result %d: %s",
+			attempt.result.Code,
+			attempt.result.DiagnosticMessage,
+		)
+	}
+	return nil
+}
+
+func passwordPolicyBindStateChanges(
+	before directory.Entry,
+	after directory.Entry,
+) []ldapwire.Modification {
+	attributes := []string{
+		"pwdFailureTime",
+		"pwdAccountLockedTime",
+		"pwdAccountTmpLockoutEnd",
+		"pwdGraceUseTime",
+	}
+	changes := make([]ldapwire.Modification, 0, len(attributes))
+	for _, description := range attributes {
+		beforeValues := before.Values(description)
+		afterValues := after.Values(description)
+		if passwordPolicyValuesEqual(beforeValues, afterValues) {
+			continue
+		}
+		operation := ldapwire.ModificationReplace
+		if len(afterValues) == 0 {
+			operation = ldapwire.ModificationDelete
+		}
+		changes = append(changes, ldapwire.Modification{
+			Operation: operation,
+			Attribute: directory.Attribute{
+				Description: description,
+				Values:      cloneByteValues(afterValues),
+			},
+		})
+	}
+	return changes
+}
+
+func passwordPolicyValuesEqual(left, right [][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !bytes.Equal(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func evaluatePasswordPolicyAccountLock(

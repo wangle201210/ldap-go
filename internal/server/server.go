@@ -237,6 +237,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		<-workerDone
 		clearSearchSessions(&state)
 		clearLDAPTransaction(state.transaction)
+		clearBindCredentials(&state)
 	}()
 
 	for {
@@ -508,6 +509,13 @@ func (server *Server) dispatch(
 	}
 	state.runtime = runtime
 	refreshPasswordPolicyRestriction(state)
+	switch message.Request.(type) {
+	case ldapwire.UnbindRequest, ldapwire.AbandonRequest:
+	default:
+		if _, failure := parseChainingBehaviorControls(message.Controls); failure != nil {
+			return false, writeResultForMessage(connection, message, *failure)
+		}
+	}
 	if state.saslSession != nil {
 		switch message.Request.(type) {
 		case ldapwire.BindRequest, ldapwire.UnbindRequest:
@@ -535,6 +543,14 @@ func (server *Server) dispatch(
 		}()
 	}
 	if handled, err := server.handleTransactionSpecification(
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
+	if handled, err := server.tryChainOperation(
+		ctx,
 		connection,
 		state,
 		message,
@@ -595,6 +611,7 @@ func (server *Server) handleBind(
 ) error {
 	clearLDAPTransaction(state.transaction)
 	state.transaction = nil
+	clearBindCredentials(state)
 	state.boundDN = ""
 	state.authMechanism = ""
 	state.passwordPolicyRestrictedDN = ""
@@ -722,6 +739,8 @@ func (server *Server) handleBind(
 	}
 	state.boundDN = request.Name
 	state.authMechanism = "SIMPLE"
+	state.bindCredentialDN = request.Name
+	state.bindCredentials = append([]byte(nil), password...)
 	if bindResult.restricted {
 		state.passwordPolicyRestrictedDN = request.Name
 	}
@@ -798,6 +817,8 @@ func (server *Server) closeConnections() {
 type connectionState struct {
 	boundDN                    string
 	authMechanism              string
+	bindCredentialDN           string
+	bindCredentials            []byte
 	runtime                    *runtimeState
 	connection                 net.Conn
 	secure                     bool
@@ -812,6 +833,12 @@ type connectionState struct {
 	accountUsabilityRequested  bool
 }
 
+func clearBindCredentials(state *connectionState) {
+	clear(state.bindCredentials)
+	state.bindCredentials = nil
+	state.bindCredentialDN = ""
+}
+
 func clearSearchSessions(state *connectionState) {
 	clearPagedSearch(state)
 	clearVirtualListViews(state)
@@ -819,7 +846,7 @@ func clearSearchSessions(state *connectionState) {
 
 func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {
 	for _, control := range controls {
-		if control.Critical {
+		if control.Critical && control.OID != chainingBehaviorControlOID {
 			return true
 		}
 	}

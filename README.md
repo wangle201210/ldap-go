@@ -42,6 +42,13 @@ referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
 rewriting, and managed referral updates. RFC 4511/4512 aliases support all four
 `derefAliases` modes, recursive base and search-scope dereferencing, loop and
 broken-target handling, and OpenLDAP's database-level `olcMaxDerefDepth`.
+An imported OpenLDAP `chain` overlay chases named and continuation referrals
+for Search, Compare, Add, Modify, Delete, ModifyDN, Password Modify, and Dynamic
+Refresh. Child `olcDatabase=ldap` entries provide URI-specific StartTLS,
+LDAPS/TLCP, timeout, identity-assertion, pass-through, schema/filter, session
+tracking, and nested-referral policies. The experimental Chaining Behavior
+control is advertised and enforces referral-preferred/required and
+chaining-required outcomes, including OpenLDAP's `cannotChain` result.
 RFC 3672 subentries include the built-in schema, base/one/subtree visibility,
 the Subentries control, paging, and OpenLDAP-compatible write and Bind rules.
 RFC 3671 collective attributes include the standard `c-*` schema, strict
@@ -87,9 +94,10 @@ logins, reset-only sessions, password age/length/history rules, safe modify,
 cleartext hashing, and `olcLastBind`/`pwdMaxIdle`. The Behera password-policy,
 SunDS account-usability, and optional Netscape controls match OpenLDAP 2.6.13
 in differential tests. Policy configuration and all operational state survive
-`slapcat` LDIF round trips. Native C `check_password()` modules and
-chain-backed `ppolicy_forward_updates` remain pending; configured native
-checker paths fail closed.
+`slapcat` LDIF round trips. On shadow databases, chain-backed
+`olcPPolicyForwardUpdates` sends policy state changes to the provider without
+mutating the consumer copy. Native C `check_password()` modules remain pending;
+configured native checker paths fail closed.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed

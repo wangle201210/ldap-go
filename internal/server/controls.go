@@ -19,6 +19,7 @@ const (
 	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
 	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
 	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
+	relaxControlOID        = "1.3.6.1.4.1.4203.666.5.12"
 	dontUseCopyControlOID  = "1.3.6.1.1.22"
 	subentriesControlOID   = "1.3.6.1.4.1.4203.1.10.1"
 	syncRequestControlOID  = "1.3.6.1.4.1.4203.1.9.1.1"
@@ -42,6 +43,7 @@ const (
 	supportsDontUseCopy
 	supportsPasswordPolicy
 	supportsAccountUsability
+	supportsRelax
 )
 
 type requestControls struct {
@@ -57,6 +59,8 @@ type requestControls struct {
 	sync             *syncRequestControl
 	passwordPolicy   bool
 	accountUsability bool
+	relax            bool
+	chaining         *chainBehaviorRequest
 }
 
 type readControlRequest struct {
@@ -86,8 +90,15 @@ func parseRequestControlsWithDisallows(
 	disallows disallowsRuntimeConfiguration,
 ) (requestControls, *ldapwire.Result) {
 	var parsed requestControls
+	chaining, controlFailure := parseChainingBehaviorControls(controls)
+	if controlFailure != nil {
+		return requestControls{}, controlFailure
+	}
+	parsed.chaining = chaining
 	for _, control := range controls {
 		switch control.OID {
+		case chainingBehaviorControlOID:
+			continue
 		case assertionControlOID:
 			if supported&supportsAssertion == 0 {
 				if control.Critical {
@@ -287,6 +298,26 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.manageDsaIT = true
+		case relaxControlOID:
+			if supported&supportsRelax == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.relax {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"relax control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"relax control must not have a value",
+				)
+			}
+			parsed.relax = true
 		case dontUseCopyControlOID:
 			if supported&supportsDontUseCopy == 0 {
 				if control.Critical {

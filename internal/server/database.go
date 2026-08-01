@@ -44,6 +44,7 @@ type runtimeDatabase struct {
 	syncConsumers         []syncConsumerConfig
 	dds                   *ddsRuntimeConfiguration
 	ppolicy               *passwordPolicyRuntimeConfiguration
+	chain                 *chainRuntimeConfiguration
 }
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
@@ -74,6 +75,11 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
 		}
 		if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
+			return nil
+		}
+		parent, hasParent := entryDN.Parent()
+		if !hasParent || !configSuffix.Equal(parent) {
+			// Overlay-owned backends are not local naming-context databases.
 			return nil
 		}
 
@@ -272,7 +278,8 @@ func loadRuntimeDatabaseOverlays(
 		if overlayType != "sssvlv" &&
 			overlayType != "syncprov" &&
 			overlayType != "dds" &&
-			overlayType != "ppolicy" {
+			overlayType != "ppolicy" &&
+			overlayType != "chain" {
 			return nil
 		}
 
@@ -300,6 +307,19 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "chain":
+			if database.chain != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate chain overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadChainRuntimeConfiguration(reader, entry)
+			if err != nil {
+				return err
+			}
+			database.chain = &configuration
 		case "dds":
 			if database.dds != nil {
 				return fmt.Errorf(
