@@ -220,6 +220,154 @@ func TestRegistryIdentifiesDNValuedAttributes(t *testing.T) {
 	}
 }
 
+func TestBuiltinNameAndOptionalUIDSchema(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	uniqueMember, found := registry.AttributeType("uniqueMember")
+	if !found || uniqueMember.OID != "2.5.4.50" ||
+		uniqueMember.Syntax != SyntaxNameAndOptionalUID ||
+		uniqueMember.Equality != "uniqueMemberMatch" {
+		t.Fatalf("uniqueMember = %#v, found %t", uniqueMember, found)
+	}
+	group, found := registry.ObjectClass("groupOfUniqueNames")
+	if !found || group.OID != "2.5.6.17" {
+		t.Fatalf("groupOfUniqueNames = %#v, found %t", group, found)
+	}
+	if !registry.IsDNReferenceValued("member") ||
+		!registry.IsDNReferenceValued("uniqueMember") ||
+		registry.IsDNValued("uniqueMember") ||
+		registry.IsDNReferenceValued("cn") {
+		t.Fatal("DN reference syntax classification is incorrect")
+	}
+
+	valid := []string{
+		"cn=Alice,dc=example,dc=com",
+		"cn=Alice,dc=example,dc=com#'0101'B",
+		"#'1'B",
+		"dc=example,dc=com#''B",
+		// OpenLDAP treats an invalid trailing BitString as part of the DN.
+		"cn=Alice,dc=example,dc=com#'1234'B",
+		"cn=Alice,dc=example,dc=com#'12AB'B",
+		"cn=Alice,dc=example,dc=com#0'B",
+		"cn=Alice,dc=example,dc=com#'0B",
+	}
+	for _, value := range valid {
+		entry := directory.Entry{
+			DN: "cn=group,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: byteValues("groupOfUniqueNames")},
+				{Description: "cn", Values: byteValues("group")},
+				{Description: "uniqueMember", Values: byteValues(value)},
+			},
+		}
+		if err := registry.ValidateEntry(entry); err != nil {
+			t.Errorf("ValidateEntry(uniqueMember=%q): %v", value, err)
+		}
+	}
+	standardGroup := directory.Entry{
+		DN: "cn=full group,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("groupOfUniqueNames")},
+			{Description: "cn", Values: byteValues("full group")},
+			{Description: "uniqueMember", Values: byteValues("cn=Alice,dc=example,dc=com")},
+			{Description: "businessCategory", Values: byteValues("Engineering")},
+			{Description: "seeAlso", Values: byteValues("ou=people,dc=example,dc=com")},
+			{Description: "owner", Values: byteValues("cn=Owner,dc=example,dc=com")},
+			{Description: "ou", Values: byteValues("Groups")},
+			{Description: "o", Values: byteValues("Example")},
+			{Description: "description", Values: byteValues("Standard optional attributes")},
+		},
+	}
+	if err := registry.ValidateEntry(standardGroup); err != nil {
+		t.Fatalf("ValidateEntry(group optional attributes): %v", err)
+	}
+
+	invalid := []string{
+		"not a DN",
+		"not a DN#'2'B",
+		"cn",
+	}
+	for _, value := range invalid {
+		entry := directory.Entry{
+			DN: "cn=group,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: byteValues("groupOfUniqueNames")},
+				{Description: "cn", Values: byteValues("group")},
+				{Description: "uniqueMember", Values: byteValues(value)},
+			},
+		}
+		assertViolation(t, registry.ValidateEntry(entry), ViolationSyntax)
+	}
+}
+
+func TestUniqueMemberMatch(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	tests := []struct {
+		name        string
+		left, right string
+		match       bool
+	}{
+		{
+			name:  "equivalent DN",
+			left:  "CN=Alice,DC=example,DC=com",
+			right: "cn=alice,dc=example,dc=com",
+			match: true,
+		},
+		{
+			name:  "same UID",
+			left:  "CN=Alice,DC=example,DC=com#'0101'B",
+			right: "cn=alice,dc=example,dc=com#'0101'B",
+			match: true,
+		},
+		{
+			name:  "different UID",
+			left:  "cn=alice,dc=example,dc=com#'0'B",
+			right: "cn=alice,dc=example,dc=com#'1'B",
+		},
+		{
+			name:  "UID presence differs",
+			left:  "cn=alice,dc=example,dc=com#'1'B",
+			right: "cn=alice,dc=example,dc=com",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			comparison, err := registry.Compare(
+				"uniqueMember",
+				"",
+				[]byte(test.left),
+				[]byte(test.right),
+			)
+			if err != nil {
+				t.Fatalf("Compare(): %v", err)
+			}
+			if (comparison == 0) != test.match {
+				t.Fatalf("comparison = %d, want match %t", comparison, test.match)
+			}
+		})
+	}
+
+	normalized, err := registry.NormalizeEqualityValue(
+		"uniqueMember",
+		[]byte("CN=Alice,DC=example,DC=com#'0101'B"),
+	)
+	if err != nil {
+		t.Fatalf("NormalizeEqualityValue(uniqueMember): %v", err)
+	}
+	if string(normalized) != "cn=alice,dc=example,dc=com#'0101'B" {
+		t.Fatalf("normalized uniqueMember = %q", normalized)
+	}
+}
+
 func TestRegistryCloneIsIndependent(t *testing.T) {
 	t.Parallel()
 

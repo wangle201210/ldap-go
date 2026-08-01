@@ -85,7 +85,10 @@ slapd. A second case converts a real slapd configuration, exports its
 verifies that uniqueness is enforced after ldap-go starts.
 The memberof/refint cases compare group and member Add/Modify/Delete/ModifyDN,
 dangling errors, Relax, AddCheck, exact reference repair, subtree rename, and
-Nothing placeholders with slapd. A third case exports real
+Nothing placeholders with slapd. A separate `groupOfUniqueNames` case compares
+Name And Optional UID equality, no-UID reverse membership and AddCheck, and the
+OpenLDAP behavior that UID-bearing values do not follow member ModifyDN. A
+third case exports real
 `olcMemberOfConfig` and `olcRefintConfig` entries with `slapcat -n 0`, imports
 them unchanged, and verifies both overlays after ldap-go starts.
 The DDS cases run Add, live-TTL Search, Refresh, Modify, ModifyDN, object-count,

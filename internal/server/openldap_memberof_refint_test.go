@@ -96,6 +96,72 @@ func TestOpenLDAPReferenceMemberOfOverlay(t *testing.T) {
 	)
 }
 
+func TestOpenLDAPReferenceMemberOfUniqueNames(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
+		t,
+		tools,
+		[]string{memberOfUniqueNamesReferenceOverlayConfiguration()},
+		"",
+		"",
+		"",
+	)
+	defer stopOpenLDAP()
+	openLDAP := bindOverlayReferenceClient(t, openLDAPURI, "secret")
+	defer openLDAP.Close()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	ldapGoAddress, stopLDAPGo := startServer(t, store, Config{
+		Schema:       memberOfTestRegistry(t),
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stopLDAPGo()
+	ldapGo := bindConstraintClient(
+		t,
+		ldapGoAddress,
+		"cn=admin,dc=example,dc=com",
+		"admin-secret",
+	)
+	defer ldapGo.Close()
+	if err := ldapGo.Add(memberOfPersonAdd("bob")); err != nil {
+		t.Fatalf("Add(ldap-go uniqueMember seed bob): %v", err)
+	}
+	configClient := bindConstraintClient(t, ldapGoAddress, "cn=config", "config-secret")
+	defer configClient.Close()
+	overlay := ldap.NewAddRequest(testMemberOfOverlayDN, nil)
+	overlay.Attribute("objectClass", []string{"olcOverlayConfig", "olcMemberOfConfig"})
+	overlay.Attribute("olcOverlay", []string{"{0}memberof"})
+	overlay.Attribute("olcMemberOfGroupOC", []string{"groupOfUniqueNames"})
+	overlay.Attribute("olcMemberOfMemberAD", []string{"uniqueMember"})
+	overlay.Attribute("olcMemberOfRefInt", []string{"TRUE"})
+	overlay.Attribute("olcMemberOfAddCheck", []string{"TRUE"})
+	if err := configClient.Add(overlay); err != nil {
+		t.Fatalf("Add(ldap-go uniqueMember memberof overlay): %v", err)
+	}
+
+	openLDAPOutcome := runMemberOfUniqueNamesReferenceScenario(t, openLDAP)
+	ldapGoOutcome := runMemberOfUniqueNamesReferenceScenario(t, ldapGo)
+	assertOverlayReferenceOutcome(
+		t,
+		"memberof uniqueMember",
+		openLDAPOutcome,
+		ldapGoOutcome,
+		[]uint16{
+			ldap.LDAPResultSuccess,
+			ldap.LDAPResultSuccess,
+			ldap.LDAPResultCompareTrue,
+			ldap.LDAPResultCompareFalse,
+			ldap.LDAPResultSuccess,
+			ldap.LDAPResultSuccess,
+			ldap.LDAPResultSuccess,
+			ldap.LDAPResultSuccess,
+		},
+	)
+}
+
 func TestOpenLDAPReferenceRefintOverlay(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
 	openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
@@ -439,6 +505,91 @@ func runMemberOfReferenceScenario(
 	return outcome
 }
 
+func runMemberOfUniqueNamesReferenceScenario(
+	t *testing.T,
+	client *ldap.Conn,
+) overlayReferenceOutcome {
+	t.Helper()
+
+	var outcome overlayReferenceOutcome
+	groupsDN := "ou=groups,dc=example,dc=com"
+	outcome.codes = append(
+		outcome.codes,
+		overlayLDAPResultCode(t, client.Add(memberOfOUAdd(groupsDN, "groups"))),
+	)
+	aliceDN := "uid=alice,ou=people,dc=example,dc=com"
+	bobDN := "uid=bob,ou=people,dc=example,dc=com"
+	bobWithUID := bobDN + "#'1'B"
+	groupDN := "cn=unique," + groupsDN
+	outcome.codes = append(
+		outcome.codes,
+		overlayLDAPResultCode(t, client.Add(memberOfGroupAdd(
+			groupDN,
+			"groupOfUniqueNames",
+			"uniqueMember",
+			aliceDN,
+			bobWithUID,
+		))),
+	)
+	outcome.states = append(
+		outcome.states,
+		ldapDNAttributeSignature(t, client, aliceDN, "memberOf"),
+		ldapDNAttributeSignature(t, client, bobDN, "memberOf"),
+		ldapStringAttributeSignature(t, client, groupDN, "uniqueMember"),
+	)
+	outcome.codes = append(
+		outcome.codes,
+		overlayCompareResultCode(
+			t,
+			client,
+			groupDN,
+			"uniqueMember",
+			"UID=BOB,OU=people,DC=example,DC=com#'1'B",
+		),
+		overlayCompareResultCode(t, client, groupDN, "uniqueMember", bobDN),
+	)
+
+	renamedAliceDN := "uid=alice-unique,ou=people,dc=example,dc=com"
+	outcome.codes = append(
+		outcome.codes,
+		overlayLDAPResultCode(t, client.ModifyDN(
+			ldap.NewModifyDNRequest(aliceDN, "uid=alice-unique", true, ""),
+		)),
+	)
+	outcome.states = append(
+		outcome.states,
+		ldapStringAttributeSignature(t, client, groupDN, "uniqueMember"),
+		ldapDNAttributeSignature(t, client, renamedAliceDN, "memberOf"),
+	)
+
+	renamedBobDN := "uid=bob-unique,ou=people,dc=example,dc=com"
+	outcome.codes = append(
+		outcome.codes,
+		overlayLDAPResultCode(t, client.ModifyDN(
+			ldap.NewModifyDNRequest(bobDN, "uid=bob-unique", true, ""),
+		)),
+	)
+	outcome.states = append(
+		outcome.states,
+		ldapStringAttributeSignature(t, client, groupDN, "uniqueMember"),
+		ldapDNAttributeSignature(t, client, renamedBobDN, "memberOf"),
+	)
+
+	futureDN := "uid=unique-future,ou=people,dc=example,dc=com"
+	addFuture := ldap.NewModifyRequest(groupDN, nil)
+	addFuture.Add("uniqueMember", []string{futureDN})
+	outcome.codes = append(
+		outcome.codes,
+		overlayLDAPResultCode(t, client.Modify(addFuture)),
+		overlayLDAPResultCode(t, client.Add(memberOfPersonAdd("unique-future"))),
+	)
+	outcome.states = append(
+		outcome.states,
+		ldapDNAttributeSignature(t, client, futureDN, "memberOf"),
+	)
+	return outcome
+}
+
 const refintReferencePlaceholderDN = "cn=placeholder,dc=example,dc=com"
 
 func runRefintReferenceScenario(
@@ -553,6 +704,14 @@ func memberOfReferenceOverlayConfiguration() string {
 		"memberof-addcheck TRUE"
 }
 
+func memberOfUniqueNamesReferenceOverlayConfiguration() string {
+	return "memberof\n" +
+		"memberof-group-oc groupOfUniqueNames\n" +
+		"memberof-member-ad uniqueMember\n" +
+		"memberof-refint TRUE\n" +
+		"memberof-addcheck TRUE"
+}
+
 func refintReferenceOverlayConfiguration() string {
 	return "refint\n" +
 		"refint_attributes member\n" +
@@ -586,6 +745,24 @@ func overlayLDAPResultCode(t *testing.T, err error) uint16 {
 		t.Fatalf("LDAP operation returned non-LDAP error: %v", err)
 	}
 	return ldapErr.ResultCode
+}
+
+func overlayCompareResultCode(
+	t *testing.T,
+	client *ldap.Conn,
+	dn,
+	attribute,
+	value string,
+) uint16 {
+	t.Helper()
+	matched, err := client.Compare(dn, attribute, value)
+	if err != nil {
+		return overlayLDAPResultCode(t, err)
+	}
+	if matched {
+		return ldap.LDAPResultCompareTrue
+	}
+	return ldap.LDAPResultCompareFalse
 }
 
 func assertOverlayReferenceOutcome(
@@ -673,6 +850,35 @@ func ldapDNAttributeSignature(
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, "|")
+}
+
+func ldapStringAttributeSignature(
+	t *testing.T,
+	client *ldap.Conn,
+	dn,
+	attribute string,
+) string {
+	t.Helper()
+	result, err := client.Search(ldap.NewSearchRequest(
+		dn,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{attribute},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("Search(%s, %s): %v", dn, attribute, err)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatalf("Search(%s, %s) returned %d entries", dn, attribute, len(result.Entries))
+	}
+	values := result.Entries[0].GetAttributeValues(attribute)
+	sort.Strings(values)
+	return strings.Join(values, "|")
 }
 
 func waitLDAPDNAttribute(

@@ -1558,18 +1558,6 @@ func proxyAuthorizationTestSchema(t *testing.T) *schema.Registry {
 	if err != nil {
 		t.Fatalf("NewBuiltinRegistry(): %v", err)
 	}
-	if err := registry.ParseAndRegisterAttributeType(
-		"( 2.5.4.31 NAME 'member' EQUALITY distinguishedNameMatch SYNTAX " +
-			schema.SyntaxDistinguishedName + " )",
-	); err != nil {
-		t.Fatalf("register member attribute: %v", err)
-	}
-	if err := registry.ParseAndRegisterObjectClass(
-		"( 2.5.6.9 NAME 'groupOfNames' SUP top STRUCTURAL " +
-			"MUST ( member $ cn ) )",
-	); err != nil {
-		t.Fatalf("register groupOfNames object class: %v", err)
-	}
 	return registry
 }
 

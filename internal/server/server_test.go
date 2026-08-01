@@ -660,12 +660,6 @@ func TestLDAPClientFilterACLUsesAssertionAndUndefined(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBuiltinRegistry(): %v", err)
 	}
-	if err := registry.ParseAndRegisterAttributeType(
-		"( 2.5.4.31 NAME 'member' EQUALITY distinguishedNameMatch SYNTAX " +
-			schema.SyntaxDistinguishedName + " )",
-	); err != nil {
-		t.Fatalf("register member schema: %v", err)
-	}
 	address, stop := startServer(t, store, Config{Schema: registry})
 	defer stop()
 

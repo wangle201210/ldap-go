@@ -85,8 +85,12 @@ individual group and member ModifyDN, dangling-reference modes, AddCheck,
 member-side referential integrity, exact and subtree refint repair, and
 `olcRefintNothing` run in the same storage transaction as the initiating
 write. Online changes, rollback, restart, real `slapcat -n 0` import, and
-same-sequence OpenLDAP 2.6.13 differentials pass. Global instances and
-name-and-optional-UID attributes remain pending.
+same-sequence OpenLDAP 2.6.13 differentials pass. The built-in Name And
+Optional UID syntax, `uniqueMemberMatch`, standard group schema, and
+`groupOfUniqueNames` memberof behavior also pass a direct differential.
+UID-bearing `uniqueMember` values are stored and matched but, like OpenLDAP's
+memberof overlay, do not create reverse links. Global instances,
+cross-overlay ordering, and replicated overlay topologies remain pending.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

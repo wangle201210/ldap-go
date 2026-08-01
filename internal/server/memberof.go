@@ -259,8 +259,11 @@ func validateMemberOfSchema(
 			if _, found := registry.AttributeType(attribute); !found {
 				return fmt.Errorf("undefined attribute type %q", attribute)
 			}
-			if !registry.IsDNValued(attribute) {
-				return fmt.Errorf("attribute %q is not DN-valued", attribute)
+			if !registry.IsDNReferenceValued(attribute) {
+				return fmt.Errorf(
+					"attribute %q is not DN or nameAndOptionalUID-valued",
+					attribute,
+				)
 			}
 		}
 	}

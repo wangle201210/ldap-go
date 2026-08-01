@@ -641,6 +641,22 @@ func (registry *Registry) IsDNValued(attributeName string) bool {
 	return err == nil && effective.Syntax == SyntaxDistinguishedName
 }
 
+func (registry *Registry) IsDNReferenceValued(attributeName string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return false
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return false
+	}
+	return effective.Syntax == SyntaxDistinguishedName ||
+		effective.Syntax == SyntaxNameAndOptionalUID
+}
+
 func (registry *Registry) IsCollective(attributeName string) bool {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -2121,6 +2137,13 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if _, err := directory.ParseDN(string(value)); err != nil {
 			return errors.New("value is not a distinguished name")
 		}
+	case SyntaxNameAndOptionalUID:
+		dn, _, _ := splitNameAndOptionalUID(value)
+		if len(dn) > 0 {
+			if _, err := directory.ParseDN(string(dn)); err != nil {
+				return errors.New("value is not a name and optional UID")
+			}
+		}
 	case SyntaxSubtreeSpecification:
 		if _, err := ParseSubtreeSpecification(string(value)); err != nil {
 			return fmt.Errorf("value is not a valid subtree specification: %w", err)
@@ -2333,6 +2356,8 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			return 0, errors.New("distinguishedNameMatch received invalid DN")
 		}
 		return strings.Compare(leftDN.Key(), rightDN.Key()), nil
+	case "uniquemembermatch":
+		return compareUniqueMember(left, right)
 	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
 	case "csnmatch", "csnorderingmatch":
@@ -2384,6 +2409,8 @@ func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 			return nil, errors.New("distinguishedNameMatch received invalid DN")
 		}
 		return []byte(dn.Key()), nil
+	case "uniquemembermatch":
+		return normalizeUniqueMember(value)
 	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
 		return bytes.ToLower(value), nil
 	case "csnmatch", "csnorderingmatch":
@@ -2421,6 +2448,7 @@ func supportedMatchingRule(rule string) bool {
 		"integerfirstcomponentmatch",
 		"booleanmatch",
 		"distinguishednamematch",
+		"uniquemembermatch",
 		"uuidmatch",
 		"uuidorderingmatch",
 		"generalizedtimematch",
@@ -2444,6 +2472,8 @@ func canonicalMatchingRule(rule string) string {
 		return "objectidentifierfirstcomponentmatch"
 	case "2.5.13.1":
 		return "distinguishednamematch"
+	case "2.5.13.23":
+		return "uniquemembermatch"
 	case "2.5.13.2":
 		return "caseignorematch"
 	case "2.5.13.3":
@@ -2497,6 +2527,65 @@ func canonicalMatchingRule(rule string) string {
 	default:
 		return normalized
 	}
+}
+
+func splitNameAndOptionalUID(value []byte) (dn, uid []byte, hasUID bool) {
+	separator := bytes.LastIndexByte(value, '#')
+	if separator < 0 || !validBitString(value[separator+1:]) {
+		return value, nil, false
+	}
+	return value[:separator], value[separator+1:], true
+}
+
+func validBitString(value []byte) bool {
+	if len(value) < 3 || value[0] != '\'' ||
+		value[len(value)-2] != '\'' || value[len(value)-1] != 'B' {
+		return false
+	}
+	for _, character := range value[1 : len(value)-2] {
+		if character != '0' && character != '1' {
+			return false
+		}
+	}
+	return true
+}
+
+func compareUniqueMember(left, right []byte) (int, error) {
+	leftDNValue, leftUID, leftHasUID := splitNameAndOptionalUID(left)
+	rightDNValue, rightUID, rightHasUID := splitNameAndOptionalUID(right)
+	switch {
+	case leftHasUID && rightHasUID:
+		if len(leftUID) != len(rightUID) {
+			return len(leftUID) - len(rightUID), nil
+		}
+		if comparison := bytes.Compare(leftUID, rightUID); comparison != 0 {
+			return comparison, nil
+		}
+	case leftHasUID:
+		return -1, nil
+	case rightHasUID:
+		return 1, nil
+	}
+	leftDN, leftErr := directory.ParseDN(string(leftDNValue))
+	rightDN, rightErr := directory.ParseDN(string(rightDNValue))
+	if leftErr != nil || rightErr != nil {
+		return 0, errors.New("uniqueMemberMatch received invalid name and optional UID")
+	}
+	return strings.Compare(leftDN.Key(), rightDN.Key()), nil
+}
+
+func normalizeUniqueMember(value []byte) ([]byte, error) {
+	dnValue, uid, hasUID := splitNameAndOptionalUID(value)
+	dn, err := directory.ParseDN(string(dnValue))
+	if err != nil {
+		return nil, errors.New("uniqueMemberMatch received invalid name and optional UID")
+	}
+	normalized := []byte(dn.Key())
+	if hasUID {
+		normalized = append(normalized, '#')
+		normalized = append(normalized, uid...)
+	}
+	return normalized, nil
 }
 
 func schemaDescriptionFirstComponent(value []byte) (string, error) {

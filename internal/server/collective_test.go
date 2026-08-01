@@ -326,12 +326,6 @@ func TestCollectiveAttributesParticipateInMemberACL(t *testing.T) {
 		t.Fatalf("NewBuiltinRegistry(): %v", err)
 	}
 	if err := registry.ParseAndRegisterAttributeType(
-		"( 2.5.4.31 NAME 'member' EQUALITY distinguishedNameMatch SYNTAX " +
-			schema.SyntaxDistinguishedName + " )",
-	); err != nil {
-		t.Fatalf("register member: %v", err)
-	}
-	if err := registry.ParseAndRegisterAttributeType(
 		"( 1.2.3.5 NAME 'c-member' SUP member COLLECTIVE )",
 	); err != nil {
 		t.Fatalf("register c-member: %v", err)

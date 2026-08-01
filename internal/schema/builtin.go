@@ -15,6 +15,7 @@ const (
 	SyntaxGeneralizedTime        = "1.3.6.1.4.1.1466.115.121.1.24"
 	SyntaxIA5String              = "1.3.6.1.4.1.1466.115.121.1.26"
 	SyntaxInteger                = "1.3.6.1.4.1.1466.115.121.1.27"
+	SyntaxNameAndOptionalUID     = "1.3.6.1.4.1.1466.115.121.1.34"
 	SyntaxNumericString          = "1.3.6.1.4.1.1466.115.121.1.36"
 	SyntaxNameForm               = "1.3.6.1.4.1.1466.115.121.1.35"
 	SyntaxObjectClass            = "1.3.6.1.4.1.1466.115.121.1.37"
@@ -81,6 +82,7 @@ var builtinAttributeTypes = []string{
 	"( 2.5.4.8 NAME ( 'st' 'stateOrProvinceName' ) SUP name )",
 	"( 2.5.4.9 NAME ( 'street' 'streetAddress' ) EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{128} )",
 	"( 2.5.4.10 NAME ( 'o' 'organizationName' ) SUP name )",
+	"( 2.5.4.15 NAME 'businessCategory' DESC 'RFC2256: business category' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{128} )",
 	"( 2.5.4.16 NAME 'postalAddress' EQUALITY caseIgnoreListMatch SUBSTR caseIgnoreListSubstringsMatch SYNTAX " + SyntaxPostalAddress + " )",
 	"( 2.5.4.17 NAME 'postalCode' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{40} )",
 	"( 2.5.4.18 NAME 'postOfficeBox' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{40} )",
@@ -103,6 +105,10 @@ var builtinAttributeTypes = []string{
 	"( 2.5.4.23.1 NAME 'c-FacsimileTelephoneNumber' SUP facsimileTelephoneNumber COLLECTIVE )",
 	"( 2.5.4.25.1 NAME 'c-InternationalISDNNumber' SUP internationalISDNNumber COLLECTIVE )",
 	"( 2.5.4.1 NAME ( 'aliasedObjectName' 'aliasedEntryName' ) DESC 'RFC4512: name of aliased object' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE )",
+	"( 2.5.4.31 NAME 'member' DESC 'RFC4519: member of a group' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " )",
+	"( 2.5.4.32 NAME 'owner' DESC 'RFC2256: owner of the object' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " )",
+	"( 2.5.4.34 NAME 'seeAlso' DESC 'RFC4519: DN of related object' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " )",
+	"( 2.5.4.50 NAME 'uniqueMember' DESC 'RFC4519: unique member of a group' EQUALITY uniqueMemberMatch SYNTAX " + SyntaxNameAndOptionalUID + " )",
 	"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' ) EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " )",
 	"( 0.9.2342.19200300.100.1.25 NAME ( 'dc' 'domainComponent' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
 	"( 0.9.2342.19200300.100.1.3 NAME ( 'mail' 'rfc822Mailbox' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " )",
@@ -155,6 +161,8 @@ var builtinObjectClasses = []string{
 	"( 2.5.6.7 NAME 'organizationalPerson' SUP person STRUCTURAL MAY ( ou $ mail ) )",
 	"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' SUP organizationalPerson STRUCTURAL MAY ( uid $ mail $ jpegPhoto $ givenName ) )",
 	"( 2.5.6.8 NAME 'organizationalRole' SUP top STRUCTURAL MUST cn MAY ( ou $ description ) )",
+	"( 2.5.6.9 NAME 'groupOfNames' SUP top STRUCTURAL MUST ( member $ cn ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )",
+	"( 2.5.6.17 NAME 'groupOfUniqueNames' SUP top STRUCTURAL MUST ( uniqueMember $ cn ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )",
 	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ description ) )",
 	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITStructureRules $ dITContentRules $ nameForms ) )",
 	"( 2.5.17.0 NAME 'subentry' DESC 'RFC3672: subentry' SUP top STRUCTURAL MUST ( cn $ subtreeSpecification ) )",

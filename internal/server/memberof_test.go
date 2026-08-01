@@ -111,7 +111,7 @@ func TestValidateMemberOfSchema(t *testing.T) {
 	if err := validateMemberOfSchema(
 		registry,
 		[]memberOfRuntimeConfiguration{configuration},
-	); err == nil || !strings.Contains(err.Error(), "not DN-valued") {
+	); err == nil || !strings.Contains(err.Error(), "not DN or nameAndOptionalUID-valued") {
 		t.Fatalf("non-DN member attribute error = %v", err)
 	}
 	configuration.memberAttribute = "undefinedMember"
@@ -217,8 +217,6 @@ func memberOfTestRegistry(t *testing.T) *schema.Registry {
 		t.Fatalf("NewBuiltinRegistry(): %v", err)
 	}
 	for _, definition := range []string{
-		"( 2.5.4.31 NAME 'member' EQUALITY distinguishedNameMatch SYNTAX " +
-			schema.SyntaxDistinguishedName + " )",
 		"( 1.3.6.1.4.1.99999.1.1 NAME 'memberA' EQUALITY distinguishedNameMatch SYNTAX " +
 			schema.SyntaxDistinguishedName + " )",
 		"( 1.3.6.1.4.1.99999.1.2 NAME 'memberOfA' EQUALITY distinguishedNameMatch SYNTAX " +
@@ -232,7 +230,6 @@ func memberOfTestRegistry(t *testing.T) *schema.Registry {
 		}
 	}
 	for _, definition := range []string{
-		"( 2.5.6.9 NAME 'groupOfNames' SUP top STRUCTURAL MUST ( cn $ member ) )",
 		"( 1.3.6.1.4.1.99999.2.1 NAME 'groupA' SUP top STRUCTURAL MUST ( cn $ memberA ) )",
 		"( 1.3.6.1.4.1.99999.2.2 NAME 'refHolder' SUP top AUXILIARY MAY managerRef )",
 	} {

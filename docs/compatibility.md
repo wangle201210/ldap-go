@@ -115,7 +115,7 @@ rebuilt by `ldap-go`.
 | DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
 | dynlist and dynid | planned | expansion/update tests |
 | homedir | planned | lifecycle hook tests |
-| memberof and refint | partial | current `cn=config` forms, multiple instances, custom DN attributes/group classes, dangling ignore/drop/error, Relax, AddCheck, member refint, refint exact/subtree repair and Nothing placeholders, Add/Modify/Delete/ModifyDN, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; global overlays, nameAndOptionalUID attributes, cross-overlay ordering, replication topologies, and fault-path parity remain |
+| memberof and refint | partial | current `cn=config` forms, multiple instances, custom DN/nameAndOptionalUID attributes and group classes, `groupOfNames`/`groupOfUniqueNames`, dangling ignore/drop/error, Relax, AddCheck, member refint, refint exact/subtree repair and Nothing placeholders, Add/Modify/Delete/ModifyDN, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; global overlays, cross-overlay ordering, replication topologies, and fault-path parity remain |
 | pbind and remoteauth | planned | remote authentication tests |
 | pcache | planned | cache correctness and invalidation tests |
 | ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, chain-backed `ppolicy_forward_updates`, and OpenLDAP 2.6.13 differentials pass; native checker-module execution remains |
@@ -299,6 +299,16 @@ Member Delete and ModifyDN update groups when `olcMemberOfRefInt` is enabled.
 Relax bypasses dangling checks, self references are ignored, and AddCheck
 discovers groups that predate a newly added member.
 
+The built-in core schema includes `member`, `uniqueMember`, `groupOfNames`,
+`groupOfUniqueNames`, and their standard optional group attributes. Name And
+Optional UID validation and `uniqueMemberMatch` follow OpenLDAP's trailing
+BitString detection and DN normalization. A `groupOfUniqueNames` differential
+also covers Compare, AddCheck, and member ModifyDN. As documented by OpenLDAP's
+memberof implementation, a `uniqueMember` value with an actual optional UID is
+valid and matchable but is not resolved as a member DN; it therefore does not
+gain `memberOf` or follow that entry's ModifyDN. Values without the optional UID
+participate normally.
+
 The database-local `refint` overlay loads multiple `olcRefintConfig` instances,
 tokenizes all `olcRefintAttribute` values, and honors `olcRefintNothing` and
 `olcRefintModifiersName`. Delete and ModifyDN repair exact references, while a
@@ -311,10 +321,9 @@ matching the overlay's non-replicated internal modifications.
 Online configuration validation is atomic, survives restart, and accepts real
 `slapcat -n 0` entries unchanged. TCP lifecycle tests and same-operation
 OpenLDAP 2.6.13 differentials cover the normal result and data states. Global
-overlay instances and the name-and-optional-UID syntax used by attributes such
-as `uniqueMember` are not implemented. Cross-overlay order, replicated
-provider/consumer configurations, and injected dependent-update failures need
-broader parity tests, so this row remains `partial`.
+overlay instances, cross-overlay order, replicated provider/consumer
+configurations, and injected dependent-update failures need broader parity
+tests, so this row remains `partial`.
 
 RFC 2589 and OpenLDAP's DDS overlay are enabled per database by
 `olcOverlay=dds`. The runtime loads `olcDDSstate`, maximum, minimum, and default

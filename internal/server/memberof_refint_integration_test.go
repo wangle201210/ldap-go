@@ -234,6 +234,120 @@ func TestMemberOfOverlayOnlineLifecycleAndWrites(t *testing.T) {
 	assertStoredDNAttribute(t, store, bobDN, "memberOfA", customGroupDN)
 }
 
+func TestMemberOfOverlayGroupOfUniqueNames(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	address, stop := startServer(t, store, Config{
+		Schema:       memberOfTestRegistry(t),
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+	configClient := bindConstraintClient(t, address, "cn=config", "config-secret")
+	defer configClient.Close()
+	dataClient := bindConstraintClient(
+		t,
+		address,
+		"cn=admin,dc=example,dc=com",
+		"admin-secret",
+	)
+	defer dataClient.Close()
+
+	overlay := ldap.NewAddRequest(testMemberOfOverlayDN, nil)
+	overlay.Attribute("objectClass", []string{"olcOverlayConfig", "olcMemberOfConfig"})
+	overlay.Attribute("olcOverlay", []string{"{0}memberof"})
+	overlay.Attribute("olcMemberOfGroupOC", []string{"groupOfUniqueNames"})
+	overlay.Attribute("olcMemberOfMemberAD", []string{"uniqueMember"})
+	overlay.Attribute("olcMemberOfRefInt", []string{"TRUE"})
+	overlay.Attribute("olcMemberOfAddCheck", []string{"TRUE"})
+	if err := configClient.Add(overlay); err != nil {
+		t.Fatalf("Add(uniqueMember memberof overlay): %v", err)
+	}
+	if err := dataClient.Add(memberOfOUAdd("ou=groups,dc=example,dc=com", "groups")); err != nil {
+		t.Fatalf("Add(groups OU): %v", err)
+	}
+	if err := dataClient.Add(memberOfPersonAdd("bob")); err != nil {
+		t.Fatalf("Add(bob): %v", err)
+	}
+
+	aliceDN := "uid=alice,ou=people,dc=example,dc=com"
+	bobDN := "uid=bob,ou=people,dc=example,dc=com"
+	groupDN := "cn=unique,ou=groups,dc=example,dc=com"
+	bobWithUID := bobDN + "#'1'B"
+	group := memberOfGroupAdd(
+		groupDN,
+		"groupOfUniqueNames",
+		"uniqueMember",
+		aliceDN,
+		bobWithUID,
+	)
+	group.Attribute("businessCategory", []string{"Engineering"})
+	if err := dataClient.Add(group); err != nil {
+		t.Fatalf("Add(groupOfUniqueNames): %v", err)
+	}
+	assertStoredDNAttribute(t, store, aliceDN, "memberOf", groupDN)
+	assertStoredDNAttribute(t, store, bobDN, "memberOf")
+
+	matched, err := dataClient.Compare(
+		groupDN,
+		"uniqueMember",
+		"UID=BOB,OU=people,DC=example,DC=com#'1'B",
+	)
+	if err != nil || !matched {
+		t.Fatalf("Compare(uniqueMember equivalent DN and UID) = %t, %v", matched, err)
+	}
+	matched, err = dataClient.Compare(groupDN, "uniqueMember", bobDN)
+	if err != nil || matched {
+		t.Fatalf("Compare(uniqueMember without UID) = %t, %v", matched, err)
+	}
+
+	renamedAliceDN := "uid=alice-unique,ou=people,dc=example,dc=com"
+	if err := dataClient.ModifyDN(
+		ldap.NewModifyDNRequest(aliceDN, "uid=alice-unique", true, ""),
+	); err != nil {
+		t.Fatalf("ModifyDN(unique member): %v", err)
+	}
+	assertStoredDNAttribute(
+		t,
+		store,
+		groupDN,
+		"uniqueMember",
+		renamedAliceDN,
+		bobWithUID,
+	)
+	assertStoredDNAttribute(t, store, renamedAliceDN, "memberOf", groupDN)
+
+	renamedBobDN := "uid=bob-unique,ou=people,dc=example,dc=com"
+	if err := dataClient.ModifyDN(
+		ldap.NewModifyDNRequest(bobDN, "uid=bob-unique", true, ""),
+	); err != nil {
+		t.Fatalf("ModifyDN(unique member with UID): %v", err)
+	}
+	assertStoredDNAttribute(
+		t,
+		store,
+		groupDN,
+		"uniqueMember",
+		renamedAliceDN,
+		bobWithUID,
+	)
+	assertStoredDNAttribute(t, store, renamedBobDN, "memberOf")
+
+	futureDN := "uid=unique-future,ou=people,dc=example,dc=com"
+	addFuture := ldap.NewModifyRequest(groupDN, nil)
+	addFuture.Add("uniqueMember", []string{futureDN})
+	if err := dataClient.Modify(addFuture); err != nil {
+		t.Fatalf("Modify(add future uniqueMember): %v", err)
+	}
+	if err := dataClient.Add(memberOfPersonAdd("unique-future")); err != nil {
+		t.Fatalf("Add(future unique member): %v", err)
+	}
+	assertStoredDNAttribute(t, store, futureDN, "memberOf", groupDN)
+}
+
 func TestRefintOverlayOnlineSubtreeAndNothing(t *testing.T) {
 	t.Parallel()
 
