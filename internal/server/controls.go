@@ -26,6 +26,7 @@ const (
 	syncStateControlOID    = "1.3.6.1.4.1.4203.1.9.1.2"
 	syncDoneControlOID     = "1.3.6.1.4.1.4203.1.9.1.3"
 	syncInfoOID            = "1.3.6.1.4.1.4203.1.9.1.4"
+	valueSortControlOID    = "1.3.6.1.4.1.4203.666.5.14"
 )
 
 type requestControlSupport uint16
@@ -44,6 +45,7 @@ const (
 	supportsPasswordPolicy
 	supportsAccountUsability
 	supportsRelax
+	supportsValueSort
 )
 
 type requestControls struct {
@@ -60,6 +62,7 @@ type requestControls struct {
 	passwordPolicy   bool
 	accountUsability bool
 	relax            bool
+	valueSort        *valueSortControlRequest
 	chaining         *chainBehaviorRequest
 }
 
@@ -70,6 +73,11 @@ type readControlRequest struct {
 
 type syncRequestControl struct {
 	request  ldapwire.SyncRequestValue
+	critical bool
+}
+
+type valueSortControlRequest struct {
+	raw      bool
 	critical bool
 }
 
@@ -402,6 +410,42 @@ func parseRequestControlsWithDisallows(
 			}
 			parsed.sync = &syncRequestControl{
 				request:  request,
+				critical: control.Critical,
+			}
+		case valueSortControlOID:
+			if supported&supportsValueSort == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.valueSort != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valSort control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valSort control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valSort control value is empty",
+				)
+			}
+			raw, err := ldapwire.DecodeValueSortControlValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valSort control: flag decoding error",
+				)
+			}
+			parsed.valueSort = &valueSortControlRequest{
+				raw:      raw,
 				critical: control.Critical,
 			}
 		case passwordPolicyControlOID:

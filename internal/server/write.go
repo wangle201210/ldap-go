@@ -208,6 +208,15 @@ func (server *Server) handleAdd(
 			}
 		}
 		if !configurationWrite {
+			if err := validateValueSortAdd(
+				state.runtime,
+				*database,
+				entry,
+			); err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
 			if err := server.validateConstraintAdd(
 				state.runtime,
 				writer,
@@ -704,6 +713,16 @@ func (server *Server) modifyEntry(
 				relax,
 			)
 			if err != nil {
+				return err
+			}
+		}
+		if !configurationWrite {
+			if err := validateValueSortModify(
+				runtime,
+				database,
+				dn,
+				processedChanges,
+			); err != nil {
 				return err
 			}
 		}

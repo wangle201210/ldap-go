@@ -319,6 +319,7 @@ func (server *Server) virtualListViewEntries(
 	view *virtualListViewState,
 	start,
 	end int,
+	rawValueOrder bool,
 ) ([]directory.Entry, error) {
 	if view == nil || start < 0 || end < start || end > len(view.items) {
 		return nil, errors.New("VLV window is invalid")
@@ -376,12 +377,20 @@ func (server *Server) virtualListViewEntries(
 				false,
 			)
 			readable = projectDDSRemainingTTL(readable, entry, time.Now())
-			entries = append(entries, server.selectEntry(
+			selected := server.selectEntry(
 				state.runtime,
 				readable,
 				request.Attributes,
 				request.TypesOnly,
-			))
+			)
+			if !rawValueOrder {
+				applyValueSort(
+					state.runtime.schema,
+					valueSortRulesForDatabase(state.runtime.databases, *database),
+					&selected,
+				)
+			}
+			entries = append(entries, selected)
 		}
 		return nil
 	})

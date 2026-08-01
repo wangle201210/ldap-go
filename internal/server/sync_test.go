@@ -980,6 +980,7 @@ type rawSyncEntry struct {
 	dn             string
 	attributeCount int
 	attributeNames []string
+	attributes     map[string][]string
 	state          ldapwire.SyncStateValue
 	controls       map[string][]byte
 }
@@ -1081,14 +1082,24 @@ func readRawSyncMessage(
 			0,
 			len(operation.Children[1].Children),
 		)
+		attributes := make(
+			map[string][]string,
+			len(operation.Children[1].Children),
+		)
 		for _, attribute := range operation.Children[1].Children {
 			if len(attribute.Children) != 2 {
 				t.Fatalf("malformed PartialAttribute: %#v", attribute)
 			}
+			description := string(attribute.Children[0].Data.Bytes())
 			attributeNames = append(
 				attributeNames,
-				string(attribute.Children[0].Data.Bytes()),
+				description,
 			)
+			values := make([]string, 0, len(attribute.Children[1].Children))
+			for _, value := range attribute.Children[1].Children {
+				values = append(values, string(value.Data.Bytes()))
+			}
+			attributes[description] = values
 		}
 		control := rawLDAPResponseControl(t, packet, syncStateControlOID)
 		state, err := ldapwire.DecodeSyncStateValue(control)
@@ -1099,6 +1110,7 @@ func readRawSyncMessage(
 			dn:             string(operation.Children[0].Data.Bytes()),
 			attributeCount: len(operation.Children[1].Children),
 			attributeNames: attributeNames,
+			attributes:     attributes,
 			state:          state,
 			controls:       message.controls,
 		}

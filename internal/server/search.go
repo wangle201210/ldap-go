@@ -39,6 +39,9 @@ func (server *Server) handleSearch(
 	if runtimeSupportsSyncProvider(state.runtime.databases) {
 		controlSupport |= supportsSync
 	}
+	if runtimeSupportsValueSort(state.runtime.databases) {
+		controlSupport |= supportsValueSort
+	}
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
 		controlSupport,
@@ -392,6 +395,28 @@ func (server *Server) handleSearch(
 			)
 		}
 	}
+	if controls.valueSort != nil && !valueSortEnabledForDatabase(
+		state.runtime.databases,
+		state.runtime.databases[routes[0].databaseIndex],
+	) {
+		if controls.valueSort.critical {
+			return server.writeSearchResult(
+				connection,
+				message.ID,
+				state,
+				paging,
+				sorting,
+				nil,
+				ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"valSort is not enabled for the target database",
+				),
+				pagedSearchCursor{},
+				false,
+			)
+		}
+		controls.valueSort = nil
+	}
 	if controls.sorting != nil || vlvRequest != nil {
 		maxKeys, enabled := serverSideSortSettingsForDatabase(
 			state.runtime.databases,
@@ -591,6 +616,7 @@ func (server *Server) handleSearch(
 				view,
 				start,
 				end,
+				controls.valueSort != nil && controls.valueSort.raw,
 			)
 			if err != nil {
 				discardVirtualListView(state, view)
@@ -643,6 +669,7 @@ func (server *Server) handleSearch(
 			request,
 			paging,
 			deadline,
+			controls.valueSort != nil && controls.valueSort.raw,
 		)
 		if err != nil {
 			clearPagedSearch(state)
@@ -1036,6 +1063,17 @@ func (server *Server) handleSearch(
 					request.Attributes,
 					request.TypesOnly,
 				)
+				if syncSearch == nil &&
+					(controls.valueSort == nil || !controls.valueSort.raw) {
+					applyValueSort(
+						state.runtime.schema,
+						valueSortRulesForDatabase(
+							state.runtime.databases,
+							*database,
+						),
+						&selected,
+					)
+				}
 				if !sorting.active() && len(candidates) >= entryLimit {
 					if paging != nil &&
 						paging.count+len(candidates) < limit {
@@ -1378,6 +1416,7 @@ func (server *Server) continueSortedPagedSearch(
 	request ldapwire.SearchRequest,
 	paging *pagedSearchContext,
 	deadline time.Time,
+	rawValueOrder bool,
 ) ([]directory.Entry, ldapwire.Result, bool, error) {
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	entries := make([]directory.Entry, 0, paging.size)
@@ -1450,12 +1489,20 @@ func (server *Server) continueSortedPagedSearch(
 				false,
 			)
 			readable = projectDDSRemainingTTL(readable, entry, time.Now())
-			entries = append(entries, server.selectEntry(
+			selected := server.selectEntry(
 				state.runtime,
 				readable,
 				request.Attributes,
 				request.TypesOnly,
-			))
+			)
+			if !rawValueOrder {
+				applyValueSort(
+					state.runtime.schema,
+					valueSortRulesForDatabase(state.runtime.databases, *database),
+					&selected,
+				)
+			}
+			entries = append(entries, selected)
 			sorted.offset++
 		}
 		if sorted.truncated {

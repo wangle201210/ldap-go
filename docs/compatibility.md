@@ -125,7 +125,7 @@ rebuilt by `ldap-go`.
 | syncprov | partial | cn=config gating, refresh/persist stream, configured SIDs, multi-SID cookies, `delcsn`, contextCSN checkpointing, session-log policies, Sort/VLV, glue providers, and OpenLDAP CLI interoperability pass |
 | translucent | planned | local/remote merge tests |
 | unique | partial | URI and legacy config, independent domains/multiple URIs, `strict`/`ignore`/`serialize`, Add/Modify/ModifyDN, managed Relax, atomic concurrency, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering and auditing pre-existing duplicates remain |
-| valsort | planned | value sorting tests |
+| valsort | partial | alpha/numeric/weighted ordering, hidden raw control, Add/Modify validation, Paging/Sort/VLV, Sync bypass, online/restart, real `slapcat` import, and OpenLDAP 2.6.13 differential pass; global/glue and cross-overlay ordering matrices remain |
 | autoca and OTP-related contrib modules | planned | module-specific compatibility tests |
 
 ## Replication and operations
@@ -287,6 +287,31 @@ on validation errors and survive restart. Concurrent TCP writes, real
 `slapcat -n 0` configuration import, and a same-sequence OpenLDAP 2.6.13 slapd
 differential pass. Like slapd, enabling the overlay does not retroactively scan
 or repair duplicate values already present.
+
+OpenLDAP's single-instance `valsort` overlay loads ordered
+`olcValSortAttr` values in the `<attribute> <dn> <sort-type> [secondary]`
+form. Alpha and numeric ascending/descending rules use the attribute's
+normalized equality value; numeric rules are restricted to Integer and
+Numeric String syntax. Weighted rules parse C-style base-zero integer prefixes,
+sort by weight with an optional secondary rule, and remove the prefix from
+Search responses. Add and Modify reject missing or malformed weights with the
+same result codes and diagnostics as slapd. Existing malformed data retains
+slapd's observable partial-prefix-removal behavior, and rules for single-valued
+attribute types are accepted but ignored.
+
+Sorting is response-only and leaves stored and exported values unchanged. The
+hidden `1.3.6.1.4.1.4203.666.5.14` control selects raw values, is parsed with
+strict BER handling, and is intentionally omitted from Root DSE
+`supportedControl`. LDAP Sync responses bypass the overlay. Ordinary Search,
+sorted paging, and both initial and context-backed VLV windows apply the same
+rule set. Online configuration changes validate atomically, roll back on
+failure, and survive restart. A process-level OpenLDAP 2.6.13 differential
+covers ordering, raw values, weight validation, single-value prefix removal,
+and hidden-control discovery; a separate `slaptest -> slapcat -n 0` fixture
+imports the generated `olcValSortConfig` entry unchanged and verifies runtime
+behavior. Global/frontend overlays, glued multi-database searches, and ordering
+against other response-rewriting overlays still need broader differentials, so
+the row remains `partial`.
 
 OpenLDAP's database-local `memberof` overlay loads multiple
 `olcMemberOfConfig` instances and supports `olcMemberOfDN`, all three dangling

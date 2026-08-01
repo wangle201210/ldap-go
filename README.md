@@ -79,6 +79,13 @@ configuration, including multiple URIs plus `strict`, `ignore`, and
 requires `manage` access for Relax bypass, validates online changes atomically,
 survives restart, and imports real `slapcat -n 0` configuration LDIF. The
 storage transaction makes concurrent uniqueness checks atomic.
+OpenLDAP's `valsort` overlay loads ordered `olcValSortAttr` rules for
+ascending/descending alpha and numeric order plus weighted primary and
+secondary order. Add and Modify enforce weight syntax, Search sorts only the
+returned values while preserving stored values, the hidden raw-value control
+is accepted without being advertised, and Sync responses bypass value sorting.
+Paging, server-side Sort, VLV continuation, online changes, restart, real
+`slapcat -n 0` import, and a same-sequence OpenLDAP 2.6.13 differential pass.
 OpenLDAP's database-local `memberof` and `refint` overlays load their current
 `cn=config` attributes, including multiple instances. Group Add/Modify/Delete,
 individual group and member ModifyDN, dangling-reference modes, AddCheck,

@@ -84,6 +84,16 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 				err,
 			)
 		}
+		if err := validateValueSortSchema(
+			registry,
+			databases[index].valueSort,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s valsort overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
 		if err := validateMemberOfSchema(
 			registry,
 			databases[index].memberOf,

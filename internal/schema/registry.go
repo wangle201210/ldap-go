@@ -494,6 +494,22 @@ func (registry *Registry) AttributeType(name string) (AttributeType, bool) {
 	return *attribute, true
 }
 
+func (registry *Registry) EffectiveAttributeType(
+	name string,
+) (AttributeType, bool, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(name))]
+	if !ok {
+		return AttributeType{}, false, nil
+	}
+	effective, err := registry.effectiveAttributeType(
+		attribute,
+		make(map[string]bool),
+	)
+	return effective, true, err
+}
+
 // AttributeDescriptionSubtype reports whether candidate is the requested
 // description itself or one of its attribute-type or tagging-option subtypes.
 func (registry *Registry) AttributeDescriptionSubtype(

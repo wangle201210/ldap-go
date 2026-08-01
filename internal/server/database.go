@@ -47,6 +47,7 @@ type runtimeDatabase struct {
 	chain                 *chainRuntimeConfiguration
 	constraint            *constraintRuntimeConfiguration
 	unique                *uniqueRuntimeConfiguration
+	valueSort             *valueSortRuntimeConfiguration
 	memberOf              []memberOfRuntimeConfiguration
 	refint                []refintRuntimeConfiguration
 }
@@ -286,6 +287,7 @@ func loadRuntimeDatabaseOverlays(
 			overlayType != "chain" &&
 			overlayType != "constraint" &&
 			overlayType != "unique" &&
+			overlayType != "valsort" &&
 			overlayType != "memberof" &&
 			overlayType != "refint" {
 			return nil
@@ -315,6 +317,19 @@ func loadRuntimeDatabaseOverlays(
 		}
 		database := &databases[databaseIndex]
 		switch overlayType {
+		case "valsort":
+			if database.valueSort != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate valsort overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadValueSortRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.valueSort = &configuration
 		case "memberof":
 			configuration, err := loadMemberOfRuntimeConfiguration(
 				entry,
