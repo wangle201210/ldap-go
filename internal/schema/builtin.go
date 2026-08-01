@@ -8,6 +8,7 @@ const (
 	SyntaxAuthenticationPassword = "1.3.6.1.4.1.4203.1.1.2"
 	SyntaxAuthz                  = "1.3.6.1.4.1.4203.666.2.7"
 	SyntaxDITContentRule         = "1.3.6.1.4.1.1466.115.121.1.16"
+	SyntaxDITStructureRule       = "1.3.6.1.4.1.1466.115.121.1.17"
 	SyntaxDistinguishedName      = "1.3.6.1.4.1.1466.115.121.1.12"
 	SyntaxDirectoryString        = "1.3.6.1.4.1.1466.115.121.1.15"
 	SyntaxFacsimileTelephone     = "1.3.6.1.4.1.1466.115.121.1.22"
@@ -15,6 +16,7 @@ const (
 	SyntaxIA5String              = "1.3.6.1.4.1.1466.115.121.1.26"
 	SyntaxInteger                = "1.3.6.1.4.1.1466.115.121.1.27"
 	SyntaxNumericString          = "1.3.6.1.4.1.1466.115.121.1.36"
+	SyntaxNameForm               = "1.3.6.1.4.1.1466.115.121.1.35"
 	SyntaxObjectClass            = "1.3.6.1.4.1.1466.115.121.1.37"
 	SyntaxOID                    = "1.3.6.1.4.1.1466.115.121.1.38"
 	SyntaxOctetString            = "1.3.6.1.4.1.1466.115.121.1.40"
@@ -111,7 +113,9 @@ var builtinAttributeTypes = []string{
 	"( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' EQUALITY caseExactIA5Match SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
 	"( 2.5.21.5 NAME 'attributeTypes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxAttributeType + " USAGE directoryOperation )",
 	"( 2.5.21.6 NAME 'objectClasses' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxObjectClass + " USAGE directoryOperation )",
+	"( 2.5.21.1 NAME 'dITStructureRules' EQUALITY integerFirstComponentMatch SYNTAX " + SyntaxDITStructureRule + " USAGE directoryOperation )",
 	"( 2.5.21.2 NAME 'dITContentRules' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxDITContentRule + " USAGE directoryOperation )",
+	"( 2.5.21.7 NAME 'nameForms' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxNameForm + " USAGE directoryOperation )",
 	"( 2.5.18.1 NAME 'createTimestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.2 NAME 'modifyTimestamp' EQUALITY generalizedTimeMatch ORDERING generalizedTimeOrderingMatch SYNTAX " + SyntaxGeneralizedTime + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.3 NAME 'creatorsName' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
@@ -121,6 +125,7 @@ var builtinAttributeTypes = []string{
 	"( 2.5.18.7 NAME 'collectiveExclusions' DESC 'RFC3671: collective attribute exclusions' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " USAGE directoryOperation )",
 	"( 2.5.18.12 NAME 'collectiveAttributeSubentries' DESC 'RFC3671: collective attribute subentries' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.21.9 NAME 'structuralObjectClass' EQUALITY objectIdentifierMatch SYNTAX " + SyntaxOID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 2.5.21.10 NAME 'governingStructureRule' EQUALITY integerMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.5.18.10 NAME 'subschemaSubentry' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 2.16.840.1.113730.3.1.34 NAME 'ref' DESC 'RFC3296: subordinate referral URL' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " USAGE distributedOperation )",
 	"( 1.3.6.1.1.16.4 NAME 'entryUUID' EQUALITY UUIDMatch ORDERING UUIDOrderingMatch SYNTAX " + SyntaxUUID + " SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )",
@@ -149,7 +154,7 @@ var builtinObjectClasses = []string{
 	"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' SUP organizationalPerson STRUCTURAL MAY ( uid $ mail $ jpegPhoto ) )",
 	"( 2.5.6.8 NAME 'organizationalRole' SUP top STRUCTURAL MUST cn MAY ( ou $ description ) )",
 	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ description ) )",
-	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITContentRules ) )",
+	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITStructureRules $ dITContentRules $ nameForms ) )",
 	"( 2.5.17.0 NAME 'subentry' DESC 'RFC3672: subentry' SUP top STRUCTURAL MUST ( cn $ subtreeSpecification ) )",
 	"( 2.5.17.2 NAME 'collectiveAttributeSubentry' DESC 'RFC3671: collective attribute subentry' AUXILIARY )",
 	"( 2.5.6.1 NAME 'alias' DESC 'RFC4512: an alias' SUP top STRUCTURAL MUST aliasedObjectName )",

@@ -84,6 +84,14 @@ The DIT content-rule cases execute the same auxiliary-class and
 result codes and diagnostics. A second case generates `slapd.d` with
 `slaptest`, exports the matching schema entry with `slapcat -n 0`, imports that
 LDIF directly, and boots ldap-go from it.
+Name Form and DIT Structure Rule tests cover OpenLDAP-style `{n}` prefixes,
+RFC description round trips, dependency and cycle rejection, registry cloning,
+subschema publication and first-component filters, RDN and superior-rule
+selection, forged governing IDs, transactional Add/Modify/ModifyDN rollback,
+operational-attribute maintenance, and Relax bypass. OpenLDAP 2.6 has no slapd
+registration or enforcement path for these schema elements, so this additive
+RFC 4512 behavior has no reference-server differential; the migratable
+`olcDitContentRules` portion retains its separate slapd differential suite.
 
 The SCRAM-SHA-256 syncrepl case discovers the mechanism through the provider
 Root DSE and skips when the OpenLDAP Cyrus SASL installation has no SCRAM

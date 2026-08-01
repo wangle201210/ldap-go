@@ -15,17 +15,21 @@ import (
 )
 
 type Registry struct {
-	mu            sync.RWMutex
-	attributes    map[string]*AttributeType
-	objectClasses map[string]*ObjectClass
-	contentRules  map[string]*DITContentRule
+	mu             sync.RWMutex
+	attributes     map[string]*AttributeType
+	objectClasses  map[string]*ObjectClass
+	contentRules   map[string]*DITContentRule
+	nameForms      map[string]*NameForm
+	structureRules map[string]*DITStructureRule
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		attributes:    make(map[string]*AttributeType),
-		objectClasses: make(map[string]*ObjectClass),
-		contentRules:  make(map[string]*DITContentRule),
+		attributes:     make(map[string]*AttributeType),
+		objectClasses:  make(map[string]*ObjectClass),
+		contentRules:   make(map[string]*DITContentRule),
+		nameForms:      make(map[string]*NameForm),
+		structureRules: make(map[string]*DITStructureRule),
 	}
 }
 
@@ -63,6 +67,26 @@ func (registry *Registry) Clone() *Registry {
 			contentRuleCopies[contentRule] = copy
 		}
 		cloned.contentRules[key] = copy
+	}
+	nameFormCopies := make(map[*NameForm]*NameForm)
+	for key, nameForm := range registry.nameForms {
+		copy, exists := nameFormCopies[nameForm]
+		if !exists {
+			value := cloneNameForm(*nameForm)
+			copy = &value
+			nameFormCopies[nameForm] = copy
+		}
+		cloned.nameForms[key] = copy
+	}
+	structureRuleCopies := make(map[*DITStructureRule]*DITStructureRule)
+	for key, structureRule := range registry.structureRules {
+		copy, exists := structureRuleCopies[structureRule]
+		if !exists {
+			value := cloneDITStructureRule(*structureRule)
+			copy = &value
+			structureRuleCopies[structureRule] = copy
+		}
+		cloned.structureRules[key] = copy
 	}
 	return cloned
 }
@@ -116,6 +140,21 @@ func cloneDITContentRule(contentRule DITContentRule) DITContentRule {
 	contentRule.Not = append([]string(nil), contentRule.Not...)
 	contentRule.Extensions = cloneExtensions(contentRule.Extensions)
 	return contentRule
+}
+
+func cloneNameForm(nameForm NameForm) NameForm {
+	nameForm.Names = append([]string(nil), nameForm.Names...)
+	nameForm.Must = append([]string(nil), nameForm.Must...)
+	nameForm.May = append([]string(nil), nameForm.May...)
+	nameForm.Extensions = cloneExtensions(nameForm.Extensions)
+	return nameForm
+}
+
+func cloneDITStructureRule(structureRule DITStructureRule) DITStructureRule {
+	structureRule.Names = append([]string(nil), structureRule.Names...)
+	structureRule.Superiors = append([]int(nil), structureRule.Superiors...)
+	structureRule.Extensions = cloneExtensions(structureRule.Extensions)
+	return structureRule
 }
 
 func cloneExtensions(extensions map[string][]string) map[string][]string {
@@ -188,6 +227,66 @@ func (registry *Registry) RegisterDITContentRule(
 	copy := cloneDITContentRule(contentRule)
 	for _, key := range keys {
 		registry.contentRules[key] = &copy
+	}
+	return nil
+}
+
+func (registry *Registry) RegisterNameForm(nameForm NameForm) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	normalized, err := registry.normalizeNameForm(nameForm)
+	if err != nil {
+		return err
+	}
+	keys := schemaKeys(normalized.OID, normalized.Names)
+	if err := validateSchemaDefinitionKeys("name form", normalized.Name(), keys); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if _, exists := registry.nameForms[key]; exists {
+			return fmt.Errorf("name form %q is already registered", key)
+		}
+	}
+	copy := cloneNameForm(normalized)
+	for _, key := range keys {
+		registry.nameForms[key] = &copy
+	}
+	return nil
+}
+
+func (registry *Registry) RegisterDITStructureRule(
+	structureRule DITStructureRule,
+) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	normalized, err := registry.normalizeDITStructureRule(structureRule)
+	if err != nil {
+		return err
+	}
+	keys := structureRuleKeys(normalized.RuleID, normalized.Names)
+	if err := validateSchemaDefinitionKeys(
+		"DIT structure rule",
+		normalized.Name(),
+		keys,
+	); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if _, exists := registry.structureRules[key]; exists {
+			return fmt.Errorf(
+				"DIT structure rule %q is already registered",
+				key,
+			)
+		}
+	}
+	if err := registry.validateDITStructureRuleGraph(normalized, false); err != nil {
+		return err
+	}
+	copy := cloneDITStructureRule(normalized)
+	for _, key := range keys {
+		registry.structureRules[key] = &copy
 	}
 	return nil
 }
@@ -308,6 +407,83 @@ func (registry *Registry) UpsertDITContentRule(
 	return nil
 }
 
+func (registry *Registry) UpsertNameForm(nameForm NameForm) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	normalized, err := registry.normalizeNameForm(nameForm)
+	if err != nil {
+		return err
+	}
+	keys := schemaKeys(normalized.OID, normalized.Names)
+	if err := validateSchemaDefinitionKeys("name form", normalized.Name(), keys); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if existing, ok := registry.nameForms[key]; ok &&
+			!strings.EqualFold(existing.OID, normalized.OID) {
+			return fmt.Errorf(
+				"name form name %q conflicts with OID %q",
+				key,
+				existing.OID,
+			)
+		}
+	}
+	for key, existing := range registry.nameForms {
+		if strings.EqualFold(existing.OID, normalized.OID) {
+			delete(registry.nameForms, key)
+		}
+	}
+	copy := cloneNameForm(normalized)
+	for _, key := range keys {
+		registry.nameForms[key] = &copy
+	}
+	return nil
+}
+
+func (registry *Registry) UpsertDITStructureRule(
+	structureRule DITStructureRule,
+) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	normalized, err := registry.normalizeDITStructureRule(structureRule)
+	if err != nil {
+		return err
+	}
+	keys := structureRuleKeys(normalized.RuleID, normalized.Names)
+	if err := validateSchemaDefinitionKeys(
+		"DIT structure rule",
+		normalized.Name(),
+		keys,
+	); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if existing, ok := registry.structureRules[key]; ok &&
+			existing.RuleID != normalized.RuleID {
+			return fmt.Errorf(
+				"DIT structure rule name %q conflicts with rule ID %d",
+				key,
+				existing.RuleID,
+			)
+		}
+	}
+	if err := registry.validateDITStructureRuleGraph(normalized, true); err != nil {
+		return err
+	}
+	for key, existing := range registry.structureRules {
+		if existing.RuleID == normalized.RuleID {
+			delete(registry.structureRules, key)
+		}
+	}
+	copy := cloneDITStructureRule(normalized)
+	for _, key := range keys {
+		registry.structureRules[key] = &copy
+	}
+	return nil
+}
+
 func (registry *Registry) AttributeType(name string) (AttributeType, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -394,6 +570,28 @@ func (registry *Registry) DITContentRule(name string) (DITContentRule, bool) {
 		return DITContentRule{}, false
 	}
 	return cloneDITContentRule(*contentRule), true
+}
+
+func (registry *Registry) NameForm(name string) (NameForm, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	nameForm, ok := registry.nameForms[schemaKey(name)]
+	if !ok {
+		return NameForm{}, false
+	}
+	return cloneNameForm(*nameForm), true
+}
+
+func (registry *Registry) DITStructureRule(
+	identifier string,
+) (DITStructureRule, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	structureRule, ok := registry.structureRules[schemaKey(identifier)]
+	if !ok {
+		return DITStructureRule{}, false
+	}
+	return cloneDITStructureRule(*structureRule), true
 }
 
 func (registry *Registry) EntryHasObjectClass(
@@ -506,26 +704,130 @@ func (registry *Registry) DITContentRuleDescriptions() []string {
 	return result
 }
 
+func (registry *Registry) NameFormDescriptions() []string {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	nameForms := uniqueNameForms(registry.nameForms)
+	result := make([]string, len(nameForms))
+	for i := range nameForms {
+		result[i] = FormatNameForm(nameForms[i])
+	}
+	return result
+}
+
+func (registry *Registry) DITStructureRuleDescriptions() []string {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	structureRules := uniqueDITStructureRules(registry.structureRules)
+	result := make([]string, len(structureRules))
+	for i := range structureRules {
+		result[i] = FormatDITStructureRule(structureRules[i])
+	}
+	return result
+}
+
 func (registry *Registry) StructuralObjectClass(entry directory.Entry) (string, error) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
+	objectClass, err := registry.structuralObjectClass(entry)
+	if err != nil {
+		return "", err
+	}
+	return objectClass.Name(), nil
+}
+
+func (registry *Registry) GoverningStructureRule(
+	entry directory.Entry,
+	parent *directory.Entry,
+) (int, bool, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	structural, err := registry.structuralObjectClass(entry)
+	if err != nil {
+		return 0, false, err
+	}
+	structureRules := uniqueDITStructureRules(registry.structureRules)
+	regulated := false
+	valid := make([]DITStructureRule, 0)
+	for _, structureRule := range structureRules {
+		nameForm := registry.nameForms[schemaKey(structureRule.Form)]
+		if nameForm == nil ||
+			!strings.EqualFold(nameForm.ObjectClass, structural.OID) {
+			continue
+		}
+		regulated = true
+		if structureRule.Obsolete || nameForm.Obsolete {
+			continue
+		}
+		if !registry.nameFormMatchesRDN(*nameForm, entry) {
+			continue
+		}
+		allowed, err := registry.structureRuleAllowsParent(
+			structureRule,
+			parent,
+		)
+		if err != nil {
+			return 0, false, err
+		}
+		if allowed {
+			valid = append(valid, structureRule)
+		}
+	}
+	if !regulated {
+		return 0, false, nil
+	}
+	if len(valid) == 0 {
+		message := fmt.Sprintf(
+			"no active DIT structure rule permits entry '%s' with structural object class '%s'",
+			entry.DN,
+			structural.Name(),
+		)
+		if parent != nil {
+			message += fmt.Sprintf(" below '%s'", parent.DN)
+		}
+		return 0, false, &Violation{
+			Kind:    ViolationNaming,
+			Message: message,
+		}
+	}
+
+	for _, value := range registry.attributeValues(entry, "governingStructureRule") {
+		ruleID, err := strconv.Atoi(string(value))
+		if err != nil {
+			continue
+		}
+		for _, candidate := range valid {
+			if candidate.RuleID == ruleID {
+				return ruleID, true, nil
+			}
+		}
+	}
+	return valid[0].RuleID, true, nil
+}
+
+func (registry *Registry) structuralObjectClass(
+	entry directory.Entry,
+) (*ObjectClass, error) {
 
 	classes := make(map[string]*ObjectClass)
 	for _, value := range registry.attributeValues(entry, "objectClass") {
 		objectClass, ok := registry.objectClasses[schemaKey(string(value))]
 		if !ok {
-			return "", &Violation{
+			return nil, &Violation{
 				Kind:      ViolationUnknownObjectClass,
 				Attribute: "objectClass",
 				Message:   fmt.Sprintf("unknown object class %q", value),
 			}
 		}
 		if err := registry.collectObjectClass(objectClass, classes, make(map[string]bool)); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 	if err := registry.validateStructuralClasses(classes); err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, candidate := range classes {
 		if candidate.Kind != ObjectClassStructural {
@@ -540,13 +842,109 @@ func (registry *Registry) StructuralObjectClass(entry directory.Entry) (string, 
 			}
 		}
 		if mostSpecific {
-			return candidate.Name(), nil
+			return candidate, nil
 		}
 	}
-	return "", &Violation{
+	return nil, &Violation{
 		Kind:    ViolationStructuralObjectClass,
 		Message: "entry has no structural object class",
 	}
+}
+
+func (registry *Registry) nameFormMatchesRDN(
+	nameForm NameForm,
+	entry directory.Entry,
+) bool {
+	dn, err := directory.ParseDN(entry.DN)
+	if err != nil || dn.Depth() == 0 {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(nameForm.Must)+len(nameForm.May))
+	required := make(map[string]struct{}, len(nameForm.Must))
+	for _, name := range nameForm.Must {
+		key := registry.attributeIdentifierKey(name)
+		allowed[key] = struct{}{}
+		required[key] = struct{}{}
+	}
+	for _, name := range nameForm.May {
+		allowed[registry.attributeIdentifierKey(name)] = struct{}{}
+	}
+	for _, value := range dn.RDNValues() {
+		attribute, ok := registry.attributes[schemaKey(value.Type)]
+		if !ok {
+			return false
+		}
+		key := schemaKey(attribute.OID)
+		if _, ok := allowed[key]; !ok {
+			return false
+		}
+		delete(required, key)
+	}
+	return len(required) == 0
+}
+
+func (registry *Registry) structureRuleAllowsParent(
+	structureRule DITStructureRule,
+	parent *directory.Entry,
+) (bool, error) {
+	if parent == nil {
+		return len(structureRule.Superiors) == 0, nil
+	}
+	if len(structureRule.Superiors) == 0 {
+		return false, nil
+	}
+
+	parentRuleValues := registry.attributeValues(*parent, "governingStructureRule")
+	if len(parentRuleValues) == 1 {
+		parentRuleID, err := strconv.Atoi(string(parentRuleValues[0]))
+		if err == nil {
+			allowedSuperior := false
+			for _, superior := range structureRule.Superiors {
+				if superior == parentRuleID {
+					allowedSuperior = true
+					break
+				}
+			}
+			if !allowedSuperior {
+				return false, nil
+			}
+			return registry.entryConformsToStructureRule(
+				*parent,
+				parentRuleID,
+			)
+		}
+	}
+
+	for _, superior := range structureRule.Superiors {
+		matches, err := registry.entryConformsToStructureRule(*parent, superior)
+		if err != nil {
+			return false, err
+		}
+		if matches {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (registry *Registry) entryConformsToStructureRule(
+	entry directory.Entry,
+	ruleID int,
+) (bool, error) {
+	structureRule := registry.structureRules[strconv.Itoa(ruleID)]
+	if structureRule == nil || structureRule.Obsolete {
+		return false, nil
+	}
+	nameForm := registry.nameForms[schemaKey(structureRule.Form)]
+	if nameForm == nil || nameForm.Obsolete {
+		return false, nil
+	}
+	structural, err := registry.structuralObjectClass(entry)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(nameForm.ObjectClass, structural.OID) &&
+		registry.nameFormMatchesRDN(*nameForm, entry), nil
 }
 
 func (registry *Registry) ParseAndRegisterAttributeType(description string) error {
@@ -573,6 +971,24 @@ func (registry *Registry) ParseAndRegisterDITContentRule(
 		return err
 	}
 	return registry.RegisterDITContentRule(contentRule)
+}
+
+func (registry *Registry) ParseAndRegisterNameForm(description string) error {
+	nameForm, err := ParseNameForm(description)
+	if err != nil {
+		return err
+	}
+	return registry.RegisterNameForm(nameForm)
+}
+
+func (registry *Registry) ParseAndRegisterDITStructureRule(
+	description string,
+) error {
+	structureRule, err := ParseDITStructureRule(description)
+	if err != nil {
+		return err
+	}
+	return registry.RegisterDITStructureRule(structureRule)
 }
 
 func (registry *Registry) Compare(
@@ -1170,6 +1586,197 @@ func (registry *Registry) validateDITContentRule(
 	return nil
 }
 
+func (registry *Registry) normalizeNameForm(nameForm NameForm) (NameForm, error) {
+	if nameForm.OID == "" ||
+		nameForm.OID[0] < '0' ||
+		nameForm.OID[0] > '9' ||
+		!validObjectIdentifier(nameForm.OID) {
+		return NameForm{}, fmt.Errorf(
+			"name form %q requires a numeric OID",
+			nameForm.Name(),
+		)
+	}
+	structural, ok := registry.objectClasses[schemaKey(nameForm.ObjectClass)]
+	if !ok {
+		return NameForm{}, fmt.Errorf(
+			"name form %q references unknown object class %q",
+			nameForm.Name(),
+			nameForm.ObjectClass,
+		)
+	}
+	if structural.Kind != ObjectClassStructural {
+		return NameForm{}, fmt.Errorf(
+			"name form %q references non-structural object class %q",
+			nameForm.Name(),
+			structural.Name(),
+		)
+	}
+	if len(nameForm.Must) == 0 {
+		return NameForm{}, fmt.Errorf(
+			"name form %q requires at least one MUST attribute",
+			nameForm.Name(),
+		)
+	}
+
+	normalized := cloneNameForm(nameForm)
+	normalized.ObjectClass = structural.OID
+	seen := make(map[string]string)
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "MUST", values: normalized.Must},
+		{name: "MAY", values: normalized.May},
+	} {
+		for _, name := range field.values {
+			attribute, ok := registry.attributes[schemaKey(name)]
+			if !ok {
+				return NameForm{}, fmt.Errorf(
+					"name form %q %s references unknown attribute type %q",
+					normalized.Name(),
+					field.name,
+					name,
+				)
+			}
+			effective, err := registry.effectiveAttributeType(
+				attribute,
+				make(map[string]bool),
+			)
+			if err != nil {
+				return NameForm{}, err
+			}
+			if effective.Usage != UsageUserApplications {
+				return NameForm{}, fmt.Errorf(
+					"name form %q %s references operational attribute type %q",
+					normalized.Name(),
+					field.name,
+					attribute.Name(),
+				)
+			}
+			collective, err := registry.attributeTypeIsCollective(
+				attribute,
+				make(map[string]bool),
+			)
+			if err != nil {
+				return NameForm{}, err
+			}
+			if collective {
+				return NameForm{}, fmt.Errorf(
+					"name form %q %s references collective attribute type %q",
+					normalized.Name(),
+					field.name,
+					attribute.Name(),
+				)
+			}
+			key := schemaKey(attribute.OID)
+			if previous, duplicate := seen[key]; duplicate {
+				return NameForm{}, fmt.Errorf(
+					"name form %q repeats attribute type %q in %s and %s",
+					normalized.Name(),
+					attribute.Name(),
+					previous,
+					field.name,
+				)
+			}
+			seen[key] = field.name
+		}
+	}
+	return normalized, nil
+}
+
+func (registry *Registry) normalizeDITStructureRule(
+	structureRule DITStructureRule,
+) (DITStructureRule, error) {
+	if structureRule.RuleID < 0 {
+		return DITStructureRule{}, fmt.Errorf(
+			"DIT structure rule ID %d must not be negative",
+			structureRule.RuleID,
+		)
+	}
+	nameForm, ok := registry.nameForms[schemaKey(structureRule.Form)]
+	if !ok {
+		return DITStructureRule{}, fmt.Errorf(
+			"DIT structure rule %q references unknown name form %q",
+			structureRule.Name(),
+			structureRule.Form,
+		)
+	}
+	normalized := cloneDITStructureRule(structureRule)
+	normalized.Form = nameForm.OID
+	return normalized, nil
+}
+
+func (registry *Registry) validateDITStructureRuleGraph(
+	candidate DITStructureRule,
+	replace bool,
+) error {
+	rules := make(map[int]DITStructureRule)
+	for _, structureRule := range uniqueDITStructureRules(registry.structureRules) {
+		rules[structureRule.RuleID] = structureRule
+	}
+	if _, exists := rules[candidate.RuleID]; exists && !replace {
+		return fmt.Errorf(
+			"DIT structure rule ID %d is already registered",
+			candidate.RuleID,
+		)
+	}
+	rules[candidate.RuleID] = candidate
+	for ruleID, structureRule := range rules {
+		seen := make(map[int]struct{}, len(structureRule.Superiors))
+		for _, superior := range structureRule.Superiors {
+			if superior == ruleID {
+				return fmt.Errorf(
+					"DIT structure rule %d cannot be its own superior",
+					ruleID,
+				)
+			}
+			if _, duplicate := seen[superior]; duplicate {
+				return fmt.Errorf(
+					"DIT structure rule %d repeats superior rule %d",
+					ruleID,
+					superior,
+				)
+			}
+			seen[superior] = struct{}{}
+			if _, exists := rules[superior]; !exists {
+				return fmt.Errorf(
+					"DIT structure rule %d references unknown superior rule %d",
+					ruleID,
+					superior,
+				)
+			}
+		}
+	}
+
+	state := make(map[int]uint8, len(rules))
+	var visit func(int) error
+	visit = func(ruleID int) error {
+		switch state[ruleID] {
+		case 1:
+			return fmt.Errorf(
+				"DIT structure rule hierarchy contains a cycle at rule %d",
+				ruleID,
+			)
+		case 2:
+			return nil
+		}
+		state[ruleID] = 1
+		for _, superior := range rules[ruleID].Superiors {
+			if err := visit(superior); err != nil {
+				return err
+			}
+		}
+		state[ruleID] = 2
+		return nil
+	}
+	for ruleID := range rules {
+		if err := visit(ruleID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func attributeTypeIdentifierMatches(attribute AttributeType, identifier string) bool {
 	identifier = schemaKey(identifier)
 	for _, key := range schemaKeys(attribute.OID, attribute.Names) {
@@ -1498,6 +2105,14 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if _, err := ParseDITContentRule(string(value)); err != nil {
 			return fmt.Errorf("value is not a DIT content rule description: %w", err)
 		}
+	case SyntaxDITStructureRule:
+		if _, err := ParseDITStructureRule(string(value)); err != nil {
+			return fmt.Errorf("value is not a DIT structure rule description: %w", err)
+		}
+	case SyntaxNameForm:
+		if _, err := ParseNameForm(string(value)); err != nil {
+			return fmt.Errorf("value is not a name form description: %w", err)
+		}
 	case SyntaxOID:
 		if !validObjectIdentifier(string(value)) {
 			return errors.New("value is not an object identifier")
@@ -1632,11 +2247,50 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 		return bytes.Compare(left, right), nil
 	case "objectidentifiermatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
+	case "objectidentifierfirstcomponentmatch":
+		firstComponent, err := schemaDescriptionFirstComponent(left)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"objectIdentifierFirstComponentMatch received an invalid description: %w",
+				err,
+			)
+		}
+		return strings.Compare(
+			strings.ToLower(firstComponent),
+			strings.ToLower(strings.TrimSpace(string(right))),
+		), nil
 	case "integermatch", "integerorderingmatch":
 		leftInteger, leftErr := strconv.ParseInt(string(left), 10, 64)
 		rightInteger, rightErr := strconv.ParseInt(string(right), 10, 64)
 		if leftErr != nil || rightErr != nil {
 			return 0, errors.New("integer matching rule received invalid integer")
+		}
+		switch {
+		case leftInteger < rightInteger:
+			return -1, nil
+		case leftInteger > rightInteger:
+			return 1, nil
+		default:
+			return 0, nil
+		}
+	case "integerfirstcomponentmatch":
+		firstComponent, err := schemaDescriptionFirstComponent(left)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"integerFirstComponentMatch received an invalid description: %w",
+				err,
+			)
+		}
+		leftInteger, leftErr := strconv.ParseInt(firstComponent, 10, 64)
+		rightInteger, rightErr := strconv.ParseInt(
+			strings.TrimSpace(string(right)),
+			10,
+			64,
+		)
+		if leftErr != nil || rightErr != nil {
+			return 0, errors.New(
+				"integerFirstComponentMatch received an invalid integer",
+			)
 		}
 		switch {
 		case leftInteger < rightInteger:
@@ -1687,8 +2341,10 @@ func supportedMatchingRule(rule string) bool {
 		"octetstringorderingmatch",
 		"authzmatch",
 		"objectidentifiermatch",
+		"objectidentifierfirstcomponentmatch",
 		"integermatch",
 		"integerorderingmatch",
+		"integerfirstcomponentmatch",
 		"booleanmatch",
 		"distinguishednamematch",
 		"uuidmatch",
@@ -1708,6 +2364,10 @@ func canonicalMatchingRule(rule string) string {
 	switch normalized {
 	case "2.5.13.0":
 		return "objectidentifiermatch"
+	case "2.5.13.29":
+		return "integerfirstcomponentmatch"
+	case "2.5.13.30":
+		return "objectidentifierfirstcomponentmatch"
 	case "2.5.13.1":
 		return "distinguishednamematch"
 	case "2.5.13.2":
@@ -1763,6 +2423,18 @@ func canonicalMatchingRule(rule string) string {
 	default:
 		return normalized
 	}
+}
+
+func schemaDescriptionFirstComponent(value []byte) (string, error) {
+	parser, err := newDescriptionParser(string(value))
+	if err != nil {
+		return "", err
+	}
+	component := parser.take()
+	if component == "" {
+		return "", errors.New("schema description has no first component")
+	}
+	return component, nil
 }
 
 func matchSubstringWithRule(
@@ -2023,6 +2695,27 @@ func schemaKeys(oid string, names []string) []string {
 	return keys
 }
 
+func structureRuleKeys(ruleID int, names []string) []string {
+	return schemaKeys(strconv.Itoa(ruleID), names)
+}
+
+func validateSchemaDefinitionKeys(kind, name string, keys []string) error {
+	if len(keys) == 0 || keys[0] == "" {
+		return fmt.Errorf("%s %q requires an identifier", kind, name)
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			return fmt.Errorf("%s %q has an empty name", kind, name)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("%s %q repeats identifier %q", kind, name, key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func schemaKey(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
@@ -2083,6 +2776,41 @@ func uniqueDITContentRules(
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].OID < result[j].OID
+	})
+	return result
+}
+
+func uniqueNameForms(nameForms map[string]*NameForm) []NameForm {
+	seen := make(map[string]struct{})
+	result := make([]NameForm, 0)
+	for _, nameForm := range nameForms {
+		key := schemaKey(nameForm.OID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, cloneNameForm(*nameForm))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].OID < result[j].OID
+	})
+	return result
+}
+
+func uniqueDITStructureRules(
+	structureRules map[string]*DITStructureRule,
+) []DITStructureRule {
+	seen := make(map[int]struct{})
+	result := make([]DITStructureRule, 0)
+	for _, structureRule := range structureRules {
+		if _, exists := seen[structureRule.RuleID]; exists {
+			continue
+		}
+		seen[structureRule.RuleID] = struct{}{}
+		result = append(result, cloneDITStructureRule(*structureRule))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].RuleID < result[j].RuleID
 	})
 	return result
 }

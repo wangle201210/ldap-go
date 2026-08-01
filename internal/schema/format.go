@@ -110,6 +110,53 @@ func FormatDITContentRule(contentRule DITContentRule) string {
 	return strings.Join(append(fields, ")"), " ")
 }
 
+func FormatNameForm(nameForm NameForm) string {
+	fields := []string{"(", nameForm.OID}
+	if len(nameForm.Names) > 0 {
+		fields = append(fields, "NAME", formatQuotedList(nameForm.Names))
+	}
+	if nameForm.Description != "" {
+		fields = append(fields, "DESC", quoteSchemaValue(nameForm.Description))
+	}
+	if nameForm.Obsolete {
+		fields = append(fields, "OBSOLETE")
+	}
+	fields = append(fields, "OC", nameForm.ObjectClass)
+	fields = append(fields, "MUST", formatOIDList(nameForm.Must))
+	if len(nameForm.May) > 0 {
+		fields = append(fields, "MAY", formatOIDList(nameForm.May))
+	}
+	fields = appendExtensions(fields, nameForm.Extensions)
+	return strings.Join(append(fields, ")"), " ")
+}
+
+func FormatDITStructureRule(structureRule DITStructureRule) string {
+	fields := []string{"(", fmt.Sprintf("%d", structureRule.RuleID)}
+	if len(structureRule.Names) > 0 {
+		fields = append(fields, "NAME", formatQuotedList(structureRule.Names))
+	}
+	if structureRule.Description != "" {
+		fields = append(
+			fields,
+			"DESC",
+			quoteSchemaValue(structureRule.Description),
+		)
+	}
+	if structureRule.Obsolete {
+		fields = append(fields, "OBSOLETE")
+	}
+	fields = append(fields, "FORM", structureRule.Form)
+	if len(structureRule.Superiors) > 0 {
+		fields = append(
+			fields,
+			"SUP",
+			formatRuleIDList(structureRule.Superiors),
+		)
+	}
+	fields = appendExtensions(fields, structureRule.Extensions)
+	return strings.Join(append(fields, ")"), " ")
+}
+
 func formatQuotedList(values []string) string {
 	quoted := make([]string, len(values))
 	for i := range values {
@@ -126,6 +173,17 @@ func formatOIDList(values []string) string {
 		return values[0]
 	}
 	return "( " + strings.Join(values, " $ ") + " )"
+}
+
+func formatRuleIDList(values []int) string {
+	formatted := make([]string, len(values))
+	for i, value := range values {
+		formatted[i] = fmt.Sprintf("%d", value)
+	}
+	if len(formatted) == 1 {
+		return formatted[0]
+	}
+	return "( " + strings.Join(formatted, " ") + " )"
 }
 
 func appendExtensions(fields []string, extensions map[string][]string) []string {

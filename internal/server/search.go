@@ -1959,6 +1959,18 @@ func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 			Values:      stringValues(descriptions...),
 		})
 	}
+	if descriptions := registry.NameFormDescriptions(); len(descriptions) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "nameForms",
+			Values:      stringValues(descriptions...),
+		})
+	}
+	if descriptions := registry.DITStructureRuleDescriptions(); len(descriptions) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "dITStructureRules",
+			Values:      stringValues(descriptions...),
+		})
+	}
 	return entry
 }
 

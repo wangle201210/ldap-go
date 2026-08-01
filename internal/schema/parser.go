@@ -176,6 +176,125 @@ func ParseDITContentRule(description string) (DITContentRule, error) {
 	return contentRule, nil
 }
 
+func ParseNameForm(description string) (NameForm, error) {
+	parser, err := newDescriptionParser(description)
+	if err != nil {
+		return NameForm{}, err
+	}
+	nameForm := NameForm{
+		OID:        parser.take(),
+		Extensions: make(map[string][]string),
+	}
+	if nameForm.OID == "" {
+		return NameForm{}, parser.errorf("missing name form OID")
+	}
+	if nameForm.OID[0] < '0' || nameForm.OID[0] > '9' ||
+		!validObjectIdentifier(nameForm.OID) {
+		return NameForm{}, parser.errorf(
+			"name form OID %q is not a numeric OID",
+			nameForm.OID,
+		)
+	}
+
+	seen := make(map[string]struct{})
+	for !parser.atEnd() {
+		keyword := strings.ToUpper(parser.take())
+		if _, duplicate := seen[keyword]; duplicate {
+			return NameForm{}, parser.errorf(
+				"duplicate name form field %q",
+				keyword,
+			)
+		}
+		seen[keyword] = struct{}{}
+		switch {
+		case keyword == "NAME":
+			nameForm.Names, err = parser.readList()
+		case keyword == "DESC":
+			nameForm.Description, err = parser.readOne()
+		case keyword == "OBSOLETE":
+			nameForm.Obsolete = true
+		case keyword == "OC":
+			nameForm.ObjectClass, err = parser.readOne()
+		case keyword == "MUST":
+			nameForm.Must, err = parser.readList()
+		case keyword == "MAY":
+			nameForm.May, err = parser.readList()
+		case strings.HasPrefix(keyword, "X-"):
+			nameForm.Extensions[keyword], err = parser.readList()
+		default:
+			err = fmt.Errorf("unknown name form field %q", keyword)
+		}
+		if err != nil {
+			return NameForm{}, parser.wrap(err)
+		}
+	}
+	if nameForm.ObjectClass == "" {
+		return NameForm{}, parser.errorf("name form requires OC")
+	}
+	if len(nameForm.Must) == 0 {
+		return NameForm{}, parser.errorf("name form requires MUST")
+	}
+	if err := parser.finish(); err != nil {
+		return NameForm{}, err
+	}
+	return nameForm, nil
+}
+
+func ParseDITStructureRule(description string) (DITStructureRule, error) {
+	parser, err := newDescriptionParser(description)
+	if err != nil {
+		return DITStructureRule{}, err
+	}
+	ruleID, err := parseRuleID(parser.take())
+	if err != nil {
+		return DITStructureRule{}, parser.wrap(err)
+	}
+	structureRule := DITStructureRule{
+		RuleID:     ruleID,
+		Extensions: make(map[string][]string),
+	}
+
+	seen := make(map[string]struct{})
+	for !parser.atEnd() {
+		keyword := strings.ToUpper(parser.take())
+		if _, duplicate := seen[keyword]; duplicate {
+			return DITStructureRule{}, parser.errorf(
+				"duplicate DIT structure rule field %q",
+				keyword,
+			)
+		}
+		seen[keyword] = struct{}{}
+		switch {
+		case keyword == "NAME":
+			structureRule.Names, err = parser.readList()
+		case keyword == "DESC":
+			structureRule.Description, err = parser.readOne()
+		case keyword == "OBSOLETE":
+			structureRule.Obsolete = true
+		case keyword == "FORM":
+			structureRule.Form, err = parser.readOne()
+		case keyword == "SUP":
+			structureRule.Superiors, err = parser.readRuleIDs()
+		case strings.HasPrefix(keyword, "X-"):
+			structureRule.Extensions[keyword], err = parser.readList()
+		default:
+			err = fmt.Errorf("unknown DIT structure rule field %q", keyword)
+		}
+		if err != nil {
+			return DITStructureRule{}, parser.wrap(err)
+		}
+	}
+	if structureRule.Form == "" {
+		return DITStructureRule{}, parser.errorf(
+			"DIT structure rule requires FORM",
+		)
+	}
+	if err := parser.finish(); err != nil {
+		return DITStructureRule{}, err
+	}
+	return structureRule, nil
+}
+
 type descriptionParser struct {
 	input  string
 	tokens []string
@@ -258,6 +377,56 @@ func (parser *descriptionParser) readList() ([]string, error) {
 		}
 	}
 	return nil, errors.New("unterminated list")
+}
+
+func (parser *descriptionParser) readRuleIDs() ([]int, error) {
+	if parser.atEnd() {
+		return nil, errors.New("missing rule ID list")
+	}
+	if parser.tokens[parser.index] != "(" {
+		ruleID, err := parseRuleID(parser.take())
+		if err != nil {
+			return nil, err
+		}
+		return []int{ruleID}, nil
+	}
+	parser.index++
+	var ruleIDs []int
+	for !parser.atEnd() {
+		value := parser.take()
+		switch value {
+		case ")":
+			if len(ruleIDs) == 0 {
+				return nil, errors.New("empty rule ID list")
+			}
+			return ruleIDs, nil
+		case "(", "$":
+			return nil, fmt.Errorf("invalid rule ID %q", value)
+		default:
+			ruleID, err := parseRuleID(value)
+			if err != nil {
+				return nil, err
+			}
+			ruleIDs = append(ruleIDs, ruleID)
+		}
+	}
+	return nil, errors.New("unterminated rule ID list")
+}
+
+func parseRuleID(value string) (int, error) {
+	if value == "" {
+		return 0, errors.New("missing DIT structure rule ID")
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return 0, fmt.Errorf("invalid DIT structure rule ID %q", value)
+		}
+	}
+	ruleID, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid DIT structure rule ID %q", value)
+	}
+	return int(ruleID), nil
 }
 
 func (parser *descriptionParser) finish() error {

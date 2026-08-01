@@ -187,6 +187,7 @@ func (server *Server) handlePasswordModify(
 		*database,
 		changes,
 		controls.manageDsaIT,
+		false,
 		precondition,
 		server.passwordPolicyModificationProcessor(
 			state.runtime,

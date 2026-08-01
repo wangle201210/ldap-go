@@ -61,6 +61,13 @@ through `cn=Subschema`, and enforced on Add and Modify. Auxiliary-class
 allowlists plus `MUST`, `MAY`, `NOT`, and obsolete-rule behavior match slapd
 diagnostics. Online updates, restart, and direct import of a real
 `slapcat -n 0` schema entry pass.
+The schema registry also implements RFC 4512 Name Forms and DIT Structure
+Rules, publishes them through `cn=Subschema`, enforces RDN and superior-rule
+relationships on Add, Modify, and ModifyDN, and maintains the protected
+`governingStructureRule` attribute. OpenLDAP 2.6 exposes these only as hidden
+subschema metadata and client-side parsers, not writable `cn=config` schema, so
+ldap-go accepts such additive definitions through its base schema registry and
+does not invent incompatible OpenLDAP configuration attributes.
 RFC 5805 transactions use the OpenLDAP 2.6 wire profile and queue Add, Modify,
 Delete, ModifyDN, and explicit-value Password Modify operations on one LDAP
 connection. Commit replays the queue in one memory or bbolt write transaction;

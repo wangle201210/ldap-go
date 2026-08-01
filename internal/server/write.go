@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ var protectedOperationalAttributes = map[string]string{
 	"2.5.18.10":                     "subschemaSubentry",
 	"2.5.18.12":                     "collectiveAttributeSubentries",
 	"2.5.21.9":                      "structuralObjectClass",
+	"2.5.21.10":                     "governingStructureRule",
 	"1.3.6.1.1.16.4":                "entryUUID",
 	"1.3.6.1.4.1.1466.101.119.3":    "entryTtl",
 	"1.3.6.1.4.1.4203.666.1.7":      "entryCSN",
@@ -44,6 +46,7 @@ var protectedOperationalAttributes = map[string]string{
 	"entryexpiretimestamp":          "entryExpireTimestamp",
 	"entryttl":                      "entryTtl",
 	"entryuuid":                     "entryUUID",
+	"governingstructurerule":        "governingStructureRule",
 	"modifiersname":                 "modifiersName",
 	"modifytimestamp":               "modifyTimestamp",
 	"pwdaccounttmplockoutend":       "pwdAccountTmpLockoutEnd",
@@ -275,12 +278,28 @@ func (server *Server) handleAdd(
 			}
 		}
 		parent := directory.Entry{DN: ""}
+		var structureParent *directory.Entry
 		if parentDN, ok := dn.Parent(); ok {
 			parent.DN = parentDN.String()
 			if storedParent, getErr := tx.Get(parentDN); getErr == nil {
 				parent = storedParent
+				structureParent = &parent
 			} else if !errors.Is(getErr, storage.ErrEntryNotFound) {
 				return getErr
+			}
+		}
+		if !configurationWrite {
+			if err := server.applyDITStructureRuleOperationalAttribute(
+				state.runtime,
+				&entry,
+				structureParent,
+				controls.relax,
+			); err != nil {
+				return operationFailureFromSchema(err)
+			}
+			logicalEntry, err = collectivePlan.apply(entry)
+			if err != nil {
+				return err
 			}
 		}
 		logicalParent, err := collectivePlan.apply(parent)
@@ -469,6 +488,7 @@ func (server *Server) handleModify(
 		*database,
 		request.Changes,
 		controls.manageDsaIT,
+		controls.relax,
 		func(reader storage.Reader, entry directory.Entry) error {
 			if err := server.checkAssertion(
 				state.runtime,
@@ -565,6 +585,7 @@ func (server *Server) modifyEntry(
 	database runtimeDatabase,
 	changes []ldapwire.Modification,
 	manageDsaIT bool,
+	relax bool,
 	precondition entryModificationPrecondition,
 	processor entryModificationProcessor,
 	postcondition entryModificationPostcondition,
@@ -694,6 +715,18 @@ func (server *Server) modifyEntry(
 		}
 		if !configurationWrite {
 			if err := runtime.schema.ValidateEntry(entry); err != nil {
+				return operationFailureFromSchema(err)
+			}
+			parent, err := schemaParentEntry(tx, dn)
+			if err != nil {
+				return err
+			}
+			if err := server.applyDITStructureRuleOperationalAttribute(
+				runtime,
+				&entry,
+				parent,
+				relax,
+			); err != nil {
 				return operationFailureFromSchema(err)
 			}
 			if err := server.applySchemaOperationalAttributes(runtime, &entry); err != nil {
@@ -1300,6 +1333,18 @@ func (server *Server) handleModifyDN(
 					if err := state.runtime.schema.ValidateEntry(item.entry); err != nil {
 						return operationFailureFromSchema(err)
 					}
+					var structureParent *directory.Entry
+					if superior.Depth() > 0 {
+						structureParent = &newParent
+					}
+					if err := server.applyDITStructureRuleOperationalAttribute(
+						state.runtime,
+						&item.entry,
+						structureParent,
+						controls.relax,
+					); err != nil {
+						return operationFailureFromSchema(err)
+					}
 					if err := server.applySchemaOperationalAttributes(
 						state.runtime,
 						&item.entry,
@@ -1667,6 +1712,54 @@ func (server *Server) applySchemaOperationalAttributes(
 	entry.ReplaceValues("structuralObjectClass", stringValues(structuralObjectClass))
 	entry.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
 	return nil
+}
+
+func (server *Server) applyDITStructureRuleOperationalAttribute(
+	runtime *runtimeState,
+	entry *directory.Entry,
+	parent *directory.Entry,
+	relax bool,
+) error {
+	ruleID, governed, err := runtime.schema.GoverningStructureRule(
+		*entry,
+		parent,
+	)
+	if err != nil {
+		var violation *schema.Violation
+		if relax && errors.As(err, &violation) &&
+			violation.Kind == schema.ViolationNaming {
+			entry.ReplaceValues("governingStructureRule", nil)
+			return nil
+		}
+		return err
+	}
+	if !governed {
+		entry.ReplaceValues("governingStructureRule", nil)
+		return nil
+	}
+	entry.ReplaceValues(
+		"governingStructureRule",
+		stringValues(strconv.Itoa(ruleID)),
+	)
+	return nil
+}
+
+func schemaParentEntry(
+	reader storage.Reader,
+	dn directory.DN,
+) (*directory.Entry, error) {
+	parentDN, ok := dn.Parent()
+	if !ok || parentDN.Depth() == 0 {
+		return nil, nil
+	}
+	parent, err := reader.Get(parentDN)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &parent, nil
 }
 
 func (server *Server) nextCSN(serverID uint16) string {

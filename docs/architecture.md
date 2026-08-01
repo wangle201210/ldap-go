@@ -84,6 +84,15 @@ dependencies. The registry indexes each rule by its structural class OID and
 names, publishes canonical descriptions through the subschema subentry, and
 applies only the rule for the entry's exact structural class. Runtime
 replacement makes online schema changes atomic with the `cn=config` write.
+RFC 4512 Name Forms and DIT Structure Rules are indexed separately by OID/name
+and integer rule ID/name. Registration resolves structural-class and attribute
+dependencies before accepting a form, then validates the complete superior-rule
+graph before accepting a replacement. Write transactions select a governing
+rule from the entry RDN and its direct parent, persist
+`governingStructureRule`, and roll back Add, Modify, or ModifyDN when no active
+rule applies. Because OpenLDAP 2.6 has no corresponding slapd runtime or
+`cn=config` fields, these additional definitions enter through the base schema
+registry rather than OpenLDAP configuration import.
 
 ### Backends
 

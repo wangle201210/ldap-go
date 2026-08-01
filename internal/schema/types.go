@@ -83,6 +83,41 @@ func (contentRule DITContentRule) Name() string {
 	return contentRule.OID
 }
 
+type NameForm struct {
+	OID         string
+	Names       []string
+	Description string
+	Obsolete    bool
+	ObjectClass string
+	Must        []string
+	May         []string
+	Extensions  map[string][]string
+}
+
+func (nameForm NameForm) Name() string {
+	if len(nameForm.Names) > 0 {
+		return nameForm.Names[0]
+	}
+	return nameForm.OID
+}
+
+type DITStructureRule struct {
+	RuleID      int
+	Names       []string
+	Description string
+	Obsolete    bool
+	Form        string
+	Superiors   []int
+	Extensions  map[string][]string
+}
+
+func (structureRule DITStructureRule) Name() string {
+	if len(structureRule.Names) > 0 {
+		return structureRule.Names[0]
+	}
+	return fmt.Sprintf("%d", structureRule.RuleID)
+}
+
 type ViolationKind uint8
 
 const (

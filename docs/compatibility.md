@@ -62,7 +62,7 @@ No row may become `compatible` based only on unit tests.
 | Subschema subentry | partial | discovery and schema publication tests |
 | Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
 | Collective attributes | partial | RFC 3671 schema, propagation, merge/exclusions, filtering, Compare, controls, paging, sorting/VLV, and ACL tests pass; X.501 administrative-area boundaries and OpenLDAP differential remain |
-| DIT content/name/structure rules | partial | OpenLDAP `olcDitContentRules` parsing, publication, enforcement, online/restart, real slapcat import, and slapd differentials pass; name forms and DIT structure rules remain |
+| DIT content/name/structure rules | partial | OpenLDAP `olcDitContentRules` parsing, publication, enforcement, online/restart, real slapcat import, and slapd differentials pass; RFC 4512 name-form/structure-rule parsing, publication, RDN/SUP enforcement, governing rule maintenance, and Relax behavior pass; OpenLDAP 2.6 exposes no equivalent runtime configuration for a differential |
 
 ## Authentication, authorization, and security
 
@@ -288,8 +288,19 @@ Online replacement is atomic and rolls back invalid configuration; restart
 reloads the persisted rule. A generated OpenLDAP
 `slaptest -> slapcat -n 0` entry imports unchanged, and process-level
 differentials match slapd result codes and diagnostics. OpenLDAP 2.6 does not
-expose writable `cn=config` fields for name forms or DIT structure rules; those
-schema elements and `governingStructureRule` enforcement remain pending.
+expose writable `cn=config` fields or slapd registration/enforcement paths for
+name forms or DIT structure rules: it declares the hidden subschema attributes
+and provides client-side `libldap` parsers only. ldap-go additionally implements
+RFC 4512 Name Form and DIT Structure Rule descriptions in its base schema
+registry. It validates structural-class and naming-attribute dependencies,
+rejects duplicate, missing, and cyclic rule hierarchies, publishes `nameForms`
+and `dITStructureRules`, and implements their RFC 4517 first-component matching
+rules. Add, Modify, and ModifyDN enforce RDN `MUST`/`MAY` sets and `SUP`
+relationships transactionally, maintain the protected
+`governingStructureRule` operational attribute, and return `namingViolation`
+on failure. The Relax control can bypass these additional naming constraints.
+These definitions can be supplied through the server's base schema registry;
+they are deliberately not represented as fictional OpenLDAP `olc*` fields.
 
 RFC 3296 `ref` and `referral` schema definitions are built in, and
 ManageDsaIT is advertised through Root DSE `supportedControl`. Without the
