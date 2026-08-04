@@ -2,6 +2,7 @@ package ldapwire
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -78,6 +79,18 @@ func TestEncodeRequestMessageRoundTrips(t *testing.T) {
 				TypesOnly:    true,
 				Filter:       filter,
 				Attributes:   []string{"cn", "+"},
+			},
+		},
+		{
+			name: "children search",
+			request: SearchRequest{
+				BaseDN:     "dc=example,dc=com",
+				Scope:      directory.ScopeChildren,
+				Attributes: []string{},
+				Filter: directory.Filter{
+					Kind:      directory.FilterPresent,
+					Attribute: "objectClass",
+				},
 			},
 		},
 		{name: "unbind", request: UnbindRequest{}},
@@ -173,5 +186,28 @@ func TestEncodeRequestMessageRejectsUnsupportedRequest(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("EncodeRequestMessage() accepted unsupported request")
+	}
+}
+
+func TestReadMessageRejectsSearchScopeAboveChildren(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := EncodeRequestMessage(Message{
+		ID: 1,
+		Request: SearchRequest{
+			Scope: directory.ScopeChildren + 1,
+			Filter: directory.Filter{
+				Kind:      directory.FilterPresent,
+				Attribute: "objectClass",
+			},
+			Attributes: []string{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequestMessage(): %v", err)
+	}
+	_, err = ReadMessage(bytes.NewReader(encoded), int64(len(encoded)))
+	if !errors.Is(err, ErrMalformedMessage) {
+		t.Fatalf("ReadMessage() error = %v, want ErrMalformedMessage", err)
 	}
 }

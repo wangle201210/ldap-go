@@ -388,7 +388,7 @@ func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
 		return SearchRequest{}, malformed("invalid search base")
 	}
 	scope, err := packetInteger(packet.Children[1])
-	if err != nil || scope < 0 || scope > 2 {
+	if err != nil || scope < 0 || scope > int64(directory.ScopeChildren) {
 		return SearchRequest{}, malformed("invalid search scope")
 	}
 	derefAliases, err := packetInteger(packet.Children[2])

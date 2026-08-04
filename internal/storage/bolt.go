@@ -51,6 +51,28 @@ func OpenBolt(path string) (*Bolt, error) {
 	return store, nil
 }
 
+// OpenBoltReadOnly opens an existing ldap-go database without creating or
+// modifying the database file, its parent directory, or any buckets.
+func OpenBoltReadOnly(path string) (*Bolt, error) {
+	if path == "" {
+		return nil, errors.New("database path is required")
+	}
+	db, err := openBoltReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(entriesBucket) == nil || tx.Bucket(metaBucket) == nil {
+			return errors.New("required entries or metadata bucket is missing")
+		}
+		return nil
+	}); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("validate database %q: %w", path, err)
+	}
+	return &Bolt{db: db}, nil
+}
+
 func (store *Bolt) View(ctx context.Context, fn func(Reader) error) error {
 	if err := ctx.Err(); err != nil {
 		return err

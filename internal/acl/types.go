@@ -50,9 +50,10 @@ const (
 )
 
 type Grant struct {
-	Mode       grantMode
-	Privileges Privilege
-	SelfValue  bool
+	Mode          grantMode
+	Privileges    Privilege
+	SelfValue     bool
+	RealSelfValue bool
 }
 
 type DNStyle uint8
@@ -63,6 +64,7 @@ const (
 	DNOne
 	DNSubtree
 	DNChildren
+	DNLevel
 	DNRegex
 )
 
@@ -70,11 +72,23 @@ type DNMatcher struct {
 	Style   DNStyle
 	DN      directory.DN
 	Pattern *regexp.Regexp
+	Raw     string
+	Expand  bool
+	Level   int
 }
 
 type TargetSelector struct {
 	DN         DNMatcher
 	Attributes []string
+	Filter     *directory.Filter
+	Value      *ValueSelector
+}
+
+type ValueSelector struct {
+	Style        DNStyle
+	MatchingRule string
+	Assertion    []byte
+	Pattern      *regexp.Regexp
 }
 
 type WhoKind uint8
@@ -87,15 +101,57 @@ const (
 	WhoDN
 	WhoDNAttribute
 	WhoGroup
+	WhoPeerName
+	WhoSockName
+	WhoDomain
+	WhoSockURL
+	WhoSet
+	WhoACI
 	WhoSSF
+)
+
+type StringStyle uint8
+
+const (
+	StringExact StringStyle = iota
+	StringRegex
+	StringSubtree
+	StringIP
+	StringIPv6
+	StringPath
+)
+
+type StringMatcher struct {
+	Style   StringStyle
+	Value   string
+	Pattern *regexp.Regexp
+	Expand  bool
+}
+
+type SSFKind uint8
+
+const (
+	SSFOverall SSFKind = iota
+	SSFTransport
+	SSFTLS
+	SSFSASL
 )
 
 type WhoMatcher struct {
 	Kind             WhoKind
+	Real             bool
 	DN               DNMatcher
 	Attribute        string
 	GroupObjectClass string
 	GroupAttribute   string
+	GroupPattern     string
+	GroupExpand      bool
+	Connection       StringMatcher
+	SetPattern       string
+	SetExpand        bool
+	ACIAttribute     string
+	SelfLevel        int
+	SSFKind          SSFKind
 	MinimumSSF       int
 }
 
@@ -113,8 +169,16 @@ type Rule struct {
 }
 
 type Subject struct {
-	DN  string
-	SSF int
+	DN           string
+	RealDN       string
+	PeerName     string
+	SockName     string
+	Domain       string
+	SockURL      string
+	SSF          int
+	TransportSSF int
+	TLSSSF       int
+	SASLSSF      int
 }
 
 type Target struct {
@@ -122,6 +186,26 @@ type Target struct {
 	Attribute string
 	Value     []byte
 	DNValued  bool
+	Schema    TargetSchema
+}
+
+type TargetSchema interface {
+	directory.ValueMatcher
+	directory.AttributeResolver
+	AttributeDescriptionSubtype(candidate, requested string) bool
+	EntryHasObjectClass(entry directory.Entry, objectClass string) bool
+	ObjectClassAllowsAttribute(objectClass, attribute string) (bool, bool)
+	HasAttributeType(attribute string) bool
+	IsOperational(attribute string) bool
+	IsDNValued(attribute string) bool
+	IsDNReferenceValued(attribute string) bool
+	IsACIValued(attribute string) bool
+	NormalizeEqualityValue(attribute string, value []byte) ([]byte, error)
+}
+
+type matchContext struct {
+	dn    []string
+	value []string
 }
 
 type EntryReader interface {

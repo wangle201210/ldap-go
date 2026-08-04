@@ -9,11 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
-	"github.com/wangle201210/ldap-go/internal/storage"
 	"github.com/xdg-go/scram"
 )
 
@@ -51,14 +49,20 @@ func (server *Server) handleSASLSCRAMStep(
 	)
 	if err != nil {
 		lookupErr := session.credentialLookupErr
-		clearSASLSession(state)
 		if lookupErr != nil &&
 			!errors.Is(
 				lookupErr,
 				errSASLSCRAMCredentialsUnavailable,
 			) {
-			return lookupErr
+			return server.writeSASLAuxiliaryLookupFailure(
+				connection,
+				state,
+				message.ID,
+				session.mechanism,
+				lookupErr,
+			)
 		}
+		clearSASLSession(state)
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
 
@@ -189,83 +193,49 @@ func (server *Server) lookupSASLSCRAMCredentials(
 		return authenticationDN, credentials, nil
 	}
 
-	var (
-		credentials scram.StoredCredentials
-		found       bool
+	entry, err := server.lookupSASLCredentialEntry(
+		ctx,
+		runtime,
+		authenticationDN,
+		[]string{"userPassword", "authPassword"},
 	)
-	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
-		entry, err := tx.Get(authenticationDN)
-		if errors.Is(err, storage.ErrEntryNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-
-		if server.allowed(
-			runtime,
-			tx,
-			"",
-			entry,
-			"userPassword",
-			nil,
-			acl.Auth,
-		) {
-			for _, stored := range entry.Values("userPassword") {
-				password, ok := auth.ExtractCleartextPassword(stored)
-				if !ok {
-					continue
-				}
-				derived, deriveErr := deriveSASLSCRAMCredentials(
-					generator,
-					username,
-					password,
-				)
-				clear(password)
-				if deriveErr != nil {
-					return deriveErr
-				}
-				credentials = derived
-				found = true
-				return nil
-			}
-		}
-
-		if !server.allowed(
-			runtime,
-			tx,
-			"",
-			entry,
-			"authPassword",
-			nil,
-			acl.Auth,
-		) {
-			return nil
-		}
-		for _, stored := range entry.Values("authPassword") {
-			parsed, ok := parseCyrusSASLSCRAMSecret(
-				stored,
-				mechanism,
-				generator().Size(),
-			)
-			if !ok {
-				continue
-			}
-			credentials = parsed
-			found = true
-			return nil
-		}
-		return nil
-	})
 	if err != nil {
+		if errors.Is(err, errSASLCredentialEntryUnavailable) {
+			err = errSASLSCRAMCredentialsUnavailable
+		}
 		return directory.DN{}, scram.StoredCredentials{}, err
 	}
-	if !found {
-		return directory.DN{}, scram.StoredCredentials{},
-			errSASLSCRAMCredentialsUnavailable
+	defer clearSASLCredentialEntry(&entry)
+
+	for _, stored := range entry.Values("userPassword") {
+		password, ok := auth.ExtractCleartextPassword(stored)
+		if !ok {
+			continue
+		}
+		credentials, deriveErr := deriveSASLSCRAMCredentials(
+			generator,
+			username,
+			password,
+		)
+		clear(password)
+		if deriveErr != nil {
+			return directory.DN{}, scram.StoredCredentials{}, deriveErr
+		}
+		return authenticationDN, credentials, nil
 	}
-	return authenticationDN, credentials, nil
+	for _, stored := range entry.Values("authPassword") {
+		credentials, ok := parseCyrusSASLSCRAMSecret(
+			stored,
+			mechanism,
+			generator().Size(),
+		)
+		if !ok {
+			continue
+		}
+		return authenticationDN, credentials, nil
+	}
+	return directory.DN{}, scram.StoredCredentials{},
+		errSASLSCRAMCredentialsUnavailable
 }
 
 func deriveSASLSCRAMCredentials(

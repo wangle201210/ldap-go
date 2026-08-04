@@ -203,10 +203,7 @@ func loadPasswordPolicy(
 	if policyDatabase == nil {
 		return policy, false
 	}
-	policyEntry, err := storage.ReaderInPartition(
-		reader,
-		policyDatabase.partition,
-	).Get(*policyDN)
+	policyEntry, err := readerForDatabase(reader, *policyDatabase).Get(*policyDN)
 	if err != nil {
 		return policy, false
 	}
@@ -457,11 +454,9 @@ func (server *Server) authenticatePasswordBind(
 	if database == nil {
 		return result, nil
 	}
-	if database.rootDN != nil &&
-		database.rootDN.Equal(dn) &&
-		database.rootPasswordSet {
+	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
 		result.authenticated = auth.VerifyPassword(
-			database.rootPassword,
+			rootPassword,
 			password,
 		)
 		return result, nil
@@ -479,7 +474,7 @@ func (server *Server) authenticatePasswordBind(
 		forwardAfter       directory.Entry
 	)
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
@@ -667,10 +662,7 @@ func (server *Server) finishPasswordBindStateWrite(
 			runtime.serverID,
 		)
 	}
-	if err := storage.WriterInPartition(
-		writer,
-		database.partition,
-	).Put(*entry, true); err != nil {
+	if err := writerForDatabase(writer, database).Put(*entry, true); err != nil {
 		return err
 	}
 	change, err := server.recordSyncChange(
@@ -1851,7 +1843,7 @@ func (server *Server) passwordPolicySearchEntryControls(
 
 	var control *ldapwire.Control
 	_ = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
+		tx := readerForDatabase(reader, *database)
 		entry, err := tx.Get(dn)
 		if err != nil {
 			return nil

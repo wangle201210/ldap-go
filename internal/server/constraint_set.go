@@ -412,10 +412,7 @@ func (evaluation constraintSetEvaluation) gather(
 		if database == nil {
 			return nil, nil
 		}
-		entry, err = storage.ReaderInPartition(
-			evaluation.reader,
-			database.partition,
-		).Get(dn)
+		entry, err = readerForDatabase(evaluation.reader, *database).Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil, nil
 		}
@@ -462,7 +459,7 @@ func (evaluation constraintSetEvaluation) gatherLDAPURL(
 		filter = *parsed.filter
 	}
 	requested := append(append([]string(nil), parsed.attributes...), attribute)
-	reader := storage.ReaderInPartition(evaluation.reader, database.partition)
+	reader := readerForDatabase(evaluation.reader, *database)
 	result := make([]string, 0)
 	err = reader.ForEach(func(entry directory.Entry) error {
 		if evaluation.runtime.schema.EntryHasObjectClass(entry, "referral") ||

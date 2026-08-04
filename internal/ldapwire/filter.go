@@ -4,10 +4,21 @@ import (
 	"bytes"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
+	"github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
 const maxFilterDepth = 64
+
+// CompileFilter parses an RFC 4515 string filter into the directory filter
+// representation used by request decoding and configuration consumers.
+func CompileFilter(value string) (directory.Filter, error) {
+	packet, err := ldap.CompileFilter(value)
+	if err != nil {
+		return directory.Filter{}, err
+	}
+	return DecodeFilter(packet.Bytes())
+}
 
 func DecodeFilter(value []byte) (directory.Filter, error) {
 	if len(value) == 0 {

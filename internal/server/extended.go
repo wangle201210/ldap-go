@@ -36,6 +36,17 @@ func (server *Server) handleExtended(
 			nil,
 		))
 	}
+	if frontendRestricts(state.runtime, requestDatabaseRestriction(request)) {
+		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+			nil,
+		))
+	}
 	switch request.Name {
 	case startTLSOID:
 		return server.handleStartTLS(ctx, connection, state, message, request)
@@ -173,6 +184,11 @@ func (server *Server) handleCancel(
 		result = ldapwire.ResultError(
 			ldapwire.ResultUnavailableCriticalExtension,
 			"unsupported critical control",
+		)
+	case frontendRestricts(server.runtime.Load(), restrictCancel):
+		result = ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"operation restricted",
 		)
 	case !request.HasValue:
 		result = ldapwire.ResultError(

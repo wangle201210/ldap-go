@@ -2,8 +2,9 @@
 
 ## Target
 
-The compatibility baseline is OpenLDAP 2.6.x. LDAP standards define protocol
-correctness; OpenLDAP differential tests define behavior where the standards
+The compatibility baseline is OpenLDAP 2.6.x, with the fixed OpenLDAP 2.6.13
+release commit as the reproducible differential oracle. LDAP standards define
+protocol correctness; differential tests define behavior where the standards
 permit multiple outcomes or OpenLDAP adds extensions.
 
 Compatibility is behavioral and data-oriented. The Go implementation does not
@@ -40,6 +41,12 @@ have no response. Bind and StartTLS enforce the RFC connection-state rules.
 Cancellation, time limits, size limits, backpressure, and graceful shutdown are
 handled here.
 
+Before paging state is allocated, database-local exact bound-DN size rules are
+combined with the server and client limits. The soft value supplies an omitted
+client limit, the hard value clamps a larger request, and database-root searches
+bypass subject-specific rules. This keeps ordinary, sorted, paged, VLV, and
+overlay-expanded candidates under one cumulative Search limit.
+
 One reader accepts and registers requests while one worker serializes ordinary
 operations that share authentication, paging, VLV, and runtime state. Abandon
 and RFC 3909 Cancel are handled by the reader so they can cancel the active
@@ -49,11 +56,22 @@ response races with Search output. The registry establishes an atomic
 final-response boundary for `tooLate` and limits cancellation to the LDAP
 association that created the target operation.
 
+Shutdown closes the listener first and interrupts each connection's read side
+so no new request is admitted. Queued and executing ordinary operations retain
+their contexts and drain before storage is closed. Refresh-and-persist Sync
+operations are marked long-lived and abandoned immediately. A configurable
+deadline cancels any remaining operation and closes its transport; timeout is
+returned distinctly so supervisors can detect a forced shutdown.
+
 RFC 5805 transaction state is connection-local. Update requests carrying the
 Transaction Specification control are cloned into an ordered queue, including
 their original message IDs, without opening a storage transaction. End
-Transaction settles the state exactly once; Bind and connection teardown
-discard an outstanding queue.
+Transaction settles the state exactly once. The queue has configurable,
+non-zero operation-count and encoded-byte limits. Crossing a limit atomically
+discards it and writes an Aborted Transaction Notice with message ID zero; Bind,
+Unbind, and connection teardown discard it without that notice. Password Modify
+generates an omitted new password once while cloning the request, returns it in
+that operation's immediate RFC 3062 response, and commits the same value.
 
 ### Directory service agent
 
@@ -104,7 +122,7 @@ interface must support:
 - stable entry IDs and entry UUIDs;
 - atomic Modify and ModifyDN, including subtree moves;
 - snapshot reads and ordered change records for replication;
-- online backup, restore, and consistency checking.
+- offline backup, restore, consistency checking, and atomic database rebuild.
 
 OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
@@ -123,6 +141,55 @@ authorization, assertions, schema checks, operational metadata, and later
 operations see a single evolving view. A failed LDAP result aborts that
 backend transaction. Runtime activation and Sync change publication are
 collected during replay and released only after durable commit.
+The flat-file auditlog response observer is intentionally outside that atomic
+boundary. It appends after each operation succeeds during replay, so an
+explicit abort writes nothing while a later replay failure can leave an audit
+record for an operation whose database change was rolled back. This matches
+OpenLDAP's observable auditlog behavior.
+
+Naming-context `ldap` and `meta` databases share an outbound transport
+executor but keep different routing models. Back-ldap selects an ordered remote
+URI list for one naming context. Back-meta first selects one or more target
+configurations, applies suffix, attribute, object-class, filter, and result
+namespace rewrites, and unions Search results. Its implemented RWM subset
+includes attribute/object-class wildcard allowlists and response-side drop
+maps; it does not implement the complete librewrite language.
+
+Back-meta pools privileged identity-assertion transports under
+`olcDbConnectionPoolMax`. The verified subset shares an eligible transport
+across frontend client connections and multiplexes concurrent requests by LDAP
+message ID while serializing BER writes. Explicit user-credential transports
+remain private, and temporary overflow follows the target's use-temporary
+policy. Pool capacity and categories are intentionally described as a subset:
+the implementation does not yet reproduce every OpenLDAP multi-target
+connection category or rebind transition.
+
+`olcDbProtocolVersion` accepts the OpenLDAP values 0, 2, and 3. Zero inherits
+the frontend connection's current Bind version, while an explicit 2 or 3
+rewrites outbound Bind requests accordingly. The LDAPv2 path suppresses
+unsupported noncritical controls and rejects combinations, such as privileged
+proxy authorization, that OpenLDAP does not forward in that mode. Protocol
+selection is part of the transport reuse key so differently configured targets
+cannot share an incompatible connection.
+
+Online meta target activation follows the stable behavior observed from the
+pinned 2.6.13 server. A zero-target parent database may receive its first
+`olcMetaTargetConfig` or `olcMetaSub` entry. Replacing an existing target URI
+updates `cn=config` successfully but makes that target unavailable in the
+running process until restart. Deleting the sole target entry returns
+`unwillingToPerform` (53), leaving it present, and a repeated Add of the same
+DN returns `entryAlreadyExists` (68). Adding a second target while the
+reference server has an active target connection triggers an upstream
+OpenLDAP 2.6.13 assertion, so that path is excluded from the stable
+differential oracle. Proxy auth-check searches use `acl-bind` with IDAssert
+fallback for back-ldap and target IDAssert for back-meta; password-based SASL
+mechanisms can therefore authenticate and authorize entries in either proxy
+backend without mutating the frontend connection's in-progress Bind state.
+Referral chasing uses OpenLDAP's default five-hop limit, while back-meta keeps
+a healthy preferred URI and probes a recovered URI after the preferred one
+fails. Complete dynamic topology, GSSAPI and SASL security layers, full rebind,
+full librewrite, and multi-target pool-category behavior remain outside the
+implemented compatibility boundary.
 
 ### Overlays
 
@@ -138,6 +205,125 @@ storage transaction as LastMod and syncprov state. A context-bound scheduler
 keeps one deadline per enabled database, is awakened by runtime replacement,
 rechecks active configuration inside each write transaction, and publishes
 committed expiration deletes only after storage success.
+
+Dynlist is implemented as a request-scoped logical-entry projection. One
+read-transaction cache loads each database partition, expands configured local
+LDAP URLs under the effective identity, and keeps separate output and filter
+projections so unmapped values remain visible but cannot affect filters.
+Membership graphs add reverse and nested values only when the request needs
+them. Compare uses the OpenLDAP DN-membership fast path where required, while
+ManageDsaIT bypasses all generated values. The legacy dyngroup configuration
+shares URL parsing and membership evaluation but remains Compare-only.
+
+Nestgroup is also request-scoped, but maintains a separate graph for every
+selected database partition and configured instance. Stored member references
+form forward edges; groups inside configured bases form the reverse parent
+index. Positive member/memberOf equality assertions are rewritten before
+candidate filtering. Internal parent searches retain the requester's Search
+ACL, while memberOf child traversal uses direct snapshot entry lookup to match
+slapd. Odd-NOT equality assertions are not rewritten. When the corresponding
+projected attribute was requested, the final expanded response entry is tested
+against the complete rewritten filter a second time.
+
+The Search order is collective logical values, dynlist, nestgroup filter/value
+processing, candidate and final-entry ACL checks, sorting/paging/VLV, then late
+collect response projection and attribute selection. ManageDsaIT skips every
+nestgroup step, and Compare never enters this path. Sorted-page and VLV
+continuations re-read the stored entry and reapply nestgroup response projection
+from a new request-scoped cache. Each graph has fixed entry, edge, depth, and
+expanded-value limits; no graph or mutable cache is shared between requests,
+so concurrent searches only share the immutable runtime snapshot and storage
+read transaction.
+
+The OpenLDAP `collect` overlay uses a separate, late Search-response
+projection. A request cache resolves each normalized template DN once, applies
+template entry/attribute/value ACLs, normalizes source values with the schema
+equality rule, and appends every configured contribution without de-duplication.
+The filter, Compare, and Sort views stay unchanged; target ACL filtering,
+attribute selection, paging/VLV response reconstruction, and valsort run on the
+final response view. Database rules precede frontend rules. This path does not
+reuse the RFC 3671 collective-attribute plan because those values are part of
+the logical entry and are deliberately visible to filters and Compare.
+
+The `translucent` runtime is database-local and owns one captive LDAP backend
+parsed from the overlay's child `olcDatabase={0}ldap` entry. Remote entries are
+the visibility anchor. A same-DN local entry replaces each matching attribute
+as a whole and appends local-only attributes before the complete request filter,
+ACL, and attribute-selection path runs. Configured local and remote attribute
+sets recursively split candidate filters; local candidates are confirmed by a
+remote base lookup, stale local entries stay hidden, and the merged entry is
+rechecked against the original filter. Compare stays local when the asserted
+attribute exists locally and otherwise uses the same back-ldap/chain network
+executor for remote fallback.
+
+Simple Bind tries the remote target first and `bindLocal` permits ordinary local
+authentication only after remote failure. Add, Modify, Delete, and ModifyDN
+write only partial local shadow entries; automatic parent glue is limited by
+`noGlue`, while `strict` controls deletion of attributes that are visible only
+remotely. Assertion controls on Add evaluate the proposed local entry, while
+Modify assertions evaluate the complete remote/local merged view before a
+shadow is created or changed. `pwmodLocal` stores Password Modify results in
+the local shadow after confirming that the remote DN exists. ManageDsaIT
+bypasses the overlay. These
+core paths are pinned to OpenLDAP 2.6.13 source and differential fixtures;
+advanced controls, OpenLDAP's non-root Modify-through-local-ACL edge,
+frontend/multiple instances, and arbitrary cross-overlay ordering or side
+effects remain outside the verified contract.
+
+Pbind is a database-local Bind overlay rather than a general proxy backend. For
+each non-anonymous Simple Bind it sends the original Bind request and controls
+to the ordered `olcDbURI` endpoints. The common outbound transport layer
+applies network deadlines, LDAPS or configured StartTLS, certificate/SAN/CRL
+policy, and the supported cipher/curve/protocol settings. A completed LDAP
+result is authoritative; only transport or framing failure advances to the
+next endpoint. The response path preserves result metadata, referrals, and
+controls, then installs the original local DN as the connection identity after
+success. Local `userPassword` is not consulted by pbind. Each attempt currently
+uses a fresh connection. `olcDbQuarantine` maintains shared health state across
+connections: it blocks requests until the current interval expires, admits a
+single retry probe, advances finite retry blocks, and resets after a responsive
+target. There is no outbound connection pool yet.
+
+Remoteauth is also database-local, but delegates selectively. Before ordinary
+local password verification, it reads the target entry in the selected
+partition and proceeds only when the entry has no `userPassword`, has a valid
+remote DN in `olcRemoteAuthDNAttribute`, and has a domain from
+`olcRemoteAuthDomainAttribute` or the configured default. Domain mapping and
+default-realm selection produce either one LDAP URI or a line-oriented
+`file://` provider list; providers are attempted in order across the configured
+retry rounds. The same outbound TLS layer is used, with an additional
+hostname-to-leaf-public-key pin check supporting SHA and SM3 digests. Invalid
+credentials stop failover, while connection failures continue it.
+
+Successful remoteauth can optionally materialize a local credential. The
+server hashes the accepted cleartext with the first effective
+`olcPasswordHash`, reopens the entry in a write transaction, and stores it only
+if no concurrent writer has added `userPassword`. Normal LastMod and Sync
+publication paths are reused. A failed writeback is logged and
+does not turn successful remote authentication into a failed Bind. Subsequent
+Binds use the local hash and bypass remoteauth. The outbound authentication
+paths still lack pooled connections; remoteauth has no endpoint-health
+scheduler, and broad platform TLS/pin fault topologies remain untested.
+
+Homedir wraps committed Store updates and records entry images before and after
+each transaction. Only after a successful commit does it pair ModifyDN
+delete/add records by `entryUUID` and apply the effective database or frontend
+overlay. This keeps aborted LDAP writes free of filesystem side effects while
+preserving OpenLDAP's rule that a later filesystem failure is logged and does
+not undo the LDAP write. Each configured replacement is reduced to a bounded
+absolute root; `os.Root` operations plus parent-symlink checks constrain copy,
+rename, chown, delete, and archive work to that boundary. Filesystem effects are
+serialized for deterministic transitions. The design assumes POSIX UID/GID and
+`Lchown` semantics and supports one homedir instance per database or frontend.
+
+The auditlog runtime can be attached to a database and once to the frontend.
+A successful write is rendered after LastMod and overlay mutations are known;
+both applicable instances receive independent records using the selected
+backend's first suffix. Each append opens and closes its configured file under
+a server mutex, which preserves complete LDIF records across concurrent
+connections and supports external rename-based rotation. File I/O errors are
+reported to the logger after the directory write and never replace its LDAP
+result.
 
 ### Configuration
 
@@ -216,9 +402,26 @@ client certificates for ECDHE.
 The consumer can replay a remote OpenLDAP accesslog as delta-syncrepl. Each
 audit operation and its cookie share a storage transaction; malformed or
 non-replayable history clears the consumer cookie and forces a conventional
-refresh before log streaming resumes. A local provider-side durable accesslog
-overlay remains a future layer and must not treat the current process-local
-provider stream as a crash-recovery log.
+refresh before log streaming resumes. The local accesslog overlay writes audit
+records and source changes in the same storage transaction, republishes those
+records through the log database's sync provider, and maintains durable
+`contextCSN`/`minCSN` boundaries across restart and purge. A consumer cookie
+older than `minCSN` receives `syncRefreshRequired`, forcing a standard refresh
+instead of silently skipping deleted history.
+
+`syncdata=changelog` follows the DSEE retro changelog protocol instead of RFC
+4533 or OpenLDAP accesslog. The consumer reads `firstChangeNumber` and
+`lastChangeNumber` from the Root DSE and uses an ordinary suffix snapshot when
+its per-RID position is absent, zero, outside the retained range, or reset by a
+replay gap. Snapshot completion removes stale local entries and stores the
+provider boundary as both private metadata and the operational
+`lastChangeNumber`. A one-level changelog search then parses each `changes`
+attribute with an LDIF parser and applies Add, Modify, ModDN, or Delete in the
+same transaction as the new position. A discontinuous change number rolls back
+and resets replay state for a later full refresh, while transport failures
+preserve the last durable position. Refresh-and-persist adds the Netscape
+Persistent Search control. This architecture is exercised by an in-process
+protocol provider; it is not evidence of real Oracle DSEE interoperability.
 
 ### Security
 
@@ -265,6 +468,16 @@ values to the client. LDAP URL mappings perform an internal anonymous
 auth-check search and require exactly one result, including `auth` access to
 the search base, candidate entry, and filter attributes.
 
+ACL evaluation receives both effective and real identities plus normalized
+peer, local-socket, domain, listener-URL, and overall/transport/TLS/SASL SSF
+connection context. Target DN and value regular expressions retain separate
+capture sets for expansion into DN, group, set, and connection selectors.
+Group and set traversal use the operation's storage reader, so membership and
+attribute chasing observe the same transaction snapshot as the protected
+operation. `OpenLDAPaci` is schema-typed and evaluated as a dynamic ACL source,
+including inherited scopes and grant/deny masks. Unsupported ACL or dynacl
+syntax is rejected while loading the immutable runtime rather than ignored.
+
 RFC 4370 controls are resolved before operation dispatch and removed before
 operation-specific control parsing. The connection's authenticated DN is
 retained while a request-local effective DN drives ACL, root, operational
@@ -285,10 +498,14 @@ OpenSSL cipher-expression language cannot be represented by `crypto/tls`.
 
 Before handing a provider socket to `go-ldap`, the consumer owns a bounded BER
 exchange layer for StartTLS and multi-round SASL Bind. This permits EXTERNAL
-with an authorization ID, PLAIN, CRAM-MD5, and SCRAM-SHA-1/256/512 while the
-existing DIGEST-MD5 path remains available. SCRAM derives and verifies both
-proofs through `xdg-go/scram`; LDAP framing, result validation, round limits,
-timeouts, and OpenLDAP `secprops` policy remain internal. GSSAPI is handed to
+with an authorization ID, PLAIN, CRAM-MD5, DIGEST-MD5, and
+SCRAM-SHA-1/256/512. The DIGEST-MD5 conversation preserves repeated realm
+directives, validates or selects a realm, carries `authzid`, derives
+`ldap/<host>` from the selected provider, and accepts the Bind only after a
+strict `rspauth` check; it selects `qop=auth` and no SASL security layer. SCRAM
+derives and verifies both proofs through `xdg-go/scram`; LDAP framing, result
+validation, round limits, timeouts, and OpenLDAP `secprops` policy remain
+internal. GSSAPI is handed to
 `go-ldap` after transport negotiation and uses its pure-Go Kerberos client
 with password, keytab, or FILE credential-cache acquisition. That client
 selects no RFC 4752 security layer. During RFC 4533 streaming, a bounded
@@ -299,10 +516,65 @@ refresh only and is removed after refresh-done for persistent searches. SCRAM
 channel-binding variants and negotiated SASL integrity/privacy layers are not
 yet implemented.
 
+The proxy cache is a database-local overlay on back-ldap. Its runtime
+configuration is immutable; a mutex-protected query store is reused only when
+an online reload preserves the complete cache fingerprint. A structured
+Filter AST prototype selects a configured template and the selected attrset,
+normalized base DN, scope, and concrete filter form the query key. Misses are
+fully staged from the remote BER stream and committed only after a successful
+SearchResultDone. Hits re-encode cached entries for the current requested
+attributes and `typesOnly` flag. Expiration is evaluated at the same
+consistency-period boundary used by the checker model, so an expired query can
+remain visible only inside that configured window. Phase 1 deliberately has
+no private database. Phase 2 adds TTR single-flight refresh, an offline mode
+that pauses expiry age, `olcPcacheMaxQueries`, query-level LRU, and OpenLDAP's
+observable delayed `>` maximum-entry boundary. Proxy writes deliberately do
+not invalidate matching cache entries before TTL. `olcPcachePersist` is part of
+the configuration fingerprint, but restart does not restore query state; this
+matches the pinned 2.6.13 fixture instead of advertising persistence that was
+not observed. Bind caching, query deletion, and full filter containment remain
+unsupported.
+
+The built-in OTP overlay is attached only to writable local databases and
+intercepts non-anonymous
+Simple Bind for entries derived from `oathUser`. It reads the user, token, and
+parameter entries through the database partition writer, validates TOTP before
+HOTP, and advances the selected token in the same storage transaction. The
+committed static-password prefix then enters the existing password and ppolicy
+Bind path. This preserves OpenLDAP's observable ordering: a valid OTP is
+consumed before a wrong static password is rejected, while Password Modify
+continues to operate only on the static password and never resets token state.
+Internal token reads deliberately bypass caller read ACLs; normal Search and
+Modify still use the ordinary ACL and schema paths. Unlike OpenLDAP 2.6.13's
+read/release/Modify sequence, the transactional update allows only one
+concurrent redemption of a token. The upstream TOTP drift placement bug is
+preserved for compatibility: drift is read from the params entry and written
+to the token entry. HMAC-SM3 and encrypted seed storage are not implied by this
+implementation.
+
+The AutoCA overlay is also database-local. Runtime activation reads or creates
+one CA certificate and PKCS#8 private key on the first naming-context suffix.
+Only a Search whose requested attributes resolve, in order, to
+`userCertificate;binary` and `userPrivateKey;binary` can trigger leaf
+issuance. The requester must be the database root or the returned entry itself,
+and the original entry must satisfy the Search filter and entry ACLs. A storage
+update rechecks the private-key attribute before signing, so concurrent strict
+Search requests converge on one persisted DER pair. The subsequent normal
+Search projection applies attribute ACLs, allowing self-service issuance while
+still hiding `userPrivateKey` when policy denies it. The default
+`openldap-rsa` profile follows OpenLDAP's RSA behavior. The explicitly labelled
+ldap-go extension `olcAutoCAProfile=sm2-sm3` selects SM2 keys and SM3
+signatures; it does not imply that an unmodified OpenLDAP server understands
+that configuration attribute. AutoCA currently stores material in LDAP but
+does not install `olcAutoCAlocalDN` material into the listener TLS context.
+
 ## Data migration contract
 
-`ldap-go import` must accept unmodified LDIF emitted by OpenLDAP `slapcat` for
-content databases and `cn=config`. Import must:
+For documented features, `ldap-go import` accepts unmodified LDIF emitted by
+OpenLDAP `slapcat` for content databases and `cn=config`. This is a semantic
+interchange contract, not a claim that every imported OpenLDAP configuration
+object has equivalent runtime behavior. Within the supported subset, import
+must:
 
 - preserve DNs, attribute options, binary values, entry UUIDs, and CSNs;
 - validate schema while supporting an explicit bootstrap order for custom

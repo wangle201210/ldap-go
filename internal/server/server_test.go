@@ -1097,7 +1097,7 @@ func TestLDAPClientOnlineConfigReloadsAtomically(t *testing.T) {
 	assertLDAPResultCode(t, searchData(), ldap.LDAPResultNoSuchObject)
 
 	invalid := ldap.NewModifyRequest(dataConfigDN, nil)
-	invalid.Replace("olcAccess", []string{`{0}to filter="(uid=*)" by * manage`})
+	invalid.Replace("olcAccess", []string{`{0}to * by dynacl/custom=example manage`})
 	assertLDAPResultCode(t, configClient.Modify(invalid), ldap.LDAPResultConstraintViolation)
 	if err := store.View(context.Background(), func(reader storage.Reader) error {
 		dn, err := directory.ParseDN(dataConfigDN)

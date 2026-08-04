@@ -103,6 +103,8 @@ func TestRetcodeOverlayOnlineLifecycle(t *testing.T) {
 		"cn=Success,ou=RetCodes,dc=example,dc=com",
 		nil,
 	)
+	syntheticAdd.Attribute("objectClass", []string{"organizationalRole"})
+	syntheticAdd.Attribute("cn", []string{"Success"})
 	if err := dataClient.Add(syntheticAdd); err != nil {
 		t.Fatalf("retcode Add(success): %v", err)
 	}

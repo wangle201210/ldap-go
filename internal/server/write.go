@@ -83,7 +83,8 @@ func (server *Server) handleAdd(
 			supportsPostRead|
 			supportsManageDsaIT|
 			supportsPasswordPolicy|
-			supportsRelax,
+			supportsRelax|
+			supportsNoOp,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
@@ -104,6 +105,17 @@ func (server *Server) handleAdd(
 			message.ID,
 			ldapwire.ApplicationAddResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if len(request.Entry.Attributes) == 0 {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"no attributes provided",
+			),
 		)
 	}
 	if isSubschemaDN(dn) {
@@ -146,6 +158,37 @@ func (server *Server) handleAdd(
 			*result,
 		)
 	}
+	if result := databaseRestrictionResult(state.runtime, dn, restrictAdd); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			*result,
+		)
+	}
+	if databaseUsesNullBackend(state.runtime, *database) {
+		return server.writeNullOperationResult(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			dn,
+			controls,
+			false,
+			true,
+		)
+	}
+	if handled, err := server.tryTranslucentAdd(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		controls,
+	); handled {
+		return err
+	}
 	if result := validateNewEntry(request.Entry, dn); result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
 	}
@@ -156,14 +199,20 @@ func (server *Server) handleAdd(
 	}
 
 	entry := request.Entry.Clone()
+	writeRecord := accesslogWriteRecord{
+		operation:       accesslogAdd,
+		session:         state.connectionID,
+		authorizationDN: state.boundDN,
+		requestDN:       dn,
+	}
 
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
-		syncChange       *syncChange
+		syncChanges      []*syncChange
 	)
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		if _, err := server.entryOrReferral(
 			state.runtime,
 			tx,
@@ -328,9 +377,10 @@ func (server *Server) handleAdd(
 						return err
 					}
 					if belowContext {
-						return operationFailed(
+						return operationFailedWithMatchedDN(
 							ldapwire.ResultNoSuchObject,
 							server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
+							"",
 						)
 					}
 				}
@@ -446,6 +496,9 @@ func (server *Server) handleAdd(
 		if postRead != nil {
 			responseControls = append(responseControls, *postRead)
 		}
+		if controls.noOp {
+			return noOperationFailure()
+		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
@@ -456,18 +509,34 @@ func (server *Server) handleAdd(
 				return validationErr
 			}
 		}
-		var changeErr error
-		syncChange, changeErr = server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChange(
 			writer,
 			state.runtime,
 			*database,
 			nil,
 			&entry,
 		)
-		return changeErr
+		if changeErr != nil {
+			return changeErr
+		}
+		syncChanges = appendSyncChanges(syncChanges, sourceChange)
+		writeRecord.after = &entry
+		logChanges, logErr := server.recordAccesslogWrite(
+			writer,
+			state.runtime,
+			*database,
+			writeRecord,
+			sourceChange,
+		)
+		if logErr != nil {
+			return logErr
+		}
+		syncChanges = append(syncChanges, logChanges...)
+		return nil
 	})
 	if err == nil {
-		server.finishWriteEffects(ctx, nextRuntime, syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
+		server.finishAuditlogWrite(state, *database, writeRecord)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -492,7 +561,9 @@ func (server *Server) handleModify(
 			supportsPostRead|
 			supportsManageDsaIT|
 			supportsPasswordPolicy|
-			supportsRelax,
+			supportsRelax|
+			supportsNoOp|
+			supportsPermissiveModify,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
@@ -506,6 +577,11 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	frontendSeqmodRelease, err := acquireFrontendSeqmod(ctx, state.runtime, dn)
+	if err != nil {
+		return err
+	}
+	defer frontendSeqmodRelease()
 	if isSubschemaDN(dn) {
 		return server.writeOperationResult(
 			connection,
@@ -526,6 +602,11 @@ func (server *Server) handleModify(
 			),
 		)
 	}
+	databaseSeqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, dn)
+	if err != nil {
+		return err
+	}
+	defer databaseSeqmodRelease()
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
 		connection,
@@ -552,6 +633,50 @@ func (server *Server) handleModify(
 			controls.passwordPolicy,
 		)
 	}
+	if isMonitorDatabase(*database) {
+		if state.boundDN == "" && !state.runtime.allows.anonymousUpdates {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationModifyResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultStrongerAuthRequired,
+					"modifications require authentication",
+				),
+			)
+		}
+		if database.readOnly {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationModifyResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"operation restricted",
+				),
+			)
+		}
+		if databaseRestricts(*database, restrictModify) {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationModifyResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"operation restricted",
+				),
+			)
+		}
+		return server.modifyMonitorEntry(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			dn,
+			request.Changes,
+			controls,
+		)
+	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, dn); result != nil {
 		return server.writeOperationResult(
 			connection,
@@ -560,8 +685,50 @@ func (server *Server) handleModify(
 			*result,
 		)
 	}
+	if result := databaseRestrictionResult(state.runtime, dn, restrictModify); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			*result,
+		)
+	}
+	if databaseUsesNullBackend(state.runtime, *database) {
+		return server.writeNullOperationResult(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			dn,
+			controls,
+			true,
+			true,
+		)
+	}
+	if handled, err := server.tryTranslucentModify(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		controls,
+	); handled {
+		return err
+	}
 	var responseControls []ldapwire.Control
-	nextRuntime, syncChange, err := server.modifyEntry(
+	writeRecord := &accesslogWriteRecord{
+		operation:       accesslogModify,
+		session:         state.connectionID,
+		authorizationDN: state.boundDN,
+		requestDN:       dn,
+	}
+	configurationWrite := isConfigurationDN(dn)
+	if configurationWrite {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
+	nextRuntime, syncChanges, err := server.modifyEntry(
 		ctx,
 		state.runtime,
 		state.boundDN,
@@ -570,6 +737,8 @@ func (server *Server) handleModify(
 		request.Changes,
 		controls.manageDsaIT,
 		controls.relax,
+		controls.permissiveModify,
+		controls.noOp,
 		func(reader storage.Reader, entry directory.Entry) error {
 			if err := server.checkAssertion(
 				state.runtime,
@@ -621,9 +790,11 @@ func (server *Server) handleModify(
 			}
 			return nil
 		},
+		writeRecord,
 	)
 	if err == nil {
-		server.finishWriteEffects(ctx, nextRuntime, syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
+		server.finishAuditlogWrite(state, *database, *writeRecord)
 		if passwordPolicyModifiesPassword(
 			state.runtime,
 			request.Changes,
@@ -667,22 +838,21 @@ func (server *Server) modifyEntry(
 	changes []ldapwire.Modification,
 	manageDsaIT bool,
 	relax bool,
+	permissiveModify bool,
+	noOp bool,
 	precondition entryModificationPrecondition,
 	processor entryModificationProcessor,
 	postcondition entryModificationPostcondition,
-) (*runtimeState, *syncChange, error) {
+	accesslogRecord *accesslogWriteRecord,
+) (*runtimeState, []*syncChange, error) {
 	configurationWrite := isConfigurationDN(dn)
-	if configurationWrite {
-		server.configMu.Lock()
-		defer server.configMu.Unlock()
-	}
 
 	var (
 		nextRuntime *runtimeState
-		syncChange  *syncChange
+		syncChanges []*syncChange
 	)
 	err := server.updateStorage(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, database)
 		entry, err := server.entryOrReferral(
 			runtime,
 			tx,
@@ -691,13 +861,19 @@ func (server *Server) modifyEntry(
 			manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(
+			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(runtime, tx, boundDN, dn),
+				"",
 			)
 		}
 		if err != nil {
 			return err
+		}
+		if !configurationWrite {
+			if err := validateCollectModify(runtime, database, dn, changes); err != nil {
+				return err
+			}
 		}
 		before := entry.Clone()
 		collectivePlan, err := buildCollectiveAttributePlan(runtime.schema, tx)
@@ -759,6 +935,11 @@ func (server *Server) modifyEntry(
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
+		if configurationWrite {
+			if err := validateDefaultSearchBaseOnlineChanges(processedChanges); err != nil {
+				return err
+			}
+		}
 		for _, change := range processedChanges {
 			if runtime.schema.IsCollective(change.Attribute.Description) &&
 				!runtime.schema.EntryHasObjectClass(
@@ -787,7 +968,11 @@ func (server *Server) modifyEntry(
 			)) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
 			}
-			if failure := applyModification(&entry, change); failure != nil {
+			if failure := applyModificationWithPermissive(
+				&entry,
+				change,
+				permissiveModify,
+			); failure != nil {
 				return failure
 			}
 		}
@@ -884,24 +1069,50 @@ func (server *Server) modifyEntry(
 				return err
 			}
 		}
+		if noOp {
+			return noOperationFailure()
+		}
 		if configurationWrite {
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
 			if err != nil {
 				return err
 			}
+			applyMetaBackendOnlineURIModification(nextRuntime, dn, processedChanges)
 		}
-		var changeErr error
-		syncChange, changeErr = server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChange(
 			writer,
 			runtime,
 			database,
 			&before,
 			&entry,
 		)
-		return changeErr
+		if changeErr != nil {
+			return changeErr
+		}
+		syncChanges = appendSyncChanges(syncChanges, sourceChange)
+		if accesslogRecord == nil {
+			return nil
+		}
+		record := *accesslogRecord
+		record.before = &before
+		record.after = &entry
+		record.modifications = processedChanges
+		logChanges, logErr := server.recordAccesslogWrite(
+			writer,
+			runtime,
+			database,
+			record,
+			sourceChange,
+		)
+		if logErr != nil {
+			return logErr
+		}
+		*accesslogRecord = record
+		syncChanges = append(syncChanges, logChanges...)
+		return nil
 	})
-	return nextRuntime, syncChange, err
+	return nextRuntime, syncChanges, err
 }
 
 func (server *Server) handleDelete(
@@ -913,7 +1124,11 @@ func (server *Server) handleDelete(
 ) error {
 	controls, result := parseRequestControls(
 		message.Controls,
-		supportsAssertion|supportsPreRead|supportsManageDsaIT|supportsRelax,
+		supportsAssertion|
+			supportsPreRead|
+			supportsManageDsaIT|
+			supportsRelax|
+			supportsNoOp,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
@@ -975,6 +1190,37 @@ func (server *Server) handleDelete(
 			*result,
 		)
 	}
+	if result := databaseRestrictionResult(state.runtime, dn, restrictDelete); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			*result,
+		)
+	}
+	if databaseUsesNullBackend(state.runtime, *database) {
+		return server.writeNullOperationResult(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			dn,
+			controls,
+			true,
+			false,
+		)
+	}
+	if handled, err := server.tryTranslucentDelete(
+		ctx,
+		connection,
+		state,
+		message,
+		dn,
+		controls,
+	); handled {
+		return err
+	}
 	configurationWrite := isConfigurationDN(dn)
 	if configurationWrite {
 		server.configMu.Lock()
@@ -984,10 +1230,16 @@ func (server *Server) handleDelete(
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
-		syncChange       *syncChange
+		syncChanges      []*syncChange
 	)
+	writeRecord := accesslogWriteRecord{
+		operation:       accesslogDelete,
+		session:         state.connectionID,
+		authorizationDN: state.boundDN,
+		requestDN:       dn,
+	}
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		entry, err := server.entryOrReferral(
 			state.runtime,
 			tx,
@@ -996,9 +1248,10 @@ func (server *Server) handleDelete(
 			controls.manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(
+			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
+				"",
 			)
 		}
 		if err != nil {
@@ -1049,6 +1302,12 @@ func (server *Server) handleDelete(
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
+		if configurationWrite && isConfiguredMetaBackendTarget(state.runtime, entry, dn) {
+			return operationFailed(
+				ldapwire.ResultUnwillingToPerform,
+				"online back-meta target deletion is not supported",
+			)
+		}
 		preRead, err := server.readResponseControl(
 			state.runtime,
 			tx,
@@ -1078,7 +1337,10 @@ func (server *Server) handleDelete(
 			return err
 		}
 		if hasChildren {
-			return operationFailed(ldapwire.ResultNotAllowedOnNonLeaf, "")
+			return operationFailed(
+				ldapwire.ResultNotAllowedOnNonLeaf,
+				"subordinate objects must be deleted first",
+			)
 		}
 		if err := tx.Delete(dn); err != nil {
 			return err
@@ -1101,6 +1363,9 @@ func (server *Server) handleDelete(
 				return err
 			}
 		}
+		if controls.noOp {
+			return noOperationFailure()
+		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
@@ -1111,18 +1376,35 @@ func (server *Server) handleDelete(
 				return err
 			}
 		}
-		var changeErr error
-		syncChange, changeErr = server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChange(
 			writer,
 			state.runtime,
 			*database,
 			&entry,
 			nil,
 		)
-		return changeErr
+		if changeErr != nil {
+			return changeErr
+		}
+		syncChanges = appendSyncChanges(syncChanges, sourceChange)
+		before := entry.Clone()
+		writeRecord.before = &before
+		logChanges, logErr := server.recordAccesslogWrite(
+			writer,
+			state.runtime,
+			*database,
+			writeRecord,
+			sourceChange,
+		)
+		if logErr != nil {
+			return logErr
+		}
+		syncChanges = append(syncChanges, logChanges...)
+		return nil
 	})
 	if err == nil {
-		server.finishWriteEffects(ctx, nextRuntime, syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
+		server.finishAuditlogWrite(state, *database, writeRecord)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -1146,7 +1428,8 @@ func (server *Server) handleModifyDN(
 			supportsPreRead|
 			supportsPostRead|
 			supportsManageDsaIT|
-			supportsRelax,
+			supportsRelax|
+			supportsNoOp,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
@@ -1196,6 +1479,11 @@ func (server *Server) handleModifyDN(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	frontendSeqmodRelease, err := acquireFrontendSeqmod(ctx, state.runtime, oldDN)
+	if err != nil {
+		return err
+	}
+	defer frontendSeqmodRelease()
 	database := databaseForDN(state.runtime, oldDN)
 	destinationDatabase := databaseForDN(state.runtime, newDN)
 	if database == nil {
@@ -1209,6 +1497,11 @@ func (server *Server) handleModifyDN(
 			),
 		)
 	}
+	databaseSeqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, oldDN)
+	if err != nil {
+		return err
+	}
+	defer databaseSeqmodRelease()
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
 		connection,
@@ -1245,6 +1538,38 @@ func (server *Server) handleModifyDN(
 			*result,
 		)
 	}
+	if result := databaseRestrictionResult(state.runtime, oldDN, restrictRename); result != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			*result,
+		)
+	}
+	if databaseUsesNullBackend(state.runtime, *database) {
+		return server.writeNullOperationResult(
+			ctx,
+			connection,
+			state,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			oldDN,
+			controls,
+			true,
+			true,
+		)
+	}
+	if handled, err := server.tryTranslucentModifyDN(
+		ctx,
+		connection,
+		state,
+		message,
+		oldDN,
+		newDN,
+		controls,
+	); handled {
+		return err
+	}
 	configurationWrite := isConfigurationDN(oldDN)
 	if configurationWrite != isConfigurationDN(newDN) {
 		return server.writeOperationResult(
@@ -1278,10 +1603,18 @@ func (server *Server) handleModifyDN(
 	var (
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
-		syncChange       *syncChange
+		syncChanges      []*syncChange
 	)
+	writeRecord := accesslogWriteRecord{
+		operation:       accesslogModifyDN,
+		session:         state.connectionID,
+		authorizationDN: state.boundDN,
+		requestDN:       oldDN,
+		newRDN:          request.NewRDN,
+		deleteOldRDN:    request.DeleteOldRDN,
+	}
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		sourceEntry, err := server.entryOrReferral(
 			state.runtime,
 			tx,
@@ -1290,9 +1623,10 @@ func (server *Server) handleModifyDN(
 			controls.manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
-			return operationFailed(
+			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(state.runtime, tx, state.boundDN, oldDN),
+				"",
 			)
 		}
 		if err != nil {
@@ -1322,7 +1656,7 @@ func (server *Server) handleModifyDN(
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				return operationFailed(
 					ldapwire.ResultNoSuchObject,
-					server.disclosedAncestor(state.runtime, tx, state.boundDN, superior),
+					"new superior not found",
 				)
 			}
 			if err != nil {
@@ -1641,6 +1975,9 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 		}
+		if controls.noOp {
+			return noOperationFailure()
+		}
 		if err := refreshNamingContexts(writer); err != nil {
 			return err
 		}
@@ -1651,18 +1988,41 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 		}
-		var changeErr error
-		syncChange, changeErr = server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChange(
 			writer,
 			state.runtime,
 			*database,
 			&sourceBefore,
 			renamedEntry,
 		)
-		return changeErr
+		if changeErr != nil {
+			return changeErr
+		}
+		syncChanges = appendSyncChanges(syncChanges, sourceChange)
+		var logSuperior *directory.DN
+		if request.HasNewSuperior {
+			value := superior
+			logSuperior = &value
+		}
+		writeRecord.before = &sourceBefore
+		writeRecord.after = renamedEntry
+		writeRecord.newSuperior = logSuperior
+		logChanges, logErr := server.recordAccesslogWrite(
+			writer,
+			state.runtime,
+			*database,
+			writeRecord,
+			sourceChange,
+		)
+		if logErr != nil {
+			return logErr
+		}
+		syncChanges = append(syncChanges, logChanges...)
+		return nil
 	})
 	if err == nil {
-		server.finishWriteEffects(ctx, nextRuntime, syncChange)
+		server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
+		server.finishAuditlogWrite(state, *database, writeRecord)
 	}
 	return server.finishOperationWithControls(
 		connection,
@@ -1682,7 +2042,7 @@ func (server *Server) handleCompare(
 ) error {
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
-		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy,
+		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy|supportsNoOp,
 		state.runtime.disallows,
 	)
 	if controlFailure != nil {
@@ -1722,6 +2082,28 @@ func (server *Server) handleCompare(
 			)
 		}
 	}
+	if isSubschemaDN(dn) && frontendRestricts(state.runtime, restrictCompare) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationCompareResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+		)
+	}
+	if database != nil && databaseRestricts(*database, restrictCompare) {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationCompareResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+		)
+	}
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
 		connection,
@@ -1734,15 +2116,90 @@ func (server *Server) handleCompare(
 	); handled {
 		return err
 	}
+	if database != nil && databaseUsesNullBackend(state.runtime, *database) {
+		result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
+		if controls.assertion != nil {
+			result.Code = ldapwire.ResultAssertionFailed
+		}
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationCompareResponse,
+			result,
+		)
+	}
+	if database != nil && !controls.manageDsaIT &&
+		activeTranslucentConfiguration(database) != nil {
+		remote, remoteErr := server.translucentCompareUsesRemote(
+			ctx,
+			*database,
+			dn,
+			request.Attribute,
+		)
+		if remoteErr != nil {
+			return server.internalOperationError(
+				connection,
+				message.ID,
+				ldapwire.ApplicationCompareResponse,
+				remoteErr,
+			)
+		}
+		if remote {
+			attempt, failure := server.executeTranslucentOperation(
+				ctx,
+				state,
+				*database,
+				message,
+			)
+			if failure != nil {
+				return server.writeOperationResult(
+					connection,
+					message.ID,
+					ldapwire.ApplicationCompareResponse,
+					*failure,
+				)
+			}
+			return server.writeLDAPBackendAttempt(connection, message, attempt)
+		}
+	}
+	var monitorEntries map[string]directory.Entry
+	if database != nil && isMonitorDatabase(*database) {
+		monitorEntries, _, err = server.monitorEntryIndex(state.runtime)
+		if err != nil {
+			return server.internalOperationError(
+				connection,
+				message.ID,
+				ldapwire.ApplicationCompareResponse,
+				err,
+			)
+		}
+	}
 
 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := reader
-		if database != nil {
-			tx = storage.ReaderInPartition(reader, database.partition)
+		if database != nil && !isMonitorDatabase(*database) {
+			tx = readerForDatabase(reader, *database)
 		}
 		var entry directory.Entry
-		if isSubschemaDN(dn) {
+		if monitorEntries != nil {
+			var exists bool
+			entry, exists = monitorEntries[dn.Key()]
+			if !exists {
+				return operationFailedWithMatchedDN(
+					ldapwire.ResultNoSuchObject,
+					monitorMatchedDN(
+						state.runtime,
+						server,
+						reader,
+						state.boundDN,
+						dn,
+						monitorEntries,
+					),
+					"",
+				)
+			}
+		} else if isSubschemaDN(dn) {
 			entry = server.subschemaEntry(state.runtime)
 		} else {
 			var getErr error
@@ -1760,9 +2217,10 @@ func (server *Server) handleCompare(
 						"copy not used",
 					)
 				}
-				return operationFailed(
+				return operationFailedWithMatchedDN(
 					ldapwire.ResultNoSuchObject,
 					server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
+					"",
 				)
 			}
 			if getErr != nil {
@@ -1801,6 +2259,38 @@ func (server *Server) handleCompare(
 		); err != nil {
 			return err
 		}
+		var dynlistPlans *dynlistProjectionCache
+		var dynlistCompareHandled bool
+		var dynlistCompareMatched bool
+		rawEntry := entry
+		if database != nil && !controls.manageDsaIT {
+			dynlistPlans = newDynlistProjectionCache(
+				ctx,
+				server,
+				state.runtime,
+				reader,
+				state.boundDN,
+				dynlistProjectionRequest{
+					compareAttribute: request.Attribute,
+				},
+			)
+			dynlistCompareHandled, dynlistCompareMatched, err =
+				dynlistPlans.dynamicListDNCompare(
+					*database,
+					rawEntry,
+					request.Attribute,
+					request.Assertion,
+				)
+			if err != nil {
+				return err
+			}
+			if !dynlistCompareHandled {
+				entry, _, err = dynlistPlans.apply(*database, entry)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		if !server.allowed(
 			state.runtime,
 			tx,
@@ -1812,10 +2302,33 @@ func (server *Server) handleCompare(
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
+		if dynlistCompareHandled {
+			if dynlistCompareMatched {
+				result.Code = ldapwire.ResultCompareTrue
+			}
+			return nil
+		}
 		if !state.runtime.schema.HasAttributeDescription(
 			entry,
 			request.Attribute,
 		) {
+			if dynlistPlans != nil {
+				handled, matched, compareErr := dynlistPlans.dynamicGroupCompare(
+					*database,
+					rawEntry,
+					request.Attribute,
+					request.Assertion,
+				)
+				if compareErr != nil {
+					return compareErr
+				}
+				if handled {
+					if matched {
+						result.Code = ldapwire.ResultCompareTrue
+					}
+					return nil
+				}
+			}
 			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
 		}
 		for _, value := range state.runtime.schema.AttributeValues(
@@ -1900,14 +2413,92 @@ func applyModification(entry *directory.Entry, change ldapwire.Modification) err
 	}
 	switch {
 	case errors.Is(err, directory.ErrNoSuchAttribute):
-		return operationFailed(ldapwire.ResultNoSuchAttribute, "")
+		diagnostic := ""
+		if change.Operation == ldapwire.ModificationDelete {
+			detail := "no such attribute"
+			if entry.HasAttribute(change.Attribute.Description) {
+				detail = "no such value"
+			}
+			diagnostic = fmt.Sprintf(
+				"modify/delete: %s: %s",
+				change.Attribute.Description,
+				detail,
+			)
+		}
+		return operationFailed(
+			ldapwire.ResultNoSuchAttribute,
+			diagnostic,
+		)
 	case errors.Is(err, directory.ErrAttributeValueExists):
-		return operationFailed(ldapwire.ResultAttributeOrValueExists, "")
+		valueIndex := 0
+		for index, value := range change.Attribute.Values {
+			if entry.HasValue(change.Attribute.Description, value) {
+				valueIndex = index
+				break
+			}
+		}
+		return operationFailed(
+			ldapwire.ResultAttributeOrValueExists,
+			fmt.Sprintf(
+				"modify/add: %s: value #%d already exists",
+				change.Attribute.Description,
+				valueIndex,
+			),
+		)
 	case errors.Is(err, directory.ErrInvalidIncrementValue):
 		return operationFailed(ldapwire.ResultConstraintViolation, "")
 	default:
 		return err
 	}
+}
+
+func applyModificationWithPermissive(
+	entry *directory.Entry,
+	change ldapwire.Modification,
+	permissive bool,
+) error {
+	if !permissive {
+		return applyModification(entry, change)
+	}
+	if len(change.Attribute.Values) == 0 {
+		if change.Operation == ldapwire.ModificationDelete &&
+			!entry.HasAttribute(change.Attribute.Description) {
+			return nil
+		}
+		return applyModification(entry, change)
+	}
+
+	filtered := change
+	filtered.Attribute.Values = nil
+	switch change.Operation {
+	case ldapwire.ModificationAdd:
+		for _, value := range change.Attribute.Values {
+			if !entry.HasValue(change.Attribute.Description, value) {
+				filtered.Attribute.Values = append(
+					filtered.Attribute.Values,
+					value,
+				)
+			}
+		}
+	case ldapwire.ModificationDelete:
+		if !entry.HasAttribute(change.Attribute.Description) {
+			return nil
+		}
+		for _, value := range change.Attribute.Values {
+			if entry.HasValue(change.Attribute.Description, value) {
+				filtered.Attribute.Values = append(
+					filtered.Attribute.Values,
+					value,
+				)
+			}
+		}
+	default:
+		return applyModification(entry, change)
+	}
+	if len(filtered.Attribute.Values) == 0 {
+		return nil
+	}
+	return applyModification(entry, filtered)
 }
 
 func schemaValidationResult(err error) ldapwire.Result {
@@ -2158,6 +2749,9 @@ func (server *Server) finishOperationWithControls(
 	controls []ldapwire.Control,
 ) error {
 	if failure := asOperationFailure(err); failure != nil {
+		if failure.result.Code == ldapwire.ResultNoOperation {
+			controls = nil
+		}
 		responseControls := append(
 			append([]ldapwire.Control(nil), controls...),
 			failure.controls...,
@@ -2275,6 +2869,18 @@ func (failure *operationFailure) Error() string {
 
 func operationFailed(code ldapwire.ResultCode, diagnostic string) error {
 	return &operationFailure{result: ldapwire.ResultError(code, diagnostic)}
+}
+
+func operationFailedWithMatchedDN(
+	code ldapwire.ResultCode,
+	matchedDN,
+	diagnostic string,
+) error {
+	return &operationFailure{result: ldapwire.Result{
+		Code:              code,
+		MatchedDN:         matchedDN,
+		DiagnosticMessage: diagnostic,
+	}}
 }
 
 func asOperationFailure(err error) *operationFailure {

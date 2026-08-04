@@ -572,6 +572,11 @@ func (server *Server) handleDynamicRefresh(
 			0,
 		)
 	}
+	seqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, dn)
+	if err != nil {
+		return err
+	}
+	defer seqmodRelease()
 	if len(retcodeConfigurationsForDatabase(state.runtime.databases, *database)) > 0 {
 		retcodeTargetExists, err := server.retcodeStoredEntryExists(ctx, *database, dn)
 		if err != nil {
@@ -626,6 +631,18 @@ func (server *Server) handleDynamicRefresh(
 			0,
 		)
 	}
+	if result := databaseRestrictionResult(
+		state.runtime,
+		dn,
+		restrictExtended,
+	); result != nil {
+		return server.writeDynamicRefreshResult(
+			connection,
+			message.ID,
+			*result,
+			0,
+		)
+	}
 
 	ttl := time.Duration(refresh.RequestTTL) * time.Second
 	if ttl > database.dds.maxTTL {
@@ -646,7 +663,7 @@ func (server *Server) handleDynamicRefresh(
 
 	var syncChange *syncChange
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return &operationFailure{result: ldapwire.Result{
@@ -934,7 +951,7 @@ func (server *Server) expireDDSDatabase(
 			database.disabled {
 			return nil
 		}
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, *database)
 		threshold := now.Add(-database.dds.tolerance)
 
 		type expiredEntry struct {

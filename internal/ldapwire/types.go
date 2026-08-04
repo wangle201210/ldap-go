@@ -206,6 +206,7 @@ const (
 	ResultAssertionFailed              ResultCode = 122
 	ResultProxiedAuthorizationDenied   ResultCode = 123
 	ResultSyncRefreshRequired          ResultCode = 4096
+	ResultNoOperation                  ResultCode = 0x410e
 	ResultTransactionIDInvalid         ResultCode = 0x4121
 )
 

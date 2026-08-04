@@ -13,13 +13,14 @@ func ParseAttributeType(description string) (AttributeType, error) {
 	if err != nil {
 		return AttributeType{}, err
 	}
+	oid, err := parser.readNumericOID("attribute type")
+	if err != nil {
+		return AttributeType{}, err
+	}
 	attribute := AttributeType{
-		OID:        parser.take(),
+		OID:        oid,
 		Usage:      UsageUserApplications,
 		Extensions: make(map[string][]string),
-	}
-	if attribute.OID == "" {
-		return AttributeType{}, parser.errorf("missing attribute type OID")
 	}
 
 	for !parser.atEnd() {
@@ -78,13 +79,14 @@ func ParseObjectClass(description string) (ObjectClass, error) {
 	if err != nil {
 		return ObjectClass{}, err
 	}
+	oid, err := parser.readNumericOID("object class")
+	if err != nil {
+		return ObjectClass{}, err
+	}
 	objectClass := ObjectClass{
-		OID:        parser.take(),
+		OID:        oid,
 		Kind:       ObjectClassStructural,
 		Extensions: make(map[string][]string),
-	}
-	if objectClass.OID == "" {
-		return ObjectClass{}, parser.errorf("missing object class OID")
 	}
 
 	for !parser.atEnd() {
@@ -128,12 +130,13 @@ func ParseDITContentRule(description string) (DITContentRule, error) {
 	if err != nil {
 		return DITContentRule{}, err
 	}
-	contentRule := DITContentRule{
-		OID:        parser.take(),
-		Extensions: make(map[string][]string),
+	oid, err := parser.readNumericOID("DIT content rule")
+	if err != nil {
+		return DITContentRule{}, err
 	}
-	if contentRule.OID == "" {
-		return DITContentRule{}, parser.errorf("missing DIT content rule OID")
+	contentRule := DITContentRule{
+		OID:        oid,
+		Extensions: make(map[string][]string),
 	}
 
 	seen := make(map[string]struct{})
@@ -181,19 +184,13 @@ func ParseNameForm(description string) (NameForm, error) {
 	if err != nil {
 		return NameForm{}, err
 	}
+	oid, err := parser.readNumericOID("name form")
+	if err != nil {
+		return NameForm{}, err
+	}
 	nameForm := NameForm{
-		OID:        parser.take(),
+		OID:        oid,
 		Extensions: make(map[string][]string),
-	}
-	if nameForm.OID == "" {
-		return NameForm{}, parser.errorf("missing name form OID")
-	}
-	if nameForm.OID[0] < '0' || nameForm.OID[0] > '9' ||
-		!validObjectIdentifier(nameForm.OID) {
-		return NameForm{}, parser.errorf(
-			"name form OID %q is not a numeric OID",
-			nameForm.OID,
-		)
 	}
 
 	seen := make(map[string]struct{})
@@ -334,6 +331,17 @@ func (parser *descriptionParser) take() string {
 	value := parser.tokens[parser.index]
 	parser.index++
 	return value
+}
+
+func (parser *descriptionParser) readNumericOID(kind string) (string, error) {
+	oid := parser.take()
+	if oid == "" {
+		return "", parser.errorf("missing %s OID", kind)
+	}
+	if oid[0] < '0' || oid[0] > '9' || !validObjectIdentifier(oid) {
+		return "", parser.errorf("%s OID %q is not a numeric OID", kind, oid)
+	}
+	return oid, nil
 }
 
 func (parser *descriptionParser) readOne() (string, error) {

@@ -10,26 +10,28 @@ import (
 )
 
 const (
-	assertionControlOID    = "1.3.6.1.1.12"
-	preReadControlOID      = "1.3.6.1.1.13.1"
-	postReadControlOID     = "1.3.6.1.1.13.2"
-	pagedResultsControlOID = "1.2.840.113556.1.4.319"
-	sortRequestControlOID  = "1.2.840.113556.1.4.473"
-	sortResponseControlOID = "1.2.840.113556.1.4.474"
-	vlvRequestControlOID   = "2.16.840.1.113730.3.4.9"
-	vlvResponseControlOID  = "2.16.840.1.113730.3.4.10"
-	manageDsaITControlOID  = "2.16.840.1.113730.3.4.2"
-	relaxControlOID        = "1.3.6.1.4.1.4203.666.5.12"
-	dontUseCopyControlOID  = "1.3.6.1.1.22"
-	subentriesControlOID   = "1.3.6.1.4.1.4203.1.10.1"
-	syncRequestControlOID  = "1.3.6.1.4.1.4203.1.9.1.1"
-	syncStateControlOID    = "1.3.6.1.4.1.4203.1.9.1.2"
-	syncDoneControlOID     = "1.3.6.1.4.1.4203.1.9.1.3"
-	syncInfoOID            = "1.3.6.1.4.1.4203.1.9.1.4"
-	valueSortControlOID    = "1.3.6.1.4.1.4203.666.5.14"
+	assertionControlOID        = "1.3.6.1.1.12"
+	preReadControlOID          = "1.3.6.1.1.13.1"
+	postReadControlOID         = "1.3.6.1.1.13.2"
+	noOpControlOID             = "1.3.6.1.4.1.4203.666.5.2"
+	pagedResultsControlOID     = "1.2.840.113556.1.4.319"
+	sortRequestControlOID      = "1.2.840.113556.1.4.473"
+	sortResponseControlOID     = "1.2.840.113556.1.4.474"
+	vlvRequestControlOID       = "2.16.840.1.113730.3.4.9"
+	vlvResponseControlOID      = "2.16.840.1.113730.3.4.10"
+	manageDsaITControlOID      = "2.16.840.1.113730.3.4.2"
+	relaxControlOID            = "1.3.6.1.4.1.4203.666.5.12"
+	permissiveModifyControlOID = "1.2.840.113556.1.4.1413"
+	dontUseCopyControlOID      = "1.3.6.1.1.22"
+	subentriesControlOID       = "1.3.6.1.4.1.4203.1.10.1"
+	syncRequestControlOID      = "1.3.6.1.4.1.4203.1.9.1.1"
+	syncStateControlOID        = "1.3.6.1.4.1.4203.1.9.1.2"
+	syncDoneControlOID         = "1.3.6.1.4.1.4203.1.9.1.3"
+	syncInfoOID                = "1.3.6.1.4.1.4203.1.9.1.4"
+	valueSortControlOID        = "1.3.6.1.4.1.4203.666.5.14"
 )
 
-type requestControlSupport uint16
+type requestControlSupport uint32
 
 const (
 	supportsAssertion requestControlSupport = 1 << iota
@@ -46,6 +48,9 @@ const (
 	supportsAccountUsability
 	supportsRelax
 	supportsValueSort
+	supportsNoOp
+	supportsPermissiveModify
+	supportsDeref
 )
 
 type requestControls struct {
@@ -62,7 +67,10 @@ type requestControls struct {
 	passwordPolicy   bool
 	accountUsability bool
 	relax            bool
+	noOp             bool
+	permissiveModify bool
 	valueSort        *valueSortControlRequest
+	deref            *derefControlRequest
 	chaining         *chainBehaviorRequest
 }
 
@@ -176,6 +184,26 @@ func parseRequestControlsWithDisallows(
 				return requestControls{}, result
 			}
 			parsed.postRead = request
+		case noOpControlOID:
+			if supported&supportsNoOp == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.noOp {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"noop control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"noop control value not absent",
+				)
+			}
+			parsed.noOp = true
 		case pagedResultsControlOID:
 			if supported&supportsPagedResults == 0 {
 				if control.Critical {
@@ -326,6 +354,26 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.relax = true
+		case permissiveModifyControlOID:
+			if supported&supportsPermissiveModify == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.permissiveModify {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"permissiveModify control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"permissiveModify control value not absent",
+				)
+			}
+			parsed.permissiveModify = true
 		case dontUseCopyControlOID:
 			if supported&supportsDontUseCopy == 0 {
 				if control.Critical {
@@ -448,6 +496,42 @@ func parseRequestControlsWithDisallows(
 				raw:      raw,
 				critical: control.Critical,
 			}
+		case ldapwire.DerefControlOID:
+			if supported&supportsDeref == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.deref != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Dereference control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Dereference control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Dereference control value is empty",
+				)
+			}
+			specs, err := decodeDerefRequestControlValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"Dereference control: derefSpec decoding error",
+				)
+			}
+			parsed.deref = &derefControlRequest{
+				specs:    specs,
+				critical: control.Critical,
+			}
 		case passwordPolicyControlOID:
 			if supported&supportsPasswordPolicy == 0 {
 				if control.Critical {
@@ -501,6 +585,19 @@ func parseRequestControlsWithDisallows(
 		)
 	}
 	return parsed, nil
+}
+
+func decodeDerefRequestControlValue(value []byte) ([]ldapwire.DerefSpec, error) {
+	// OpenLDAP's ber_first_element accepts any short-form constructed outer
+	// tag; normalize that container while retaining strict child decoding.
+	if len(value) > 0 &&
+		value[0]&0x20 != 0 &&
+		value[0]&0x1f != 0x1f &&
+		value[0] != 0x30 {
+		value = append([]byte(nil), value...)
+		value[0] = 0x30
+	}
+	return ldapwire.DecodeDerefRequestValue(value)
 }
 
 func parseReadControl(

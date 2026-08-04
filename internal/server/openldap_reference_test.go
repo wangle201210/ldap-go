@@ -17,7 +17,10 @@ import (
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
-const openLDAPReferenceTestsEnv = "LDAP_GO_OPENLDAP_REFERENCE_TESTS"
+const (
+	openLDAPReferenceTestsEnv = "LDAP_GO_OPENLDAP_REFERENCE_TESTS"
+	openLDAPSlapdDebugEnv     = "LDAP_GO_OPENLDAP_SLAPD_DEBUG"
+)
 
 type openLDAPReferenceTools struct {
 	slapd     string
@@ -27,6 +30,9 @@ type openLDAPReferenceTools struct {
 
 func TestOpenLDAPReferenceSyncSortAndVLV(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
+	if os.Getenv(openLDAPSlapdDebugEnv) == "" {
+		t.Setenv(openLDAPSlapdDebugEnv, "16385")
+	}
 	syncControl := ldapwire.Control{
 		OID:      syncRequestControlOID,
 		Critical: true,
@@ -233,19 +239,60 @@ func requireOpenLDAPReferenceTools(t *testing.T) openLDAPReferenceTools {
 		t.Skip("OpenLDAP schema directory was not found")
 	}
 
-	return openLDAPReferenceTools{
-		slapd: find(
+	slapd := os.Getenv("OPENLDAP_SLAPD")
+	if slapd == "" {
+		slapd = find(
 			"slapd",
 			"/opt/homebrew/opt/openldap/libexec/slapd",
 			"/usr/lib/openldap/slapd",
 			"/usr/sbin/slapd",
-		),
-		slapadd: find(
+		)
+	}
+	slapadd := os.Getenv("OPENLDAP_SLAPADD")
+	if slapadd == "" {
+		slapadd = find(
 			"slapadd",
 			"/opt/homebrew/opt/openldap/sbin/slapadd",
 			"/usr/sbin/slapadd",
-		),
+		)
+	}
+	return openLDAPReferenceTools{
+		slapd:     slapd,
+		slapadd:   slapadd,
 		schemaDir: schemaDir,
+	}
+}
+
+func requireOpenLDAPACIReference(t *testing.T, tools openLDAPReferenceTools) {
+	t.Helper()
+	root := t.TempDir()
+	databaseDir := filepath.Join(root, "db")
+	if err := os.Mkdir(databaseDir, 0o700); err != nil {
+		t.Fatalf("create OpenLDAP ACI probe database: %v", err)
+	}
+	configPath := filepath.Join(root, "slapd.conf")
+	config := fmt.Sprintf(
+		`include %s
+database mdb
+suffix "dc=example,dc=com"
+rootdn "cn=admin,dc=example,dc=com"
+rootpw secret
+directory %s
+access to * by dynacl/aci write
+`,
+		filepath.Join(tools.schemaDir, "core.schema"),
+		databaseDir,
+	)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatalf("write OpenLDAP ACI probe config: %v", err)
+	}
+	command := exec.Command(tools.slapd, "-Ttest", "-u", "-f", configPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Skipf(
+			"OpenLDAP reference was built without dynacl/aci: %v: %s",
+			err,
+			strings.TrimSpace(string(output)),
+		)
 	}
 }
 
@@ -373,6 +420,10 @@ sn: Bob
 	}
 	uri := "ldap://" + address
 	var logs bytes.Buffer
+	debugLevel := os.Getenv(openLDAPSlapdDebugEnv)
+	if debugLevel == "" {
+		debugLevel = "0"
+	}
 	slapd := exec.Command(
 		tools.slapd,
 		"-f",
@@ -380,40 +431,95 @@ sn: Bob
 		"-h",
 		uri,
 		"-d",
-		"0",
+		debugLevel,
 	)
 	slapd.Stdout = &logs
 	slapd.Stderr = &logs
 	if err := slapd.Start(); err != nil {
 		t.Fatalf("start OpenLDAP slapd: %v", err)
 	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- slapd.Wait()
+	}()
 	stopped := false
+	reportUnexpectedExit := func(waitErr error) {
+		t.Logf(
+			"OpenLDAP slapd exited before cleanup: %v\nslapd.conf:\n%s\nslapd log tail:\n%s",
+			waitErr,
+			config,
+			openLDAPReferenceLogTail(logs.Bytes()),
+		)
+	}
 	stop := func() {
 		if stopped {
 			return
 		}
 		stopped = true
-		if slapd.Process != nil {
-			_ = slapd.Process.Kill()
+		defer func() {
+			if t.Failed() && logs.Len() > 0 {
+				t.Logf("OpenLDAP slapd log tail:\n%s", openLDAPReferenceLogTail(logs.Bytes()))
+			}
+		}()
+		select {
+		case waitErr := <-waitDone:
+			reportUnexpectedExit(waitErr)
+			return
+		default:
 		}
-		_ = slapd.Wait()
+		if slapd.Process == nil {
+			return
+		}
+		if err := slapd.Process.Signal(os.Interrupt); err != nil {
+			_ = slapd.Process.Kill()
+			<-waitDone
+			return
+		}
+		select {
+		case <-waitDone:
+		case <-time.After(5 * time.Second):
+			_ = slapd.Process.Kill()
+			<-waitDone
+		}
 	}
 	t.Cleanup(stop)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		select {
+		case waitErr := <-waitDone:
+			stopped = true
+			t.Fatalf(
+				"OpenLDAP slapd exited during startup: %v\nslapd.conf:\n%s\nslapd log tail:\n%s",
+				waitErr,
+				config,
+				openLDAPReferenceLogTail(logs.Bytes()),
+			)
+		default:
+		}
 		connection, dialErr := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if dialErr == nil {
 			_ = connection.Close()
 			break
 		}
-		if slapd.ProcessState != nil || time.Now().After(deadline) {
+		if time.Now().After(deadline) {
 			stop()
 			t.Fatalf("OpenLDAP slapd did not start: %v\n%s", dialErr, logs.Bytes())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return uri, stop
+}
+
+func openLDAPReferenceLogTail(log []byte) string {
+	const maxLogBytes = 64 << 10
+	if len(log) == 0 {
+		return "<empty>"
+	}
+	if len(log) > maxLogBytes {
+		return "<truncated>\n" + string(log[len(log)-maxLogBytes:])
+	}
+	return string(log)
 }
 
 type openLDAPReferenceControl struct {

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,14 +16,21 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
+	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/go-ldap/ldif"
+	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/auth"
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/gmtransport"
 	"github.com/wangle201210/ldap-go/internal/migration"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -29,6 +38,7 @@ import (
 const (
 	rootPasswordEnvironment = "LDAP_GO_ROOT_PASSWORD"
 	passwordEnvironment     = "LDAP_GO_PASSWORD"
+	auditKeyEnvironment     = "LDAP_GO_AUDIT_KEY"
 	maxPasswordInputSize    = 1 << 20
 )
 
@@ -52,12 +62,42 @@ func run(
 
 	var err error
 	switch args[0] {
-	case "import":
-		err = runImport(args[1:], stdin, stdout, stderr)
-	case "export":
-		err = runExport(args[1:], stdout, stderr)
-	case "passwd":
-		err = runPassword(args[1:], stdin, stdout, stderr, getenv)
+	case "audit-verify":
+		err = runAuditVerify(args[1:], stdout, stderr, getenv)
+	case "backup":
+		err = runBackup(args[1:], stdout, stderr)
+	case "check":
+		err = runCheck(args[1:], stdout, stderr)
+	case "config-test", "slaptest":
+		err = runConfigurationTest(args[0], args[1:], stdout, stderr)
+	case "dn", "slapdn":
+		err = runDN(args[0], args[1:], stdout, stderr)
+	case "import", "slapadd":
+		err = runImport(args[0], args[1:], stdin, stdout, stderr)
+	case "ldapsearch":
+		err = runLDAPSearch(args[1:], stdin, stdout, stderr)
+	case "ldapwhoami":
+		err = runLDAPWhoAmI(args[1:], stdin, stdout, stderr)
+	case "ldapcompare":
+		err = runLDAPCompare(args[1:], stdin, stdout, stderr)
+	case "ldappasswd":
+		err = runLDAPPasswd(args[1:], stdin, stdout, stderr)
+	case "ldapexop":
+		err = runLDAPExop(args[1:], stdin, stdout, stderr)
+	case "ldapmodify", "ldapadd":
+		err = runLDAPModify(args[0], args[1:], stdin, stdout, stderr)
+	case "ldapdelete":
+		err = runLDAPDelete(args[1:], stdin, stdout, stderr)
+	case "ldapmodrdn":
+		err = runLDAPModRDN(args[1:], stdin, stdout, stderr)
+	case "export", "slapcat":
+		err = runExport(args[0], args[1:], stdout, stderr)
+	case "passwd", "slappasswd":
+		err = runPassword(args[0], args[1:], stdin, stdout, stderr, getenv)
+	case "rebuild", "reindex", "slapindex":
+		err = runRebuild(args[0], args[1:], stdout, stderr)
+	case "restore":
+		err = runRestore(args[1:], stdout, stderr)
 	case "serve":
 		err = runServe(args[1:], stdout, stderr, getenv)
 	case "version":
@@ -71,25 +111,174 @@ func run(
 		return 2
 	}
 	if err != nil {
+		if exitCode, cause, ok := ldapClientExitStatus(err); ok {
+			if cause != nil {
+				fmt.Fprintln(stderr, "error:", cause)
+			}
+			return exitCode
+		}
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 	return 0
 }
 
-func runPassword(
+func runDN(
+	command string,
 	args []string,
-	stdin io.Reader,
 	stdout, stderr io.Writer,
-	getenv func(string) string,
-) error {
-	flags := flag.NewFlagSet("passwd", flag.ContinueOnError)
+) (runErr error) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	iterations := flags.Int(
-		"iterations",
-		auth.DefaultSMPBKDF2Iterations,
-		"PBKDF2-SM3 iteration count",
-	)
+	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	normalizedOnly := flags.Bool("N", false, "print normalized DNs")
+	prettyOnly := flags.Bool("P", false, "print pretty DNs")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *normalizedOnly && *prettyOnly {
+		return errors.New("-N and -P are mutually exclusive")
+	}
+	if flags.NArg() == 0 {
+		return errors.New("at least one DN is required")
+	}
+
+	store, err := storage.OpenBoltReadOnly(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, store.Close())
+	}()
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		return fmt.Errorf("initialize built-in schema: %w", err)
+	}
+	if _, err := schema.LoadOpenLDAPConfig(
+		context.Background(),
+		store,
+		registry,
+	); err != nil {
+		return fmt.Errorf("load cn=config schema: %w", err)
+	}
+
+	for _, rawDN := range flags.Args() {
+		pretty, normalized, err := formatLDAPDN(registry, rawDN)
+		if err != nil {
+			return fmt.Errorf("DN <%s> check failed: %w", rawDN, err)
+		}
+		switch {
+		case *prettyOnly:
+			_, err = fmt.Fprintln(stdout, pretty)
+		case *normalizedOnly:
+			_, err = fmt.Fprintln(stdout, normalized)
+		default:
+			_, err = fmt.Fprintf(
+				stdout,
+				"DN: <%s> check succeeded\nnormalized: <%s>\npretty:     <%s>\n",
+				rawDN,
+				normalized,
+				pretty,
+			)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatLDAPDN(
+	registry *schema.Registry,
+	raw string,
+) (pretty, normalized string, err error) {
+	parsed, err := ldap.ParseDN(raw)
+	if err != nil {
+		return "", "", err
+	}
+	prettyRDNs := make([]string, 0, len(parsed.RDNs))
+	normalizedRDNs := make([]string, 0, len(parsed.RDNs))
+	for _, rdn := range parsed.RDNs {
+		prettyValues := make([]string, 0, len(rdn.Attributes))
+		normalizedValues := make([]string, 0, len(rdn.Attributes))
+		for _, value := range rdn.Attributes {
+			if value.Value == "" {
+				return "", "", fmt.Errorf(
+					"attribute %q has an empty DN assertion value",
+					value.Type,
+				)
+			}
+			attribute, found := registry.AttributeType(value.Type)
+			if !found {
+				return "", "", fmt.Errorf(
+					"undefined attribute type %q",
+					value.Type,
+				)
+			}
+			if err := registry.ValidateAttributeValue(
+				value.Type,
+				[]byte(value.Value),
+			); err != nil {
+				return "", "", err
+			}
+			normalizedValue, err := registry.NormalizeEqualityValue(
+				value.Type,
+				[]byte(value.Value),
+			)
+			if err != nil {
+				return "", "", fmt.Errorf("%s: %w", attribute.Name(), err)
+			}
+			prettyValues = append(
+				prettyValues,
+				attribute.Name()+"="+escapeLDAPDNValue(value.Value),
+			)
+			normalizedValues = append(
+				normalizedValues,
+				attribute.Name()+"="+escapeLDAPDNValue(string(normalizedValue)),
+			)
+		}
+		sort.Strings(prettyValues)
+		sort.Strings(normalizedValues)
+		prettyRDNs = append(prettyRDNs, strings.Join(prettyValues, "+"))
+		normalizedRDNs = append(normalizedRDNs, strings.Join(normalizedValues, "+"))
+	}
+	return strings.Join(prettyRDNs, ","), strings.Join(normalizedRDNs, ","), nil
+}
+
+func escapeLDAPDNValue(value string) string {
+	const hexadecimal = "0123456789ABCDEF"
+	validUTF8 := utf8.ValidString(value)
+	var escaped strings.Builder
+	escaped.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case (index == 0 && (character == ' ' || character == '#')) ||
+			(index == len(value)-1 && character == ' ') ||
+			strings.ContainsRune("\"+,;<>\\", rune(character)):
+			escaped.WriteByte('\\')
+			escaped.WriteByte(character)
+		case character < 0x20 || character == 0x7f ||
+			(character >= utf8.RuneSelf && !validUTF8):
+			escaped.WriteByte('\\')
+			escaped.WriteByte(hexadecimal[character>>4])
+			escaped.WriteByte(hexadecimal[character&0x0f])
+		default:
+			escaped.WriteByte(character)
+		}
+	}
+	return escaped.String()
+}
+
+func runConfigurationTest(
+	command string,
+	args []string,
+	stdout, stderr io.Writer,
+) (runErr error) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	quiet := flags.Bool("Q", false, "suppress successful output")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -97,31 +286,417 @@ func runPassword(
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 
-	password := []byte(getenv(passwordEnvironment))
-	if len(password) == 0 {
-		input, err := io.ReadAll(io.LimitReader(stdin, maxPasswordInputSize+1))
-		if err != nil {
-			return fmt.Errorf("read password: %w", err)
-		}
-		if len(input) > maxPasswordInputSize {
-			clear(input)
-			return fmt.Errorf("password input exceeds %d bytes", maxPasswordInputSize)
-		}
-		password = bytes.TrimSuffix(input, []byte{'\n'})
-		password = bytes.TrimSuffix(password, []byte{'\r'})
-	}
-	defer clear(password)
-
-	stored, err := auth.HashPasswordSMPBKDF2(password, *iterations, nil)
+	store, err := storage.OpenBoltReadOnly(*databasePath)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, string(stored))
+	defer func() {
+		runErr = errors.Join(runErr, store.Close())
+	}()
+	summary, err := server.ValidateConfiguration(
+		context.Background(),
+		server.Config{Store: store},
+	)
+	if err != nil {
+		return err
+	}
+	if *quiet {
+		return nil
+	}
+	_, err = fmt.Fprintf(
+		stdout,
+		"configuration OK: %d databases, %d overlays, %d syncrepl consumers; "+
+			"schema: %d attribute types, %d object classes, %d DIT content rules; "+
+			"ACL: %d rules; SASL authz: %d rules\n",
+		summary.Databases,
+		summary.Overlays,
+		summary.SyncreplConsumers,
+		summary.AttributeTypes,
+		summary.ObjectClasses,
+		summary.DITContentRules,
+		summary.ACLRules,
+		summary.SASLAuthzRules,
+	)
 	return err
 }
 
-func runExport(args []string, stdout, stderr io.Writer) error {
-	flags := flag.NewFlagSet("export", flag.ContinueOnError)
+func runBackup(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "source database path")
+	backupPath := flags.String("out", "", "destination backup path")
+	replace := flags.Bool("replace", false, "replace an existing backup")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *backupPath == "" {
+		return errors.New("-out is required")
+	}
+	report, err := storage.BackupBolt(
+		context.Background(),
+		*databasePath,
+		*backupPath,
+		*replace,
+	)
+	if err != nil {
+		return err
+	}
+	return printMaintenanceReport(stdout, "backed up", *backupPath, report)
+}
+
+func runRestore(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	backupPath := flags.String("backup", "", "source backup path")
+	databasePath := flags.String("db", "data/ldap-go.db", "destination database path")
+	replace := flags.Bool("replace", false, "replace an existing database")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *backupPath == "" {
+		return errors.New("-backup is required")
+	}
+	report, err := storage.RestoreBolt(
+		context.Background(),
+		*backupPath,
+		*databasePath,
+		*replace,
+	)
+	if err != nil {
+		return err
+	}
+	return printMaintenanceReport(stdout, "restored", *databasePath, report)
+}
+
+func runCheck(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("check", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	report, err := storage.CheckBolt(context.Background(), *databasePath)
+	if err != nil {
+		return err
+	}
+	return printMaintenanceReport(stdout, "checked", *databasePath, report)
+}
+
+func runRebuild(command string, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	if command == "slapindex" {
+		flags.String("b", "", "unsupported: select a database by suffix")
+		flags.Int("n", -1, "unsupported: select a database by number")
+		registerUnsupportedBool(flags, "c", "continue after index errors")
+		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
+		registerUnsupportedBool(flags, "q", "skip consistency checks")
+		registerUnsupportedBool(flags, "t", "truncate attribute indexes")
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if command == "slapindex" {
+		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
+			{name: "b", reason: "the bbolt rebuild operates on the complete database file"},
+			{name: "n", reason: "the bbolt rebuild operates on the complete database file"},
+			{name: "c", reason: "the atomic rebuild stops on the first error"},
+			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
+			{name: "q", reason: "the atomic rebuild always performs consistency checks"},
+			{name: "t", reason: "ldap-go has no independent attribute-index database"},
+		}); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New(
+				"slapindex attribute selection is not supported: " +
+					"ldap-go rebuilds the complete bbolt database",
+			)
+		}
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	report, err := storage.RebuildBolt(context.Background(), *databasePath)
+	if err != nil {
+		return err
+	}
+	return printMaintenanceReport(stdout, "rebuilt", *databasePath, report)
+}
+
+type unsupportedFlag struct {
+	name   string
+	reason string
+}
+
+func registerUnsupportedBool(flags *flag.FlagSet, name, description string) {
+	flags.Bool(name, false, "unsupported: "+description)
+}
+
+func rejectUnsupportedFlags(
+	command string,
+	flags *flag.FlagSet,
+	unsupported []unsupportedFlag,
+) error {
+	for _, option := range unsupported {
+		if flagWasSet(flags, option.name) {
+			return fmt.Errorf(
+				"%s option -%s is not supported: %s",
+				command,
+				option.name,
+				option.reason,
+			)
+		}
+	}
+	return nil
+}
+
+func flagWasSet(flags *flag.FlagSet, name string) bool {
+	found := false
+	flags.Visit(func(candidate *flag.Flag) {
+		if candidate.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+func printMaintenanceReport(
+	writer io.Writer,
+	action,
+	path string,
+	report storage.CheckReport,
+) error {
+	_, err := fmt.Fprintf(
+		writer,
+		"%s %d entries in %d partitions with %d metadata records (%d bytes): %s\n",
+		action,
+		report.Entries,
+		len(report.Partitions),
+		report.Metadata,
+		report.FileSize,
+		path,
+	)
+	return err
+}
+
+func runPassword(
+	command string,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	getenv func(string) string,
+) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	iterations := flags.Int(
+		"iterations",
+		auth.DefaultSMPBKDF2Iterations,
+		"PBKDF2-SM3 iteration count",
+	)
+	scheme := auth.SMPBKDF2HashScheme
+	var directSecret secretFlagValue
+	var generate, omitNewline, rfc2307 bool
+	var passwordFile string
+	if command == "slappasswd" {
+		scheme = auth.OpenLDAPDefaultHashScheme
+		flags.StringVar(&scheme, "h", scheme, "RFC 2307 password scheme")
+		flags.Var(&directSecret, "s", "password to hash")
+		flags.BoolVar(&generate, "g", false, "generate a random cleartext password")
+		flags.BoolVar(&omitNewline, "n", false, "omit the trailing newline")
+		flags.BoolVar(&rfc2307, "u", true, "generate an RFC 2307 value")
+		flags.StringVar(&passwordFile, "T", "", "read the password from a file")
+		flags.String("c", "", "unsupported: crypt(3) salt format")
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	defer directSecret.clear()
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if command == "slappasswd" {
+		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{{
+			name:   "c",
+			reason: "ldap-go does not implement the platform-specific {CRYPT} scheme",
+		}}); err != nil {
+			return err
+		}
+		if flagWasSet(flags, "u") && !rfc2307 {
+			return errors.New(
+				"slappasswd option -u=false is not supported: output is always RFC 2307",
+			)
+		}
+		if flagWasSet(flags, "g") && !generate {
+			return errors.New("slappasswd option -g=false is not supported")
+		}
+		if flagWasSet(flags, "n") && !omitNewline {
+			return errors.New("slappasswd option -n=false is not supported")
+		}
+		sources := 0
+		for _, name := range []string{"g", "s", "T"} {
+			if flagWasSet(flags, name) {
+				sources++
+			}
+		}
+		if sources > 1 {
+			return errors.New("slappasswd options -g, -s, and -T are mutually exclusive")
+		}
+		if directSecret.count > 1 {
+			return errors.New("slappasswd password was provided more than once")
+		}
+		if generate && flagWasSet(flags, "h") {
+			return errors.New("slappasswd options -g and -h are mutually exclusive")
+		}
+		if generate && flagWasSet(flags, "iterations") {
+			return errors.New("slappasswd options -g and -iterations are mutually exclusive")
+		}
+	}
+
+	if generate {
+		password, err := generateRandomPassword()
+		if err != nil {
+			return err
+		}
+		defer clear(password)
+		return writePasswordOutput(stdout, password, omitNewline)
+	}
+
+	var password []byte
+	var err error
+	switch {
+	case flagWasSet(flags, "s"):
+		password = directSecret.take()
+	case flagWasSet(flags, "T"):
+		password, err = readPasswordFile(passwordFile)
+	default:
+		if environmentPassword := getenv(passwordEnvironment); environmentPassword != "" {
+			password = []byte(environmentPassword)
+		} else {
+			password, err = readPasswordInput(stdin, true, "password")
+		}
+	}
+	if err != nil {
+		return err
+	}
+	defer clear(password)
+
+	normalizedScheme, err := auth.NormalizePasswordHashScheme(scheme)
+	if err != nil {
+		return err
+	}
+	var stored []byte
+	if normalizedScheme == auth.SMPBKDF2HashScheme {
+		stored, err = auth.HashPasswordSMPBKDF2(password, *iterations, nil)
+	} else {
+		if flagWasSet(flags, "iterations") {
+			return fmt.Errorf(
+				"-iterations is only valid with %s",
+				auth.SMPBKDF2HashScheme,
+			)
+		}
+		stored, err = auth.HashPassword(password, normalizedScheme, nil)
+	}
+	if err != nil {
+		return err
+	}
+	defer clear(stored)
+	return writePasswordOutput(stdout, stored, omitNewline)
+}
+
+type secretFlagValue struct {
+	value []byte
+	count int
+}
+
+func (value *secretFlagValue) String() string {
+	return ""
+}
+
+func (value *secretFlagValue) Set(secret string) error {
+	clear(value.value)
+	value.value = []byte(secret)
+	value.count++
+	return nil
+}
+
+func (value *secretFlagValue) take() []byte {
+	secret := value.value
+	value.value = nil
+	return secret
+}
+
+func (value *secretFlagValue) clear() {
+	clear(value.value)
+	value.value = nil
+	value.count = 0
+}
+
+func readPasswordFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open password file: %w", err)
+	}
+	defer file.Close()
+	return readPasswordInput(file, false, "password file")
+}
+
+func readPasswordInput(reader io.Reader, trimLineEnding bool, source string) ([]byte, error) {
+	input, err := io.ReadAll(io.LimitReader(reader, maxPasswordInputSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", source, err)
+	}
+	if len(input) > maxPasswordInputSize {
+		clear(input)
+		return nil, fmt.Errorf("%s exceeds %d bytes", source, maxPasswordInputSize)
+	}
+	if trimLineEnding {
+		for len(input) > 0 && (input[len(input)-1] == '\n' || input[len(input)-1] == '\r') {
+			input[len(input)-1] = 0
+			input = input[:len(input)-1]
+		}
+	}
+	return input, nil
+}
+
+func generateRandomPassword() ([]byte, error) {
+	random := make([]byte, 6)
+	if _, err := io.ReadFull(rand.Reader, random); err != nil {
+		return nil, fmt.Errorf("generate random password: %w", err)
+	}
+	defer clear(random)
+	encoded := make([]byte, base64.RawStdEncoding.EncodedLen(len(random)))
+	base64.RawStdEncoding.Encode(encoded, random)
+	return encoded, nil
+}
+
+func writePasswordOutput(writer io.Writer, password []byte, omitNewline bool) error {
+	written, err := writer.Write(password)
+	if err != nil {
+		return err
+	}
+	if written != len(password) {
+		return io.ErrShortWrite
+	}
+	if omitNewline {
+		return nil
+	}
+	_, err = io.WriteString(writer, "\n")
+	return err
+}
+
+func runExport(command string, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "source database path")
 	ldifPath := flags.String("ldif", "-", "destination LDIF path, or - for stdout")
@@ -130,26 +705,66 @@ func runExport(args []string, stdout, stderr io.Writer) error {
 		"",
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
+	var openLDAPLDIFPath, suffix, subtree string
+	databaseNumber := -1
+	if command == "slapcat" {
+		flags.StringVar(&openLDAPLDIFPath, "l", "", "destination LDIF path")
+		flags.StringVar(&suffix, "b", "", "select the database containing this suffix")
+		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
+		flags.StringVar(&subtree, "s", "", "export only this subtree")
+		registerUnsupportedBool(flags, "c", "continue after export errors")
+		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
+	}
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	if command == "slapcat" {
+		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
+			{name: "c", reason: "the structured export stops on the first error"},
+			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
+		}); err != nil {
+			return err
+		}
+		if flagWasSet(flags, "l") && flagWasSet(flags, "ldif") {
+			return errors.New("slapcat options -l and -ldif are mutually exclusive")
+		}
+		if flagWasSet(flags, "l") {
+			*ldifPath = openLDAPLDIFPath
+		}
+		if flagWasSet(flags, "s") && strings.TrimSpace(subtree) == "" {
+			return errors.New("slapcat option -s requires a non-empty subtree DN")
+		}
+	}
+	selectedDatabase, err := resolveOfflineDatabaseSelection(
+		command,
+		flags,
+		*databasePath,
+		*database,
+		suffix,
+		databaseNumber,
+		subtree,
+	)
+	if err != nil {
+		return err
+	}
 
-	store, err := storage.OpenBolt(*databasePath)
+	store, err := storage.OpenBoltReadOnly(*databasePath)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 
-	options := migration.ExportOptions{Database: *database}
+	options := migration.ExportOptions{Database: selectedDatabase}
 	if *ldifPath == "-" {
-		result, err := migration.ExportLDIFWithOptions(
+		result, err := exportLDIFWithSubtree(
 			context.Background(),
 			store,
 			stdout,
 			options,
+			subtree,
 		)
 		if err != nil {
 			return err
@@ -157,7 +772,7 @@ func runExport(args []string, stdout, stderr io.Writer) error {
 		_, err = fmt.Fprintf(stderr, "exported %d entries\n", result.Entries)
 		return err
 	}
-	return exportToFile(store, *ldifPath, stderr, options)
+	return exportToFile(store, *ldifPath, stderr, options, subtree)
 }
 
 func exportToFile(
@@ -165,6 +780,7 @@ func exportToFile(
 	path string,
 	stderr io.Writer,
 	options migration.ExportOptions,
+	subtree string,
 ) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -177,11 +793,12 @@ func exportToFile(
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 
-	result, exportErr := migration.ExportLDIFWithOptions(
+	result, exportErr := exportLDIFWithSubtree(
 		context.Background(),
 		store,
 		temp,
 		options,
+		subtree,
 	)
 	syncErr := temp.Sync()
 	closeErr := temp.Close()
@@ -204,8 +821,81 @@ func exportToFile(
 	return err
 }
 
-func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	flags := flag.NewFlagSet("import", flag.ContinueOnError)
+func exportLDIFWithSubtree(
+	ctx context.Context,
+	store storage.Store,
+	writer io.Writer,
+	options migration.ExportOptions,
+	subtree string,
+) (migration.ExportResult, error) {
+	if strings.TrimSpace(subtree) == "" {
+		return migration.ExportLDIFWithOptions(ctx, store, writer, options)
+	}
+	base, err := directory.ParseDN(subtree)
+	if err != nil || base.Depth() == 0 {
+		if err == nil {
+			err = errors.New("subtree DN must not be empty")
+		}
+		return migration.ExportResult{}, fmt.Errorf("invalid slapcat subtree %q: %w", subtree, err)
+	}
+
+	type exportOutcome struct {
+		result migration.ExportResult
+		err    error
+	}
+	reader, pipeWriter := io.Pipe()
+	done := make(chan exportOutcome, 1)
+	go func() {
+		result, exportErr := migration.ExportLDIFWithOptions(
+			ctx,
+			store,
+			pipeWriter,
+			options,
+		)
+		_ = pipeWriter.CloseWithError(exportErr)
+		done <- exportOutcome{result: result, err: exportErr}
+	}()
+
+	fail := func(filterErr error) (migration.ExportResult, error) {
+		_ = reader.CloseWithError(filterErr)
+		outcome := <-done
+		if outcome.err != nil {
+			return migration.ExportResult{}, outcome.err
+		}
+		return migration.ExportResult{}, filterErr
+	}
+
+	selected := 0
+	document := &ldif.LDIF{}
+	for record, parseErr := range ldif.UnmarshalEntries(reader, document) {
+		if parseErr != nil {
+			return fail(fmt.Errorf("parse generated LDIF: %w", parseErr))
+		}
+		if record == nil || record.Entry == nil {
+			return fail(errors.New("generated LDIF contains a non-entry record"))
+		}
+		entryDN, err := directory.ParseDN(record.Entry.DN)
+		if err != nil {
+			return fail(fmt.Errorf("parse exported DN %q: %w", record.Entry.DN, err))
+		}
+		if !base.Equal(entryDN) && !base.AncestorOf(entryDN) {
+			continue
+		}
+		if err := ldif.Dump(writer, 76, record.Entry); err != nil {
+			return fail(fmt.Errorf("export %q: %w", record.Entry.DN, err))
+		}
+		selected++
+	}
+	_ = reader.Close()
+	outcome := <-done
+	if outcome.err != nil {
+		return migration.ExportResult{}, outcome.err
+	}
+	return migration.ExportResult{Entries: selected}, nil
+}
+
+func runImport(command string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "destination database path")
 	ldifPath := flags.String("ldif", "-", "slapcat LDIF path, or - for stdin")
@@ -215,11 +905,55 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		"",
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
+	var openLDAPLDIFPath, suffix string
+	var dryRun bool
+	databaseNumber := -1
+	if command == "slapadd" {
+		flags.StringVar(&openLDAPLDIFPath, "l", "", "source LDIF path")
+		flags.StringVar(&suffix, "b", "", "select the database containing this suffix")
+		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
+		flags.BoolVar(&dryRun, "u", false, "validate without modifying the database")
+		registerUnsupportedBool(flags, "c", "continue after import errors")
+		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
+		registerUnsupportedBool(flags, "q", "skip consistency checks")
+		registerUnsupportedBool(flags, "s", "disable schema checking")
+	}
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if command == "slapadd" {
+		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
+			{name: "c", reason: "imports are atomic and stop on the first error"},
+			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
+			{name: "q", reason: "imports always retain consistency checks"},
+			{name: "s", reason: "schema checking is not a switchable import mode"},
+		}); err != nil {
+			return err
+		}
+		if flagWasSet(flags, "l") && flagWasSet(flags, "ldif") {
+			return errors.New("slapadd options -l and -ldif are mutually exclusive")
+		}
+		if flagWasSet(flags, "l") {
+			*ldifPath = openLDAPLDIFPath
+		}
+		if flagWasSet(flags, "u") && !dryRun {
+			return errors.New("slapadd option -u=false is not supported")
+		}
+	}
+	selectedDatabase, err := resolveOfflineDatabaseSelection(
+		command,
+		flags,
+		*databasePath,
+		*database,
+		suffix,
+		databaseNumber,
+		"",
+	)
+	if err != nil {
+		return err
 	}
 
 	reader := stdin
@@ -234,7 +968,16 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		reader = file
 	}
 
-	store, err := storage.OpenBolt(*databasePath)
+	effectiveDatabasePath := *databasePath
+	cleanup := func() {}
+	if dryRun {
+		effectiveDatabasePath, cleanup, err = prepareDryRunDatabase(*databasePath)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+	}
+	store, err := storage.OpenBolt(effectiveDatabasePath)
 	if err != nil {
 		return err
 	}
@@ -246,26 +989,196 @@ func runImport(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		reader,
 		migration.ImportOptions{
 			Replace:  *replace,
-			Database: *database,
+			Database: selectedDatabase,
 		},
 	)
 	if err != nil {
 		return err
 	}
+	action := "imported"
+	if dryRun {
+		action = "validated"
+	}
 	_, err = fmt.Fprintf(
 		stdout,
-		"imported %d entries; naming contexts: %s\n",
+		"%s %d entries; naming contexts: %s\n",
+		action,
 		result.Entries,
 		strings.Join(result.NamingContexts, ", "),
 	)
 	return err
 }
 
+func prepareDryRunDatabase(databasePath string) (string, func(), error) {
+	directoryPath, err := os.MkdirTemp("", "ldap-go-slapadd-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create slapadd dry-run directory: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(directoryPath)
+	}
+	temporaryPath := filepath.Join(directoryPath, "directory.db")
+	if _, err := os.Stat(databasePath); err == nil {
+		if _, err := storage.BackupBolt(
+			context.Background(),
+			databasePath,
+			temporaryPath,
+			false,
+		); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("prepare slapadd dry run: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		cleanup()
+		return "", nil, fmt.Errorf("inspect destination database: %w", err)
+	}
+	return temporaryPath, cleanup, nil
+}
+
+func resolveOfflineDatabaseSelection(
+	command string,
+	flags *flag.FlagSet,
+	databasePath,
+	nativeSelector,
+	suffix string,
+	databaseNumber int,
+	subtree string,
+) (string, error) {
+	selectors := 0
+	for _, name := range []string{"database", "b", "n"} {
+		if flagWasSet(flags, name) {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		return "", fmt.Errorf(
+			"%s options -database, -b, and -n are mutually exclusive",
+			command,
+		)
+	}
+	if flagWasSet(flags, "n") {
+		if databaseNumber < 0 {
+			return "", errors.New("OpenLDAP database number must be non-negative")
+		}
+		return strconv.Itoa(databaseNumber), nil
+	}
+	if flagWasSet(flags, "database") {
+		if strings.TrimSpace(nativeSelector) == "" {
+			return "", errors.New("-database must not be empty")
+		}
+		return nativeSelector, nil
+	}
+	if flagWasSet(flags, "b") && strings.TrimSpace(suffix) == "" {
+		return "", fmt.Errorf("%s option -b requires a non-empty suffix DN", command)
+	}
+
+	targetDN := ""
+	if flagWasSet(flags, "b") {
+		targetDN = suffix
+	} else if command == "slapcat" && strings.TrimSpace(subtree) != "" {
+		targetDN = subtree
+	}
+	if targetDN == "" {
+		return nativeSelector, nil
+	}
+	return databaseSelectorForDN(databasePath, targetDN)
+}
+
+func databaseSelectorForDN(databasePath, rawDN string) (string, error) {
+	target, err := directory.ParseDN(rawDN)
+	if err != nil || target.Depth() == 0 {
+		if err == nil {
+			err = errors.New("DN must not be empty")
+		}
+		return "", fmt.Errorf("invalid database suffix %q: %w", rawDN, err)
+	}
+	configDN, err := directory.ParseDN("cn=config")
+	if err != nil {
+		return "", err
+	}
+	if configDN.Equal(target) || configDN.AncestorOf(target) {
+		return "0", nil
+	}
+
+	store, err := storage.OpenBoltReadOnly(databasePath)
+	if err != nil {
+		return "", err
+	}
+	type candidate struct {
+		selector string
+		depth    int
+	}
+	var matches []candidate
+	err = store.View(context.Background(), func(reader storage.Reader) error {
+		return reader.ForEachPartition(func(_ string, entry directory.Entry) error {
+			entryDN, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return err
+			}
+			if !configDN.Equal(entryDN) && !configDN.AncestorOf(entryDN) {
+				return nil
+			}
+			names := entry.Values("olcDatabase")
+			if len(names) == 0 {
+				return nil
+			}
+			if len(names) != 1 {
+				return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
+			}
+			for _, encodedSuffix := range entry.Values("olcSuffix") {
+				configured, err := directory.ParseDN(string(encodedSuffix))
+				if err != nil {
+					return fmt.Errorf("%s has invalid olcSuffix: %w", entry.DN, err)
+				}
+				if configured.Equal(target) || configured.AncestorOf(target) {
+					matches = append(matches, candidate{
+						selector: string(names[0]),
+						depth:    configured.Depth(),
+					})
+				}
+			}
+			return nil
+		})
+	})
+	closeErr := store.Close()
+	if err != nil {
+		return "", err
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf(
+			"OpenLDAP database containing suffix %q is not present in cn=config",
+			rawDN,
+		)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].depth != matches[j].depth {
+			return matches[i].depth > matches[j].depth
+		}
+		return matches[i].selector < matches[j].selector
+	})
+	best := matches[0]
+	for _, match := range matches[1:] {
+		if match.depth != best.depth {
+			break
+		}
+		if !strings.EqualFold(match.selector, best.selector) {
+			return "", fmt.Errorf(
+				"OpenLDAP database suffix %q is ambiguous",
+				rawDN,
+			)
+		}
+	}
+	return best.selector, nil
+}
+
 func runServe(
 	args []string,
 	stdout, stderr io.Writer,
 	getenv func(string) string,
-) error {
+) (runErr error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "directory database path")
@@ -273,7 +1186,19 @@ func runServe(
 	rootDN := flags.String("root-dn", "", "optional database root DN override")
 	maxMessageSize := flags.Int64("max-message-size", 16<<20, "maximum BER message size in bytes")
 	searchLimit := flags.Int("search-limit", 1000, "server-side maximum entries per search")
+	transactionMaxOperations := flags.Int(
+		"transaction-max-operations",
+		1000,
+		"maximum queued operations per LDAP transaction",
+	)
+	transactionMaxQueuedBytes := flags.Int64(
+		"transaction-max-queued-bytes",
+		16<<20,
+		"maximum encoded queued bytes per LDAP transaction",
+	)
 	logLevel := flags.String("log-level", "info", "debug, info, warn, or error")
+	auditLogPath := flags.String("audit-log", "", "append-only JSON audit log path")
+	auditKeyFile := flags.String("audit-key-file", "", "file containing the audit HMAC key")
 	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
 	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
 	tlsClientCA := flags.String("tls-client-ca", "", "PEM CA bundle for TLS client certificates")
@@ -311,11 +1236,18 @@ func runServe(
 	)
 	implicitTLCP := flags.Bool("tlcp-implicit", false, "negotiate TLCP before LDAP messages")
 	secureHandshakeTimeout := 10 * time.Second
+	shutdownTimeout := 30 * time.Second
 	flags.DurationVar(
 		&secureHandshakeTimeout,
 		"secure-handshake-timeout",
 		secureHandshakeTimeout,
 		"maximum TLS or TLCP handshake duration",
+	)
+	flags.DurationVar(
+		&shutdownTimeout,
+		"shutdown-timeout",
+		shutdownTimeout,
+		"maximum graceful shutdown duration",
 	)
 	flags.DurationVar(
 		&secureHandshakeTimeout,
@@ -372,6 +1304,27 @@ func runServe(
 	if (tlsConfig != nil || tlcpTransport != nil) && secureHandshakeTimeout <= 0 {
 		return errors.New("-secure-handshake-timeout must be positive")
 	}
+	if shutdownTimeout <= 0 {
+		return errors.New("-shutdown-timeout must be positive")
+	}
+	if *transactionMaxOperations <= 0 {
+		return errors.New("-transaction-max-operations must be positive")
+	}
+	if *transactionMaxQueuedBytes <= 0 {
+		return errors.New("-transaction-max-queued-bytes must be positive")
+	}
+	if samePath(*auditLogPath, *databasePath) {
+		return errors.New("audit log and directory database must use different paths")
+	}
+	auditSink, err := openAuditSink(*auditLogPath, *auditKeyFile, getenv)
+	if err != nil {
+		return err
+	}
+	if auditSink != nil {
+		defer func() {
+			runErr = errors.Join(runErr, auditSink.Close())
+		}()
+	}
 
 	store, err := storage.OpenBolt(*databasePath)
 	if err != nil {
@@ -405,17 +1358,21 @@ func runServe(
 		net.JoinHostPort(listenerHost, listenerPort),
 	)
 	instance, err := server.New(server.Config{
-		Store:                  store,
-		ListenerURLs:           []string{listenerURL},
-		MaxMessageSize:         *maxMessageSize,
-		MaxSearchEntries:       *searchLimit,
-		RootDN:                 *rootDN,
-		RootPassword:           []byte(getenv(rootPasswordEnvironment)),
-		Logger:                 logger,
-		TLSConfig:              tlsConfig,
-		SecureTransport:        tlcpTransport,
-		ImplicitTLS:            *implicitTLS || *implicitTLCP,
-		SecureHandshakeTimeout: secureHandshakeTimeout,
+		Store:                     store,
+		ListenerURLs:              []string{listenerURL},
+		MaxMessageSize:            *maxMessageSize,
+		MaxSearchEntries:          *searchLimit,
+		MaxTransactionOperations:  *transactionMaxOperations,
+		MaxTransactionQueuedBytes: *transactionMaxQueuedBytes,
+		RootDN:                    *rootDN,
+		RootPassword:              []byte(getenv(rootPasswordEnvironment)),
+		Logger:                    logger,
+		AuditSink:                 auditSink,
+		TLSConfig:                 tlsConfig,
+		SecureTransport:           tlcpTransport,
+		ImplicitTLS:               *implicitTLS || *implicitTLCP,
+		SecureHandshakeTimeout:    secureHandshakeTimeout,
+		ShutdownTimeout:           shutdownTimeout,
 	})
 	if err != nil {
 		return err
@@ -427,6 +1384,108 @@ func runServe(
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return instance.Serve(ctx, listener)
+}
+
+func runAuditVerify(
+	args []string,
+	stdout, stderr io.Writer,
+	getenv func(string) string,
+) error {
+	flags := flag.NewFlagSet("audit-verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	auditLogPath := flags.String("audit-log", "", "JSON audit log path")
+	auditKeyFile := flags.String("audit-key-file", "", "file containing the audit HMAC key")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *auditLogPath == "" {
+		return errors.New("-audit-log is required")
+	}
+	key, err := loadAuditKey(*auditKeyFile, getenv)
+	if err != nil {
+		return err
+	}
+	defer clear(key)
+	verified, err := audit.VerifyFile(*auditLogPath, key)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "verified %d audit records\n", verified.Records)
+	return err
+}
+
+func openAuditSink(
+	logPath,
+	keyFile string,
+	getenv func(string) string,
+) (*audit.FileSink, error) {
+	environmentKey := getenv(auditKeyEnvironment)
+	if logPath == "" {
+		if keyFile != "" || environmentKey != "" {
+			return nil, errors.New("-audit-log is required when an audit key is configured")
+		}
+		return nil, nil
+	}
+	if samePath(logPath, keyFile) {
+		return nil, errors.New("audit log and audit key must use different paths")
+	}
+	key, err := loadAuditKey(keyFile, getenv)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(key)
+	sink, err := audit.OpenFile(logPath, key)
+	if err != nil {
+		return nil, err
+	}
+	return sink, nil
+}
+
+func loadAuditKey(keyFile string, getenv func(string) string) ([]byte, error) {
+	environmentKey := getenv(auditKeyEnvironment)
+	if keyFile != "" && environmentKey != "" {
+		return nil, fmt.Errorf(
+			"-%s and %s are mutually exclusive",
+			"audit-key-file",
+			auditKeyEnvironment,
+		)
+	}
+	if keyFile == "" && environmentKey == "" {
+		return nil, fmt.Errorf(
+			"-audit-key-file or %s is required",
+			auditKeyEnvironment,
+		)
+	}
+	if environmentKey != "" {
+		return bytes.Clone([]byte(environmentKey)), nil
+	}
+	info, err := os.Stat(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("stat audit key file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("audit key must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("audit key file permissions must not allow group or other access")
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read audit key file: %w", err)
+	}
+	return bytes.Clone(bytes.TrimSpace(key)), nil
+}
+
+func samePath(first, second string) bool {
+	if first == "" || second == "" {
+		return false
+	}
+	firstPath, firstErr := filepath.Abs(first)
+	secondPath, secondErr := filepath.Abs(second)
+	return firstErr == nil && secondErr == nil && firstPath == secondPath
 }
 
 func loadServerTLSConfig(certificateFile, privateKeyFile string) (*tls.Config, error) {
@@ -549,9 +1608,32 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `usage: ldap-go <command> [options]
 
 commands:
+  audit-verify  verify an HMAC-chained audit log
+  backup   create and validate an atomic bbolt backup (offline)
+  check    check bbolt pages, buckets, keys, entries, and metadata (offline)
+  config-test  validate runtime configuration without modifying the database
+  slaptest alias for config-test
+  dn       validate, normalize, or pretty-print DNs using database schema
+  slapdn   alias for dn
   import   atomically import slapcat-compatible LDIF
+  slapadd  OpenLDAP-style alias for import
+	  ldapsearch  search a remote LDAP directory and print LDIF
+	  ldapwhoami  print the authorization identity reported by an LDAP server
+	  ldapcompare  compare an LDAP attribute assertion
+	  ldappasswd  change or generate an LDAP user password
+	  ldapexop  issue an LDAP extended operation
+	  ldapmodify  apply ordered LDAP LDIF change records
+  ldapadd  add LDIF entries or apply explicit change records
+  ldapdelete  delete LDAP entries by DN
+  ldapmodrdn  rename or move LDAP entries
   export   atomically export a directory database as LDIF
+  slapcat  OpenLDAP-style alias for export
   passwd   generate a PBKDF2-SM3 userPassword value
+  slappasswd  generate OpenLDAP-compatible and national-crypto password values
+  rebuild  compact and atomically rebuild the bbolt database (offline)
+  reindex  alias for rebuild
+  slapindex  whole-database bbolt rebuild alias
+  restore  validate and atomically restore a bbolt backup (offline)
   serve    serve the persistent directory over LDAP
   version  print the build version`)
 }

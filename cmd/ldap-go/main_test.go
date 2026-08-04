@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -56,6 +59,713 @@ func TestPasswordCommand(t *testing.T) {
 				t.Fatal("generated password accepted an incorrect value")
 			}
 		})
+	}
+}
+
+func TestAuditVerifyCommand(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	logPath := filepath.Join(directoryPath, "audit.jsonl")
+	keyPath := filepath.Join(directoryPath, "audit.key")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	sink, err := audit.OpenFile(logPath, key)
+	if err != nil {
+		t.Fatalf("OpenFile(): %v", err)
+	}
+	if err := sink.Record(audit.Event{Operation: "search", Outcome: "success"}); err != nil {
+		t.Fatalf("Record(): %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(
+		[]string{"audit-verify", "-audit-log", logPath, "-audit-key-file", keyPath},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 0 || stdout.String() != "verified 1 audit records\n" {
+		t.Fatalf("audit-verify exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+
+	encoded, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(): %v", err)
+	}
+	encoded = bytes.Replace(encoded, []byte(`"search"`), []byte(`"delete"`), 1)
+	if err := os.WriteFile(logPath, encoded, 0o600); err != nil {
+		t.Fatalf("tamper log: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run(
+		[]string{"audit-verify", "-audit-log", logPath, "-audit-key-file", keyPath},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 1 || !strings.Contains(stderr.String(), "integrity") {
+		t.Fatalf("tampered audit-verify exit = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func TestMaintenanceCommands(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	databasePath := filepath.Join(directoryPath, "directory.db")
+	backupPath := filepath.Join(directoryPath, "backup.db")
+	restoredPath := filepath.Join(directoryPath, "restored.db")
+	store, err := storage.OpenBolt(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	entry := directory.Entry{
+		DN: "dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "dc", Values: [][]byte{[]byte("example")}},
+		},
+	}
+	err = store.Update(context.Background(), func(writer storage.Writer) error {
+		if err := writer.PutIn("database-one", entry, false); err != nil {
+			return err
+		}
+		if err := writer.SetNamingContexts([]string{"dc=example,dc=com"}); err != nil {
+			return err
+		}
+		return writer.SetMetadata("test", []byte("metadata"))
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("seed database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		args   []string
+		action string
+	}{
+		{
+			name:   "check",
+			args:   []string{"check", "-db", databasePath},
+			action: "checked",
+		},
+		{
+			name: "backup",
+			args: []string{
+				"backup", "-db", databasePath, "-out", backupPath,
+			},
+			action: "backed up",
+		},
+		{
+			name: "restore",
+			args: []string{
+				"restore", "-backup", backupPath, "-db", restoredPath,
+			},
+			action: "restored",
+		},
+		{
+			name:   "rebuild",
+			args:   []string{"rebuild", "-db", restoredPath},
+			action: "rebuilt",
+		},
+		{
+			name:   "reindex alias",
+			args:   []string{"reindex", "-db", restoredPath},
+			action: "rebuilt",
+		},
+		{
+			name:   "slapindex alias",
+			args:   []string{"slapindex", "-db", restoredPath},
+			action: "rebuilt",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				test.args,
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			)
+			if exitCode != 0 {
+				t.Fatalf(
+					"run() exit code = %d, stdout = %q, stderr = %q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+			if !strings.Contains(stdout.String(), test.action+" 1 entries in 1 partitions") ||
+				!strings.Contains(stdout.String(), "with 2 metadata records") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+		})
+	}
+
+	restored, err := storage.OpenBolt(restoredPath)
+	if err != nil {
+		t.Fatalf("OpenBolt(restored): %v", err)
+	}
+	dn, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	err = restored.View(context.Background(), func(reader storage.Reader) error {
+		got, err := reader.GetIn("database-one", dn)
+		if err != nil {
+			return err
+		}
+		if !entry.Equal(got) {
+			t.Fatalf("restored entry = %#v, want %#v", got, entry)
+		}
+		metadata, err := reader.Metadata("test")
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(metadata, []byte("metadata")) {
+			t.Fatalf("restored metadata = %q", metadata)
+		}
+		return nil
+	})
+	if err != nil {
+		_ = restored.Close()
+		t.Fatalf("verify restored database: %v", err)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatalf("Close(restored): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(
+		[]string{"backup", "-db", databasePath, "-out", backupPath},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 1 || !strings.Contains(stderr.String(), "--replace") {
+		t.Fatalf(
+			"second backup exit code = %d, stdout = %q, stderr = %q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestMaintenanceCommandsValidateArguments(t *testing.T) {
+	t.Parallel()
+
+	tests := [][]string{
+		{"backup"},
+		{"restore"},
+		{"check", "unexpected"},
+		{"rebuild", "unexpected"},
+	}
+	for _, args := range tests {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := run(
+			args,
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+			func(string) string { return "" },
+		); exitCode != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "error:") {
+			t.Errorf(
+				"run(%v) exit code = %d, stdout = %q, stderr = %q",
+				args,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+	}
+}
+
+func TestDNCommandUsesBuiltinAndConfiguredSchema(t *testing.T) {
+	t.Parallel()
+
+	databasePath := seedOfflineCommandDatabase(t, "")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "normalized multiple DNs",
+			args: []string{
+				"dn", "-db", databasePath, "-N",
+				"CN= Alice  Smith ,DC=Example,DC=COM",
+				"employeeCode= AB  12 ,DC=Example,DC=COM",
+			},
+			want: "cn=alice smith,dc=example,dc=com\n" +
+				"employeeCode=ab 12,dc=example,dc=com\n",
+		},
+		{
+			name: "pretty alias",
+			args: []string{
+				"slapdn", "-db", databasePath, "-P",
+				"CN= Alice  Smith ,DC=Example,DC=COM",
+			},
+			want: "cn=Alice  Smith,dc=Example,dc=COM\n",
+		},
+		{
+			name: "OpenLDAP default report",
+			args: []string{
+				"dn", "-db", databasePath,
+				"CN= Alice  Smith ,DC=Example,DC=COM",
+			},
+			want: "DN: <CN= Alice  Smith ,DC=Example,DC=COM> check succeeded\n" +
+				"normalized: <cn=alice smith,dc=example,dc=com>\n" +
+				"pretty:     <cn=Alice  Smith,dc=Example,dc=COM>\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				test.args,
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			)
+			if exitCode != 0 || stdout.String() != test.want || stderr.Len() != 0 {
+				t.Fatalf(
+					"run() exit = %d, stdout = %q, stderr = %q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestDNCommandRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	databasePath := seedOfflineCommandDatabase(t, "")
+	tests := []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{
+			name:    "invalid DN syntax",
+			args:    []string{"dn", "-db", databasePath, "cn"},
+			message: "check failed",
+		},
+		{
+			name:    "invalid attribute syntax",
+			args:    []string{"dn", "-db", databasePath, "dc=张,dc=com"},
+			message: "value is not IA5",
+		},
+		{
+			name:    "empty directory string",
+			args:    []string{"dn", "-db", databasePath, "uid=,dc=example,dc=com"},
+			message: "empty DN assertion value",
+		},
+		{
+			name:    "empty octet string",
+			args:    []string{"dn", "-db", databasePath, "jpegPhoto=,dc=example,dc=com"},
+			message: "empty DN assertion value",
+		},
+		{
+			name: "unknown attribute type",
+			args: []string{
+				"dn", "-db", databasePath,
+				"unknownAttribute=value,dc=example,dc=com",
+			},
+			message: "undefined attribute type",
+		},
+		{
+			name: "mode conflict",
+			args: []string{
+				"dn", "-db", databasePath, "-N", "-P",
+				"dc=example,dc=com",
+			},
+			message: "mutually exclusive",
+		},
+		{
+			name: "unsupported OpenLDAP config flag",
+			args: []string{
+				"slapdn", "-db", databasePath, "-f", "slapd.conf",
+				"dc=example,dc=com",
+			},
+			message: "flag provided but not defined",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				test.args,
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			)
+			if exitCode != 1 || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), test.message) {
+				t.Fatalf(
+					"run() exit = %d, stdout = %q, stderr = %q",
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		})
+	}
+}
+
+func TestConfigurationTestCommandAndAlias(t *testing.T) {
+	t.Parallel()
+
+	databasePath := seedOfflineCommandDatabase(t, "")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(
+		[]string{"config-test", "-db", databasePath},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 0 || stderr.Len() != 0 ||
+		!strings.Contains(stdout.String(), "configuration OK: 1 databases, 1 overlays") ||
+		!strings.Contains(stdout.String(), "ACL: 1 rules") {
+		t.Fatalf(
+			"config-test exit = %d, stdout = %q, stderr = %q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run(
+		[]string{"slaptest", "-db", databasePath, "-Q"},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf(
+			"quiet slaptest exit = %d, stdout = %q, stderr = %q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestConfigurationTestRejectsInvalidRuntimeConfiguration(t *testing.T) {
+	t.Parallel()
+
+	databasePath := seedOfflineCommandDatabase(t, "minssf=invalid")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(
+		[]string{"config-test", "-db", databasePath},
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	if exitCode != 1 || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "olcSaslSecProps") {
+		t.Fatalf(
+			"config-test exit = %d, stdout = %q, stderr = %q",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestOfflineConfigurationCommandsDoNotModifyDatabase(t *testing.T) {
+	t.Parallel()
+
+	databasePath := seedOfflineCommandDatabase(t, "")
+	before, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database before commands: %v", err)
+	}
+	for _, args := range [][]string{
+		{"config-test", "-db", databasePath, "-Q"},
+		{"dn", "-db", databasePath, "-N", "dc=example,dc=com"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := run(
+			args,
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+			func(string) string { return "" },
+		); exitCode != 0 {
+			t.Fatalf(
+				"run(%v) exit = %d, stdout = %q, stderr = %q",
+				args,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+	}
+	after, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database after commands: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("offline commands modified the bbolt database file")
+	}
+}
+
+func TestOfflineConfigurationCommandsDoNotCreateMissingDatabase(t *testing.T) {
+	t.Parallel()
+
+	parent := filepath.Join(t.TempDir(), "missing")
+	databasePath := filepath.Join(parent, "directory.db")
+	for _, args := range [][]string{
+		{"config-test", "-db", databasePath},
+		{"dn", "-db", databasePath, "dc=example,dc=com"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := run(
+			args,
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+			func(string) string { return "" },
+		); exitCode != 1 || stdout.Len() != 0 {
+			t.Fatalf(
+				"run(%v) exit = %d, stdout = %q, stderr = %q",
+				args,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+		if _, err := os.Stat(parent); !os.IsNotExist(err) {
+			t.Fatalf("run(%v) created parent directory: %v", args, err)
+		}
+	}
+}
+
+func seedOfflineCommandDatabase(t *testing.T, saslSecurityProperties string) string {
+	t.Helper()
+	databasePath := filepath.Join(t.TempDir(), "offline.db")
+	store, err := storage.OpenBolt(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	globalAttributes := []directory.Attribute{
+		{Description: "objectClass", Values: offlineCommandValues("olcGlobal")},
+		{Description: "cn", Values: offlineCommandValues("config")},
+		{
+			Description: "olcAccess",
+			Values:      offlineCommandValues("{0}to * by * read"),
+		},
+	}
+	if saslSecurityProperties != "" {
+		globalAttributes = append(globalAttributes, directory.Attribute{
+			Description: "olcSaslSecProps",
+			Values:      offlineCommandValues(saslSecurityProperties),
+		})
+	}
+	err = store.Update(context.Background(), func(writer storage.Writer) error {
+		entries := []directory.Entry{
+			{DN: "cn=config", Attributes: globalAttributes},
+			{
+				DN: "cn={1}offline,cn=schema,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcAttributeTypes",
+						Values: offlineCommandValues(
+							"( 1.3.6.1.4.1.55555.1.1 NAME 'employeeCode' " +
+								"EQUALITY caseIgnoreMatch SYNTAX " +
+								"1.3.6.1.4.1.1466.115.121.1.15 )",
+						),
+					},
+				},
+			},
+			{
+				DN: "olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcDatabase",
+						Values:      offlineCommandValues("{1}mdb"),
+					},
+					{
+						Description: "olcSuffix",
+						Values:      offlineCommandValues("dc=example,dc=com"),
+					},
+				},
+			},
+			{
+				DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
+				Attributes: []directory.Attribute{
+					{
+						Description: "olcOverlay",
+						Values:      offlineCommandValues("{0}sssvlv"),
+					},
+				},
+			},
+			{
+				DN: "dc=example,dc=com",
+				Attributes: []directory.Attribute{
+					{Description: "dc", Values: offlineCommandValues("example")},
+				},
+			},
+		}
+		for _, entry := range entries {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return writer.SetNamingContexts([]string{"dc=example,dc=com"})
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("seed offline database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close offline database: %v", err)
+	}
+	return databasePath
+}
+
+func offlineCommandValues(values ...string) [][]byte {
+	result := make([][]byte, len(values))
+	for index := range values {
+		result[index] = []byte(values[index])
+	}
+	return result
+}
+
+func TestOpenAuditSinkValidatesConfiguration(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	logPath := filepath.Join(directoryPath, "audit.jsonl")
+	keyPath := filepath.Join(directoryPath, "audit.key")
+	getenv := func(string) string { return "" }
+	if _, err := openAuditSink("", keyPath, getenv); err == nil {
+		t.Fatal("openAuditSink() accepted a key without a log")
+	}
+	if _, err := openAuditSink(logPath, "", getenv); err == nil {
+		t.Fatal("openAuditSink() accepted a log without a key")
+	}
+	if _, err := openAuditSink(logPath, logPath, getenv); err == nil {
+		t.Fatal("openAuditSink() accepted the same log and key path")
+	}
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", 32)), 0o644); err != nil {
+		t.Fatalf("write permissive key: %v", err)
+	}
+	if _, err := openAuditSink(logPath, keyPath, getenv); err == nil ||
+		!strings.Contains(err.Error(), "permissions") {
+		t.Fatalf("openAuditSink(permissive key) error = %v", err)
+	}
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("Chmod(): %v", err)
+	}
+	sink, err := openAuditSink(logPath, keyPath, getenv)
+	if err != nil {
+		t.Fatalf("openAuditSink(valid): %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+	if _, err := openAuditSink(logPath, keyPath, func(name string) string {
+		if name == auditKeyEnvironment {
+			return strings.Repeat("e", 32)
+		}
+		return ""
+	}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("openAuditSink(duplicate keys) error = %v", err)
+	}
+}
+
+func TestServeRejectsNonPositiveShutdownTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"0", "-1s"} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(
+			[]string{"serve", "-shutdown-timeout", value},
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+			func(string) string { return "" },
+		)
+		if exitCode != 1 || stdout.Len() != 0 ||
+			!strings.Contains(stderr.String(), "shutdown-timeout must be positive") {
+			t.Fatalf(
+				"serve shutdown timeout %q: exit=%d stdout=%q stderr=%q",
+				value,
+				exitCode,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+	}
+}
+
+func TestServeRejectsNonPositiveTransactionLimits(t *testing.T) {
+	t.Parallel()
+
+	for _, flagName := range []string{
+		"transaction-max-operations",
+		"transaction-max-queued-bytes",
+	} {
+		for _, value := range []string{"0", "-1"} {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				[]string{"serve", "-" + flagName, value},
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			)
+			if exitCode != 1 || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), "-"+flagName+" must be positive") {
+				t.Fatalf(
+					"serve %s %q: exit=%d stdout=%q stderr=%q",
+					flagName,
+					value,
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		}
 	}
 }
 
@@ -256,6 +966,379 @@ description: selected database
 		!strings.Contains(stderr.String(), "exported 1 entries") {
 		t.Fatalf("selected export stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
+}
+
+func TestOpenLDAPImportExportAliasesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	sourceDatabase := filepath.Join(directoryPath, "source.db")
+	targetDatabase := filepath.Join(directoryPath, "target.db")
+	seedOpenLDAPAliasDatabase(t, sourceDatabase)
+	seedOpenLDAPAliasDatabase(t, targetDatabase)
+
+	dataPath := filepath.Join(directoryPath, "data.ldif")
+	dataLDIF := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: ou=People,dc=example,dc=com
+objectClass: organizationalUnit
+ou: People
+
+dn: uid=alice,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Example
+sn: Example
+
+dn: ou=Systems,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Systems
+
+dn: uid=service,ou=Systems,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: service
+cn: Service Account
+sn: Account
+
+`
+	if err := os.WriteFile(dataPath, []byte(dataLDIF), 0o600); err != nil {
+		t.Fatalf("write data LDIF: %v", err)
+	}
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", sourceDatabase, "-l", dataPath, "-n", "1"},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 5 entries") || stderr != "" {
+		t.Fatalf("slapadd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", sourceDatabase, "-n", "1"},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stderr, "exported 5 entries") ||
+		!strings.Contains(stdout, "dn: uid=service,ou=Systems,dc=example,dc=com") {
+		t.Fatalf("slapcat -n exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	beforeDryRun, err := os.ReadFile(sourceDatabase)
+	if err != nil {
+		t.Fatalf("read source before dry run: %v", err)
+	}
+	dryRunPath := filepath.Join(directoryPath, "dry-run.ldif")
+	if err := os.WriteFile(dryRunPath, []byte(`dn: uid=dry-run,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: dry-run
+cn: Dry Run
+sn: Run
+
+`), 0o600); err != nil {
+		t.Fatalf("write dry-run LDIF: %v", err)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapadd", "-db", sourceDatabase, "-l", dryRunPath,
+			"-b", "dc=example,dc=com", "-u",
+		},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "validated 1 entries") || stderr != "" {
+		t.Fatalf("slapadd dry run exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	afterDryRun, err := os.ReadFile(sourceDatabase)
+	if err != nil {
+		t.Fatalf("read source after dry run: %v", err)
+	}
+	if !bytes.Equal(beforeDryRun, afterDryRun) {
+		t.Fatal("slapadd -u modified the destination database")
+	}
+
+	subtreePath := filepath.Join(directoryPath, "people.ldif")
+	beforeSlapcat := bytes.Clone(afterDryRun)
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapcat", "-db", sourceDatabase,
+			"-s", "ou=People,dc=example,dc=com", "-l", subtreePath,
+		},
+		"",
+	)
+	if exitCode != 0 || stdout != "" || !strings.Contains(stderr, "exported 2 entries") {
+		t.Fatalf("slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	subtreeLDIF, err := os.ReadFile(subtreePath)
+	if err != nil {
+		t.Fatalf("read subtree LDIF: %v", err)
+	}
+	if !bytes.Contains(subtreeLDIF, []byte("dn: ou=People,dc=example,dc=com")) ||
+		!bytes.Contains(subtreeLDIF, []byte("dn: uid=alice,ou=People,dc=example,dc=com")) ||
+		bytes.Contains(subtreeLDIF, []byte("ou=Systems")) {
+		t.Fatalf("slapcat subtree output = %q", subtreeLDIF)
+	}
+	if info, err := os.Stat(subtreePath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("slapcat output mode = %v, error = %v", info, err)
+	}
+	afterSlapcat, err := os.ReadFile(sourceDatabase)
+	if err != nil {
+		t.Fatalf("read source after slapcat: %v", err)
+	}
+	if !bytes.Equal(beforeSlapcat, afterSlapcat) {
+		t.Fatal("slapcat modified the source database")
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapadd", "-db", targetDatabase, "-l", subtreePath,
+			"-b", "uid=alice,ou=People,dc=example,dc=com",
+		},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 2 entries") || stderr != "" {
+		t.Fatalf("round-trip slapadd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapcat", "-db", targetDatabase,
+			"-b", "dc=example,dc=com",
+		},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stderr, "exported 2 entries") {
+		t.Fatalf("round-trip slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if strings.TrimSpace(stdout) != strings.TrimSpace(string(subtreeLDIF)) {
+		t.Fatalf("round-trip output:\n%s\nwant:\n%s", stdout, subtreeLDIF)
+	}
+}
+
+func TestSlapaddDryRunDoesNotCreateMissingDatabase(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parent := filepath.Join(root, "missing")
+	databasePath := filepath.Join(parent, "directory.db")
+	ldifPath := filepath.Join(root, "entry.ldif")
+	if err := os.WriteFile(ldifPath, []byte(`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+`), 0o600); err != nil {
+		t.Fatalf("write LDIF: %v", err)
+	}
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-l", ldifPath, "-u"},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "validated 1 entries") || stderr != "" {
+		t.Fatalf("slapadd -u exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if _, err := os.Stat(parent); !os.IsNotExist(err) {
+		t.Fatalf("slapadd -u created the destination directory: %v", err)
+	}
+}
+
+func TestSlapcatAliasDoesNotCreateMissingDatabase(t *testing.T) {
+	t.Parallel()
+
+	parent := filepath.Join(t.TempDir(), "missing")
+	databasePath := filepath.Join(parent, "directory.db")
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", databasePath},
+		"",
+	)
+	if exitCode != 1 || stdout != "" || stderr == "" {
+		t.Fatalf("slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if _, err := os.Stat(parent); !os.IsNotExist(err) {
+		t.Fatalf("slapcat created the missing database directory: %v", err)
+	}
+}
+
+func TestSlappasswdCompatibilityOptions(t *testing.T) {
+	t.Parallel()
+
+	const secret = "compatibility-secret"
+	tests := []struct {
+		name      string
+		args      []string
+		password  []byte
+		prefix    string
+		noNewline bool
+	}{
+		{
+			name:     "OpenLDAP default SSHA",
+			args:     []string{"slappasswd", "-s", secret},
+			password: []byte(secret),
+			prefix:   "{SSHA}",
+		},
+		{
+			name:      "national salted SM3 RFC2307 without newline",
+			args:      []string{"slappasswd", "-u", "-n", "-h", "{SSM3}", "-s", secret},
+			password:  []byte(secret),
+			prefix:    "{SSM3}",
+			noNewline: true,
+		},
+		{
+			name:     "national PBKDF2",
+			args:     []string{"slappasswd", "-h", "{PBKDF2-SM3}", "-iterations", "10", "-s", secret},
+			password: []byte(secret),
+			prefix:   "{PBKDF2-SM3}10$",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, exitCode := runCLIForTest(t, test.args, "unused stdin")
+			if exitCode != 0 || stderr != "" || strings.Contains(stderr, secret) {
+				t.Fatalf("slappasswd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+			}
+			if test.noNewline == strings.HasSuffix(stdout, "\n") {
+				t.Fatalf("slappasswd newline mismatch: %q", stdout)
+			}
+			stored := []byte(strings.TrimSuffix(stdout, "\n"))
+			if !bytes.HasPrefix(stored, []byte(test.prefix)) ||
+				!auth.VerifyPassword(stored, test.password) {
+				t.Fatalf("slappasswd output = %q", stdout)
+			}
+		})
+	}
+
+	passwordFile := filepath.Join(t.TempDir(), "password.txt")
+	filePassword := []byte("password-from-file\n")
+	if err := os.WriteFile(passwordFile, filePassword, 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slappasswd", "-T", passwordFile, "-h", "{SM3}"},
+		"unused stdin",
+	)
+	if exitCode != 0 || stderr != "" ||
+		!auth.VerifyPassword([]byte(strings.TrimSuffix(stdout, "\n")), filePassword) {
+		t.Fatalf("slappasswd -T exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(t, []string{"slappasswd", "-g", "-n"}, "")
+	if exitCode != 0 || stderr != "" || strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("slappasswd -g exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(stdout)
+	if err != nil || len(decoded) != 6 {
+		t.Fatalf("generated password = %q, decode error = %v", stdout, err)
+	}
+}
+
+func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
+	t.Parallel()
+
+	const secret = "must-not-appear"
+	tests := []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "slapadd continue", args: []string{"slapadd", "-c"}, message: "option -c is not supported"},
+		{name: "slapadd quick", args: []string{"slapadd", "-q"}, message: "option -q is not supported"},
+		{name: "slapadd schema", args: []string{"slapadd", "-s"}, message: "option -s is not supported"},
+		{name: "slapadd glue", args: []string{"slapadd", "-g"}, message: "option -g is not supported"},
+		{name: "slapcat continue", args: []string{"slapcat", "-c"}, message: "option -c is not supported"},
+		{name: "slapcat glue", args: []string{"slapcat", "-g"}, message: "option -g is not supported"},
+		{name: "slapindex suffix", args: []string{"slapindex", "-b", "dc=example,dc=com"}, message: "option -b is not supported"},
+		{name: "slapindex number", args: []string{"slapindex", "-n", "1"}, message: "option -n is not supported"},
+		{name: "slapindex quick", args: []string{"slapindex", "-q"}, message: "option -q is not supported"},
+		{name: "slapindex continue", args: []string{"slapindex", "-c"}, message: "option -c is not supported"},
+		{name: "slapindex glue", args: []string{"slapindex", "-g"}, message: "option -g is not supported"},
+		{name: "slapindex truncate", args: []string{"slapindex", "-t"}, message: "option -t is not supported"},
+		{name: "slapindex attribute", args: []string{"slapindex", "uid"}, message: "attribute selection is not supported"},
+		{name: "slappasswd crypt format", args: []string{"slappasswd", "-c", "%.2s"}, message: "option -c is not supported"},
+		{name: "slappasswd generated hash", args: []string{"slappasswd", "-g", "-h", "{SSHA}"}, message: "mutually exclusive"},
+		{name: "slappasswd secret sources", args: []string{"slappasswd", "-s", secret, "-T", "password.txt"}, message: "mutually exclusive"},
+		{name: "slappasswd unsupported scheme", args: []string{"slappasswd", "-h", "{CRYPT}", "-s", secret}, message: "unsupported password hash scheme"},
+		{name: "database selectors", args: []string{"slapadd", "-b", "dc=example,dc=com", "-n", "1"}, message: "mutually exclusive"},
+		{name: "negative database", args: []string{"slapadd", "-n", "-1"}, message: "must be non-negative"},
+		{name: "empty suffix", args: []string{"slapadd", "-b", ""}, message: "requires a non-empty suffix"},
+		{name: "false dry run", args: []string{"slapadd", "-u=false"}, message: "-u=false is not supported"},
+		{name: "empty subtree", args: []string{"slapcat", "-s", ""}, message: "requires a non-empty subtree"},
+		{name: "empty password file", args: []string{"slappasswd", "-T", ""}, message: "open password file"},
+		{name: "false generation", args: []string{"slappasswd", "-g=false"}, message: "-g=false is not supported"},
+		{name: "duplicate secret", args: []string{"slappasswd", "-s", secret, "-s", "replacement"}, message: "provided more than once"},
+		{name: "LDIF outputs", args: []string{"slapcat", "-l", "one.ldif", "-ldif", "two.ldif"}, message: "mutually exclusive"},
+		{name: "unknown config option", args: []string{"slapadd", "-f", "slapd.conf"}, message: "flag provided but not defined"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, exitCode := runCLIForTest(t, test.args, "")
+			if exitCode != 1 || stdout != "" || !strings.Contains(stderr, test.message) {
+				t.Fatalf("run(%v) exit=%d stdout=%q stderr=%q", test.args, exitCode, stdout, stderr)
+			}
+			if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) ||
+				strings.Contains(stdout, "replacement") || strings.Contains(stderr, "replacement") {
+				t.Fatalf("run(%v) exposed the password: stdout=%q stderr=%q", test.args, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestUsageListsOpenLDAPOfflineAliases(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runCLIForTest(t, []string{"help"}, "")
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("help exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, command := range []string{"slapadd", "slapcat", "slappasswd", "slapindex"} {
+		if !strings.Contains(stdout, command) {
+			t.Errorf("help does not list %s: %q", command, stdout)
+		}
+	}
+}
+
+func seedOpenLDAPAliasDatabase(t *testing.T, databasePath string) {
+	t.Helper()
+	configLDIF := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+entryUUID: 11111111-1111-4111-8111-111111111111
+
+`
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-replace"},
+		configLDIF,
+	)
+	if exitCode != 0 {
+		t.Fatalf("seed database exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
+func runCLIForTest(t *testing.T, args []string, stdin string) (string, string, int) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run(
+		args,
+		strings.NewReader(stdin),
+		&stdout,
+		&stderr,
+		func(string) string { return "" },
+	)
+	return stdout.String(), stderr.String(), exitCode
 }
 
 func TestLoadServerTLSConfigRequiresCertificatePair(t *testing.T) {

@@ -84,10 +84,16 @@ func (server *Server) handleSASLCRAMMD5Step(
 		authenticationDN,
 	)
 	if err != nil {
-		clearSASLSession(state)
 		if !errors.Is(err, errSASLCleartextPasswordUnavailable) {
-			return err
+			return server.writeSASLAuxiliaryLookupFailure(
+				connection,
+				state,
+				message.ID,
+				session.mechanism,
+				err,
+			)
 		}
+		clearSASLSession(state)
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
 	defer clear(password)

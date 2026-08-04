@@ -68,6 +68,8 @@ type chainRemoteConfiguration struct {
 	connectionPoolMax   int
 	quarantine          []syncConsumerRetry
 	cancelMode          string
+	bindPollRetries     int
+	bindPollTimeout     time.Duration
 	stopOnError         bool
 	absoluteFilters     chainFeatureMode
 	noRefs              bool
@@ -78,18 +80,30 @@ type chainRemoteConfiguration struct {
 }
 
 type chainRuntimeConfiguration struct {
-	configDNKey      string
-	cacheURI         bool
-	maxReferralDepth int
-	returnError      bool
-	outboundChaining *ldapwire.Control
-	common           chainRemoteConfiguration
-	remotes          []chainRemoteConfiguration
+	configDNKey            string
+	cacheURI               bool
+	maxReferralDepth       int
+	referralHopLimitResult bool
+	returnError            bool
+	outboundChaining       *ldapwire.Control
+	common                 chainRemoteConfiguration
+	remotes                []chainRemoteConfiguration
+	transportCache         *metaTransportCache
+	transportPool          *metaTransportPool
+	transportKey           string
+	transportOwner         string
+	transportPoolMax       int
+	useTemporaryPool       bool
+	packetSink             func(*ber.Packet) error
+	requestStarted         func() error
 }
 
 func defaultChainRemoteConfiguration() chainRemoteConfiguration {
 	return chainRemoteConfiguration{
-		order: math.MaxInt,
+		cancelMode:      "exop",
+		bindPollRetries: 10,
+		bindPollTimeout: 100 * time.Millisecond,
+		order:           math.MaxInt,
 		bind: syncConsumerConfig{
 			securityProperties: defaultSyncConsumerSASLSecurityProperties(),
 		},
@@ -415,7 +429,7 @@ func loadChainRemoteConfiguration(
 		return err
 	} else if present {
 		switch strings.ToLower(value) {
-		case "abandon", "ignore", "exop", "discover", "exop-discover":
+		case "abandon", "ignore", "exop", "exop-discover":
 			configuration.cancelMode = strings.ToLower(value)
 		default:
 			return fmt.Errorf("%s olcDbCancel has invalid value %q", entry.DN, value)

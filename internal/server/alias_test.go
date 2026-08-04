@@ -424,6 +424,93 @@ func TestLDAPClientAliasPagingAndSorting(t *testing.T) {
 	}
 }
 
+func TestLDAPClientChildrenScopeAliasDereference(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedAliasDirectory(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, entry := range []directory.Entry{
+			{
+				DN: "ou=children-aliases,dc=example,dc=com",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("organizationalUnit")},
+					{Description: "ou", Values: stringValues("children-aliases")},
+				},
+			},
+			aliasTestEntry(
+				"cn=direct,ou=children-aliases,dc=example,dc=com",
+				"cn",
+				"direct",
+				"uid=alice,ou=people,dc=example,dc=com",
+				"",
+			),
+		} {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed children-scope aliases: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+	client := bindAliasRootClient(t, address)
+	defer client.Close()
+
+	container := "ou=children-aliases,dc=example,dc=com"
+	aliasDN := "cn=direct," + container
+	targetChild := "cn=child,uid=alice,ou=people,dc=example,dc=com"
+
+	never := aliasSearch(
+		t,
+		client,
+		container,
+		ldap.ScopeChildren,
+		ldap.NeverDerefAliases,
+		"(objectClass=*)",
+	)
+	assertAliasDNs(t, never, []string{aliasDN})
+
+	searching := aliasSearch(
+		t,
+		client,
+		container,
+		ldap.ScopeChildren,
+		ldap.DerefInSearching,
+		"(objectClass=*)",
+	)
+	assertAliasDNs(t, searching, []string{targetChild})
+
+	for _, mode := range []int{ldap.DerefFindingBaseObj, ldap.DerefAlways} {
+		result := aliasSearch(
+			t,
+			client,
+			aliasDN,
+			ldap.ScopeChildren,
+			mode,
+			"(objectClass=*)",
+		)
+		assertAliasDNs(t, result, []string{targetChild})
+	}
+
+	searchingBase := aliasSearch(
+		t,
+		client,
+		aliasDN,
+		ldap.ScopeChildren,
+		ldap.DerefInSearching,
+		"(objectClass=*)",
+	)
+	assertAliasDNs(t, searchingBase, nil)
+}
+
 func seedAliasDirectory(t *testing.T, store storage.Store) {
 	t.Helper()
 	seedDirectory(t, store)

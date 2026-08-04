@@ -33,14 +33,18 @@ type trackedOperation struct {
 	id          int64
 	cancelable  bool
 	abandonable bool
+	longLived   bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 	done        chan struct{}
 	complete    sync.Once
 
-	mu    sync.Mutex
-	phase operationPhase
-	stop  operationStopMode
+	mu                         sync.Mutex
+	phase                      operationPhase
+	stop                       operationStopMode
+	metaBackendSearch          bool
+	metaBackendResponseSeen    bool
+	metaBackendCancelCompleted bool
 }
 
 func newTrackedOperation(
@@ -53,10 +57,25 @@ func newTrackedOperation(
 		id:          message.ID,
 		cancelable:  isSearch,
 		abandonable: isSearch,
+		longLived:   isLongLivedOperation(message),
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
 	}
+}
+
+func isLongLivedOperation(message ldapwire.Message) bool {
+	if _, isSearch := message.Request.(ldapwire.SearchRequest); !isSearch {
+		return false
+	}
+	for _, control := range message.Controls {
+		if control.OID != syncRequestControlOID || !control.HasValue {
+			continue
+		}
+		request, err := ldapwire.DecodeSyncRequestValue(control.Value)
+		return err == nil && request.Mode == ldapwire.SyncRefreshAndPersist
+	}
+	return false
 }
 
 func (operation *trackedOperation) start() bool {
@@ -106,10 +125,36 @@ func (operation *trackedOperation) requestCancel() ldapwire.Result {
 			"message ID already being cancelled",
 		)
 	}
+	if operation.metaBackendSearch && operation.metaBackendResponseSeen {
+		operation.metaBackendCancelCompleted = true
+		operation.mu.Unlock()
+		operation.cancel()
+		return ldapwire.Result{Code: ldapwire.ResultTooLate}
+	}
 	operation.stop = operationCanceled
 	operation.mu.Unlock()
 	operation.cancel()
 	return ldapwire.Result{Code: ldapwire.ResultSuccess}
+}
+
+func (operation *trackedOperation) enableMetaBackendSearch() {
+	operation.mu.Lock()
+	operation.metaBackendSearch = true
+	operation.mu.Unlock()
+}
+
+func (operation *trackedOperation) observeMetaBackendResponse() {
+	operation.mu.Lock()
+	if operation.metaBackendSearch {
+		operation.metaBackendResponseSeen = true
+	}
+	operation.mu.Unlock()
+}
+
+func (operation *trackedOperation) metaBackendCancelCompletesNormally() bool {
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	return operation.metaBackendCancelCompleted
 }
 
 func (operation *trackedOperation) beginFinalResponse() error {
@@ -225,6 +270,20 @@ func (registry *operationRegistry) shutdown() {
 	}
 }
 
+func (registry *operationRegistry) abandonLongLived() {
+	registry.mu.Lock()
+	operations := make([]*trackedOperation, 0, len(registry.operations))
+	for _, operation := range registry.operations {
+		if operation.longLived {
+			operations = append(operations, operation)
+		}
+	}
+	registry.mu.Unlock()
+	for _, operation := range operations {
+		operation.requestAbandon()
+	}
+}
+
 type queuedOperation struct {
 	message    ldapwire.Message
 	operation  *trackedOperation
@@ -242,6 +301,7 @@ type operationQueue struct {
 	ready  *sync.Cond
 	items  []*queuedOperation
 	closed bool
+	drain  bool
 }
 
 func newOperationQueue() *operationQueue {
@@ -267,7 +327,7 @@ func (queue *operationQueue) pop() (*queuedOperation, bool) {
 	for len(queue.items) == 0 && !queue.closed {
 		queue.ready.Wait()
 	}
-	if queue.closed {
+	if len(queue.items) == 0 || (queue.closed && !queue.drain) {
 		return nil, false
 	}
 	operation := queue.items[0]
@@ -279,17 +339,37 @@ func (queue *operationQueue) pop() (*queuedOperation, bool) {
 	return operation, true
 }
 
+func (queue *operationQueue) pending() int {
+	if queue == nil {
+		return 0
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return len(queue.items)
+}
+
 func (queue *operationQueue) close() {
 	queue.mu.Lock()
 	queue.closed = true
+	queue.drain = false
 	queue.items = nil
+	queue.ready.Broadcast()
+	queue.mu.Unlock()
+}
+
+func (queue *operationQueue) closeAndDrain() {
+	queue.mu.Lock()
+	queue.closed = true
+	queue.drain = true
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
 }
 
 type serializedResponseConnection struct {
 	net.Conn
-	mu *sync.Mutex
+	mu                *sync.Mutex
+	monitor           *monitorState
+	monitorConnection *monitorConnection
 }
 
 func (connection *serializedResponseConnection) Write(value []byte) (int, error) {
@@ -307,21 +387,45 @@ func (connection *serializedResponseConnection) Write(value []byte) (int, error)
 			return written, io.ErrShortWrite
 		}
 	}
+	if connection.monitor != nil && connection.monitorConnection != nil {
+		connection.monitor.observeResponse(connection.monitorConnection, value)
+	}
 	return written, nil
 }
 
 type operationResponseConnection struct {
 	net.Conn
 	operation *trackedOperation
+	audit     *operationAuditObservation
+}
+
+func (connection *operationResponseConnection) enableMetaBackendSearch() {
+	connection.operation.enableMetaBackendSearch()
+}
+
+func (connection *operationResponseConnection) observeMetaBackendResponse() {
+	connection.operation.observeMetaBackendResponse()
+}
+
+func (connection *operationResponseConnection) metaBackendCancelCompletesNormally() bool {
+	return connection.operation.metaBackendCancelCompletesNormally()
 }
 
 func (connection *operationResponseConnection) Write(value []byte) (int, error) {
 	if !connection.operation.responseAllowed() {
 		return 0, errOperationStopped
 	}
-	return connection.Conn.Write(value)
+	written, err := connection.Conn.Write(value)
+	if written == len(value) {
+		connection.audit.observeResponse(value)
+	}
+	return written, err
 }
 
 func (connection *operationResponseConnection) beginFinalResponse() error {
 	return connection.operation.beginFinalResponse()
+}
+
+func (connection *operationResponseConnection) setAuditAuthorizationDN(value string) {
+	connection.audit.setAuthorizationDN(value)
 }

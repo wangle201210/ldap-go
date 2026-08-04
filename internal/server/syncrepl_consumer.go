@@ -157,9 +157,6 @@ func (server *Server) runSyncConsumerCycle(
 	config syncConsumerConfig,
 	provider string,
 ) error {
-	if config.syncData == "changelog" {
-		return fmt.Errorf("syncdata=%s is not implemented", config.syncData)
-	}
 	cookie, err := server.loadSyncConsumerCookie(ctx, config)
 	if err != nil {
 		return err
@@ -221,10 +218,9 @@ func (server *Server) runSyncConsumerCycle(
 	}
 
 	rawSASL := config.bindMethod == "sasl" &&
-		!strings.EqualFold(config.saslMechanism, "DIGEST-MD5") &&
 		!strings.EqualFold(config.saslMechanism, "GSSAPI")
 	if rawSASL {
-		if err := bindSyncConsumerSASL(transport, config); err != nil {
+		if err := bindSyncConsumerSASL(transport, config, provider); err != nil {
 			return err
 		}
 	}
@@ -289,6 +285,13 @@ func (server *Server) runSyncConsumerCycle(
 			config,
 			config.mode,
 			cookie,
+		)
+	case "changelog":
+		return server.runSyncConsumerChangelog(
+			ctx,
+			connection,
+			config,
+			config.mode,
 		)
 	default:
 		return fmt.Errorf("unknown syncdata mode %q", config.syncData)
@@ -1426,35 +1429,6 @@ func bindSyncConsumer(
 		return nil
 	case "sasl":
 		switch strings.ToUpper(config.saslMechanism) {
-		case "DIGEST-MD5":
-			if config.authenticationID == "" {
-				return errors.New("SASL DIGEST-MD5 requires authcid")
-			}
-			if config.authorizationID != "" || config.realm != "" {
-				return errors.New(
-					"SASL DIGEST-MD5 authzid and realm are not implemented",
-				)
-			}
-			if err := validateSyncConsumerSASLSecurity(
-				config.securityProperties,
-				"DIGEST-MD5",
-				externalSSF,
-			); err != nil {
-				return err
-			}
-			parsed, err := parseSyncConsumerProviderURL(provider)
-			if err != nil {
-				return err
-			}
-			_, err = connection.DigestMD5Bind(&ldap.DigestMD5BindRequest{
-				Host:     parsed.Hostname(),
-				Username: config.authenticationID,
-				Password: string(config.credentials),
-			})
-			if err != nil {
-				return fmt.Errorf("SASL DIGEST-MD5 bind: %w", err)
-			}
-			return nil
 		case "GSSAPI":
 			if err := validateSyncConsumerSASLSecurity(
 				config.securityProperties,
@@ -1466,7 +1440,7 @@ func bindSyncConsumer(
 			return bindSyncConsumerGSSAPI(connection, config, provider)
 		default:
 			return fmt.Errorf(
-				"SASL mechanism %q is not implemented",
+				"SASL mechanism %q requires the raw consumer transport",
 				config.saslMechanism,
 			)
 		}

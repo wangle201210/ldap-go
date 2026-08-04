@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 func ParseRule(value string) (Rule, error) {
@@ -58,8 +59,13 @@ func SortRules(rules []Rule) {
 
 func parseTarget(tokens []string) (TargetSelector, error) {
 	target := TargetSelector{DN: DNMatcher{Style: DNAny}}
+	dnSpecified := false
 	for _, token := range tokens {
 		if token == "*" {
+			if dnSpecified {
+				return TargetSelector{}, errors.New("ACL target DN is already specified")
+			}
+			dnSpecified = true
 			continue
 		}
 		key, value, ok := splitSelector(token)
@@ -73,29 +79,95 @@ func parseTarget(tokens []string) (TargetSelector, error) {
 				if attribute == "" {
 					return TargetSelector{}, errors.New("empty ACL target attribute")
 				}
-				if strings.HasPrefix(attribute, "@") || strings.HasPrefix(attribute, "!") {
-					return TargetSelector{}, fmt.Errorf(
-						"object-class attribute selector %q is not implemented",
-						attribute,
-					)
+				if strings.ContainsRune("@!+-", rune(attribute[0])) && len(attribute) == 1 {
+					if attribute == "+" {
+						target.Attributes = append(target.Attributes, attribute)
+						continue
+					}
+					return TargetSelector{}, fmt.Errorf("empty ACL target selector %q", attribute)
 				}
 				target.Attributes = append(target.Attributes, attribute)
 			}
-		case strings.HasPrefix(key, "dn"):
-			matcher, err := parseDNMatcher(key, value)
+		case key == "dn" || strings.HasPrefix(key, "dn."):
+			if dnSpecified {
+				return TargetSelector{}, errors.New("ACL target DN is already specified")
+			}
+			matcher, err := parseDNMatcher(key, value, false)
 			if err != nil {
 				return TargetSelector{}, fmt.Errorf("target %s: %w", key, err)
 			}
 			target.DN = matcher
+			dnSpecified = true
 		case key == "filter":
-			return TargetSelector{}, errors.New("ACL filter selectors are not implemented")
+			filter, err := ldapwire.CompileFilter(value)
+			if err != nil {
+				return TargetSelector{}, fmt.Errorf("compile ACL target filter: %w", err)
+			}
+			target.Filter = &filter
 		case strings.HasPrefix(key, "val"):
-			return TargetSelector{}, errors.New("ACL value selectors are not implemented")
+			if target.Value != nil {
+				return TargetSelector{}, errors.New("ACL target value is already specified")
+			}
+			if len(target.Attributes) != 1 || !plainValueAttribute(target.Attributes[0]) {
+				return TargetSelector{}, errors.New("ACL target value requires one attribute")
+			}
+			selector, err := parseValueSelector(key, value)
+			if err != nil {
+				return TargetSelector{}, err
+			}
+			target.Value = &selector
 		default:
 			return TargetSelector{}, fmt.Errorf("unsupported target selector %q", token)
 		}
 	}
 	return target, nil
+}
+
+func plainValueAttribute(attribute string) bool {
+	return attribute != "" && !strings.ContainsRune("@!+-*", rune(attribute[0]))
+}
+
+func parseValueSelector(key, value string) (ValueSelector, error) {
+	style := "exact"
+	if dot := strings.IndexByte(key, '.'); dot >= 0 {
+		style = key[dot+1:]
+		key = key[:dot]
+	}
+	parts := strings.SplitN(key, "/", 2)
+	if parts[0] != "val" || len(parts) > 2 {
+		return ValueSelector{}, fmt.Errorf("invalid ACL target value selector %q", key)
+	}
+	selector := ValueSelector{
+		Style:     DNExact,
+		Assertion: []byte(value),
+	}
+	if len(parts) == 2 {
+		if parts[1] == "" {
+			return ValueSelector{}, errors.New("empty ACL target value matching rule")
+		}
+		selector.MatchingRule = parts[1]
+	}
+	switch style {
+	case "exact", "base", "baseobject":
+		return selector, nil
+	case "regex":
+		pattern, err := regexp.Compile("(?i)" + value)
+		if err != nil {
+			return ValueSelector{}, fmt.Errorf("compile ACL target value regular expression: %w", err)
+		}
+		selector.Style = DNRegex
+		selector.Pattern = pattern
+		return selector, nil
+	case "one", "onelevel":
+		selector.Style = DNOne
+	case "sub", "subtree":
+		selector.Style = DNSubtree
+	case "children":
+		selector.Style = DNChildren
+	default:
+		return ValueSelector{}, fmt.Errorf("unsupported ACL target value style %q", style)
+	}
+	return selector, nil
 }
 
 func parseByClause(tokens []string) (ByClause, error) {
@@ -146,7 +218,8 @@ func parseByClause(tokens []string) (ByClause, error) {
 }
 
 func parseWhoMatcher(token string) (WhoMatcher, error) {
-	switch strings.ToLower(token) {
+	lower := strings.ToLower(token)
+	switch lower {
 	case "*":
 		return WhoMatcher{Kind: WhoAny}, nil
 	case "anonymous":
@@ -155,6 +228,32 @@ func parseWhoMatcher(token string) (WhoMatcher, error) {
 		return WhoMatcher{Kind: WhoUsers}, nil
 	case "self":
 		return WhoMatcher{Kind: WhoSelf}, nil
+	case "realanonymous":
+		return WhoMatcher{Kind: WhoAnonymous, Real: true}, nil
+	case "realusers":
+		return WhoMatcher{Kind: WhoUsers, Real: true}, nil
+	case "realself":
+		return WhoMatcher{Kind: WhoSelf, Real: true}, nil
+	case "aci", "dynacl/aci":
+		return WhoMatcher{Kind: WhoACI, ACIAttribute: "OpenLDAPaci"}, nil
+	}
+	if isACISelector(lower) {
+		return parseACIMatcher(lower, "")
+	}
+	selfPrefix := "self."
+	real := false
+	if strings.HasPrefix(lower, "realself.") {
+		selfPrefix = "realself."
+		real = true
+	}
+	if strings.HasPrefix(lower, selfPrefix+"level{") {
+		level, ok, err := parseLevelStyle(strings.TrimPrefix(lower, selfPrefix))
+		if err != nil {
+			return WhoMatcher{}, fmt.Errorf("subject %s: %w", strings.TrimSuffix(selfPrefix, "."), err)
+		}
+		if ok {
+			return WhoMatcher{Kind: WhoSelf, Real: real, SelfLevel: level}, nil
+		}
 	}
 
 	key, value, ok := splitSelector(token)
@@ -162,28 +261,109 @@ func parseWhoMatcher(token string) (WhoMatcher, error) {
 		return WhoMatcher{}, fmt.Errorf("unsupported subject selector %q", token)
 	}
 	switch {
+	case isACISelector(key):
+		return parseACIMatcher(key, value)
 	case strings.HasPrefix(key, "dn.") || key == "dn":
-		matcher, err := parseDNMatcher(key, value)
+		matcher, err := parseDNMatcher(key, value, true)
 		if err != nil {
 			return WhoMatcher{}, fmt.Errorf("subject %s: %w", key, err)
 		}
 		return WhoMatcher{Kind: WhoDN, DN: matcher}, nil
+	case strings.HasPrefix(key, "realdn.") || key == "realdn":
+		matcherKey := strings.TrimPrefix(key, "real")
+		matcher, err := parseDNMatcher(matcherKey, value, true)
+		if err != nil {
+			return WhoMatcher{}, fmt.Errorf("subject %s: %w", key, err)
+		}
+		return WhoMatcher{Kind: WhoDN, Real: true, DN: matcher}, nil
 	case key == "dnattr":
 		if value == "" {
 			return WhoMatcher{}, errors.New("dnattr requires an attribute")
 		}
 		return WhoMatcher{Kind: WhoDNAttribute, Attribute: value}, nil
+	case key == "realdnattr":
+		if value == "" {
+			return WhoMatcher{}, errors.New("realdnattr requires an attribute")
+		}
+		return WhoMatcher{Kind: WhoDNAttribute, Real: true, Attribute: value}, nil
 	case strings.HasPrefix(key, "group"):
 		return parseGroupMatcher(key, value)
-	case key == "ssf":
+	case key == "peername" || strings.HasPrefix(key, "peername."):
+		matcher, err := parseStringMatcher(key, "peername", value, stringStyles{
+			regex: true, ip: true, ipv6: true, path: true,
+		})
+		return WhoMatcher{Kind: WhoPeerName, Connection: matcher}, err
+	case key == "sockname" || strings.HasPrefix(key, "sockname."):
+		matcher, err := parseStringMatcher(key, "sockname", value, stringStyles{regex: true})
+		return WhoMatcher{Kind: WhoSockName, Connection: matcher}, err
+	case key == "domain" || strings.HasPrefix(key, "domain."):
+		matcher, err := parseStringMatcher(key, "domain", value, stringStyles{
+			regex: true, subtree: true, modifier: true,
+		})
+		return WhoMatcher{Kind: WhoDomain, Connection: matcher}, err
+	case key == "sockurl" || strings.HasPrefix(key, "sockurl."):
+		matcher, err := parseStringMatcher(key, "sockurl", value, stringStyles{regex: true})
+		return WhoMatcher{Kind: WhoSockURL, Connection: matcher}, err
+	case key == "set" || strings.HasPrefix(key, "set."):
+		style := "exact"
+		if key != "set" {
+			style = strings.TrimPrefix(key, "set.")
+		}
+		expand := false
+		switch style {
+		case "exact", "base", "baseobject":
+		case "expand", "regex":
+			expand = true
+		default:
+			return WhoMatcher{}, fmt.Errorf("unsupported set style %q", style)
+		}
+		if value == "" {
+			return WhoMatcher{}, errors.New("set requires an expression")
+		}
+		return WhoMatcher{Kind: WhoSet, SetPattern: value, SetExpand: expand}, nil
+	case key == "ssf" || key == "transport_ssf" || key == "tls_ssf" || key == "sasl_ssf":
 		minimum, err := strconv.Atoi(value)
 		if err != nil || minimum < 0 {
 			return WhoMatcher{}, fmt.Errorf("invalid SSF %q", value)
 		}
-		return WhoMatcher{Kind: WhoSSF, MinimumSSF: minimum}, nil
+		kind := SSFOverall
+		switch key {
+		case "transport_ssf":
+			kind = SSFTransport
+		case "tls_ssf":
+			kind = SSFTLS
+		case "sasl_ssf":
+			kind = SSFSASL
+		}
+		return WhoMatcher{Kind: WhoSSF, SSFKind: kind, MinimumSSF: minimum}, nil
 	default:
 		return WhoMatcher{}, fmt.Errorf("unsupported subject selector %q", token)
 	}
+}
+
+func isACISelector(key string) bool {
+	base := key
+	if dot := strings.LastIndexByte(base, '.'); dot > strings.LastIndexByte(base, '/') {
+		base = base[:dot]
+	}
+	return base == "aci" || base == "dynacl/aci" ||
+		strings.HasPrefix(base, "dynacl/aci/")
+}
+
+func parseACIMatcher(key, attribute string) (WhoMatcher, error) {
+	style := "exact"
+	if dot := strings.LastIndexByte(key, '.'); dot > strings.LastIndexByte(key, '/') {
+		style = key[dot+1:]
+	}
+	switch style {
+	case "exact", "base", "baseobject", "regex":
+	default:
+		return WhoMatcher{}, fmt.Errorf("unsupported ACI style %q", style)
+	}
+	if attribute == "" {
+		attribute = "OpenLDAPaci"
+	}
+	return WhoMatcher{Kind: WhoACI, ACIAttribute: attribute}, nil
 }
 
 func parseGroupMatcher(key, value string) (WhoMatcher, error) {
@@ -192,8 +372,13 @@ func parseGroupMatcher(key, value string) (WhoMatcher, error) {
 		style = key[dot+1:]
 		key = key[:dot]
 	}
-	if style != "exact" {
-		return WhoMatcher{}, fmt.Errorf("group style %q is not implemented", style)
+	expand := false
+	switch style {
+	case "exact", "base", "baseobject":
+	case "expand", "regex":
+		expand = true
+	default:
+		return WhoMatcher{}, fmt.Errorf("unsupported group style %q", style)
 	}
 	parts := strings.Split(key, "/")
 	if parts[0] != "group" || len(parts) > 3 {
@@ -207,31 +392,87 @@ func parseGroupMatcher(key, value string) (WhoMatcher, error) {
 	if len(parts) == 3 && parts[2] != "" {
 		attribute = parts[2]
 	}
-	groupDN, err := directory.ParseDN(value)
-	if err != nil {
-		return WhoMatcher{}, err
-	}
-	return WhoMatcher{
+	matcher := WhoMatcher{
 		Kind:             WhoGroup,
-		DN:               DNMatcher{Style: DNExact, DN: groupDN},
 		GroupObjectClass: objectClass,
 		GroupAttribute:   attribute,
-	}, nil
+		GroupPattern:     value,
+		GroupExpand:      expand,
+	}
+	if expand {
+		return matcher, nil
+	}
+	groupDN, err := directory.ParseDN(value)
+	matcher.DN = DNMatcher{Style: DNExact, DN: groupDN}
+	return matcher, err
 }
 
-func parseDNMatcher(key, value string) (DNMatcher, error) {
-	style := "regex"
+func parseDNMatcher(key, value string, allowExpansion bool) (DNMatcher, error) {
+	style := "exact"
+	expand := false
 	if dot := strings.IndexByte(key, '.'); dot >= 0 {
 		style = key[dot+1:]
 		if comma := strings.IndexByte(style, ','); comma >= 0 {
 			if style[comma+1:] != "expand" {
 				return DNMatcher{}, fmt.Errorf("unsupported DN modifier %q", style[comma+1:])
 			}
-			return DNMatcher{}, errors.New("DN expansion is not implemented")
+			if !allowExpansion {
+				return DNMatcher{}, errors.New("DN expansion is not valid in an ACL target")
+			}
+			expand = true
+			style = style[:comma]
 		}
+	}
+	if expand && style == "regex" {
+		return DNMatcher{}, errors.New("DN regex style already implies expansion")
+	}
+	if expand && !hasACLExpansion(value) {
+		return DNMatcher{}, errors.New("DN expansion pattern contains no substitutions")
+	}
+	if expand {
+		matcher := DNMatcher{Raw: value, Expand: true}
+		if level, ok, err := parseLevelStyle(style); ok || err != nil {
+			if err != nil {
+				return DNMatcher{}, err
+			}
+			if level < 0 {
+				return DNMatcher{}, fmt.Errorf("negative DN level %d", level)
+			}
+			matcher.Style = DNLevel
+			matcher.Level = level
+			return matcher, nil
+		}
+		switch style {
+		case "exact", "base", "baseobject":
+			matcher.Style = DNExact
+		case "one", "onelevel":
+			matcher.Style = DNOne
+		case "subtree", "sub":
+			matcher.Style = DNSubtree
+		case "children":
+			matcher.Style = DNChildren
+		default:
+			return DNMatcher{}, fmt.Errorf("unsupported DN style %q", style)
+		}
+		return matcher, nil
 	}
 	switch style {
 	case "regex":
+		if value == "" {
+			dn, err := directory.ParseDN("")
+			return DNMatcher{Style: DNExact, DN: dn}, err
+		}
+		switch value {
+		case "*", ".*", ".*$", "^.*", "^.*$", ".*$$", "^.*$$":
+			return DNMatcher{Style: DNAny}, nil
+		}
+		if allowExpansion {
+			return DNMatcher{
+				Style:  DNRegex,
+				Raw:    value,
+				Expand: hasACLExpansion(value),
+			}, nil
+		}
 		pattern, err := regexp.Compile("(?i)" + value)
 		if err != nil {
 			return DNMatcher{}, fmt.Errorf("compile DN regular expression: %w", err)
@@ -250,14 +491,51 @@ func parseDNMatcher(key, value string) (DNMatcher, error) {
 		dn, err := directory.ParseDN(value)
 		return DNMatcher{Style: DNChildren, DN: dn}, err
 	default:
+		if level, ok, err := parseLevelStyle(style); ok || err != nil {
+			if err != nil {
+				return DNMatcher{}, err
+			}
+			if level < 0 {
+				return DNMatcher{}, fmt.Errorf("negative DN level %d", level)
+			}
+			if !allowExpansion {
+				return DNMatcher{}, fmt.Errorf("unsupported DN style %q", style)
+			}
+			dn, err := directory.ParseDN(value)
+			return DNMatcher{Style: DNLevel, DN: dn, Level: level}, err
+		}
 		return DNMatcher{}, fmt.Errorf("unsupported DN style %q", style)
 	}
+}
+
+func parseLevelStyle(style string) (int, bool, error) {
+	if !strings.HasPrefix(style, "level") {
+		return 0, false, nil
+	}
+	if len(style) < len("level{}") || style[len("level")] != '{' || style[len(style)-1] != '}' {
+		return 0, true, fmt.Errorf("invalid DN level style %q", style)
+	}
+	raw := style[len("level{") : len(style)-1]
+	if raw == "" {
+		return 0, true, errors.New("empty DN level")
+	}
+	level, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, true, fmt.Errorf("invalid DN level %q", raw)
+	}
+	return level, true, nil
 }
 
 func parseGrant(token string) (Grant, error) {
 	grant := Grant{Mode: grantSet}
 	lower := strings.ToLower(token)
-	if strings.HasPrefix(lower, "self") {
+	if strings.HasPrefix(lower, "realself") {
+		grant.RealSelfValue = true
+		lower = strings.TrimPrefix(lower, "realself")
+		if lower == "" {
+			return Grant{}, errors.New("realself access modifier requires a level or privileges")
+		}
+	} else if strings.HasPrefix(lower, "self") {
 		grant.SelfValue = true
 		lower = strings.TrimPrefix(lower, "self")
 		if lower == "" {
@@ -348,7 +626,9 @@ func parsePrivilegeLetters(value string) (Privilege, error) {
 
 func isAccessToken(token string) bool {
 	lower := strings.ToLower(token)
-	if strings.HasPrefix(lower, "self") {
+	if strings.HasPrefix(lower, "realself") {
+		lower = strings.TrimPrefix(lower, "realself")
+	} else if strings.HasPrefix(lower, "self") {
 		lower = strings.TrimPrefix(lower, "self")
 	}
 	switch lower {

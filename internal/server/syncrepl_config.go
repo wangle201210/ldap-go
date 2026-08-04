@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
@@ -557,11 +556,16 @@ func parseSyncConsumerConfig(
 			"bindmethod=sasl requires saslmech",
 		)
 	}
-	if config.syncData != "default" &&
+	if config.syncData == "accesslog" &&
 		(config.logBase == nil || config.logFilter == nil) {
 		return syncConsumerConfig{}, fmt.Errorf(
 			"syncdata=%s requires logbase and logfilter",
 			config.syncData,
+		)
+	}
+	if config.syncData == "changelog" && config.logBase == nil {
+		return syncConsumerConfig{}, errors.New(
+			"syncdata=changelog requires logbase",
 		)
 	}
 	config.credentials = bytes.Clone(config.credentials)
@@ -677,11 +681,7 @@ func parseSyncConsumerProviders(value string) ([]string, error) {
 }
 
 func compileSyncConsumerFilter(value string) (directory.Filter, error) {
-	packet, err := ldap.CompileFilter(value)
-	if err != nil {
-		return directory.Filter{}, err
-	}
-	return ldapwire.DecodeFilter(packet.Bytes())
+	return ldapwire.CompileFilter(value)
 }
 
 func parseSyncConsumerScope(value string) (directory.Scope, error) {

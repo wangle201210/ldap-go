@@ -123,6 +123,11 @@ func (server *Server) handlePasswordModify(
 			nil,
 		)
 	}
+	seqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, target)
+	if err != nil {
+		return err
+	}
+	defer seqmodRelease()
 	if len(retcodeConfigurationsForDatabase(state.runtime.databases, *database)) > 0 {
 		retcodeTargetExists, err := server.retcodeStoredEntryExists(ctx, *database, target)
 		if err != nil {
@@ -145,6 +150,24 @@ func (server *Server) handlePasswordModify(
 	}
 	if result := updateOperationPrecondition(state.runtime, state.boundDN, target); result != nil {
 		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
+	}
+	if result := databaseRestrictionResult(
+		state.runtime,
+		target,
+		restrictPasswordModify,
+	); result != nil {
+		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
+	}
+	if handled, err := server.tryTranslucentPasswordModify(
+		ctx,
+		connection,
+		state,
+		message,
+		target,
+		*database,
+		passwordRequest,
+	); handled {
+		return err
 	}
 
 	newPassword := passwordRequest.NewPassword
@@ -199,7 +222,17 @@ func (server *Server) handlePasswordModify(
 			)
 		}
 	}
-	nextRuntime, syncChange, err := server.modifyEntry(
+	writeRecord := &accesslogWriteRecord{
+		operation:       accesslogModify,
+		session:         state.connectionID,
+		authorizationDN: state.boundDN,
+		requestDN:       target,
+	}
+	if isConfigurationDN(target) {
+		server.configMu.Lock()
+		defer server.configMu.Unlock()
+	}
+	nextRuntime, syncChanges, err := server.modifyEntry(
 		ctx,
 		state.runtime,
 		state.boundDN,
@@ -207,6 +240,8 @@ func (server *Server) handlePasswordModify(
 		*database,
 		changes,
 		controls.manageDsaIT,
+		false,
+		false,
 		false,
 		precondition,
 		server.passwordPolicyModificationProcessor(
@@ -222,11 +257,13 @@ func (server *Server) handlePasswordModify(
 			},
 		),
 		nil,
+		writeRecord,
 	)
 	if err != nil {
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
-	server.finishWriteEffects(ctx, nextRuntime, syncChange)
+	server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
+	server.finishAuditlogWrite(state, *database, *writeRecord)
 	state.passwordPolicyRestrictedDN = ""
 
 	var responseValue []byte

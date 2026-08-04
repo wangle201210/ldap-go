@@ -37,6 +37,14 @@ func TestRewriteReferralURLMatchesOpenLDAPRules(t *testing.T) {
 			ok:     true,
 		},
 		{
+			name:   "children search uses subordinate scope",
+			raw:    "ldap://remote.example/ou=people,dc=remote,dc=example",
+			target: &child,
+			scope:  referralScopeForSearch(directory.ScopeChildren),
+			want:   "ldap://remote.example/uid=alice,ou=people,dc=remote,dc=example??subordinate",
+			ok:     true,
+		},
+		{
 			name:   "URL without DN uses target",
 			raw:    "ldap://remote.example Remote",
 			target: &child,
@@ -244,6 +252,27 @@ func TestLDAPClientManageDsaITAndReferrals(t *testing.T) {
 		"ldap://remote.example/dc=remote,dc=example??base",
 	)
 
+	childrenBaseResult, err := client.Search(ldap.NewSearchRequest(
+		referralDN,
+		ldap.ScopeChildren,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"1.1"},
+		nil,
+	))
+	if childrenBaseResult == nil {
+		t.Fatal("children referral Search() returned nil result")
+	}
+	assertLDAPReferral(
+		t,
+		err,
+		referralDN,
+		"ldap://remote.example/dc=remote,dc=example??subordinate",
+	)
+
 	subtree, err := client.Search(ldap.NewSearchRequest(
 		"dc=example,dc=com",
 		ldap.ScopeWholeSubtree,
@@ -262,6 +291,26 @@ func TestLDAPClientManageDsaITAndReferrals(t *testing.T) {
 		subtree.Referrals[0] !=
 			"ldap://remote.example/dc=remote,dc=example??sub" {
 		t.Fatalf("subtree referrals = %q", subtree.Referrals)
+	}
+
+	children, err := client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeChildren,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(uid=filter-does-not-match-referral)",
+		[]string{"1.1"},
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("children Search(): %v", err)
+	}
+	if len(children.Referrals) != 1 ||
+		children.Referrals[0] !=
+			"ldap://remote.example/dc=remote,dc=example??sub" {
+		t.Fatalf("children referrals = %q", children.Referrals)
 	}
 
 	oneLevel, err := client.Search(ldap.NewSearchRequest(
@@ -319,6 +368,24 @@ func TestLDAPClientManageDsaITAndReferrals(t *testing.T) {
 	if len(managed.Entries) != 1 ||
 		managed.Entries[0].GetAttributeValue("ref") != referralURL {
 		t.Fatalf("managed referral entries = %#v", managed.Entries)
+	}
+
+	managedChildren, err := client.Search(ldap.NewSearchRequest(
+		referralDN,
+		ldap.ScopeChildren,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=referral)",
+		[]string{"*", "ref"},
+		[]ldap.Control{manage},
+	))
+	if err != nil {
+		t.Fatalf("managed children referral Search(): %v", err)
+	}
+	if len(managedChildren.Entries) != 0 {
+		t.Fatalf("managed children referral entries = %#v", managedChildren.Entries)
 	}
 
 	modify := ldap.NewModifyRequest(referralDN, nil)

@@ -45,9 +45,11 @@ type syncSearchPolicy struct {
 }
 
 type syncSearchRoute struct {
-	partition string
-	base      directory.DN
-	scope     directory.Scope
+	partition     string
+	databaseIndex int
+	rwm           *rwmRuntimeConfiguration
+	base          directory.DN
+	scope         directory.Scope
 }
 
 type syncDeletedUUID struct {
@@ -105,9 +107,11 @@ func (server *Server) prepareSyncSearch(
 			}
 		}
 		syncRoutes = append(syncRoutes, syncSearchRoute{
-			partition: database.partition,
-			base:      route.base,
-			scope:     route.scope,
+			partition:     database.partition,
+			databaseIndex: route.databaseIndex,
+			rwm:           database.rwm,
+			base:          route.base,
+			scope:         route.scope,
 		})
 	}
 	syncSearch := &syncSearchContext{
@@ -284,6 +288,21 @@ func (server *Server) prepareSyncRefresh(
 		}
 		return nil, nil
 	case !anySessionLog && allNoPresent:
+		withinMinimum, err := syncCookieWithinMinimumCSNs(
+			state.runtime,
+			reader,
+			syncSearch,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !withinMinimum {
+			result := ldapwire.ResultError(
+				ldapwire.ResultSyncRefreshRequired,
+				"sync cookie is stale",
+			)
+			return &result, nil
+		}
 		syncSearch.refreshDeletes = true
 		return nil, nil
 	}
@@ -304,6 +323,60 @@ func (server *Server) prepareSyncRefresh(
 	}
 	syncSearch.cookie.csns = make(syncCSNState)
 	return nil, nil
+}
+
+func syncCookieWithinMinimumCSNs(
+	runtime *runtimeState,
+	reader storage.Reader,
+	syncSearch *syncSearchContext,
+) (bool, error) {
+	seen := make(map[int]struct{})
+	for _, route := range syncSearch.routes {
+		providerIndex := effectiveSyncProviderDatabaseIndex(
+			runtime.databases,
+			route.databaseIndex,
+		)
+		if providerIndex < 0 {
+			continue
+		}
+		if _, alreadyChecked := seen[providerIndex]; alreadyChecked {
+			continue
+		}
+		seen[providerIndex] = struct{}{}
+		provider := runtime.databases[providerIndex]
+		policy := syncSearch.policies[provider.partition]
+		if !policy.noPresent || !policy.reloadHint ||
+			policy.sessionLogSize != 0 {
+			continue
+		}
+		tx := storage.ReaderInPartition(reader, provider.partition)
+		for _, suffix := range provider.suffixes {
+			entry, err := tx.Get(suffix)
+			switch {
+			case err == nil:
+			case errors.Is(err, storage.ErrEntryNotFound):
+				continue
+			default:
+				return false, err
+			}
+			for _, raw := range entry.Values("minCSN") {
+				minimum, err := parseOpenLDAPCSN(string(raw))
+				if err != nil {
+					return false, fmt.Errorf(
+						"%s has invalid minCSN %q: %w",
+						entry.DN,
+						raw,
+						err,
+					)
+				}
+				consumer, exists := syncSearch.cookie.csns[minimum.serverID]
+				if !exists || compareOpenLDAPCSN(consumer, minimum) < 0 {
+					return false, nil
+				}
+			}
+		}
+	}
+	return true, nil
 }
 
 func syncCookieStateExists(
@@ -875,8 +948,18 @@ func syncSearchBaseChanged(
 		return false
 	}
 	for _, route := range syncSearch.routes {
-		if route.partition == change.partition &&
-			(beforeDN.Equal(route.base) || beforeDN.AncestorOf(route.base)) {
+		if route.partition != change.partition {
+			continue
+		}
+		routeBefore := route.localDN(beforeDN)
+		routeAfterAtSameDN := false
+		if change.hasAfter {
+			routeAfterAtSameDN = routeBefore.Equal(route.localDN(afterDN))
+		}
+		if routeAfterAtSameDN {
+			continue
+		}
+		if routeBefore.Equal(route.base) || routeBefore.AncestorOf(route.base) {
 			return true
 		}
 	}
@@ -892,27 +975,56 @@ func (server *Server) syncEventEntry(
 	partition string,
 	entry directory.Entry,
 ) (directory.Entry, ldapwire.SyncUUID, bool, error) {
-	dn, err := directory.ParseDN(entry.DN)
+	storedDN, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.Entry{}, ldapwire.SyncUUID{}, false, err
 	}
-	inScope := false
+	databaseIndex := -1
 	for _, route := range syncSearch.routes {
-		if route.partition == partition &&
-			directory.InScope(route.base, dn, route.scope) {
-			inScope = true
+		if route.partition != partition {
+			continue
+		}
+		localDN := route.localDN(storedDN)
+		if directory.InScope(route.base, localDN, route.scope) {
+			databaseIndex = route.databaseIndex
+			if databaseIndex >= 0 && databaseIndex < len(runtime.databases) &&
+				runtime.databases[databaseIndex].rwm != nil {
+				entry, err = runtime.databases[databaseIndex].rwm.mapEntryToLocal(entry)
+				if err != nil {
+					return directory.Entry{}, ldapwire.SyncUUID{}, false, err
+				}
+			}
 			break
 		}
 	}
-	if !inScope {
+	if databaseIndex < 0 || databaseIndex >= len(runtime.databases) {
 		return directory.Entry{}, ldapwire.SyncUUID{}, false, nil
 	}
 
-	tx := storage.ReaderInPartition(reader, partition)
+	tx := readerForDatabase(reader, runtime.databases[databaseIndex])
 	entry = withSubschemaReference(entry)
 	entry, err = withCollectiveAttributes(runtime.schema, tx, entry)
 	if err != nil {
 		return directory.Entry{}, ldapwire.SyncUUID{}, false, err
+	}
+	filterEntry := entry
+	if !syncSearch.manageDsaIT {
+		projected, projectedFilterEntry, projectErr := newDynlistProjectionCache(
+			context.Background(),
+			server,
+			runtime,
+			reader,
+			boundDN,
+			dynlistProjectionRequest{
+				attributes: request.Attributes,
+				filter:     &request.Filter,
+			},
+		).apply(runtime.databases[databaseIndex], entry)
+		if projectErr != nil {
+			return directory.Entry{}, ldapwire.SyncUUID{}, false, projectErr
+		}
+		entry = projected
+		filterEntry = projectedFilterEntry
 	}
 	if !subentrySearchVisible(
 		runtime,
@@ -930,7 +1042,7 @@ func (server *Server) syncEventEntry(
 		runtime,
 		tx,
 		boundDN,
-		entry,
+		filterEntry,
 		request.Filter,
 	)
 	if err != nil {
@@ -967,4 +1079,13 @@ func (server *Server) syncEventEntry(
 		request.TypesOnly,
 	)
 	return selected, uuid, true, nil
+}
+
+func (route syncSearchRoute) localDN(dn directory.DN) directory.DN {
+	if route.rwm != nil {
+		if local, err := route.rwm.mapDNToLocal(dn); err == nil {
+			return local
+		}
+	}
+	return dn
 }

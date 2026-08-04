@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -91,32 +93,57 @@ func (server *Server) authorizationRulesMatch(
 	}
 
 	var rules [][]byte
-	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
-		entry, err := tx.Get(rulesDN)
-		if errors.Is(err, storage.ErrEntryNotFound) {
-			return nil
+	defer func() {
+		for _, rule := range rules {
+			clear(rule)
 		}
+	}()
+	if saslAuthorizationUsesProxyBackend(database) {
+		entry, found, err := server.lookupProxySASLAuthorizationEntry(
+			ctx,
+			runtime,
+			*database,
+			rulesDN,
+			[]string{attribute},
+			authenticationDN.String(),
+		)
 		if err != nil {
-			return err
+			return false, err
 		}
-		for _, value := range runtime.schema.AttributeValues(entry, attribute) {
-			if server.allowed(
-				runtime,
-				tx,
-				authenticationDN.String(),
-				entry,
-				attribute,
-				value,
-				acl.Auth,
-			) {
-				rules = append(rules, value)
+		if found {
+			defer clearSASLCredentialEntry(&entry)
+			for _, value := range runtime.schema.AttributeValues(entry, attribute) {
+				rules = append(rules, bytes.Clone(value))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return false, err
+	} else {
+		err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+			tx := readerForDatabase(reader, *database)
+			entry, err := tx.Get(rulesDN)
+			if errors.Is(err, storage.ErrEntryNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			for _, value := range runtime.schema.AttributeValues(entry, attribute) {
+				if server.allowed(
+					runtime,
+					tx,
+					authenticationDN.String(),
+					entry,
+					attribute,
+					value,
+					acl.Auth,
+				) {
+					rules = append(rules, bytes.Clone(value))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
 	}
 
 	var lastErr error
@@ -307,10 +334,61 @@ func (server *Server) authorizationGroupRuleMatches(
 	if database == nil {
 		return false, nil
 	}
+	if saslAuthorizationUsesProxyBackend(database) {
+		entries, err := server.searchProxySASLAuthorization(
+			ctx,
+			runtime,
+			*database,
+			ldapwire.SearchRequest{
+				BaseDN:       groupDN.String(),
+				Scope:        directory.ScopeBase,
+				DerefAliases: ldapwire.NeverDerefAliases,
+				SizeLimit:    1,
+				TypesOnly:    true,
+				Filter: directory.Filter{
+					Kind: directory.FilterAnd,
+					Children: []directory.Filter{
+						{
+							Kind:      directory.FilterEquality,
+							Attribute: "objectClass",
+							Assertion: []byte(objectClass),
+						},
+						{
+							Kind:      directory.FilterEquality,
+							Attribute: memberAttribute,
+							Assertion: []byte(assertedDN.String()),
+						},
+					},
+				},
+				Attributes: []string{"1.1"},
+			},
+			authenticationDN.String(),
+		)
+		if err != nil {
+			return false, err
+		}
+		defer clearSASLAuthorizationEntries(entries)
+		if len(entries) > 1 {
+			return false, errors.New(
+				"SASL authorization group search returned multiple entries",
+			)
+		}
+		for _, entry := range entries {
+			entryDN, parseErr := directory.ParseDN(entry.DN)
+			if parseErr != nil || !entryDN.Equal(groupDN) {
+				return false, fmt.Errorf(
+					"SASL authorization group search for %q returned unexpected entry %q",
+					groupDN.String(),
+					entry.DN,
+				)
+			}
+		}
+		return len(entries) == 1, nil
+	}
 
 	matched := false
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
+		tx := readerForDatabase(reader, *database)
 		entry, err := tx.Get(groupDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
@@ -382,14 +460,92 @@ func (server *Server) authorizationURLRuleMatches(
 		return false, nil
 	}
 
+	primary := &runtime.databases[routes[0].databaseIndex]
+	visible, err := server.saslAuthorizationSearchBaseVisible(
+		ctx,
+		runtime,
+		*primary,
+		search.base,
+		authenticationDN.String(),
+	)
+	if err != nil || !visible {
+		return false, err
+	}
+
+	matches := 0
+	for _, route := range routes {
+		if !directory.InScope(route.base, assertedDN, route.scope) {
+			continue
+		}
+		database := &runtime.databases[route.databaseIndex]
+		if saslAuthorizationUsesProxyBackend(database) {
+			entries, err := server.searchProxySASLAuthorization(
+				ctx,
+				runtime,
+				*database,
+				ldapwire.SearchRequest{
+					BaseDN:       assertedDN.String(),
+					Scope:        directory.ScopeBase,
+					DerefAliases: ldapwire.NeverDerefAliases,
+					SizeLimit:    1,
+					TypesOnly:    true,
+					Filter:       search.filter,
+					Attributes:   []string{"1.1"},
+				},
+				authenticationDN.String(),
+			)
+			if err != nil {
+				return false, err
+			}
+			defer clearSASLAuthorizationEntries(entries)
+			for _, entry := range entries {
+				entryDN, parseErr := directory.ParseDN(entry.DN)
+				if parseErr != nil || !entryDN.Equal(assertedDN) {
+					return false, fmt.Errorf(
+						"SASL authorization URL search for %q returned unexpected entry %q",
+						assertedDN.String(),
+						entry.DN,
+					)
+				}
+				matches++
+			}
+		} else {
+			matched, err := server.localSASLAuthorizationEntryMatches(
+				ctx,
+				runtime,
+				*database,
+				authenticationDN.String(),
+				assertedDN,
+				search.filter,
+			)
+			if err != nil {
+				return false, err
+			}
+			if matched {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return false, errors.New(
+				"SASL authorization URL search returned multiple matching entries",
+			)
+		}
+	}
+	return matches == 1, nil
+}
+
+func (server *Server) localSASLAuthorizationEntryMatches(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	subjectDN string,
+	assertedDN directory.DN,
+	filter directory.Filter,
+) (bool, error) {
 	matched := false
-	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		primary := &runtime.databases[routes[0].databaseIndex]
-		primaryReader := storage.ReaderInPartition(
-			reader,
-			primary.partition,
-		)
-		baseEntry, err := primaryReader.Get(search.base)
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		entry, err := tx.Get(assertedDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -398,55 +554,24 @@ func (server *Server) authorizationURLRuleMatches(
 		}
 		if !server.allowed(
 			runtime,
-			primaryReader,
-			authenticationDN.String(),
-			baseEntry,
+			tx,
+			subjectDN,
+			entry,
 			"entry",
 			nil,
 			acl.Auth,
 		) {
 			return nil
 		}
-
-		for _, route := range routes {
-			if !directory.InScope(
-				route.base,
-				assertedDN,
-				route.scope,
-			) {
-				continue
-			}
-			database := &runtime.databases[route.databaseIndex]
-			tx := storage.ReaderInPartition(reader, database.partition)
-			entry, err := tx.Get(assertedDN)
-			if errors.Is(err, storage.ErrEntryNotFound) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !server.allowed(
-				runtime,
-				tx,
-				authenticationDN.String(),
-				entry,
-				"entry",
-				nil,
-				acl.Auth,
-			) {
-				return nil
-			}
-			matched, err = server.filterMatchesWithPrivilege(
-				runtime,
-				tx,
-				authenticationDN.String(),
-				entry,
-				search.filter,
-				acl.Auth,
-			)
-			return err
-		}
-		return nil
+		matched, err = server.filterMatchesWithPrivilege(
+			runtime,
+			tx,
+			subjectDN,
+			entry,
+			filter,
+			acl.Auth,
+		)
+		return err
 	})
 	return matched, err
 }

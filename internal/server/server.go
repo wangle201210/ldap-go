@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -20,22 +21,33 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-const defaultSearchLimit = 1000
+const (
+	defaultSearchLimit               = 1000
+	defaultTransactionMaxOperations  = 1000
+	defaultTransactionMaxQueuedBytes = int64(16 << 20)
+	defaultShutdownTimeout           = 30 * time.Second
+)
+
+var ErrShutdownTimeout = errors.New("graceful shutdown timed out")
 
 type Config struct {
-	Store                  storage.Store
-	ListenerURLs           []string
-	MaxMessageSize         int64
-	MaxSearchEntries       int
-	RootDN                 string
-	RootPassword           []byte
-	Logger                 *slog.Logger
-	Schema                 *schema.Registry
-	AccessPolicy           *acl.Policy
-	TLSConfig              *tls.Config
-	SecureTransport        SecureTransport
-	ImplicitTLS            bool
-	SecureHandshakeTimeout time.Duration
+	Store                     storage.Store
+	ListenerURLs              []string
+	MaxMessageSize            int64
+	MaxSearchEntries          int
+	MaxTransactionOperations  int
+	MaxTransactionQueuedBytes int64
+	RootDN                    string
+	RootPassword              []byte
+	Logger                    *slog.Logger
+	AuditSink                 audit.Sink
+	Schema                    *schema.Registry
+	AccessPolicy              *acl.Policy
+	TLSConfig                 *tls.Config
+	SecureTransport           SecureTransport
+	ImplicitTLS               bool
+	SecureHandshakeTimeout    time.Duration
+	ShutdownTimeout           time.Duration
 }
 
 type Server struct {
@@ -44,17 +56,33 @@ type Server struct {
 	secureTransport SecureTransport
 	runtime         atomic.Pointer[runtimeState]
 
-	mu          sync.Mutex
-	connections map[net.Conn]struct{}
-	wg          sync.WaitGroup
-	configMu    sync.Mutex
+	mu                   sync.Mutex
+	connections          map[net.Conn]struct{}
+	connectionOperations map[net.Conn]*operationRegistry
+	wg                   sync.WaitGroup
+	configMu             sync.Mutex
+	runtimeActivationMu  sync.Mutex
+	draining             atomic.Bool
 
-	csnMu         sync.Mutex
-	lastCSN       time.Time
-	csnCounter    uint32
-	syncChanges   *syncChangeHub
-	syncConsumers *syncConsumerManager
-	ddsWake       chan struct{}
+	csnMu                 sync.Mutex
+	lastCSN               time.Time
+	csnCounter            uint32
+	accesslogMu           sync.Mutex
+	lastAccesslogTime     time.Time
+	auditlogMu            sync.Mutex
+	homedirMu             sync.Mutex
+	syncChanges           *syncChangeHub
+	syncConsumers         *syncConsumerManager
+	ddsWake               chan struct{}
+	accesslogWake         chan struct{}
+	nextConnectionID      atomic.Uint64
+	monitor               *monitorState
+	metaRoutes            *metaDNRouteCache
+	metaTransports        *metaTransportPool
+	metaTransportCachesMu sync.Mutex
+	metaTransportCaches   map[*metaTransportCache]struct{}
+	runtimeSequence       atomic.Uint64
+	metaTransportSequence atomic.Uint64
 }
 
 func New(config Config) (*Server, error) {
@@ -66,6 +94,24 @@ func New(config Config) (*Server, error) {
 	}
 	if config.MaxSearchEntries <= 0 {
 		config.MaxSearchEntries = defaultSearchLimit
+	}
+	if config.MaxTransactionOperations < 0 {
+		return nil, errors.New("maximum transaction operations cannot be negative")
+	}
+	if config.MaxTransactionOperations == 0 {
+		config.MaxTransactionOperations = defaultTransactionMaxOperations
+	}
+	if config.MaxTransactionQueuedBytes < 0 {
+		return nil, errors.New("maximum transaction queued bytes cannot be negative")
+	}
+	if config.MaxTransactionQueuedBytes == 0 {
+		config.MaxTransactionQueuedBytes = defaultTransactionMaxQueuedBytes
+	}
+	if config.ShutdownTimeout < 0 {
+		return nil, errors.New("shutdown timeout cannot be negative")
+	}
+	if config.ShutdownTimeout == 0 {
+		config.ShutdownTimeout = defaultShutdownTimeout
 	}
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -97,15 +143,27 @@ func New(config Config) (*Server, error) {
 	if secureTransport != nil && config.SecureHandshakeTimeout <= 0 {
 		config.SecureHandshakeTimeout = defaultSecureHandshakeTimeout
 	}
+	config.Store = &accessContextStore{Store: config.Store}
 
 	server := &Server{
-		config:          config,
-		baseSchema:      baseSchema.Clone(),
-		secureTransport: secureTransport,
-		connections:     make(map[net.Conn]struct{}),
-		syncChanges:     newSyncChangeHub(),
-		ddsWake:         make(chan struct{}, 1),
+		config:               config,
+		baseSchema:           baseSchema.Clone(),
+		secureTransport:      secureTransport,
+		connections:          make(map[net.Conn]struct{}),
+		connectionOperations: make(map[net.Conn]*operationRegistry),
+		metaRoutes:           newMetaDNRouteCache(time.Now),
+		metaTransports:       newMetaTransportPool(time.Now),
+		metaTransportCaches:  make(map[*metaTransportCache]struct{}),
+		syncChanges:          newSyncChangeHub(),
+		ddsWake:              make(chan struct{}, 1),
+		accesslogWake:        make(chan struct{}, 1),
+		monitor:              newMonitorState(),
 	}
+	server.config.Store = &homedirEffectStore{
+		Store:  server.config.Store,
+		server: server,
+	}
+	config.Store = server.config.Store
 	server.syncConsumers = newSyncConsumerManager(server)
 	var runtime *runtimeState
 	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
@@ -116,8 +174,25 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := normalizeDefaultSearchBaseConfiguration(
+		context.Background(),
+		config.Store,
+	); err != nil {
+		return nil, fmt.Errorf("normalize default search base: %w", err)
+	}
 	if err := server.partitionDefaultEntries(context.Background(), runtime); err != nil {
 		return nil, err
+	}
+	if err := config.Store.Update(
+		context.Background(),
+		func(writer storage.Writer) error {
+			if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
+				return err
+			}
+			return server.ensureAccesslogContainers(writer, runtime)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("initialize runtime-owned entries: %w", err)
 	}
 	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
 		var err error
@@ -130,18 +205,27 @@ func New(config Config) (*Server, error) {
 	if err := server.seedCSNClock(runtime); err != nil {
 		return nil, fmt.Errorf("initialize CSN clock: %w", err)
 	}
+	if err := server.seedAccesslogClock(runtime); err != nil {
+		return nil, fmt.Errorf("initialize accesslog clock: %w", err)
+	}
+	runtime.revision = server.nextRuntimeRevision()
 	server.activateRuntime(runtime)
 	return server, nil
 }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
+	if ctx == nil {
+		return errors.New("serve context is required")
+	}
 	if listener == nil {
 		return errors.New("listener is required")
 	}
 	if err := server.syncConsumers.start(ctx); err != nil {
 		return err
 	}
+	server.draining.Store(false)
 	defer server.syncConsumers.stop()
+	defer server.metaTransports.close()
 
 	ddsContext, stopDDS := context.WithCancel(ctx)
 	ddsDone := make(chan struct{})
@@ -154,12 +238,29 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		<-ddsDone
 	}()
 
+	accesslogContext, stopAccesslog := context.WithCancel(ctx)
+	accesslogDone := make(chan struct{})
+	go func() {
+		defer close(accesslogDone)
+		server.runAccesslogPurge(accesslogContext)
+	}()
+	defer func() {
+		stopAccesslog()
+		<-accesslogDone
+	}()
+
+	operationContext, forceOperations := context.WithCancel(
+		context.WithoutCancel(ctx),
+	)
+	defer forceOperations()
+
 	stop := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
+			server.draining.Store(true)
 			_ = listener.Close()
-			server.closeConnections()
+			server.beginConnectionDrain()
 		case <-stop:
 		}
 	}()
@@ -169,30 +270,55 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		connection, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				server.wg.Wait()
-				return nil
+				server.draining.Store(true)
+				server.beginConnectionDrain()
+				return server.waitForConnectionDrain(forceOperations)
 			}
+			forceOperations()
+			server.closeConnections()
+			server.wg.Wait()
 			return fmt.Errorf("accept LDAP connection: %w", err)
 		}
 
 		server.mu.Lock()
+		if server.draining.Load() {
+			server.mu.Unlock()
+			_ = connection.Close()
+			continue
+		}
 		server.connections[connection] = struct{}{}
 		server.mu.Unlock()
 		server.wg.Add(1)
-		go server.serveConnection(ctx, connection)
+		go server.serveConnection(operationContext, connection)
 	}
 }
 
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
 	state := connectionState{
-		connection:  connection,
-		externalSSF: connectionSecurityStrength(connection, false),
+		connectionID:   server.nextConnectionID.Add(1),
+		connection:     connection,
+		externalSSF:    connectionSecurityStrength(connection, false),
+		auditIdentity:  &connectionAuditIdentityState{},
+		metaTransports: newMetaTransportCache(time.Now),
 	}
+	server.registerMetaTransportCache(state.metaTransports)
+	defer func() {
+		server.unregisterMetaTransportCache(state.metaTransports)
+		state.metaTransports.close()
+	}()
+	state.publishAuditIdentity()
+	state.monitor = server.monitor.registerConnection(
+		state.connectionID,
+		connection,
+		server.config.ImplicitTLS,
+	)
+	defer server.monitor.unregisterConnection(state.connectionID)
 	defer func() {
 		_ = state.connection.Close()
 		server.mu.Lock()
 		delete(server.connections, connection)
+		delete(server.connectionOperations, connection)
 		server.mu.Unlock()
 	}()
 
@@ -210,11 +336,14 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		state.secure = true
 		state.externalSSF = connectionSecurityStrength(secured, true)
 		state.externalDN = externalIdentityDN(secured)
+		server.monitor.updateConnectionState(state.monitor, &state)
 	}
 
 	connectionContext, cancelConnection := context.WithCancel(ctx)
 	operations := newOperationRegistry()
+	server.trackConnectionOperations(connection, operations)
 	queue := newOperationQueue()
+	state.operationQueue = queue
 	writeMutex := &sync.Mutex{}
 	workerDone := make(chan struct{})
 	go func() {
@@ -230,22 +359,36 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 
 	readConnection := state.connection
 	defer func() {
-		cancelConnection()
-		queue.close()
-		operations.shutdown()
-		_ = connection.Close()
-		<-workerDone
+		if server.draining.Load() {
+			queue.closeAndDrain()
+			operations.abandonLongLived()
+			<-workerDone
+			cancelConnection()
+			operations.shutdown()
+		} else {
+			cancelConnection()
+			queue.close()
+			operations.shutdown()
+			_ = connection.Close()
+			<-workerDone
+		}
 		clearSearchSessions(&state)
 		clearLDAPTransaction(state.transaction)
 		clearBindCredentials(&state)
 	}()
 
 	for {
+		if server.draining.Load() {
+			return
+		}
 		message, err := ldapwire.ReadMessage(
 			readConnection,
 			server.config.MaxMessageSize,
 		)
 		if err != nil {
+			if server.draining.Load() {
+				return
+			}
 			if errors.Is(err, io.EOF) ||
 				errors.Is(err, net.ErrClosed) ||
 				connectionContext.Err() != nil ||
@@ -253,9 +396,12 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				return
 			}
 			server.config.Logger.Debug("closing malformed LDAP connection", "error", err)
+			server.writeMalformedMessageAudit(&state)
 			responseConnection := &serializedResponseConnection{
-				Conn: readConnection,
-				mu:   writeMutex,
+				Conn:              readConnection,
+				mu:                writeMutex,
+				monitor:           server.monitor,
+				monitorConnection: state.monitor,
 			}
 			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 				ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
@@ -263,13 +409,34 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			return
 		}
 
+		server.monitor.observeRequest(state.monitor, message)
+
 		if _, ok := message.Request.(ldapwire.UnbindRequest); ok {
+			observation := server.newImmediateAuditObservation(&state, message)
+			server.finishOperationAudit(
+				observation,
+				&state,
+				operationRunning,
+				nil,
+			)
+			server.monitor.completeImmediateOperation(state.monitor, message.Request)
 			return
 		}
 		if operations.contains(message.ID) {
+			observation := server.newImmediateAuditObservation(&state, message)
+			observation.setResult(ldapwire.ResultProtocolError)
+			server.finishOperationAudit(
+				observation,
+				&state,
+				operationRunning,
+				nil,
+			)
+			server.monitor.completeImmediateOperation(state.monitor, message.Request)
 			responseConnection := &serializedResponseConnection{
-				Conn: readConnection,
-				mu:   writeMutex,
+				Conn:              readConnection,
+				mu:                writeMutex,
+				monitor:           server.monitor,
+				monitorConnection: state.monitor,
 			}
 			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 				ldapwire.ResultError(
@@ -285,20 +452,43 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			if !hasUnsupportedCriticalControl(message.Controls) {
 				operations.abandon(request.MessageID)
 			}
+			observation := server.newImmediateAuditObservation(&state, message)
+			server.finishOperationAudit(
+				observation,
+				&state,
+				operationRunning,
+				nil,
+			)
+			server.monitor.completeImmediateOperation(state.monitor, message.Request)
 			continue
 		case ldapwire.ExtendedRequest:
 			if request.Name == cancelOID {
-				responseConnection := &serializedResponseConnection{
-					Conn: readConnection,
-					mu:   writeMutex,
+				baseConnection := &serializedResponseConnection{
+					Conn:              readConnection,
+					mu:                writeMutex,
+					monitor:           server.monitor,
+					monitorConnection: state.monitor,
 				}
-				if err := server.handleCancel(
+				observation := server.newImmediateAuditObservation(&state, message)
+				responseConnection := &auditResponseConnection{
+					Conn:        baseConnection,
+					observation: observation,
+				}
+				err := server.handleCancel(
 					connectionContext,
 					responseConnection,
 					operations,
 					message,
 					request,
-				); err != nil {
+				)
+				server.finishOperationAudit(
+					observation,
+					&state,
+					operationRunning,
+					err,
+				)
+				server.monitor.completeImmediateOperation(state.monitor, message.Request)
+				if err != nil {
 					if connectionContext.Err() == nil {
 						server.config.Logger.Debug(
 							"LDAP Cancel request failed",
@@ -323,7 +513,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			operation:  operation,
 			completion: make(chan operationCompletion, 1),
 		}
+		server.monitor.queueOperation(state.monitor)
 		if !queue.push(queued) {
+			server.monitor.startOperation(state.monitor, false)
+			server.monitor.completeOperation(state.monitor, message.Request, false)
 			operations.finish(operation)
 			return
 		}
@@ -359,12 +552,15 @@ func (server *Server) runConnectionOperations(
 		}
 
 		baseConnection := &serializedResponseConnection{
-			Conn: state.connection,
-			mu:   writeMutex,
+			Conn:              state.connection,
+			mu:                writeMutex,
+			monitor:           server.monitor,
+			monitorConnection: state.monitor,
 		}
 		responseConnection := &operationResponseConnection{
 			Conn:      baseConnection,
 			operation: queued.operation,
+			audit:     server.newOperationAuditObservation(state, queued.message),
 		}
 
 		var (
@@ -372,7 +568,9 @@ func (server *Server) runConnectionOperations(
 			err             error
 		)
 		searchSessions := snapshotSearchSessions(state, queued.message)
-		if queued.operation.start() {
+		started := queued.operation.start()
+		server.monitor.startOperation(state.monitor, started)
+		if started {
 			closeConnection, err = server.dispatch(
 				queued.operation.ctx,
 				responseConnection,
@@ -380,8 +578,10 @@ func (server *Server) runConnectionOperations(
 				queued.message,
 			)
 		}
+		state.publishAuditIdentity()
 
-		switch queued.operation.stopMode() {
+		stopMode := queued.operation.stopMode()
+		switch stopMode {
 		case operationAbandoned:
 			server.clearStoppedSearchState(state, queued.message, searchSessions)
 			closeConnection = false
@@ -398,6 +598,13 @@ func (server *Server) runConnectionOperations(
 				),
 			)
 		}
+		server.finishOperationAudit(responseConnection.audit, state, stopMode, err)
+		server.monitor.updateConnectionState(state.monitor, state)
+		server.monitor.completeOperation(
+			state.monitor,
+			queued.message.Request,
+			started,
+		)
 
 		operations.finish(queued.operation)
 		queued.completion <- operationCompletion{
@@ -527,6 +734,12 @@ func (server *Server) dispatch(
 		}
 	}
 	originalBoundDN := state.boundDN
+	previousOperationRealDN := state.operationRealDN
+	state.operationRealDN = originalBoundDN
+	defer func() {
+		state.operationRealDN = previousOperationRealDN
+	}()
+	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	message, effectiveBoundDN, proxied, proxyFailure :=
 		server.applyProxyAuthorization(ctx, state, message)
 	if proxyFailure != nil {
@@ -537,10 +750,28 @@ func (server *Server) dispatch(
 		)
 	}
 	if proxied {
+		setAuditAuthorizationDN(connection, effectiveBoundDN)
 		state.boundDN = effectiveBoundDN
 		defer func() {
 			state.boundDN = originalBoundDN
 		}()
+	}
+	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
+	if handled, err := server.tryMetaBackendOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
+	if handled, err := server.tryLDAPBackendOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
 	}
 	if handled, err := server.handleTransactionSpecification(
 		connection,
@@ -662,6 +893,7 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
+	state.protocolVersion = request.Version
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
 		connection,
@@ -674,6 +906,29 @@ func (server *Server) handleBind(
 	); handled {
 		clearSASLSession(state)
 		return err
+	}
+	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+		databaseRestricts(*database, restrictBind) {
+		clearSASLSession(state)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+			nil,
+		))
+	}
+	if requestDN.Depth() == 0 && frontendRestricts(state.runtime, restrictBind) {
+		clearSASLSession(state)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+			nil,
+		))
 	}
 	if request.Authentication.IsSASL {
 		return server.handleSASLBind(
@@ -732,6 +987,134 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
+	if handled, err := server.tryTranslucentBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		return err
+	}
+	if handled, err := server.tryMetaBackendBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		return err
+	}
+	if handled, err := server.tryLDAPBackendBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		return err
+	}
+	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+		database.remoteAuth != nil {
+		handled, result, responseControls := server.remoteAuthSimpleBind(
+			ctx,
+			state.runtime,
+			*database,
+			requestDN,
+			password,
+		)
+		if handled {
+			if result.Code == ldapwire.ResultSuccess {
+				state.boundDN = request.Name
+				state.authMechanism = "SIMPLE"
+				state.bindCredentialDN = request.Name
+				state.bindCredentials = append([]byte(nil), password...)
+			}
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				result,
+				responseControls,
+			))
+		}
+	}
+	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+		database.pbind != nil {
+		result, responseControls := server.proxySimpleBind(
+			ctx,
+			*database.pbind,
+			message,
+			request,
+		)
+		if result.Code == ldapwire.ResultSuccess {
+			state.boundDN = request.Name
+			state.authMechanism = "SIMPLE"
+			state.bindCredentialDN = request.Name
+			state.bindCredentials = append([]byte(nil), password...)
+		}
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			result,
+			responseControls,
+		))
+	}
+	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+		databaseUsesNullBackend(state.runtime, *database) {
+		authenticated := database.nullBindAllowed
+		if !authenticated {
+			if rootPassword, ok := databaseAuthenticationRoot(
+				state.runtime,
+				*database,
+				requestDN,
+			); ok {
+				authenticated = auth.VerifyPassword(rootPassword, password)
+			}
+		}
+		if !authenticated {
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				ldapwire.ResultError(ldapwire.ResultInvalidCredentials, ""),
+				nil,
+			))
+		}
+		state.boundDN = request.Name
+		state.authMechanism = "SIMPLE"
+		state.bindCredentialDN = request.Name
+		state.bindCredentials = append([]byte(nil), password...)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		))
+	}
+	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+		activeOTPConfiguration(database) != nil {
+		if _, root := databaseAuthenticationRoot(
+			state.runtime,
+			*database,
+			requestDN,
+		); !root {
+			handled, staticPassword, result := server.prepareOTPBind(
+				ctx,
+				state.runtime,
+				*database,
+				requestDN,
+				password,
+			)
+			if handled {
+				if result.Code != ldapwire.ResultSuccess {
+					return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+						message.ID,
+						result,
+						nil,
+					))
+				}
+				password = staticPassword
+			}
+		}
+	}
 
 	bindResult, err := server.authenticatePasswordBind(
 		ctx,
@@ -785,15 +1168,13 @@ func (server *Server) authenticate(
 	if database == nil {
 		return false, nil
 	}
-	if database.rootDN != nil &&
-		database.rootDN.Equal(dn) &&
-		database.rootPasswordSet {
-		return auth.VerifyPassword(database.rootPassword, password), nil
+	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
+		return auth.VerifyPassword(rootPassword, password), nil
 	}
 
 	var authenticated bool
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
+		tx := readerForDatabase(reader, *database)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
@@ -821,17 +1202,86 @@ func (server *Server) authenticate(
 
 func (server *Server) closeConnections() {
 	server.mu.Lock()
-	defer server.mu.Unlock()
+	connections := make([]net.Conn, 0, len(server.connections))
 	for connection := range server.connections {
+		connections = append(connections, connection)
+	}
+	server.mu.Unlock()
+	for _, connection := range connections {
 		_ = connection.Close()
 	}
 }
 
+func (server *Server) trackConnectionOperations(
+	connection net.Conn,
+	operations *operationRegistry,
+) {
+	server.mu.Lock()
+	server.connectionOperations[connection] = operations
+	draining := server.draining.Load()
+	server.mu.Unlock()
+	if draining {
+		_ = connection.SetReadDeadline(time.Now())
+		operations.abandonLongLived()
+	}
+}
+
+func (server *Server) beginConnectionDrain() {
+	server.mu.Lock()
+	connections := make([]net.Conn, 0, len(server.connections))
+	operations := make([]*operationRegistry, 0, len(server.connectionOperations))
+	for connection := range server.connections {
+		connections = append(connections, connection)
+	}
+	for _, registry := range server.connectionOperations {
+		operations = append(operations, registry)
+	}
+	server.mu.Unlock()
+
+	now := time.Now()
+	for _, connection := range connections {
+		_ = connection.SetReadDeadline(now)
+	}
+	for _, registry := range operations {
+		registry.abandonLongLived()
+	}
+}
+
+func (server *Server) waitForConnectionDrain(force context.CancelFunc) error {
+	done := make(chan struct{})
+	go func() {
+		server.wg.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(server.config.ShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		force()
+		server.closeConnections()
+		<-done
+		return fmt.Errorf(
+			"%w after %s",
+			ErrShutdownTimeout,
+			server.config.ShutdownTimeout,
+		)
+	}
+}
+
 type connectionState struct {
+	connectionID               uint64
 	boundDN                    string
+	operationRealDN            string
 	authMechanism              string
+	protocolVersion            int
 	bindCredentialDN           string
 	bindCredentials            []byte
+	metaBindDatabaseKey        string
+	metaBindTargetKey          string
+	metaTransports             *metaTransportCache
+	operationQueue             *operationQueue
 	runtime                    *runtimeState
 	connection                 net.Conn
 	secure                     bool
@@ -844,12 +1294,52 @@ type connectionState struct {
 	transaction                *ldapTransaction
 	passwordPolicyRestrictedDN string
 	accountUsabilityRequested  bool
+	monitor                    *monitorConnection
+	auditIdentity              *connectionAuditIdentityState
+}
+
+type connectionAuditIdentity struct {
+	boundDN       string
+	authMechanism string
+}
+
+type connectionAuditIdentityState struct {
+	current atomic.Pointer[connectionAuditIdentity]
+}
+
+func (state *connectionState) publishAuditIdentity() {
+	if state.auditIdentity == nil {
+		state.auditIdentity = &connectionAuditIdentityState{}
+	}
+	state.auditIdentity.current.Store(&connectionAuditIdentity{
+		boundDN:       state.boundDN,
+		authMechanism: state.authMechanism,
+	})
+}
+
+func (state *connectionState) loadAuditIdentity() connectionAuditIdentity {
+	if state.auditIdentity == nil {
+		return connectionAuditIdentity{
+			boundDN:       state.boundDN,
+			authMechanism: state.authMechanism,
+		}
+	}
+	identity := state.auditIdentity.current.Load()
+	if identity == nil {
+		return connectionAuditIdentity{
+			boundDN:       state.boundDN,
+			authMechanism: state.authMechanism,
+		}
+	}
+	return *identity
 }
 
 func clearBindCredentials(state *connectionState) {
 	clear(state.bindCredentials)
 	state.bindCredentials = nil
 	state.bindCredentialDN = ""
+	state.metaBindDatabaseKey = ""
+	state.metaBindTargetKey = ""
 }
 
 func clearSearchSessions(state *connectionState) {
@@ -868,6 +1358,8 @@ func hasUnsupportedCriticalControl(controls []ldapwire.Control) bool {
 
 func responseTagFor(requestTag uint64) (uint64, bool) {
 	switch requestTag {
+	case ldapwire.ApplicationBindRequest:
+		return ldapwire.ApplicationBindResponse, true
 	case ldapwire.ApplicationModifyRequest,
 		ldapwire.ApplicationAddRequest,
 		ldapwire.ApplicationDeleteRequest,
@@ -918,13 +1410,12 @@ func (server *Server) isRoot(
 		return false
 	}
 	database := databaseForDN(runtime, target)
-	return database != nil && database.rootDN != nil && database.rootDN.Equal(subject)
+	return database != nil && databaseRootMatches(runtime, *database, subject)
 }
 
 func isAnyDatabaseRoot(runtime *runtimeState, subject directory.DN) bool {
 	for index := range runtime.databases {
-		if runtime.databases[index].rootDN != nil &&
-			runtime.databases[index].rootDN.Equal(subject) {
+		if databaseRootMatches(runtime, runtime.databases[index], subject) {
 			return true
 		}
 	}

@@ -16,12 +16,14 @@ import (
 var configurationSuffix = staticRuntimeDN("cn=config")
 
 type runtimeState struct {
+	revision            uint64
 	schema              *schema.Registry
 	access              *acl.Policy
 	databases           []runtimeDatabase
 	serverID            uint16
 	allows              allowsRuntimeConfiguration
 	disallows           disallowsRuntimeConfiguration
+	defaultSearchBase   defaultSearchBaseConfiguration
 	passwordHashSchemes []string
 	sasl                saslRuntimeConfiguration
 	syncContexts        map[string]syncCSNState
@@ -58,18 +60,82 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 			return nil, err
 		}
 	}
+	if err := access.Validate(registry); err != nil {
+		return nil, fmt.Errorf("validate OpenLDAP ACL configuration: %w", err)
+	}
 
 	databases, err := loadRuntimeDatabasesReader(reader)
 	if err != nil {
 		return nil, err
 	}
 	for index := range databases {
+		if databases[index].rwm != nil {
+			databases[index].rwm.schema = registry
+		}
+		if databases[index].metaBackend != nil {
+			for targetIndex := range databases[index].metaBackend.targets {
+				target := &databases[index].metaBackend.targets[targetIndex]
+				if target.rwm != nil {
+					target.rwm.schema = registry
+				}
+			}
+		}
+		if err := validateCollectSchema(
+			registry,
+			databases[index].collect,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s collect overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateNestGroupSchema(
+			registry,
+			databases[index].nestGroups,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s nestgroup overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateAccesslogSchema(
+			registry,
+			databases[index].accesslog,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s accesslog overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
 		if err := validateConstraintSchema(
 			registry,
 			databases[index].constraint,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"%s constraint overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateDynlistSchema(
+			registry,
+			databases[index].dynlist,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s dynlist overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateDynamicGroupSchema(
+			registry,
+			databases[index].dyngroup,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s dyngroup overlay: %w",
 				databases[index].name,
 				err,
 			)
@@ -90,6 +156,36 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		); err != nil {
 			return nil, fmt.Errorf(
 				"%s valsort overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateRemoteAuthSchema(
+			registry,
+			databases[index].remoteAuth,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s remoteauth overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateHomedirSchema(
+			registry,
+			databases[index].homedir,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s homedir overlay: %w",
+				databases[index].name,
+				err,
+			)
+		}
+		if err := validateAutoCASchema(
+			registry,
+			databases[index].autoca,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%s autoca overlay: %w",
 				databases[index].name,
 				err,
 			)
@@ -135,6 +231,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	defaultSearchBase, err := loadDefaultSearchBase(reader)
+	if err != nil {
+		return nil, err
+	}
 	passwordHashSchemes, err := loadPasswordHashSchemes(reader)
 	if err != nil {
 		return nil, err
@@ -152,16 +252,21 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 			return nil, err
 		}
 	}
-	return &runtimeState{
+	runtime := &runtimeState{
 		schema:              registry,
 		access:              access,
 		databases:           databases,
 		serverID:            serverID,
 		allows:              allows,
 		disallows:           disallows,
+		defaultSearchBase:   defaultSearchBase,
 		passwordHashSchemes: passwordHashSchemes,
 		sasl:                sasl,
-	}, nil
+	}
+	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func loadPasswordHashSchemes(reader storage.Reader) ([]string, error) {
@@ -321,6 +426,13 @@ func updateOperationPrecondition(
 		)
 		return &result
 	}
+	if database := databaseForDN(runtime, target); database != nil && isMonitorDatabase(*database) {
+		result := ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"monitor database is read-only",
+		)
+		return &result
+	}
 	if database := databaseForDN(runtime, target); database != nil && database.readOnly {
 		result := ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
@@ -341,27 +453,103 @@ func updateOperationPrecondition(
 	return nil
 }
 
+func databaseRestrictionResult(
+	runtime *runtimeState,
+	target directory.DN,
+	operation databaseRestrictions,
+) *ldapwire.Result {
+	database := databaseForDN(runtime, target)
+	if database == nil || !databaseRestricts(*database, operation) {
+		return nil
+	}
+	result := ldapwire.ResultError(
+		ldapwire.ResultUnwillingToPerform,
+		"operation restricted",
+	)
+	return &result
+}
+
+func requestDatabaseRestriction(request ldapwire.Request) databaseRestrictions {
+	switch value := request.(type) {
+	case ldapwire.BindRequest:
+		return restrictBind
+	case ldapwire.SearchRequest:
+		return restrictSearch
+	case ldapwire.AddRequest:
+		return restrictAdd
+	case ldapwire.ModifyRequest:
+		return restrictModify
+	case ldapwire.DeleteRequest:
+		return restrictDelete
+	case ldapwire.ModifyDNRequest:
+		return restrictRename
+	case ldapwire.CompareRequest:
+		return restrictCompare
+	case ldapwire.ExtendedRequest:
+		switch value.Name {
+		case startTLSOID:
+			return restrictStartTLS
+		case passwordModifyOID:
+			return restrictPasswordModify
+		case whoAmIOID:
+			return restrictWhoAmI
+		case cancelOID:
+			return restrictCancel
+		default:
+			return restrictExtended
+		}
+	default:
+		return 0
+	}
+}
+
 func lastModEnabled(runtime *runtimeState, target directory.DN) bool {
 	database := databaseForDN(runtime, target)
 	return database == nil || database.lastMod
 }
 
 func (server *Server) validateRuntimeConfiguration(
-	reader storage.Reader,
+	writer storage.Writer,
 ) (*runtimeState, error) {
-	runtime, err := server.buildRuntimeState(reader)
+	runtime, err := server.buildRuntimeState(writer)
 	if err != nil {
+		if result, ok := collectConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := nestGroupConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := seqmodConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
 		return nil, operationFailed(
 			ldapwire.ResultConstraintViolation,
 			"invalid cn=config: "+err.Error(),
 		)
 	}
-	if err := server.observeRuntimeCSNs(reader, runtime); err != nil {
+	previous := server.runtime.Load()
+	applyMetaBackendOnlineConfigurationState(previous, runtime)
+	reuseSeqmodCoordinators(previous, runtime)
+	reusePcacheStates(previous, runtime)
+	if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid autoca state: "+err.Error(),
+		)
+	}
+	if err := server.ensureAccesslogContainers(writer, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid accesslog state: "+err.Error(),
+		)
+	}
+	if err := server.observeRuntimeCSNs(writer, runtime); err != nil {
 		return nil, operationFailed(
 			ldapwire.ResultConstraintViolation,
 			"invalid sync provider state: "+err.Error(),
 		)
 	}
+	runtime.revision = server.nextRuntimeRevision()
 	return runtime, nil
 }
 

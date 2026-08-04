@@ -16,10 +16,11 @@ import (
 type referralURLScope string
 
 const (
-	referralScopeDefault referralURLScope = ""
-	referralScopeBase    referralURLScope = "base"
-	referralScopeOne     referralURLScope = "one"
-	referralScopeSubtree referralURLScope = "sub"
+	referralScopeDefault  referralURLScope = ""
+	referralScopeBase     referralURLScope = "base"
+	referralScopeOne      referralURLScope = "one"
+	referralScopeSubtree  referralURLScope = "sub"
+	referralScopeChildren referralURLScope = "subordinate"
 )
 
 func referralScopeForSearch(scope directory.Scope) referralURLScope {
@@ -30,6 +31,8 @@ func referralScopeForSearch(scope directory.Scope) referralURLScope {
 		return referralScopeOne
 	case directory.ScopeWholeSubtree:
 		return referralScopeSubtree
+	case directory.ScopeChildren:
+		return referralScopeChildren
 	default:
 		return referralScopeDefault
 	}

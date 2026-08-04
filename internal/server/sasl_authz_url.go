@@ -9,6 +9,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -44,48 +45,162 @@ func (server *Server) searchSASLAuthzLDAPURL(
 		)
 	}
 
-	var matched *directory.DN
-	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		primary := &runtime.databases[routes[0].databaseIndex]
-		primaryReader := storage.ReaderInPartition(
-			reader,
-			primary.partition,
+	primary := &runtime.databases[routes[0].databaseIndex]
+	visible, err := server.saslAuthorizationSearchBaseVisible(
+		ctx,
+		runtime,
+		*primary,
+		search.base,
+		subjectDN,
+	)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !visible {
+		return directory.DN{}, fmt.Errorf(
+			"authz-regexp search for %q returned no entries",
+			requestDN.String(),
 		)
-		baseEntry, err := primaryReader.Get(search.base)
+	}
+
+	var matched *directory.DN
+	for _, route := range routes {
+		database := &runtime.databases[route.databaseIndex]
+		candidates, err := server.searchSASLAuthorizationRoute(
+			ctx,
+			runtime,
+			*database,
+			route,
+			subjectDN,
+			search.filter,
+		)
+		if err != nil {
+			if errors.Is(err, errStopSASLAuthzSearch) {
+				return directory.DN{}, fmt.Errorf(
+					"authz-regexp search for %q returned multiple entries",
+					requestDN.String(),
+				)
+			}
+			return directory.DN{}, err
+		}
+		for _, candidate := range candidates {
+			if matched != nil {
+				return directory.DN{}, fmt.Errorf(
+					"authz-regexp search for %q returned multiple entries",
+					requestDN.String(),
+				)
+			}
+			copy := candidate
+			matched = &copy
+		}
+	}
+	if matched == nil {
+		return directory.DN{}, fmt.Errorf(
+			"authz-regexp search for %q returned no entries",
+			requestDN.String(),
+		)
+	}
+	return *matched, nil
+}
+
+func (server *Server) saslAuthorizationSearchBaseVisible(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	base directory.DN,
+	subjectDN string,
+) (bool, error) {
+	if saslAuthorizationUsesProxyBackend(&database) {
+		_, found, err := server.lookupProxySASLAuthorizationEntry(
+			ctx,
+			runtime,
+			database,
+			base,
+			[]string{"1.1"},
+			subjectDN,
+		)
+		return found, err
+	}
+
+	visible := false
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		entry, err := tx.Get(base)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if !server.allowed(
+		visible = server.allowed(
 			runtime,
-			primaryReader,
+			tx,
 			subjectDN,
-			baseEntry,
+			entry,
 			"entry",
 			nil,
 			acl.Auth,
-		) {
-			return nil
-		}
+		)
+		return nil
+	})
+	return visible, err
+}
 
-		for _, route := range routes {
-			database := &runtime.databases[route.databaseIndex]
-			tx := storage.ReaderInPartition(reader, database.partition)
-			err := tx.ForEach(func(entry directory.Entry) error {
-				candidate, err := directory.ParseDN(entry.DN)
-				if err != nil {
-					return err
-				}
-				if !directory.InScope(
-					route.base,
-					candidate,
-					route.scope,
-				) {
-					return nil
-				}
-				if !server.allowed(
+func (server *Server) searchSASLAuthorizationRoute(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	route databaseSearchRoute,
+	subjectDN string,
+	filter directory.Filter,
+) ([]directory.DN, error) {
+	if saslAuthorizationUsesProxyBackend(&database) {
+		entries, err := server.searchProxySASLAuthorization(
+			ctx,
+			runtime,
+			database,
+			ldapwire.SearchRequest{
+				BaseDN:       route.base.String(),
+				Scope:        route.scope,
+				DerefAliases: ldapwire.NeverDerefAliases,
+				SizeLimit:    1,
+				TypesOnly:    true,
+				Filter:       filter,
+				Attributes:   []string{"1.1"},
+			},
+			subjectDN,
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer clearSASLAuthorizationEntries(entries)
+		candidates := make([]directory.DN, 0, len(entries))
+		for _, entry := range entries {
+			candidate, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return nil, err
+			}
+			if !directory.InScope(route.base, candidate, route.scope) {
+				return nil, fmt.Errorf(
+					"SASL authorization search returned out-of-scope entry %q",
+					entry.DN,
+				)
+			}
+			candidates = append(candidates, candidate)
+		}
+		return candidates, nil
+	}
+
+	var candidates []directory.DN
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		return tx.ForEach(func(entry directory.Entry) error {
+			candidate, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return err
+			}
+			if !directory.InScope(route.base, candidate, route.scope) ||
+				!server.allowed(
 					runtime,
 					tx,
 					subjectDN,
@@ -94,48 +209,27 @@ func (server *Server) searchSASLAuthzLDAPURL(
 					nil,
 					acl.Auth,
 				) {
-					return nil
-				}
-				matches, err := server.filterMatchesWithPrivilege(
-					runtime,
-					tx,
-					subjectDN,
-					entry,
-					search.filter,
-					acl.Auth,
-				)
-				if err != nil || !matches {
-					return err
-				}
-				if matched != nil {
-					return errStopSASLAuthzSearch
-				}
-				copy := candidate
-				matched = &copy
 				return nil
-			})
-			if err != nil {
+			}
+			matches, err := server.filterMatchesWithPrivilege(
+				runtime,
+				tx,
+				subjectDN,
+				entry,
+				filter,
+				acl.Auth,
+			)
+			if err != nil || !matches {
 				return err
 			}
-		}
-		return nil
+			candidates = append(candidates, candidate)
+			if len(candidates) > 1 {
+				return errStopSASLAuthzSearch
+			}
+			return nil
+		})
 	})
-	switch {
-	case errors.Is(err, errStopSASLAuthzSearch):
-		return directory.DN{}, fmt.Errorf(
-			"authz-regexp search for %q returned multiple entries",
-			requestDN.String(),
-		)
-	case err != nil:
-		return directory.DN{}, err
-	case matched == nil:
-		return directory.DN{}, fmt.Errorf(
-			"authz-regexp search for %q returned no entries",
-			requestDN.String(),
-		)
-	default:
-		return *matched, nil
-	}
+	return candidates, err
 }
 
 func parseSASLAuthzLDAPURL(value string) (saslAuthzLDAPURL, error) {

@@ -26,6 +26,10 @@ const (
 type syncConsumerTransport struct {
 	connectionMu     sync.RWMutex
 	connection       net.Conn
+	messageMu        sync.Mutex
+	writeMu          sync.Mutex
+	multiplexerMu    sync.Mutex
+	multiplexer      *syncConsumerMultiplexer
 	context          context.Context
 	operationTimeout time.Duration
 	secure           bool
@@ -42,6 +46,12 @@ type syncConsumerLDAPResult struct {
 	responseName       string
 	responseValue      []byte
 	packet             *ber.Packet
+}
+
+type syncConsumerResultPolling struct {
+	initial  time.Duration
+	interval time.Duration
+	retries  int
 }
 
 func dialSyncConsumer(
@@ -141,6 +151,7 @@ func performSyncConsumerStartTLS(
 	transport *syncConsumerTransport,
 	config syncConsumerConfig,
 	provider *url.URL,
+	polling ...syncConsumerResultPolling,
 ) error {
 	messageID := transport.nextMessageID()
 	request := ber.NewSequence("LDAPMessage")
@@ -167,11 +178,22 @@ func performSyncConsumerStartTLS(
 	))
 	request.AppendChild(operation)
 
-	result, err := transport.exchangeLDAPResult(
-		messageID,
-		request,
-		ldap.ApplicationExtendedResponse,
-	)
+	var result syncConsumerLDAPResult
+	var err error
+	if len(polling) > 0 {
+		result, err = transport.exchangeLDAPResultPolling(
+			messageID,
+			request,
+			ldap.ApplicationExtendedResponse,
+			polling[0],
+		)
+	} else {
+		result, err = transport.exchangeLDAPResult(
+			messageID,
+			request,
+			ldap.ApplicationExtendedResponse,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("StartTLS protocol exchange: %w", err)
 	}
@@ -184,6 +206,9 @@ func performSyncConsumerStartTLS(
 			"StartTLS response name is %q",
 			result.responseName,
 		)
+	}
+	if err := transport.clearDeadline(); err != nil {
+		return fmt.Errorf("clear StartTLS protocol deadline: %w", err)
 	}
 
 	tlsConfig, err := buildSyncConsumerTLSConfig(config, provider)
@@ -241,8 +266,16 @@ func parseSyncConsumerProviderURL(value string) (*url.URL, error) {
 }
 
 func (transport *syncConsumerTransport) nextMessageID() int64 {
+	transport.messageMu.Lock()
+	defer transport.messageMu.Unlock()
 	transport.messageID++
 	return transport.messageID
+}
+
+func (transport *syncConsumerTransport) writePacket(encoded []byte) error {
+	transport.writeMu.Lock()
+	defer transport.writeMu.Unlock()
+	return writeSyncConsumerPacket(transport.currentConnection(), encoded)
 }
 
 func (transport *syncConsumerTransport) currentConnection() net.Conn {
@@ -278,6 +311,90 @@ func (transport *syncConsumerTransport) exchangeLDAPResult(
 		return syncConsumerLDAPResult{}, err
 	}
 	return parseSyncConsumerLDAPResult(response, messageID, responseTag)
+}
+
+func (transport *syncConsumerTransport) exchangeLDAPResultPolling(
+	messageID int64,
+	request *ber.Packet,
+	responseTag uint64,
+	polling syncConsumerResultPolling,
+) (syncConsumerLDAPResult, error) {
+	deadline := transport.resultPollingDeadline(polling)
+	if err := transport.currentConnection().SetDeadline(deadline); err != nil {
+		return syncConsumerLDAPResult{}, err
+	}
+	connection := transport.currentConnection()
+	if err := writeSyncConsumerPacket(connection, request.Bytes()); err != nil {
+		return syncConsumerLDAPResult{}, err
+	}
+
+	type outcome struct {
+		result syncConsumerLDAPResult
+		err    error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		packet, err := readSyncConsumerPacket(connection)
+		if err == nil {
+			var parsed syncConsumerLDAPResult
+			parsed, err = parseSyncConsumerLDAPResult(
+				packet,
+				messageID,
+				responseTag,
+			)
+			result <- outcome{result: parsed, err: err}
+			return
+		}
+		result <- outcome{err: err}
+	}()
+
+	var timeout <-chan time.Time
+	var timer *time.Timer
+	if !deadline.IsZero() {
+		duration := time.Until(deadline)
+		if duration < 0 {
+			duration = 0
+		}
+		timer = time.NewTimer(duration)
+		timeout = timer.C
+		defer timer.Stop()
+	}
+	select {
+	case completed := <-result:
+		return completed.result, completed.err
+	case <-transport.context.Done():
+		return syncConsumerLDAPResult{}, transport.context.Err()
+	case <-timeout:
+		return syncConsumerLDAPResult{}, context.DeadlineExceeded
+	}
+}
+
+func (transport *syncConsumerTransport) resultPollingDeadline(
+	polling syncConsumerResultPolling,
+) time.Time {
+	var deadline time.Time
+	if polling.retries >= 0 {
+		budget := polling.initial
+		if polling.retries > 0 && polling.interval > 0 {
+			maximumBudget := time.Duration(^uint64(0) >> 1)
+			if budget >= maximumBudget ||
+				time.Duration(polling.retries) >
+					(maximumBudget-budget)/polling.interval {
+				budget = maximumBudget
+			} else {
+				budget += time.Duration(polling.retries) * polling.interval
+			}
+		}
+		if transport.operationTimeout > budget {
+			budget = transport.operationTimeout
+		}
+		deadline = time.Now().Add(budget)
+	}
+	if contextDeadline, ok := transport.context.Deadline(); ok &&
+		(deadline.IsZero() || contextDeadline.Before(deadline)) {
+		deadline = contextDeadline
+	}
+	return deadline
 }
 
 func (transport *syncConsumerTransport) setOperationDeadline() error {

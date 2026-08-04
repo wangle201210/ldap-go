@@ -47,6 +47,13 @@ type partitionReader struct {
 	partition string
 }
 
+func (reader partitionReader) AccessContext() any {
+	if provider, ok := reader.Reader.(interface{ AccessContext() any }); ok {
+		return provider.AccessContext()
+	}
+	return nil
+}
+
 func (reader partitionReader) Get(dn directory.DN) (directory.Entry, error) {
 	return reader.Reader.GetIn(reader.partition, dn)
 }
@@ -58,6 +65,13 @@ func (reader partitionReader) ForEach(fn func(directory.Entry) error) error {
 type partitionWriter struct {
 	Writer
 	partition string
+}
+
+func (writer partitionWriter) AccessContext() any {
+	if provider, ok := writer.Writer.(interface{ AccessContext() any }); ok {
+		return provider.AccessContext()
+	}
+	return nil
 }
 
 func (writer partitionWriter) Get(dn directory.DN) (directory.Entry, error) {

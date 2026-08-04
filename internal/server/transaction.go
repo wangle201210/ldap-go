@@ -16,19 +16,22 @@ const (
 	transactionStartOID                = "1.3.6.1.1.21.1"
 	transactionSpecificationControlOID = "1.3.6.1.1.21.2"
 	transactionEndOID                  = "1.3.6.1.1.21.3"
+	transactionAbortedNoticeOID        = "1.3.6.1.1.21.4"
 )
 
 type ldapTransaction struct {
-	identifier []byte
-	runtime    *runtimeState
-	partition  string
-	operations []ldapTransactionOperation
-	messageIDs map[int64]struct{}
+	identifier  []byte
+	runtime     *runtimeState
+	partition   string
+	operations  []ldapTransactionOperation
+	messageIDs  map[int64]struct{}
+	queuedBytes int64
 }
 
 type ldapTransactionOperation struct {
 	message ldapwire.Message
 	boundDN string
+	realDN  string
 }
 
 type transactionExecutionContextKey struct{}
@@ -109,7 +112,7 @@ func (server *Server) updateStorage(
 	update func(storage.Writer) error,
 ) error {
 	if execution, ok := ctx.Value(transactionExecutionContextKey{}).(*transactionExecution); ok {
-		return update(execution.writer)
+		return update(accessWriterFromContext(ctx, execution.writer))
 	}
 	return server.config.Store.Update(ctx, update)
 }
@@ -119,7 +122,7 @@ func (server *Server) viewStorage(
 	view func(storage.Reader) error,
 ) error {
 	if execution, ok := ctx.Value(transactionExecutionContextKey{}).(*transactionExecution); ok {
-		return view(execution.writer)
+		return view(accessWriterFromContext(ctx, execution.writer))
 	}
 	return server.config.Store.View(ctx, view)
 }
@@ -127,21 +130,25 @@ func (server *Server) viewStorage(
 func (server *Server) finishWriteEffects(
 	ctx context.Context,
 	nextRuntime *runtimeState,
-	change *syncChange,
+	changes ...*syncChange,
 ) {
 	if execution, ok := ctx.Value(transactionExecutionContextKey{}).(*transactionExecution); ok {
 		if nextRuntime != nil {
 			execution.nextRuntime = nextRuntime
 		}
-		if change != nil {
-			execution.syncChanges = append(execution.syncChanges, change)
+		for _, change := range changes {
+			if change != nil {
+				execution.syncChanges = append(execution.syncChanges, change)
+			}
 		}
 		return
 	}
 	if nextRuntime != nil {
 		server.activateRuntime(nextRuntime)
 	}
-	server.publishSyncChange(change)
+	for _, change := range changes {
+		server.publishSyncChange(change)
+	}
 }
 
 func (server *Server) handleTransactionStart(
@@ -317,7 +324,9 @@ func (server *Server) handleTransactionSpecification(
 			message,
 		)
 	}
-	if result == nil && database.partition == configurationStoragePartition {
+	if result == nil &&
+		(database.partition == configurationStoragePartition ||
+			databaseUsesNullBackend(state.transaction.runtime, *database)) {
 		result = transactionResult(
 			ldapwire.ResultUnwillingToPerform,
 			"backend doesn't support transactions",
@@ -344,6 +353,67 @@ func (server *Server) handleTransactionSpecification(
 			connection,
 			message,
 			*result,
+			nil,
+		)
+	}
+
+	queuedMessage, responseValue, err := prepareTransactionOperation(
+		message,
+		controlIndex,
+	)
+	if err != nil {
+		server.config.Logger.Error(
+			"LDAP transaction operation preparation failed",
+			"message_id",
+			message.ID,
+			"error",
+			err,
+		)
+		return true, server.abortLDAPTransactionWithNotice(
+			connection,
+			state,
+			ldapwire.ResultError(
+				ldapwire.ResultOther,
+				"cannot queue transaction operation",
+			),
+		)
+	}
+	defer clear(responseValue)
+	queuedBytes, err := transactionOperationQueuedBytes(queuedMessage)
+	if err != nil {
+		clearLDAPTransactionOperation(&ldapTransactionOperation{message: queuedMessage})
+		server.config.Logger.Error(
+			"LDAP transaction operation accounting failed",
+			"message_id",
+			message.ID,
+			"error",
+			err,
+		)
+		return true, server.abortLDAPTransactionWithNotice(
+			connection,
+			state,
+			ldapwire.ResultError(
+				ldapwire.ResultOther,
+				"cannot queue transaction operation",
+			),
+		)
+	}
+	transaction := state.transaction
+	limitDiagnostic := ""
+	if len(transaction.operations) >= server.config.MaxTransactionOperations {
+		limitDiagnostic = "transaction operation limit exceeded"
+	} else if queuedBytes > server.config.MaxTransactionQueuedBytes-transaction.queuedBytes {
+		limitDiagnostic = "transaction queued byte limit exceeded"
+	}
+	if limitDiagnostic != "" {
+		clearLDAPTransactionOperation(&ldapTransactionOperation{message: queuedMessage})
+		return true, server.abortLDAPTransactionWithNotice(
+			connection,
+			state,
+			ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				limitDiagnostic,
+			),
 		)
 	}
 
@@ -351,17 +421,20 @@ func (server *Server) handleTransactionSpecification(
 		state.transaction.partition = database.partition
 	}
 	state.transaction.messageIDs[message.ID] = struct{}{}
+	state.transaction.queuedBytes += queuedBytes
 	state.transaction.operations = append(
 		state.transaction.operations,
 		ldapTransactionOperation{
-			message: cloneTransactionMessage(message, controlIndex),
+			message: queuedMessage,
 			boundDN: state.boundDN,
+			realDN:  state.operationRealDN,
 		},
 	)
 	return true, server.writeTransactionOperationResult(
 		connection,
 		message,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		responseValue,
 	)
 }
 
@@ -450,22 +523,30 @@ func validateTransactionOperationControls(
 			supportsPostRead |
 			supportsManageDsaIT |
 			supportsPasswordPolicy |
-			supportsRelax
+			supportsRelax |
+			supportsNoOp
 	case ldapwire.ModifyRequest:
 		supported = supportsAssertion |
 			supportsPreRead |
 			supportsPostRead |
 			supportsManageDsaIT |
 			supportsPasswordPolicy |
-			supportsRelax
+			supportsRelax |
+			supportsNoOp |
+			supportsPermissiveModify
 	case ldapwire.DeleteRequest:
-		supported = supportsAssertion | supportsPreRead | supportsManageDsaIT | supportsRelax
+		supported = supportsAssertion |
+			supportsPreRead |
+			supportsManageDsaIT |
+			supportsRelax |
+			supportsNoOp
 	case ldapwire.ModifyDNRequest:
 		supported = supportsAssertion |
 			supportsPreRead |
 			supportsPostRead |
 			supportsManageDsaIT |
-			supportsRelax
+			supportsRelax |
+			supportsNoOp
 	case ldapwire.ExtendedRequest:
 		if request.Name == passwordModifyOID {
 			supported = supportsManageDsaIT | supportsPasswordPolicy
@@ -487,6 +568,12 @@ func (server *Server) transactionOperationDatabase(
 		dn, err := directory.ParseDN(request.Entry.DN)
 		if err != nil || dn.Depth() == 0 {
 			return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
+		}
+		if len(request.Entry.Attributes) == 0 {
+			return nil, transactionResult(
+				ldapwire.ResultProtocolError,
+				"no attributes provided",
+			)
 		}
 		if isSubschemaDN(dn) {
 			return nil, transactionResult(ldapwire.ResultEntryAlreadyExists, "")
@@ -587,12 +674,6 @@ func (server *Server) transactionOperationDatabase(
 				"new password value is empty",
 			)
 		}
-		if !passwordRequest.HasNewPassword {
-			return nil, transactionResult(
-				ldapwire.ResultUnwillingToPerform,
-				"generated passwords cannot be returned from a transaction",
-			)
-		}
 		targetName := state.boundDN
 		if passwordRequest.HasUserIdentity && len(passwordRequest.UserIdentity) > 0 {
 			targetName = string(passwordRequest.UserIdentity)
@@ -627,6 +708,13 @@ func (server *Server) transactionOperationDatabase(
 	if result := updateOperationPrecondition(runtime, state.boundDN, target); result != nil {
 		return nil, result
 	}
+	if result := databaseRestrictionResult(
+		runtime,
+		target,
+		requestDatabaseRestriction(message.Request),
+	); result != nil {
+		return nil, result
+	}
 	return database, nil
 }
 
@@ -634,6 +722,7 @@ func (server *Server) writeTransactionOperationResult(
 	connection net.Conn,
 	message ldapwire.Message,
 	result ldapwire.Result,
+	responseValue []byte,
 ) error {
 	responseTag, ok := responseTagFor(message.Request.ApplicationTag())
 	if !ok {
@@ -645,7 +734,83 @@ func (server *Server) writeTransactionOperationResult(
 		responseTag,
 		result,
 		"",
+		responseValue,
 		nil,
+	)
+}
+
+func prepareTransactionOperation(
+	message ldapwire.Message,
+	transactionControlIndex int,
+) (ldapwire.Message, []byte, error) {
+	queued := cloneTransactionMessage(message, transactionControlIndex)
+	request, ok := queued.Request.(ldapwire.ExtendedRequest)
+	if !ok || request.Name != passwordModifyOID {
+		return queued, nil, nil
+	}
+
+	passwordRequest, err := ldapwire.DecodePasswordModifyRequestValue(
+		request.Value,
+		request.HasValue,
+	)
+	if err != nil {
+		clearLDAPTransactionOperation(&ldapTransactionOperation{message: queued})
+		return ldapwire.Message{}, nil, err
+	}
+	defer func() {
+		clear(passwordRequest.UserIdentity)
+		clear(passwordRequest.OldPassword)
+		clear(passwordRequest.NewPassword)
+	}()
+	if passwordRequest.HasNewPassword {
+		return queued, nil, nil
+	}
+
+	generatedPassword, err := generatePassword()
+	if err != nil {
+		clearLDAPTransactionOperation(&ldapTransactionOperation{message: queued})
+		return ldapwire.Message{}, nil, err
+	}
+	defer clear(generatedPassword)
+	passwordRequest.NewPassword = generatedPassword
+	passwordRequest.HasNewPassword = true
+	clear(request.Value)
+	request.Value = encodeChainedPasswordModifyValue(passwordRequest)
+	request.HasValue = true
+	queued.Request = request
+	return queued, ldapwire.EncodePasswordModifyResponseValue(generatedPassword), nil
+}
+
+func transactionOperationQueuedBytes(message ldapwire.Message) (int64, error) {
+	encoded, err := ldapwire.EncodeRequestMessage(message)
+	if err != nil {
+		return 0, err
+	}
+	defer clear(encoded)
+	return int64(len(encoded)), nil
+}
+
+func (server *Server) abortLDAPTransactionWithNotice(
+	connection net.Conn,
+	state *connectionState,
+	result ldapwire.Result,
+) error {
+	transaction := state.transaction
+	if transaction == nil {
+		return errors.New("cannot abort an inactive LDAP transaction")
+	}
+	identifier := make([]byte, len(transaction.identifier))
+	copy(identifier, transaction.identifier)
+	state.transaction = nil
+	clearLDAPTransaction(transaction)
+	defer clear(identifier)
+	return server.writeLDAPResultResponse(
+		connection,
+		0,
+		ldapwire.ApplicationExtendedResponse,
+		result,
+		transactionAbortedNoticeOID,
+		identifier,
 		nil,
 	)
 }
@@ -674,9 +839,14 @@ func (server *Server) commitLDAPTransaction(
 		for _, operation := range transaction.operations {
 			message := operation.message
 			transactionState.boundDN = operation.boundDN
+			transactionState.operationRealDN = operation.realDN
+			operationContext := withACLSubject(
+				transactionContext,
+				server.connectionACLSubject(&transactionState),
+			)
 			capture := &transactionResultCapture{}
 			if err := server.executeTransactionOperation(
-				transactionContext,
+				operationContext,
 				capture,
 				&transactionState,
 				message,
@@ -812,29 +982,37 @@ func clearLDAPTransaction(transaction *ldapTransaction) {
 	}
 	clear(transaction.identifier)
 	for messageIndex := range transaction.operations {
-		operation := &transaction.operations[messageIndex]
-		message := &operation.message
-		for controlIndex := range message.Controls {
-			clear(message.Controls[controlIndex].Value)
-		}
-		switch request := message.Request.(type) {
-		case ldapwire.AddRequest:
-			clearEntryValues(request.Entry)
-		case ldapwire.ModifyRequest:
-			for changeIndex := range request.Changes {
-				for valueIndex := range request.Changes[changeIndex].Attribute.Values {
-					clear(request.Changes[changeIndex].Attribute.Values[valueIndex])
-				}
-			}
-		case ldapwire.ExtendedRequest:
-			clear(request.Value)
-		}
-		*message = ldapwire.Message{}
-		operation.boundDN = ""
+		clearLDAPTransactionOperation(&transaction.operations[messageIndex])
 	}
 	transaction.identifier = nil
 	transaction.operations = nil
 	transaction.messageIDs = nil
+	transaction.queuedBytes = 0
+}
+
+func clearLDAPTransactionOperation(operation *ldapTransactionOperation) {
+	if operation == nil {
+		return
+	}
+	message := &operation.message
+	for controlIndex := range message.Controls {
+		clear(message.Controls[controlIndex].Value)
+	}
+	switch request := message.Request.(type) {
+	case ldapwire.AddRequest:
+		clearEntryValues(request.Entry)
+	case ldapwire.ModifyRequest:
+		for changeIndex := range request.Changes {
+			for valueIndex := range request.Changes[changeIndex].Attribute.Values {
+				clear(request.Changes[changeIndex].Attribute.Values[valueIndex])
+			}
+		}
+	case ldapwire.ExtendedRequest:
+		clear(request.Value)
+	}
+	*message = ldapwire.Message{}
+	operation.boundDN = ""
+	operation.realDN = ""
 }
 
 func clearEntryValues(entry directory.Entry) {

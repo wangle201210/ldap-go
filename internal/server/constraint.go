@@ -905,7 +905,7 @@ func (server *Server) constraintURIMatches(
 	if targetDatabase == nil {
 		return false, operationFailed(ldapwire.ResultNoSuchObject, "")
 	}
-	targetReader := storage.ReaderInPartition(reader, targetDatabase.partition)
+	targetReader := readerForDatabase(reader, *targetDatabase)
 	equalities := make([]directory.Filter, 0, len(uri.attributes))
 	for _, attribute := range uri.attributes {
 		equalities = append(equalities, directory.Filter{

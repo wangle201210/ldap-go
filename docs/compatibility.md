@@ -14,13 +14,15 @@ No row may become `compatible` based only on unit tests.
 
 ## Completeness audit
 
-As of 2026-08-02, the official current LTS baseline is OpenLDAP 2.6.13 and
-ldap-go is not a complete drop-in replacement. No matrix row is currently
+The reproducible verification baseline is the OpenLDAP 2.6.13 release commit,
+and ldap-go is not a complete drop-in replacement. No matrix row is currently
 marked `compatible`; planned backends, overlays, operational tooling, SASL
-security layers, monitoring, and protocol edge cases remain. The supported
+security layers, and protocol edge cases remain. The supported
 migration boundary is semantic `slapcat` LDIF, not OpenLDAP MDB binary files.
 Content and `cn=config` values can be preserved by the importer, but only the
-features explicitly listed below have matching runtime behavior.
+features explicitly listed below have matching runtime behavior. Passing one
+listed differential does not establish compatibility for all OpenLDAP
+functions, configurations, or directory data.
 
 ## LDAPv3 protocol
 
@@ -46,11 +48,12 @@ features explicitly listed below have matching runtime behavior.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | StartTLS | partial | RFC 4511/4513 state machine plus OpenLDAP `tls_2_anon`/`tls_authc` identity ordering tests pass; broader slapd TLS differentials remain |
-| Password Modify | partial | RFC 3062 core plus ppolicy old-password, quality, minimum-age, history, reset, hashing, and response-control integration pass; remaining transaction/generated-password edge cases remain |
+| Password Modify | partial | RFC 3062 core plus ppolicy old-password, quality, minimum-age, history, reset, hashing, response-control integration, and transaction-generated password commit/rollback pass; broader cross-overlay cases remain |
 | Who Am I? | partial | RFC 4532 simple-bind and StartTLS identity tests pass |
 | Cancel | partial | RFC 3909 BER, result, ordering, isolation, and OpenLDAP 2.6.13 differential tests pass |
 | Assertion | partial | RFC 4528 Add/Modify/Delete/ModifyDN/Search/Compare atomic tests pass |
 | Pre-read and post-read | partial | RFC 4527 Add/Modify/Delete/ModifyDN transaction and ACL tests pass |
+| No-Op and permissive modify | partial | hidden OpenLDAP controls, validation, all four update operations, atomic memory/bbolt rollback, read-control interaction, transaction composition, and OpenLDAP 2.6.13 MDB differentials pass |
 | Paged results | partial | RFC 2696 Go-client, cookie, ACL, limit, glue, and mutation tests pass |
 | Server-side sorting | partial | RFC 2891/OpenLDAP 2.6.13 CLI, Go-client, matching, ACL, paging, and mutation tests pass |
 | VLV | partial | OpenLDAP 2.6.13 CLI, Go-client, BER, offset, assertion, multi-context, ACL, limit, and error tests pass |
@@ -59,7 +62,7 @@ features explicitly listed below have matching runtime behavior.
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, chain routing, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, and OpenLDAP 2.6.13 ldapsearch pass |
-| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and slapd differential tests pass; generated passwords, server abort notices, and resource limits remain |
+| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, generated-password commit/rollback, bounded configurable queues, Aborted Transaction Notice, Bind/Unbind no-notice aborts, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and pinned source/slapd differential tests pass; pre/post-read, proxied authorization on Start, and broader extension interactions remain |
 | Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
 
 ## Data model and schema
@@ -79,14 +82,14 @@ features explicitly listed below have matching runtime behavior.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | OpenLDAP and SM3 password schemes | partial | hash/verify vectors and migration tests |
-| Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules and chain-backed forwarded state updates remain |
-| OpenLDAP ACL grammar and evaluation | partial | ordered rule differential suite |
-| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, Cyrus credential forms, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
-| SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; GSSAPI password/keytab/FILE-cache paths pass unit coverage; a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
-| Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, and PLAIN advertisement policy pass; SASL-layer and ACL SSF integration remain |
+| Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, chain-backed forwarded state updates, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules remain |
+| OpenLDAP ACL grammar and evaluation | partial | filter/value/object-class targets; real/effective DN and level selectors; static/dynamic groups and set expressions; DN/value capture expansion; peer/domain/sockname/sockurl and IPv4/IPv6/path selectors; overall/transport/TLS/SASL SSF; `OpenLDAPaci`; and direct OpenLDAP target, expansion/group, connection/level, and ACI differentials pass; unlisted grammar and dynacl modules remain |
+| SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, group/LDAP-URL rules, Cyrus credential forms, proxy-backed auxprop/auth-check searches, OpenLDAP `other(80)` backend-failure mapping, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
+| SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; DIGEST-MD5 covers multiple offered realms, configured realm validation, `authzid`, provider-host `digest-uri`, and strict `rspauth`; GSSAPI password/keytab/FILE-cache paths pass unit coverage; only DIGEST `qop=auth` is supported, and a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
+| Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, PLAIN advertisement policy, and ACL `ssf`/`transport_ssf`/`tls_ssf`/`sasl_ssf` selectors pass; negotiated SASL-layer SSF remains unavailable |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert pass; syncrepl CA/SAN/CRL policies pass; live server certificate reload remains |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
-| Audit and security logging | planned | redaction, integrity, and operation coverage |
+| Audit and security logging | partial | credential-free operation metadata, result codes, identities, transport SSF, malformed-message coverage, HMAC-SHA-256 chaining, verified restart append, CLI verification, concurrency/race, and tamper tests pass; OpenLDAP accesslog and flat-file auditlog records, rotation, proxy identities, frontend scope, and transaction behavior pass slapd differentials; broader cross-overlay and OS fault matrices remain |
 
 ## Storage, configuration, and migration
 
@@ -97,8 +100,11 @@ features explicitly listed below have matching runtime behavior.
 | `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
 | `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
 | `slapcat` `cn=config` import | partial | boot from imported configuration |
-| Backup, restore, index rebuild, check | planned | fault-injection and round-trip tests |
-| Proxy, relay, monitor, and null backends | planned | OpenLDAP behavior suites |
+| Backup, restore, database rebuild, check | partial | offline bbolt page/bucket/key/JSON/DN validation, multi-partition and metadata-preserving snapshot/restore, atomic publication, overwrite protection, corruption/cancellation tests, and rebuild round trips pass; online backup, crash injection at each filesystem boundary, and OpenLDAP tool output parity remain |
+| Monitor backend | partial | Root DSE discovery, all 13 standard monitor branches, dynamic connection/operation/statistics/time/database/overlay state, Search/Compare/ACL/paging/limits, matched DN, runtime read-only/restriction changes, and OpenLDAP 2.6.13 differentials pass; complete backend/overlay inventories and worker/runtime internals remain |
+| Null backend | partial | `olcDbBindAllowed`/`olcDbDoSearch`, synthetic Search, Bind/root Bind, discarded writes, Compare, Assertion, paging, typesOnly, read controls, No-Op, and a null-enabled OpenLDAP differential pass |
+| Relay backend | partial | explicit and suffix-massage-selected local targets, bidirectional storage views, Bind/Search/Compare/writes/transactions, ACL translation, inherited sort and sync-provider configuration, direct attribute/objectClass/DN-value mappings, and an OpenLDAP differential pass; arbitrary rewrites, relay chains, and broader overlay combinations remain |
+| LDAP and meta proxy backends | partial | `olcDatabase=ldap` forwards Bind, Search, Compare, writes, Password Modify, Dynamic Refresh, and Who Am I? with ordered URI failover, health-preferred endpoint recovery, single-URI reconnect, Simple identity reuse, root/native SASL identity assertion, proxy authorization, password-based SASL auxprop/auth-check searches, Abandon/Cancel, remote diagnostics, default five-hop referral chasing, and online rollback; `olcDatabase=meta` adds multi-target routing/Search union, target/default selection, suffix massage, direct and wildcard/drop attribute/objectClass maps, subtree/filter rules, result namespace rewriting, client-pr, onerr, quarantine, DN-route caching, health-preferred URI recovery, connection reuse/expiry/use-temporary, bind polling, controls, Abandon/Cancel, mapped SASL authorization IDs and rules, `olcDbProtocolVersion` 2/3, privileged `olcDbConnectionPoolMax` cross-frontend reuse, pool caps, busy-connection reuse and temporary overflow, plus online target creation, pre-connection URI updates, and sibling-target isolation, with pinned OpenLDAP 2.6.13 differentials/source contracts and local protocol topologies; GSSAPI and SASL security-layer proxy Bind, complete referral rebind behavior, full librewrite, complete multi-target connection categories, active-connection topology mutation, target deletion/reordering, local/frontend overlay execution, and transaction forwarding remain. OpenLDAP 2.6.13 itself can abort in `back-meta/conn.c` when a target URI changes after a multi-target metaconn exists, so that unsafe path is documented rather than treated as a compatibility target. |
 | SQL, sock, and perl-style adapters | planned | backend-specific compatibility suites |
 
 OpenLDAP MDB binary files are not a stable interchange format. Canonical
@@ -109,37 +115,45 @@ rebuilt by `ldap-go`.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| accesslog and auditlog | planned | LDIF/result differential tests |
+| accesslog | partial | successful Add/Delete/Modify/ModDN and Password Modify, failed writes, Search/Compare, Bind/Unbind/Abandon, database-targeted Extended, request/result/control/referral fields, atomic successful source/log commits, `reqMod`, `reqOld`/`reqOldAttr`, branch `olcAccessLogBase`, `olcAccessLogSuccess`, `auditContext`, source-derived multi-SID context/min CSNs, purge, stale-cookie rejection, online rollback, ldap-go delta topology, and OpenLDAP 2.6.13 record differentials pass; arbitrary unknown-operation routing, cross-overlay ordering, and broader fault matrices remain |
+| auditlog | partial | database and frontend `olcAuditlogFile`, successful Add/Modify/Password Modify/ModDN/Delete, LastMod modifications, proxy `realdn`, LDIF Base64/folding, No-Op and failed-write exclusion, online rollback/restart, real `slapcat` config import, external rotation, non-fatal file errors, concurrent appends, RFC 5805 commit/abort/rollback behavior, and OpenLDAP 2.6.13 semantic differentials pass; broader cross-overlay ordering and platform filesystem fault matrices remain |
+| autoca | partial | built-in OpenLDAP 2.6.13 PKI/config schema, writable database-local singleton lifecycle, startup CA creation and DER reuse, strict ordered certificate/private-key Search trigger, user/server RSA issuance, email/IP SANs, PKCS#8 persistence, root/self rules, final response ACL filtering, concurrent one-pair hardening, and a pinned OpenLDAP 2.6.13 semantic differential pass; the explicit ldap-go `olcAutoCAProfile=sm2-sm3` extension issues SM2 certificates signed with SM3; automatic `olcAutoCAlocalDN` TLS-context installation, legacy 512-bit RSA, exact OpenSSL extension encoding, replication/cross-overlay matrices, and CA rotation remain |
 | chain | partial | imported `olcChainConfig`/child back-ldap entries; Search continuation, Compare, writes, Password Modify, Dynamic Refresh, identity assertion, TLS/TLCP, chaining behavior, schema/filter policies, session tracking, nested referrals, and ppolicy forwarding pass; connection pooling/quarantine scheduling, full SASL rebind coverage, and OpenLDAP differential fixtures remain |
+| collect | partial | ordered database/frontend `olcCollectInfo`, overlapping response-only projections, normalization without de-duplication, requested attributes/typesOnly, Paging/Sort/VLV/ManageDsaIT, source and target ACLs, Modify protection, online rollback/restart, and a pinned OpenLDAP 2.6.13 differential pass; synthesized operational template attributes and broader glue/proxy/cross-overlay matrices remain; hardened divergences check every Modify element and protect the base type of optioned attributes |
 | constraint | partial | all six rule types, `restrict=`, Add/Modify/ModifyDN, Relax, online/restart, rollback, and slapd differential pass; cross-overlay ordering and locale-dependent regex edges remain |
 | DDS | partial | OpenLDAP config, add/modify/modDN constraints, live TTL, limits, expiry/restart, sync delete publication, disabled state, and slapd differential tests pass |
-| dynlist and dynid | planned | expansion/update tests |
-| homedir | planned | lifecycle hook tests |
+| deref control overlay | partial | `olcOverlay: deref` lifecycle, database/frontend control registration, source/target/value ACL filtering, same-backend resolution, binary/empty values, and gated OpenLDAP 2.6.13 differential tests; hardened divergence: OpenLDAP 2.6.13 leaks a target value denied by value-level ACL through the deref response even though direct Search hides it, while ldap-go filters it |
+| dynlist and dyngroup | partial | default and ordered multiple attrsets, arbitrary/mapped projections, local LDAP URL variants and restrictions, DN members, memberOf, static/dynamic nesting, filters, Compare, `dgIdentity`/`dgAuthz`, ACLs, ManageDsaIT, paging quirks, online/restart behavior, real config import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering, large-directory performance, and broader glue/replication matrices remain |
+| homedir | partial | `olcSkeletonPath`, minimum UID, ordered POSIX mappings, Add/Modify/ModifyDN/Delete lifecycle, IGNORE/DELETE/ARCHIVE, post-commit effects, online rollback, skeleton copy, rename, selective chown, tar archive, traversal/symlink/root/recursive-source boundaries, repeated/race tests, and OpenLDAP 2.6 DELETE/ARCHIVE filesystem differentials pass; FIFO skeleton entries, non-root ownership differential coverage, POSIX-only ownership, one instance per database/frontend, libc-regex edge parity, and byte-identical OpenLDAP tar output remain |
 | memberof and refint | partial | current `cn=config` forms, multiple instances, custom DN/nameAndOptionalUID attributes and group classes, `groupOfNames`/`groupOfUniqueNames`, dangling ignore/drop/error, Relax, AddCheck, member refint, refint exact/subtree repair and Nothing placeholders, Add/Modify/Delete/ModifyDN, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; global overlays, cross-overlay ordering, replication topologies, and fault-path parity remain |
-| pbind and remoteauth | planned | remote authentication tests |
-| pcache | planned | cache correctness and invalidation tests |
+| nestgroup | partial | database/frontend placement, multiple instances and bases, default/custom DN or Name And Optional UID attributes, all four flags, request-aware values and equality-filter expansion, negative-filter response recheck, cycles/dangling paths, ACLs, ManageDsaIT, paging/Sort/VLV, limits, online disable/delete/re-add/restart, and a pinned OpenLDAP 2.6.13 fixture plus differential pass; complete glue/proxy/replication and arbitrary cross-overlay order matrices remain |
+| otp | partial | built-in OpenLDAP 2.6.13 OATH schema, writable database-local singleton lifecycle, HOTP/TOTP Simple Bind, static-password suffix splitting, replay state, Password Modify bypass, hidden internal reads, atomic same-token concurrency hardening, and a pinned OpenLDAP 2.6.13 fixture plus differential pass; contrib `userPassword` TOTP schemes, replication-topology guarantees, HMAC-SM3, encrypted seed envelopes, and arbitrary cross-overlay ordering remain |
+| pbind | partial | database-local Simple Bind forwarding, ordered multi-endpoint `olcDbURI` failover, `olcDbStartTLS` TLS parameters, network timeout, active retrylist quarantine with single-probe concurrency, request controls, remote result/referral/response-control propagation, live StartTLS trust/fallback tests, local two-server topology, and optional OpenLDAP `back_ldap` differential pass; per-attempt dialing, connection pooling, broader TLS platform failures, and non-Simple mechanisms remain |
+| remoteauth | partial | ordered mappings, DN/domain attributes, default domain/realm, domain truncation, file-backed multi-provider realms, retries, store-on-success, required TLS policy and live SHA-256/SM3 peer-key pin tests, local-password precedence, no-`userPassword` eligibility, `olcPasswordHash` writeback including `{PBKDF2-SM3}`, local two-server topology, and OpenLDAP 2.6 delegation/writeback/provider-loss differential pass; connection pooling and a broader TLS platform failure matrix remain |
+| pcache | partial | database-local `olcPcacheConfig` on back-ldap, canonical/legacy configuration names, structured equality-template matching, attrset-aware keys, positive/negative caching, OpenLDAP's delayed `>` entry boundary, TTL/consistency windows, TTR single-flight refresh, offline expiry pause/resume, query-level LRU, `olcPcacheMaxQueries`, provider-outage hits, requested-attribute/`typesOnly` reprojection, paging policy, concurrent/reload-safe state, intentionally stale proxy writes, and pinned OpenLDAP 2.6.13 Phase 1/2 differentials pass; `olcPcachePersist` is accepted but reproduces the observed no-restore behavior rather than promising durable query recovery; Bind cache, private DB/query deletion, full containment, advanced controls, and broader overlay ordering remain |
 | ppolicy | partial | core Bind/Add/Modify/Password Modify policy behavior, operational state, controls, migration, online configuration, chain-backed `ppolicy_forward_updates`, and OpenLDAP 2.6.13 differentials pass; native checker-module execution remains |
 | retcode | partial | static/in-directory results, hidden schema, ACL, wire effects, online/restart, real config import, and slapd differentials pass; default-referral and cross-overlay matrices remain |
-| rwm | planned | DN/attribute rewrite differential tests |
+| rwm | partial | one- and two-argument `rwm-suffixmassage`, direct and wildcard/drop attribute/objectClass mappings, DN/nameAndOptionalUID/LDAP-URL value translation, filter/assertion translation, and relay/back-meta differentials pass; arbitrary rewrite contexts/rules, normalization controls, and remaining map flags remain |
+| seqmod | partial | database/frontend singleton configuration, Add/Modify/ModifyDN/Delete and write Extended-operation serialization, disabled state, online delete/re-add/restart, cancellation/race coverage, and pinned OpenLDAP 2.6.13 configuration/basic-operation differentials pass; complete transaction, replication, and arbitrary cross-overlay ordering matrices remain |
 | sssvlv | partial | RFC 2891 sorting, VLV, RFC 2696 interaction, and global/per-connection limits pass |
 | syncprov | partial | cn=config gating, refresh/persist stream, configured SIDs, multi-SID cookies, `delcsn`, contextCSN checkpointing, session-log policies, Sort/VLV, glue providers, and OpenLDAP CLI interoperability pass |
-| translucent | planned | local/remote merge tests |
+| translucent | partial | database-local single-instance `olcTranslucentConfig` with one captive `olcTranslucentDatabase` LDAP target, disabled/reload/rollback validation, remote-anchored Search, whole-attribute local override, stale-local suppression, remote-only entries, complete-filter recheck, recursive local/remote split filters, Compare attribute shadow/fallback, remote-first Bind plus `bindLocal` fallback and health-preferred URI recovery, local `pwmodLocal`, `strict`, `noGlue`, root-only local-shadow Add/Modify/Delete/ModifyDN, Assertion on Add/merged Modify views, ManageDsaIT bypass, and pinned OpenLDAP 2.6.13 source-contract plus Phase 1/2 differential passes; other advanced controls, OpenLDAP's non-root Modify-through-local-ACL edge, frontend/multiple instances, and arbitrary cross-overlay ordering/side effects remain |
 | unique | partial | URI and legacy config, independent domains/multiple URIs, `strict`/`ignore`/`serialize`, Add/Modify/ModifyDN, managed Relax, atomic concurrency, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering and auditing pre-existing duplicates remain |
 | valsort | partial | alpha/numeric/weighted ordering, hidden raw control, Add/Modify validation, Paging/Sort/VLV, Sync bypass, online/restart, real `slapcat` import, and OpenLDAP 2.6.13 differential pass; global/glue and cross-overlay ordering matrices remain |
-| autoca and OTP-related contrib modules | planned | module-specific compatibility tests |
+| OTP-related contrib password modules | planned | contrib `userPassword` TOTP schemes are separate from the built-in otp overlay tracked above |
 
 ## Replication and operations
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Syncrepl consumer | partial | ordered olcSyncrepl loading plus ldap-go, OpenLDAP 2.6.13 standard, and accesslog delta initial/persist/restart/recovery topologies pass; tag-based Sync Info compatibility and initial-refresh timeout semantics pass; advanced modes remain |
+| Syncrepl consumer | partial | ordered `olcSyncrepl` loading plus ldap-go, OpenLDAP 2.6.13 standard, accesslog delta, and protocol-level fake DSEE retro changelog initial/persist/restart/recovery topologies pass; tag-based Sync Info compatibility, initial-refresh timeout semantics, and DIGEST-MD5 realm/authzid/server-proof handling pass; real Oracle DSEE and broader provider variants remain unverified |
 | Syncprov provider | partial | OpenLDAP 2.6.13 ldapsearch, overlay-order Sort/VLV, and slapd consumer initial/persist/restart topology pass; broader topology suite remains |
-| Delta-syncrepl | partial | OpenLDAP accesslog `reqMod` replay, durable cookies, refresh fallback, and gap recovery pass; DSEE changelog and provider-side accesslog remain |
+| Delta-syncrepl | partial | OpenLDAP and ldap-go accesslog `reqMod` replay, durable cookies, refresh fallback, purge/minCSN gap recovery, and ldap-go provider-to-consumer Add/Modify/Password Modify/ModDN/Delete topology pass; DSEE `syncdata=changelog` covers Root DSE bounds, initial/gap snapshots, LDIF Add/Modify/ModDN/Delete replay, durable `lastChangeNumber`, and Persistent Search against a protocol-level fake provider; real Oracle DSEE, attribute-level multi-provider conflicts, and broader failure topologies remain unverified |
 | Multi-provider and mirror mode | partial | `olcServerID`, writable `olcMultiProvider`/`olcMirrorMode`, durable UUID tombstones, three-node relay/restart/offline conflict convergence, and OpenLDAP 2.6 bidirectional topology pass; delta attribute-level conflicts and broader failure matrices remain |
 | Fractional and sparse replication | partial | attrs/exattrs, filter exit/reentry, mandatory UUID/CSN, and suffix-massage convergence pass; broader schema/topology cases remain |
-| Connection and operation monitoring | planned | `cn=Monitor` differential tests |
-| Dynamic logging and runtime limits | planned | `cn=config` behavior tests |
-| Graceful restart and zero-loss shutdown | planned | in-flight operation and durability tests |
+| Connection and operation monitoring | partial | concurrent connection lifecycle, operation/response counters, Search/Compare/ACL/paging, and OpenLDAP 2.6.13 `cn=Monitor` differential tests pass; OS descriptor and exact worker-pool internals remain |
+| Dynamic logging and runtime limits | partial | monitor Log modification behavior, database `readOnly`, operation restrictions, online enforcement, rollback, and OpenLDAP 2.6.13 differential sequences pass; dynamic logger category routing and the remaining limits remain |
+| Graceful restart and zero-loss shutdown | partial | SIGINT/SIGTERM stop admission, drain accepted queued operations, preserve and durably commit in-flight writes, abandon persistent Sync, bound the drain with configurable forced cancellation, and pass timeout/race tests; SIGHUP restart, listener inheritance, and zero-downtime process handoff remain |
 | `lloadd` behavior | planned | routing, health, bind affinity, and controls |
 
 ## Command-line compatibility
@@ -147,9 +161,11 @@ rebuilt by `ldap-go`.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Server daemon and config validation | partial | lifecycle and config diagnostics |
-| `slapadd` / `slapcat` equivalents | partial | OpenLDAP LDIF round trips |
-| `slapindex` / `slaptest` / `slapdn` | planned | output and exit-code differential tests |
-| LDAP client tools | planned | option and protocol interoperability |
+| `slapadd` / `slapcat` equivalents | partial | `-l/-b/-n/-s/-u` implemented where applicable, dry-run and subtree export, read-only/atomic file behavior, database selection, OpenLDAP LDIF round trips, unsupported-option rejection, and exit-code tests pass; complete diagnostic text and every historical option remain |
+| Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
+| `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
+| `slappasswd` equivalent | partial | `{SSHA}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; OpenLDAP module-provided schemes remain |
+| LDAP client tools | partial | `ldapsearch`, `ldapwhoami`, `ldapcompare`, `ldappasswd`, `ldapexop`, `ldapmodify`/`ldapadd`, `ldapdelete`, and `ldapmodrdn` cover simple Bind, LDAP/LDAPS/StartTLS, password prompting/files, LDIF writes, Compare exit codes, extended-operation binary values, generic `-e`/`-E` controls on applicable commands, and opt-in anonymous referral chasing with DN/scope rewriting, control preservation, loop detection, and a five-hop default; OpenLDAP Compare/ldapexop differentials and pinned ldap-tools/libldap source contracts pass; SASL, generic Compare controls, complete referral URL fields/rebind behavior, and the full historical option surface remain |
 | Load balancer tooling | planned | `lloadd` configuration tests |
 
 ## Implemented subset evidence
@@ -174,11 +190,19 @@ proxy authorization policy. Tests cover EXTERNAL root authorization, Who Am
 I, simple-Bind state replacement, and both implicit TLCP and
 StartTLS-to-TLCP paths.
 SASL PLAIN authenticates mapped directory entries through the same
-`userPassword` and `auth` ACL path as simple Bind. Root DSE publishes it only
+`userPassword` and `auth` ACL path as simple Bind. For back-ldap/back-meta
+entries, PLAIN and the other password-based mechanisms perform isolated remote
+auxprop searches without changing the frontend Bind state. Back-ldap prefers
+`olcDbACLBind` and falls back to IDAssert when its bind method is `none`;
+back-meta uses the selected target's IDAssert configuration and maps request
+and response namespaces. Infrastructure failures return OpenLDAP-compatible
+`other(80)` with an empty diagnostic while keeping the frontend connection
+usable. Root DSE publishes PLAIN only
 when `olcSaslSecProps` permits it for the connection's TLS, TLCP, or Unix
 external SSF, or when `noplain` is disabled. `olcSaslRealm` and ordered
-`olcAuthzRegexp` rules support direct DN and local LDAP URL mappings; URL
-searches require exactly one result and OpenLDAP-compatible `auth` access.
+`olcAuthzRegexp` rules support direct DN and local LDAP URL mappings across
+local and proxy backends; URL searches require exactly one result and
+OpenLDAP-compatible privileged auth-check access.
 Self and database-root authorization plus `olcAuthzPolicy`, hidden ordered
 `authzTo`, and `authzFrom` rules are shared by all implemented SASL
 mechanisms.
@@ -213,23 +237,40 @@ RFC 5805 transactions advertise the Start Transaction and End Transaction
 extended operations plus the Transaction Specification control. The wire codec
 accepts OpenLDAP's explicitly present zero-length transaction identifier and
 strictly validates transaction end request and response values. A connection
-queues Add, Modify, Delete, ModifyDN, and Password Modify with an explicit new
-password without holding a database lock. End Transaction commit replays the
-ordered queue through one storage writer, so later operations observe earlier
-ones and any operation failure rolls back entries, metadata, runtime changes,
-and Sync publication. The failure result and original update message ID are
-returned in `txnEndRes`. Abort discards the queue, and Bind or connection close
-aborts outstanding work. A transaction is restricted to one storage partition;
+queues Add, Modify, Delete, ModifyDN, and Password Modify without holding a
+database lock. If Password Modify omits the new password, ldap-go generates it
+once while admitting the operation, returns it in that operation's immediate
+RFC 3062 response, and stores the same generated value in the queued request.
+End Transaction commit replays the ordered queue through one storage writer, so
+later operations observe earlier ones and any operation failure rolls back
+entries, metadata, runtime changes, and Sync publication. The failure result,
+original update message ID, and update response controls are returned in
+`txnEndRes`. RFC 5805's `txnEndRes` has no field for an update ExtendedResponse
+value, so a generated password cannot conformingly be moved to End Transaction.
+
+The queue defaults to at most 1000 operations and 16 MiB of re-encoded retained
+requests. `Config.MaxTransactionOperations` /
+`Config.MaxTransactionQueuedBytes` and the corresponding
+`-transaction-max-operations` / `-transaction-max-queued-bytes` flags configure
+lower or higher positive bounds; zero selects the Go API defaults. Crossing a
+bound clears all retained values and sends an unsolicited ExtendedResponse with
+message ID zero, result `adminLimitExceeded`, response name `1.3.6.1.1.21.4`,
+and an explicitly present transaction identifier. Explicit abort discards the
+queue normally. Bind, Unbind, and connection close abort without notice, as RFC
+5805 requires. A transaction is restricted to one storage partition;
 configuration writes and cross-database operations are rejected.
 
 OpenLDAP 2.6.13 `ldapmodify -E txn=commit/abort` interoperates with ldap-go.
-A raw BER differential against slapd also verifies duplicate-Add failure
-ordering, failed message ID reporting, and full rollback. Like OpenLDAP 2.6.13,
-the current transaction path rejects pre-read and post-read controls. Each
-queued update captures its effective proxied identity; the proxy control is
-unavailable on Start and End Transaction themselves. Generated Password
-Modify response values, server-initiated Aborted Transaction Notice, and
-explicit queued-resource limits remain pending.
+Raw BER differentials against slapd verify duplicate-Add failure ordering,
+failed message ID reporting, full rollback, and Bind's no-notice abort. A pinned
+source and wire test also records an OpenLDAP 2.6.13 limitation: its transaction
+control is registered only for update protocol operations, so transactional
+Password Modify is rejected with `unavailableCriticalExtension` before the
+transaction branch in `passwd.c` is reached. ldap-go implements the RFC 5805
+Password Modify combination instead of copying that unreachable behavior. Like
+OpenLDAP 2.6.13, pre-read and post-read controls remain rejected in a
+transaction. Each queued update captures its effective proxied identity; the
+proxy control is unavailable on Start and End Transaction themselves.
 
 RFC 6171 Don't Use Copy is advertised in Root DSE and accepted on Search and
 Compare only. The control requires an absent value; duplicate or valued
@@ -269,6 +310,58 @@ transaction rollback, Rename and Relax; a gated OpenLDAP 2.6.13 fixture runs
 the same operation sequence against both servers. Ordering interactions with
 other overlays and locale-specific POSIX regular-expression behavior remain
 for a broader differential matrix.
+
+OpenLDAP's single-instance `collect` overlay accepts ordered
+`olcCollectInfo: "<template DN>" <attribute>,...` values on both a data
+database and the frontend. Template DNs are normalized for duplicate checks;
+rules run by descending normalized-DN string length with stable order for
+equal lengths. Every matching ancestor contributes equality-normalized values
+to the final Search response, including duplicates from local values,
+overlapping rules, or repeated configured attributes. A template does not
+project onto itself, and a missing template has no effect. Database values are
+appended before frontend values.
+
+The projection is intentionally later than filter, Compare, and Sort
+evaluation. Requested attributes, `1.1`, `+`, `typesOnly`, paging, VLV,
+ManageDsaIT, template and target entry/attribute/value ACLs, and valsort then
+operate on the appropriate stored or response view. This mechanism is separate
+from RFC 3671 collective attributes, which remain logical values visible to
+filters and Compare. Configuration Add/Modify/Delete, replacement rollback,
+overlay deletion, duplicate rejection, and restart are tested. Like slapd,
+`collect` does not intercept Add, ModifyDN, or Delete. Descendant Modify returns
+`unwillingToPerform (53)`. Unlike OpenLDAP 2.6.13, ldap-go examines every
+modification instead of only the first and compares the base attribute type so
+an option such as `description;lang-en` cannot bypass a configured
+`description` rule. The stable differential hard-asserts both upstream bypasses
+and ldap-go's rollback-preserving fixes. Projection of backend-synthesized
+operational attributes and broader glue, proxy, replication, and overlay-order
+combinations remain outside the current claim.
+
+The `nestgroup` overlay loads multiple database or frontend instances with
+independent member/memberOf attributes, group bases, flags, and disabled state.
+Search expands response values only when the relevant attribute is requested.
+Positive equality filters are expanded through the nested graph; equality
+assertions below an odd number of NOT operators remain unchanged and trigger a
+full response-entry filter recheck only when value projection is active. This
+preserves OpenLDAP's requested-attribute and `typesOnly` behavior. Compare reads
+stored values, and ManageDsaIT bypasses the overlay entirely.
+
+Traversal de-duplicates cycles, self-cycles, overlapping bases, and duplicate
+paths. Parent discovery for member/memberOf value traversal uses the requester's
+Search ACL where slapd performs an internal search, while memberOf-filter child
+entry lookup follows slapd's ACL-bypassing entry-get path; final candidate ACLs
+still apply. The request-scoped graph is isolated per storage partition and
+bounded to 100,000 entries, 500,000 edges, depth 256, and 100,000 expanded
+values. Exceeding a bound returns `adminLimitExceeded`; these explicit bounds
+are a hardening difference from slapd. Imported custom configuration attributes
+are retained rather than reproducing OpenLDAP 2.6.13's observed
+`slapd.conf`-to-`slapd.d` custom-attribute loss.
+
+Database `olcLimits` now applies exact bound-DN `size.soft` and `size.hard`
+rules before paging state is created. An absent client size limit uses soft;
+a requested value is retained when smaller and clamped by hard when larger;
+database roots bypass subject rules. Other OpenLDAP selectors and time,
+unchecked, and paged-results-specific limit fields remain outside this claim.
 
 OpenLDAP's database-local `unique` overlay loads both current
 `olcUniqueURI` domains and the legacy `olcUniqueBase`, `olcUniqueAttribute`,
@@ -594,8 +687,8 @@ responses for changes outside the filter. Filter-entry and filter-exit
 transitions become add and delete respectively. Abandon and RFC 3909 Cancel
 stop the operation; a changed search base or an overflowing bounded event
 queue terminates it with `syncRefreshRequired` (4096). Collective values are
-not synchronized onto member entries. TCP tests cover these paths, and an
-installed OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` is run as an optional
+not synchronized onto member entries. TCP tests cover these paths, and the
+pinned OpenLDAP 2.6.13 `ldapsearch -E !sync=ro` client is run as an optional
 process-level interoperability test. A real OpenLDAP 2.6.13 syncrepl consumer
 also converges from an empty MDB, applies persistent Add/Modify/Delete events,
 and catches up through the same cookie after it is stopped, provider changes
@@ -620,10 +713,14 @@ connection adapter, accepting legal OpenLDAP encodings that omit the cookie or
 default Boolean. For refresh-and-persist, `timeout=` is enforced through the
 initial refresh-done response and does not terminate a healthy persistent
 stream.
-EXTERNAL and SCRAM carry `authzid`; SASL defaults and numeric `secprops` are
-enforced without silently enabling plaintext authentication. Options that
-require credential delegation, stronger mechanism classifications, channel
-binding, or a SASL security layer fail explicitly. Entry upserts, UUID-based
+EXTERNAL, DIGEST-MD5, and SCRAM carry `authzid`. DIGEST-MD5 accepts repeated
+realm directives, selects the configured realm only when the provider offered
+it (or otherwise selects the first offered realm), forms `ldap/<provider-host>`
+as its `digest-uri`, and strictly validates the final `rspauth`. It selects only
+`qop=auth`. SASL defaults and numeric `secprops` are enforced without silently
+enabling plaintext authentication. Options that require credential delegation,
+stronger mechanism classifications, channel binding, or a SASL security layer
+fail explicitly. Entry upserts, UUID-based
 renames/deletes, cookie updates, and derived context CSNs use storage
 transactions. Present completion removes only local entries in the configured
 scope and filter that were not reported by the provider. An in-process
@@ -675,6 +772,66 @@ returning to the log stream. A gated OpenLDAP 2.6.13 accesslog fixture verifies
 online replay, stopped-consumer catch-up, deliberate local-state loss,
 automatic full recovery, and continued modrdn/delete persistence.
 
+DSEE retro changelog mode uses `syncdata=changelog` and requires `logbase` but
+not an accesslog `logfilter`. It reads `firstChangeNumber` and
+`lastChangeNumber` from the Root DSE. Missing, zero, out-of-range, or reset
+state triggers an ordinary full search of the replicated suffix; snapshot
+completion removes stale local entries and atomically stores the provider's
+last change number. Sequential one-level changelog searches parse the `changes`
+attribute as LDIF and replay Add, Modify, ModDN, and Delete while advancing the
+per-RID metadata and operational `lastChangeNumber` in the same transaction.
+An unsafe change-number gap rolls back the operation, resets replay state, and
+forces a full refresh on the next cycle; transient connection failures retain
+the durable position. Refresh-and-persist adds the Netscape Persistent Search
+control. Unit and protocol-level fake DSEE tests cover UUID conversion,
+snapshot cleanup, gap rollback, all four operations, restart without a second
+snapshot, and persistent streaming. No real Oracle DSEE or `dsadm` topology has
+been run, so this remains a partial compatibility claim.
+
+The provider-side accesslog accepts `olcAccessLogDB`, all named operation groups
+from `olcAccessLogOps`, branch-scoped `olcAccessLogBase`,
+`olcAccessLogSuccess`, `olcAccessLogOld`, `olcAccessLogOldAttr`, and
+`olcAccessLogPurge`. Add, Delete, Modify, ModDN, and Password Modify produce
+OpenLDAP-shaped audit entries in the same storage transaction as a successful
+source change. Failed writes and completed read/session operations are appended
+after their result is known. Search/Compare, Bind/Unbind/Abandon, and
+database-targeted Extended records include their operation-specific fields;
+common fields include request/result metadata, controls, referrals, and error
+text. Frontend-only Extended operations such as Who Am I are not attributed to
+a database overlay, matching slapd. Password request data is deliberately not
+copied into `reqData`; the resulting hash is recorded by auditModify.
+
+The accesslog database exposes source-derived `entryCSN`, `contextCSN`, and
+`minCSN`; the source suffix exposes dynamic `auditContext`. Purge advances
+`minCSN`, and syncprov rejects a cookie below that boundary with
+`syncRefreshRequired`. Real slapd differentials compare write/read/session and
+failure classes, DNs, result fields, Search and Compare parameters, Bind and
+Abandon fields, modifications, old values, renames, password hashing,
+UUID/CSN metadata, and timestamps.
+
+The flat-file auditlog overlay accepts the OpenLDAP `olcAuditlogFile`
+configuration on a data database or the frontend. Each successful Add,
+Modify, Password Modify, ModDN, or Delete appends one OpenLDAP-shaped LDIF
+record per applicable overlay. Add records contain the final entry, Modify
+records include backend-added LastMod changes, password values are always
+Base64 encoded, and proxy authorization records retain both the effective
+identity and `realdn`. The file is opened in append mode for every record, so
+external rename-based rotation works without a signal; open, write, or close
+errors are logged but do not change a successful LDAP result.
+
+The file is deliberately not enlisted in an RFC 5805 storage transaction.
+Queued operations produce no output before End Transaction, and an explicit
+abort produces none. During commit replay, however, each successful operation
+is appended immediately. If a later operation fails and the database rolls
+back, the earlier audit record remains, matching OpenLDAP's response-callback
+behavior. Differential tests cover this edge, frontend and database overlays,
+proxy identities, No-Op and failed writes, all four change types plus Password
+Modify, external rotation, binary and folded LDIF, and Increment/delete-all
+modifications. Local tests add online configuration rollback, restart,
+unavailable paths, and concurrent/race coverage. A migration case generates
+`slapd.d`, exports the real `olcAuditlogConfig` entry with `slapcat -n 0`,
+imports the folded LDIF unchanged, and verifies runtime logging.
+
 Single-provider consumer databases follow OpenLDAP shadow rules. External
 updates return rewritten `olcUpdateRef` referrals, or
 `shadow context; no update referral` when none is configured. Legacy
@@ -714,13 +871,118 @@ and ldap-go SID 1. `olcMirrorMode` is accepted as OpenLDAP's alias for
 `olcMultiProvider`; active/passive writer selection remains the responsibility
 of the external load balancer.
 
-This provider does not yet implement an accesslog overlay,
-`olcSpSessionlogSource`, the optional sync-provider subentry context, or a full
-`slapd` topology differential. The consumer still lacks obsolete DSEE
-changelog delta mode, the remaining SASL mechanisms and security layers, full
-OpenSSL cipher-expression compatibility, delta-syncrepl's complete
-attribute-level conflict history, and broader OpenLDAP provider variants. The
+This provider does not yet implement arbitrary accesslog unknown-operation
+routing, `olcSpSessionlogSource`, the optional sync-provider subentry context,
+or an exhaustive `slapd` topology matrix. The consumer still lacks SASL
+integrity/privacy layers, full OpenSSL cipher-expression compatibility,
+delta-syncrepl's complete attribute-level conflict history, real Oracle DSEE
+interoperability evidence, and broader OpenLDAP provider variants. The
 replication rows therefore remain `partial`.
+
+The database-local `pbind` overlay intercepts non-anonymous Simple Bind and
+forwards the original Bind DN, credential, and request controls to the
+whitespace-separated LDAP endpoints in `olcDbURI`. Providers are tried in
+configuration order after dial, TLS, framing, or other transport failures; an
+LDAP Bind result, including invalid credentials, is authoritative and is not
+retried on another endpoint. The returned result code, matched DN, diagnostic,
+referrals, and response controls are copied to the client. Successful remote
+authentication establishes the original local Bind DN, while a configured
+local-only password is deliberately not consulted.
+
+`olcDbStartTLS` loads the optional/critical StartTLS mode plus certificate,
+key, CA, SAN/certificate requirement, cipher, curve, CRL, and protocol-minimum
+parameters. `olcDbNetworkTimeout` bounds dialing and the Bind exchange.
+`olcDbQuarantine` drives an OpenLDAP-style shared health state: after all
+providers fail with transport errors, requests are rejected until the active
+retry interval expires, one concurrent probe is admitted, finite retry blocks
+advance to the next interval, and any completed non-`unavailable` LDAP result
+clears quarantine. Connection pooling is not yet implemented, so each provider
+attempt opens a new connection. A local two-server
+topology verifies remote credentials, ordered failover, local-password
+exclusion, identity establishment, and provider unavailability. A gated,
+optional OpenLDAP 2.6.13 `back_ldap` differential compares successful and
+failed credentials, Who Am I? identity, and the unavailable-provider result.
+It skips when the selected slapd build omits the `ldap` backend.
+
+An imported `olcDatabase=ldap` naming-context backend proxies Bind, Search,
+Compare, Add, Modify, ModifyDN, Delete, Password Modify, Dynamic Refresh, and
+Who Am I? to ordered `olcDbURI` endpoints. It reuses a successful Simple Bind
+identity when permitted, applies configured root identity assertion, and
+forwards an authorized proxied identity. Abandon and Cancel reach the active
+remote operation, transport failures advance to the next URI, and provider
+LDAP results remain authoritative. RFC 5805 transactions are rejected because
+the current implementation cannot make remote updates atomic. Database-local
+ACLs and recognized overlays directly attached to this proxy backend are also
+rejected during startup or online reload: proxy dispatch precedes local
+overlay execution, so accepting either would silently bypass configured
+policy. Frontend overlays are not yet executed around proxy responses and are
+documented as an unsupported composition. For this back-ldap path, connections
+are opened per operation, but a successful endpoint is remembered and moved to
+the front of subsequent Bind and operation attempts, matching OpenLDAP's
+registered URL-list callback. Password-based SASL Bind is completed by the local
+server while remote auxiliary credentials and authorization rules are read
+through the privileged auth-check identity; native outbound SASL identity
+assertion uses the selected provider host and authorization ID. Pooling,
+GSSAPI and SASL security layers, paged-cookie
+continuity across reconnects, and complete referral rebind behavior remain.
+
+An imported `olcDatabase=meta` adds target selection and Search union over the
+same outbound executor. The implemented mapping path covers suffix massage,
+direct attribute/object-class mappings, wildcard allowlists, response-side
+drop mappings, DN-valued attributes, LDAP URL DNs, and request/result namespace
+translation. Strict OpenLDAP 2.6.13 differentials cover Cancel and Abandon,
+Bind polling, those wildcard/drop mappings, and `olcDbProtocolVersion` 2/3.
+Privileged identity-assertion transports also implement the verified
+`olcDbConnectionPoolMax` subset: eligible connections are reused across
+frontend clients and concurrent operations are multiplexed by LDAP message ID.
+Targets retain a healthy preferred URI, fail over when it becomes unavailable,
+and probe a recovered URI after the preferred endpoint fails. Back-ldap and
+back-meta referral chasing both enforce OpenLDAP's default five-hop limit and
+return `loopDetect(54)` at exhaustion.
+This is not a claim of complete OpenLDAP pool parity; full multi-target
+connection-category accounting and rebind transitions remain.
+
+The online target lifecycle follows the stable 2.6.13 observations. A
+zero-target meta parent accepts its first `olcMetaTargetConfig` or `olcMetaSub`.
+Modifying an existing target URI returns success and persists the configuration,
+but that target is unavailable in the current process until restart. Deleting
+the sole target returns `unwillingToPerform` (53), so a subsequent Add of the
+same target DN returns `entryAlreadyExists` (68). OpenLDAP 2.6.13 triggers an
+upstream assertion when a second target is added while an existing target
+connection is active; that unstable path is excluded from the differential
+oracle. GSSAPI and SASL security layers, complete referral rebind behavior,
+full librewrite, complete multi-target connection categories, and broader
+dynamic topology remain unsupported compatibility claims.
+
+The database-local `remoteauth` overlay takes over Simple Bind only when the
+local target entry exists, has no `userPassword`, and provides the configured
+`olcRemoteAuthDNAttribute` plus either
+`olcRemoteAuthDomainAttribute` or `olcRemoteAuthDefaultDomain`. Existing local
+passwords therefore retain priority and use the ordinary verifier. Ordered
+`olcRemoteAuthMapping` values map the domain prefix to a realm; text after the
+first backslash or colon is removed before lookup, and an unmatched domain uses
+`olcRemoteAuthDefaultRealm`. A realm can name one LDAP endpoint directly or a
+line-oriented `file://` provider list. Providers are tried in order for each
+`olcRemoteAuthRetryCount` round; invalid credentials terminate immediately,
+while transport failures and other remote results permit provider/retry
+progression.
+
+The required `olcRemoteAuthTLS` value loads StartTLS and the same outbound TLS
+policy. Ordered `olcRemoteAuthTLSPeerkeyHash` values pin each provider hostname's leaf public
+key with SHA-1/256/384/512 or SM3 and fail closed on cleartext, absent, or
+mismatched peers. When `olcRemoteAuthStore` is enabled, a successful credential
+is hashed with the first effective `olcPasswordHash` scheme (default `{SSHA}`;
+national-cryptography schemes such as `{PBKDF2-SM3}` are accepted) and written
+to the local entry without replacing a concurrently added password. The local
+two-server topology verifies delegation, bad credentials, writeback, local
+fallback after provider shutdown, local-password precedence, and provider
+failures. Live StartTLS cases verify valid SHA-256/SM3 pins, untrusted
+certificates, wrong digests, and missing host pins. A gated OpenLDAP 2.6
+`remoteauth` differential compares delegated and local Bind, writeback, bad
+credentials, and provider loss; transport failure follows OpenLDAP's
+`operationsError` result while a received LDAP result remains authoritative.
+Connection pooling and a broader platform TLS matrix remain outside the tested
+boundary. Both overlay rows therefore remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
@@ -884,20 +1146,32 @@ OpenLDAP's pointer-derived context, an `ldap-go` context cannot be reused with
 changed query semantics.
 
 The ACL evaluator loads ordered `olcAccess` values from frontend and database
-entries. It supports exact/base, one-level, subtree, children, and regular
-expression DN targets; attribute targets; anonymous, users, self, DN, DN
-attribute, static group, and SSF subjects; access levels and `=`, `+`, `-`
-privileges; `stop`, `continue`, and `break`; and OpenLDAP's implicit clauses.
+entries. Targets support exact/base, one-level, subtree, children, and regular
+expression DNs; filters; individual, user/operational wildcard, and
+object-class attribute sets; and equality, matching-rule, regex, or DN-scoped
+values. Regular-expression target DN captures (`$1` and peers) and target-value
+captures (`${v1}` and peers) expand into DN, group, set, domain, and other
+eligible subject selectors.
+
+Subjects include anonymous/users/self and their real-identity forms, exact and
+relative-level DNs, DN attributes, configurable static or dynamic groups, set
+expressions, `peername`, `sockname`, `domain`, `sockurl`, IPv4/IPv6 networks,
+Unix paths, and overall/transport/TLS/SASL SSF thresholds. Access levels,
+`=`, `+`, and `-` privileges, `stop`/`continue`/`break`, and OpenLDAP's implicit
+clauses are retained. `OpenLDAPaci` and custom attributes using the same syntax
+participate through `aci`/`dynacl/aci`, including scoped grant/deny evaluation.
 Search/Compare/Bind and all write operations enforce attribute or pseudo-
 attribute access. Add/delete privileges (`a`/`z`), Replace semantics,
-`olcAddContentAcl`, ModifyDN parent/RDN checks, DN-syntax-only `selfwrite`,
-root bypass, default read access, and the `cn=config` default-none exception
-follow the slapd implementation.
+`olcAddContentAcl`, ModifyDN parent/RDN checks, DN-syntax-only `selfwrite`, root
+bypass, default read access, and the `cn=config` default-none exception follow
+the slapd implementation.
 
-ACL filter/value targets, object-class attribute sets, dynamic groups, sets,
-network/peer selectors, ACI, DN expansion, and transport-derived SSF remain
-unimplemented. Configurations using an unsupported selector fail server
-startup instead of silently weakening access control.
+Direct OpenLDAP differentials cover target filters/value/object-class sets,
+DN and value capture expansion, static/dynamic groups, connection and level
+selectors, and `OpenLDAPaci`. The row remains `partial`: unlisted ACL grammar,
+other dynacl plugins, and the full cross-operation/overlay matrix are not
+claimed. Configurations using an unsupported selector fail server startup
+instead of silently weakening access control.
 
 Runtime database selection loads `olcDatabase`, all `olcSuffix` values,
 `olcRootDN`, and `olcRootPW` from imported `cn=config` entries. Longest-suffix

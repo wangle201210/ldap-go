@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -55,9 +56,14 @@ type chainAttempt struct {
 	result       ldapwire.Result
 	hasResult    bool
 	hasEntries   bool
+	connected    bool
+	requestSent  bool
+	responses    int
 	transportErr error
 	localResult  *ldapwire.Result
 }
+
+const openLDAPDefaultReferralHopLimit = 5
 
 func (server *Server) tryChainOperation(
 	ctx context.Context,
@@ -99,6 +105,13 @@ func (server *Server) tryChainOperation(
 				return false, nil
 			}
 			referral = result
+		}
+		if result := databaseRestrictionResult(
+			state.runtime,
+			target,
+			requestDatabaseRestriction(message.Request),
+		); result != nil {
+			return false, nil
 		}
 	} else if searchOperation &&
 		hasLDAPControl(message.Controls, dontUseCopyControlOID) &&
@@ -269,7 +282,7 @@ func (server *Server) namedReferralForChain(
 ) (*ldapwire.Result, error) {
 	var result *ldapwire.Result
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
+		tx := readerForDatabase(reader, database)
 		search, isSearch := request.(ldapwire.SearchRequest)
 		if isSearch {
 			value, err := server.searchReferralForChain(
@@ -642,6 +655,18 @@ func (server *Server) applyChainIdentity(
 
 	message = withoutChainProxyAuthorization(message)
 	if identity.native {
+		switch identity.mode {
+		case chainIdentityAnonymous:
+			remote.bind.authorizationID = "dn:"
+		case chainIdentityLegacy, chainIdentitySelf:
+			remote.bind.authorizationID = "dn:" + state.boundDN
+		case chainIdentityOtherDN, chainIdentityOtherID:
+			remote.bind.authorizationID = identity.assertedID
+		case chainIdentityNone:
+			remote.bind.authorizationID = ""
+		default:
+			remote.bind.authorizationID = ""
+		}
 		return remote, message, nil
 	}
 	var authorizationID string
@@ -746,36 +771,121 @@ func (server *Server) executeChainTarget(
 	message ldapwire.Message,
 	depth int,
 ) chainAttempt {
+	remote.protocolVersion = effectiveChainProtocolVersion(state, remote, message)
+	var protocolFailure *ldapwire.Result
+	message, remote, protocolFailure = prepareChainProtocolMessage(message, remote)
+	if protocolFailure != nil {
+		return chainAttempt{result: *protocolFailure, hasResult: true}
+	}
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok &&
 		remote.noUndefinedFilter &&
 		chainFilterHasUndefined(state.runtime.schema, request.Filter) {
 		return emptySuccessfulChainSearch(message.ID)
 	}
-	transport, err := server.openChainTransport(ctx, state, remote, message.Request)
-	if err != nil {
-		return chainAttempt{transportErr: err}
+	cache := chain.transportCache
+	pool := chain.transportPool
+	cacheKey := chain.transportKey
+	var (
+		transport *syncConsumerTransport
+		poolLease *metaTransportPoolLease
+	)
+	if pool != nil {
+		var err error
+		transport, poolLease, err = pool.acquireOwned(
+			ctx,
+			cacheKey,
+			chain.transportOwner,
+			remote,
+			chain.transportPoolMax,
+			chain.useTemporaryPool,
+		)
+		if err != nil {
+			return chainAttempt{transportErr: err}
+		}
+	} else {
+		transport = cache.acquireOwned(cacheKey, chain.transportOwner, remote)
 	}
-	defer transport.close()
-	stop := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = transport.close()
-		case <-stop:
+	if transport != nil && pool == nil {
+		transport.context = ctx
+		transport.operationTimeout = chainRequestTimeout(remote, message.Request)
+	}
+	if transport == nil {
+		var err error
+		transport, err = server.openChainTransport(ctx, state, remote, message.Request)
+		if err != nil {
+			pool.abort(poolLease)
+			return chainAttempt{transportErr: err}
+		}
+		if pool != nil {
+			pool.publish(poolLease, transport)
+		}
+	}
+	attempt := chainAttempt{connected: true}
+	healthy := false
+	poolReusable := true
+	cancelWriteReusable := true
+	var (
+		stop          chan struct{}
+		cancelStopped chan struct{}
+	)
+	defer func() {
+		if stop != nil {
+			close(stop)
+		}
+		if pool != nil {
+			if cancelStopped != nil {
+				<-cancelStopped
+			}
+			pool.release(
+				poolLease,
+				remote,
+				transport,
+				poolReusable && cancelWriteReusable,
+			)
+		} else {
+			healthy = healthy && ctx.Err() == nil
+			if healthy && transport.clearDeadline() != nil {
+				healthy = false
+			}
+			cache.releaseOwned(
+				cacheKey,
+				chain.transportOwner,
+				remote,
+				transport,
+				healthy,
+			)
 		}
 	}()
-	defer close(stop)
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
 		supportsAbsoluteFilters := remote.absoluteFilters == chainFeatureEnabled
 		if remote.absoluteFilters == chainFeatureDiscover {
-			supportsAbsoluteFilters, err = discoverChainAbsoluteFilters(transport)
+			discovered, err := discoverChainAbsoluteFilters(transport)
 			if err != nil {
-				return chainAttempt{transportErr: err}
+				poolReusable = false
+				attempt.transportErr = err
+				return attempt
 			}
+			supportsAbsoluteFilters = discovered
 		}
 		if !supportsAbsoluteFilters {
 			request.Filter = rewriteChainAbsoluteFilters(request.Filter)
 			message.Request = request
+		}
+	}
+	resolvedCancelMode := remote.cancelMode
+	if resolvedCancelMode == "" {
+		resolvedCancelMode = "exop"
+	}
+	if resolvedCancelMode == "exop-discover" {
+		supported, err := discoverChainCancel(transport)
+		if err != nil {
+			poolReusable = false
+			attempt.transportErr = err
+			return attempt
+		}
+		resolvedCancelMode = "abandon"
+		if supported {
+			resolvedCancelMode = "exop"
 		}
 	}
 	if remote.sessionTracking && !hasLDAPControl(message.Controls, sessionTrackingControlOID) {
@@ -793,14 +903,114 @@ func (server *Server) executeChainTarget(
 	message.ID = transport.nextMessageID()
 	encoded, err := ldapwire.EncodeRequestMessage(message)
 	if err != nil {
-		return chainAttempt{transportErr: err}
+		attempt.transportErr = err
+		return attempt
 	}
-	if err := transport.setOperationDeadline(); err != nil {
-		return chainAttempt{transportErr: err}
+	forwardedBind := message.Request.ApplicationTag() == ldapwire.ApplicationBindRequest
+	operationCtx := ctx
+	var cancelOperation context.CancelFunc
+	if pool != nil {
+		if timeout := chainRequestTimeout(remote, message.Request); timeout > 0 {
+			operationCtx, cancelOperation = context.WithTimeout(ctx, timeout)
+			defer cancelOperation()
+		}
+	} else {
+		if err := setChainRequestDeadline(transport, remote, forwardedBind); err != nil {
+			attempt.transportErr = err
+			return attempt
+		}
+	}
+	var responseStream *syncConsumerResponseStream
+	if pool != nil {
+		if err := transport.enableMultiplexing(); err != nil {
+			poolReusable = false
+			attempt.transportErr = err
+			return attempt
+		}
+		var unregister func()
+		responseStream, unregister, err = transport.multiplexedResponse(message.ID)
+		if err != nil {
+			poolReusable = false
+			attempt.transportErr = err
+			return attempt
+		}
+		defer unregister()
 	}
 	connection := transport.currentConnection()
-	if err := writeSyncConsumerPacket(connection, encoded); err != nil {
-		return chainAttempt{transportErr: err}
+	if pool != nil {
+		writeContext := operationCtx
+		var cancelWrite context.CancelFunc
+		if remote.bind.networkTimeout > 0 {
+			writeContext, cancelWrite = context.WithTimeout(
+				operationCtx,
+				remote.bind.networkTimeout,
+			)
+		}
+		outcome, writeErr := writeMetaTransportPoolPacket(
+			writeContext,
+			transport,
+			encoded,
+		)
+		if cancelWrite != nil {
+			cancelWrite()
+		}
+		attempt.requestSent = outcome.requestSent
+		poolReusable = poolReusable && outcome.reusable
+		if writeErr != nil {
+			attempt.transportErr = writeErr
+			return attempt
+		}
+	} else {
+		if err := transport.writePacket(encoded); err != nil {
+			attempt.transportErr = err
+			return attempt
+		}
+		attempt.requestSent = true
+	}
+	stop = make(chan struct{})
+	remoteMessageID := message.ID
+	var cancelRemote sync.Once
+	cancelUpstream := func() {
+		cancelRemote.Do(func() {
+			if pool != nil {
+				cancelContext, cancel := context.WithTimeout(
+					context.Background(),
+					chainPooledCancelTimeout(remote, message.Request),
+				)
+				cancelWriteReusable = cancelChainOperation(
+					cancelContext,
+					transport,
+					remoteMessageID,
+					resolvedCancelMode,
+					true,
+				)
+				cancel()
+			} else {
+				cancelChainOperation(
+					context.Background(),
+					transport,
+					remoteMessageID,
+					resolvedCancelMode,
+					false,
+				)
+				_ = transport.close()
+			}
+		})
+	}
+	cancelStopped = make(chan struct{})
+	go func() {
+		defer close(cancelStopped)
+		select {
+		case <-operationCtx.Done():
+			cancelUpstream()
+		case <-stop:
+		}
+	}()
+	if chain.requestStarted != nil {
+		if err := chain.requestStarted(); err != nil {
+			attempt.transportErr = err
+			return attempt
+		}
 	}
 
 	search := message.Request.ApplicationTag() == ldapwire.ApplicationSearchRequest
@@ -810,20 +1020,55 @@ func (server *Server) executeChainTarget(
 		responds = true
 	}
 	if !responds {
-		return chainAttempt{transportErr: errors.New("chained request has no response")}
+		poolReusable = false
+		attempt.transportErr = errors.New("chained request has no response")
+		return attempt
 	}
-	attempt := chainAttempt{}
+	referralLimitExceeded := false
 	for {
-		packet, err := readSyncConsumerPacket(connection)
+		var packet *ber.Packet
+		var err error
+		if responseStream != nil {
+			packet, err = responseStream.next(operationCtx)
+		} else {
+			packet, err = readSyncConsumerPacket(connection)
+		}
 		if err != nil {
+			if responseStream != nil && operationCtx.Err() != nil {
+				cancelUpstream()
+			} else if responseStream != nil {
+				poolReusable = false
+			}
+			if responseStream != nil && forwardedBind {
+				poolReusable = false
+			}
+			if forwardedBind && ctx.Err() == nil && chainRequestTimedOut(err) {
+				result := ldapwire.ResultError(
+					ldapwire.ResultAdminLimitExceeded,
+					"Operation timed out",
+				)
+				packet, decodeErr := ber.DecodePacketErr(
+					ldapwire.EncodeBindResponse(message.ID, result, nil),
+				)
+				if decodeErr != nil {
+					attempt.transportErr = decodeErr
+					return attempt
+				}
+				attempt.packets = append(attempt.packets, packet)
+				attempt.result = result
+				attempt.hasResult = true
+				return attempt
+			}
 			attempt.transportErr = err
 			return attempt
 		}
 		tag, err := validateChainResponseEnvelope(packet, message.ID)
 		if err != nil {
+			poolReusable = false
 			attempt.transportErr = err
 			return attempt
 		}
+		attempt.responses++
 		if search {
 			switch tag {
 			case ldapwire.ApplicationSearchResultEntry:
@@ -832,51 +1077,77 @@ func (server *Server) executeChainTarget(
 					state.runtime.schema,
 					remote.removeUnknownSchema,
 				); err != nil {
+					poolReusable = false
 					attempt.transportErr = err
 					return attempt
 				}
 				attempt.hasEntries = true
-				attempt.packets = append(attempt.packets, packet)
+				if err := emitChainSearchPackets(&attempt, chain.packetSink, packet); err != nil {
+					attempt.transportErr = err
+					return attempt
+				}
 				continue
 			case ldapwire.ApplicationSearchResultReference:
 				references, err := chainSearchReferences(packet)
 				if err != nil {
+					poolReusable = false
 					attempt.transportErr = err
 					return attempt
 				}
-				if remote.chaseReferrals && depth < chain.maxReferralDepth {
-					nested := server.executeChainReferrals(
-						ctx,
-						state,
-						chain,
-						message,
-						references,
-						depth,
-						true,
-						&remote,
-					)
-					if chainAttemptIsUsable(message.Request, nested) {
-						attempt.packets = append(
-							attempt.packets,
-							withoutSearchDone(nested.packets)...,
+				if remote.chaseReferrals {
+					if depth < chain.maxReferralDepth {
+						nested := server.executeChainReferrals(
+							ctx,
+							state,
+							chain,
+							message,
+							references,
+							depth,
+							true,
+							&remote,
 						)
-						attempt.hasEntries = attempt.hasEntries || nested.hasEntries
+						if nested.localResult != nil ||
+							chainAttemptIsUsable(message.Request, nested) {
+							if err := emitChainSearchPackets(
+								&attempt,
+								chain.packetSink,
+								withoutSearchDone(nested.packets)...,
+							); err != nil {
+								attempt.transportErr = err
+								return attempt
+							}
+							attempt.hasEntries = attempt.hasEntries || nested.hasEntries
+							if nested.localResult != nil {
+								referralLimitExceeded = true
+							}
+							continue
+						}
+					} else if chain.referralHopLimitResult && len(references) > 0 {
+						referralLimitExceeded = true
 						continue
 					}
 				}
 				if !remote.noRefs {
-					attempt.packets = append(attempt.packets, packet)
+					if err := emitChainSearchPackets(&attempt, chain.packetSink, packet); err != nil {
+						attempt.transportErr = err
+						return attempt
+					}
 				}
 				continue
 			case ldapwire.ApplicationIntermediateResponse:
-				attempt.packets = append(attempt.packets, packet)
+				if err := emitChainSearchPackets(&attempt, chain.packetSink, packet); err != nil {
+					attempt.transportErr = err
+					return attempt
+				}
 				continue
 			case expectedTag:
 			default:
+				poolReusable = false
 				attempt.transportErr = fmt.Errorf("unexpected chained search response tag %d", tag)
 				return attempt
 			}
 		} else if tag != expectedTag {
+			poolReusable = false
 			attempt.transportErr = fmt.Errorf(
 				"unexpected chained response tag %d, want %d",
 				tag,
@@ -887,8 +1158,15 @@ func (server *Server) executeChainTarget(
 
 		result, err := chainLDAPResult(packet, message.ID, expectedTag)
 		if err != nil {
+			poolReusable = false
 			attempt.transportErr = err
 			return attempt
+		}
+		healthy = result.Code != ldapwire.ResultUnavailable
+		if _, bind := message.Request.(ldapwire.BindRequest); bind &&
+			result.Code != ldapwire.ResultSuccess {
+			healthy = false
+			poolReusable = false
 		}
 		if result.Code == ldapwire.ResultReferral &&
 			remote.chaseReferrals &&
@@ -904,22 +1182,185 @@ func (server *Server) executeChainTarget(
 				false,
 				&remote,
 			)
-			if chainAttemptIsUsable(message.Request, nested) {
+			if nested.localResult != nil || chainAttemptIsUsable(message.Request, nested) {
 				if search {
 					attempt.packets = append(attempt.packets, nested.packets...)
 					attempt.hasEntries = attempt.hasEntries || nested.hasEntries
 					attempt.result = nested.result
 					attempt.hasResult = nested.hasResult
+					attempt.localResult = nested.localResult
 					return attempt
 				}
 				return nested
 			}
+		}
+		if referralLimitExceeded ||
+			(result.Code == ldapwire.ResultReferral &&
+				remote.chaseReferrals &&
+				chain.referralHopLimitResult &&
+				depth >= chain.maxReferralDepth &&
+				len(result.Referrals) > 0) {
+			return chainReferralHopLimitAttempt(attempt, message.ID, expectedTag)
 		}
 		attempt.packets = append(attempt.packets, packet)
 		attempt.result = result
 		attempt.hasResult = true
 		return attempt
 	}
+}
+
+func chainReferralHopLimitAttempt(
+	attempt chainAttempt,
+	messageID int64,
+	responseTag uint64,
+) chainAttempt {
+	result := ldapwire.ResultError(ldapwire.ResultLoopDetect, "")
+	packet, err := ber.DecodePacketErr(
+		ldapwire.EncodeResultResponse(messageID, responseTag, result, nil),
+	)
+	if err != nil {
+		attempt.transportErr = err
+		return attempt
+	}
+	attempt.packets = append(attempt.packets, packet)
+	attempt.result = result
+	attempt.hasResult = true
+	attempt.localResult = &result
+	return attempt
+}
+
+func effectiveChainProtocolVersion(
+	state *connectionState,
+	remote chainRemoteConfiguration,
+	message ldapwire.Message,
+) int {
+	if remote.protocolVersion == 2 || remote.protocolVersion == 3 {
+		return remote.protocolVersion
+	}
+	if request, bind := message.Request.(ldapwire.BindRequest); bind &&
+		(request.Version == 2 || request.Version == 3) {
+		return request.Version
+	}
+	if state != nil && (state.protocolVersion == 2 || state.protocolVersion == 3) {
+		return state.protocolVersion
+	}
+	return 3
+}
+
+func prepareChainProtocolMessage(
+	message ldapwire.Message,
+	remote chainRemoteConfiguration,
+) (ldapwire.Message, chainRemoteConfiguration, *ldapwire.Result) {
+	if request, bind := message.Request.(ldapwire.BindRequest); bind {
+		request.Version = remote.protocolVersion
+		message.Request = request
+	}
+	if remote.protocolVersion != 2 {
+		return message, remote, nil
+	}
+	if hasLDAPControl(message.Controls, proxyAuthorizationControlOID) {
+		result := ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"identity assertion requires LDAPv3",
+		)
+		return message, remote, &result
+	}
+	for _, control := range message.Controls {
+		if control.Critical {
+			result := ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+			return message, remote, &result
+		}
+	}
+	message.Controls = nil
+	remote.sessionTracking = false
+	return message, remote, nil
+}
+
+func setChainRequestDeadline(
+	transport *syncConsumerTransport,
+	remote chainRemoteConfiguration,
+	forwardedBind bool,
+) error {
+	if !forwardedBind {
+		return transport.setOperationDeadline()
+	}
+	deadline := transport.resultPollingDeadline(syncConsumerResultPolling{
+		initial:  100 * time.Millisecond,
+		interval: remote.bindPollTimeout,
+		retries:  remote.bindPollRetries,
+	})
+	return transport.currentConnection().SetDeadline(deadline)
+}
+
+func chainRequestTimedOut(err error) bool {
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+func cancelChainOperation(
+	ctx context.Context,
+	transport *syncConsumerTransport,
+	remoteMessageID int64,
+	mode string,
+	pooled bool,
+) bool {
+	if transport == nil || remoteMessageID <= 0 || mode == "ignore" {
+		return true
+	}
+	requestID := transport.nextMessageID()
+	message := ldapwire.Message{ID: requestID}
+	switch mode {
+	case "abandon":
+		message.Request = ldapwire.AbandonRequest{MessageID: remoteMessageID}
+	case "exop":
+		message.Request = ldapwire.ExtendedRequest{
+			Name:     cancelOID,
+			Value:    ldapwire.EncodeCancelRequestValue(remoteMessageID),
+			HasValue: true,
+		}
+	default:
+		return true
+	}
+	encoded, err := ldapwire.EncodeRequestMessage(message)
+	if err != nil {
+		return true
+	}
+	if pooled {
+		outcome, _ := writeMetaTransportPoolPacket(ctx, transport, encoded)
+		return outcome.reusable
+	}
+	_ = transport.writePacket(encoded)
+	return true
+}
+
+func chainPooledCancelTimeout(
+	remote chainRemoteConfiguration,
+	request ldapwire.Request,
+) time.Duration {
+	if timeout := chainRequestTimeout(remote, request); timeout > 0 {
+		return timeout
+	}
+	if remote.bind.networkTimeout > 0 {
+		return remote.bind.networkTimeout
+	}
+	return ldap.DefaultTimeout
+}
+
+func emitChainSearchPackets(
+	attempt *chainAttempt,
+	sink func(*ber.Packet) error,
+	packets ...*ber.Packet,
+) error {
+	for _, packet := range packets {
+		if sink != nil {
+			if err := sink(packet); err != nil {
+				return err
+			}
+			continue
+		}
+		attempt.packets = append(attempt.packets, packet)
+	}
+	return nil
 }
 
 func (server *Server) openChainTransport(
@@ -929,15 +1370,11 @@ func (server *Server) openChainTransport(
 	request ldapwire.Request,
 ) (*syncConsumerTransport, error) {
 	configuration := remote.bind
-	bindTimeout := configuration.operationTimeout
-	if timeout, found := remote.operationTimeouts[ldapwire.ApplicationBindRequest]; found {
-		bindTimeout = timeout
-	}
 	requestTimeout := time.Duration(0)
 	if timeout, found := remote.operationTimeouts[request.ApplicationTag()]; found {
 		requestTimeout = timeout
 	}
-	configuration.operationTimeout = bindTimeout
+	configuration.operationTimeout = 0
 	parsed, err := parseSyncConsumerProviderURL(remote.uri)
 	if err != nil {
 		return nil, err
@@ -963,12 +1400,24 @@ func (server *Server) openChainTransport(
 		return nil, err
 	}
 	ready := func() (*syncConsumerTransport, error) {
+		if err := transport.clearDeadline(); err != nil {
+			return fail(fmt.Errorf("clear chain transport deadline: %w", err))
+		}
 		transport.operationTimeout = requestTimeout
 		return transport, nil
 	}
 	if configuration.startTLS != syncConsumerStartTLSOff &&
 		strings.EqualFold(parsed.Scheme, "ldap") {
-		if err := performSyncConsumerStartTLS(transport, configuration, parsed); err != nil {
+		if err := performSyncConsumerStartTLS(
+			transport,
+			configuration,
+			parsed,
+			syncConsumerResultPolling{
+				initial:  100 * time.Millisecond,
+				interval: 100 * time.Millisecond,
+				retries:  remote.bindPollRetries,
+			},
+		); err != nil {
 			if configuration.startTLS == syncConsumerStartTLSCritical {
 				return fail(fmt.Errorf("chain StartTLS: %w", err))
 			}
@@ -978,12 +1427,25 @@ func (server *Server) openChainTransport(
 	case "":
 		return ready()
 	case "simple":
-		if err := bindChainSimple(transport, configuration, remote.protocolVersion); err != nil {
+		transport.operationTimeout = requestTimeout
+		pollRetries := remote.bindPollRetries
+		if _, search := request.(ldapwire.SearchRequest); search {
+			// OpenLDAP keeps polling an identity-assertion Bind for the
+			// lifetime of the Search operation, even after nretries expires.
+			pollRetries = -1
+		}
+		if err := bindChainSimple(
+			transport,
+			configuration,
+			remote.protocolVersion,
+			pollRetries,
+			remote.bindPollTimeout,
+		); err != nil {
 			return fail(err)
 		}
 		return ready()
 	case "sasl":
-		if err := bindSyncConsumerSASL(transport, configuration); err != nil {
+		if err := bindSyncConsumerSASL(transport, configuration, remote.uri); err != nil {
 			return fail(fmt.Errorf("chain SASL bind: %w", err))
 		}
 		return ready()
@@ -996,6 +1458,8 @@ func bindChainSimple(
 	transport *syncConsumerTransport,
 	configuration syncConsumerConfig,
 	protocolVersion int,
+	pollRetries int,
+	pollTimeout time.Duration,
 ) error {
 	if protocolVersion == 0 {
 		protocolVersion = 3
@@ -1018,10 +1482,15 @@ func bindChainSimple(
 	if err != nil {
 		return err
 	}
-	result, err := transport.exchangeLDAPResult(
+	result, err := transport.exchangeLDAPResultPolling(
 		messageID,
 		packet,
 		ldapwire.ApplicationBindResponse,
+		syncConsumerResultPolling{
+			initial:  100 * time.Millisecond,
+			interval: pollTimeout,
+			retries:  pollRetries,
+		},
 	)
 	if err != nil {
 		return err
@@ -1432,6 +1901,22 @@ func emptySuccessfulChainSearch(messageID int64) chainAttempt {
 }
 
 func discoverChainAbsoluteFilters(transport *syncConsumerTransport) (bool, error) {
+	return discoverChainRootDSEValue(
+		transport,
+		"supportedFeatures",
+		absoluteFiltersFeatureOID,
+	)
+}
+
+func discoverChainCancel(transport *syncConsumerTransport) (bool, error) {
+	return discoverChainRootDSEValue(transport, "supportedExtension", cancelOID)
+}
+
+func discoverChainRootDSEValue(
+	transport *syncConsumerTransport,
+	description string,
+	expected string,
+) (bool, error) {
 	messageID := transport.nextMessageID()
 	encoded, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
 		ID: messageID,
@@ -1442,7 +1927,7 @@ func discoverChainAbsoluteFilters(transport *syncConsumerTransport) (bool, error
 				Kind:      directory.FilterPresent,
 				Attribute: "objectClass",
 			},
-			Attributes: []string{"supportedFeatures"},
+			Attributes: []string{description},
 		},
 	})
 	if err != nil {
@@ -1469,8 +1954,8 @@ func discoverChainAbsoluteFilters(transport *syncConsumerTransport) (bool, error
 		case ldapwire.ApplicationSearchResultEntry:
 			found = found || chainedEntryHasValue(
 				packet,
-				"supportedFeatures",
-				absoluteFiltersFeatureOID,
+				description,
+				expected,
 			)
 		case ldapwire.ApplicationSearchResultReference,
 			ldapwire.ApplicationIntermediateResponse:

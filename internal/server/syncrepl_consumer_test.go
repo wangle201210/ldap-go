@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1564,7 +1565,7 @@ func waitForSyncConsumerAttribute(
 	want string,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(syncConsumerWaitTimeout())
 	var last string
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -1604,7 +1605,7 @@ func waitForSyncConsumerMissing(
 	dn string,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(syncConsumerWaitTimeout())
 	var lastErr error
 	for time.Now().Before(deadline) {
 		result, err := client.Search(ldap.NewSearchRequest(
@@ -1785,7 +1786,7 @@ func waitForSyncConsumerStoredAttribute(
 ) {
 	t.Helper()
 	dn := mustSyncConsumerDN(t, rawDN)
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(syncConsumerWaitTimeout())
 	var (
 		last    string
 		lastErr error
@@ -1819,6 +1820,13 @@ func waitForSyncConsumerStoredAttribute(
 		want,
 		lastErr,
 	)
+}
+
+func syncConsumerWaitTimeout() time.Duration {
+	if os.Getenv(openLDAPReferenceTestsEnv) != "" {
+		return 20 * time.Second
+	}
+	return 8 * time.Second
 }
 
 func assertSyncConsumerMissingEntry(

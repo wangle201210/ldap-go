@@ -320,6 +320,7 @@ func (server *Server) virtualListViewEntries(
 	start,
 	end int,
 	rawValueOrder bool,
+	manageDsaIT bool,
 ) ([]directory.Entry, error) {
 	if view == nil || start < 0 || end < start || end > len(view.items) {
 		return nil, errors.New("VLV window is invalid")
@@ -327,6 +328,24 @@ func (server *Server) virtualListViewEntries(
 	entries := make([]directory.Entry, 0, end-start)
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
+		collectResponses := newCollectProjectionCache(
+			server,
+			state.runtime,
+			reader,
+			state.boundDN,
+		)
+		nestGroupPlans := newNestGroupProjectionCache(
+			ctx,
+			server,
+			state.runtime,
+			reader,
+			state.boundDN,
+			nestGroupProjectionRequest{
+				attributes: request.Attributes,
+				typesOnly:  request.TypesOnly,
+				filter:     request.Filter,
+			},
+		)
 		for _, item := range view.items[start:end] {
 			if item.route < 0 || item.route >= len(routes) {
 				return fmt.Errorf("VLV route %d is invalid", item.route)
@@ -336,7 +355,7 @@ func (server *Server) virtualListViewEntries(
 				return fmt.Errorf("parse VLV DN %q: %w", item.dn, err)
 			}
 			database := &state.runtime.databases[routes[item.route].databaseIndex]
-			tx := storage.ReaderInPartition(reader, database.partition)
+			tx := readerForDatabase(reader, *database)
 			entry, err := tx.Get(dn)
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				continue
@@ -348,6 +367,12 @@ func (server *Server) virtualListViewEntries(
 			entry, err = collectivePlans.apply(database.partition, tx, entry)
 			if err != nil {
 				return err
+			}
+			if !manageDsaIT {
+				entry, err = nestGroupPlans.project(*database, entry)
+				if err != nil {
+					return err
+				}
 			}
 			entry, err = withSyncProviderContextCSNs(
 				reader,
@@ -368,15 +393,19 @@ func (server *Server) virtualListViewEntries(
 			) {
 				continue
 			}
+			responseEntry, err := collectResponses.apply(*database, entry)
+			if err != nil {
+				return err
+			}
 			readable := server.attributesWithPrivilege(
 				state.runtime,
 				tx,
 				state.boundDN,
-				entry,
+				responseEntry,
 				acl.Read,
-				false,
+				request.TypesOnly,
 			)
-			readable = projectDDSRemainingTTL(readable, entry, time.Now())
+			readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
 			selected := server.selectEntry(
 				state.runtime,
 				readable,

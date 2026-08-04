@@ -157,6 +157,26 @@ func TestParseSyncConsumerConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestParseSyncConsumerConfigDSEEChangelog(t *testing.T) {
+	t.Parallel()
+
+	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
+	config, err := parseSyncConsumerConfig(
+		`rid=75 provider=ldap://provider `+
+			`searchbase="dc=example,dc=com" `+
+			`logbase="cn=changelog" syncdata=changelog`,
+		"database/example",
+		[]directory.DN{suffix},
+	)
+	if err != nil {
+		t.Fatalf("parse DSEE changelog config: %v", err)
+	}
+	if config.syncData != "changelog" || config.logBase == nil ||
+		config.logBase.String() != "cn=changelog" || config.logFilter != nil {
+		t.Fatalf("DSEE changelog config = %#v", config)
+	}
+}
+
 func TestParseSyncConsumerConfigPreservesEmptyCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -307,6 +327,12 @@ func TestParseSyncConsumerConfigRejectsInvalidValues(t *testing.T) {
 			value: `rid=1 provider=ldap://provider ` +
 				`searchbase="dc=example,dc=com" syncdata=accesslog`,
 			want: "requires logbase and logfilter",
+		},
+		{
+			name: "changelog logbase",
+			value: `rid=1 provider=ldap://provider ` +
+				`searchbase="dc=example,dc=com" syncdata=changelog`,
+			want: "requires logbase",
 		},
 		{
 			name: "attribute include",

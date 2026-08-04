@@ -197,6 +197,12 @@ func TestImplicitTLSHandshakeFailureCleansUpConnection(t *testing.T) {
 	if connectionCount != 0 {
 		t.Fatalf("tracked connection count = %d, want 0", connectionCount)
 	}
+	instance.metaTransportCachesMu.Lock()
+	cacheCount := len(instance.metaTransportCaches)
+	instance.metaTransportCachesMu.Unlock()
+	if cacheCount != 0 {
+		t.Fatalf("tracked meta transport cache count = %d, want 0", cacheCount)
+	}
 }
 
 func TestNewRejectsImplicitTLSWithoutTransport(t *testing.T) {

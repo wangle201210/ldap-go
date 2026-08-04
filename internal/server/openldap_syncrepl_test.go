@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -758,16 +759,25 @@ func (consumer *openLDAPSyncreplConsumer) start(t *testing.T) func() {
 	if err := command.Start(); err != nil {
 		t.Fatalf("start OpenLDAP syncrepl consumer: %v", err)
 	}
-	stopped := false
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
+	var stopOnce sync.Once
 	stop := func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		if command.Process != nil {
-			_ = command.Process.Kill()
-		}
-		_ = command.Wait()
+		stopOnce.Do(func() {
+			if command.Process != nil {
+				_ = command.Process.Signal(os.Interrupt)
+			}
+			select {
+			case <-waitDone:
+			case <-time.After(5 * time.Second):
+				if command.Process != nil {
+					_ = command.Process.Kill()
+				}
+				<-waitDone
+			}
+		})
 	}
 	t.Cleanup(stop)
 

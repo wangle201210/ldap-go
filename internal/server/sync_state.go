@@ -615,26 +615,35 @@ func withSyncProviderContextCSNs(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) (directory.Entry, error) {
-	if !database.syncProvider || len(database.suffixes) == 0 {
-		return entry, nil
-	}
 	entryDN, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	if !database.suffixes[0].Equal(entryDN) {
+	if len(database.suffixes) == 0 ||
+		!database.suffixes[0].Equal(entryDN) {
 		return entry, nil
 	}
-	state, err := syncContextCSNs(reader, database.partition)
-	if err != nil {
-		return directory.Entry{}, err
+	if database.syncProvider {
+		state, err := syncContextCSNs(reader, database.partition)
+		if err != nil {
+			return directory.Entry{}, err
+		}
+		values := make([][]byte, 0, len(state))
+		for _, rawCSN := range orderedSyncCSNs(state) {
+			values = append(values, []byte(rawCSN))
+		}
+		entry = entry.Clone()
+		entry.ReplaceValues("contextCSN", values)
 	}
-	values := make([][]byte, 0, len(state))
-	for _, rawCSN := range orderedSyncCSNs(state) {
-		values = append(values, []byte(rawCSN))
+	if database.accesslog != nil {
+		if !database.syncProvider {
+			entry = entry.Clone()
+		}
+		entry.ReplaceValues(
+			"auditContext",
+			stringValues(database.accesslog.targetSuffix.String()),
+		)
 	}
-	entry = entry.Clone()
-	entry.ReplaceValues("contextCSN", values)
 	return entry, nil
 }
 
@@ -982,6 +991,22 @@ func (server *Server) observeRuntimeCSNs(
 }
 
 func (server *Server) activateRuntime(runtime *runtimeState) {
+	if runtime == nil {
+		return
+	}
+	server.runtimeActivationMu.Lock()
+	defer server.runtimeActivationMu.Unlock()
+	if runtime.revision == 0 {
+		runtime.revision = server.nextRuntimeRevision()
+	} else {
+		server.observeRuntimeRevision(runtime.revision)
+	}
+	previous := server.runtime.Load()
+	if previous != nil && runtime.revision <= previous.revision {
+		return
+	}
+	server.prepareMetaTransportLifecycle(previous, runtime)
+	server.configureMetaTransportOwners(metaBackendTransportOwners(runtime))
 	server.syncChanges.configure(runtime)
 	server.runtime.Store(runtime)
 	server.syncConsumers.configure(runtime)
@@ -989,6 +1014,60 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	case server.ddsWake <- struct{}{}:
 	default:
 	}
+	select {
+	case server.accesslogWake <- struct{}{}:
+	default:
+	}
+}
+
+func (server *Server) nextRuntimeRevision() uint64 {
+	return server.runtimeSequence.Add(1)
+}
+
+func (server *Server) observeRuntimeRevision(revision uint64) {
+	for {
+		current := server.runtimeSequence.Load()
+		if revision <= current || server.runtimeSequence.CompareAndSwap(current, revision) {
+			return
+		}
+	}
+}
+
+func (server *Server) configureMetaTransportOwners(active map[string]struct{}) {
+	server.metaTransports.configureOwners(active)
+	server.metaTransportCachesMu.Lock()
+	caches := make([]*metaTransportCache, 0, len(server.metaTransportCaches))
+	for cache := range server.metaTransportCaches {
+		caches = append(caches, cache)
+	}
+	server.metaTransportCachesMu.Unlock()
+	for _, cache := range caches {
+		cache.configureOwners(active)
+	}
+}
+
+func (server *Server) registerMetaTransportCache(cache *metaTransportCache) {
+	if cache == nil {
+		return
+	}
+	server.runtimeActivationMu.Lock()
+	defer server.runtimeActivationMu.Unlock()
+	cache.configureOwners(metaBackendTransportOwners(server.runtime.Load()))
+	server.metaTransportCachesMu.Lock()
+	if server.metaTransportCaches == nil {
+		server.metaTransportCaches = make(map[*metaTransportCache]struct{})
+	}
+	server.metaTransportCaches[cache] = struct{}{}
+	server.metaTransportCachesMu.Unlock()
+}
+
+func (server *Server) unregisterMetaTransportCache(cache *metaTransportCache) {
+	if cache == nil {
+		return
+	}
+	server.metaTransportCachesMu.Lock()
+	delete(server.metaTransportCaches, cache)
+	server.metaTransportCachesMu.Unlock()
 }
 
 func (server *Server) observeCSN(csn openLDAPCSN) {

@@ -170,6 +170,18 @@ func TestBuiltinOpenLDAPCSNAttributes(t *testing.T) {
 		contextCSN.Usage != UsageDSAOperation {
 		t.Fatalf("contextCSN = %#v, found %t", contextCSN, ok)
 	}
+	lastChangeNumber, ok := registry.AttributeType("lastChangeNumber")
+	if !ok || lastChangeNumber.OID != "1.3.6.1.4.1.4203.666.1.28" ||
+		lastChangeNumber.Syntax != SyntaxInteger ||
+		!lastChangeNumber.SingleValue ||
+		!lastChangeNumber.NoUserModification ||
+		lastChangeNumber.Usage != UsageDirectoryOperation {
+		t.Fatalf(
+			"lastChangeNumber = %#v, found %t",
+			lastChangeNumber,
+			ok,
+		)
+	}
 
 	modern := "20260730010101.000001Z#00000A#001#00000B"
 	legacy := "20260730010101Z#00000a#01#00000b"
@@ -228,6 +240,62 @@ func TestBuiltinOpenLDAPCSNAttributes(t *testing.T) {
 		invalid := entry.Clone()
 		invalid.ReplaceValues("contextCSN", byteValues(malformed))
 		assertViolation(t, registry.ValidateEntry(invalid), ViolationSyntax)
+	}
+}
+
+func TestBuiltinOpenLDAPACI(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	attribute, ok := registry.AttributeType("OpenLDAPaci")
+	if !ok || !attribute.Hidden || attribute.Syntax != SyntaxOpenLDAPACI ||
+		attribute.Equality != "OpenLDAPaciMatch" ||
+		attribute.Usage != UsageDirectoryOperation ||
+		!registry.IsACIValued("OpenLDAPaci") {
+		t.Fatalf("OpenLDAPaci = %#v, found %t", attribute, ok)
+	}
+	roleOccupant, ok := registry.AttributeType("roleOccupant")
+	if !ok || !registry.IsDNReferenceValued("roleOccupant") {
+		t.Fatalf("roleOccupant = %#v, found %t", roleOccupant, ok)
+	}
+	allowed, known := registry.ObjectClassAllowsAttribute("organizationalRole", "roleOccupant")
+	if !known || !allowed {
+		t.Fatal("organizationalRole does not allow roleOccupant")
+	}
+
+	valid := directory.Entry{
+		DN: "dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("domain")},
+			{Description: "dc", Values: byteValues("example")},
+			{
+				Description: "OpenLDAPaci",
+				Values: byteValues(
+					"0#subtree#grant;d,c,s,r;[all]#public#",
+				),
+			},
+		},
+	}
+	if err := registry.ValidateEntry(valid); err != nil {
+		t.Fatalf("ValidateEntry(valid ACI): %v", err)
+	}
+	invalid := valid.Clone()
+	invalid.ReplaceValues("OpenLDAPaci", byteValues("not an ACI"))
+	if err := registry.ValidateEntry(invalid); err == nil {
+		t.Fatal("ValidateEntry() accepted invalid OpenLDAP ACI syntax")
+	}
+
+	left := []byte("0#SUBTREE#GRANT;r;CN#ACCESS-ID#UID=Alice,DC=Example,DC=COM")
+	right := []byte("0#subtree#grant;r;cn#access-id#uid=alice,dc=example,dc=com")
+	comparison, err := registry.Compare("OpenLDAPaci", "", left, right)
+	if err != nil {
+		t.Fatalf("Compare(OpenLDAPaci): %v", err)
+	}
+	if comparison != 0 {
+		t.Fatalf("Compare(OpenLDAPaci) = %d, want 0", comparison)
 	}
 }
 
@@ -378,5 +446,34 @@ func TestBuiltinDynamicDirectorySchema(t *testing.T) {
 	}
 	if err := registry.ValidateEntry(entry); err != nil {
 		t.Fatalf("ValidateEntry(dynamicObject): %v", err)
+	}
+}
+
+func TestBuiltinDynamicGroupSchema(t *testing.T) {
+	t.Parallel()
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	for _, attribute := range []string{
+		"memberURL",
+		"dgIdentity",
+		"dgAuthz",
+		"dgMemberOf",
+	} {
+		if _, found := registry.AttributeType(attribute); !found {
+			t.Fatalf("missing dynamic-group attribute %q", attribute)
+		}
+	}
+	for _, objectClass := range []string{"groupOfURLs", "dgIdentityAux"} {
+		if _, found := registry.ObjectClass(objectClass); !found {
+			t.Fatalf("missing dynamic-group objectClass %q", objectClass)
+		}
+	}
+	if !registry.AttributeDescriptionSubtype("memberURL", "labeledURI") {
+		t.Fatal("memberURL is not a labeledURI subtype")
+	}
+	if !registry.IsDNValued("dgIdentity") || !registry.IsDNValued("dgMemberOf") {
+		t.Fatal("dynamic-group DN attributes do not use DN syntax")
 	}
 }

@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
@@ -54,6 +59,21 @@ type syncConsumerCRAMMD5 struct {
 type syncConsumerSCRAM struct {
 	conversation *scram.ClientConversation
 	started      bool
+}
+
+type syncConsumerDIGESTMD5 struct {
+	authenticationID string
+	authorizationID  string
+	realm            string
+	host             string
+	password         []byte
+	maxBufferSize    uint32
+	random           io.Reader
+
+	started         bool
+	done            bool
+	valid           bool
+	expectedRspauth string
 }
 
 func defaultSyncConsumerSASLSecurityProperties() syncConsumerSASLSecurityProperties {
@@ -189,8 +209,16 @@ func parseSyncConsumerSASLUintProperty(
 func bindSyncConsumerSASL(
 	transport *syncConsumerTransport,
 	config syncConsumerConfig,
+	provider ...string,
 ) error {
-	mechanism, conversation, err := newSyncConsumerSASLConversation(config)
+	providerURL := ""
+	if len(provider) > 0 {
+		providerURL = provider[0]
+	}
+	mechanism, conversation, err := newSyncConsumerSASLConversationForProvider(
+		config,
+		providerURL,
+	)
 	if err != nil {
 		return err
 	}
@@ -271,6 +299,13 @@ func bindSyncConsumerSASL(
 func newSyncConsumerSASLConversation(
 	config syncConsumerConfig,
 ) (string, syncConsumerSASLConversation, error) {
+	return newSyncConsumerSASLConversationForProvider(config, "")
+}
+
+func newSyncConsumerSASLConversationForProvider(
+	config syncConsumerConfig,
+	provider string,
+) (string, syncConsumerSASLConversation, error) {
 	mechanism := strings.ToUpper(config.saslMechanism)
 	switch mechanism {
 	case "EXTERNAL":
@@ -320,6 +355,37 @@ func newSyncConsumerSASLConversation(
 			authenticationID: config.authenticationID,
 			password:         bytes.Clone(config.credentials),
 		}, nil
+	case "DIGEST-MD5":
+		if config.authenticationID == "" {
+			return "", nil, errors.New(
+				"SASL DIGEST-MD5 requires authcid",
+			)
+		}
+		for name, value := range map[string]string{
+			"authcid": config.authenticationID,
+			"authzid": config.authorizationID,
+			"realm":   config.realm,
+		} {
+			if !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+				return "", nil, fmt.Errorf(
+					"SASL DIGEST-MD5 %s is not valid UTF-8",
+					name,
+				)
+			}
+		}
+		host, err := syncConsumerDIGESTMD5Host(provider)
+		if err != nil {
+			return "", nil, err
+		}
+		return mechanism, &syncConsumerDIGESTMD5{
+			authenticationID: config.authenticationID,
+			authorizationID:  config.authorizationID,
+			realm:            config.realm,
+			host:             host,
+			password:         bytes.Clone(config.credentials),
+			maxBufferSize:    config.securityProperties.maxBufferSize,
+			random:           rand.Reader,
+		}, nil
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
 		if config.authenticationID == "" {
 			return "", nil, fmt.Errorf(
@@ -350,10 +416,25 @@ func newSyncConsumerSASLConversation(
 		}, nil
 	default:
 		return "", nil, fmt.Errorf(
-			"SASL mechanism %q is not implemented",
+			"SASL mechanism %q is not supported by the built-in syncrepl client",
 			config.saslMechanism,
 		)
 	}
+}
+
+func syncConsumerDIGESTMD5Host(provider string) (string, error) {
+	if provider == "" {
+		return "localhost", nil
+	}
+	parsed, err := parseSyncConsumerProviderURL(provider)
+	if err != nil {
+		return "", fmt.Errorf("parse DIGEST-MD5 provider: %w", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host = "localhost"
+	}
+	return strings.ToLower(host), nil
 }
 
 func validateSyncConsumerSASLSecurity(
@@ -507,6 +588,247 @@ func (conversation *syncConsumerCRAMMD5) Done() bool {
 
 func (conversation *syncConsumerCRAMMD5) Valid() bool {
 	return conversation.done
+}
+
+func (conversation *syncConsumerDIGESTMD5) Initial() ([]byte, bool, error) {
+	if conversation.started {
+		return nil, false, errors.New("DIGEST-MD5 conversation already started")
+	}
+	conversation.started = true
+	return nil, false, nil
+}
+
+func (conversation *syncConsumerDIGESTMD5) Next(
+	challenge []byte,
+) ([]byte, error) {
+	if !conversation.started || conversation.done {
+		return nil, errors.New("unexpected DIGEST-MD5 challenge")
+	}
+	if conversation.expectedRspauth != "" {
+		return conversation.verifyServer(challenge)
+	}
+	return conversation.respond(challenge)
+}
+
+func (conversation *syncConsumerDIGESTMD5) respond(
+	challenge []byte,
+) ([]byte, error) {
+	directives, realms, err := parseSyncConsumerDIGESTMD5Challenge(challenge)
+	if err != nil {
+		return nil, err
+	}
+	nonce := directives["nonce"]
+	if nonce == "" {
+		return nil, errors.New("DIGEST-MD5 challenge has no nonce")
+	}
+	if algorithm := directives["algorithm"]; !strings.EqualFold(
+		algorithm,
+		"md5-sess",
+	) {
+		return nil, fmt.Errorf(
+			"DIGEST-MD5 challenge algorithm is %q, want md5-sess",
+			algorithm,
+		)
+	}
+	charset, charsetOffered := directives["charset"]
+	if charsetOffered &&
+		!strings.EqualFold(charset, "utf-8") {
+		return nil, fmt.Errorf(
+			"DIGEST-MD5 challenge charset is %q, want utf-8",
+			charset,
+		)
+	}
+	if stale, present := directives["stale"]; present &&
+		strings.EqualFold(stale, "true") {
+		return nil, errors.New("DIGEST-MD5 server marked the nonce stale")
+	}
+	qop := directives["qop"]
+	if qop == "" {
+		qop = saslDigestMD5AuthenticationQOP
+	}
+	if !syncConsumerDIGESTMD5QOPContains(qop, saslDigestMD5AuthenticationQOP) {
+		return nil, fmt.Errorf(
+			"DIGEST-MD5 challenge qop %q does not offer auth",
+			qop,
+		)
+	}
+	if rawMax, present := directives["maxbuf"]; present {
+		maximum, err := strconv.ParseUint(rawMax, 10, 32)
+		if err != nil || maximum <= 16 || maximum > maxSASLDigestMD5BufferSize {
+			return nil, fmt.Errorf(
+				"DIGEST-MD5 challenge maxbuf %q is invalid",
+				rawMax,
+			)
+		}
+	}
+	if conversation.maxBufferSize != 0 &&
+		(conversation.maxBufferSize <= 16 ||
+			conversation.maxBufferSize > maxSASLDigestMD5BufferSize) {
+		return nil, fmt.Errorf(
+			"DIGEST-MD5 maxbuf %d is outside [17..%d]",
+			conversation.maxBufferSize,
+			maxSASLDigestMD5BufferSize,
+		)
+	}
+
+	realm := conversation.realm
+	if realm == "" && len(realms) > 0 {
+		realm = realms[0]
+	}
+	if conversation.realm != "" && len(realms) > 0 &&
+		!slicesContainsExact(realms, conversation.realm) {
+		return nil, fmt.Errorf(
+			"DIGEST-MD5 realm %q was not offered by the server",
+			conversation.realm,
+		)
+	}
+
+	entropy := make([]byte, 24)
+	if _, err := io.ReadFull(conversation.random, entropy); err != nil {
+		return nil, fmt.Errorf("generate DIGEST-MD5 cnonce: %w", err)
+	}
+	cnonce := base64.RawStdEncoding.EncodeToString(entropy)
+	clear(entropy)
+	response := saslDigestMD5Response{
+		username:         conversation.authenticationID,
+		realm:            realm,
+		nonce:            nonce,
+		cnonce:           cnonce,
+		nonceCount:       1,
+		qop:              saslDigestMD5AuthenticationQOP,
+		digestURI:        "ldap/" + conversation.host,
+		authorization:    conversation.authorizationID,
+		hasAuthorization: conversation.authorizationID != "",
+	}
+	secret := calculateSASLDigestMD5Secret(
+		response.username,
+		response.realm,
+		conversation.password,
+		true,
+	)
+	digest, rspauth := calculateSASLDigestMD5Exchange(secret, response)
+	clear(secret)
+	conversation.expectedRspauth = rspauth
+	return formatSyncConsumerDIGESTMD5Response(
+		response,
+		digest,
+		conversation.maxBufferSize,
+		charsetOffered,
+	), nil
+}
+
+func (conversation *syncConsumerDIGESTMD5) verifyServer(
+	challenge []byte,
+) ([]byte, error) {
+	directives, err := parseSASLDigestMD5Directives(challenge)
+	if err != nil {
+		return nil, fmt.Errorf("parse DIGEST-MD5 rspauth: %w", err)
+	}
+	if len(directives) != 1 {
+		return nil, errors.New("DIGEST-MD5 final challenge must only contain rspauth")
+	}
+	rspauth, present := directives["rspauth"]
+	if !present || len(rspauth) != len(conversation.expectedRspauth) ||
+		subtle.ConstantTimeCompare(
+			[]byte(rspauth),
+			[]byte(conversation.expectedRspauth),
+		) != 1 {
+		return nil, errors.New("DIGEST-MD5 server rspauth is invalid")
+	}
+	conversation.done = true
+	conversation.valid = true
+	clear(conversation.password)
+	return nil, nil
+}
+
+func (conversation *syncConsumerDIGESTMD5) Done() bool {
+	return conversation.done
+}
+
+func (conversation *syncConsumerDIGESTMD5) Valid() bool {
+	return conversation.valid
+}
+
+func parseSyncConsumerDIGESTMD5Challenge(
+	challenge []byte,
+) (map[string]string, []string, error) {
+	if len(challenge) == 0 || len(challenge) >= maxSASLDigestMD5ChallengeSize {
+		return nil, nil, errors.New("DIGEST-MD5 challenge size is invalid")
+	}
+	parsed, err := parseSASLDigestMD5DirectiveList(challenge)
+	if err != nil {
+		return nil, nil, err
+	}
+	directives := make(map[string]string, len(parsed))
+	var realms []string
+	for _, directive := range parsed {
+		if directive.name == "realm" {
+			realms = append(realms, directive.value)
+			continue
+		}
+		if _, exists := directives[directive.name]; exists {
+			return nil, nil, fmt.Errorf(
+				"DIGEST-MD5 challenge directive %q is duplicated",
+				directive.name,
+			)
+		}
+		directives[directive.name] = directive.value
+	}
+	return directives, realms, nil
+}
+
+func syncConsumerDIGESTMD5QOPContains(values, wanted string) bool {
+	for _, value := range strings.Split(values, ",") {
+		if strings.EqualFold(strings.TrimSpace(value), wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesContainsExact(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func formatSyncConsumerDIGESTMD5Response(
+	response saslDigestMD5Response,
+	digest string,
+	maxBufferSize uint32,
+	charsetUTF8 bool,
+) []byte {
+	var value strings.Builder
+	fmt.Fprintf(
+		&value,
+		`username="%s",realm="%s",nonce="%s",cnonce="%s",`+
+			`nc=%08x,qop=%s,digest-uri="%s",response=%s`,
+		quoteSASLDigestMD5Value(response.username),
+		quoteSASLDigestMD5Value(response.realm),
+		quoteSASLDigestMD5Value(response.nonce),
+		quoteSASLDigestMD5Value(response.cnonce),
+		response.nonceCount,
+		response.qop,
+		quoteSASLDigestMD5Value(response.digestURI),
+		digest,
+	)
+	if response.hasAuthorization {
+		fmt.Fprintf(
+			&value,
+			`,authzid="%s"`,
+			quoteSASLDigestMD5Value(response.authorization),
+		)
+	}
+	if maxBufferSize != 0 {
+		fmt.Fprintf(&value, ",maxbuf=%d", maxBufferSize)
+	}
+	if charsetUTF8 {
+		value.WriteString(",charset=utf-8")
+	}
+	return []byte(value.String())
 }
 
 func (conversation *syncConsumerSCRAM) Initial() ([]byte, bool, error) {

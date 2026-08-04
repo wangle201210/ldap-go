@@ -334,19 +334,17 @@ func TestLDAPBindAbortsOutstandingTransaction(t *testing.T) {
 		),
 		int64(ldapwire.ResultSuccess),
 	)
-	assertRawLDAPResult(
+	bindResponse := sendRawLDAPOperation(
 		t,
-		sendRawLDAPOperation(
-			t,
-			connection,
-			4,
-			rawSimpleBindRequest(
-				"cn=admin,dc=example,dc=com",
-				"admin-secret",
-			),
+		connection,
+		4,
+		rawSimpleBindRequest(
+			"cn=admin,dc=example,dc=com",
+			"admin-secret",
 		),
-		int64(ldapwire.ResultSuccess),
 	)
+	assertRawLDAPMessageID(t, bindResponse, 4)
+	assertRawLDAPResult(t, bindResponse, int64(ldapwire.ResultSuccess))
 	response := endRawLDAPTransaction(t, connection, 5, true, identifier)
 	assertRawLDAPResult(
 		t,

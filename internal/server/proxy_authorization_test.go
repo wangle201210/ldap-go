@@ -536,6 +536,61 @@ func TestLDAPProxyAuthorizationUsesEffectiveIdentityPerOperation(
 	}
 }
 
+func TestLDAPProxyAuthorizationACLUsesRealIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedProxyAuthorizationDirectory(t, store, "", nil, nil)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn := mustProxyAuthorizationDN("olcDatabase={1}mdb,cn=config")
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcAccess", stringValues(
+			`{0}to attrs=userPassword by anonymous auth by * none`,
+			`{1}to dn.base="`+aliceDN+`" by realdn.exact="`+proxyAuthorizationRootDN+`" read by * none`,
+			`{2}to * by * none`,
+		))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("configure real identity ACL: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       proxyAuthorizationRootDN,
+		RootPassword: []byte(proxyAuthorizationRootPassword),
+	})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind(proxyAuthorizationRootDN, proxyAuthorizationRootPassword); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+
+	result, err := client.Search(ldap.NewSearchRequest(
+		aliceDN,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"uid", "cn"},
+		[]ldap.Control{proxyAuthorizationControl("dn:"+aliceDN, true)},
+	))
+	if err != nil {
+		t.Fatalf("proxied real-DN Search(): %v", err)
+	}
+	if len(result.Entries) != 1 || result.Entries[0].DN != aliceDN {
+		t.Fatalf("proxied real-DN entries = %#v", result.Entries)
+	}
+}
+
 func TestLDAPProxyAuthorizationSelfAndAnonymousNeedNoPolicy(t *testing.T) {
 	t.Parallel()
 

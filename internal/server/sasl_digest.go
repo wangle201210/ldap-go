@@ -17,11 +17,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
-	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 const (
@@ -55,6 +53,11 @@ type saslDigestMD5Response struct {
 	response         string
 	authorization    string
 	hasAuthorization bool
+}
+
+type saslDigestMD5Directive struct {
+	name  string
+	value string
 }
 
 type saslDigestMD5Credentials struct {
@@ -163,10 +166,16 @@ func (server *Server) handleSASLDigestMD5Step(
 		authenticationID,
 	)
 	if err != nil {
-		clearSASLSession(state)
 		if !errors.Is(err, errSASLDigestMD5CredentialsUnavailable) {
-			return err
+			return server.writeSASLAuxiliaryLookupFailure(
+				connection,
+				state,
+				message.ID,
+				session.mechanism,
+				err,
+			)
 		}
+		clearSASLSession(state)
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
 	defer credentials.clear()
@@ -251,63 +260,37 @@ func (server *Server) lookupSASLDigestMD5Credentials(
 	credentials := saslDigestMD5Credentials{
 		authenticationDN: authenticationDN,
 	}
-	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := storage.ReaderInPartition(reader, database.partition)
-		entry, err := tx.Get(authenticationDN)
-		if errors.Is(err, storage.ErrEntryNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-
-		if server.allowed(
-			runtime,
-			tx,
-			"",
-			entry,
-			"userPassword",
-			nil,
-			acl.Auth,
-		) {
-			for _, stored := range entry.Values("userPassword") {
-				password, ok := auth.ExtractCleartextPassword(stored)
-				if !ok {
-					continue
-				}
-				credentials.password = password
-				return nil
-			}
-		}
-		if !server.allowed(
-			runtime,
-			tx,
-			"",
-			entry,
-			saslDigestMD5SecretAttribute,
-			nil,
-			acl.Auth,
-		) {
-			return nil
-		}
-		for _, stored := range entry.Values(saslDigestMD5SecretAttribute) {
-			if len(stored) != md5.Size {
-				continue
-			}
-			credentials.secret = bytes.Clone(stored)
-			return nil
-		}
-		return nil
-	})
+	entry, err := server.lookupSASLCredentialEntry(
+		ctx,
+		runtime,
+		authenticationDN,
+		[]string{"userPassword", saslDigestMD5SecretAttribute},
+	)
 	if err != nil {
-		credentials.clear()
+		if errors.Is(err, errSASLCredentialEntryUnavailable) {
+			err = errSASLDigestMD5CredentialsUnavailable
+		}
 		return saslDigestMD5Credentials{}, err
 	}
-	if credentials.password == nil && credentials.secret == nil {
-		return saslDigestMD5Credentials{},
-			errSASLDigestMD5CredentialsUnavailable
+	defer clearSASLCredentialEntry(&entry)
+
+	for _, stored := range entry.Values("userPassword") {
+		password, ok := auth.ExtractCleartextPassword(stored)
+		if !ok {
+			continue
+		}
+		credentials.password = password
+		return credentials, nil
 	}
-	return credentials, nil
+	for _, stored := range entry.Values(saslDigestMD5SecretAttribute) {
+		if len(stored) != md5.Size {
+			continue
+		}
+		credentials.secret = bytes.Clone(stored)
+		return credentials, nil
+	}
+	return saslDigestMD5Credentials{},
+		errSASLDigestMD5CredentialsUnavailable
 }
 
 func parseSASLDigestMD5Response(
@@ -417,11 +400,31 @@ func parseSASLDigestMD5Response(
 func parseSASLDigestMD5Directives(
 	input []byte,
 ) (map[string]string, error) {
+	parsed, err := parseSASLDigestMD5DirectiveList(input)
+	if err != nil {
+		return nil, err
+	}
+	directives := make(map[string]string, len(parsed))
+	for _, directive := range parsed {
+		if _, exists := directives[directive.name]; exists {
+			return nil, fmt.Errorf(
+				"DIGEST-MD5 directive %q is duplicated",
+				directive.name,
+			)
+		}
+		directives[directive.name] = directive.value
+	}
+	return directives, nil
+}
+
+func parseSASLDigestMD5DirectiveList(
+	input []byte,
+) ([]saslDigestMD5Directive, error) {
 	if bytes.IndexByte(input, 0) >= 0 {
 		return nil, errors.New("DIGEST-MD5 response contains NUL")
 	}
 	text := string(input)
-	directives := make(map[string]string)
+	var directives []saslDigestMD5Directive
 	index := 0
 	skipLWS := func() {
 		for index < len(text) && isSASLDigestMD5LWS(text[index]) {
@@ -493,13 +496,10 @@ func parseSASLDigestMD5Directives(
 			value = text[valueStart:index]
 		}
 		skipLWS()
-		if _, exists := directives[name]; exists {
-			return nil, fmt.Errorf(
-				"DIGEST-MD5 directive %q is duplicated",
-				name,
-			)
-		}
-		directives[name] = value
+		directives = append(directives, saslDigestMD5Directive{
+			name:  name,
+			value: value,
+		})
 		if index == len(text) {
 			break
 		}

@@ -515,7 +515,7 @@ func (server *Server) validateUniqueAttributes(
 			}
 			duplicate, err := uniqueSearch(
 				runtime,
-				storage.ReaderInPartition(reader, database.partition),
+				readerForDatabase(reader, database),
 				ignoredDN,
 				base,
 				uri.scope,

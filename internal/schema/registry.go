@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/wangle201210/ldap-go/internal/aci"
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
@@ -494,6 +495,13 @@ func (registry *Registry) AttributeType(name string) (AttributeType, bool) {
 	return *attribute, true
 }
 
+func (registry *Registry) HasAttributeType(name string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	_, ok := registry.attributes[schemaKey(baseAttributeDescription(name))]
+	return ok
+}
+
 func (registry *Registry) EffectiveAttributeType(
 	name string,
 ) (AttributeType, bool, error) {
@@ -576,6 +584,41 @@ func (registry *Registry) ObjectClass(name string) (ObjectClass, bool) {
 		return ObjectClass{}, false
 	}
 	return *objectClass, true
+}
+
+// ObjectClassAllowsAttribute reports whether an attribute is included in an
+// object class's inherited MUST or MAY set. The second result distinguishes an
+// unknown class from a known class that does not include the attribute.
+func (registry *Registry) ObjectClassAllowsAttribute(
+	objectClassName,
+	attributeName string,
+) (bool, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	objectClass, ok := registry.objectClasses[schemaKey(objectClassName)]
+	if !ok {
+		return false, false
+	}
+	if strings.EqualFold(objectClass.OID, "1.3.6.1.4.1.1466.101.120.111") {
+		return true, true
+	}
+	classes := make(map[string]*ObjectClass)
+	if err := registry.collectObjectClass(
+		objectClass,
+		classes,
+		make(map[string]bool),
+	); err != nil {
+		return false, true
+	}
+	for _, class := range classes {
+		for _, description := range append(class.Must, class.May...) {
+			if registry.attributeDescriptionSubtype(attributeName, description) {
+				return true, true
+			}
+		}
+	}
+	return false, true
 }
 
 func (registry *Registry) DITContentRule(name string) (DITContentRule, bool) {
@@ -671,6 +714,18 @@ func (registry *Registry) IsDNReferenceValued(attributeName string) bool {
 	}
 	return effective.Syntax == SyntaxDistinguishedName ||
 		effective.Syntax == SyntaxNameAndOptionalUID
+}
+
+func (registry *Registry) IsACIValued(attributeName string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return false
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	return err == nil && effective.Syntax == SyntaxOpenLDAPACI
 }
 
 func (registry *Registry) IsCollective(attributeName string) bool {
@@ -1048,6 +1103,15 @@ func (registry *Registry) Compare(
 	if rule == "" {
 		return 0, fmt.Errorf("attribute %q has no equality matching rule", attributeName)
 	}
+	if strings.EqualFold(attribute.OID, "2.5.4.0") &&
+		canonicalMatchingRule(rule) == "objectidentifiermatch" {
+		candidate, candidateFound := registry.objectClasses[schemaKey(strings.TrimSpace(string(left)))]
+		ancestor, ancestorFound := registry.objectClasses[schemaKey(strings.TrimSpace(string(right)))]
+		if candidateFound && ancestorFound &&
+			registry.isSubclass(candidate, ancestor, make(map[string]bool)) {
+			return 0, nil
+		}
+	}
 	return compareWithRule(rule, left, right)
 }
 
@@ -1073,6 +1137,29 @@ func (registry *Registry) NormalizeEqualityValue(
 		return bytes.Clone(value), nil
 	}
 	return normalizeWithRule(effective.Equality, value)
+}
+
+// ValidateAttributeValue checks a single value against the effective syntax
+// and optional length constraint of an attribute type.
+func (registry *Registry) ValidateAttributeValue(
+	attributeName string,
+	value []byte,
+) error {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return err
+	}
+	if err := validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
+		return fmt.Errorf("attribute %q: %w", attributeName, err)
+	}
+	return nil
 }
 
 func (registry *Registry) OrderingRule(
@@ -1306,6 +1393,7 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 	}
 	type requiredAttribute struct {
 		name        string
+		objectClass string
 		contentRule *DITContentRule
 	}
 	required := make(map[string]requiredAttribute)
@@ -1319,7 +1407,14 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 		}
 		for _, name := range objectClass.Must {
 			key := registry.attributeIdentifierKey(name)
-			required[key] = requiredAttribute{name: name}
+			requiringClass := structuralClass.Name()
+			if objectClass.Kind == ObjectClassAuxiliary {
+				requiringClass = objectClass.Name()
+			}
+			required[key] = requiredAttribute{
+				name:        registry.attributeTypeName(name),
+				objectClass: requiringClass,
+			}
 			allowed[key] = struct{}{}
 		}
 		for _, name := range objectClass.May {
@@ -1400,6 +1495,16 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 					Message:   err.Error(),
 				}
 			}
+			if effective.Syntax == SyntaxOpenLDAPACI {
+				parsed, _ := aci.Parse(string(value))
+				if err := registry.validateOpenLDAPACI(parsed); err != nil {
+					return &Violation{
+						Kind:      ViolationSyntax,
+						Attribute: attribute.Description,
+						Message:   err.Error(),
+					}
+				}
+			}
 		}
 	}
 	if entry.DN != "" {
@@ -1440,10 +1545,45 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 				}
 			}
 			return &Violation{
-				Kind:      ViolationMissingRequiredAttribute,
-				Attribute: requiredAttribute.name,
-				Message:   "required attribute is missing",
+				Kind: ViolationMissingRequiredAttribute,
+				Message: fmt.Sprintf(
+					"object class '%s' requires attribute '%s'",
+					requiredAttribute.objectClass,
+					requiredAttribute.name,
+				),
 			}
+		}
+	}
+	return nil
+}
+
+func (registry *Registry) validateOpenLDAPACI(value aci.Value) error {
+	for _, permission := range value.Permissions {
+		for _, selector := range permission.Attributes {
+			if selector.All {
+				continue
+			}
+			if _, ok := registry.attributes[schemaKey(baseAttributeDescription(selector.Name))]; !ok {
+				return fmt.Errorf("ACI references unknown attribute %q", selector.Name)
+			}
+		}
+	}
+	switch value.SubjectKind {
+	case aci.SubjectDNAttribute:
+		attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(value.Subject))]
+		if !ok {
+			return fmt.Errorf("ACI dnattr references unknown attribute %q", value.Subject)
+		}
+		effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+		if err != nil || effective.Syntax != SyntaxDistinguishedName {
+			return fmt.Errorf("ACI dnattr %q does not use DN syntax", value.Subject)
+		}
+	case aci.SubjectGroup, aci.SubjectRole:
+		if _, ok := registry.objectClasses[schemaKey(value.ObjectClass)]; !ok {
+			return fmt.Errorf("ACI references unknown group object class %q", value.ObjectClass)
+		}
+		if _, ok := registry.attributes[schemaKey(baseAttributeDescription(value.GroupAttribute))]; !ok {
+			return fmt.Errorf("ACI references unknown group attribute %q", value.GroupAttribute)
 		}
 	}
 	return nil
@@ -2109,6 +2249,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	switch syntax {
 	case "", SyntaxOctetString, SyntaxAuthenticationPassword:
 		return nil
+	case SyntaxOpenLDAPACI:
+		if _, err := aci.Parse(string(value)); err != nil {
+			return fmt.Errorf("value is not valid OpenLDAP ACI: %w", err)
+		}
 	case SyntaxDirectoryString:
 		if len(value) == 0 || !utf8.Valid(value) {
 			return errors.New("value is not a valid non-empty Directory String")
@@ -2284,6 +2428,8 @@ func isHexDigit(value byte) bool {
 
 func compareWithRule(rule string, left, right []byte) (int, error) {
 	switch canonicalMatchingRule(rule) {
+	case "openldapacimatch":
+		return aci.Compare(left, right)
 	case "caseignorematch",
 		"caseignoreia5match",
 		"caseignoreorderingmatch",
@@ -2393,6 +2539,8 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 
 func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 	switch canonicalMatchingRule(rule) {
+	case "openldapacimatch":
+		return aci.Normalize(value)
 	case "caseignorematch",
 		"caseignoreia5match",
 		"caseignoreorderingmatch",
@@ -2445,7 +2593,8 @@ func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 
 func supportedMatchingRule(rule string) bool {
 	switch canonicalMatchingRule(rule) {
-	case "caseignorematch",
+	case "openldapacimatch",
+		"caseignorematch",
 		"caseignoreia5match",
 		"caseignoreorderingmatch",
 		"caseignoreia5orderingmatch",
@@ -2483,6 +2632,8 @@ func supportedMatchingRule(rule string) bool {
 func canonicalMatchingRule(rule string) string {
 	normalized := strings.ToLower(strings.TrimSpace(rule))
 	switch normalized {
+	case "1.3.6.1.4.1.4203.666.4.2":
+		return "openldapacimatch"
 	case "2.5.13.0":
 		return "objectidentifiermatch"
 	case "2.5.13.29":

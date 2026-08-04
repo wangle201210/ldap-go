@@ -1,0 +1,26 @@
+FROM golang:1.25-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        libssl-dev \
+        libsasl2-dev \
+        libsasl2-modules \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --system --add safe.directory /workspace
+
+RUN printf '%s\n' 'export PATH=/usr/local/go/bin:/go/bin:$PATH' \
+    > /etc/profile.d/ldap-go-go-path.sh
+
+ENV PATH=/usr/local/go/bin:/go/bin:${PATH} \
+    GOPROXY=https://goproxy.cn,direct \
+    OPENLDAP_SOURCE_CACHE=/var/cache/ldap-go-openldap/source \
+    BUILD=/var/cache/ldap-go-openldap/build \
+    LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1
+
+WORKDIR /workspace
+
+CMD ["./scripts/test-openldap-full.sh"]

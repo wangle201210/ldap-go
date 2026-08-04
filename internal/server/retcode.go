@@ -422,7 +422,7 @@ func (server *Server) retcodeStoredEntryExists(
 ) (bool, error) {
 	found := false
 	err := server.viewStorage(ctx, func(reader storage.Reader) error {
-		_, err := storage.ReaderInPartition(reader, database.partition).Get(dn)
+		_, err := readerForDatabase(reader, database).Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -524,10 +524,7 @@ func (server *Server) tryRetcodeOperation(
 		} else {
 			found := false
 			err := server.viewStorage(ctx, func(reader storage.Reader) error {
-				stored, err := storage.ReaderInPartition(
-					reader,
-					database.partition,
-				).Get(target)
+				stored, err := readerForDatabase(reader, *database).Get(target)
 				if errors.Is(err, storage.ErrEntryNotFound) {
 					return nil
 				}
@@ -734,7 +731,7 @@ func (server *Server) writeRetcodeSyntheticSearch(
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		aclReader := reader
 		if database := databaseForDN(state.runtime, configuration.parent); database != nil {
-			aclReader = storage.ReaderInPartition(reader, database.partition)
+			aclReader = readerForDatabase(reader, *database)
 		}
 		for _, item := range configuration.items {
 			matches, err := server.filterMatches(

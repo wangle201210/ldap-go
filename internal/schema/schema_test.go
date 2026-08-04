@@ -2,6 +2,7 @@ package schema
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,6 +42,46 @@ func TestParseOpenLDAPSchemaDescriptions(t *testing.T) {
 		len(objectClass.May) != 2 ||
 		len(objectClass.Extensions["X-ORIGIN"]) != 2 {
 		t.Fatalf("objectClass = %#v", objectClass)
+	}
+}
+
+func TestSchemaDefinitionParsersRejectNonNumericOIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		description string
+		parse       func(string) error
+	}{
+		"attribute type": {
+			description: "( ' ' NAME 'invalid' )",
+			parse: func(description string) error {
+				_, err := ParseAttributeType(description)
+				return err
+			},
+		},
+		"object class": {
+			description: "( descriptor NAME 'invalid' )",
+			parse: func(description string) error {
+				_, err := ParseObjectClass(description)
+				return err
+			},
+		},
+		"DIT content rule": {
+			description: "( 1.02.3 NAME 'invalid' )",
+			parse: func(description string) error {
+				_, err := ParseDITContentRule(description)
+				return err
+			},
+		},
+	}
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := test.parse(test.description); err == nil {
+				t.Fatalf("parser accepted non-numeric OID in %q", test.description)
+			}
+		})
 	}
 }
 
@@ -301,6 +342,19 @@ func TestBuiltinNameAndOptionalUIDSchema(t *testing.T) {
 			},
 		}
 		assertViolation(t, registry.ValidateEntry(entry), ViolationSyntax)
+	}
+}
+
+func TestBuiltinLabeledURIObjectSchema(t *testing.T) {
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	objectClass, found := registry.ObjectClass("labeledURIObject")
+	if !found || objectClass.OID != "1.3.6.1.4.1.250.3.15" ||
+		objectClass.Kind != ObjectClassAuxiliary ||
+		!slices.Contains(objectClass.May, "labeledURI") {
+		t.Fatalf("labeledURIObject = %#v, found %t", objectClass, found)
 	}
 }
 
@@ -609,6 +663,94 @@ func TestNormalizeEqualityValue(t *testing.T) {
 	}
 	if len(opaque) != 3 || opaque[0] != 0 || opaque[1] != 1 || opaque[2] != 2 {
 		t.Fatalf("normalized jpegPhoto = %v", opaque)
+	}
+}
+
+func TestObjectClassEqualityMatchesSuperclasses(t *testing.T) {
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+
+	comparison, err := registry.Compare(
+		"objectClass",
+		"",
+		[]byte("auditModify"),
+		[]byte("auditWriteObject"),
+	)
+	if err != nil {
+		t.Fatalf("Compare(auditModify, auditWriteObject): %v", err)
+	}
+	if comparison != 0 {
+		t.Fatalf("Compare(auditModify, auditWriteObject) = %d, want 0", comparison)
+	}
+
+	comparison, err = registry.Compare(
+		"2.5.4.0",
+		"2.5.13.0",
+		[]byte("1.3.6.1.4.1.4203.666.11.5.2.9"),
+		[]byte("auditObject"),
+	)
+	if err != nil {
+		t.Fatalf("Compare(auditModify OID, auditObject): %v", err)
+	}
+	if comparison != 0 {
+		t.Fatalf("Compare(auditModify OID, auditObject) = %d, want 0", comparison)
+	}
+
+	comparison, err = registry.Compare(
+		"objectClass",
+		"",
+		[]byte("auditObject"),
+		[]byte("auditModify"),
+	)
+	if err != nil {
+		t.Fatalf("Compare(auditObject, auditModify): %v", err)
+	}
+	if comparison == 0 {
+		t.Fatal("a superclass must not match a subclass assertion")
+	}
+}
+
+func TestObjectClassAttributeSetsAndACLPseudoAttributes(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	tests := []struct {
+		class     string
+		attribute string
+		allowed   bool
+		known     bool
+	}{
+		{class: "person", attribute: "cn", allowed: true, known: true},
+		{class: "inetOrgPerson", attribute: "cn", allowed: true, known: true},
+		{class: "inetOrgPerson", attribute: "mail", allowed: true, known: true},
+		{class: "person", attribute: "mail", known: true},
+		{class: "labeledURIObject", attribute: "memberURL", allowed: true, known: true},
+		{class: "extensibleObject", attribute: "entry", allowed: true, known: true},
+		{class: "missingClass", attribute: "cn"},
+	}
+	for _, test := range tests {
+		allowed, known := registry.ObjectClassAllowsAttribute(test.class, test.attribute)
+		if allowed != test.allowed || known != test.known {
+			t.Errorf(
+				"ObjectClassAllowsAttribute(%q, %q) = (%v, %v), want (%v, %v)",
+				test.class,
+				test.attribute,
+				allowed,
+				known,
+				test.allowed,
+				test.known,
+			)
+		}
+	}
+	for _, attribute := range []string{"entry", "children"} {
+		if !registry.HasAttributeType(attribute) || !registry.IsOperational(attribute) {
+			t.Errorf("ACL pseudo-attribute %q is not registered as operational", attribute)
+		}
 	}
 }
 

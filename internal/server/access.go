@@ -26,16 +26,55 @@ func (server *Server) allowed(
 	value []byte,
 	privilege acl.Privilege,
 ) bool {
-	if server.isRoot(runtime, subjectDN, entry.DN, attribute) {
+	subject := accessSubject(reader, subjectDN)
+	if server.isRoot(runtime, subject.DN, entry.DN, attribute) {
 		return true
 	}
+	if mapped, ok := reader.(interface {
+		remoteACLView(
+			string,
+			directory.Entry,
+			string,
+			[]byte,
+		) (storage.Reader, string, directory.Entry, string, []byte, error)
+	}); ok {
+		remoteReader, remoteSubject, remoteEntry, remoteAttribute, remoteValue, err :=
+			mapped.remoteACLView(subject.DN, entry, attribute, value)
+		if err != nil {
+			return false
+		}
+		subject.DN = remoteSubject
+		if subject.RealDN != "" {
+			if identityMapper, ok := reader.(interface {
+				remoteACLIdentity(string) (string, error)
+			}); ok {
+				subject.RealDN, err = identityMapper.remoteACLIdentity(subject.RealDN)
+				if err != nil {
+					return false
+				}
+			}
+		}
+		return runtime.access.Allowed(
+			subject,
+			acl.Target{
+				Entry:     remoteEntry,
+				Attribute: remoteAttribute,
+				Value:     remoteValue,
+				DNValued:  runtime.schema.IsDNValued(remoteAttribute),
+				Schema:    runtime.schema,
+			},
+			privilege,
+			remoteReader,
+		)
+	}
 	return runtime.access.Allowed(
-		acl.Subject{DN: subjectDN},
+		subject,
 		acl.Target{
 			Entry:     entry,
 			Attribute: attribute,
 			Value:     value,
 			DNValued:  runtime.schema.IsDNValued(attribute),
+			Schema:    runtime.schema,
 		},
 		privilege,
 		reader,

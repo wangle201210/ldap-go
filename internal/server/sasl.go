@@ -20,6 +20,21 @@ func (server *Server) handleSASLBind(
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) error {
+	if request.Version < 3 {
+		clearSASLSession(state)
+		if err := ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"SASL bind requires LDAPv3",
+			),
+			nil,
+		)); err != nil {
+			return err
+		}
+		return connection.Close()
+	}
+
 	mechanism := strings.ToUpper(request.Authentication.SASLMechanism)
 	session := state.saslSession
 	if session != nil && session.mechanism != mechanism {
@@ -255,14 +270,20 @@ func (server *Server) handleSASLPlainBind(
 	if err != nil {
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
-	authenticated, err := server.authenticate(
+	authenticated, err := server.authenticateSASLPassword(
 		ctx,
 		runtime,
-		authenticationDN.String(),
+		authenticationDN,
 		[]byte(preparedPassword),
 	)
 	if err != nil {
-		return err
+		return server.writeSASLAuxiliaryLookupFailure(
+			connection,
+			state,
+			message.ID,
+			"PLAIN",
+			err,
+		)
 	}
 	if !authenticated {
 		return writeSASLInvalidCredentials(connection, message.ID)
@@ -315,6 +336,31 @@ func writeSASLInvalidCredentials(
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		messageID,
 		ldapwire.ResultError(ldapwire.ResultInvalidCredentials, ""),
+		nil,
+	))
+}
+
+func (server *Server) writeSASLAuxiliaryLookupFailure(
+	connection net.Conn,
+	state *connectionState,
+	messageID int64,
+	mechanism string,
+	err error,
+) error {
+	clearSASLSession(state)
+	server.config.Logger.Warn(
+		"SASL auxiliary credential lookup failed",
+		"message_id",
+		messageID,
+		"mechanism",
+		mechanism,
+		"error",
+		err,
+	)
+	// OpenLDAP maps an auxprop backend failure through SASL_FAIL to LDAP_OTHER.
+	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+		messageID,
+		ldapwire.ResultError(ldapwire.ResultOther, ""),
 		nil,
 	))
 }

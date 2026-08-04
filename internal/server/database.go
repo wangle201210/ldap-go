@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -15,6 +16,11 @@ type runtimeDatabase struct {
 	name                  string
 	partition             string
 	suffixes              []directory.DN
+	ldapBackend           *ldapBackendRuntimeConfiguration
+	metaBackend           *metaBackendRuntimeConfiguration
+	metaTargetKey         string
+	relay                 *relayRuntimeConfiguration
+	rwm                   *rwmRuntimeConfiguration
 	rootDN                *directory.DN
 	rootPassword          []byte
 	rootPasswordSet       bool
@@ -23,6 +29,8 @@ type runtimeDatabase struct {
 	subordinate           bool
 	advertise             bool
 	readOnly              bool
+	searchSizeLimits      []databaseSearchSizeLimit
+	restrictions          databaseRestrictions
 	shadow                bool
 	multiProvider         bool
 	updateDN              *directory.DN
@@ -31,6 +39,8 @@ type runtimeDatabase struct {
 	lastBind              bool
 	lastBindPrecision     int
 	maxDerefDepth         int
+	nullBindAllowed       bool
+	nullDoSearch          bool
 	configDNKey           string
 	serverSideSort        bool
 	sortMaxKeys           int
@@ -44,14 +54,63 @@ type runtimeDatabase struct {
 	syncConsumers         []syncConsumerConfig
 	dds                   *ddsRuntimeConfiguration
 	ppolicy               *passwordPolicyRuntimeConfiguration
+	pbind                 *pbindRuntimeConfiguration
+	remoteAuth            *remoteAuthRuntimeConfiguration
+	homedir               *homedirRuntimeConfiguration
 	chain                 *chainRuntimeConfiguration
+	translucent           *translucentRuntimeConfiguration
+	pcache                *pcacheRuntimeConfiguration
+	otp                   *otpRuntimeConfiguration
+	autoca                *autoCARuntimeConfiguration
 	constraint            *constraintRuntimeConfiguration
+	collect               *collectRuntimeConfiguration
+	seqmod                *seqmodRuntimeConfiguration
+	nestGroups            []nestGroupRuntimeConfiguration
+	deref                 bool
+	dynlist               *dynlistRuntimeConfiguration
+	dyngroup              *dynamicGroupRuntimeConfiguration
 	unique                *uniqueRuntimeConfiguration
 	valueSort             *valueSortRuntimeConfiguration
+	accesslog             *accesslogRuntimeConfiguration
+	auditlog              *auditlogRuntimeConfiguration
 	retcodes              []retcodeRuntimeConfiguration
 	memberOf              []memberOfRuntimeConfiguration
 	refint                []refintRuntimeConfiguration
 }
+
+type databaseSearchSizeLimit struct {
+	subject directory.DN
+	soft    int
+	hard    int
+	softSet bool
+	hardSet bool
+}
+
+type databaseRestrictions uint32
+
+const (
+	restrictAdd databaseRestrictions = 1 << iota
+	restrictBind
+	restrictCompare
+	restrictDelete
+	restrictExtended
+	restrictModify
+	restrictRename
+	restrictSearch
+	restrictStartTLS
+	restrictPasswordModify
+	restrictWhoAmI
+	restrictCancel
+)
+
+const (
+	restrictReads  = restrictCompare | restrictSearch
+	restrictWrites = restrictAdd | restrictDelete | restrictModify | restrictRename
+	restrictAll    = restrictAdd | restrictBind | restrictCompare | restrictDelete |
+		restrictExtended | restrictModify | restrictRename | restrictSearch
+	restrictSpecificExtended = restrictStartTLS | restrictPasswordModify |
+		restrictWhoAmI | restrictCancel
+)
 
 const configurationStoragePartition = storage.OpenLDAPConfigPartition
 
@@ -162,6 +221,20 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		database.restrictions, err = parseDatabaseRestrictions(
+			entry.Values("olcRestrict"),
+		)
+		if err != nil {
+			return fmt.Errorf("%s olcRestrict: %w", entry.DN, err)
+		}
+		if database.readOnly {
+			database.restrictions |= restrictWrites
+		}
+		database.readOnly = databaseIsReadOnly(database)
+		database.searchSizeLimits, err = loadDatabaseSearchSizeLimits(entry)
+		if err != nil {
+			return err
+		}
 		database.disabled, _, err = singleBoolean(entry, "olcDisabled")
 		if err != nil {
 			return err
@@ -207,6 +280,47 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return err
 		}
+		if isNullDatabase(database) {
+			database.nullBindAllowed, _, err = singleBoolean(
+				entry,
+				"olcDbBindAllowed",
+			)
+			if err != nil {
+				return err
+			}
+			database.nullDoSearch, _, err = singleBoolean(
+				entry,
+				"olcDbDoSearch",
+			)
+			if err != nil {
+				return err
+			}
+		}
+		if isRelayDatabase(database) {
+			relay, err := loadRelayRuntimeConfiguration(entry, database)
+			if err != nil {
+				return err
+			}
+			database.relay = relay
+		}
+		if isLDAPBackendDatabase(database) {
+			configuration, err := loadLDAPBackendRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.ldapBackend = configuration
+			// A proxy database never owns a local data partition.
+			database.partition = ""
+		}
+		if isMetaBackendDatabase(database) {
+			configuration, err := loadMetaBackendRuntimeConfiguration(reader, entry)
+			if err != nil {
+				return err
+			}
+			database.metaBackend = configuration
+			// A meta proxy database never owns a local data partition.
+			database.partition = ""
+		}
 		database.syncConsumers, err = loadSyncConsumerConfigs(entry, database)
 		if err != nil {
 			return err
@@ -226,13 +340,19 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	if err := validateDatabaseSuffixes(databases); err != nil {
 		return nil, err
 	}
-	if err := validateDatabasePartitions(databases); err != nil {
-		return nil, err
-	}
 	if err := validateSyncConsumerRIDs(databases); err != nil {
 		return nil, err
 	}
 	if err := loadRuntimeDatabaseOverlays(reader, databases); err != nil {
+		return nil, err
+	}
+	if err := resolveRelayDatabases(databases); err != nil {
+		return nil, err
+	}
+	if err := resolveAccesslogDatabases(databases); err != nil {
+		return nil, err
+	}
+	if err := validateDatabasePartitions(databases); err != nil {
 		return nil, err
 	}
 
@@ -256,6 +376,147 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	return databases, nil
 }
 
+func loadDatabaseSearchSizeLimits(
+	entry directory.Entry,
+) ([]databaseSearchSizeLimit, error) {
+	var limits []databaseSearchSizeLimit
+	for _, raw := range entry.Values("olcLimits") {
+		value := strings.TrimSpace(string(raw))
+		if strings.HasPrefix(value, "{") {
+			end := strings.IndexByte(value, '}')
+			if end <= 1 {
+				return nil, fmt.Errorf("%s olcLimits has invalid ordered prefix", entry.DN)
+			}
+			if _, err := strconv.Atoi(value[1:end]); err != nil {
+				return nil, fmt.Errorf("%s olcLimits has invalid ordered prefix", entry.DN)
+			}
+			value = strings.TrimSpace(value[end+1:])
+		}
+		arguments, err := tokenizeOpenLDAPConfig(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcLimits: %w", entry.DN, err)
+		}
+		if len(arguments) < 2 {
+			return nil, fmt.Errorf("%s olcLimits requires a pattern and limits", entry.DN)
+		}
+
+		pattern := strings.ToLower(arguments[0])
+		var rawDN string
+		for _, prefix := range []string{
+			"dn.exact=",
+			"dn.base=",
+			"dn.self.exact=",
+			"dn.self.base=",
+		} {
+			if strings.HasPrefix(pattern, prefix) {
+				rawDN = arguments[0][len(prefix):]
+				break
+			}
+		}
+		if rawDN == "" {
+			// Other OpenLDAP limit selectors remain accepted; this runtime
+			// currently applies exact bound-DN size rules only.
+			continue
+		}
+		subject, err := directory.ParseDN(rawDN)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcLimits subject: %w", entry.DN, err)
+		}
+		limit := databaseSearchSizeLimit{subject: subject}
+		for _, argument := range arguments[1:] {
+			name, rawValue, found := strings.Cut(argument, "=")
+			if !found {
+				return nil, fmt.Errorf("%s olcLimits has invalid value %q", entry.DN, argument)
+			}
+			switch strings.ToLower(name) {
+			case "size":
+				parsed, err := parseDatabaseSearchSizeLimit(rawValue, false)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.soft, limit.softSet = parsed, true
+				limit.hard, limit.hardSet = 0, true
+			case "size.soft":
+				parsed, err := parseDatabaseSearchSizeLimit(rawValue, false)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.soft, limit.softSet = parsed, true
+			case "size.hard":
+				parsed, err := parseDatabaseSearchSizeLimit(rawValue, true)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.hard, limit.hardSet = parsed, true
+			default:
+				// Time, unchecked, and paged-results settings are outside the
+				// search-size contract implemented here.
+			}
+		}
+		if limit.softSet || limit.hardSet {
+			limits = append(limits, limit)
+		}
+	}
+	return limits, nil
+}
+
+func parseDatabaseSearchSizeLimit(value string, hard bool) (int, error) {
+	switch strings.ToLower(value) {
+	case "none", "unlimited":
+		return -1, nil
+	case "soft":
+		if hard {
+			return 0, nil
+		}
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < -1 {
+		return 0, fmt.Errorf("invalid size limit %q", value)
+	}
+	return parsed, nil
+}
+
+func effectiveDatabaseSearchLimit(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	boundDN string,
+	serverLimit,
+	requestLimit int,
+) int {
+	limit := effectiveSearchLimit(serverLimit, requestLimit)
+	subject, err := directory.ParseDN(boundDN)
+	if err != nil || databaseRootMatches(runtime, database, subject) {
+		return limit
+	}
+	for _, configured := range database.searchSizeLimits {
+		if !configured.subject.Equal(subject) {
+			continue
+		}
+		if requestLimit <= 0 {
+			if configured.softSet && configured.soft > 0 && configured.soft < limit {
+				return configured.soft
+			}
+			return limit
+		}
+		hard := serverLimit
+		if configured.hardSet {
+			hard = configured.hard
+			if hard == 0 && configured.softSet {
+				hard = configured.soft
+			}
+		} else if configured.softSet {
+			// OpenLDAP's default hard limit is "soft", so an exact rule
+			// that only replaces size.soft also bounds explicit requests.
+			hard = configured.soft
+		}
+		if hard > 0 && hard < limit {
+			return hard
+		}
+		return limit
+	}
+	return limit
+}
+
 func loadRuntimeDatabaseOverlays(
 	reader storage.Reader,
 	databases []runtimeDatabase,
@@ -264,7 +525,7 @@ func loadRuntimeDatabaseOverlays(
 	if err != nil {
 		return err
 	}
-	return reader.ForEach(func(entry directory.Entry) error {
+	if err := reader.ForEach(func(entry directory.Entry) error {
 		entryDN, err := directory.ParseDN(entry.DN)
 		if err != nil {
 			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
@@ -281,17 +542,40 @@ func loadRuntimeDatabaseOverlays(
 			return fmt.Errorf("%s olcOverlay must be single-valued", entry.DN)
 		}
 		overlayType := databaseType(string(overlayValues[0]))
+		if seqmodOverlayDNTargetsSeqmod(entryDN) && overlayType != "seqmod" {
+			return seqmodConfigurationFailure(
+				ldapwire.ResultNamingViolation,
+				"%s olcOverlay value does not match its seqmod RDN",
+				entry.DN,
+			)
+		}
 		if overlayType != "sssvlv" &&
 			overlayType != "syncprov" &&
 			overlayType != "dds" &&
 			overlayType != "ppolicy" &&
+			overlayType != "pbind" &&
+			overlayType != "remoteauth" &&
+			overlayType != "homedir" &&
 			overlayType != "chain" &&
+			overlayType != "translucent" &&
+			overlayType != "pcache" &&
+			overlayType != "otp" &&
+			overlayType != "autoca" &&
 			overlayType != "constraint" &&
+			overlayType != "collect" &&
+			overlayType != "seqmod" &&
+			overlayType != "nestgroup" &&
+			overlayType != "deref" &&
+			overlayType != "dynlist" &&
+			overlayType != "dyngroup" &&
 			overlayType != "unique" &&
 			overlayType != "valsort" &&
 			overlayType != "retcode" &&
 			overlayType != "memberof" &&
-			overlayType != "refint" {
+			overlayType != "refint" &&
+			overlayType != "rwm" &&
+			overlayType != "accesslog" &&
+			overlayType != "auditlog" {
 			return nil
 		}
 
@@ -318,7 +602,268 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		database := &databases[databaseIndex]
+		if (database.ldapBackend != nil || database.metaBackend != nil) &&
+			overlayType != "pcache" {
+			return fmt.Errorf(
+				"%s %s overlay on remote proxy backend %s is unsupported because local overlays would be bypassed",
+				entry.DN,
+				overlayType,
+				database.name,
+			)
+		}
 		switch overlayType {
+		case "autoca":
+			if database.autoca != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate autoca overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadAutoCARuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			if err := validateAutoCADatabase(*database, configuration); err != nil {
+				return err
+			}
+			database.autoca = &configuration
+		case "otp":
+			if database.otp != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate otp overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if databaseType(database.name) == "frontend" ||
+				isConfigDatabase(*database) || isMonitorDatabase(*database) ||
+				isNullDatabase(*database) || database.relay != nil ||
+				database.readOnly || database.shadow ||
+				len(database.suffixes) == 0 || database.partition == "" {
+				return fmt.Errorf(
+					"%s otp overlay requires a local database naming context",
+					entry.DN,
+				)
+			}
+			configuration, err := loadOTPRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.otp = &configuration
+		case "pcache":
+			if database.pcache != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate pcache overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if database.ldapBackend == nil {
+				return fmt.Errorf(
+					"%s pcache Phase 1 requires an ldap backend",
+					entry.DN,
+				)
+			}
+			if databaseType(database.name) == "frontend" || len(database.suffixes) == 0 {
+				return fmt.Errorf(
+					"%s pcache overlay requires a database naming context",
+					entry.DN,
+				)
+			}
+			if database.rootDN == nil {
+				return fmt.Errorf(
+					"%s pcache overlay requires olcRootDN on %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadPcacheRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.pcache = &configuration
+		case "translucent":
+			if database.translucent != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate translucent overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if databaseType(database.name) == "frontend" {
+				return fmt.Errorf(
+					"%s translucent overlay cannot be global",
+					entry.DN,
+				)
+			}
+			configuration, err := loadTranslucentRuntimeConfiguration(
+				reader,
+				entry,
+			)
+			if err != nil {
+				return err
+			}
+			database.translucent = &configuration
+		case "nestgroup":
+			configuration, err := loadNestGroupRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.nestGroups = append(database.nestGroups, configuration)
+		case "seqmod":
+			if database.seqmod != nil {
+				return seqmodConfigurationFailure(
+					ldapwire.ResultOther,
+					"%s seqmod overlay is already in the list for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadSeqmodRuntimeConfiguration(entry, entryDN)
+			if err != nil {
+				return err
+			}
+			database.seqmod = &configuration
+		case "collect":
+			if database.collect != nil {
+				return collectConfigurationFailure(
+					ldapwire.ResultOther,
+					"%s collect overlay is already in the list for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadCollectRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.collect = &configuration
+		case "deref":
+			if database.deref {
+				return fmt.Errorf(
+					"%s configures a duplicate deref overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			database.deref = true
+		case "homedir":
+			if database.homedir != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate homedir overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadHomedirRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.homedir = &configuration
+		case "remoteauth":
+			if database.remoteAuth != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate remoteauth overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if databaseType(database.name) == "frontend" {
+				return fmt.Errorf(
+					"%s remoteauth overlay cannot be global",
+					entry.DN,
+				)
+			}
+			configuration, err := loadRemoteAuthRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.remoteAuth = &configuration
+		case "pbind":
+			if database.pbind != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate pbind overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			if databaseType(database.name) == "frontend" {
+				return fmt.Errorf(
+					"%s pbind overlay cannot be global",
+					entry.DN,
+				)
+			}
+			configuration, err := loadPBindRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.pbind = &configuration
+		case "dynlist":
+			if database.dynlist != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate dynlist overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadDynlistRuntimeConfiguration(entry, *database)
+			if err != nil {
+				return err
+			}
+			database.dynlist = &configuration
+		case "dyngroup":
+			if database.dyngroup != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate dyngroup overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadDynamicGroupRuntimeConfiguration(entry, *database)
+			if err != nil {
+				return err
+			}
+			database.dyngroup = &configuration
+		case "auditlog":
+			if database.auditlog != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate auditlog overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadAuditlogRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.auditlog = &configuration
+		case "accesslog":
+			if database.accesslog != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate accesslog overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadAccesslogRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.accesslog = &configuration
+		case "rwm":
+			if database.rwm != nil {
+				return fmt.Errorf(
+					"%s configures a duplicate rwm overlay for %s",
+					entry.DN,
+					database.name,
+				)
+			}
+			configuration, err := loadRWMRuntimeConfiguration(entry, *database)
+			if err != nil {
+				return err
+			}
+			database.rwm = &configuration
 		case "retcode":
 			configuration, err := loadRetcodeRuntimeConfiguration(entry, *database)
 			if err != nil {
@@ -522,7 +1067,21 @@ func loadRuntimeDatabaseOverlays(
 			database.syncReloadHint = reloadHint
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, database := range databases {
+		if database.otp == nil {
+			continue
+		}
+		if database.pbind != nil || database.remoteAuth != nil {
+			return fmt.Errorf(
+				"%s otp overlay cannot share a database with a Bind-delegating overlay",
+				database.name,
+			)
+		}
+	}
+	return nil
 }
 
 func syncCheckpointSetting(entry directory.Entry) (ops, minutes int, err error) {
@@ -706,16 +1265,150 @@ func subordinateSetting(
 }
 
 func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
-	frontendReadOnly := false
+	var frontendRestrictions databaseRestrictions
 	for _, database := range databases {
-		if databaseType(database.name) == "frontend" && database.readOnly {
-			frontendReadOnly = database.readOnly
+		if databaseType(database.name) == "frontend" {
+			frontendRestrictions = effectiveDatabaseRestrictions(database)
 			break
 		}
 	}
 	for index := range databases {
-		databases[index].readOnly = databases[index].readOnly || frontendReadOnly
+		databases[index].restrictions |= frontendRestrictions
+		databases[index].readOnly = databaseIsReadOnly(databases[index])
 	}
+}
+
+func effectiveDatabaseRestrictions(database runtimeDatabase) databaseRestrictions {
+	restrictions := database.restrictions
+	if database.readOnly {
+		restrictions |= restrictWrites
+	}
+	return restrictions
+}
+
+func databaseIsReadOnly(database runtimeDatabase) bool {
+	return effectiveDatabaseRestrictions(database)&restrictWrites == restrictWrites
+}
+
+func databaseRestricts(database runtimeDatabase, operation databaseRestrictions) bool {
+	restrictions := effectiveDatabaseRestrictions(database)
+	if operation&(restrictStartTLS|restrictPasswordModify|restrictWhoAmI|restrictCancel) != 0 {
+		return restrictions&restrictExtended != 0 || restrictions&operation != 0
+	}
+	return restrictions&operation != 0
+}
+
+func frontendRestricts(runtime *runtimeState, operation databaseRestrictions) bool {
+	database := runtimeDatabase{
+		restrictions: monitorFrontendRestrictions(runtime.databases),
+	}
+	return databaseRestricts(database, operation)
+}
+
+func parseDatabaseRestrictions(values [][]byte) (databaseRestrictions, error) {
+	var restrictions databaseRestrictions
+	for _, raw := range values {
+		value := string(raw)
+		if strings.HasPrefix(value, "{") {
+			end := strings.IndexByte(value, '}')
+			if end < 0 {
+				return 0, fmt.Errorf("invalid ordering prefix %q", value)
+			}
+			value = value[end+1:]
+		}
+		for _, word := range strings.Fields(value) {
+			flag, ok := databaseRestrictionName(word, true)
+			if !ok {
+				return 0, fmt.Errorf("unknown operation %q", word)
+			}
+			restrictions |= flag
+		}
+	}
+	if restrictions&restrictExtended != 0 {
+		restrictions &^= restrictSpecificExtended
+	}
+	return restrictions, nil
+}
+
+func databaseRestrictionName(
+	value string,
+	allowAliases bool,
+) (databaseRestrictions, bool) {
+	switch strings.ToLower(value) {
+	case "add":
+		return restrictAdd, true
+	case "bind":
+		return restrictBind, true
+	case "compare":
+		return restrictCompare, true
+	case "delete":
+		return restrictDelete, true
+	case "extended":
+		return restrictExtended, true
+	case "modify":
+		return restrictModify, true
+	case "rename":
+		return restrictRename, true
+	case "search":
+		return restrictSearch, true
+	case startTLSOID:
+		return restrictStartTLS, true
+	case passwordModifyOID:
+		return restrictPasswordModify, true
+	case whoAmIOID:
+		return restrictWhoAmI, true
+	case cancelOID:
+		return restrictCancel, true
+	}
+	if !allowAliases {
+		return 0, false
+	}
+	switch strings.ToLower(value) {
+	case "modrdn":
+		return restrictRename, true
+	case "read":
+		return restrictReads, true
+	case "write":
+		return restrictWrites, true
+	case "all":
+		return restrictAll, true
+	case "extended=" + startTLSOID:
+		return restrictStartTLS, true
+	case "extended=" + passwordModifyOID:
+		return restrictPasswordModify, true
+	case "extended=" + whoAmIOID:
+		return restrictWhoAmI, true
+	case "extended=" + cancelOID:
+		return restrictCancel, true
+	default:
+		return 0, false
+	}
+}
+
+func databaseRestrictionValues(restrictions databaseRestrictions) []string {
+	values := make([]string, 0, 12)
+	for _, item := range []struct {
+		value string
+		flag  databaseRestrictions
+	}{
+		{"add", restrictAdd},
+		{"bind", restrictBind},
+		{"compare", restrictCompare},
+		{"delete", restrictDelete},
+		{"extended", restrictExtended},
+		{"modify", restrictModify},
+		{"rename", restrictRename},
+		{"search", restrictSearch},
+		{startTLSOID, restrictStartTLS},
+		{passwordModifyOID, restrictPasswordModify},
+		{whoAmIOID, restrictWhoAmI},
+		{cancelOID, restrictCancel},
+	} {
+		if restrictions&item.flag != 0 {
+			values = append(values, item.value)
+		}
+	}
+	return values
 }
 
 func validateDatabaseSuffixes(databases []runtimeDatabase) error {
@@ -740,19 +1433,22 @@ func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 }
 
 func validateDatabasePartitions(databases []runtimeDatabase) error {
-	owners := make(map[string]string)
-	for _, database := range databases {
+	owners := make(map[string]int)
+	for index, database := range databases {
 		if database.partition == "" {
 			continue
 		}
-		if owner, exists := owners[database.partition]; exists {
+		if ownerIndex, exists := owners[database.partition]; exists {
+			if isRelayDatabase(database) || isRelayDatabase(databases[ownerIndex]) {
+				continue
+			}
 			return fmt.Errorf(
 				"databases %q and %q use the same storage partition",
-				owner,
+				databases[ownerIndex].name,
 				database.name,
 			)
 		}
-		owners[database.partition] = database.name
+		owners[database.partition] = index
 	}
 	return nil
 }
@@ -982,6 +1678,22 @@ func isConfigDatabase(database runtimeDatabase) bool {
 
 func isMonitorDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "monitor"
+}
+
+func isNullDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "null"
+}
+
+func isRelayDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "relay"
+}
+
+func isLDAPBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "ldap"
+}
+
+func isMetaBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "meta"
 }
 
 func databaseType(name string) string {

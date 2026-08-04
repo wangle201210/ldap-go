@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -478,6 +479,32 @@ func startOpenLDAPAccesslogProvider(
 	tools openLDAPReferenceTools,
 ) (string, func()) {
 	t.Helper()
+	return startOpenLDAPAccesslogProviderWithOptions(t, tools, "")
+}
+
+func startOpenLDAPAccesslogProviderWithOptions(
+	t *testing.T,
+	tools openLDAPReferenceTools,
+	options string,
+) (string, func()) {
+	t.Helper()
+	return startOpenLDAPAccesslogProviderWithConfiguration(
+		t,
+		tools,
+		"writes",
+		true,
+		options,
+	)
+}
+
+func startOpenLDAPAccesslogProviderWithConfiguration(
+	t *testing.T,
+	tools openLDAPReferenceTools,
+	operations string,
+	successOnly bool,
+	options string,
+) (string, func()) {
+	t.Helper()
 	root := t.TempDir()
 	logDirectory := filepath.Join(root, "log")
 	dataDirectory := filepath.Join(root, "data")
@@ -491,6 +518,7 @@ func startOpenLDAPAccesslogProvider(
 		`include %s
 include %s
 include %s
+include %s
 pidfile %s
 argsfile %s
 
@@ -500,6 +528,9 @@ suffix "cn=log"
 rootdn "%s"
 directory %s
 index objectClass,entryCSN,reqResult,reqDN eq
+access to *
+    by dn.exact="%s" manage
+    by * none
 
 overlay syncprov
 syncprov-reloadhint true
@@ -520,19 +551,25 @@ overlay syncprov
 
 overlay accesslog
 logdb "cn=log"
-logops writes
-logsuccess true
+logops %s
+logsuccess %t
+%s
 `,
 		filepath.Join(tools.schemaDir, "core.schema"),
 		filepath.Join(tools.schemaDir, "cosine.schema"),
 		filepath.Join(tools.schemaDir, "inetorgperson.schema"),
+		filepath.Join(tools.schemaDir, "nis.schema"),
 		filepath.Join(root, "slapd.pid"),
 		filepath.Join(root, "slapd.args"),
 		syncTestRootDN,
 		logDirectory,
 		syncTestRootDN,
+		syncTestRootDN,
 		syncTestRootPassword,
 		dataDirectory,
+		operations,
+		successOnly,
+		options,
 	)
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatalf("write OpenLDAP accesslog config: %v", err)
@@ -562,16 +599,25 @@ logsuccess true
 	if err := command.Start(); err != nil {
 		t.Fatalf("start OpenLDAP accesslog provider: %v", err)
 	}
-	stopped := false
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
+	var stopOnce sync.Once
 	stop := func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		if command.Process != nil {
-			_ = command.Process.Kill()
-		}
-		_ = command.Wait()
+		stopOnce.Do(func() {
+			if command.Process != nil {
+				_ = command.Process.Signal(os.Interrupt)
+			}
+			select {
+			case <-waitDone:
+			case <-time.After(5 * time.Second):
+				if command.Process != nil {
+					_ = command.Process.Kill()
+				}
+				<-waitDone
+			}
+		})
 	}
 	t.Cleanup(stop)
 
@@ -586,7 +632,17 @@ logsuccess true
 			_ = connection.Close()
 			break
 		}
-		if command.ProcessState != nil || time.Now().After(deadline) {
+		select {
+		case waitErr := <-waitDone:
+			stopOnce.Do(func() {})
+			t.Fatalf(
+				"OpenLDAP accesslog provider exited during startup: %v\n%s",
+				waitErr,
+				logs.Bytes(),
+			)
+		default:
+		}
+		if time.Now().After(deadline) {
 			stop()
 			t.Fatalf(
 				"OpenLDAP accesslog provider did not start: %v\n%s",

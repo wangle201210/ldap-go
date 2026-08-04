@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
 	"github.com/xdg-go/scram"
 )
 
@@ -117,6 +119,260 @@ func TestSyncConsumerSASLMechanismPayloads(t *testing.T) {
 		!conversation.Done() ||
 		!conversation.Valid() {
 		t.Fatalf("CRAM-MD5 response = %q", response)
+	}
+}
+
+func TestSyncConsumerDIGESTMD5RealmAuthzIDAndServerProof(t *testing.T) {
+	t.Parallel()
+
+	config := syncConsumerConfig{
+		saslMechanism:    "DIGEST-MD5",
+		authenticationID: "alice",
+		authorizationID:  "dn:uid=alice,ou=people,dc=example,dc=com",
+		realm:            "example.com",
+		credentials:      []byte("secret"),
+		securityProperties: syncConsumerSASLSecurityProperties{
+			maxBufferSize: 65536,
+		},
+	}
+	mechanism, generic, err := newSyncConsumerSASLConversationForProvider(
+		config,
+		"ldap://LDAP.EXAMPLE.TEST:1389",
+	)
+	if err != nil {
+		t.Fatalf("new DIGEST-MD5 conversation: %v", err)
+	}
+	conversation, ok := generic.(*syncConsumerDIGESTMD5)
+	if mechanism != "DIGEST-MD5" || !ok {
+		t.Fatalf("DIGEST-MD5 conversation = %q/%T", mechanism, generic)
+	}
+	conversation.random = bytes.NewReader(make([]byte, 24))
+	initial, hasInitial, err := conversation.Initial()
+	if err != nil || hasInitial || initial != nil {
+		t.Fatalf("DIGEST-MD5 initial = %q/%t/%v", initial, hasInitial, err)
+	}
+	response, err := conversation.Next([]byte(
+		`realm="other.example",realm="example.com",` +
+			`nonce="fixed-nonce",qop="auth,auth-int",` +
+			`maxbuf=65536,charset=utf-8,algorithm=md5-sess`,
+	))
+	if err != nil {
+		t.Fatalf("DIGEST-MD5 challenge: %v", err)
+	}
+	directives, err := parseSASLDigestMD5Directives(response)
+	if err != nil {
+		t.Fatalf("parse DIGEST-MD5 response: %v", err)
+	}
+	if directives["username"] != "alice" ||
+		directives["realm"] != "example.com" ||
+		directives["authzid"] != config.authorizationID ||
+		directives["digest-uri"] != "ldap/ldap.example.test" ||
+		directives["qop"] != "auth" ||
+		directives["maxbuf"] != "65536" ||
+		directives["charset"] != "utf-8" {
+		t.Fatalf("DIGEST-MD5 response directives = %#v", directives)
+	}
+	wantResponse, rspauth := calculateSyncConsumerDIGESTMD5TestExchange(
+		t,
+		directives,
+		[]byte("secret"),
+	)
+	if directives["response"] != wantResponse {
+		t.Fatalf(
+			"DIGEST-MD5 response = %q, want %q",
+			directives["response"],
+			wantResponse,
+		)
+	}
+	final, err := conversation.Next([]byte("rspauth=" + rspauth))
+	if err != nil || len(final) != 0 ||
+		!conversation.Done() || !conversation.Valid() {
+		t.Fatalf(
+			"DIGEST-MD5 final = %q, done/valid %t/%t, error %v",
+			final,
+			conversation.Done(),
+			conversation.Valid(),
+			err,
+		)
+	}
+}
+
+func TestSyncConsumerDIGESTMD5WithoutCharset(t *testing.T) {
+	t.Parallel()
+
+	config := syncConsumerConfig{
+		saslMechanism:    "DIGEST-MD5",
+		authenticationID: "alice",
+		realm:            "example.com",
+		credentials:      []byte("secret"),
+	}
+	conversation := newStartedSyncConsumerDIGESTMD5TestConversation(t, config)
+	response, err := conversation.Next([]byte(
+		`realm="example.com",nonce="fixed-nonce",` +
+			`qop="auth,auth-int",algorithm=md5-sess`,
+	))
+	if err != nil {
+		t.Fatalf("DIGEST-MD5 challenge without charset: %v", err)
+	}
+	directives, err := parseSASLDigestMD5Directives(response)
+	if err != nil {
+		t.Fatalf("parse DIGEST-MD5 response without charset: %v", err)
+	}
+	if _, present := directives["charset"]; present {
+		t.Fatalf("DIGEST-MD5 response unexpectedly includes charset: %q", response)
+	}
+	wantResponse, rspauth := calculateSyncConsumerDIGESTMD5TestExchange(
+		t,
+		directives,
+		config.credentials,
+	)
+	if directives["response"] != wantResponse {
+		t.Fatalf(
+			"DIGEST-MD5 response = %q, want %q",
+			directives["response"],
+			wantResponse,
+		)
+	}
+	final, err := conversation.Next([]byte("rspauth=" + rspauth))
+	if err != nil || len(final) != 0 ||
+		!conversation.Done() || !conversation.Valid() {
+		t.Fatalf(
+			"DIGEST-MD5 final without charset = %q, done/valid %t/%t, error %v",
+			final,
+			conversation.Done(),
+			conversation.Valid(),
+			err,
+		)
+	}
+}
+
+func TestSyncConsumerDIGESTMD5RejectsInvalidChallenges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		challenge string
+		want      string
+	}{
+		{
+			name:      "empty",
+			challenge: "",
+			want:      "size is invalid",
+		},
+		{
+			name:      "embedded NUL",
+			challenge: "nonce=one\x00,algorithm=md5-sess",
+			want:      "contains NUL",
+		},
+		{
+			name:      "duplicate nonce",
+			challenge: `nonce="one",nonce="two",algorithm=md5-sess`,
+			want:      `directive "nonce" is duplicated`,
+		},
+		{
+			name:      "missing nonce",
+			challenge: `algorithm=md5-sess`,
+			want:      "has no nonce",
+		},
+		{
+			name:      "unsupported algorithm",
+			challenge: `nonce="one",algorithm=md5`,
+			want:      "want md5-sess",
+		},
+		{
+			name:      "unsupported charset",
+			challenge: `nonce="one",algorithm=md5-sess,charset=iso-8859-1`,
+			want:      "want utf-8",
+		},
+		{
+			name:      "unsupported qop",
+			challenge: `nonce="one",algorithm=md5-sess,qop="auth-int,auth-conf"`,
+			want:      "does not offer auth",
+		},
+		{
+			name:      "unoffered configured realm",
+			challenge: `realm="other.example",nonce="one",algorithm=md5-sess`,
+			want:      "was not offered",
+		},
+		{
+			name:      "stale nonce",
+			challenge: `nonce="one",algorithm=md5-sess,stale=true`,
+			want:      "marked the nonce stale",
+		},
+		{
+			name:      "oversized",
+			challenge: strings.Repeat("a", maxSASLDigestMD5ChallengeSize),
+			want:      "size is invalid",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			conversation := newStartedSyncConsumerDIGESTMD5TestConversation(
+				t,
+				syncConsumerConfig{
+					saslMechanism:    "DIGEST-MD5",
+					authenticationID: "alice",
+					realm:            "example.com",
+					credentials:      []byte("secret"),
+				},
+			)
+			if _, err := conversation.Next([]byte(test.challenge)); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf(
+					"DIGEST-MD5 challenge error = %v, want %q",
+					err,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestBindSyncConsumerDIGESTMD5RealmAndAuthzID(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	seedSASLDigestMD5Configuration(t, store)
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	connection, err := net.DialTimeout("tcp", address, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial DIGEST-MD5 consumer test: %v", err)
+	}
+	transport := &syncConsumerTransport{
+		connection:       connection,
+		context:          context.Background(),
+		operationTimeout: 2 * time.Second,
+	}
+	const authorizationID = "dn:uid=alice,ou=people,dc=example,dc=com"
+	err = bindSyncConsumerSASL(transport, syncConsumerConfig{
+		saslMechanism:      "DIGEST-MD5",
+		authenticationID:   "alice",
+		authorizationID:    authorizationID,
+		realm:              "example.com",
+		credentials:        []byte("secret"),
+		securityProperties: defaultSyncConsumerSASLSecurityProperties(),
+	}, "ldap://ldap.example.test:389")
+	if err != nil {
+		_ = connection.Close()
+		t.Fatalf("bind DIGEST-MD5 consumer: %v", err)
+	}
+	if err := transport.clearDeadline(); err != nil {
+		_ = connection.Close()
+		t.Fatalf("clear DIGEST-MD5 deadline: %v", err)
+	}
+	client := ldap.NewConn(connection, false)
+	client.Start()
+	identity, err := client.WhoAmI(nil)
+	_ = client.Close()
+	if err != nil || identity.AuthzID != authorizationID {
+		t.Fatalf("DIGEST-MD5 consumer WhoAmI = %#v, %v", identity, err)
 	}
 }
 
@@ -251,6 +507,62 @@ func TestParseSyncConsumerProviderURLLDAPI(t *testing.T) {
 			t.Fatalf("parse %q = %#v", test.value, parsed)
 		}
 	}
+}
+
+func newStartedSyncConsumerDIGESTMD5TestConversation(
+	t *testing.T,
+	config syncConsumerConfig,
+) *syncConsumerDIGESTMD5 {
+	t.Helper()
+	mechanism, generic, err := newSyncConsumerSASLConversationForProvider(
+		config,
+		"ldap://ldap.example.test:1389",
+	)
+	if err != nil {
+		t.Fatalf("new DIGEST-MD5 conversation: %v", err)
+	}
+	conversation, ok := generic.(*syncConsumerDIGESTMD5)
+	if mechanism != "DIGEST-MD5" || !ok {
+		t.Fatalf("DIGEST-MD5 conversation = %q/%T", mechanism, generic)
+	}
+	conversation.random = bytes.NewReader(make([]byte, 24))
+	initial, hasInitial, err := conversation.Initial()
+	if err != nil || hasInitial || initial != nil {
+		t.Fatalf("DIGEST-MD5 initial = %q/%t/%v", initial, hasInitial, err)
+	}
+	return conversation
+}
+
+func calculateSyncConsumerDIGESTMD5TestExchange(
+	t *testing.T,
+	directives map[string]string,
+	password []byte,
+) (string, string) {
+	t.Helper()
+	nonceCount, err := strconv.ParseUint(directives["nc"], 16, 32)
+	if err != nil {
+		t.Fatalf("parse DIGEST-MD5 nonce count: %v", err)
+	}
+	exchange := saslDigestMD5Response{
+		username:         directives["username"],
+		realm:            directives["realm"],
+		nonce:            directives["nonce"],
+		cnonce:           directives["cnonce"],
+		nonceCount:       uint32(nonceCount),
+		qop:              directives["qop"],
+		digestURI:        directives["digest-uri"],
+		authorization:    directives["authzid"],
+		hasAuthorization: directives["authzid"] != "",
+	}
+	secret := calculateSASLDigestMD5Secret(
+		exchange.username,
+		exchange.realm,
+		password,
+		true,
+	)
+	digest, rspauth := calculateSASLDigestMD5Exchange(secret, exchange)
+	clear(secret)
+	return digest, rspauth
 }
 
 func runSyncConsumerSCRAMTestServer(

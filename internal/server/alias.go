@@ -67,7 +67,7 @@ func (server *Server) prepareAliasSearch(
 		if derefAliasesWhileFinding(mode) {
 			primary := effectiveRoutes[0]
 			database := &state.runtime.databases[primary.databaseIndex]
-			tx := storage.ReaderInPartition(reader, database.partition)
+			tx := readerForDatabase(reader, *database)
 			resolved, changed, failure, err := resolveAliasSearchBase(
 				tx,
 				state.runtime.schema,
@@ -344,7 +344,7 @@ func expandAliasSearchRoutes(
 
 	for _, route := range routes {
 		database := &runtime.databases[route.databaseIndex]
-		tx := storage.ReaderInPartition(reader, database.partition)
+		tx := readerForDatabase(reader, *database)
 		additions, err := aliasSearchRoutesForRoute(
 			tx,
 			runtime.schema,
@@ -377,8 +377,11 @@ func aliasSearchRoutesForRoute(
 	}
 
 	targetScope := directory.ScopeBase
-	if route.scope == directory.ScopeWholeSubtree {
+	switch route.scope {
+	case directory.ScopeWholeSubtree:
 		targetScope = directory.ScopeWholeSubtree
+	case directory.ScopeChildren:
+		targetScope = directory.ScopeChildren
 	}
 	processedAliases := make(map[string]struct{})
 	searchVisited := make(map[string]struct{})
@@ -468,7 +471,7 @@ func aliasSearchRoutesForRoute(
 			nextRound = append(nextRound, addition)
 		}
 
-		if route.scope != directory.ScopeWholeSubtree {
+		if route.scope == directory.ScopeSingleLevel {
 			break
 		}
 		priorScopes = append(priorScopes, nextRound...)
@@ -488,7 +491,7 @@ func aliasIsSearchSubordinate(
 			candidate,
 			directory.ScopeSingleLevel,
 		)
-	case directory.ScopeWholeSubtree:
+	case directory.ScopeWholeSubtree, directory.ScopeChildren:
 		return scope.base.AncestorOf(candidate)
 	default:
 		return false
