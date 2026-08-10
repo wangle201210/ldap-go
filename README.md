@@ -88,11 +88,14 @@ remapping message IDs, maintains regular and Bind connection pools, supports
 round-robin, weighted, and best-of backend selection, preserves ordered-tier
 busy/unavailable behavior and pending limits, performs guarded Simple Bind and
 ProxyAuthz flows, applies operation restrictions and write affinity, rewrites
-explicit and disconnect/re-Bind Abandon targets, supports both OpenLDAP LDAPI
-URL forms, and recovers backend connections. Its standalone configuration
+explicit and disconnect/re-Bind Abandon targets, and implements RFC 3909 Cancel
+by pinning it to the target's physical upstream while rewriting both message
+IDs. Cancel remains accounted while bypassing a full target connection's
+ordinary pending limit. The proxy also supports both OpenLDAP LDAPI URL forms
+and recovers backend connections. Its standalone configuration
 parser and runtime pass pinned-source and live OpenLDAP 2.6.13 differential
 tests. Unsafe unsupported paths fail explicitly: service Bind requires
-ProxyAuthz, while client StartTLS, Cancel, and SASL EXTERNAL are rejected.
+ProxyAuthz, while client StartTLS and SASL EXTERNAL are rejected.
 Client-facing LDAPS/StartTLS/PROXY v2, config-driven upstream TLS, full SASL
 identity/security-layer handling, embedded `cn=config`/monitor mode, dynamic
 topology, and the historical daemon surface are not yet implemented; see the

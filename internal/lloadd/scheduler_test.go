@@ -351,6 +351,37 @@ func TestWeightedTriesAnotherBackendBeforeReportingBusy(t *testing.T) {
 	lease.Release()
 }
 
+func TestSignalingReservationExceedsCapacityButRemainsAccounted(t *testing.T) {
+	scheduler := mustScheduler(t, SchedulerConfig{Tiers: []SchedulerTierConfig{{
+		ID:     "tier",
+		Policy: PolicyRoundRobin,
+		Backends: []SchedulerBackendConfig{{
+			ID:         "backend",
+			MaxPending: 1,
+			Connections: []SchedulerConnectionConfig{{
+				ID:         "connection",
+				MaxPending: 1,
+			}},
+		}},
+	}}})
+	target := mustSelect(t, scheduler, SelectRequest{})
+	signal, err := scheduler.reserveSignalingConnection("connection")
+	if err != nil {
+		t.Fatalf("reserveSignalingConnection(): %v", err)
+	}
+	assertSchedulerPending(t, scheduler, 2)
+	assertSelectError(t, scheduler, SelectRequest{}, ErrBusy)
+
+	target.Release()
+	assertSchedulerPending(t, scheduler, 1)
+	assertSelectError(t, scheduler, SelectRequest{}, ErrBusy)
+
+	signal.Release()
+	assertNoPending(t, scheduler)
+	lease := mustSelect(t, scheduler, SelectRequest{})
+	lease.Release()
+}
+
 func TestBestOfRollingFitnessOpenLDAPSourceContract(t *testing.T) {
 	const sourceHash = "89723da861c7cf68f49c2b0b68fac892f6fdac50ced2c91e93191132b6e84680"
 
@@ -938,5 +969,21 @@ func assertNoPending(t *testing.T, scheduler *Scheduler) {
 		if connection.Pending != 0 {
 			t.Errorf("connection %q pending = %d", connection.ID, connection.Pending)
 		}
+	}
+}
+
+func assertSchedulerPending(t *testing.T, scheduler *Scheduler, want int) {
+	t.Helper()
+	snapshot := scheduler.Snapshot()
+	if len(snapshot.Backends) != 1 || len(snapshot.Connections) != 1 {
+		t.Fatalf("scheduler snapshot shape = %#v", snapshot)
+	}
+	if snapshot.Backends[0].Pending != want || snapshot.Connections[0].Pending != want {
+		t.Fatalf(
+			"scheduler pending = backend %d, connection %d, want %d",
+			snapshot.Backends[0].Pending,
+			snapshot.Connections[0].Pending,
+			want,
+		)
 	}
 }

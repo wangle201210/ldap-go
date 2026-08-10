@@ -448,7 +448,7 @@ func TestProxyRejectRestrictionDoesNotReachUpstream(t *testing.T) {
 	}
 }
 
-func TestProxyRejectsUnsupportedLocalExtendedOperations(t *testing.T) {
+func TestProxyRejectsUnsupportedLocalStartTLS(t *testing.T) {
 	var extendedRequests atomic.Int64
 	upstream := startProxyTestUpstream(t, "unused", func(_ net.Conn, frame Frame) bool {
 		if frame.ProtocolTag == TagExtendedRequest {
@@ -471,35 +471,26 @@ func TestProxyRejectsUnsupportedLocalExtendedOperations(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer connection.Close()
-	for index, oid := range []string{clientStartTLSOID, clientCancelOID} {
-		messageID := int64(12 + index)
-		request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
-			ID: messageID,
-			Request: ldapwire.ExtendedRequest{
-				Name: oid,
-				Value: func() []byte {
-					if oid == clientCancelOID {
-						return ldapwire.EncodeCancelRequestValue(1)
-					}
-					return nil
-				}(),
-				HasValue: oid == clientCancelOID,
-			},
-		})
-		if err != nil {
-			t.Fatalf("encode extended operation %s: %v", oid, err)
-		}
-		if err := ldapwire.Write(connection, request); err != nil {
-			t.Fatalf("write extended operation %s: %v", oid, err)
-		}
-		response, err := ReadFrame(connection, DefaultMaxFrameSize)
-		if err != nil {
-			t.Fatalf("read extended operation %s response: %v", oid, err)
-		}
-		if response.MessageID != messageID || response.ResultCode == nil ||
-			*response.ResultCode != ResultCode(ldapwire.ResultUnwillingToPerform) {
-			t.Fatalf("extended operation %s response = %s", oid, response)
-		}
+	const messageID = int64(12)
+	request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
+		ID: messageID,
+		Request: ldapwire.ExtendedRequest{
+			Name: clientStartTLSOID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode StartTLS: %v", err)
+	}
+	if err := ldapwire.Write(connection, request); err != nil {
+		t.Fatalf("write StartTLS: %v", err)
+	}
+	response, err := ReadFrame(connection, DefaultMaxFrameSize)
+	if err != nil {
+		t.Fatalf("read StartTLS response: %v", err)
+	}
+	if response.MessageID != messageID || response.ResultCode == nil ||
+		*response.ResultCode != ResultCode(ldapwire.ResultUnwillingToPerform) {
+		t.Fatalf("StartTLS response = %s", response)
 	}
 	if extendedRequests.Load() != 0 {
 		t.Fatalf("unsupported local extended operations reached upstream %d times", extendedRequests.Load())

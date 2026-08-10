@@ -96,17 +96,25 @@ as the service identity. Auth-only client SASL remains on its exclusive bound
 upstream and does not receive an empty ProxyAuthz control; EXTERNAL is rejected
 until the listener can derive a trustworthy local TLS or Unix peer identity.
 A concurrency-safe scheduler implements ordered tiers, round-robin, weighted,
-and best-of selection, per-backend and per-connection limits, latency
-observations, and the OpenLDAP distinction between a busy tier and one with no
-available backend. Restrictions and write coherence increase affinity from a
-backend to a specific upstream when needed.
+and best-of selection, per-backend and per-connection limits, OpenLDAP's
+decaying best-of latency fitness, and the distinction between a busy tier and
+one with no available backend. Restrictions and write coherence increase
+affinity from a backend to a specific upstream when needed.
+
+RFC 3909 Cancel is registered as a separate operation on the same physical
+upstream as its target. The outer Cancel message ID and inner `cancelID` are
+both translated, the client association is revalidated before attachment, and
+ProxyAuthz identity is retained. Its signaling lease may temporarily exceed a
+full client/backend/connection limit so the operation that consumes the last
+slot can still be canceled, but remains included in pending accounting. A
+target admits at most one in-flight Cancel; Cancel itself cannot be abandoned.
 
 The proxy owns listener-accepted clients and background backend maintainers;
 upstream loss completes affected operations with OpenLDAP's `other` result and
 the maintainer rebuilds the configured pool. Connection establishment and
 service Bind reads are context-cancellable, and service Bind honors its
-configured timeout. Client-facing StartTLS and Cancel are rejected locally
-until their stateful implementations exist. Client-facing TLS/PROXY v2,
+configured timeout. Client-facing StartTLS is rejected locally until its
+stateful implementation exists. Client-facing TLS/PROXY v2,
 service-account SASL, exact SASL post-Bind identity restoration and security
 layers, embedded slapd-module configuration/monitoring, and dynamic topology
 are outside the current runtime contract.

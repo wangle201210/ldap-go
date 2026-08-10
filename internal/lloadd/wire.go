@@ -108,6 +108,8 @@ type Frame struct {
 	ControlsRaw      RawBER
 	Controls         []Control
 	ExtendedOID      string
+	ExtendedValue    RawBER
+	HasExtendedValue bool
 	Bind             *BindMetadata
 	ResultCode       *ResultCode
 	AbandonTarget    int64
@@ -209,6 +211,42 @@ func RewriteAbandonMessageIDs(
 	targetMessageID int64,
 ) ([]byte, error) {
 	return rewriteAbandon(frame, messageID, targetMessageID)
+}
+
+func RewriteExtendedRequestValue(
+	frame Frame,
+	messageID int64,
+	requestValue []byte,
+) ([]byte, error) {
+	if err := validateMessageID(messageID, false); err != nil {
+		return nil, err
+	}
+	if err := validateFrameParts(frame); err != nil {
+		return nil, err
+	}
+	if frame.ProtocolTag != TagExtendedRequest {
+		return nil, malformed("frame is not an ExtendedRequest")
+	}
+	protocol, next, err := parseElement(frame.ProtocolOp, 0)
+	if err != nil || next != len(frame.ProtocolOp) ||
+		!elementIs(protocol, berClassApplication, true, TagExtendedRequest) {
+		return nil, malformed("invalid ExtendedRequest protocol op")
+	}
+	if _, _, _, err := parseExtendedRequestMetadata(frame.ProtocolOp, protocol); err != nil {
+		return nil, err
+	}
+	requestName, _, err := parseElement(frame.ProtocolOp, protocol.contentStart)
+	if err != nil || !elementIs(requestName, berClassContext, false, 0) {
+		return nil, malformed("invalid ExtendedRequest OID")
+	}
+	operation := encodeTLV(
+		0x77,
+		joinBER(
+			frame.ProtocolOp[requestName.start:requestName.end],
+			encodeTLV(0x81, requestValue),
+		),
+	)
+	return encodeFrame(messageID, operation, frame.ControlsRaw), nil
 }
 
 func EncodeAbandonRequest(messageID, targetMessageID int64) ([]byte, error) {
@@ -338,6 +376,18 @@ func (berFrameCodec) RewriteAbandon(
 	return RewriteAbandonMessageIDs(parsed, messageID, targetMessageID)
 }
 
+func (berFrameCodec) RewriteExtendedRequestValue(
+	frame proxyFrame,
+	messageID int64,
+	requestValue []byte,
+) ([]byte, error) {
+	parsed, err := parseProxyFrame(frame)
+	if err != nil {
+		return nil, err
+	}
+	return RewriteExtendedRequestValue(parsed, messageID, requestValue)
+}
+
 func (berFrameCodec) EncodeAbandon(messageID, targetMessageID int64) ([]byte, error) {
 	return EncodeAbandonRequest(messageID, targetMessageID)
 }
@@ -365,12 +415,14 @@ func (berFrameCodec) EncodeResult(
 
 func projectProxyFrame(frame Frame) proxyFrame {
 	projected := proxyFrame{
-		Raw:           []byte(frame.Raw),
-		MessageID:     frame.MessageID,
-		ProtocolTag:   frame.ProtocolTag,
-		ExtendedOID:   frame.ExtendedOID,
-		AbandonID:     frame.AbandonTarget,
-		FinalResponse: IsFinalResponse(frame),
+		Raw:              []byte(frame.Raw),
+		MessageID:        frame.MessageID,
+		ProtocolTag:      frame.ProtocolTag,
+		ExtendedOID:      frame.ExtendedOID,
+		ExtendedValue:    append(RawBER(nil), frame.ExtendedValue...),
+		HasExtendedValue: frame.HasExtendedValue,
+		AbandonID:        frame.AbandonTarget,
+		FinalResponse:    IsFinalResponse(frame),
 	}
 	if len(frame.Controls) != 0 {
 		projected.Controls = make([]string, len(frame.Controls))
@@ -482,11 +534,13 @@ func parseOwnedFrame(raw []byte, max int64) (Frame, error) {
 		}
 		frame.Bind = &bind
 	case TagExtendedRequest:
-		oid, extendedErr := parseExtendedRequestOID(raw, protocol)
+		oid, value, hasValue, extendedErr := parseExtendedRequestMetadata(raw, protocol)
 		if extendedErr != nil {
 			return Frame{}, extendedErr
 		}
 		frame.ExtendedOID = oid
+		frame.ExtendedValue = value
+		frame.HasExtendedValue = hasValue
 	case TagAbandonRequest:
 		if protocol.constructed {
 			return Frame{}, malformed("AbandonRequest must be primitive")
@@ -639,30 +693,37 @@ func parseBindMetadata(raw []byte, protocol berElement) (BindMetadata, error) {
 	return metadata, nil
 }
 
-func parseExtendedRequestOID(raw []byte, protocol berElement) (string, error) {
+func parseExtendedRequestMetadata(
+	raw []byte,
+	protocol berElement,
+) (string, RawBER, bool, error) {
 	if !protocol.constructed {
-		return "", malformed("ExtendedRequest must be constructed")
+		return "", nil, false, malformed("ExtendedRequest must be constructed")
 	}
 	requestName, next, err := parseElement(raw, protocol.contentStart)
 	if err != nil || !elementIs(requestName, berClassContext, false, 0) {
-		return "", malformed("invalid ExtendedRequest OID")
+		return "", nil, false, malformed("invalid ExtendedRequest OID")
 	}
 	oid, err := parseNumericOID(raw[requestName.contentStart:requestName.end])
 	if err != nil {
-		return "", malformed("invalid ExtendedRequest OID")
+		return "", nil, false, malformed("invalid ExtendedRequest OID")
 	}
+	var value RawBER
+	hasValue := false
 	if next < protocol.end {
 		requestValue, valueEnd, valueErr := parseElement(raw, next)
 		if valueErr != nil || valueEnd != protocol.end ||
 			!elementIs(requestValue, berClassContext, false, 1) {
-			return "", malformed("invalid ExtendedRequest value")
+			return "", nil, false, malformed("invalid ExtendedRequest value")
 		}
+		value = RawBER(raw[requestValue.contentStart:requestValue.end])
+		hasValue = true
 		next = valueEnd
 	}
 	if next != protocol.end {
-		return "", malformed("unexpected ExtendedRequest field")
+		return "", nil, false, malformed("unexpected ExtendedRequest field")
 	}
-	return oid, nil
+	return oid, value, hasValue, nil
 }
 
 func parseLDAPResultCode(raw []byte, protocol berElement) (ResultCode, error) {

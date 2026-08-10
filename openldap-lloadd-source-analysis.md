@@ -23,7 +23,7 @@
 5. 没有“等待 upstream 空闲”的 operation 队列。达到 client/backend/connection 上限或连接暂时忙时，当前 operation 立即得到 `LDAP_BUSY`；没有已建立的合适连接时得到 `LDAP_UNAVAILABLE`。
 6. 没有独立 LDAP ping/health-search。健康度由 DNS、TCP connect、TLS/StartTLS、服务 Bind、实际收发成功以及 socket keepalive 间接决定；失败后按固定间隔重建池，无指数退避或 jitter。
 7. 客户端 StartTLS 在 lloadd 本地终止，和 upstream TLS 配置相互独立。客户端 SASL 代理有明确限制；SASL EXTERNAL 在本地根据客户端证书 DN 完成，其他多步 SASL Bind 固定到 bind upstream。
-8. LDAP Cancel extended operation没有 messageID 内层改写实现，官方示例明确建议配置为 `reject`。Abandon 则有正确的 client/upstream messageID 映射。Transactions 没有事务状态机，只能通过 `connection` restriction 保证同一 upstream，固定范围会延续到下一次 Bind。
+8. LDAP Cancel extended operation没有 messageID 内层改写实现，官方示例明确建议配置为 `reject`。Go 实现因此选择 RFC 3909 修复语义：固定到目标物理 upstream，并同时改写外层 ID 与内层 `cancelID`；这不是对固定源码缺陷的复刻。Abandon 则有正确的 client/upstream messageID 映射。Transactions 没有事务状态机，只能通过 `connection` restriction 保证同一 upstream，固定范围会延续到下一次 Bind。
 9. `cn=config` 和 `cn=monitor` 仅在 lloadd 作为 slapd 模块时可用；该模块仍拥有独立 listener，且没有任何 slapd `bi_op_*` 回调，流量与 slapd 普通数据库完全隔离。
 10. 源码存在若干必须由 oracle 固化的边界或疑似缺陷：文档默认值与代码不同、`idletimeout`/legacy `restrict` 只解析不执行、`isolate` 标为 TODO、Bind 后 affinity 状态清理可疑、在线变更 `bindconf` 后 PRIVILEGED 判定疑似反向、daemon 的 gentle shutdown 不像真正 drain、DNS 仅尝试首个 addrinfo。
 

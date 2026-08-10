@@ -180,6 +180,9 @@ type proxyOperation struct {
 	bindSASL       bool
 	bindDN         string
 	bindGeneration uint64
+	cancel         bool
+	cancelTarget   *proxyOperation
+	cancelInFlight bool
 	requestSent    bool
 	abandoning     bool
 	started        time.Time
@@ -191,25 +194,28 @@ type frameCodec interface {
 	Read(io.Reader, int64) (proxyFrame, error)
 	RewriteMessageID(proxyFrame, int64) ([]byte, error)
 	RewriteAbandon(proxyFrame, int64, int64) ([]byte, error)
+	RewriteExtendedRequestValue(proxyFrame, int64, []byte) ([]byte, error)
 	EncodeAbandon(int64, int64) ([]byte, error)
 	PrependProxyAuthz(proxyFrame, int64, []byte) ([]byte, error)
 	EncodeResult(int64, uint64, ldapwire.ResultCode, string) ([]byte, error)
 }
 
 type proxyFrame struct {
-	Raw           []byte
-	MessageID     int64
-	ProtocolTag   uint64
-	Controls      []string
-	ExtendedOID   string
-	AbandonID     int64
-	BindVersion   int
-	BindDN        string
-	BindSASL      bool
-	BindMechanism string
-	ResultCode    ldapwire.ResultCode
-	HasResultCode bool
-	FinalResponse bool
+	Raw              []byte
+	MessageID        int64
+	ProtocolTag      uint64
+	Controls         []string
+	ExtendedOID      string
+	ExtendedValue    RawBER
+	HasExtendedValue bool
+	AbandonID        int64
+	BindVersion      int
+	BindDN           string
+	BindSASL         bool
+	BindMechanism    string
+	ResultCode       ldapwire.ResultCode
+	HasResultCode    bool
+	FinalResponse    bool
 }
 
 func NewProxy(config RuntimeConfig) (*Proxy, error) {

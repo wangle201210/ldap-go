@@ -365,6 +365,24 @@ func TestProxyClientMaxPendingMatchesOpenLDAPThreshold(t *testing.T) {
 	})
 }
 
+func TestUpstreamMessageIDAllocationSkipsPendingIDsAcrossWrap(t *testing.T) {
+	upstream := &upstreamConnection{
+		nextID: MaxMessageID,
+		pending: map[int64]*proxyOperation{
+			MaxMessageID: {},
+			1:            {},
+		},
+	}
+	messageID, ok := upstream.allocateMessageID()
+	if !ok || messageID != 2 {
+		t.Fatalf("allocateMessageID() = (%d, %t), want (2, true)", messageID, ok)
+	}
+	messageID, ok = upstream.allocateMessageID()
+	if !ok || messageID != 3 {
+		t.Fatalf("second allocateMessageID() = (%d, %t), want (3, true)", messageID, ok)
+	}
+}
+
 func dialProxyProtocolTestClient(t *testing.T, address string) net.Conn {
 	t.Helper()
 	connection, err := net.Dial("tcp", address)

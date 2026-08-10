@@ -1,6 +1,7 @@
 package lloadd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +58,13 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 	if frame.MessageID == 0 || !isClientRequestTag(frame.ProtocolTag) {
 		return false
 	}
+	client.mu.Lock()
+	_, duplicateMessageID := client.ops[frame.MessageID]
+	client.mu.Unlock()
+	if duplicateMessageID {
+		client.close()
+		return false
+	}
 	switch frame.ProtocolTag {
 	case ldapwire.ApplicationUnbindRequest:
 		return false
@@ -65,6 +73,18 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 		return true
 	case ldapwire.ApplicationBindRequest:
 		client.handleBind(frame)
+		return true
+	}
+	client.mu.Lock()
+	binding := client.binding
+	client.mu.Unlock()
+	if binding {
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultProtocolError,
+			"bind in progress",
+		)
 		return true
 	}
 	if frame.ProtocolTag == ldapwire.ApplicationExtendedRequest {
@@ -78,27 +98,9 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 			)
 			return true
 		case clientCancelOID:
-			client.sendResult(
-				frame.MessageID,
-				frame.ProtocolTag,
-				ldapwire.ResultUnwillingToPerform,
-				"client Cancel target rewriting is not implemented",
-			)
+			client.handleCancel(frame)
 			return true
 		}
-	}
-
-	client.mu.Lock()
-	binding := client.binding
-	client.mu.Unlock()
-	if binding {
-		client.sendResult(
-			frame.MessageID,
-			frame.ProtocolTag,
-			ldapwire.ResultProtocolError,
-			"bind in progress",
-		)
-		return true
 	}
 	client.route(frame, false)
 	return true
@@ -347,7 +349,7 @@ func (client *clientConnection) register(operation *proxyOperation) (
 		return ldapwire.ResultProtocolError, "message ID is already in use", true, false
 	}
 	if limit := client.proxy.config.ClientMaxPending; limit > 0 &&
-		!operation.bind && len(client.ops)+1 >= limit {
+		!operation.bind && !operation.cancel && len(client.ops)+1 >= limit {
 		return ldapwire.ResultBusy, "too many pending operations", false, false
 	}
 	client.ops[operation.clientID] = operation
@@ -364,19 +366,150 @@ func (client *clientConnection) handleAbandon(frame proxyFrame) {
 	client.abandonOperation(operation, &frame, false)
 }
 
+func (client *clientConnection) handleCancel(frame proxyFrame) {
+	operation := &proxyOperation{
+		client:     client,
+		clientID:   frame.MessageID,
+		requestTag: frame.ProtocolTag,
+		cancel:     true,
+		started:    time.Now(),
+	}
+	if _, _, closeClient, ok := client.register(operation); !ok {
+		if closeClient {
+			client.close()
+		}
+		return
+	}
+	reject := func(code ldapwire.ResultCode, diagnostic string) {
+		operation.responseMu.Lock()
+		won := operation.finish(false)
+		operation.responseMu.Unlock()
+		if won {
+			client.sendResult(frame.MessageID, frame.ProtocolTag, code, diagnostic)
+		}
+	}
+
+	if client.requestRestriction(frame) == RuntimeRestrictionReject {
+		reject(ldapwire.ResultUnwillingToPerform, "extended operation or control disallowed")
+		return
+	}
+	if !frame.HasExtendedValue {
+		reject(ldapwire.ResultProtocolError, "no message ID supplied")
+		return
+	}
+	if len(frame.ExtendedValue) == 0 {
+		reject(ldapwire.ResultProtocolError, "empty request data field")
+		return
+	}
+	targetID, err := ldapwire.DecodeCancelRequestValue([]byte(frame.ExtendedValue))
+	if err != nil {
+		reject(ldapwire.ResultProtocolError, "message ID parse failed")
+		return
+	}
+
+	client.mu.Lock()
+	target := client.ops[targetID]
+	client.mu.Unlock()
+	if target == nil {
+		reject(ldapwire.ResultNoSuchOperation, "message ID not found")
+		return
+	}
+	if target == operation {
+		reject(ldapwire.ResultCannotCancel, "Cancel operations cannot be canceled")
+		return
+	}
+
+	target.responseMu.Lock()
+	client.mu.Lock()
+	current := client.ops[targetID]
+	client.mu.Unlock()
+	if current != target || target.finished.Load() {
+		target.responseMu.Unlock()
+		reject(ldapwire.ResultNoSuchOperation, "message ID not found")
+		return
+	}
+	if target.bind || target.cancel {
+		target.responseMu.Unlock()
+		diagnostic := "operation does not support cancellation"
+		if target.cancel {
+			diagnostic = "Cancel operations cannot be canceled"
+		}
+		reject(ldapwire.ResultCannotCancel, diagnostic)
+		return
+	}
+	upstream, upstreamTargetID, duplicate, attached := attachCancelOperation(operation, target)
+	if !attached {
+		target.responseMu.Unlock()
+		if duplicate {
+			reject(ldapwire.ResultOperationsError, "message ID already being cancelled")
+			return
+		}
+		reject(ldapwire.ResultTooLate, "operation can no longer be canceled")
+		return
+	}
+
+	encoded, err := client.proxy.codec.RewriteExtendedRequestValue(
+		frame,
+		operation.upstreamID,
+		ldapwire.EncodeCancelRequestValue(upstreamTargetID),
+	)
+	useProxyAuthz := client.proxy.config.ProxyAuthz &&
+		!client.privileged() && !upstream.ownerFor(client)
+	if err == nil && useProxyAuthz {
+		var rewritten proxyFrame
+		rewritten, err = client.proxy.codec.Read(bytes.NewReader(encoded), int64(len(encoded)))
+		if err == nil {
+			encoded, err = client.proxy.codec.PrependProxyAuthz(
+				rewritten,
+				operation.upstreamID,
+				client.authorizationIdentity(),
+			)
+		}
+	}
+	writeAttempted := false
+	if err == nil {
+		writeAttempted = true
+		err = operation.writeRequest(encoded)
+	}
+	target.responseMu.Unlock()
+	if errors.Is(err, errOperationFinished) {
+		return
+	}
+	if err == nil {
+		return
+	}
+	operation.responseMu.Lock()
+	won := operation.finish(false)
+	operation.responseMu.Unlock()
+	if won {
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultOther,
+			"connection to the remote server has been severed",
+		)
+	}
+	if writeAttempted {
+		upstream.closeWithError(err)
+	}
+}
+
 func (client *clientConnection) abandonOperation(
 	operation *proxyOperation,
 	frame *proxyFrame,
-	finishBind bool,
+	finishUnabandonable bool,
 ) {
 	operation.responseMu.Lock()
 	operation.mu.Lock()
 	bind := operation.bind
-	if bind {
+	unabandonable := bind || operation.cancel
+	if unabandonable {
 		operation.mu.Unlock()
-		if finishBind {
+		if finishUnabandonable {
 			if operation.finish(false) {
-				client.clearBindAttempt(operation)
+				if bind {
+					client.clearBindAttempt(operation)
+				}
 			}
 		}
 		operation.responseMu.Unlock()
@@ -635,14 +768,9 @@ func (upstream *upstreamConnection) attach(
 			return false
 		}
 	}
-	messageID := upstream.nextID
-	upstream.nextID++
-	if upstream.nextID <= 0 || upstream.nextID > 1<<31-1 {
-		upstream.nextID = 1
-	}
-	for upstream.pending[messageID] != nil {
-		messageID = upstream.nextID
-		upstream.nextID++
+	messageID, ok := upstream.nextMessageIDLocked()
+	if !ok {
+		return false
 	}
 	operation.upstream = upstream
 	operation.upstreamID = messageID
@@ -655,18 +783,76 @@ func (upstream *upstreamConnection) attach(
 	return true
 }
 
+func attachCancelOperation(
+	operation *proxyOperation,
+	target *proxyOperation,
+) (*upstreamConnection, int64, bool, bool) {
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	if target.cancelInFlight {
+		return nil, 0, true, false
+	}
+	if operation.finished.Load() || target.finished.Load() || target.abandoning ||
+		!target.requestSent || target.upstream == nil || target.client != operation.client {
+		return nil, 0, false, false
+	}
+	upstream := target.upstream
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+	client := operation.client
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed || upstream.closed ||
+		upstream.pending[target.upstreamID] != target {
+		return nil, 0, false, false
+	}
+	lease, err := client.proxy.scheduler.reserveSignalingConnection(upstream.id)
+	if err != nil {
+		return nil, 0, false, false
+	}
+	messageID, ok := upstream.nextMessageIDLocked()
+	if !ok {
+		lease.Release()
+		return nil, 0, false, false
+	}
+	operation.upstream = upstream
+	operation.upstreamID = messageID
+	operation.lease = lease
+	operation.cancelTarget = target
+	target.cancelInFlight = true
+	upstream.pending[messageID] = operation
+	return upstream, target.upstreamID, false, true
+}
+
 func (upstream *upstreamConnection) allocateMessageID() (int64, bool) {
 	upstream.mu.Lock()
 	defer upstream.mu.Unlock()
+	return upstream.nextMessageIDLocked()
+}
+
+func (upstream *upstreamConnection) nextMessageIDLocked() (int64, bool) {
 	if upstream.closed {
 		return 0, false
 	}
-	messageID := upstream.nextID
-	upstream.nextID++
-	if upstream.nextID <= 0 || upstream.nextID > 1<<31-1 {
+	if upstream.nextID <= 0 || upstream.nextID > MaxMessageID {
 		upstream.nextID = 1
 	}
-	return messageID, true
+	first := upstream.nextID
+	for {
+		messageID := upstream.nextID
+		upstream.nextID++
+		if upstream.nextID > MaxMessageID {
+			upstream.nextID = 1
+		}
+		if upstream.pending[messageID] == nil {
+			return messageID, true
+		}
+		if upstream.nextID == first {
+			return 0, false
+		}
+	}
 }
 
 func (upstream *upstreamConnection) write(encoded []byte) error {
@@ -735,6 +921,7 @@ func (operation *proxyOperation) finish(response bool) bool {
 	client := operation.client
 	upstream := operation.upstream
 	lease := operation.lease
+	cancelTarget := operation.cancelTarget
 	operation.mu.Unlock()
 	if upstream != nil {
 		upstream.mu.Lock()
@@ -745,6 +932,11 @@ func (operation *proxyOperation) finish(response bool) bool {
 	}
 	if lease != nil {
 		lease.Release()
+	}
+	if cancelTarget != nil {
+		cancelTarget.mu.Lock()
+		cancelTarget.cancelInFlight = false
+		cancelTarget.mu.Unlock()
 	}
 	client.mu.Lock()
 	if client.ops[operation.clientID] == operation {

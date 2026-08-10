@@ -59,6 +59,11 @@ func (upstream *upstreamConnection) handleResponse(frame proxyFrame) {
 		upstream.closeWithError(errors.New("unexpected response type for upstream Bind"))
 		return
 	}
+	if operation.cancel && frame.ProtocolTag != ldapwire.ApplicationExtendedResponse {
+		operation.responseMu.Unlock()
+		upstream.closeWithError(errors.New("unexpected response type for upstream Cancel"))
+		return
+	}
 	if operation.firstSeen.CompareAndSwap(false, true) {
 		if operation.lease != nil {
 			operation.lease.RecordFirstResponse(time.Since(operation.started))

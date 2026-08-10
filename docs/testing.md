@@ -172,11 +172,16 @@ message-ID and Abandon rewriting, scheduling and limits, pool recovery,
 Simple service/client Bind, ProxyAuthz, auth-only SASL pinning, strict client
 request envelopes, single-winner final responses, connection/Bind shutdown,
 escaped and three-slash LDAPI addresses, unsupported-operation rejection,
-explicit/disconnect/re-Bind Abandon, restriction rejection, and concurrent
-client multiplexing. Gated live tests run equivalent no-backend/restriction and
-Bind plus Search sequences against the built OpenLDAP 2.6.13 `lloadd` and the
-Go proxy. These tests establish the documented subset, not complete daemon,
-TLS, SASL, dynamic-config, or monitor compatibility.
+explicit/disconnect/re-Bind Abandon, RFC 3909 Cancel outer/inner ID rewriting,
+same-upstream and same-association enforcement, pending-limit signaling leases,
+ProxyAuthz preservation, malformed/duplicate/retry handling, restriction
+rejection, and concurrent client multiplexing. Gated live tests run equivalent
+no-backend/restriction and Bind plus Search sequences against the built
+OpenLDAP 2.6.13 `lloadd` and the Go proxy. Cancel is verified locally against
+RFC 3909 because the pinned OpenLDAP lloadd forwards an unmodified inner ID;
+that known defect is not the compatibility oracle. These tests establish the
+documented subset, not complete daemon, TLS, SASL, dynamic-config, or monitor
+compatibility.
 
 The built-in client-tool suite uses raw LDAP wire fixtures to verify generic
 control criticality and absent/empty/string/Base64/file values across Search,

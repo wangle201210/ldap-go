@@ -410,6 +410,22 @@ func (scheduler *Scheduler) reserveOwnedConnection(
 	return scheduler.reserveLocked(connection.backend, connection), nil
 }
 
+// reserveSignalingConnection accounts for a protocol operation that must use
+// an exact live connection even when the target operation already fills its
+// configured capacity. The caller is responsible for proving that relationship.
+func (scheduler *Scheduler) reserveSignalingConnection(connectionID string) (*Lease, error) {
+	if scheduler == nil {
+		return nil, ErrUnavailable
+	}
+	scheduler.mu.Lock()
+	defer scheduler.mu.Unlock()
+	connection := scheduler.connections[connectionID]
+	if connection == nil || connection.state == ConnectionUnavailable {
+		return nil, ErrUnavailable
+	}
+	return scheduler.reserveLocked(connection.backend, connection), nil
+}
+
 // SetConnectionState updates established-pool membership or temporary busy
 // state without disturbing existing leases.
 func (scheduler *Scheduler) SetConnectionState(

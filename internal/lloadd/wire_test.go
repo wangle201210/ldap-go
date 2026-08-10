@@ -97,14 +97,29 @@ func TestReadFrameParsesSASLBindAndExtendedRequestMetadata(t *testing.T) {
 		encodeTLV(0x81, extendedValue),
 	))
 	extendedFrame := mustParseFrame(t, encodeFrame(13, extended, nil))
-	if extendedFrame.ExtendedOID != passwordModifyOID {
-		t.Fatalf("ExtendedOID = %q", extendedFrame.ExtendedOID)
+	if extendedFrame.ExtendedOID != passwordModifyOID || !extendedFrame.HasExtendedValue ||
+		!bytes.Equal(extendedFrame.ExtendedValue, extendedValue) {
+		t.Fatalf(
+			"ExtendedRequest metadata = oid %q, hasValue %t, value bytes %d",
+			extendedFrame.ExtendedOID,
+			extendedFrame.HasExtendedValue,
+			len(extendedFrame.ExtendedValue),
+		)
 	}
 	if !bytes.Equal(extendedFrame.ProtocolOp, extended) {
 		t.Fatal("ExtendedRequest was not byte-preserved")
 	}
-	if strings.Contains(fmt.Sprintf("%#v", extendedFrame), string(extendedValue)) {
+	if strings.Contains(fmt.Sprintf("%#v", extendedFrame), string(extendedValue)) ||
+		strings.Contains(fmt.Sprintf("%s", extendedFrame.ExtendedValue), string(extendedValue)) {
 		t.Fatal("ExtendedRequest value was rendered")
+	}
+	withoutValue := mustParseFrame(t, encodeFrame(
+		14,
+		encodeTLV(0x77, encodeTLV(0x80, []byte(passwordModifyOID))),
+		nil,
+	))
+	if withoutValue.HasExtendedValue || withoutValue.ExtendedValue != nil {
+		t.Fatalf("value-free ExtendedRequest metadata = %#v", withoutValue)
 	}
 }
 
@@ -573,6 +588,41 @@ func TestBERFrameCodecAdapter(t *testing.T) {
 	rewrittenFrame := mustParseFrame(t, rewritten)
 	if rewrittenFrame.MessageID != 129 || rewrittenFrame.AbandonTarget != 130 {
 		t.Fatalf("codec Abandon rewrite = %#v", rewrittenFrame)
+	}
+
+	cancelRaw, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
+		ID: 19,
+		Request: ldapwire.ExtendedRequest{
+			Name:     clientCancelOID,
+			Value:    ldapwire.EncodeCancelRequestValue(17),
+			HasValue: true,
+		},
+		Controls: []ldapwire.Control{{OID: "1.2.3"}},
+	})
+	if err != nil {
+		t.Fatalf("encode Cancel: %v", err)
+	}
+	cancel, err := codec.Read(bytes.NewReader(cancelRaw), int64(len(cancelRaw)))
+	if err != nil {
+		t.Fatalf("berFrameCodec.Read(Cancel) error = %v", err)
+	}
+	rewritten, err = codec.RewriteExtendedRequestValue(
+		cancel,
+		131,
+		ldapwire.EncodeCancelRequestValue(130),
+	)
+	if err != nil {
+		t.Fatalf("berFrameCodec.RewriteExtendedRequestValue() error = %v", err)
+	}
+	rewrittenFrame = mustParseFrame(t, rewritten)
+	rewrittenTarget, err := ldapwire.DecodeCancelRequestValue([]byte(rewrittenFrame.ExtendedValue))
+	if err != nil {
+		t.Fatalf("decode rewritten Cancel target: %v", err)
+	}
+	if rewrittenFrame.MessageID != 131 || rewrittenFrame.ExtendedOID != clientCancelOID ||
+		!rewrittenFrame.HasExtendedValue || rewrittenTarget != 130 ||
+		len(rewrittenFrame.Controls) != 1 || rewrittenFrame.Controls[0].OID != "1.2.3" {
+		t.Fatalf("codec Cancel rewrite = %#v", rewrittenFrame)
 	}
 
 	encoded, err := codec.EncodeResult(19, TagSearchRequest, ldapwire.ResultBusy, "busy")
