@@ -73,6 +73,44 @@ Unbind, and connection teardown discard it without that notice. Password Modify
 generates an omitted new password once while cloning the request, returns it in
 that operation's immediate RFC 3062 response, and commits the same value.
 
+### LDAP load balancer
+
+The standalone `internal/lloadd` runtime is separate from the directory
+service agent and storage stack. It accepts bounded LDAP BER frames, parses
+only the outer message envelope needed for routing, and preserves protocol-op
+and control payloads while translating client and upstream message IDs. Search
+entries, references, and intermediate responses retain an operation until its
+final response; Abandon rewrites its embedded target ID and removes the mapped
+operation without forwarding a response. Client disconnect and replacement
+Bind paths synthesize the same mapped Abandon for outstanding non-Bind
+operations. Attachment and completion share a small operation lock, and only
+the goroutine that wins final completion may publish a terminal response.
+
+Each configured backend maintains regular and Bind connection pools. Regular
+connections can carry concurrent operations and may first perform a configured
+Simple service Bind. Bind connections are reserved for client authentication,
+and successful identity state is represented through critical ProxyAuthz on
+later regular operations. A non-anonymous service Bind is rejected unless
+ProxyAuthz is enabled, preventing anonymous clients from accidentally running
+as the service identity. Auth-only client SASL remains on its exclusive bound
+upstream and does not receive an empty ProxyAuthz control; EXTERNAL is rejected
+until the listener can derive a trustworthy local TLS or Unix peer identity.
+A concurrency-safe scheduler implements ordered tiers, round-robin, weighted,
+and best-of selection, per-backend and per-connection limits, latency
+observations, and the OpenLDAP distinction between a busy tier and one with no
+available backend. Restrictions and write coherence increase affinity from a
+backend to a specific upstream when needed.
+
+The proxy owns listener-accepted clients and background backend maintainers;
+upstream loss completes affected operations with OpenLDAP's `other` result and
+the maintainer rebuilds the configured pool. Connection establishment and
+service Bind reads are context-cancellable, and service Bind honors its
+configured timeout. Client-facing StartTLS and Cancel are rejected locally
+until their stateful implementations exist. Client-facing TLS/PROXY v2,
+service-account SASL, exact SASL post-Bind identity restoration and security
+layers, embedded slapd-module configuration/monitoring, and dynamic topology
+are outside the current runtime contract.
+
 ### Directory service agent
 
 The DSA implements Bind, Search, Modify, Add, Delete, ModifyDN, Compare,

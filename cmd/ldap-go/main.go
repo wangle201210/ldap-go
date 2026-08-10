@@ -90,6 +90,8 @@ func run(
 		err = runLDAPDelete(args[1:], stdin, stdout, stderr)
 	case "ldapmodrdn":
 		err = runLDAPModRDN(args[1:], stdin, stdout, stderr)
+	case "lloadd":
+		err = runLloadd(args[1:], stdout, stderr)
 	case "export", "slapcat":
 		err = runExport(args[0], args[1:], stdout, stderr)
 	case "passwd", "slappasswd":
@@ -1626,6 +1628,7 @@ commands:
   ldapadd  add LDIF entries or apply explicit change records
   ldapdelete  delete LDAP entries by DN
   ldapmodrdn  rename or move LDAP entries
+  lloadd   run the LDAP-aware reverse proxy/load balancer
   export   atomically export a directory database as LDIF
   slapcat  OpenLDAP-style alias for export
   passwd   generate a PBKDF2-SM3 userPassword value

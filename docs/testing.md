@@ -45,23 +45,24 @@ make full
 `make compat` runs formatting, vet, all Go tests, the selected OpenLDAP
 reference suite, and a bounded fuzz smoke pass. `make full` additionally runs
 the complete suite with the race detector, builds the fixed OpenLDAP 2.6.13
-source locally with the required backends and overlays enabled, rejects every
-top-level skip, and fuzzes every parser target for five seconds. Set
-`LDAP_GO_FUZZ_TIME` to extend the fuzz duration before a compatibility row is
-promoted. Corpus minimization is bounded to keep short runs deterministic;
+source locally with the required backends, overlays, and `lloadd` enabled,
+rejects every top-level skip, and fuzzes every parser target for five seconds.
+Set `LDAP_GO_FUZZ_TIME` to extend the fuzz duration before a compatibility row
+is promoted. Corpus minimization is bounded to keep short runs deterministic;
 `LDAP_GO_FUZZ_MINIMIZE_TIME` can extend that budget.
 
 The OpenLDAP runner requires 2.6.13 reference tools and schema. The strict
 evidence path uses the locally built pinned release described below. It runs
-the entire `internal/server` package with the reference gate enabled, so a new
-differential cannot be omitted from a manually maintained `-run` regular
-expression:
+the entire `internal/server` and `internal/lloadd` packages with the reference
+gate enabled, so a new differential cannot be omitted from a manually
+maintained `-run` regular expression:
 
 ```sh
 make openldap
 ```
 
-Missing tools and unexpected top-level skips fail the run. Two SCRAM-SHA-256
+Missing `slapd`, `slapadd`, `lloadd`, or schema files and unexpected top-level
+skips fail the run. Two SCRAM-SHA-256
 cases may be reported as optional skips when the local Cyrus SASL installation
 does not provide that plugin. Feature-gated differentials are optional when the
 selected `slapd -VVV` omits their required backend or overlay: `ldap`, `meta`,
@@ -125,9 +126,10 @@ test fixture databases remain inside the disposable container.
 For reproducible full-feature evidence, `make openldap-full` uses the pinned
 OpenLDAP 2.6.13 release commit
 `d172686d3d270bc961b78f3ff00d7019c8dfb094`, enables the `ldap`, `meta`,
-`null`, `relay`, and `mdb` backends plus every overlay used by the strict suite,
-builds only libraries/server/client tools, emits a sourceable runtime
-environment, and then rejects all optional skips. When `OPENLDAP_SOURCE` is
+`null`, `relay`, and `mdb` backends plus every overlay used by the strict suite
+and the standalone balancer. It builds the libraries, slapd/slap tools,
+`lloadd`, and client tools, emits a sourceable runtime environment, and then
+rejects all optional skips. When `OPENLDAP_SOURCE` is
 not set, the tagged source is shallow-cloned once into
 `${TMPDIR:-/tmp}/ldap-go-openldap-source-2.6.13`; set
 `OPENLDAP_SOURCE_CACHE` to move that managed cache:
@@ -135,6 +137,7 @@ not set, the tagged source is shallow-cloned once into
 ```sh
 BUILD=/tmp/ldap-go-openldap-reference-2.6 \
 CYRUS_SASL_PREFIX=/path/to/cyrus-sasl \
+LIBEVENT_PREFIX=/path/to/libevent \
   make openldap-full
 ```
 
@@ -142,10 +145,11 @@ An existing clean checkout at that exact commit can instead be selected with
 `OPENLDAP_SOURCE`. A development branch such as `OPENLDAP_REL_ENG_2_6` is
 rejected as compatibility evidence; `OPENLDAP_ALLOW_UNVERIFIED_REFERENCE=1`
 is reserved for upstream diagnostics and emits a warning. `OPENSSL_PREFIX`,
-`PREFIX`, `JOBS`, and `OPENLDAP_ENV_FILE` are optional. On Homebrew systems
-the script detects installed `openssl@3` and `cyrus-sasl` prefixes. The
-configuration signature permits deterministic incremental rebuilds while
-recording the exact OpenLDAP commit and runtime library paths.
+`CYRUS_SASL_PREFIX`, `LIBEVENT_PREFIX`, `PREFIX`, `JOBS`, and
+`OPENLDAP_ENV_FILE` are optional. On Homebrew systems the script detects
+installed `openssl@3`, `cyrus-sasl`, and `libevent` prefixes. The configuration
+signature permits deterministic incremental rebuilds while recording the exact
+OpenLDAP commit and runtime library paths.
 
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
@@ -160,6 +164,19 @@ ldap-go. It compares result codes, matched DNs, diagnostics, referrals, and
 normalized entry data. Overlay, control, SASL, transaction, CLI, migration,
 and replication differentials remain separate tests and are included by the
 same runner.
+
+The `lloadd` evidence group first pins source hashes and behavioral anchors for
+message-ID forwarding, tier fallback, Bind pinning, and restriction actions.
+Always-on tests cover standalone configuration parsing, bounded BER frames,
+message-ID and Abandon rewriting, scheduling and limits, pool recovery,
+Simple service/client Bind, ProxyAuthz, auth-only SASL pinning, strict client
+request envelopes, single-winner final responses, connection/Bind shutdown,
+escaped and three-slash LDAPI addresses, unsupported-operation rejection,
+explicit/disconnect/re-Bind Abandon, restriction rejection, and concurrent
+client multiplexing. Gated live tests run equivalent no-backend/restriction and
+Bind plus Search sequences against the built OpenLDAP 2.6.13 `lloadd` and the
+Go proxy. These tests establish the documented subset, not complete daemon,
+TLS, SASL, dynamic-config, or monitor compatibility.
 
 The built-in client-tool suite uses raw LDAP wire fixtures to verify generic
 control criticality and absent/empty/string/Base64/file values across Search,

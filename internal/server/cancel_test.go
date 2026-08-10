@@ -328,8 +328,9 @@ func TestLDAPCancelRejectsPendingSearch(t *testing.T) {
 		t.Fatalf("pending Search Cancel diagnostic = %q", diagnostic)
 	}
 
-	writeRawLDAPRequest(t, connection, 5, rawAbandonRequest(2), nil)
-	writeRawLDAPRequest(t, connection, 6, rawAbandonRequest(3), nil)
+	// Remove the pending Search before releasing the running Search's gate.
+	writeRawLDAPRequest(t, connection, 5, rawAbandonRequest(3), nil)
+	writeRawLDAPRequest(t, connection, 6, rawAbandonRequest(2), nil)
 	writeRawLDAPRequest(t, connection, 7, rawExtendedRequest(whoAmIOID, nil, false), nil)
 	assertRawLDAPEnvelope(
 		t,

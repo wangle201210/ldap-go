@@ -29,8 +29,15 @@ slapd=$(find_tool slapd \
 slapadd=$(find_tool slapadd \
 	/opt/homebrew/opt/openldap/sbin/slapadd \
 	/usr/sbin/slapadd)
+lloadd=$(find_tool lloadd \
+	"${OPENLDAP_LLOADD:-}" \
+	/opt/homebrew/opt/openldap/libexec/lloadd \
+	/usr/lib/openldap/lloadd \
+	/usr/sbin/lloadd)
+OPENLDAP_LLOADD=$lloadd
+export OPENLDAP_LLOADD
 
-tool_dirs="$(dirname "$slapd"):$(dirname "$slapadd")"
+tool_dirs="$(dirname "$slapd"):$(dirname "$slapadd"):$(dirname "$lloadd")"
 for directory in \
 	/opt/homebrew/opt/openldap/bin \
 	/opt/homebrew/opt/openldap/sbin \
@@ -77,8 +84,16 @@ if [ "$version" != "$expected_version" ]; then
 		"$expected_version" "${version:-unknown}" "$slapd" >&2
 	exit 1
 fi
+lloadd_version_output=$("$lloadd" -VV 2>&1 || true)
+lloadd_version=$(printf '%s\n' "$lloadd_version_output" | sed -n 's/.*lloadd \([^[:space:]]*\).*/\1/p' | head -n 1)
+if [ "$lloadd_version" != "$expected_version" ]; then
+	printf 'OpenLDAP lloadd version %s is required, found %s at %s\n' \
+		"$expected_version" "${lloadd_version:-unknown}" "$lloadd" >&2
+	exit 1
+fi
 
 printf 'OpenLDAP reference: %s (%s)\n' "$version" "$slapd"
+printf 'OpenLDAP lloadd:     %s (%s)\n' "$lloadd_version" "$OPENLDAP_LLOADD"
 if [ -n "${OPENLDAP_COMMIT:-}" ]; then
 	printf 'OpenLDAP commit:    %s (verified=%s)\n' \
 		"$OPENLDAP_COMMIT" "${OPENLDAP_REFERENCE_VERIFIED:-unknown}"
@@ -92,6 +107,7 @@ test_status=0
 test_parallel=${LDAP_GO_OPENLDAP_PARALLEL:-1}
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
 	go test ./internal/server \
+		./internal/lloadd \
 		-count=1 \
 		-timeout=30m \
 		-parallel="$test_parallel" \

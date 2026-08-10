@@ -2,6 +2,11 @@
 
 ## 0. 分析边界与结论口径
 
+> 实现状态（2026-08-04）：本文仍保留为当时的静态源码分析记录；其后已在
+> `internal/lloadd` 和 `ldap-go lloadd` 中实现文档化子集，并增加固定源码契约、
+> 本地并发/竞态测试以及 OpenLDAP 2.6.13 实时差分测试。当前兼容状态仍为
+> `partial`，具体范围以 `docs/compatibility.md` 为准。
+
 - 固定源码目录：`/tmp/openldap-2.6.13.IjWZV9`
 - 固定 Git commit：`d172686d3d270bc961b78f3ff00d7019c8dfb094`
 - 分析对象：该提交中的 `servers/lloadd`，并以同一提交中的 man page、管理员指南、官方 lloadd 测试，以及 `slapd/back-ldap`、`slapd/back-meta` 作对照。

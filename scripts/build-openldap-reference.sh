@@ -42,7 +42,7 @@ ensure_symlink() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, CYRUS_SASL_PREFIX, and OPENLDAP_ENV_FILE"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, and OPENLDAP_ENV_FILE"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -138,6 +138,7 @@ configure_help=$("$configure" --help 2>&1) || die "failed to inspect configure o
 set -- \
 	"--prefix=$effective_prefix_dir" \
 	--enable-slapd=yes \
+	--enable-balancer=yes \
 	--enable-shared=yes \
 	--disable-static \
 	--with-tls=openssl
@@ -216,6 +217,41 @@ if [ -n "$openssl_prefix" ]; then
 	runtime_dependency_path=$openssl_prefix/lib
 fi
 
+libevent_prefix=${LIBEVENT_PREFIX:-}
+if [ -n "$libevent_prefix" ]; then
+	if ! libevent_prefix=$(CDPATH= cd -- "$libevent_prefix" 2>/dev/null && pwd); then
+		die "LIBEVENT_PREFIX does not exist or is not readable: ${LIBEVENT_PREFIX}"
+	fi
+elif [ "$(uname -s 2>/dev/null || true)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+	brew_libevent=$(brew --prefix libevent 2>/dev/null || true)
+	if [ -n "$brew_libevent" ] && [ -f "$brew_libevent/include/event2/event.h" ]; then
+		libevent_prefix=$(CDPATH= cd -- "$brew_libevent" && pwd)
+	fi
+fi
+
+libevent_lib_dir=
+if [ -n "$libevent_prefix" ]; then
+	if [ ! -f "$libevent_prefix/include/event2/event.h" ]; then
+		die "libevent headers were not found below LIBEVENT_PREFIX: $libevent_prefix"
+	fi
+	for candidate in "$libevent_prefix/lib" "$libevent_prefix/lib64"; do
+		if { [ -f "$candidate/libevent.dylib" ] || [ -f "$candidate/libevent.so" ] || [ -f "$candidate/libevent.a" ]; } &&
+			{ [ -f "$candidate/libevent_extra.dylib" ] || [ -f "$candidate/libevent_extra.so" ] || [ -f "$candidate/libevent_extra.a" ]; }; then
+			libevent_lib_dir=$candidate
+			break
+		fi
+	done
+	if [ -z "$libevent_lib_dir" ]; then
+		die "libevent and libevent_extra libraries were not found below LIBEVENT_PREFIX: $libevent_prefix"
+	fi
+	cppflags="-I$libevent_prefix/include${cppflags:+ $cppflags}"
+	ldflags="-L$libevent_lib_dir${ldflags:+ $ldflags}"
+	if [ -d "$libevent_lib_dir/pkgconfig" ]; then
+		pkg_config_path="$libevent_lib_dir/pkgconfig${pkg_config_path:+:$pkg_config_path}"
+	fi
+	runtime_dependency_path="$libevent_lib_dir${runtime_dependency_path:+:$runtime_dependency_path}"
+fi
+
 cyrus_sasl_prefix=${CYRUS_SASL_PREFIX:-}
 if [ -n "$cyrus_sasl_prefix" ]; then
 	if ! cyrus_sasl_prefix=$(CDPATH= cd -- "$cyrus_sasl_prefix" 2>/dev/null && pwd); then
@@ -286,6 +322,7 @@ configuration_signature=$(
 		printf 'LIBS=%s\n' "${LIBS:-}"
 		printf 'PKG_CONFIG_PATH=%s\n' "$pkg_config_path"
 		printf 'CYRUS_SASL_PREFIX=%s\n' "$cyrus_sasl_prefix"
+		printf 'LIBEVENT_PREFIX=%s\n' "$libevent_prefix"
 		for argument in "$@"; do
 			printf 'argument=%s\n' "$argument"
 		done
@@ -300,6 +337,7 @@ printf 'Build directory: %s\n' "$requested_build_dir"
 printf 'Configure prefix: %s\n' "$prefix_dir"
 printf 'OpenSSL prefix: %s\n' "${openssl_prefix:-system default}"
 printf 'Cyrus SASL prefix: %s\n' "${cyrus_sasl_prefix:-system default}"
+printf 'libevent prefix: %s\n' "${libevent_prefix:-system default}"
 if [ "$effective_build_dir" != "$requested_build_dir" ]; then
 	printf 'Whitespace-safe work directory: %s\n' "$effective_build_dir"
 fi
@@ -329,7 +367,7 @@ else
 	fi
 
 	printf 'Generating dependency files...\n'
-	for dependency_dir in include libraries servers/slapd clients/tools; do
+	for dependency_dir in include libraries servers/slapd servers/lloadd clients/tools; do
 		"$make_command" -C "$effective_build_dir/$dependency_dir" depend
 	done
 	printf '%s\n' "$configuration_signature" >"$configuration_stamp"
@@ -341,15 +379,20 @@ printf 'Building OpenLDAP libraries...\n'
 printf 'Building slapd and slap tools...\n'
 "$make_command" -C "$effective_build_dir/servers/slapd" -j "$jobs"
 
+printf 'Building lloadd...\n'
+"$make_command" -C "$effective_build_dir/servers/lloadd" -j "$jobs"
+
 printf 'Building LDAP client tools...\n'
 "$make_command" -C "$effective_build_dir/clients/tools" -j "$jobs"
 
 slapd=$artifact_build_dir/servers/slapd/slapd
 slapadd=$artifact_build_dir/servers/slapd/slapadd
+lloadd=$artifact_build_dir/servers/lloadd/lloadd
 built_slapd=$effective_build_dir/servers/slapd/slapd
 schema_dir=$source_dir/servers/slapd/schema
 for required_path in \
 	"$built_slapd" \
+	"$effective_build_dir/servers/lloadd/lloadd" \
 	"$effective_build_dir/servers/slapd/slapadd" \
 	"$effective_build_dir/servers/slapd/slapcat" \
 	"$effective_build_dir/servers/slapd/slaptest" \
@@ -411,7 +454,7 @@ if [ "$allow_unverified_reference" -eq 1 ]; then
 	expected_runtime_version=$version
 fi
 
-tool_path=$artifact_build_dir/servers/slapd:$artifact_build_dir/clients/tools
+tool_path=$artifact_build_dir/servers/slapd:$artifact_build_dir/servers/lloadd:$artifact_build_dir/clients/tools
 {
 	printf '# Generated by scripts/build-openldap-reference.sh.\n'
 	write_export OPENLDAP_SOURCE "$source_dir"
@@ -423,6 +466,7 @@ tool_path=$artifact_build_dir/servers/slapd:$artifact_build_dir/clients/tools
 	write_export OPENLDAP_PREFIX "$prefix_dir"
 	write_export OPENLDAP_SLAPD "$slapd"
 	write_export OPENLDAP_SLAPADD "$slapadd"
+	write_export OPENLDAP_LLOADD "$lloadd"
 	write_export OPENLDAP_SCHEMA_DIR "$schema_dir"
 	write_export OPENLDAP_ACTUAL_VERSION "$version"
 	write_export OPENLDAP_EXPECTED_VERSION "$expected_runtime_version"

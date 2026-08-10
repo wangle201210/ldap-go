@@ -5,6 +5,7 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         git \
+        libevent-dev \
         libssl-dev \
         libsasl2-dev \
         libsasl2-modules \

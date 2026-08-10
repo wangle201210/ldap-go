@@ -34,10 +34,10 @@ make full
 ```
 
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
-`ldap`, `meta`, `null`, `relay`, and `mdb` backends plus the required
-overlays, rejects reference-test skips, runs the Go race detector, and executes
-the parser fuzz suite. The tagged source is cached outside the repository and
-an explicit checkout is never reset or switched. See
+`ldap`, `meta`, `null`, `relay`, and `mdb` backends, the required overlays,
+and the reference `lloadd` binary. It rejects reference-test skips, runs the Go
+race detector, and executes the parser fuzz suite. The tagged source is cached
+outside the repository and an explicit checkout is never reset or switched. See
 [docs/testing.md](docs/testing.md) for dependency-prefix and build-cache
 options.
 
@@ -81,6 +81,28 @@ PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM Bind can read proxy-backed auxiliary
 credentials and authorization rules through `acl-bind`/IDAssert, including
 group and local LDAP-URL rules; native outbound SASL assertion carries the
 mapped authorization ID.
+
+The separate `ldap-go lloadd` command implements the verified core of
+OpenLDAP's LDAP-aware load balancer. It forwards bounded BER frames while
+remapping message IDs, maintains regular and Bind connection pools, supports
+round-robin, weighted, and best-of backend selection, preserves ordered-tier
+busy/unavailable behavior and pending limits, performs guarded Simple Bind and
+ProxyAuthz flows, applies operation restrictions and write affinity, rewrites
+explicit and disconnect/re-Bind Abandon targets, supports both OpenLDAP LDAPI
+URL forms, and recovers backend connections. Its standalone configuration
+parser and runtime pass pinned-source and live OpenLDAP 2.6.13 differential
+tests. Unsafe unsupported paths fail explicitly: service Bind requires
+ProxyAuthz, while client StartTLS, Cancel, and SASL EXTERNAL are rejected.
+Client-facing LDAPS/StartTLS/PROXY v2, config-driven upstream TLS, full SASL
+identity/security-layer handling, embedded `cn=config`/monitor mode, dynamic
+topology, and the historical daemon surface are not yet implemented; see the
+compatibility matrix for the exact boundary.
+
+```sh
+go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
+go run ./cmd/ldap-go lloadd -f ./lloadd.conf
+```
+
 Pinned OpenLDAP 2.6.13 differentials additionally cover
 `olcDbProtocolVersion` 2/3 and the verified subset of privileged
 `olcDbConnectionPoolMax` behavior: cross-frontend reuse and concurrent LDAP
