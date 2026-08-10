@@ -107,6 +107,12 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		"{SMD5}",
 		"{SM3}",
 		"{SSM3}",
+		TOTP1HashScheme,
+		TOTP256HashScheme,
+		TOTP512HashScheme,
+		TOTP1AndPWHashScheme,
+		TOTP256AndPWHashScheme,
+		TOTP512AndPWHashScheme,
 		SMPBKDF2HashScheme:
 		return scheme, nil
 	default:
@@ -177,6 +183,13 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 				return digest[:]
 			},
 		)
+	case TOTP1HashScheme,
+		TOTP256HashScheme,
+		TOTP512HashScheme,
+		TOTP1AndPWHashScheme,
+		TOTP256AndPWHashScheme,
+		TOTP512AndPWHashScheme:
+		return hashTOTPPassword(password, normalized, random)
 	case SMPBKDF2HashScheme:
 		return HashPasswordSMPBKDF2(password, DefaultSMPBKDF2Iterations, random)
 	default:
