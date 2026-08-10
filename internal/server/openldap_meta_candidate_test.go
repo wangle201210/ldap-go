@@ -175,8 +175,14 @@ func observeOpenLDAPMetaCandidates(
 		t.Fatalf("dial candidate proxy as user: %v", err)
 	}
 	outcome.broadBindCode = monitorLDAPResultCode(user.Bind(broadDN, "broad-secret"))
+	user.Close()
 	if outcome.broadBindCode == ldap.LDAPResultSuccess {
-		result, searchErr := user.Search(ldap.NewSearchRequest(
+		// OpenLDAP retains the selected Bind target on the client connection.
+		crossTarget, dialErr := ldap.DialURL(proxyURI)
+		if dialErr != nil {
+			t.Fatalf("dial candidate proxy for cross-target search: %v", dialErr)
+		}
+		result, searchErr := crossTarget.Search(ldap.NewSearchRequest(
 			"uid=route-two,"+openLDAPMetaSpecificBase,
 			ldap.ScopeBaseObject,
 			ldap.NeverDerefAliases,
@@ -191,8 +197,8 @@ func observeOpenLDAPMetaCandidates(
 		if result != nil && len(result.Entries) == 1 {
 			outcome.crossTargetDesc = result.Entries[0].GetAttributeValue("description")
 		}
+		crossTarget.Close()
 	}
-	user.Close()
 
 	root, err := ldap.DialURL(proxyURI)
 	if err != nil {
