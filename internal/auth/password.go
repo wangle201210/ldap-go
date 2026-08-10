@@ -105,6 +105,8 @@ func VerifyPassword(stored, supplied []byte) bool {
 		})
 	case "PBKDF2-SM3":
 		return verifySMPBKDF2(payload, supplied)
+	case "PBKDF2", "PBKDF2-SHA1", "PBKDF2-SHA256", "PBKDF2-SHA512":
+		return verifyOpenLDAPPBKDF2(scheme, payload, supplied)
 	default:
 		return false
 	}
@@ -152,6 +154,10 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		TOTP1AndPWHashScheme,
 		TOTP256AndPWHashScheme,
 		TOTP512AndPWHashScheme,
+		OpenLDAPPBKDF2HashScheme,
+		OpenLDAPPBKDF2SHA1HashScheme,
+		OpenLDAPPBKDF2SHA256HashScheme,
+		OpenLDAPPBKDF2SHA512HashScheme,
 		SMPBKDF2HashScheme:
 		return scheme, nil
 	default:
@@ -279,6 +285,16 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 		return hashTOTPPassword(password, normalized, random)
 	case SMPBKDF2HashScheme:
 		return HashPasswordSMPBKDF2(password, DefaultSMPBKDF2Iterations, random)
+	case OpenLDAPPBKDF2HashScheme,
+		OpenLDAPPBKDF2SHA1HashScheme,
+		OpenLDAPPBKDF2SHA256HashScheme,
+		OpenLDAPPBKDF2SHA512HashScheme:
+		return HashPasswordOpenLDAPPBKDF2(
+			password,
+			normalized,
+			OpenLDAPPBKDF2DefaultIterations,
+			random,
+		)
 	default:
 		panic("validated password hash scheme was not handled")
 	}

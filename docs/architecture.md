@@ -514,9 +514,12 @@ and constant-time verification is mandatory. Imported OpenLDAP digest schemes
 remain readable. The contrib SHA-2 schemes use Go's SHA-256/384/512 primitives,
 strict Base64 decoding, exact unsalted digest lengths, and OpenLDAP's eight-byte
 salt for newly generated salted values. New national-cryptography credentials
-use salted, costed PBKDF2-SM3 rather than a fast bare SM3 digest. Stored
-iteration counts are bounded during verification so a malicious directory
-value cannot force unlimited work on a Bind handler. RFC 3062 Password Modify runs old-password
+use salted, costed PBKDF2-SM3 rather than a fast bare SM3 digest. The upstream
+PBKDF2 family has a separate parser and SHA-1/256/512 parameter table matching
+the contrib module's generated representation. Both PBKDF2 families bound
+stored iteration counts before derivation and compare keys in constant time,
+so a malicious directory value cannot force unlimited work on a Bind handler.
+RFC 3062 Password Modify runs old-password
 verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is
 loaded from the frontend database's `olcPasswordHash` values in the same

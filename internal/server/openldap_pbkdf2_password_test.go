@@ -14,29 +14,26 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-const openLDAPSHA2PasswordCommit = "d172686d3d270bc961b78f3ff00d7019c8dfb094"
+const openLDAPPBKDF2PasswordCommit = "d172686d3d270bc961b78f3ff00d7019c8dfb094"
 
-func TestOpenLDAPReferenceSHA2PasswordModule(t *testing.T) {
+func TestOpenLDAPReferencePBKDF2PasswordModule(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
-	module := buildOpenLDAPSHA2PasswordModule(t)
-	assertOpenLDAPSHA2PasswordSourceContract(t)
+	module := buildOpenLDAPPBKDF2PasswordModule(t)
+	assertOpenLDAPPBKDF2PasswordSourceContract(t)
 
 	for _, scheme := range []string{
-		"{SHA256}",
-		"{SSHA256}",
-		"{SHA384}",
-		"{SSHA384}",
-		"{SHA512}",
-		"{SSHA512}",
+		auth.OpenLDAPPBKDF2HashScheme,
+		auth.OpenLDAPPBKDF2SHA1HashScheme,
+		auth.OpenLDAPPBKDF2SHA256HashScheme,
+		auth.OpenLDAPPBKDF2SHA512HashScheme,
 	} {
 		t.Run(scheme, func(t *testing.T) {
-			const originalPassword = "sha2-original-secret"
+			const originalPassword = "pbkdf2-original-secret"
 			stored := generateLDAPGoPasswordModifyHash(
 				t,
 				scheme,
 				originalPassword,
 			)
-
 			openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
 				t,
 				tools,
@@ -53,7 +50,7 @@ func TestOpenLDAPReferenceSHA2PasswordModule(t *testing.T) {
 				originalPassword,
 			)
 
-			const modifiedPassword = "sha2-modified-secret"
+			const modifiedPassword = "pbkdf2-modified-secret"
 			openLDAP := dialAndBindReferencePassword(
 				t,
 				openLDAPURI,
@@ -110,20 +107,23 @@ func TestOpenLDAPReferenceSHA2PasswordModule(t *testing.T) {
 		})
 	}
 
-	t.Run("Base64 boundaries", func(t *testing.T) {
+	t.Run("adapted Base64 whitespace", func(t *testing.T) {
+		const prefix = auth.OpenLDAPPBKDF2SHA256HashScheme + "10000$"
+		const salt = "jq40ImWtmpTE.aYDYV1GfQ"
+		const derived = "mpiL4ui02ACmYOAnCjp/MI1gQk50xLbZ54RZneU0fCg"
 		for _, test := range []struct {
 			name     string
 			stored   string
 			wantBind bool
 		}{
 			{
-				name:     "whitespace",
-				stored:   "{SHA256}K7gN U3sdo+OL0wNh\tqoVWhr3g6s1xYv72ol/pe/Unols=",
+				name:     "four whitespace bytes preserve padding",
+				stored:   prefix + salt + "$" + derived[:10] + "    " + derived[10:],
 				wantBind: true,
 			},
 			{
-				name:   "nonzero padding bits",
-				stored: "{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unolt=",
+				name:   "two whitespace bytes change padding",
+				stored: prefix + salt + "$" + derived[:10] + "  " + derived[10:],
 			},
 		} {
 			t.Run(test.name, func(t *testing.T) {
@@ -164,95 +164,7 @@ func TestOpenLDAPReferenceSHA2PasswordModule(t *testing.T) {
 	})
 }
 
-func generateLDAPGoPasswordModifyHash(
-	t *testing.T,
-	scheme,
-	password string,
-) []byte {
-	t.Helper()
-	store := storage.NewMemory()
-	t.Cleanup(func() { _ = store.Close() })
-	seedDirectory(t, store)
-	if err := store.Update(t.Context(), func(writer storage.Writer) error {
-		return writer.Put(directory.Entry{
-			DN: "olcDatabase={-1}frontend,cn=config",
-			Attributes: []directory.Attribute{
-				{Description: "olcDatabase", Values: stringValues("{-1}frontend")},
-				{Description: "olcPasswordHash", Values: stringValues(scheme)},
-			},
-		}, false)
-	}); err != nil {
-		t.Fatalf("configure ldap-go password hash %s: %v", scheme, err)
-	}
-	address, stop := startServer(t, store, Config{
-		RootDN:       "cn=admin,dc=example,dc=com",
-		RootPassword: []byte("admin-secret"),
-	})
-	admin := dialAndBindReferencePassword(
-		t,
-		"ldap://"+address,
-		"cn=admin,dc=example,dc=com",
-		"admin-secret",
-	)
-	if _, err := admin.PasswordModify(ldap.NewPasswordModifyRequest(
-		aliceDN,
-		"",
-		password,
-	)); err != nil {
-		admin.Close()
-		stop()
-		t.Fatalf("ldap-go PasswordModify(%s): %v", scheme, err)
-	}
-	admin.Close()
-	stored := readStoredEntry(t, store, aliceDN).Values("userPassword")
-	stop()
-	if len(stored) != 1 || !bytes.HasPrefix(stored[0], []byte(scheme)) {
-		t.Fatalf("ldap-go generated password = %q, want %s prefix", stored, scheme)
-	}
-	return bytes.Clone(stored[0])
-}
-
-func assertReferencePasswordBind(t *testing.T, uri, dn, password string) {
-	t.Helper()
-	client, err := ldap.DialURL(uri)
-	if err != nil {
-		t.Fatalf("DialURL(%s): %v", uri, err)
-	}
-	defer client.Close()
-	if err := client.Bind(dn, password); err != nil {
-		t.Fatalf("Bind(%s, correct password): %v", uri, err)
-	}
-	assertLDAPResultCode(t, client.Bind(dn, "wrong-password"), ldap.LDAPResultInvalidCredentials)
-}
-
-func dialAndBindReferencePassword(
-	t *testing.T,
-	uri,
-	dn,
-	password string,
-) *ldap.Conn {
-	t.Helper()
-	client, err := ldap.DialURL(uri)
-	if err != nil {
-		t.Fatalf("DialURL(%s): %v", uri, err)
-	}
-	if err := client.Bind(dn, password); err != nil {
-		client.Close()
-		t.Fatalf("Bind(%s): %v", uri, err)
-	}
-	return client
-}
-
-func dialReferencePassword(t *testing.T, uri string) *ldap.Conn {
-	t.Helper()
-	client, err := ldap.DialURL(uri)
-	if err != nil {
-		t.Fatalf("DialURL(%s): %v", uri, err)
-	}
-	return client
-}
-
-func buildOpenLDAPSHA2PasswordModule(t *testing.T) string {
+func buildOpenLDAPPBKDF2PasswordModule(t *testing.T) string {
 	t.Helper()
 	sourceRoot := os.Getenv("OPENLDAP_SOURCE")
 	buildRoot := os.Getenv("OPENLDAP_BUILD_WORK")
@@ -267,24 +179,24 @@ func buildOpenLDAPSHA2PasswordModule(t *testing.T) string {
 		t.Fatal("OpenLDAP reference must be rebuilt with --enable-modules=yes")
 	}
 
-	moduleRoot := filepath.Join(t.TempDir(), "sha2")
+	moduleRoot := filepath.Join(t.TempDir(), "pbkdf2")
 	if err := os.Mkdir(moduleRoot, 0o700); err != nil {
-		t.Fatalf("create pw-sha2 build directory: %v", err)
+		t.Fatalf("create pw-pbkdf2 build directory: %v", err)
 	}
 	sourceDir := filepath.Join(
 		sourceRoot,
 		"contrib",
 		"slapd-modules",
 		"passwd",
-		"sha2",
+		"pbkdf2",
 	)
-	for _, name := range []string{"Makefile", "slapd-sha2.c", "sha2.c", "sha2.h"} {
+	for _, name := range []string{"Makefile", "pw-pbkdf2.c"} {
 		contents, err := os.ReadFile(filepath.Join(sourceDir, name))
 		if err != nil {
-			t.Fatalf("read pw-sha2 %s: %v", name, err)
+			t.Fatalf("read pw-pbkdf2 %s: %v", name, err)
 		}
 		if err := os.WriteFile(filepath.Join(moduleRoot, name), contents, 0o600); err != nil {
-			t.Fatalf("write pw-sha2 %s: %v", name, err)
+			t.Fatalf("write pw-pbkdf2 %s: %v", name, err)
 		}
 	}
 	cppflags := os.Getenv("OPENLDAP_CPPFLAGS")
@@ -301,47 +213,49 @@ func buildOpenLDAPSHA2PasswordModule(t *testing.T) string {
 		"CC=cc",
 	)
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build OpenLDAP pw-sha2 module: %v\n%s", err, output)
+		t.Fatalf("build OpenLDAP pw-pbkdf2 module: %v\n%s", err, output)
 	}
-	module := filepath.Join(moduleRoot, "pw-sha2.la")
+	module := filepath.Join(moduleRoot, "pw-pbkdf2.la")
 	if info, err := os.Stat(module); err != nil || info.IsDir() {
-		t.Fatalf("pw-sha2 module was not built at %s", module)
+		t.Fatalf("pw-pbkdf2 module was not built at %s", module)
 	}
 	return module
 }
 
-func assertOpenLDAPSHA2PasswordSourceContract(t *testing.T) {
+func assertOpenLDAPPBKDF2PasswordSourceContract(t *testing.T) {
 	t.Helper()
 	source := filepath.Join(
 		os.Getenv("OPENLDAP_SOURCE"),
 		"contrib",
 		"slapd-modules",
 		"passwd",
-		"sha2",
-		"slapd-sha2.c",
+		"pbkdf2",
+		"pw-pbkdf2.c",
 	)
 	contents, err := os.ReadFile(source)
 	if err != nil {
-		t.Fatalf("read pinned pw-sha2 source: %v", err)
+		t.Fatalf("read pinned pw-pbkdf2 source: %v", err)
 	}
 	for _, fragment := range []string{
-		`#define SHA2_SALT_SIZE 8`,
-		`BER_BVC("{SHA256}")`,
-		`BER_BVC("{SSHA256}")`,
-		`BER_BVC("{SHA384}")`,
-		`BER_BVC("{SSHA384}")`,
-		`BER_BVC("{SHA512}")`,
-		`BER_BVC("{SSHA512}")`,
+		`#define PBKDF2_ITERATION 10000`,
+		`#define PBKDF2_SALT_SIZE 16`,
+		`#define PBKDF2_SHA1_DK_SIZE 20`,
+		`#define PBKDF2_SHA256_DK_SIZE 32`,
+		`#define PBKDF2_SHA512_DK_SIZE 64`,
+		`BER_BVC("{PBKDF2}")`,
+		`BER_BVC("{PBKDF2-SHA1}")`,
+		`BER_BVC("{PBKDF2-SHA256}")`,
+		`BER_BVC("{PBKDF2-SHA512}")`,
 	} {
 		if !bytes.Contains(contents, []byte(fragment)) {
-			t.Fatalf("pinned pw-sha2 source is missing %q", fragment)
+			t.Fatalf("pinned pw-pbkdf2 source is missing %q", fragment)
 		}
 	}
-	if revision := os.Getenv("OPENLDAP_COMMIT"); revision != openLDAPSHA2PasswordCommit {
+	if revision := os.Getenv("OPENLDAP_COMMIT"); revision != openLDAPPBKDF2PasswordCommit {
 		t.Fatalf(
-			"pw-sha2 reference commit = %q, want %q",
+			"pw-pbkdf2 reference commit = %q, want %q",
 			revision,
-			openLDAPSHA2PasswordCommit,
+			openLDAPPBKDF2PasswordCommit,
 		)
 	}
 }

@@ -81,7 +81,7 @@ functions, configurations, or directory data.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors; OpenLDAP contrib SHA-256/384/512 salted and unsalted schemes pass bidirectional Password Modify/import/Bind differentials; `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants pass hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials; PBKDF2, APR1/BSDMD5, Netscape, and external-service password modules remain |
+| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors; OpenLDAP contrib SHA-256/384/512 salted and unsalted schemes plus `{PBKDF2}`, `{PBKDF2-SHA1}`, `{PBKDF2-SHA256}`, and `{PBKDF2-SHA512}` pass bidirectional Password Modify/import/Bind differentials; `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants pass hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials; APR1/BSDMD5, Netscape, and external-service password modules remain |
 | Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, chain-backed forwarded state updates, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules remain |
 | OpenLDAP ACL grammar and evaluation | partial | filter/value/object-class targets; real/effective DN and level selectors; static/dynamic groups and set expressions; DN/value capture expansion; peer/domain/sockname/sockurl and IPv4/IPv6/path selectors; overall/transport/TLS/SASL SSF; `OpenLDAPaci`; and direct OpenLDAP target, expansion/group, connection/level, and ACI differentials pass; unlisted grammar and dynacl modules remain |
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, group/LDAP-URL rules, Cyrus credential forms, proxy-backed auxprop/auth-check searches, OpenLDAP `other(80)` backend-failure mapping, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
@@ -170,7 +170,7 @@ production qualification gate.
 | `slapadd` / `slapcat` equivalents | partial | `slapadd` supports `-l/-b/-n/-g/-s/-u/-S/-w` and `-o schema-check=yes\|no` / `value-check=yes\|no`; `slapcat` supports `-l/-b/-n/-g/-s` for the tested subset; default-primary and explicit selection, glue-subordinate import/export, backend callback policy, schema/options/normalizer, LastMod/CSN, root and `olcSyncUseSubentry` context, atomic `cn=config`, dry-run, round-trip, and exit-code cases pass; imports remain atomic, `-c/-q` are rejected, and exact dry-run, partial-write, parser/normalizer, diagnostic, native backend-file, and historical-option parity remain unsupported |
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
 | `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
-| `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
+| `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, all four contrib PBKDF2 schemes, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
 | LDAP client tools | partial | `ldapsearch`, `ldapwhoami`, `ldapcompare`, `ldappasswd`, `ldapexop`, `ldapmodify`/`ldapadd`, `ldapdelete`, and `ldapmodrdn` cover simple Bind, LDAP/LDAPS/StartTLS, password prompting/files, LDIF writes, Compare exit codes, extended-operation binary values, generic `-e`/`-E` controls on applicable commands, and opt-in anonymous referral chasing with DN/scope rewriting, control preservation, loop detection, and a five-hop default; OpenLDAP Compare/ldapexop differentials and pinned ldap-tools/libldap source contracts pass; SASL, generic Compare controls, complete referral URL fields/rebind behavior, and the full historical option surface remain |
 | Load balancer tooling | partial | `ldap-go lloadd` parses standalone OpenLDAP-style configuration, validates the runnable subset and rejects unsupported settings with `-test-config`, serves multiple LDAP and escaped-authority/three-slash LDAPI listeners, exposes listener/log overrides, and is exercised by unit, race, pinned-source, and live OpenLDAP 2.6.13 tests; client TLS/PROXY listeners, config-file-driven upstream TLS/socket tuning, the historical daemon option/signal/logging surface, embedded slapd-module mode, and runtime config/monitor administration remain |
 
@@ -1029,7 +1029,9 @@ boundary. Both overlay rows therefore remain `partial`.
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
 `{SSHA}`, `{MD5}`, `{SMD5}`, the OpenLDAP contrib `{SHA256}`, `{SSHA256}`,
 `{SHA384}`, `{SSHA384}`, `{SHA512}`, and `{SSHA512}` schemes, `{SM3}`,
-`{SSM3}`, and `{PBKDF2-SM3}`. SHA-2 generation uses the contrib module's
+`{SSM3}`, `{PBKDF2-SM3}`, and the OpenLDAP contrib `{PBKDF2}`,
+`{PBKDF2-SHA1}`, `{PBKDF2-SHA256}`, and `{PBKDF2-SHA512}` schemes. SHA-2
+generation uses the contrib module's
 eight-byte salt and passes a pinned 2.6.13 bidirectional dynamic-module
 differential. New
 national-cryptography password values use `{PBKDF2-SM3}` with a random 16-byte
@@ -1042,6 +1044,17 @@ existing deployments but are not recommended for newly stored passwords.
 These three SM3 scheme names are not built into upstream OpenLDAP; reverse
 migration requires a corresponding OpenLDAP password module or patch.
 
+The upstream PBKDF2 schemes generate 10,000 iterations with a random 16-byte
+salt and 20, 32, or 64 derived bytes for SHA-1, SHA-256, or SHA-512. The
+`{PBKDF2}` name aliases `{PBKDF2-SHA1}`. Pinned dynamic-module tests exercise
+Password Modify and imported Simple Bind in both directions. Verification is
+intentionally stricter than OpenLDAP 2.6.13 for selected manually constructed
+values: ldap-go rejects non-decimal iteration text, extra fields, and
+iterations above 1,000,000 before deriving a key. Adapted Base64 whitespace,
+padding, and nonzero tail-bit behavior are matched directly against the pinned
+module. OpenLDAP's module uses unbounded `atoi` and `memcmp`; ldap-go keeps the
+work bound and compares derived keys in constant time.
+
 `ldap-go passwd` generates `{PBKDF2-SM3}` values. It reads the cleartext from
 `LDAP_GO_PASSWORD` or bounded standard input and never accepts it as a
 positional command argument.
@@ -1051,10 +1064,10 @@ identity or an explicit target DN, optional old-password verification,
 client-supplied passwords, server-generated passwords, ACL enforcement, and
 normal schema/operational-attribute updates in one storage transaction. The
 frontend database's `olcPasswordHash` values select one or more output hashes;
-the OpenLDAP default is `{SSHA}`, the contrib SHA-2 names preserve OpenLDAP
-interoperability, and `{PBKDF2-SM3}` enables the costed SM3 format. Legacy
-placement on `cn=config` is also accepted. Online changes are validated as part
-of the runtime snapshot and unsupported schemes roll back.
+the OpenLDAP default is `{SSHA}`, the contrib SHA-2 and PBKDF2 names preserve
+OpenLDAP interoperability, and `{PBKDF2-SM3}` enables the costed SM3 format.
+Legacy placement on `cn=config` is also accepted. Online changes are validated
+as part of the runtime snapshot and unsupported schemes roll back.
 
 An imported OpenLDAP `ppolicy` overlay applies its default or per-entry
 `pwdPolicySubentry` policy to simple Bind, Add, Modify, and Password Modify.

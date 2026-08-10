@@ -215,6 +215,17 @@ Simple Bind. Known upstream vectors, eight-byte generated salts, zero-salt
 rejection, whitespace, and nonzero Base64 padding-bit behavior are also
 covered.
 
+The pw-pbkdf2 differential builds the official contrib module and covers its
+`{PBKDF2}` SHA-1 alias plus the explicit SHA-1, SHA-256, and SHA-512 names.
+Each scheme runs ldap-go Password Modify followed by OpenLDAP Bind, then
+OpenLDAP Password Modify followed by ldap-go import and Bind. The module's man
+page vectors, 10,000-iteration generation, 16-byte salt, adapted Base64 forms,
+20/32/64-byte derived keys, malformed fields, exact whitespace/padding behavior,
+and the 1,000,000-iteration verification bound have coverage. The suite records
+the selected stricter parser rules, bounded work, and constant-time compare as
+security hardening rather than bug-for-bug parity with the contrib C
+implementation.
+
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
 with EOF during the reference-only Sync plus Sort/VLV matrix, while the same

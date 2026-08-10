@@ -36,9 +36,9 @@ make full
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
-OpenLDAP's contrib `pw-sha2` and `pw-totp` modules against that build. It rejects
-reference-test skips, runs the Go race detector, and executes the parser fuzz
-suite. The tagged source is cached outside the repository and an explicit
+OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, and `pw-totp` modules against that
+build. It rejects reference-test skips, runs the Go race detector, and executes
+the parser fuzz suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
 the `libltdl` dependency, dependency-prefix, and build-cache options.
 
@@ -294,6 +294,16 @@ hashes use the module's eight-byte salt, and Password Modify,
 same implementation. A pinned 2.6.13 dynamic-module differential verifies
 both directions: ldap-go hashes bind on OpenLDAP, and OpenLDAP-generated
 hashes bind after import into ldap-go.
+OpenLDAP's contrib `pw-pbkdf2` module is data-compatible for `{PBKDF2}` and
+`{PBKDF2-SHA1}` using HMAC-SHA-1, plus `{PBKDF2-SHA256}` and
+`{PBKDF2-SHA512}`. Generation matches the module's 10,000 iterations,
+16-byte salt, adapted Base64, and 20/32/64-byte derived keys. Password Modify,
+`olcPasswordHash`, Simple Bind, and import pass a pinned bidirectional
+dynamic-module differential; `slappasswd -h` has CLI compatibility tests over
+all four names. Verification rejects iterations above 1,000,000 and malformed
+trailing fields before running PBKDF2, and uses a constant-time derived-key
+comparison; these are intentional hardening differences from the contrib
+module's unbounded `atoi` and `memcmp` path.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple
@@ -755,7 +765,9 @@ iterations by default. `ldap-go` also verifies imported `{SM3}` and `{SSM3}`
 values, but those fast digest schemes should only be retained for migration.
 `{PBKDF2-SM3}` is an `ldap-go` extension modeled on OpenLDAP's contributed
 PBKDF2 format; an upstream OpenLDAP server needs a matching module or patch to
-authenticate against it.
+authenticate against it. This is separate from the supported upstream
+`{PBKDF2}`, `{PBKDF2-SHA1}`, `{PBKDF2-SHA256}`, and `{PBKDF2-SHA512}`
+schemes, which use SHA-family HMACs rather than SM3.
 
 RFC 3062 Password Modify follows OpenLDAP's `olcPasswordHash` setting. Its
 default remains `{SSHA}` for OpenLDAP compatibility. To make server-side
