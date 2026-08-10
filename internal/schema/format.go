@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+func FormatLDAPSyntax(syntax LDAPSyntax) string {
+	fields := []string{"(", syntax.OID}
+	if syntax.Description != "" {
+		fields = append(fields, "DESC", quoteSchemaValue(syntax.Description))
+	}
+	fields = appendExtensions(fields, syntax.Extensions)
+	return strings.Join(append(fields, ")"), " ")
+}
+
 func FormatAttributeType(attribute AttributeType) string {
 	fields := []string{"(", attribute.OID}
 	if len(attribute.Names) > 0 {

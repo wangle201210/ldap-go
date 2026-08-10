@@ -2,6 +2,7 @@ package migration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -17,7 +18,9 @@ type ExportResult struct {
 }
 
 type ExportOptions struct {
-	Database string
+	Database              string
+	SelectDefaultDatabase bool
+	IncludeSubordinates   bool
 }
 
 func ExportLDIF(
@@ -40,15 +43,60 @@ func ExportLDIFWithOptions(
 
 	var entries []directory.Entry
 	err := store.View(ctx, func(tx storage.Reader) error {
+		appendTarget := func(target databaseTarget) error {
+			return tx.ForEachIn(target.partition, func(entry directory.Entry) error {
+				entries = append(entries, entry)
+				return nil
+			})
+		}
+		appendSelected := func(target databaseTarget) error {
+			if !target.supportsOfflineExport() {
+				return fmt.Errorf(
+					"OpenLDAP %s backend %q does not support offline entry export",
+					target.backend,
+					target.name,
+				)
+			}
+			if err := appendTarget(target); err != nil {
+				return err
+			}
+			if !options.IncludeSubordinates {
+				return nil
+			}
+			targets, err := loadDatabaseTargets(tx)
+			if err != nil {
+				return err
+			}
+			subordinates, err := glueSubordinateTargets(tx, target, targets)
+			if err != nil {
+				return err
+			}
+			for _, subordinate := range subordinates {
+				if !subordinate.supportsOfflineExport() {
+					continue
+				}
+				if err := appendTarget(subordinate); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		if options.Database != "" {
 			target, err := resolveDatabaseTarget(tx, options.Database)
 			if err != nil {
 				return err
 			}
-			return tx.ForEachIn(target.partition, func(entry directory.Entry) error {
-				entries = append(entries, entry)
-				return nil
-			})
+			return appendSelected(target)
+		}
+		if options.SelectDefaultDatabase {
+			target, found, err := resolveDefaultDatabaseTarget(tx)
+			if err != nil {
+				return fmt.Errorf("resolve default OpenLDAP database: %w", err)
+			}
+			if found {
+				return appendSelected(target)
+			}
+			return errors.New("no available OpenLDAP content database")
 		}
 
 		seen := make(map[string]string)

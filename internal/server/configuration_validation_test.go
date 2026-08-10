@@ -126,7 +126,11 @@ func TestValidateConfigurationRejectsRuntimeConfigurationLayers(t *testing.T) {
 					[]directory.Entry{global, database},
 					test.configuration...,
 				) {
-					if err := writer.Put(entry, false); err != nil {
+					if err := writer.PutIn(
+						storage.OpenLDAPConfigPartition,
+						entry,
+						false,
+					); err != nil {
 						return err
 					}
 				}

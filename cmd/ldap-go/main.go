@@ -708,6 +708,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
 	var openLDAPLDIFPath, suffix, subtree string
+	var disableSubordinateGlue bool
 	databaseNumber := -1
 	if command == "slapcat" {
 		flags.StringVar(&openLDAPLDIFPath, "l", "", "destination LDIF path")
@@ -715,7 +716,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
 		flags.StringVar(&subtree, "s", "", "export only this subtree")
 		registerUnsupportedBool(flags, "c", "continue after export errors")
-		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
+		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -726,7 +727,6 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 	if command == "slapcat" {
 		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
 			{name: "c", reason: "the structured export stops on the first error"},
-			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
 		}); err != nil {
 			return err
 		}
@@ -759,7 +759,11 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 	}
 	defer store.Close()
 
-	options := migration.ExportOptions{Database: selectedDatabase}
+	options := migration.ExportOptions{
+		Database:              selectedDatabase,
+		SelectDefaultDatabase: command == "slapcat",
+		IncludeSubordinates:   command == "slapcat" && !disableSubordinateGlue,
+	}
 	if *ldifPath == "-" {
 		result, err := exportLDIFWithSubtree(
 			context.Background(),
@@ -908,17 +912,44 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
 	var openLDAPLDIFPath, suffix string
-	var dryRun bool
+	var dryRun, skipSchemaValidation, updateContextCSN, disableSubordinateGlue bool
+	skipValueValidation := command == "slapadd"
 	databaseNumber := -1
+	csnServerID := 0
 	if command == "slapadd" {
 		flags.StringVar(&openLDAPLDIFPath, "l", "", "source LDIF path")
 		flags.StringVar(&suffix, "b", "", "select the database containing this suffix")
 		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
 		flags.BoolVar(&dryRun, "u", false, "validate without modifying the database")
+		flags.IntVar(&csnServerID, "S", 0, "server ID for generated entryCSN values")
+		flags.BoolVar(&updateContextCSN, "w", false, "update the suffix contextCSN")
 		registerUnsupportedBool(flags, "c", "continue after import errors")
-		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
+		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
 		registerUnsupportedBool(flags, "q", "skip consistency checks")
-		registerUnsupportedBool(flags, "s", "disable schema checking")
+		flags.BoolVar(&skipSchemaValidation, "s", false, "disable schema checking")
+		flags.Func("o", "set slapadd tool option", func(raw string) error {
+			name, value, found := strings.Cut(raw, "=")
+			if !found || strings.TrimSpace(name) == "" {
+				return fmt.Errorf("invalid slapadd option %q; expected name=yes|no", raw)
+			}
+			enabled := false
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "yes":
+				enabled = true
+			case "no":
+			default:
+				return fmt.Errorf("invalid slapadd option %q; value must be yes or no", raw)
+			}
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "schema-check":
+				skipSchemaValidation = !enabled
+			case "value-check":
+				skipValueValidation = !enabled
+			default:
+				return fmt.Errorf("unsupported slapadd option %q", name)
+			}
+			return nil
+		})
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -929,9 +960,7 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 	if command == "slapadd" {
 		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
 			{name: "c", reason: "imports are atomic and stop on the first error"},
-			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
 			{name: "q", reason: "imports always retain consistency checks"},
-			{name: "s", reason: "schema checking is not a switchable import mode"},
 		}); err != nil {
 			return err
 		}
@@ -943,6 +972,9 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		}
 		if flagWasSet(flags, "u") && !dryRun {
 			return errors.New("slapadd option -u=false is not supported")
+		}
+		if csnServerID < 0 || csnServerID > 0x0fff {
+			return fmt.Errorf("slapadd server ID must be between 0 and %d", 0x0fff)
 		}
 	}
 	selectedDatabase, err := resolveOfflineDatabaseSelection(
@@ -985,14 +1017,35 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 	}
 	defer store.Close()
 
+	importOptions := migration.ImportOptions{
+		Replace:                       *replace,
+		Database:                      selectedDatabase,
+		SelectDefaultDatabase:         command == "slapadd",
+		DisableSubordinateGlue:        disableSubordinateGlue,
+		DryRun:                        dryRun,
+		SkipSchemaValidation:          skipSchemaValidation,
+		SkipValueValidation:           skipValueValidation,
+		RequireObjectClass:            command == "slapadd",
+		ValidateConfigurationEntries:  command == "slapadd",
+		GenerateOperationalAttributes: command == "slapadd",
+		CSNServerID:                   uint16(csnServerID),
+		UpdateContextCSN:              updateContextCSN && !dryRun,
+	}
+	if command == "slapadd" {
+		importOptions.ValidateTransaction = func(reader storage.Reader) error {
+			_, err := server.ValidateConfigurationReader(
+				context.Background(),
+				server.Config{},
+				reader,
+			)
+			return err
+		}
+	}
 	result, err := migration.ImportLDIF(
 		context.Background(),
 		store,
 		reader,
-		migration.ImportOptions{
-			Replace:  *replace,
-			Database: selectedDatabase,
-		},
+		importOptions,
 	)
 	if err != nil {
 		return err
@@ -1112,13 +1165,23 @@ func databaseSelectorForDN(databasePath, rawDN string) (string, error) {
 	}
 	var matches []candidate
 	err = store.View(context.Background(), func(reader storage.Reader) error {
-		return reader.ForEachPartition(func(_ string, entry directory.Entry) error {
+		return reader.ForEachIn(storage.OpenLDAPConfigPartition, func(entry directory.Entry) error {
 			entryDN, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err
 			}
-			if !configDN.Equal(entryDN) && !configDN.AncestorOf(entryDN) {
+			parent, hasParent := entryDN.Parent()
+			if !hasParent || !configDN.Equal(parent) {
 				return nil
+			}
+			for _, attribute := range []string{"olcHidden", "olcDisabled"} {
+				disabled, present, err := openLDAPBooleanAttribute(entry, attribute)
+				if err != nil {
+					return err
+				}
+				if present && disabled {
+					return nil
+				}
 			}
 			names := entry.Values("olcDatabase")
 			if len(names) == 0 {
@@ -1174,6 +1237,36 @@ func databaseSelectorForDN(databasePath, rawDN string) (string, error) {
 		}
 	}
 	return best.selector, nil
+}
+
+func openLDAPBooleanAttribute(
+	entry directory.Entry,
+	description string,
+) (bool, bool, error) {
+	values := entry.Values(description)
+	if len(values) == 0 {
+		return false, false, nil
+	}
+	if len(values) != 1 {
+		return false, true, fmt.Errorf(
+			"%s %s must be single-valued",
+			entry.DN,
+			description,
+		)
+	}
+	switch strings.ToLower(strings.TrimSpace(string(values[0]))) {
+	case "true", "yes", "on", "1":
+		return true, true, nil
+	case "false", "no", "off", "0":
+		return false, true, nil
+	default:
+		return false, true, fmt.Errorf(
+			"%s %s has invalid boolean value %q",
+			entry.DN,
+			description,
+			values[0],
+		)
+	}
 }
 
 func runServe(

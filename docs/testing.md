@@ -33,6 +33,45 @@ Fixtures are generated with `slapadd` and `slapcat`, imported unchanged into
 schema, binary and base64 values, folded lines, attribute options, referrals,
 subentries, UUID/CSN metadata, and `cn=config`.
 
+Pinned OpenLDAP 2.6.13 `slapadd` differentials import configuration emitted by
+`slaptest` and `slapcat -n 0`, then compare the tested acceptance boundary for
+unknown attributes, MUST and SINGLE-VALUE rules, default and explicit value
+checks, child-before-parent input, final orphans, suffix ownership, obsolete
+schema, and schema-disabled `objectClass` handling. The default-value-check
+matrix specifically covers malformed integer acceptance, explicit rejection of
+noncanonical integers, arbitrary-precision INTEGER acceptance, GeneralizedTime
+hour and timezone forms, authzMatch normalization, DN and UUID
+equality-normalizer rejection, default `lang-` options, unknown options, and
+required/forbidden `;binary` transfer options. Unit and direct slapd tests also
+verify that imported `olcAttributeOptions` replace `lang-` with configured
+exact, trailing-`-`, and `range=` prefix definitions; range Search selection;
+range rejection on Modify; binary shallow validators; idempotent import of
+built-in `olcLdapSyntaxes`; and ordered `X-SUBST` validator inheritance. An
+ordinary custom syntax without a validator is rejected only when full value
+checking is requested.
+
+Separate differentials compare preservation and generation of LastMod
+attributes, `-S` CSN server IDs, `-w` suffix-root and config-database
+`contextCSN`, config-backend metadata generation, glue-superior root-DN policy,
+and `olcSyncUseSubentry` creation/update of `cn=ldapsync,<suffix>`. A real
+`slapcat -n 0` fixture passes hierarchy, supported schema, and runnable-config
+validation through the same import transaction; an invalid runtime setting has
+a rollback regression test. Generated UUIDs, CSNs, and timestamps are compared
+structurally rather than byte-for-byte.
+
+Database-routing regressions cover the default first primary database,
+most-specific automatic ownership, rejection of an overlapping ordinary
+database, and routing from a selected glue superior into a more-specific
+`olcSubordinate` partition. A pinned direct OpenLDAP topology also covers
+configuration-order defaults, most-specific `-b`, hidden/disabled fallback,
+glued `slapcat`, physical `-g` import/export, and duplicate subordinate-suffix
+rejection. A direct back-ldif round trip and back-ldap rejection differential
+plus fixed-source/unit coverage for the unavailable `wt` reference backend pin
+the offline callback matrix. Arbitrary custom syntax/matching-rule modules, exact
+partial-write/dry-run behavior, and large-import memory/write-lock bounds remain
+outside the proved surface. This bounded matrix is not evidence of complete
+`slapadd` or `slapcat` compatibility.
+
 ## Required checks
 
 The repository exposes two supported entry points:
@@ -61,8 +100,8 @@ maintained `-run` regular expression:
 make openldap
 ```
 
-Missing `slapd`, `slapadd`, `lloadd`, or schema files and unexpected top-level
-skips fail the run. Two SCRAM-SHA-256
+Missing `slapd`, `slapadd`, `slapcat`, `slaptest`, `lloadd`, or schema files
+and unexpected top-level skips fail the run. Two SCRAM-SHA-256
 cases may be reported as optional skips when the local Cyrus SASL installation
 does not provide that plugin. Feature-gated differentials are optional when the
 selected `slapd -VVV` omits their required backend or overlay: `ldap`, `meta`,

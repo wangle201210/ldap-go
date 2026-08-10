@@ -40,7 +40,7 @@ func TestLoadOpenLDAPConfigSchema(t *testing.T) {
 		},
 	}
 	if err := store.Update(context.Background(), func(tx storage.Writer) error {
-		return tx.Put(schemaEntry, false)
+		return tx.PutIn(storage.OpenLDAPConfigPartition, schemaEntry, false)
 	}); err != nil {
 		t.Fatalf("seed schema: %v", err)
 	}
@@ -78,6 +78,229 @@ func TestLoadOpenLDAPConfigSchema(t *testing.T) {
 	}
 }
 
+func TestLoadOpenLDAPConfigResolvesObjectIdentifierMacros(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	schemaEntry := directory.Entry{
+		DN: "cn={1}macros,cn=schema,cn=config",
+		Attributes: []directory.Attribute{
+			{
+				Description: "olcObjectIdentifier",
+				Values: byteValues(
+					"{0}exampleRoot 1.3.6.1.4.1.99999",
+					"{1}exampleAttribute exampleRoot:1",
+				),
+			},
+			{
+				Description: "olcAttributeTypes",
+				Values: byteValues(
+					"{0}( exampleAttribute:1 NAME 'macroValue' "+
+						"EQUALITY caseIgnoreMatch SYNTAX OMsDirectoryString )",
+					"{1}( OLcfgGlAt:78 NAME 'olcConfigFile' "+
+						"EQUALITY caseExactMatch SYNTAX OMsDirectoryString SINGLE-VALUE )",
+				),
+			},
+			{
+				Description: "olcObjectClasses",
+				Values: byteValues(
+					"{0}( exampleRoot:2 NAME 'macroObject' SUP top " +
+						"AUXILIARY MAY macroValue )",
+				),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.PutIn(storage.OpenLDAPConfigPartition, schemaEntry, false)
+	}); err != nil {
+		t.Fatalf("seed macro schema: %v", err)
+	}
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err != nil {
+		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
+	}
+	macroValue, found := registry.AttributeType("macroValue")
+	if !found || macroValue.OID != "1.3.6.1.4.1.99999.1.1" ||
+		macroValue.Syntax != SyntaxDirectoryString {
+		t.Fatalf("macroValue = %#v, found %t", macroValue, found)
+	}
+	configFile, found := registry.AttributeType("olcConfigFile")
+	if !found || configFile.OID != "1.3.6.1.4.1.4203.1.12.2.3.0.78" ||
+		configFile.Syntax != SyntaxDirectoryString {
+		t.Fatalf("olcConfigFile = %#v, found %t", configFile, found)
+	}
+	objectClass, found := registry.ObjectClass("macroObject")
+	if !found || objectClass.OID != "1.3.6.1.4.1.99999.2" {
+		t.Fatalf("macroObject = %#v, found %t", objectClass, found)
+	}
+}
+
+func TestLoadOpenLDAPConfigRejectsForwardObjectIdentifierMacroReference(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entry := directory.Entry{
+		DN: "cn={1}forward,cn=schema,cn=config",
+		Attributes: []directory.Attribute{
+			{
+				Description: "olcObjectIdentifier",
+				Values:      byteValues("{0}first second:1", "{1}second 1.2.3"),
+			},
+			{
+				Description: "olcAttributeTypes",
+				Values: byteValues(
+					"{0}( first:3 NAME 'forwardValue' SYNTAX OMsDirectoryString )",
+				),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.PutIn(storage.OpenLDAPConfigPartition, entry, false)
+	}); err != nil {
+		t.Fatalf("seed forward macro schema: %v", err)
+	}
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err == nil ||
+		!strings.Contains(err.Error(), "undefined object identifier descriptor \"second\"") {
+		t.Fatalf("LoadOpenLDAPConfig() error = %v", err)
+	}
+}
+
+func TestLoadOpenLDAPConfigOrdersObjectIdentifierMacrosAcrossEntries(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "cn={2}producer,cn=schema,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcObjectIdentifier",
+					Values:      byteValues("{0}crossEntryRoot 1.3.6.1.4.1.99998"),
+				},
+			},
+		},
+		{
+			DN: "cn={10}consumer,cn=schema,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcObjectIdentifier",
+					Values:      byteValues("{0}crossEntryAttribute crossEntryRoot:1"),
+				},
+				{
+					Description: "olcAttributeTypes",
+					Values: byteValues(
+						"{0}( crossEntryAttribute:1 NAME 'crossEntryValue' " +
+							"SYNTAX OMsDirectoryString )",
+					),
+				},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		for _, entry := range entries {
+			if err := tx.PutIn(storage.OpenLDAPConfigPartition, entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed cross-entry macro schema: %v", err)
+	}
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err != nil {
+		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
+	}
+	attribute, found := registry.AttributeType("crossEntryValue")
+	if !found || attribute.OID != "1.3.6.1.4.1.99998.1.1" {
+		t.Fatalf("crossEntryValue = %#v, found %t", attribute, found)
+	}
+}
+
+func TestLoadOpenLDAPConfigRejectsForwardMacroAcrossEntries(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		{
+			DN: "cn={2}consumer,cn=schema,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcObjectIdentifier",
+					Values:      byteValues("{0}earlyMacro lateRoot:1"),
+				},
+			},
+		},
+		{
+			DN: "cn={10}producer,cn=schema,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcObjectIdentifier",
+					Values:      byteValues("{0}lateRoot 1.3.6.1.4.1.99997"),
+				},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		for _, entry := range entries {
+			if err := tx.PutIn(storage.OpenLDAPConfigPartition, entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed cross-entry forward macro schema: %v", err)
+	}
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err == nil ||
+		!strings.Contains(err.Error(), "undefined object identifier descriptor \"lateRoot\"") {
+		t.Fatalf("LoadOpenLDAPConfig() error = %v", err)
+	}
+}
+
+func TestOpenLDAPObjectIdentifierResolverUsesResolvedDuplicateOID(t *testing.T) {
+	t.Parallel()
+
+	resolver := newOpenLDAPObjectIdentifierResolver()
+	for _, definition := range []string{
+		"root 1.3.6.1.4.1.99999",
+		"attributeRoot root:1",
+		"attributeRoot 1.3.6.1.4.1.99999.1",
+	} {
+		if err := resolver.add(definition); err != nil {
+			t.Fatalf("add(%q): %v", definition, err)
+		}
+	}
+	resolved, err := resolver.resolve("attributeRoot:7")
+	if err != nil {
+		t.Fatalf("resolve(attributeRoot:7): %v", err)
+	}
+	if resolved != "1.3.6.1.4.1.99999.1.7" {
+		t.Fatalf("resolve(attributeRoot:7) = %q", resolved)
+	}
+	if err := resolver.add("attributeRoot root:2"); err == nil ||
+		!strings.Contains(err.Error(), "already defined") {
+		t.Fatalf("conflicting duplicate error = %v", err)
+	}
+}
+
 func TestLoadOpenLDAPConfigSchemaIgnoresBusinessEntries(t *testing.T) {
 	t.Parallel()
 
@@ -90,7 +313,7 @@ func TestLoadOpenLDAPConfigSchemaIgnoresBusinessEntries(t *testing.T) {
 		},
 	}
 	if err := store.Update(context.Background(), func(tx storage.Writer) error {
-		return tx.Put(entry, false)
+		return tx.PutIn(storage.OpenLDAPConfigPartition, entry, false)
 	}); err != nil {
 		t.Fatalf("seed entry: %v", err)
 	}
@@ -128,7 +351,7 @@ func TestLoadOpenLDAPConfigRejectsDuplicateDITContentRules(t *testing.T) {
 		},
 	}
 	if err := store.Update(context.Background(), func(tx storage.Writer) error {
-		return tx.Put(entry, false)
+		return tx.PutIn(storage.OpenLDAPConfigPartition, entry, false)
 	}); err != nil {
 		t.Fatalf("seed duplicate content rules: %v", err)
 	}
@@ -142,6 +365,126 @@ func TestLoadOpenLDAPConfigRejectsDuplicateDITContentRules(t *testing.T) {
 		registry,
 	); err == nil {
 		t.Fatal("LoadOpenLDAPConfig() accepted duplicate DIT content rules")
+	}
+}
+
+func TestLoadOpenLDAPConfigAttributeOptionsReplaceDefault(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entry := directory.Entry{
+		DN: "cn=config",
+		Attributes: []directory.Attribute{
+			{
+				Description: "olcAttributeOptions",
+				Values:      byteValues("x-hidden z z- range="),
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(tx storage.Writer) error {
+		return tx.PutIn(storage.OpenLDAPConfigPartition, entry, false)
+	}); err != nil {
+		t.Fatalf("seed attribute options: %v", err)
+	}
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err != nil {
+		t.Fatalf("LoadOpenLDAPConfig(): %v", err)
+	}
+	base := directory.Entry{
+		DN: "cn=options,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("top", "device", "extensibleObject")},
+			{Description: "cn", Values: byteValues("options")},
+		},
+	}
+	for _, test := range []struct {
+		description string
+		wantError   bool
+	}{
+		{description: "description;x-hidden"},
+		{description: "description;z"},
+		{description: "description;z-"},
+		{description: "description;z-value"},
+		{description: "description;range="},
+		{description: "description;range=0-1499"},
+		{description: "description;range==opaque"},
+		{description: "description;range=.opaque"},
+		{description: "description;range=*", wantError: true},
+		{description: "description;lang-en", wantError: true},
+		{description: "description;x-unknown", wantError: true},
+	} {
+		candidate := base.Clone()
+		candidate.Attributes = append(candidate.Attributes, directory.Attribute{
+			Description: test.description,
+			Values:      byteValues("value"),
+		})
+		err := registry.ValidateEntry(candidate)
+		if test.wantError == (err == nil) {
+			t.Errorf("ValidateEntry(%q) error = %v", test.description, err)
+		}
+	}
+
+	for _, test := range []struct {
+		candidate string
+		requested string
+		want      bool
+	}{
+		{candidate: "description;z", requested: "description;z-", want: true},
+		{candidate: "description;z-value", requested: "description;z-", want: true},
+		{candidate: "description;z-", requested: "description;z-", want: true},
+		{candidate: "description;z-value", requested: "description;z"},
+		{candidate: "description;x-hidden", requested: "description;z-"},
+	} {
+		if got := registry.AttributeDescriptionSubtype(test.candidate, test.requested); got != test.want {
+			t.Errorf(
+				"AttributeDescriptionSubtype(%q, %q) = %t, want %t",
+				test.candidate,
+				test.requested,
+				got,
+				test.want,
+			)
+		}
+	}
+}
+
+func TestLoadOpenLDAPConfigAttributeOptionsRejectConflicts(t *testing.T) {
+	t.Parallel()
+
+	for _, options := range []string{
+		"binary",
+		"x- x-value",
+		"x-value x-",
+		"x x",
+		"range= range=0-1",
+		"range=0-1 range=",
+		"range==",
+	} {
+		t.Run(options, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			if err := store.Update(context.Background(), func(tx storage.Writer) error {
+				return tx.PutIn(storage.OpenLDAPConfigPartition, directory.Entry{
+					DN: "cn=config",
+					Attributes: []directory.Attribute{{
+						Description: "olcAttributeOptions",
+						Values:      byteValues(options),
+					}},
+				}, false)
+			}); err != nil {
+				t.Fatalf("seed attribute options: %v", err)
+			}
+			registry, err := NewBuiltinRegistry()
+			if err != nil {
+				t.Fatalf("NewBuiltinRegistry(): %v", err)
+			}
+			if _, err := LoadOpenLDAPConfig(context.Background(), store, registry); err == nil {
+				t.Fatalf("LoadOpenLDAPConfig() accepted conflicting options %q", options)
+			}
+		})
 	}
 }
 

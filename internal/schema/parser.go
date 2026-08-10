@@ -8,8 +8,68 @@ import (
 	"unicode"
 )
 
+func ParseLDAPSyntax(description string) (LDAPSyntax, error) {
+	return parseLDAPSyntax(description, nil)
+}
+
+func parseLDAPSyntax(
+	description string,
+	resolveOID func(string) (string, error),
+) (LDAPSyntax, error) {
+	parser, err := newDescriptionParserWithOIDResolver(description, resolveOID)
+	if err != nil {
+		return LDAPSyntax{}, err
+	}
+	oid, err := parser.readNumericOID("LDAP syntax")
+	if err != nil {
+		return LDAPSyntax{}, err
+	}
+	syntax := LDAPSyntax{
+		OID:        oid,
+		Extensions: make(map[string][]string),
+	}
+	seen := make(map[string]struct{})
+	for !parser.atEnd() {
+		keyword := strings.ToUpper(parser.take())
+		if _, duplicate := seen[keyword]; duplicate {
+			return LDAPSyntax{}, parser.errorf("duplicate LDAP syntax field %q", keyword)
+		}
+		seen[keyword] = struct{}{}
+		switch {
+		case keyword == "DESC":
+			syntax.Description, err = parser.readOne()
+		case strings.HasPrefix(keyword, "X-"):
+			syntax.Extensions[keyword], err = parser.readList()
+			if err == nil && keyword == "X-SUBST" && resolveOID != nil {
+				for index, value := range syntax.Extensions[keyword] {
+					syntax.Extensions[keyword][index], err = resolveOID(value)
+					if err != nil {
+						break
+					}
+				}
+			}
+		default:
+			err = fmt.Errorf("unknown LDAP syntax field %q", keyword)
+		}
+		if err != nil {
+			return LDAPSyntax{}, parser.wrap(err)
+		}
+	}
+	if err := parser.finish(); err != nil {
+		return LDAPSyntax{}, err
+	}
+	return syntax, nil
+}
+
 func ParseAttributeType(description string) (AttributeType, error) {
-	parser, err := newDescriptionParser(description)
+	return parseAttributeType(description, nil)
+}
+
+func parseAttributeType(
+	description string,
+	resolveOID func(string) (string, error),
+) (AttributeType, error) {
+	parser, err := newDescriptionParserWithOIDResolver(description, resolveOID)
 	if err != nil {
 		return AttributeType{}, err
 	}
@@ -45,6 +105,9 @@ func ParseAttributeType(description string) (AttributeType, error) {
 			syntax, err = parser.readOne()
 			if err == nil {
 				attribute.Syntax, attribute.SyntaxLength, err = parseSyntaxOID(syntax)
+				if err == nil && resolveOID != nil {
+					attribute.Syntax, err = resolveOID(attribute.Syntax)
+				}
 			}
 		case keyword == "SINGLE-VALUE":
 			attribute.SingleValue = true
@@ -75,7 +138,14 @@ func ParseAttributeType(description string) (AttributeType, error) {
 }
 
 func ParseObjectClass(description string) (ObjectClass, error) {
-	parser, err := newDescriptionParser(description)
+	return parseObjectClass(description, nil)
+}
+
+func parseObjectClass(
+	description string,
+	resolveOID func(string) (string, error),
+) (ObjectClass, error) {
+	parser, err := newDescriptionParserWithOIDResolver(description, resolveOID)
 	if err != nil {
 		return ObjectClass{}, err
 	}
@@ -126,7 +196,14 @@ func ParseObjectClass(description string) (ObjectClass, error) {
 }
 
 func ParseDITContentRule(description string) (DITContentRule, error) {
-	parser, err := newDescriptionParser(description)
+	return parseDITContentRule(description, nil)
+}
+
+func parseDITContentRule(
+	description string,
+	resolveOID func(string) (string, error),
+) (DITContentRule, error) {
+	parser, err := newDescriptionParserWithOIDResolver(description, resolveOID)
 	if err != nil {
 		return DITContentRule{}, err
 	}
@@ -293,12 +370,20 @@ func ParseDITStructureRule(description string) (DITStructureRule, error) {
 }
 
 type descriptionParser struct {
-	input  string
-	tokens []string
-	index  int
+	input      string
+	tokens     []string
+	index      int
+	resolveOID func(string) (string, error)
 }
 
 func newDescriptionParser(description string) (*descriptionParser, error) {
+	return newDescriptionParserWithOIDResolver(description, nil)
+}
+
+func newDescriptionParserWithOIDResolver(
+	description string,
+	resolveOID func(string) (string, error),
+) (*descriptionParser, error) {
 	description = strings.TrimSpace(description)
 	if strings.HasPrefix(description, "{") {
 		end := strings.IndexByte(description, '}')
@@ -317,7 +402,11 @@ func newDescriptionParser(description string) (*descriptionParser, error) {
 	if len(tokens) < 3 || tokens[0] != "(" || tokens[len(tokens)-1] != ")" {
 		return nil, errors.New("schema description must be enclosed in parentheses")
 	}
-	return &descriptionParser{input: description, tokens: tokens[1 : len(tokens)-1]}, nil
+	return &descriptionParser{
+		input:      description,
+		tokens:     tokens[1 : len(tokens)-1],
+		resolveOID: resolveOID,
+	}, nil
 }
 
 func (parser *descriptionParser) atEnd() bool {
@@ -337,6 +426,18 @@ func (parser *descriptionParser) readNumericOID(kind string) (string, error) {
 	oid := parser.take()
 	if oid == "" {
 		return "", parser.errorf("missing %s OID", kind)
+	}
+	if oid[0] >= '0' && oid[0] <= '9' && validObjectIdentifier(oid) {
+		return oid, nil
+	}
+	if parser.resolveOID != nil {
+		resolved, err := parser.resolveOID(oid)
+		if err != nil {
+			return "", parser.errorf("resolve %s OID %q: %v", kind, oid, err)
+		}
+		if resolved != "" && validObjectIdentifier(resolved) {
+			return resolved, nil
+		}
 	}
 	if oid[0] < '0' || oid[0] > '9' || !validObjectIdentifier(oid) {
 		return "", parser.errorf("%s OID %q is not a numeric OID", kind, oid)

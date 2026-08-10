@@ -16,22 +16,28 @@ import (
 )
 
 type Registry struct {
-	mu             sync.RWMutex
-	attributes     map[string]*AttributeType
-	objectClasses  map[string]*ObjectClass
-	contentRules   map[string]*DITContentRule
-	nameForms      map[string]*NameForm
-	structureRules map[string]*DITStructureRule
+	mu               sync.RWMutex
+	syntaxes         map[string]*LDAPSyntax
+	attributes       map[string]*AttributeType
+	objectClasses    map[string]*ObjectClass
+	contentRules     map[string]*DITContentRule
+	nameForms        map[string]*NameForm
+	structureRules   map[string]*DITStructureRule
+	attributeOptions []string
 }
 
 func NewRegistry() *Registry {
-	return &Registry{
-		attributes:     make(map[string]*AttributeType),
-		objectClasses:  make(map[string]*ObjectClass),
-		contentRules:   make(map[string]*DITContentRule),
-		nameForms:      make(map[string]*NameForm),
-		structureRules: make(map[string]*DITStructureRule),
+	registry := &Registry{
+		syntaxes:         make(map[string]*LDAPSyntax),
+		attributes:       make(map[string]*AttributeType),
+		objectClasses:    make(map[string]*ObjectClass),
+		contentRules:     make(map[string]*DITContentRule),
+		nameForms:        make(map[string]*NameForm),
+		structureRules:   make(map[string]*DITStructureRule),
+		attributeOptions: []string{"lang-"},
 	}
+	registry.installBuiltinLDAPSyntaxes()
+	return registry
 }
 
 func (registry *Registry) Clone() *Registry {
@@ -39,6 +45,11 @@ func (registry *Registry) Clone() *Registry {
 	defer registry.mu.RUnlock()
 
 	cloned := NewRegistry()
+	cloned.syntaxes = make(map[string]*LDAPSyntax, len(registry.syntaxes))
+	for key, syntax := range registry.syntaxes {
+		copy := cloneLDAPSyntax(*syntax)
+		cloned.syntaxes[key] = &copy
+	}
 	attributeCopies := make(map[*AttributeType]*AttributeType)
 	for key, attribute := range registry.attributes {
 		copy, exists := attributeCopies[attribute]
@@ -89,6 +100,7 @@ func (registry *Registry) Clone() *Registry {
 		}
 		cloned.structureRules[key] = copy
 	}
+	cloned.attributeOptions = append([]string(nil), registry.attributeOptions...)
 	return cloned
 }
 
@@ -1170,7 +1182,7 @@ func (registry *Registry) NormalizeEqualityAssertion(
 		assertionSyntax = SyntaxOID
 		assertionLength = 0
 	}
-	if err := validateSyntax(assertionSyntax, assertionLength, value); err != nil {
+	if err := registry.validateSyntax(assertionSyntax, assertionLength, value); err != nil {
 		return nil, fmt.Errorf("attribute %q assertion: %w", attributeName, err)
 	}
 	return normalizeWithRule(effective.Equality, value)
@@ -1193,7 +1205,7 @@ func (registry *Registry) ValidateAttributeValue(
 	if err != nil {
 		return err
 	}
-	if err := validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
+	if err := registry.validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
 		return fmt.Errorf("attribute %q: %w", attributeName, err)
 	}
 	return nil
@@ -1264,6 +1276,13 @@ func (registry *Registry) MatchSubstring(
 }
 
 func (registry *Registry) ValidateEntry(entry directory.Entry) error {
+	return registry.ValidateEntryWithOptions(entry, EntryValidationOptions{})
+}
+
+func (registry *Registry) ValidateEntryWithOptions(
+	entry directory.Entry,
+	options EntryValidationOptions,
+) error {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
@@ -1284,6 +1303,16 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 				Kind:      ViolationUnknownObjectClass,
 				Attribute: "objectClass",
 				Message:   fmt.Sprintf("unknown object class %q", value),
+			}
+		}
+		if objectClass.Obsolete {
+			return &Violation{
+				Kind:      ViolationStructuralObjectClass,
+				Attribute: "objectClass",
+				Message: fmt.Sprintf(
+					"object class '%s' is obsolete",
+					objectClass.Name(),
+				),
 			}
 		}
 		if err := registry.collectObjectClass(objectClass, classes, make(map[string]bool)); err != nil {
@@ -1524,8 +1553,31 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 		if err != nil {
 			return err
 		}
+		if err := registry.validateAttributeDescription(
+			attribute.Description,
+			effective,
+		); err != nil {
+			return &Violation{
+				Kind:      ViolationUndefinedAttribute,
+				Attribute: attribute.Description,
+				Message:   err.Error(),
+			}
+		}
 		for _, value := range attribute.Values {
-			if err := validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
+			if options.SkipValueSyntax {
+				if err := validateStoredEqualityNormalization(
+					effective.Equality,
+					value,
+				); err != nil {
+					return &Violation{
+						Kind:      ViolationSyntax,
+						Attribute: attribute.Description,
+						Message:   err.Error(),
+					}
+				}
+				continue
+			}
+			if err := registry.validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
 				return &Violation{
 					Kind:      ViolationSyntax,
 					Attribute: attribute.Description,
@@ -1564,6 +1616,13 @@ func (registry *Registry) ValidateEntry(entry directory.Entry) error {
 						Kind:      ViolationNaming,
 						Attribute: namingValue.Type,
 						Message:   "collective attribute cannot be used for naming",
+					}
+				}
+				if attributeType.Obsolete {
+					return &Violation{
+						Kind:      ViolationNaming,
+						Attribute: namingValue.Type,
+						Message:   "obsolete attribute cannot be used for naming",
 					}
 				}
 			}
@@ -2219,7 +2278,7 @@ func (registry *Registry) attributeDescriptionSubtype(
 	requestedType, requestedKnown := registry.attributes[schemaKey(requestedTypeName)]
 	if !candidateKnown || !requestedKnown {
 		return schemaKey(candidateTypeName) == schemaKey(requestedTypeName) &&
-			sameAttributeOptions(candidateOptions, requestedOptions)
+			attributeOptionsSubtype(candidateOptions, requestedOptions)
 	}
 	if !registry.attributeTypeSubtype(
 		candidateType,
@@ -2228,23 +2287,25 @@ func (registry *Registry) attributeDescriptionSubtype(
 	) {
 		return false
 	}
-	for option := range requestedOptions {
-		if _, present := candidateOptions[option]; !present {
-			return false
-		}
-	}
-	return true
+	return attributeOptionsSubtype(candidateOptions, requestedOptions)
 }
 
-func sameAttributeOptions(
-	left,
-	right map[string]struct{},
+func attributeOptionsSubtype(
+	candidate,
+	requested map[string]struct{},
 ) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for option := range left {
-		if _, present := right[option]; !present {
+	for requestedOption := range requested {
+		matched := false
+		for candidateOption := range candidate {
+			if candidateOption == requestedOption ||
+				(strings.HasSuffix(requestedOption, "-") &&
+					(candidateOption == strings.TrimSuffix(requestedOption, "-") ||
+						strings.HasPrefix(candidateOption, requestedOption))) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}
@@ -2277,6 +2338,191 @@ func splitAttributeDescription(
 		options[schemaKey(option)] = struct{}{}
 	}
 	return parts[0], options
+}
+
+func (registry *Registry) configureAttributeOptions(values []string) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if len(values) == 0 {
+		return nil
+	}
+	configured := make([]string, 0)
+	for _, raw := range values {
+		for _, option := range strings.Fields(raw) {
+			key := strings.ToLower(option)
+			if !validAttributeOptionDefinition(key) {
+				return fmt.Errorf("invalid attribute option definition %q", option)
+			}
+			if key == "binary" {
+				return errors.New("attribute option \"binary\" is already defined")
+			}
+			for _, existing := range configured {
+				if attributeOptionDefinitionMatches(existing, key) ||
+					attributeOptionDefinitionMatches(key, existing) {
+					return fmt.Errorf(
+						"attribute option %q conflicts with %q",
+						option,
+						existing,
+					)
+				}
+			}
+			configured = append(configured, key)
+		}
+	}
+	registry.attributeOptions = configured
+	return nil
+}
+
+func (registry *Registry) validateAttributeDescription(
+	description string,
+	attribute AttributeType,
+) error {
+	if description == "" || strings.TrimSpace(description) != description {
+		return errors.New("invalid AttributeDescription")
+	}
+	parts := strings.Split(description, ";")
+	if !validObjectIdentifier(parts[0]) {
+		return errors.New("AttributeDescription contains inappropriate characters")
+	}
+	if len(parts) > 1 && attribute.Usage != UsageUserApplications {
+		return errors.New("operational attribute with options undefined")
+	}
+	binarySyntax := registry.syntaxRequiresBinaryTransfer(attribute.Syntax)
+	allowEquals := registry.attributeOptionsAllowEquals()
+	binary := false
+	seen := make(map[string]struct{}, len(parts)-1)
+	tagBytes := 0
+	for _, rawOption := range parts[1:] {
+		option := strings.ToLower(rawOption)
+		if !validAttributeOption(option, allowEquals) {
+			return errors.New("invalid attribute option")
+		}
+		if option == "binary" {
+			if binary {
+				return errors.New("option \"binary\" specified multiple times")
+			}
+			if !binarySyntax {
+				return errors.New("option \"binary\" not supported with type")
+			}
+			binary = true
+			continue
+		}
+		if !registry.attributeOptionAllowed(option) {
+			return fmt.Errorf("unrecognized attribute option %q", rawOption)
+		}
+		if _, duplicate := seen[option]; duplicate {
+			continue
+		}
+		seen[option] = struct{}{}
+		tagBytes += len(option) + 1
+		if len(seen) > 128 || tagBytes > 1024 {
+			return errors.New("too many or too long attribute options")
+		}
+	}
+	if binarySyntax && !binary {
+		return fmt.Errorf("attribute needs ';binary' transfer as required by syntax %s", attribute.Syntax)
+	}
+	return nil
+}
+
+func (registry *Registry) attributeOptionAllowed(option string) bool {
+	for _, definition := range registry.attributeOptions {
+		if attributeOptionDefinitionMatches(definition, option) {
+			return true
+		}
+	}
+	return false
+}
+
+func (registry *Registry) attributeOptionsAllowEquals() bool {
+	for _, definition := range registry.attributeOptions {
+		if strings.HasSuffix(definition, "=") {
+			return true
+		}
+	}
+	return false
+}
+
+func attributeOptionDefinitionMatches(definition, option string) bool {
+	return option == definition ||
+		((strings.HasSuffix(definition, "-") ||
+			strings.HasSuffix(definition, "=")) &&
+			strings.HasPrefix(option, definition))
+}
+
+func validAttributeOptionDefinition(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, character := range []byte(value) {
+		if character == '=' && index == len(value)-1 {
+			continue
+		}
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validAttributeOption(value string, allowEquals bool) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '-' && character != '.' {
+			if allowEquals && character == '=' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func validateStoredEqualityNormalization(
+	rule string,
+	value []byte,
+) error {
+	switch canonicalMatchingRule(rule) {
+	case "openldapacimatch":
+		_, err := aci.Normalize(value)
+		return err
+	case "distinguishednamematch":
+		_, err := directory.ParseDN(string(value))
+		if err != nil {
+			return errors.New("distinguishedNameMatch received invalid DN")
+		}
+		return nil
+	case "uniquemembermatch":
+		_, err := normalizeUniqueMember(value)
+		return err
+	case "uuidmatch", "uuidorderingmatch":
+		return validateSyntax(SyntaxUUID, 0, value)
+	case "generalizedtimematch", "generalizedtimeorderingmatch":
+		_, err := normalizeGeneralizedTime(value)
+		return err
+	case "authzmatch":
+		return validateAuthzSyntax(value)
+	case "csnmatch", "csnorderingmatch":
+		_, ok := normalizeCSN(value)
+		if !ok {
+			return errors.New("CSN matching received an invalid value")
+		}
+		return nil
+	case "caseignorematch", "caseignoreorderingmatch", "caseexactmatch",
+		"caseexactorderingmatch":
+		if !utf8.Valid(value) {
+			return errors.New("matching rule normalization received invalid UTF-8")
+		}
+	case "caseignoreia5match", "caseignoreia5orderingmatch",
+		"caseexactia5match", "caseexactia5orderingmatch":
+		return nil
+	}
+	return nil
 }
 
 func validateSyntax(syntax string, maxLength int, value []byte) error {
@@ -2317,6 +2563,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if !validPostalAddress(value) {
 			return errors.New("value is not a postal address")
 		}
+	case SyntaxPrintableString:
+		if !validPrintableString(value) {
+			return errors.New("value is not a Printable String")
+		}
 	case SyntaxTelephoneNumber:
 		if !validPrintableString(value) {
 			return errors.New("value is not a telephone number")
@@ -2326,7 +2576,7 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 			return errors.New("value is not a printable string list")
 		}
 	case SyntaxInteger:
-		if _, err := strconv.ParseInt(string(value), 10, 64); err != nil {
+		if !validLDAPInteger(value) {
 			return errors.New("value is not an integer")
 		}
 	case SyntaxBoolean:
@@ -2360,6 +2610,14 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if _, err := ParseNameForm(string(value)); err != nil {
 			return fmt.Errorf("value is not a name form description: %w", err)
 		}
+	case SyntaxAttributeType:
+		if _, err := ParseAttributeType(string(value)); err != nil {
+			return fmt.Errorf("value is not an attribute type description: %w", err)
+		}
+	case SyntaxObjectClass:
+		if _, err := ParseObjectClass(string(value)); err != nil {
+			return fmt.Errorf("value is not an object class description: %w", err)
+		}
 	case SyntaxOID:
 		if !validObjectIdentifier(string(value)) {
 			return errors.New("value is not an object identifier")
@@ -2368,26 +2626,55 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if !validGeneralizedTime(value) {
 			return errors.New("value is not generalized time")
 		}
+	case SyntaxUUID:
+		if !validUUID(value) {
+			return errors.New("value is not a UUID")
+		}
 	case SyntaxCSN:
 		if _, ok := normalizeCSN(value); !ok {
 			return errors.New("value is not a CSN")
 		}
+	case SyntaxCertificate:
+		return validateCertificate(value)
+	case SyntaxCertificateList:
+		return validateCertificateList(value)
+	case SyntaxCertificatePair:
+		return validateCertificatePair(value)
+	case SyntaxSupportedAlgorithm:
+		return validateBlob(value)
+	case SyntaxAttributeCertificate:
+		return validateAttributeCertificate(value)
+	case SyntaxPKCS8PrivateKey:
+		return validatePKCS8PrivateKey(value)
+	case SyntaxACIItem:
+		return fmt.Errorf("no validator for syntax %s", syntax)
+	case SyntaxOpenLDAPVoid:
+		return nil
+	default:
+		return fmt.Errorf("unsupported syntax %q", syntax)
 	}
 	return nil
 }
 
-func validGeneralizedTime(value []byte) bool {
-	raw := string(value)
-	for _, layout := range []string{
-		"20060102150405Z",
-		"20060102150405.000000Z",
-		"200601021504Z",
-	} {
-		if _, err := time.Parse(layout, raw); err == nil {
-			return true
+func validUUID(value []byte) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			if (character < '0' || character > '9') &&
+				(character < 'a' || character > 'f') &&
+				(character < 'A' || character > 'F') {
+				return false
+			}
 		}
 	}
-	return false
+	return true
 }
 
 func normalizeCSN(value []byte) (string, bool) {
@@ -2492,8 +2779,15 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			normalizeNumericString(left),
 			normalizeNumericString(right),
 		), nil
-	case "octetstringmatch", "octetstringorderingmatch", "authzmatch":
+	case "octetstringmatch", "octetstringorderingmatch":
 		return bytes.Compare(left, right), nil
+	case "authzmatch":
+		normalizedLeft, leftErr := normalizeWithRule(rule, left)
+		normalizedRight, rightErr := normalizeWithRule(rule, right)
+		if leftErr != nil || rightErr != nil {
+			return 0, errors.New("authzMatch received an invalid value")
+		}
+		return bytes.Compare(normalizedLeft, normalizedRight), nil
 	case "objectidentifiermatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
 	case "objectidentifierfirstcomponentmatch":
@@ -2509,19 +2803,7 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			strings.ToLower(strings.TrimSpace(string(right))),
 		), nil
 	case "integermatch", "integerorderingmatch":
-		leftInteger, leftErr := strconv.ParseInt(string(left), 10, 64)
-		rightInteger, rightErr := strconv.ParseInt(string(right), 10, 64)
-		if leftErr != nil || rightErr != nil {
-			return 0, errors.New("integer matching rule received invalid integer")
-		}
-		switch {
-		case leftInteger < rightInteger:
-			return -1, nil
-		case leftInteger > rightInteger:
-			return 1, nil
-		default:
-			return 0, nil
-		}
+		return compareLDAPIntegers(left, right)
 	case "integerfirstcomponentmatch":
 		firstComponent, err := schemaDescriptionFirstComponent(left)
 		if err != nil {
@@ -2530,25 +2812,16 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 				err,
 			)
 		}
-		leftInteger, leftErr := strconv.ParseInt(firstComponent, 10, 64)
-		rightInteger, rightErr := strconv.ParseInt(
-			strings.TrimSpace(string(right)),
-			10,
-			64,
+		comparison, err := compareLDAPIntegers(
+			[]byte(firstComponent),
+			[]byte(strings.TrimSpace(string(right))),
 		)
-		if leftErr != nil || rightErr != nil {
+		if err != nil {
 			return 0, errors.New(
 				"integerFirstComponentMatch received an invalid integer",
 			)
 		}
-		switch {
-		case leftInteger < rightInteger:
-			return -1, nil
-		case leftInteger > rightInteger:
-			return 1, nil
-		default:
-			return 0, nil
-		}
+		return comparison, nil
 	case "booleanmatch":
 		return strings.Compare(strings.ToUpper(string(left)), strings.ToUpper(string(right))), nil
 	case "distinguishednamematch":
@@ -2560,8 +2833,20 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 		return strings.Compare(leftDN.Key(), rightDN.Key()), nil
 	case "uniquemembermatch":
 		return compareUniqueMember(left, right)
-	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
+	case "uuidmatch", "uuidorderingmatch":
 		return strings.Compare(strings.ToLower(string(left)), strings.ToLower(string(right))), nil
+	case "generalizedtimematch", "generalizedtimeorderingmatch":
+		normalizedLeft, leftErr := normalizeGeneralizedTime(left)
+		normalizedRight, rightErr := normalizeGeneralizedTime(right)
+		if leftErr != nil || rightErr != nil {
+			return 0, errors.New("generalized time matching received an invalid value")
+		}
+		if canonicalMatchingRule(rule) == "generalizedtimeorderingmatch" {
+			leftTime := normalizedLeft[:len(normalizedLeft)-1]
+			rightTime := normalizedRight[:len(normalizedRight)-1]
+			return bytes.Compare(leftTime, rightTime), nil
+		}
+		return bytes.Compare(normalizedLeft, normalizedRight), nil
 	case "csnmatch", "csnorderingmatch":
 		normalizedLeft, leftOK := normalizeCSN(left)
 		normalizedRight, rightOK := normalizeCSN(right)
@@ -2594,17 +2879,18 @@ func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 		return normalizeTelephoneNumber(value), nil
 	case "numericstringmatch", "numericstringorderingmatch":
 		return normalizeNumericString(value), nil
-	case "octetstringmatch", "octetstringorderingmatch", "authzmatch",
+	case "octetstringmatch", "octetstringorderingmatch",
 		"objectidentifierfirstcomponentmatch", "integerfirstcomponentmatch":
+		return bytes.Clone(value), nil
+	case "authzmatch":
+		if err := validateAuthzSyntax(value); err != nil {
+			return nil, err
+		}
 		return bytes.Clone(value), nil
 	case "objectidentifiermatch":
 		return bytes.ToLower(value), nil
 	case "integermatch", "integerorderingmatch":
-		integer, err := strconv.ParseInt(string(value), 10, 64)
-		if err != nil {
-			return nil, errors.New("integer matching rule received invalid integer")
-		}
-		return []byte(strconv.FormatInt(integer, 10)), nil
+		return bytes.Clone(value), nil
 	case "booleanmatch":
 		return bytes.ToUpper(value), nil
 	case "distinguishednamematch":
@@ -2615,8 +2901,10 @@ func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 		return []byte(dn.Key()), nil
 	case "uniquemembermatch":
 		return normalizeUniqueMember(value)
-	case "uuidmatch", "uuidorderingmatch", "generalizedtimematch", "generalizedtimeorderingmatch":
+	case "uuidmatch", "uuidorderingmatch":
 		return bytes.ToLower(value), nil
+	case "generalizedtimematch", "generalizedtimeorderingmatch":
+		return normalizeGeneralizedTime(value)
 	case "csnmatch", "csnorderingmatch":
 		normalized, ok := normalizeCSN(value)
 		if !ok {

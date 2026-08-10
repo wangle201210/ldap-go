@@ -70,10 +70,10 @@ functions, configurations, or directory data.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | DN/RDN parsing and normalization | partial | RFC 4514 corpus and OpenLDAP normalization |
-| Core syntaxes and matching rules | partial | RFC 4517 schema-aware corpus |
+| Core syntaxes and matching rules | partial | RFC 4517 schema-aware corpus plus pinned `slapadd` checks for arbitrary-precision INTEGER, GeneralizedTime hour/offset forms, authzMatch, default equality normalization, covered OpenLDAP binary syntax validators, required `;binary`, and explicit value validation pass; arbitrary module-provided syntax validators and matching-rule implementations remain unsupported |
 | Standard operational attributes | partial | create/modify/rename differential tests |
 | Subschema subentry | partial | discovery and schema publication tests |
-| Runtime schema through `cn=config` | partial | add/modify/delete and restart tests |
+| Runtime schema through `cn=config` | partial | add/modify/delete/restart tests, imported `olcAttributeOptions` exact/trailing-`-`/`range=` handling, range Search/Modify behavior, ordered `olcLdapSyntaxes` declarations and `X-SUBST` inheritance, idempotent built-in syntax restore, and atomic offline configuration validation pass; executable third-party validators, complete schema-module loading, and every OpenLDAP schema description remain unsupported |
 | Collective attributes | partial | RFC 3671 schema, propagation, merge/exclusions, filtering, Compare, controls, paging, sorting/VLV, and ACL tests pass; X.501 administrative-area boundaries and OpenLDAP differential remain |
 | DIT content/name/structure rules | partial | OpenLDAP `olcDitContentRules` parsing, publication, enforcement, online/restart, real slapcat import, and slapd differentials pass; RFC 4512 name-form/structure-rule parsing, publication, RDN/SUP enforcement, governing rule maintenance, and Relax behavior pass; OpenLDAP 2.6 exposes no equivalent runtime configuration for a differential |
 
@@ -96,10 +96,10 @@ functions, configurations, or directory data.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Transactional durable backend | partial | crash, atomicity, recovery, and race tests pass; configurable equality/substring/ordering indexes and indexed Search planning remain unsupported, so local database Search currently scans the selected partition |
-| Multiple suffixes and subordinate DBs | partial | partition, hidden, glue routing, paging, and syncprov inheritance tests pass |
-| `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
-| `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests pass; offline import assumes trusted `slapcat` output and does not apply the online Add path's complete schema validation |
-| `slapcat` `cn=config` import | partial | boot from imported configuration |
+| Multiple suffixes and subordinate DBs | partial | runtime partition/hidden/glue/paging/syncprov tests plus pinned offline default-primary, most-specific `-b`, hidden/disabled fallback, selected-superior-to-subordinate routing, superior LastMod/root-DN policy, glued replacement, glued `slapcat`, physical `-g`, and duplicate-suffix rejection pass; broader nested glue/backend combinations remain |
+| `cn=config` online configuration | partial | OpenLDAP LDIF import, online changes, and immutable runtime publication pass; complete backend/module-specific validation hooks remain |
+| `slapcat` content LDIF import/export | partial | semantic round trips, atomic rollback including API dry-run, default/explicit database selection and no-database rejection, glue-subordinate import/export/replacement and `-g`, `config`/`mdb`/`ldif`/`wt`/`null` callback policy, proxy-backend rejection, built-in and supported imported schema validation, ordered `olcLdapSyntaxes`/`X-SUBST`, AttributeDescription/options/`;binary` checks, selected default equality normalizers, RDN-value completion, `structuralObjectClass`, selected-database LastMod, `-S`, root/subentry/config `contextCSN`, selected-database suffix/final-parent checks, and supplied operational metadata pass; complete slapd parser/normalizer behavior, executable custom syntax and matching-rule modules, diagnostics, native backend file layouts, and every OpenLDAP data shape remain unverified |
+| `slapcat` `cn=config` import | partial | real OpenLDAP 2.6.13 `slapcat -n 0` schema/config import and same-transaction hierarchy/schema/runtime validation pass; unsupported configuration modules and values still reject or lack equivalent runtime behavior |
 | Backup, restore, database rebuild, check | partial | offline bbolt page/bucket/key/JSON/DN validation, multi-partition and metadata-preserving snapshot/restore, atomic publication, overwrite protection, corruption/cancellation tests, and rebuild round trips pass; online backup, crash injection at each filesystem boundary, and OpenLDAP tool output parity remain |
 | Monitor backend | partial | Root DSE discovery, all 13 standard monitor branches, dynamic connection/operation/statistics/time/database/overlay state, Search/Compare/ACL/paging/limits, matched DN, runtime read-only/restriction changes, and OpenLDAP 2.6.13 differentials pass; complete backend/overlay inventories and worker/runtime internals remain |
 | Null backend | partial | `olcDbBindAllowed`/`olcDbDoSearch`, synthetic Search, Bind/root Bind, discarded writes, Compare, Assertion, paging, typesOnly, read controls, No-Op, and a null-enabled OpenLDAP differential pass |
@@ -111,7 +111,11 @@ functions, configurations, or directory data.
 OpenLDAP MDB binary files are not a stable interchange format. Canonical
 `slapcat` LDIF is the direct migration contract. MDB indexes are not migrated;
 the current bbolt engine uses its own layout and does not yet implement
-configurable OpenLDAP-style Search indexes.
+configurable OpenLDAP-style Search indexes. Each import also parses and
+validates all pending content inside one write transaction, retaining the
+pending entry set until database routing is known. Large-import memory use,
+write-lock duration, and crash/fault behavior at scale do not yet have a
+production qualification gate.
 
 ## Overlays
 
@@ -163,7 +167,7 @@ configurable OpenLDAP-style Search indexes.
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Server daemon and config validation | partial | lifecycle and config diagnostics |
-| `slapadd` / `slapcat` equivalents | partial | `-l/-b/-n/-s/-u` implemented where applicable, dry-run and subtree export, read-only/atomic file behavior, database selection, OpenLDAP LDIF round trips, unsupported-option rejection, and exit-code tests pass; complete diagnostic text and every historical option remain |
+| `slapadd` / `slapcat` equivalents | partial | `slapadd` supports `-l/-b/-n/-g/-s/-u/-S/-w` and `-o schema-check=yes\|no` / `value-check=yes\|no`; `slapcat` supports `-l/-b/-n/-g/-s` for the tested subset; default-primary and explicit selection, glue-subordinate import/export, backend callback policy, schema/options/normalizer, LastMod/CSN, root and `olcSyncUseSubentry` context, atomic `cn=config`, dry-run, round-trip, and exit-code cases pass; imports remain atomic, `-c/-q` are rejected, and exact dry-run, partial-write, parser/normalizer, diagnostic, native backend-file, and historical-option parity remain unsupported |
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
 | `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
 | `slappasswd` equivalent | partial | `{SSHA}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; OpenLDAP module-provided schemes remain |
@@ -1290,10 +1294,10 @@ Evidence currently consists of package tests, TCP interoperability tests using
 `github.com/go-ldap/ldap/v3`, import/export semantic round trips, and manual
 process-level operations using OpenLDAP 2.6.13 `ldapsearch`, `ldapadd`,
 `ldapmodify`, `ldapcompare`, `ldapmodrdn`, and `ldapdelete`. Rows remain
-`partial` because the complete RFC 4517 syntax/matching-rule set,
-referral chaining, controls, the remaining ACL grammar and differential suite,
-SASL, subtree-delete control, and full differential fixtures are still
-pending.
+`partial` because the complete RFC 4517 syntax/matching-rule set, executable
+third-party schema modules, referral chaining, controls, the remaining ACL
+grammar and differential suite, SASL, subtree-delete control, and full
+differential fixtures are still pending.
 
 Schema bootstrap was also exercised by importing the unmodified Homebrew
 OpenLDAP 2.6 `core`, `cosine`, `inetorgperson`, `nis`, and `openldap` schema

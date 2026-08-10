@@ -37,6 +37,38 @@ func ValidateConfiguration(
 	if config.Store == nil {
 		return ConfigurationSummary{}, errors.New("store is required")
 	}
+	var summary ConfigurationSummary
+	err := config.Store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		summary, err = ValidateConfigurationReader(ctx, config, reader)
+		return err
+	})
+	if err != nil {
+		return ConfigurationSummary{}, fmt.Errorf(
+			"validate runtime configuration: %w",
+			err,
+		)
+	}
+	return summary, nil
+}
+
+// ValidateConfigurationReader validates a configuration already visible in a
+// caller-owned transaction. It allows offline import to reject invalid
+// cn=config data before committing it.
+func ValidateConfigurationReader(
+	ctx context.Context,
+	config Config,
+	reader storage.Reader,
+) (ConfigurationSummary, error) {
+	if ctx == nil {
+		return ConfigurationSummary{}, errors.New("validation context is required")
+	}
+	if reader == nil {
+		return ConfigurationSummary{}, errors.New("configuration reader is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return ConfigurationSummary{}, err
+	}
 	if config.RootDN != "" && len(config.RootPassword) == 0 {
 		return ConfigurationSummary{}, errors.New(
 			"root password is required when root DN is configured",
@@ -59,39 +91,26 @@ func ValidateConfiguration(
 		baseSchema: baseSchema.Clone(),
 	}
 
-	var summary ConfigurationSummary
-	err := config.Store.View(ctx, func(reader storage.Reader) error {
-		listenerURLs, err := configurationValidationListenerURLs(
-			reader,
-			config.ListenerURLs,
-		)
-		if err != nil {
-			return err
-		}
-		validator.config.ListenerURLs = listenerURLs
-
-		runtime, err := validator.buildRuntimeState(reader)
-		if err != nil {
-			return err
-		}
-
-		var aclResult acl.LoadResult
-		if config.AccessPolicy == nil {
-			_, aclResult, err = acl.LoadOpenLDAPConfigReader(reader)
-			if err != nil {
-				return err
-			}
-		}
-		summary = summarizeConfiguration(runtime, aclResult.Rules)
-		return nil
-	})
+	listenerURLs, err := configurationValidationListenerURLs(
+		reader,
+		config.ListenerURLs,
+	)
 	if err != nil {
-		return ConfigurationSummary{}, fmt.Errorf(
-			"validate runtime configuration: %w",
-			err,
-		)
+		return ConfigurationSummary{}, err
 	}
-	return summary, nil
+	validator.config.ListenerURLs = listenerURLs
+	runtime, err := validator.buildRuntimeState(reader)
+	if err != nil {
+		return ConfigurationSummary{}, err
+	}
+	var aclResult acl.LoadResult
+	if config.AccessPolicy == nil {
+		_, aclResult, err = acl.LoadOpenLDAPConfigReader(reader)
+		if err != nil {
+			return ConfigurationSummary{}, err
+		}
+	}
+	return summarizeConfiguration(runtime, aclResult.Rules), nil
 }
 
 func configurationValidationListenerURLs(

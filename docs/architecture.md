@@ -658,14 +658,83 @@ must:
 - preserve DNs, attribute options, binary values, entry UUIDs, and CSNs;
 - validate schema while supporting an explicit bootstrap order for custom
   schema;
-- reconstruct all indexes rather than trusting source database files;
+- reconstruct backend-native storage rather than trusting source database files;
 - reject partial imports atomically and report the record and line;
 - produce an export whose normalized LDAP content is equivalent to the input.
 
+Native `ldap-go import` and the `slapadd` alias share one atomic storage
+transaction but use different validation policies. Native import enables
+structural and value-syntax validation. `slapadd` enables structural checks by
+default while leaving full value checks off unless requested. Both use the
+built-in registry plus supported `olcObjectIdentifier`, `olcAttributeTypes`,
+`olcObjectClasses`, `olcDitContentRules`, and `olcLdapSyntaxes` definitions
+imported through `cn=config`. Ordered `X-SUBST` syntax declarations inherit a
+known validator and binary-transfer behavior; ordinary declarations remain
+registered without inventing a validator. AttributeDescription parsing always
+validates configured exact, trailing-`-`, and `range=` options,
+operational-attribute option restrictions, and required or forbidden `;binary`
+transfer. With `value-check=no`, only matching rules that OpenLDAP invokes while
+materializing stored values are checked in the covered subset: DN, Name And
+Optional UID, UUID, arbitrary-precision INTEGER, generalized time, authzMatch,
+CSN, OpenLDAP ACI, and case-rule UTF-8.
+Full value checking validates implemented built-in and substituted syntaxes,
+including OpenLDAP's shallow checks for the covered binary certificate/key
+syntaxes, and rejects a declaration with no validator rather than accepting
+unvalidated data. These checks do not rewrite the original attribute bytes.
+
+For a selected database, hierarchy validation runs after all records are read,
+so child-before-parent LDIF is accepted while final orphans and out-of-suffix
+DNs are rejected. With no explicit selector, the OpenLDAP-style aliases select
+the first configured primary content database in configuration order, excluding
+config, frontend, monitor, and subordinate databases. They do not skip an
+unsupported selected backend to find a later one. A selected glue superior
+routes records owned by a more-specific `olcSubordinate` suffix into the child
+partition; a more-specific ordinary database is a selection error. Automatic
+native import routing instead chooses the most-specific active configured
+suffix. `slapcat` assembles a selected glue superior with its attached
+subordinate partitions. `-g` disables import routing and export aggregation so
+the selected physical partition is operated on directly. Default glue mode
+also rejects a subordinate suffix entry duplicated in the superior partition,
+matching the OpenLDAP tool-open consistency check.
+Database-scoped replacement follows the same boundary: a glued selection
+clears the superior and directly attached subordinate partitions, while `-g`
+clears only the selected physical partition.
+
+The `slapadd` path preserves supplied operational values and, when `olcLastMod`
+is enabled, generates missing LastMod metadata. Metadata policy comes from the
+database selected by the tool, even when glue routes the physical write to a
+subordinate backend. `-S` selects the generated CSN SID. With LastMod enabled,
+`-w` derives the maximum imported `entryCSN` per SID
+and updates the first suffix root; with `olcSyncUseSubentry: TRUE`, it instead
+creates or updates the OpenLDAP-shaped `cn=ldapsync,<suffix>` sync-provider
+subentry. The same context update and config-backend LastMod generation apply
+to `slapadd -n 0`. A `slapadd` configuration import validates the imported
+hierarchy and supported schema,
+then builds the runnable server configuration through the transaction reader.
+The persisted configuration becomes visible only after that same transaction
+commits; the offline validator does not publish a live runtime snapshot.
+
 Configuration LDIF is imported first. Subsequent content imports identify the
 OpenLDAP database by numeric index, `olcDatabase` value, or configuration-entry
-DN, which permits overlapping backends to contain identical DNs. A
-database-scoped replacement clears only that partition.
+DN, which permits overlapping backends to contain identical DNs. Default tool
+selection fails when no primary content database exists rather than writing to
+an unconfigured fallback partition. API dry-run executes all validation against
+the staged transaction and then deliberately rolls it back.
+
+This atomic design intentionally differs from OpenLDAP `slapadd`, which can
+leave earlier records committed and supports `-c` continuation. It also means
+the LDIF parse, pending-entry set, schema/hierarchy checks, and final writes live
+inside one write transaction; memory use and write-lock duration grow with a
+large import. Offline tool behavior currently covers `config`/`mdb` and
+`ldif`/`wt`, plus `null` accept-then-discard; proxy and virtual backends reject
+offline operations without the corresponding OpenLDAP callbacks. All supported
+content is represented in bbolt rather than native backend files. Arbitrary
+custom syntax/matching-rule modules, exact OpenLDAP dry-run diagnostics, and
+broader nested glue/backend combinations are not implemented.
+MDB indexes are never imported, and the current bbolt backend has no
+independent attribute indexes, so local Search scans its selected partition.
+These are explicit non-drop-in
+boundaries.
 
 ## Dependency policy
 

@@ -610,7 +610,7 @@ scripts:
 ```sh
 go run ./cmd/ldap-go slaptest -db ./data/ldap-go.db
 go run ./cmd/ldap-go slapdn -db ./data/ldap-go.db 'uid=alice,dc=example,dc=com'
-go run ./cmd/ldap-go slapadd -db ./data/ldap-go.db -l data-1.ldif -n 1
+go run ./cmd/ldap-go slapadd -db ./data/ldap-go.db -l data-1.ldif -n 1 -S 1 -w
 go run ./cmd/ldap-go slapcat -db ./data/ldap-go.db -l exported.ldif -n 1
 go run ./cmd/ldap-go slapindex -db ./data/ldap-go.db
 go run ./cmd/ldap-go slappasswd -h '{PBKDF2-SM3}'
@@ -618,10 +618,70 @@ go run ./cmd/ldap-go slappasswd -h '{PBKDF2-SM3}'
 
 These aliases preserve the implemented OpenLDAP option and exit-code surface;
 they do not make bbolt files binary-compatible with OpenLDAP MDB files.
-The offline importer assumes trusted `slapcat` output and does not run the
-online Add path's complete schema validation. The current bbolt backend also
-has no independent attribute indexes, so local Search scans the selected
-partition; size and latency must be qualified before production use.
+Native `ldap-go import` atomically validates value syntax and structural schema
+using the built-in registry plus supported schema imported from `cn=config`.
+The `slapadd` alias follows the tested OpenLDAP subset: structural checks are on
+by default, `-o value-check=yes` enables full value-syntax checks, and `-s` or
+`-o schema-check=no` disables schema checks while still requiring
+`objectClass`. Even with the default `value-check=no`, AttributeDescription,
+configured attribute options, `;binary` transfer requirements, and the tested
+DN, Name And Optional UID, UUID, arbitrary-precision INTEGER, generalized-time,
+authzMatch, CSN, OpenLDAP ACI, and UTF-8 equality normalizers are checked.
+Imported `olcAttributeOptions` replace the default `lang-` option family and
+support OpenLDAP-style exact, trailing-`-`, and `range=` prefix definitions,
+including range selection on Search and range rejection on Modify. Imported
+`olcLdapSyntaxes` preserve ordinary declarations and ordered `X-SUBST` chains;
+a substitute inherits the known syntax's validator and binary-transfer flags.
+Full value checking covers built-in and supported substituted syntaxes;
+ordinary declarations without a validator and unknown module-provided
+syntaxes fail closed.
+
+Without `-n`, `-b`, or `-database`, `slapadd` and `slapcat` select the first
+configured primary content database in `cn=config` order, skipping config,
+frontend, monitor, and subordinate databases. An unsupported first database is
+reported rather than silently skipped, and an installation with no selectable
+content database fails instead of falling back to an unconfigured partition.
+Selected-database imports allow
+child-before-parent LDIF but reject final orphans and DNs outside configured
+suffixes. When the selected database is a glue superior, `slapadd` routes DNs
+under a more-specific `olcSubordinate` suffix into that subordinate partition;
+an overlapping ordinary database is rejected. `slapcat` assembles the selected
+superior and its directly attached subordinate partitions. For both tools,
+`-g` disables glue and operates on only the selected physical partition;
+default glue mode rejects a subordinate suffix entry duplicated in its superior.
+Replacing a selected glued tree clears the superior and each directly attached
+subordinate partition; `-g` limits replacement to the selected physical
+partition.
+
+Missing LastMod metadata is generated when `olcLastMod` is enabled, and `-S`
+selects the generated CSN SID. A glue import uses the selected superior's
+LastMod and root-DN policy before routing records to physical subordinate
+partitions. With LastMod enabled, `-w` updates the per-SID
+`contextCSN` vector on the first suffix root, or on a created/updated
+`cn=ldapsync,<suffix>` subentry when `olcSyncUseSubentry` is true. A
+`slapadd -n 0` import generates config-backend metadata under `cn=config`,
+supports `-w`, and validates the configuration hierarchy, supported schema,
+and the runnable server configuration before the same transaction commits, so
+an invalid supported setting rolls back the whole import.
+
+All ldap-go imports remain atomic and stop at the first error. This differs
+from OpenLDAP's partial-write and `-c` behavior; `-c` and `-q` remain
+unsupported, and `-u` uses a temporary database copy rather than reproducing
+every upstream backend-callback detail. The import API itself also forces a
+transaction rollback after successful dry-run validation, so direct callers
+cannot accidentally commit staged entries. Offline tool behavior is
+modeled for `config`, `mdb`, `ldif`, and `wt`, plus `null`
+accept-then-discard; proxy and virtual backends reject unsupported tool
+operations. This is semantic LDIF compatibility backed by bbolt, not direct
+access to OpenLDAP backend files. Custom schema/matching-rule modules are not
+executed. Import parsing,
+pending-entry validation, and commit
+currently occupy one write transaction and retain the pending content set, so
+memory use and lock duration grow with a large LDIF. The current bbolt backend
+also has no independent attribute indexes, so local Search scans the selected
+partition; migration size, lock time, and Search latency must be qualified
+before production use. These limits are part of why ldap-go is not yet a
+complete OpenLDAP drop-in replacement.
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit

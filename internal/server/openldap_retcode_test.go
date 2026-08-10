@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -171,6 +172,27 @@ retcode-indir on`},
 		t.Fatalf("Add(ldap-go in-directory retcode overlay): %v", err)
 	}
 	for _, add := range retcodeInDirectoryReferenceAdds() {
+		if strings.EqualFold(
+			add.DN,
+			"cn=Normalized Error,ou=people,dc=example,dc=com",
+		) {
+			// OpenLDAP's fixture reaches storage through slapadd's default
+			// value-check=no path. Seed the same noncanonical INTEGER without
+			// weakening online LDAP Add validation.
+			if err := store.Update(context.Background(), func(writer storage.Writer) error {
+				entry := directory.Entry{DN: add.DN}
+				for _, attribute := range add.Attributes {
+					entry.Attributes = append(entry.Attributes, directory.Attribute{
+						Description: attribute.Type,
+						Values:      stringValues(attribute.Vals...),
+					})
+				}
+				return writer.PutIn(configuredDatabasePartition("{1}mdb"), entry, false)
+			}); err != nil {
+				t.Fatalf("seed noncanonical ldap-go retcode entry %s: %v", add.DN, err)
+			}
+			continue
+		}
 		if err := ldapGo.Add(add); err != nil {
 			t.Fatalf("seed ldap-go in-directory retcode entry %s: %v", add.DN, err)
 		}

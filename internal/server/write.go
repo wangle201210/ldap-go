@@ -577,6 +577,22 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	for _, change := range request.Changes {
+		if attributeDescriptionUsesTagRange(change.Attribute.Description) {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationModifyResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUndefinedAttributeType,
+					fmt.Sprintf(
+						"%s: inappropriate use of tag range option",
+						change.Attribute.Description,
+					),
+				),
+			)
+		}
+	}
 	frontendSeqmodRelease, err := acquireFrontendSeqmod(ctx, state.runtime, dn)
 	if err != nil {
 		return err
@@ -809,6 +825,16 @@ func (server *Server) handleModify(
 		err,
 		responseControls,
 	)
+}
+
+func attributeDescriptionUsesTagRange(description string) bool {
+	parts := strings.Split(description, ";")
+	for _, option := range parts[1:] {
+		if strings.HasSuffix(option, "-") || strings.Contains(option, "=") {
+			return true
+		}
+	}
+	return false
 }
 
 type entryModificationPrecondition func(

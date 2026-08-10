@@ -477,6 +477,56 @@ func TestRegistryAcceptsCustomOpenLDAPSchema(t *testing.T) {
 	}
 }
 
+func TestRegistryMatchesOpenLDAPObsoleteSchemaRules(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if err := registry.ParseAndRegisterAttributeType(
+		"( 1.2.3.40 NAME 'oldCode' OBSOLETE EQUALITY caseIgnoreMatch SYNTAX " +
+			SyntaxDirectoryString + " )",
+	); err != nil {
+		t.Fatalf("register obsolete attribute: %v", err)
+	}
+	if err := registry.ParseAndRegisterObjectClass(
+		"( 1.2.3.41 NAME 'oldPerson' OBSOLETE SUP top STRUCTURAL MUST cn )",
+	); err != nil {
+		t.Fatalf("register obsolete object class: %v", err)
+	}
+	obsoleteClass := directory.Entry{
+		DN: "cn=old,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("oldPerson")},
+			{Description: "cn", Values: byteValues("old")},
+		},
+	}
+	assertViolation(
+		t,
+		registry.ValidateEntry(obsoleteClass),
+		ViolationStructuralObjectClass,
+	)
+	obsoleteAttribute := directory.Entry{
+		DN: "uid=old,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      byteValues("inetOrgPerson", "extensibleObject"),
+			},
+			{Description: "uid", Values: byteValues("old")},
+			{Description: "cn", Values: byteValues("Old")},
+			{Description: "sn", Values: byteValues("User")},
+			{Description: "oldCode", Values: byteValues("legacy")},
+		},
+	}
+	if err := registry.ValidateEntry(obsoleteAttribute); err != nil {
+		t.Fatalf("ordinary obsolete attribute: %v", err)
+	}
+	obsoleteAttribute.DN = "oldCode=legacy,dc=example,dc=com"
+	assertViolation(t, registry.ValidateEntry(obsoleteAttribute), ViolationNaming)
+}
+
 func TestSchemaAwareMatching(t *testing.T) {
 	t.Parallel()
 
@@ -663,6 +713,149 @@ func TestNormalizeEqualityValue(t *testing.T) {
 	}
 	if len(opaque) != 3 || opaque[0] != 0 || opaque[1] != 1 || opaque[2] != 2 {
 		t.Fatalf("normalized jpegPhoto = %v", opaque)
+	}
+}
+
+func TestEntryValidationSkipValueSyntaxRetainsOpenLDAPParserChecks(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	base := directory.Entry{
+		DN: "cn=parser-check,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("top", "device", "extensibleObject")},
+			{Description: "cn", Values: byteValues("parser-check")},
+		},
+	}
+	for _, test := range []struct {
+		name      string
+		attribute directory.Attribute
+		wantError string
+	}{
+		{
+			name:      "integer syntax remains unchecked",
+			attribute: directory.Attribute{Description: "uidNumber", Values: byteValues("not-an-integer")},
+		},
+		{
+			name:      "UUID equality normalizer",
+			attribute: directory.Attribute{Description: "entryUUID", Values: byteValues("not-a-uuid")},
+			wantError: "UUID",
+		},
+		{
+			name:      "DN equality normalizer",
+			attribute: directory.Attribute{Description: "modifiersName", Values: byteValues("cn=unterminated\\")},
+			wantError: "invalid DN",
+		},
+		{
+			name:      "unknown option",
+			attribute: directory.Attribute{Description: "description;unknown", Values: byteValues("value")},
+			wantError: "unrecognized attribute option",
+		},
+		{
+			name:      "default language option",
+			attribute: directory.Attribute{Description: "description;lang-en", Values: byteValues("value")},
+		},
+		{
+			name:      "operational option",
+			attribute: directory.Attribute{Description: "entryUUID;lang-en", Values: byteValues("11111111-1111-4111-8111-111111111111")},
+			wantError: "operational attribute with options",
+		},
+		{
+			name:      "missing binary option",
+			attribute: directory.Attribute{Description: "userCertificate", Values: [][]byte{{0x01}}},
+			wantError: "needs ';binary'",
+		},
+		{
+			name:      "required binary option",
+			attribute: directory.Attribute{Description: "userCertificate;binary", Values: [][]byte{{0x01}}},
+		},
+		{
+			name:      "binary option on text syntax",
+			attribute: directory.Attribute{Description: "description;binary", Values: byteValues("value")},
+			wantError: "not supported with type",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := base.Clone()
+			entry.Attributes = append(entry.Attributes, test.attribute)
+			err := registry.ValidateEntryWithOptions(
+				entry,
+				EntryValidationOptions{SkipValueSyntax: true},
+			)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("ValidateEntryWithOptions(): %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ValidateEntryWithOptions() error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestEntryValidationRejectsUnsupportedSyntaxOnlyDuringValueCheck(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	if err := registry.ParseAndRegisterAttributeType(
+		"( 1.3.6.1.4.1.99999.500 NAME 'moduleValue' SYNTAX 1.3.6.1.4.1.99999.501 )",
+	); err != nil {
+		t.Fatalf("register module attribute: %v", err)
+	}
+	entry := directory.Entry{
+		DN: "cn=module,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("top", "device", "extensibleObject")},
+			{Description: "cn", Values: byteValues("module")},
+			{Description: "moduleValue", Values: byteValues("opaque")},
+		},
+	}
+	if err := registry.ValidateEntryWithOptions(
+		entry,
+		EntryValidationOptions{SkipValueSyntax: true},
+	); err != nil {
+		t.Fatalf("ValidateEntryWithOptions(skip syntax): %v", err)
+	}
+	if err := registry.ValidateEntry(entry); err == nil ||
+		!strings.Contains(err.Error(), "unsupported syntax") {
+		t.Fatalf("ValidateEntry() error = %v", err)
+	}
+}
+
+func TestEntryValidationDefersIA5SyntaxUntilValueCheck(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	entry := directory.Entry{
+		DN: "uid=invalid-ia5,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: byteValues("top", "inetOrgPerson")},
+			{Description: "uid", Values: byteValues("invalid-ia5")},
+			{Description: "cn", Values: byteValues("Invalid IA5")},
+			{Description: "sn", Values: byteValues("IA5")},
+			{Description: "mail", Values: [][]byte{{0xff, '@', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm'}}},
+		},
+	}
+	if err := registry.ValidateEntryWithOptions(
+		entry,
+		EntryValidationOptions{SkipValueSyntax: true},
+	); err != nil {
+		t.Fatalf("ValidateEntryWithOptions(skip syntax): %v", err)
+	}
+	if err := registry.ValidateEntry(entry); err == nil ||
+		!strings.Contains(err.Error(), "value is not IA5") {
+		t.Fatalf("ValidateEntry() error = %v", err)
 	}
 }
 

@@ -11,6 +11,23 @@ const (
 	UsageDSAOperation         AttributeUsage = "dSAOperation"
 )
 
+type syntaxValidator func([]byte) error
+
+type LDAPSyntax struct {
+	OID                    string
+	Description            string
+	Extensions             map[string][]string
+	BinaryTransferRequired bool
+	BEREncoded             bool
+	validator              syntaxValidator
+	validatorIdentity      string
+	builtin                bool
+}
+
+func (syntax LDAPSyntax) HasValidator() bool {
+	return syntax.validator != nil
+}
+
 type AttributeType struct {
 	OID                string
 	Names              []string
@@ -136,6 +153,10 @@ type Violation struct {
 	Kind      ViolationKind
 	Attribute string
 	Message   string
+}
+
+type EntryValidationOptions struct {
+	SkipValueSyntax bool
 }
 
 func (violation *Violation) Error() string {

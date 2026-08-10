@@ -62,6 +62,23 @@ jpegPhoto:: AP8Q
 	assertStoresEqual(t, source, destination)
 }
 
+func TestExportLDIFDefaultSelectionRequiresContentDatabase(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	var output bytes.Buffer
+	_, err := ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		&output,
+		ExportOptions{SelectDefaultDatabase: true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "no available OpenLDAP content database") {
+		t.Fatalf("ExportLDIFWithOptions(default without database) error = %v", err)
+	}
+}
+
 func TestDatabaseSelectedImportExportSupportsDuplicateDN(t *testing.T) {
 	t.Parallel()
 
@@ -209,6 +226,159 @@ entryUUID: 22222222-2222-4222-8222-222222222222
 	if !strings.Contains(hidden.String(), "description: hidden") ||
 		strings.Contains(hidden.String(), "description: visible") {
 		t.Fatalf("hidden export:\n%s", hidden.String())
+	}
+}
+
+func TestExportLDIFRejectsBackendWithoutOfflineExport(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(`dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={1}ldap,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}ldap
+olcSuffix: dc=example,dc=com
+
+`),
+		ImportOptions{Database: "0", Replace: true, SkipSchemaValidation: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(config): %v", err)
+	}
+	var output bytes.Buffer
+	if _, err := ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		&output,
+		ExportOptions{Database: "1"},
+	); err == nil || !strings.Contains(err.Error(), "does not support offline entry export") {
+		t.Fatalf("ExportLDIFWithOptions(LDAP backend) error = %v", err)
+	}
+}
+
+func TestExportLDIFSelectedGlueSuperiorIncludesSubordinates(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	configLDIF := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: ou=people,dc=example,dc=com
+olcSubordinate: TRUE
+
+dn: olcDatabase={2}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {2}mdb
+olcSuffix: dc=example,dc=com
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(configLDIF),
+		ImportOptions{Database: "0", Replace: true, SkipSchemaValidation: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(config): %v", err)
+	}
+	contentLDIF := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=alice,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice
+sn: Example
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(contentLDIF),
+		ImportOptions{
+			SelectDefaultDatabase: true,
+			SkipSchemaValidation:  true,
+		},
+	); err != nil {
+		t.Fatalf("ImportLDIF(content): %v", err)
+	}
+
+	for _, test := range []struct {
+		name                string
+		includeSubordinates bool
+		wantEntries         int
+		wantAlice           bool
+	}{
+		{name: "glue enabled", includeSubordinates: true, wantEntries: 3, wantAlice: true},
+		{name: "glue disabled", wantEntries: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			result, err := ExportLDIFWithOptions(
+				context.Background(),
+				store,
+				&output,
+				ExportOptions{
+					Database:            "2",
+					IncludeSubordinates: test.includeSubordinates,
+				},
+			)
+			if err != nil {
+				t.Fatalf("ExportLDIFWithOptions(): %v", err)
+			}
+			if result.Entries != test.wantEntries {
+				t.Fatalf("Entries = %d, want %d\n%s", result.Entries, test.wantEntries, output.String())
+			}
+			containsAlice := strings.Contains(output.String(), "dn: uid=alice,ou=people,dc=example,dc=com")
+			if containsAlice != test.wantAlice {
+				t.Fatalf("contains Alice = %t, want %t\n%s", containsAlice, test.wantAlice, output.String())
+			}
+		})
+	}
+
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(`dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+`),
+		ImportOptions{
+			Database:               "2",
+			DisableSubordinateGlue: true,
+			SkipSchemaValidation:   true,
+		},
+	); err != nil {
+		t.Fatalf("ImportLDIF(duplicate glue suffix): %v", err)
+	}
+	var invalid bytes.Buffer
+	if _, err := ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		&invalid,
+		ExportOptions{Database: "2", IncludeSubordinates: true},
+	); err == nil || !strings.Contains(err.Error(), "also present in superior database") {
+		t.Fatalf("ExportLDIFWithOptions(duplicate glue suffix) error = %v", err)
 	}
 }
 

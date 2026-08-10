@@ -643,8 +643,12 @@ func seedOfflineCommandDatabase(t *testing.T, saslSecurityProperties string) str
 				},
 			},
 		}
-		for _, entry := range entries {
-			if err := writer.Put(entry, false); err != nil {
+		for index, entry := range entries {
+			partition := storage.OpenLDAPConfigPartition
+			if index == len(entries)-1 {
+				partition = ""
+			}
+			if err := writer.PutIn(partition, entry, false); err != nil {
 				return err
 			}
 		}
@@ -968,6 +972,141 @@ description: selected database
 	}
 }
 
+func TestDatabaseSelectorForDNSkipsInactiveAndNestedDefinitions(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "partitioned.db")
+	store, err := storage.OpenBolt(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	entries := []directory.Entry{
+		{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: [][]byte{[]byte("{1}mdb")}},
+				{Description: "olcSuffix", Values: [][]byte{[]byte("dc=example,dc=com")}},
+			},
+		},
+		{
+			DN: "olcDatabase={2}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: [][]byte{[]byte("{2}mdb")}},
+				{Description: "olcSuffix", Values: [][]byte{[]byte("ou=hidden,dc=example,dc=com")}},
+				{Description: "olcHidden", Values: [][]byte{[]byte("TRUE")}},
+			},
+		},
+		{
+			DN: "olcDatabase={3}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: [][]byte{[]byte("{3}mdb")}},
+				{Description: "olcSuffix", Values: [][]byte{[]byte("ou=disabled,dc=example,dc=com")}},
+				{Description: "olcDisabled", Values: [][]byte{[]byte("yes")}},
+			},
+		},
+		{
+			DN: "olcDatabase={4}mdb,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: [][]byte{[]byte("{4}mdb")}},
+				{Description: "olcSuffix", Values: [][]byte{[]byte("ou=people,dc=example,dc=com")}},
+			},
+		},
+		{
+			DN: "olcDatabase={9}mdb,cn=module,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "olcDatabase", Values: [][]byte{[]byte("{9}mdb")}},
+				{Description: "olcSuffix", Values: [][]byte{[]byte("ou=nested,dc=example,dc=com")}},
+			},
+		},
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, entry := range entries {
+			if err := writer.PutIn(storage.OpenLDAPConfigPartition, entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed database definitions: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	for _, test := range []struct {
+		dn   string
+		want string
+	}{
+		{dn: "uid=alice,ou=people,dc=example,dc=com", want: "{4}mdb"},
+		{dn: "uid=alice,ou=hidden,dc=example,dc=com", want: "{1}mdb"},
+		{dn: "uid=alice,ou=disabled,dc=example,dc=com", want: "{1}mdb"},
+		{dn: "uid=alice,ou=nested,dc=example,dc=com", want: "{1}mdb"},
+	} {
+		selector, err := databaseSelectorForDN(databasePath, test.dn)
+		if err != nil {
+			t.Fatalf("databaseSelectorForDN(%q): %v", test.dn, err)
+		}
+		if selector != test.want {
+			t.Errorf("databaseSelectorForDN(%q) = %q, want %q", test.dn, selector, test.want)
+		}
+	}
+}
+
+func TestSlapaddConfigRuntimeValidationRollsBackAtomically(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "invalid-config.db")
+	input := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+olcReadOnly: not-a-boolean
+
+`
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{
+			"slapadd",
+			"-db", databasePath,
+			"-n", "0",
+			"-s",
+			"-ldif", "-",
+		},
+		input,
+	)
+	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "olcReadOnly") {
+		t.Fatalf("slapadd invalid config exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	store, err := storage.OpenBoltReadOnly(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBoltReadOnly(): %v", err)
+	}
+	defer store.Close()
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		count := 0
+		if err := reader.ForEachPartition(func(string, directory.Entry) error {
+			count++
+			return nil
+		}); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Fatalf("failed config import retained %d entries", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect rolled-back config import: %v", err)
+	}
+}
+
 func TestOpenLDAPImportExportAliasesRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -1092,6 +1231,18 @@ sn: Run
 
 	stdout, stderr, exitCode = runCLIForTest(
 		t,
+		[]string{"slapadd", "-db", targetDatabase, "-n", "1"},
+		`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+`,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") || stderr != "" {
+		t.Fatalf("target suffix slapadd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
 		[]string{
 			"slapadd", "-db", targetDatabase, "-l", subtreePath,
 			"-b", "uid=alice,ou=People,dc=example,dc=com",
@@ -1106,6 +1257,7 @@ sn: Run
 		[]string{
 			"slapcat", "-db", targetDatabase,
 			"-b", "dc=example,dc=com",
+			"-s", "ou=People,dc=example,dc=com",
 		},
 		"",
 	)
@@ -1117,6 +1269,140 @@ sn: Run
 	}
 }
 
+func TestSlapaddSchemaValidationModes(t *testing.T) {
+	t.Parallel()
+
+	validStructureInvalidValue := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=invalid,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: invalid
+cn: Invalid Integer
+sn: Integer
+uidNumber: not-an-integer
+gidNumber: 1000
+homeDirectory: /home/invalid
+
+`
+	invalidStructure := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=unknown,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: unknown
+cn: Unknown Attribute
+sn: Attribute
+notRegistered: value
+
+`
+
+	for _, test := range []struct {
+		name       string
+		command    string
+		extraArgs  []string
+		input      string
+		wantExit   int
+		wantStderr string
+	}{
+		{
+			name:       "slapadd rejects structural schema violation",
+			command:    "slapadd",
+			input:      invalidStructure,
+			wantExit:   1,
+			wantStderr: "undefined attribute type",
+		},
+		{
+			name:     "slapadd default skips value syntax validation",
+			command:  "slapadd",
+			input:    validStructureInvalidValue,
+			wantExit: 0,
+		},
+		{
+			name:       "slapadd value-check validates syntax",
+			command:    "slapadd",
+			extraArgs:  []string{"-o", "value-check=yes"},
+			input:      validStructureInvalidValue,
+			wantExit:   1,
+			wantStderr: "value is not an integer",
+		},
+		{
+			name:       "native import validates value syntax",
+			command:    "import",
+			input:      validStructureInvalidValue,
+			wantExit:   1,
+			wantStderr: "value is not an integer",
+		},
+		{
+			name:      "slapadd schema disable accepts undefined attribute",
+			command:   "slapadd",
+			extraArgs: []string{"-s"},
+			input:     invalidStructure,
+			wantExit:  0,
+		},
+		{
+			name:      "slapadd schema-check option accepts undefined attribute",
+			command:   "slapadd",
+			extraArgs: []string{"-o", "schema-check=no"},
+			input:     invalidStructure,
+			wantExit:  0,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			databasePath := filepath.Join(t.TempDir(), "directory.db")
+			if test.command == "slapadd" {
+				configLDIF := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+
+`
+				stdout, stderr, exitCode := runCLIForTest(
+					t,
+					[]string{"import", "-db", databasePath, "-replace"},
+					configLDIF,
+				)
+				if exitCode != 0 {
+					t.Fatalf(
+						"seed config exit=%d stdout=%q stderr=%q",
+						exitCode,
+						stdout,
+						stderr,
+					)
+				}
+			}
+			args := append(
+				[]string{test.command, "-db", databasePath, "-ldif", "-", "-replace"},
+				test.extraArgs...,
+			)
+			stdout, stderr, exitCode := runCLIForTest(t, args, test.input)
+			if exitCode != test.wantExit {
+				t.Fatalf(
+					"exit = %d, want %d; stdout=%q stderr=%q",
+					exitCode,
+					test.wantExit,
+					stdout,
+					stderr,
+				)
+			}
+			if test.wantStderr != "" && !strings.Contains(stderr, test.wantStderr) {
+				t.Fatalf("stderr = %q, want fragment %q", stderr, test.wantStderr)
+			}
+		})
+	}
+}
+
 func TestSlapaddDryRunDoesNotCreateMissingDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -1124,24 +1410,131 @@ func TestSlapaddDryRunDoesNotCreateMissingDatabase(t *testing.T) {
 	parent := filepath.Join(root, "missing")
 	databasePath := filepath.Join(parent, "directory.db")
 	ldifPath := filepath.Join(root, "entry.ldif")
-	if err := os.WriteFile(ldifPath, []byte(`dn: dc=example,dc=com
-objectClass: domain
-dc: example
+	if err := os.WriteFile(ldifPath, []byte(`dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
 
 `), 0o600); err != nil {
 		t.Fatalf("write LDIF: %v", err)
 	}
 	stdout, stderr, exitCode := runCLIForTest(
 		t,
-		[]string{"slapadd", "-db", databasePath, "-l", ldifPath, "-u"},
+		[]string{"slapadd", "-db", databasePath, "-l", ldifPath, "-u", "-n", "0", "-s"},
 		"",
 	)
-	if exitCode != 0 || !strings.Contains(stdout, "validated 1 entries") || stderr != "" {
+	if exitCode != 0 || !strings.Contains(stdout, "validated 2 entries") || stderr != "" {
 		t.Fatalf("slapadd -u exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
 	if _, err := os.Stat(parent); !os.IsNotExist(err) {
 		t.Fatalf("slapadd -u created the destination directory: %v", err)
 	}
+}
+
+func TestSlapaddAndSlapcatSubordinateGlueFlag(t *testing.T) {
+	t.Parallel()
+
+	configLDIF := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: ou=people,dc=example,dc=com
+olcSubordinate: TRUE
+
+dn: olcDatabase={2}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {2}mdb
+olcSuffix: dc=example,dc=com
+
+`
+	contentLDIF := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+`
+	seed := func(t *testing.T, databasePath string) {
+		t.Helper()
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{"import", "-db", databasePath, "-replace"},
+			configLDIF,
+		)
+		if exitCode != 0 {
+			t.Fatalf("seed config exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	}
+
+	t.Run("default glue and slapcat disable", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "directory.db")
+		seed(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{"slapadd", "-db", databasePath},
+			contentLDIF,
+		)
+		if exitCode != 0 {
+			t.Fatalf("slapadd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+		stdout, stderr, exitCode = runCLIForTest(
+			t,
+			[]string{"slapcat", "-db", databasePath, "-n", "2"},
+			"",
+		)
+		if exitCode != 0 || !strings.Contains(stdout, "dn: ou=people,dc=example,dc=com") {
+			t.Fatalf("glued slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+		stdout, stderr, exitCode = runCLIForTest(
+			t,
+			[]string{"slapcat", "-db", databasePath, "-n", "2", "-g"},
+			"",
+		)
+		if exitCode != 0 || strings.Contains(stdout, "dn: ou=people,dc=example,dc=com") {
+			t.Fatalf("unglued slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+
+	t.Run("slapadd disable stores in superior", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "directory.db")
+		seed(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{"slapadd", "-db", databasePath, "-n", "2", "-g"},
+			contentLDIF,
+		)
+		if exitCode != 0 {
+			t.Fatalf("slapadd -g exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+		stdout, stderr, exitCode = runCLIForTest(
+			t,
+			[]string{"slapcat", "-db", databasePath, "-n", "2", "-g"},
+			"",
+		)
+		if exitCode != 0 || !strings.Contains(stdout, "dn: ou=people,dc=example,dc=com") {
+			t.Fatalf("superior slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+		stdout, stderr, exitCode = runCLIForTest(
+			t,
+			[]string{"slapcat", "-db", databasePath, "-n", "2"},
+			"",
+		)
+		if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "also present in superior database") {
+			t.Fatalf("inconsistent glued slapcat exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
 }
 
 func TestSlapcatAliasDoesNotCreateMissingDatabase(t *testing.T) {
@@ -1246,10 +1639,7 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 	}{
 		{name: "slapadd continue", args: []string{"slapadd", "-c"}, message: "option -c is not supported"},
 		{name: "slapadd quick", args: []string{"slapadd", "-q"}, message: "option -q is not supported"},
-		{name: "slapadd schema", args: []string{"slapadd", "-s"}, message: "option -s is not supported"},
-		{name: "slapadd glue", args: []string{"slapadd", "-g"}, message: "option -g is not supported"},
 		{name: "slapcat continue", args: []string{"slapcat", "-c"}, message: "option -c is not supported"},
-		{name: "slapcat glue", args: []string{"slapcat", "-g"}, message: "option -g is not supported"},
 		{name: "slapindex suffix", args: []string{"slapindex", "-b", "dc=example,dc=com"}, message: "option -b is not supported"},
 		{name: "slapindex number", args: []string{"slapindex", "-n", "1"}, message: "option -n is not supported"},
 		{name: "slapindex quick", args: []string{"slapindex", "-q"}, message: "option -q is not supported"},

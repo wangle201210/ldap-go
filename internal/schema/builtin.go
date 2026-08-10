@@ -3,8 +3,12 @@ package schema
 import "fmt"
 
 const (
+	SyntaxACIItem                = "1.3.6.1.4.1.1466.115.121.1.1"
 	SyntaxOpenLDAPACI            = "1.3.6.1.4.1.4203.666.2.1"
 	SyntaxBoolean                = "1.3.6.1.4.1.1466.115.121.1.7"
+	SyntaxCertificate            = "1.3.6.1.4.1.1466.115.121.1.8"
+	SyntaxCertificateList        = "1.3.6.1.4.1.1466.115.121.1.9"
+	SyntaxCertificatePair        = "1.3.6.1.4.1.1466.115.121.1.10"
 	SyntaxAttributeType          = "1.3.6.1.4.1.1466.115.121.1.3"
 	SyntaxAuthenticationPassword = "1.3.6.1.4.1.4203.1.1.2"
 	SyntaxAuthz                  = "1.3.6.1.4.1.4203.666.2.7"
@@ -23,11 +27,16 @@ const (
 	SyntaxOID                    = "1.3.6.1.4.1.1466.115.121.1.38"
 	SyntaxOctetString            = "1.3.6.1.4.1.1466.115.121.1.40"
 	SyntaxPostalAddress          = "1.3.6.1.4.1.1466.115.121.1.41"
+	SyntaxPrintableString        = "1.3.6.1.4.1.1466.115.121.1.44"
 	SyntaxSubtreeSpecification   = "1.3.6.1.4.1.1466.115.121.1.45"
+	SyntaxSupportedAlgorithm     = "1.3.6.1.4.1.1466.115.121.1.49"
 	SyntaxTelephoneNumber        = "1.3.6.1.4.1.1466.115.121.1.50"
 	SyntaxTelexNumber            = "1.3.6.1.4.1.1466.115.121.1.52"
 	SyntaxUUID                   = "1.3.6.1.1.16.1"
 	SyntaxCSN                    = "1.3.6.1.4.1.4203.666.11.2.1"
+	SyntaxAttributeCertificate   = "1.3.6.1.4.1.4203.666.11.10.2.1"
+	SyntaxPKCS8PrivateKey        = "1.2.840.113549.1.8.1.1"
+	SyntaxOpenLDAPVoid           = "1.3.6.1.4.1.4203.1.1.1"
 )
 
 func NewBuiltinRegistry() (*Registry, error) {
@@ -99,6 +108,7 @@ var builtinAttributeTypes = []string{
 	"( 2.5.4.49 NAME 'distinguishedName' DESC 'RFC4519: common supertype of DN attributes' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " )",
 	"( 2.5.4.3 NAME 'cn' SUP name )",
 	"( 2.5.4.4 NAME 'sn' SUP name )",
+	"( 2.5.4.5 NAME 'serialNumber' DESC 'RFC2256: serial number of the entity' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxPrintableString + "{64} )",
 	"( 2.5.4.42 NAME 'givenName' SUP name )",
 	"( 2.5.4.11 NAME 'ou' SUP name )",
 	"( 2.5.4.13 NAME 'description' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + " )",
@@ -318,6 +328,7 @@ var builtinObjectClasses = []string{
 	"( 2.5.6.8 NAME 'organizationalRole' SUP top STRUCTURAL MUST cn MAY ( roleOccupant $ ou $ description ) )",
 	"( 2.5.6.9 NAME 'groupOfNames' SUP top STRUCTURAL MUST ( member $ cn ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )",
 	"( 2.5.6.17 NAME 'groupOfUniqueNames' SUP top STRUCTURAL MUST ( uniqueMember $ cn ) MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )",
+	"( 2.5.6.14 NAME 'device' SUP top STRUCTURAL MUST cn MAY ( serialNumber $ seeAlso $ owner $ ou $ o $ l $ description ) )",
 	"( 1.3.6.1.4.1.250.3.15 NAME 'labeledURIObject' DESC 'RFC2079: object that contains the URI attribute type' SUP top AUXILIARY MAY labeledURI )",
 	"( 2.16.840.1.113730.3.2.33 NAME 'groupOfURLs' SUP top STRUCTURAL MUST cn MAY ( memberURL $ businessCategory $ description $ o $ ou $ owner $ seeAlso ) )",
 	"( 1.3.6.1.4.1.4203.666.11.8.2.1 NAME 'dgIdentityAux' SUP top AUXILIARY MAY ( dgIdentity $ dgAuthz ) )",
@@ -325,6 +336,7 @@ var builtinObjectClasses = []string{
 	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITStructureRules $ dITContentRules $ nameForms ) )",
 	"( 2.5.17.0 NAME 'subentry' DESC 'RFC3672: subentry' SUP top STRUCTURAL MUST ( cn $ subtreeSpecification ) )",
 	"( 2.5.17.2 NAME 'collectiveAttributeSubentry' DESC 'RFC3671: collective attribute subentry' AUXILIARY )",
+	"( 1.3.6.1.4.1.4203.666.3.6 NAME 'syncProviderSubentry' DESC 'Persistent Info for SyncRepl Producer' AUXILIARY MAY contextCSN )",
 	"( 2.5.6.1 NAME 'alias' DESC 'RFC4512: an alias' SUP top STRUCTURAL MUST aliasedObjectName )",
 	"( 2.16.840.1.113730.3.2.6 NAME 'referral' DESC 'namedref: named subordinate referral' SUP top STRUCTURAL MUST ref )",
 	"( 1.3.6.1.4.1.1466.101.119.2 NAME 'dynamicObject' DESC 'RFC2589: entry with a limited lifetime' SUP top AUXILIARY )",
