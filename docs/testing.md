@@ -206,6 +206,15 @@ behavior against ldap-go. A separate local concurrency test asserts ldap-go's
 intentional one-winner hardening for simultaneous first use; this is not claimed
 as bug-for-bug parity with OpenLDAP's separate check/update sequence.
 
+The pw-sha2 differential builds the official contrib module from the same
+pinned source and covers all salted and unsalted SHA-256, SHA-384, and SHA-512
+schemes. For each scheme, ldap-go generates a value through Password Modify
+that is exercised by an OpenLDAP Simple Bind; OpenLDAP then generates a new
+value through Password Modify, which is imported and exercised by a ldap-go
+Simple Bind. Known upstream vectors, eight-byte generated salts, zero-salt
+rejection, whitespace, and nonzero Base64 padding-bit behavior are also
+covered.
+
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
 with EOF during the reference-only Sync plus Sort/VLV matrix, while the same

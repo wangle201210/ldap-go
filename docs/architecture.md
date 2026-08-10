@@ -511,10 +511,12 @@ signing and encryption certificates and SM4/SM3 cipher suites without forking
 the operation engine. RFC 8998 TLS 1.3 support is a separate provider because
 it is not wire-compatible with TLCP. Password schemes are registered modules
 and constant-time verification is mandatory. Imported OpenLDAP digest schemes
-remain readable, while new national-cryptography credentials use salted,
-costed PBKDF2-SM3 rather than a fast bare SM3 digest. Stored iteration counts
-are bounded during verification so a malicious directory value cannot force
-unlimited work on a Bind handler. RFC 3062 Password Modify runs old-password
+remain readable. The contrib SHA-2 schemes use Go's SHA-256/384/512 primitives,
+strict Base64 decoding, exact unsalted digest lengths, and OpenLDAP's eight-byte
+salt for newly generated salted values. New national-cryptography credentials
+use salted, costed PBKDF2-SM3 rather than a fast bare SM3 digest. Stored
+iteration counts are bounded during verification so a malicious directory
+value cannot force unlimited work on a Bind handler. RFC 3062 Password Modify runs old-password
 verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is
 loaded from the frontend database's `olcPasswordHash` values in the same

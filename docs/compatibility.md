@@ -81,7 +81,7 @@ functions, configurations, or directory data.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors plus OpenLDAP contrib `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; pw-totp Simple Bind, hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials pass; dynamically registered password modules, including an unsupported scheme nested inside imported `ANDPW`, remain |
+| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors; OpenLDAP contrib SHA-256/384/512 salted and unsalted schemes pass bidirectional Password Modify/import/Bind differentials; `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants pass hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials; PBKDF2, APR1/BSDMD5, Netscape, and external-service password modules remain |
 | Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, chain-backed forwarded state updates, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules remain |
 | OpenLDAP ACL grammar and evaluation | partial | filter/value/object-class targets; real/effective DN and level selectors; static/dynamic groups and set expressions; DN/value capture expansion; peer/domain/sockname/sockurl and IPv4/IPv6/path selectors; overall/transport/TLS/SASL SSF; `OpenLDAPaci`; and direct OpenLDAP target, expansion/group, connection/level, and ACI differentials pass; unlisted grammar and dynacl modules remain |
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, group/LDAP-URL rules, Cyrus credential forms, proxy-backed auxprop/auth-check searches, OpenLDAP `other(80)` backend-failure mapping, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
@@ -146,7 +146,7 @@ production qualification gate.
 | translucent | partial | database-local single-instance `olcTranslucentConfig` with one captive `olcTranslucentDatabase` LDAP target, disabled/reload/rollback validation, remote-anchored Search, whole-attribute local override, stale-local suppression, remote-only entries, complete-filter recheck, recursive local/remote split filters, Compare attribute shadow/fallback, remote-first Bind plus `bindLocal` fallback and health-preferred URI recovery, local `pwmodLocal`, `strict`, `noGlue`, root-only local-shadow Add/Modify/Delete/ModifyDN, Assertion on Add/merged Modify views, ManageDsaIT bypass, and pinned OpenLDAP 2.6.13 source-contract plus Phase 1/2 differential passes; other advanced controls, OpenLDAP's non-root Modify-through-local-ACL edge, frontend/multiple instances, and arbitrary cross-overlay ordering/side effects remain |
 | unique | partial | URI and legacy config, independent domains/multiple URIs, `strict`/`ignore`/`serialize`, Add/Modify/ModifyDN, managed Relax, atomic concurrency, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering and auditing pre-existing duplicates remain |
 | valsort | partial | alpha/numeric/weighted ordering, hidden raw control, Add/Modify validation, Paging/Sort/VLV, Sync bypass, online/restart, real `slapcat` import, and OpenLDAP 2.6.13 differential pass; global/glue and cross-overlay ordering matrices remain |
-| OTP-related contrib password modules | partial | OpenLDAP pw-totp `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; fixed 30-second/six-digit credentials, current/previous-window rules, non-replicated `authTimestamp`, root/ordinary/TOTP successful-Bind timestamp updates, Password Modify hashing, database/frontend and duplicate placement, online disable/delete/restart, and a dynamically built pinned OpenLDAP 2.6.13 module differential pass; ldap-go intentionally makes first-use replay prevention atomic where OpenLDAP's separate check/update can admit concurrent attempts; unsupported nested/dynamic password schemes, replication topologies, proxy databases, arbitrary overlay ordering, and additional contrib password modules remain |
+| OTP-related contrib password modules | partial | OpenLDAP pw-totp `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; fixed 30-second/six-digit credentials, current/previous-window rules, non-replicated `authTimestamp`, root/ordinary/TOTP successful-Bind timestamp updates, Password Modify hashing, database/frontend and duplicate placement, online disable/delete/restart, and a dynamically built pinned OpenLDAP 2.6.13 module differential pass; SHA-2 nested passwords are supported; ldap-go intentionally makes first-use replay prevention atomic where OpenLDAP's separate check/update can admit concurrent attempts; other unsupported nested/dynamic schemes, replication topologies, proxy databases, and arbitrary overlay ordering remain |
 
 ## Replication and operations
 
@@ -170,7 +170,7 @@ production qualification gate.
 | `slapadd` / `slapcat` equivalents | partial | `slapadd` supports `-l/-b/-n/-g/-s/-u/-S/-w` and `-o schema-check=yes\|no` / `value-check=yes\|no`; `slapcat` supports `-l/-b/-n/-g/-s` for the tested subset; default-primary and explicit selection, glue-subordinate import/export, backend callback policy, schema/options/normalizer, LastMod/CSN, root and `olcSyncUseSubentry` context, atomic `cn=config`, dry-run, round-trip, and exit-code cases pass; imports remain atomic, `-c/-q` are rejected, and exact dry-run, partial-write, parser/normalizer, diagnostic, native backend-file, and historical-option parity remain unsupported |
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
 | `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
-| `slappasswd` equivalent | partial | `{SSHA}`, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; arbitrary OpenLDAP module-provided schemes remain |
+| `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
 | LDAP client tools | partial | `ldapsearch`, `ldapwhoami`, `ldapcompare`, `ldappasswd`, `ldapexop`, `ldapmodify`/`ldapadd`, `ldapdelete`, and `ldapmodrdn` cover simple Bind, LDAP/LDAPS/StartTLS, password prompting/files, LDIF writes, Compare exit codes, extended-operation binary values, generic `-e`/`-E` controls on applicable commands, and opt-in anonymous referral chasing with DN/scope rewriting, control preservation, loop detection, and a five-hop default; OpenLDAP Compare/ldapexop differentials and pinned ldap-tools/libldap source contracts pass; SASL, generic Compare controls, complete referral URL fields/rebind behavior, and the full historical option surface remain |
 | Load balancer tooling | partial | `ldap-go lloadd` parses standalone OpenLDAP-style configuration, validates the runnable subset and rejects unsupported settings with `-test-config`, serves multiple LDAP and escaped-authority/three-slash LDAPI listeners, exposes listener/log overrides, and is exercised by unit, race, pinned-source, and live OpenLDAP 2.6.13 tests; client TLS/PROXY listeners, config-file-driven upstream TLS/socket tuning, the historical daemon option/signal/logging surface, embedded slapd-module mode, and runtime config/monitor administration remain |
 
@@ -1027,7 +1027,11 @@ Connection pooling and a broader platform TLS matrix remain outside the tested
 boundary. Both overlay rows therefore remain `partial`.
 
 Current password verification covers cleartext, `{CLEARTEXT}`, `{SHA}`,
-`{SSHA}`, `{MD5}`, `{SMD5}`, `{SM3}`, `{SSM3}`, and `{PBKDF2-SM3}`. New
+`{SSHA}`, `{MD5}`, `{SMD5}`, the OpenLDAP contrib `{SHA256}`, `{SSHA256}`,
+`{SHA384}`, `{SSHA384}`, `{SHA512}`, and `{SSHA512}` schemes, `{SM3}`,
+`{SSM3}`, and `{PBKDF2-SM3}`. SHA-2 generation uses the contrib module's
+eight-byte salt and passes a pinned 2.6.13 bidirectional dynamic-module
+differential. New
 national-cryptography password values use `{PBKDF2-SM3}` with a random 16-byte
 salt, a 32-byte derived key, and 100,000 iterations by default. The textual
 layout follows OpenLDAP's contributed PBKDF2 scheme:
@@ -1047,9 +1051,10 @@ identity or an explicit target DN, optional old-password verification,
 client-supplied passwords, server-generated passwords, ACL enforcement, and
 normal schema/operational-attribute updates in one storage transaction. The
 frontend database's `olcPasswordHash` values select one or more output hashes;
-the OpenLDAP default is `{SSHA}`, while `{PBKDF2-SM3}` enables the costed SM3
-format. Legacy placement on `cn=config` is also accepted. Online changes are
-validated as part of the runtime snapshot and unsupported schemes roll back.
+the OpenLDAP default is `{SSHA}`, the contrib SHA-2 names preserve OpenLDAP
+interoperability, and `{PBKDF2-SM3}` enables the costed SM3 format. Legacy
+placement on `cn=config` is also accepted. Online changes are validated as part
+of the runtime snapshot and unsupported schemes roll back.
 
 An imported OpenLDAP `ppolicy` overlay applies its default or per-entry
 `pwdPolicySubentry` policy to simple Bind, Add, Modify, and Password Modify.

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"errors"
 	"strings"
@@ -21,6 +23,12 @@ func TestVerifyPassword(t *testing.T) {
 	sha := sha1.Sum(password)
 	sshaInput := append(append([]byte(nil), password...), salt...)
 	ssha := sha1.Sum(sshaInput)
+	sha256Digest := sha256.Sum256(password)
+	ssha256Digest := sha256.Sum256(sshaInput)
+	sha384Digest := sha512.Sum384(password)
+	ssha384Digest := sha512.Sum384(sshaInput)
+	sha512Digest := sha512.Sum512(password)
+	ssha512Digest := sha512.Sum512(sshaInput)
 	md := md5.Sum(password)
 	smdInput := append(append([]byte(nil), password...), salt...)
 	smd := md5.Sum(smdInput)
@@ -50,6 +58,12 @@ func TestVerifyPassword(t *testing.T) {
 		{name: "cleartext", stored: append([]byte("{CLEARTEXT}"), password...), want: true},
 		{name: "sha", stored: encoded("{SHA}", sha[:]), want: true},
 		{name: "ssha", stored: encoded("{SSHA}", append(ssha[:], salt...)), want: true},
+		{name: "sha256", stored: encoded("{SHA256}", sha256Digest[:]), want: true},
+		{name: "ssha256", stored: encoded("{SSHA256}", append(ssha256Digest[:], salt...)), want: true},
+		{name: "sha384", stored: encoded("{SHA384}", sha384Digest[:]), want: true},
+		{name: "ssha384", stored: encoded("{SSHA384}", append(ssha384Digest[:], salt...)), want: true},
+		{name: "sha512", stored: encoded("{SHA512}", sha512Digest[:]), want: true},
+		{name: "ssha512", stored: encoded("{SSHA512}", append(ssha512Digest[:], salt...)), want: true},
 		{name: "md5", stored: encoded("{MD5}", md[:]), want: true},
 		{name: "smd5", stored: encoded("{SMD5}", append(smd[:], salt...)), want: true},
 		{name: "sm3", stored: encoded("{SM3}", sm[:]), want: true},
@@ -141,6 +155,12 @@ func TestHashPasswordSchemes(t *testing.T) {
 		{scheme: "{CLEARTEXT}", prefix: "secret"},
 		{scheme: "{SHA}", prefix: "{SHA}"},
 		{scheme: "{SSHA}", prefix: "{SSHA}"},
+		{scheme: "{SHA256}", prefix: "{SHA256}"},
+		{scheme: "{SSHA256}", prefix: "{SSHA256}"},
+		{scheme: "{SHA384}", prefix: "{SHA384}"},
+		{scheme: "{SSHA384}", prefix: "{SSHA384}"},
+		{scheme: "{SHA512}", prefix: "{SHA512}"},
+		{scheme: "{SSHA512}", prefix: "{SSHA512}"},
 		{scheme: "{MD5}", prefix: "{MD5}"},
 		{scheme: "{SMD5}", prefix: "{SMD5}"},
 		{scheme: "{SM3}", prefix: "{SM3}"},
@@ -169,6 +189,96 @@ func TestHashPasswordSchemes(t *testing.T) {
 				t.Fatal("generated password accepted an incorrect value")
 			}
 		})
+	}
+}
+
+func TestOpenLDAPSHA2KnownVectors(t *testing.T) {
+	t.Parallel()
+
+	for _, stored := range []string{
+		"{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=",
+		"{SHA384}WKd1ukESvjAFrkQHznV9iP2nHUBJe7gCbsrFTU4//HIyzo3jq1rLMK45dg/ufFPt",
+		"{SHA512}vSsar3708Jvp9Szi2NWZZ02Bqp1qRCFpbcTZPdBhnWgs5WtNZKnvCXdhztmeD2cmW192CF5bDufKRpayrW/isg==",
+	} {
+		if !VerifyPassword([]byte(stored), []byte("secret")) {
+			t.Fatalf("VerifyPassword(%q) rejected the OpenLDAP vector", stored)
+		}
+		if VerifyPassword([]byte(stored), []byte("wrong")) {
+			t.Fatalf("VerifyPassword(%q) accepted an incorrect password", stored)
+		}
+	}
+}
+
+func TestOpenLDAPDigestBase64Rules(t *testing.T) {
+	t.Parallel()
+
+	withWhitespace := []byte(
+		"{SHA256}K7gN U3sdo+OL0wNh\tqoVWhr3g6s1x\vYv72ol/pe/Un\fols=\r\n",
+	)
+	if !VerifyPassword(withWhitespace, []byte("secret")) {
+		t.Fatal("VerifyPassword() rejected OpenLDAP Base64 whitespace")
+	}
+	for _, stored := range []string{
+		"{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unolt=",
+		"{SHA512}vSsar3708Jvp9Szi2NWZZ02Bqp1qRCFpbcTZPdBhnWgs5WtNZKnvCXdhztmeD2cmW192CF5bDufKRpayrW/ish==",
+	} {
+		if VerifyPassword([]byte(stored), []byte("secret")) {
+			t.Fatalf("VerifyPassword(%q) accepted nonzero Base64 padding bits", stored)
+		}
+	}
+}
+
+func TestHashOpenLDAPSHA2UsesEightByteSalt(t *testing.T) {
+	t.Parallel()
+
+	salt := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	for _, test := range []struct {
+		scheme       string
+		digestLength int
+	}{
+		{scheme: "{SSHA256}", digestLength: sha256.Size},
+		{scheme: "{SSHA384}", digestLength: sha512.Size384},
+		{scheme: "{SSHA512}", digestLength: sha512.Size},
+	} {
+		stored, err := HashPassword(
+			[]byte("secret"),
+			test.scheme,
+			bytes.NewReader(salt),
+		)
+		if err != nil {
+			t.Fatalf("HashPassword(%s): %v", test.scheme, err)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(
+			strings.TrimPrefix(string(stored), test.scheme),
+		)
+		if err != nil {
+			t.Fatalf("decode HashPassword(%s): %v", test.scheme, err)
+		}
+		if len(decoded) != test.digestLength+len(salt) ||
+			!bytes.Equal(decoded[test.digestLength:], salt) {
+			t.Fatalf("HashPassword(%s) payload = %x", test.scheme, decoded)
+		}
+	}
+}
+
+func TestVerifyPasswordRejectsMalformedSHA2(t *testing.T) {
+	t.Parallel()
+
+	for _, stored := range []string{
+		"{SSHA}5en6G6MezRroT3XKqkdPOmY/BfQ=",
+		"{SHA256}",
+		"{SHA256}AAAA",
+		"{SHA256}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+		"{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=AAAA",
+		"{SSHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=",
+		"{SHA384}AAAA",
+		"{SSHA384}WKd1ukESvjAFrkQHznV9iP2nHUBJe7gCbsrFTU4//HIyzo3jq1rLMK45dg/ufFPt",
+		"{SHA512}AAAA",
+		"{SSHA512}vSsar3708Jvp9Szi2NWZZ02Bqp1qRCFpbcTZPdBhnWgs5WtNZKnvCXdhztmeD2cmW192CF5bDufKRpayrW/isg==",
+	} {
+		if VerifyPassword([]byte(stored), []byte("secret")) {
+			t.Fatalf("VerifyPassword(%q) accepted malformed SHA-2 data", stored)
+		}
 	}
 }
 

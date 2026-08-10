@@ -36,7 +36,7 @@ make full
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
-OpenLDAP's contrib `pw-totp` module against that build. It rejects
+OpenLDAP's contrib `pw-sha2` and `pw-totp` modules against that build. It rejects
 reference-test skips, runs the Go race detector, and executes the parser fuzz
 suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
@@ -287,6 +287,13 @@ in differential tests. Policy configuration and all operational state survive
 `olcPPolicyForwardUpdates` sends policy state changes to the provider without
 mutating the consumer copy. Native C `check_password()` modules remain pending;
 configured native checker paths fail closed.
+OpenLDAP's contrib `pw-sha2` module is data-compatible for `{SHA256}`,
+`{SSHA256}`, `{SHA384}`, `{SSHA384}`, `{SHA512}`, and `{SSHA512}`. Salted
+hashes use the module's eight-byte salt, and Password Modify,
+`olcPasswordHash`, Simple Bind, imported values, and `slappasswd -h` share the
+same implementation. A pinned 2.6.13 dynamic-module differential verifies
+both directions: ldap-go hashes bind on OpenLDAP, and OpenLDAP-generated
+hashes bind after import into ldap-go.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple
@@ -298,8 +305,9 @@ concurrently. The schemes fail closed when the overlay is absent or disabled.
 Password Modify and `slappasswd -h` accept a raw seed for pure TOTP schemes and
 `seed|static-password` for `ANDPW`, matching the contrib module's Base32 plus
 `{SSHA}` storage format. Imported `ANDPW` values can nest any password scheme
-implemented by ldap-go; dynamically registered third-party nested schemes are
-not yet executable. Pinned OpenLDAP 2.6.13 module differentials cover all six
+implemented by ldap-go, including the contrib SHA-2 schemes; dynamically
+registered third-party nested schemes are not yet executable. Pinned OpenLDAP
+2.6.13 module differentials cover all six
 schemes, root and ordinary passwords, database/frontend and duplicate overlay
 placement, current/previous windows, replay, malformed credentials, and
 Relax-managed `authTimestamp` updates. On an entry with no prior timestamp,

@@ -145,6 +145,63 @@ func TestOpenLDAPReferenceTOTPPasswordModule(t *testing.T) {
 		})
 	}
 
+	t.Run("SHA2 nested password", func(t *testing.T) {
+		sha2Module := buildOpenLDAPSHA2PasswordModule(t)
+		stored := []byte(
+			auth.TOTP1AndPWHashScheme +
+				"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ|" +
+				"{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=",
+		)
+		openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
+			t,
+			tools,
+			[]string{"totp"},
+			"moduleload "+module+"\nmoduleload "+sha2Module,
+			"",
+			"userPassword: "+string(stored)+"\n",
+		)
+		defer stopOpenLDAP()
+
+		ldapGoStore := storage.NewMemory()
+		t.Cleanup(func() { _ = ldapGoStore.Close() })
+		seedDirectory(t, ldapGoStore)
+		seedTOTPPasswordConfiguration(t, ldapGoStore, stored, false, "")
+		ldapGoAddress, stopLDAPGo := startServer(t, ldapGoStore, Config{
+			RootDN:       "cn=admin,dc=example,dc=com",
+			RootPassword: []byte("secret"),
+		})
+		defer stopLDAPGo()
+
+		credential := totpPasswordCredential(
+			t,
+			totpPasswordTestSecret,
+			stableTOTPPasswordReferenceTime().Unix()/30,
+			otpHMACSHA1OID,
+			"secret",
+		)
+		want := [2]uint16{ldap.LDAPResultSuccess, ldap.LDAPResultInvalidCredentials}
+		openLDAPCodes := bindTOTPPasswordTwice(
+			t,
+			openLDAPURI,
+			"uid=bob,ou=people,dc=example,dc=com",
+			credential,
+		)
+		ldapGoCodes := bindTOTPPasswordTwice(
+			t,
+			"ldap://"+ldapGoAddress,
+			totpPasswordUserDN,
+			credential,
+		)
+		if openLDAPCodes != want || ldapGoCodes != want {
+			t.Fatalf(
+				"SHA-2 nested TOTP results: OpenLDAP=%v ldap-go=%v want=%v",
+				openLDAPCodes,
+				ldapGoCodes,
+				want,
+			)
+		}
+	})
+
 	t.Run("database root password", func(t *testing.T) {
 		stored, err := auth.HashPassword(
 			totpPasswordTestSecret,

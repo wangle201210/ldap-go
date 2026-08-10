@@ -205,6 +205,24 @@ func TestVerifyTOTPAndPWUsesCredentialSuffix(t *testing.T) {
 	}
 }
 
+func TestVerifyTOTPAndPWWithOpenLDAPSHA2(t *testing.T) {
+	t.Parallel()
+
+	stored := []byte(
+		TOTP1AndPWHashScheme +
+			"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ|" +
+			"{SHA256}K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=",
+	)
+	if !VerifyTOTPPassword(
+		stored,
+		[]byte("secret287082"),
+		time.Unix(59, 0),
+		time.Time{},
+	) {
+		t.Fatal("VerifyTOTPPassword() rejected an OpenLDAP SHA-2 nested password")
+	}
+}
+
 func TestVerifyTOTPPasswordReplayBoundaries(t *testing.T) {
 	t.Parallel()
 

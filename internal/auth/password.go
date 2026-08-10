@@ -5,6 +5,8 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -23,6 +25,7 @@ const (
 	OpenLDAPDefaultHashScheme = "{SSHA}"
 	SMPBKDF2HashScheme        = "{PBKDF2-SM3}"
 	openLDAPPasswordSaltSize  = 4
+	openLDAPSHA2SaltSize      = 8
 	smPasswordSaltSize        = 16
 	maxSMPBKDF2PayloadSize    = 8 + 1 + 22 + 1 + 43
 )
@@ -48,6 +51,36 @@ func VerifyPassword(stored, supplied []byte) bool {
 	case "SSHA":
 		return verifyDigest(payload, supplied, true, sha1.Size, func(value []byte) []byte {
 			digest := sha1.Sum(value)
+			return digest[:]
+		})
+	case "SHA256":
+		return verifyDigest(payload, supplied, false, sha256.Size, func(value []byte) []byte {
+			digest := sha256.Sum256(value)
+			return digest[:]
+		})
+	case "SSHA256":
+		return verifyDigest(payload, supplied, true, sha256.Size, func(value []byte) []byte {
+			digest := sha256.Sum256(value)
+			return digest[:]
+		})
+	case "SHA384":
+		return verifyDigest(payload, supplied, false, sha512.Size384, func(value []byte) []byte {
+			digest := sha512.Sum384(value)
+			return digest[:]
+		})
+	case "SSHA384":
+		return verifyDigest(payload, supplied, true, sha512.Size384, func(value []byte) []byte {
+			digest := sha512.Sum384(value)
+			return digest[:]
+		})
+	case "SHA512":
+		return verifyDigest(payload, supplied, false, sha512.Size, func(value []byte) []byte {
+			digest := sha512.Sum512(value)
+			return digest[:]
+		})
+	case "SSHA512":
+		return verifyDigest(payload, supplied, true, sha512.Size, func(value []byte) []byte {
+			digest := sha512.Sum512(value)
 			return digest[:]
 		})
 	case "MD5":
@@ -103,6 +136,12 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 	case "{CLEARTEXT}",
 		"{SHA}",
 		"{SSHA}",
+		"{SHA256}",
+		"{SSHA256}",
+		"{SHA384}",
+		"{SSHA384}",
+		"{SHA512}",
+		"{SSHA512}",
 		"{MD5}",
 		"{SMD5}",
 		"{SM3}",
@@ -148,6 +187,54 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 			random,
 			func(value []byte) []byte {
 				digest := sha1.Sum(value)
+				return digest[:]
+			},
+		)
+	case "{SHA256}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := sha256.Sum256(value)
+			return digest[:]
+		})
+	case "{SSHA256}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			openLDAPSHA2SaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := sha256.Sum256(value)
+				return digest[:]
+			},
+		)
+	case "{SHA384}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := sha512.Sum384(value)
+			return digest[:]
+		})
+	case "{SSHA384}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			openLDAPSHA2SaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := sha512.Sum384(value)
+				return digest[:]
+			},
+		)
+	case "{SHA512}":
+		return hashPasswordDigest(password, normalized, 0, random, func(value []byte) []byte {
+			digest := sha512.Sum512(value)
+			return digest[:]
+		})
+	case "{SSHA512}":
+		return hashPasswordDigest(
+			password,
+			normalized,
+			openLDAPSHA2SaltSize,
+			random,
+			func(value []byte) []byte {
+				digest := sha512.Sum512(value)
 				return digest[:]
 			},
 		)
@@ -266,13 +353,15 @@ func verifyDigest(
 	digestLength int,
 	sum func([]byte) []byte,
 ) bool {
+	encoded = stripOpenLDAPBase64Whitespace(encoded)
 	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(encoded)))
-	n, err := base64.StdEncoding.Decode(decoded, encoded)
+	n, err := base64.StdEncoding.Strict().Decode(decoded, encoded)
 	if err != nil {
 		return false
 	}
 	decoded = decoded[:n]
-	if len(decoded) < digestLength || (!salted && len(decoded) != digestLength) {
+	if (salted && len(decoded) <= digestLength) ||
+		(!salted && len(decoded) != digestLength) {
 		return false
 	}
 
@@ -282,6 +371,32 @@ func verifyDigest(
 	input = append(input, salt...)
 	actual := sum(input)
 	return subtle.ConstantTimeCompare(decoded[:digestLength], actual) == 1
+}
+
+func stripOpenLDAPBase64Whitespace(value []byte) []byte {
+	for index, character := range value {
+		if !openLDAPBase64Whitespace(character) {
+			continue
+		}
+		cleaned := make([]byte, 0, len(value)-1)
+		cleaned = append(cleaned, value[:index]...)
+		for _, remaining := range value[index+1:] {
+			if !openLDAPBase64Whitespace(remaining) {
+				cleaned = append(cleaned, remaining)
+			}
+		}
+		return cleaned
+	}
+	return value
+}
+
+func openLDAPBase64Whitespace(character byte) bool {
+	switch character {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func verifySMPBKDF2(payload, password []byte) bool {
