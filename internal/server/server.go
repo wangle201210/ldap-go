@@ -412,6 +412,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		server.monitor.observeRequest(state.monitor, message)
 
 		if _, ok := message.Request.(ldapwire.UnbindRequest); ok {
+			server.notifySockBackends(connectionContext, &state, message)
 			observation := server.newImmediateAuditObservation(&state, message)
 			server.finishOperationAudit(
 				observation,
@@ -773,6 +774,14 @@ func (server *Server) dispatch(
 	); handled {
 		return false, err
 	}
+	if handled, err := server.trySockBackendOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
 	if handled, err := server.handleTransactionSpecification(
 		connection,
 		state,
@@ -1008,6 +1017,16 @@ func (server *Server) handleBind(
 		return err
 	}
 	if handled, err := server.tryLDAPBackendBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		return err
+	}
+	if handled, err := server.trySockBackendBind(
 		ctx,
 		connection,
 		state,

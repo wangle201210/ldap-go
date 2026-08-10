@@ -165,6 +165,19 @@ normalized entry data. Overlay, control, SASL, transaction, CLI, migration,
 and replication differentials remain separate tests and are included by the
 same runner.
 
+The back-sock differential starts one Unix socket fixture and drives the same
+Bind, Search, Add, Modify, Compare, ModifyDN, Delete, Password Modify, and
+Unbind session through the pinned OpenLDAP 2.6.13 slapd and ldap-go. It compares
+LDAP result codes and normalized Search entries, then compares the command,
+message ID, suffix, connection metadata, filter, LDIF fields, and extended
+request value observed by the fixture. Always-on protocol tests separately
+cover Base64/folding, limits, malformed RESULT/LDIF input, and parser fuzzing.
+A second live differential verifies that invalid Add/Modify/Compare/ModifyDN
+requests and anonymous Password Modify are rejected before any socket request,
+while a first-component Compare assertion and OpenLDAP's empty Modify are
+delegated. It compares response tags, result codes, matched DNs, diagnostics,
+network behavior, and whether the fixture was contacted.
+
 The `lloadd` evidence group first pins source hashes and behavioral anchors for
 message-ID forwarding, tier fallback, Bind pinning, and restriction actions.
 Always-on tests cover standalone configuration parsing, bounded BER frames,

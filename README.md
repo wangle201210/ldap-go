@@ -34,7 +34,7 @@ make full
 ```
 
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
-`ldap`, `meta`, `null`, `relay`, and `mdb` backends, the required overlays,
+`ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 and the reference `lloadd` binary. It rejects reference-test skips, runs the Go
 race detector, and executes the parser fuzz suite. The tagged source is cached
 outside the repository and an explicit checkout is never reset or switched. See
@@ -81,6 +81,19 @@ PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM Bind can read proxy-backed auxiliary
 credentials and authorization rules through `acl-bind`/IDAssert, including
 group and local LDAP-URL rules; native outbound SASL assertion carries the
 mapped authorization ID.
+
+An imported `olcDatabase=sock` delegates Bind, Search, Compare, Add, Modify,
+ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
+OpenLDAP's line-oriented back-sock protocol. Each operation gets a fresh
+socket, optional `binddn`/`peername`/`ssf`/`connid` fields come from the
+frontend connection, Search entries pass local read ACLs, and Abandon/Cancel
+close a blocked external request. Before delegation, the frontend applies the
+same tested Add/Modify schema checks, matching-rule assertion validation for
+Compare, ModifyDN validation, manage-only Relax updates, shadow-aware Don't Use
+Copy handling, and empty-Modify behavior as OpenLDAP 2.6.13. The
+implementation passes pinned operation and frontend-validation differentials.
+Socket overlay mode, transactions, and overlay response callbacks remain
+outside this milestone.
 
 The separate `ldap-go lloadd` command implements the verified core of
 OpenLDAP's LDAP-aware load balancer. It forwards bounded BER frames while
@@ -605,6 +618,10 @@ go run ./cmd/ldap-go slappasswd -h '{PBKDF2-SM3}'
 
 These aliases preserve the implemented OpenLDAP option and exit-code surface;
 they do not make bbolt files binary-compatible with OpenLDAP MDB files.
+The offline importer assumes trusted `slapcat` output and does not run the
+online Add path's complete schema validation. The current bbolt backend also
+has no independent attribute indexes, so local Search scans the selected
+partition; size and latency must be qualified before production use.
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit

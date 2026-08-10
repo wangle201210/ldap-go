@@ -160,8 +160,8 @@ registry rather than OpenLDAP configuration import.
 
 ### Backends
 
-Backends expose atomic read/write transactions over entries and indexes. The
-interface must support:
+Backends expose atomic read/write transactions over entries. The target
+candidate-selection and indexing architecture must support:
 
 - base, one-level, and subtree candidate selection;
 - equality, ordering, approximate, substring, and presence indexes;
@@ -169,6 +169,12 @@ interface must support:
 - atomic Modify and ModifyDN, including subtree moves;
 - snapshot reads and ordered change records for replication;
 - offline backup, restore, consistency checking, and atomic database rebuild.
+
+The current bbolt implementation provides DN-keyed transactional entry storage
+but no independent attribute indexes; Search walks the selected partition and
+applies scope and filter evaluation in the server. Index-backed candidate
+selection is therefore a production scalability requirement, not a current
+compatibility claim.
 
 OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
@@ -236,6 +242,33 @@ a healthy preferred URI and probes a recovered URI after the preferred one
 fails. Complete dynamic topology, GSSAPI and SASL security layers, full rebind,
 full librewrite, and multi-target pool-category behavior remain outside the
 implemented compatibility boundary.
+
+A `sock` naming-context database is a delegated backend with no local storage
+partition. Its immutable runtime configuration contains a Unix socket path and
+the enabled OpenLDAP connection-extension fields. Dispatch performs the same
+frontend restriction and limited pseudo-entry ACL checks as back-sock, encodes
+the operation into the line/LDIF protocol, and creates a fresh Unix connection.
+The operation context owns that connection, so Abandon, Cancel, shutdown, or a
+client disconnect interrupts blocked I/O by closing it. Unbind bypasses normal
+target routing and is written to every configured socket backend.
+
+Before encoding, the delegated database frontend validates the operation forms
+that slapd handles outside `back-sock`: Add/Modify schema and value rules,
+Compare matching-rule assertion validation and normalization, ModifyDN
+destination syntax and database ownership, manage-only Relax updates,
+shadow-aware Don't Use Copy results, and Password Modify authentication.
+An empty Modify change sequence remains a valid delegated request because that
+is the observed OpenLDAP 2.6.13 behavior.
+
+The external service is an untrusted process boundary. Request encoding is
+completed before dialing and rejects newline/NUL injection. Response parsing
+has byte, line, entry, attribute, value, and entry-count limits and requires a
+terminal RESULT. Search entries are parsed before LDAP emission, then pass
+local entry and attribute/value read ACLs and requested-attribute projection.
+This bounded fail-closed design intentionally does not reproduce OpenLDAP's
+known early-EOF-as-success bug. RESULT diagnostics preserve the bytes following
+the field colon as OpenLDAP does. Socket overlay callbacks are a separate
+middleware architecture and are not implemented by the database runtime.
 
 ### Overlays
 

@@ -412,7 +412,7 @@ func (encoder *sockRequestEncoder) compare(request SockCompareRequest) error {
 	if err := validateAttributeDescription(request.Attribute); err != nil {
 		return fmt.Errorf("COMPARE attribute: %w", err)
 	}
-	return encoder.ldifValue(request.Attribute, request.Assertion, false)
+	return encoder.ldifValue(request.Attribute, request.Assertion, true)
 }
 
 func (encoder *sockRequestEncoder) delete(request SockDeleteRequest) error {
@@ -467,7 +467,7 @@ func (encoder *sockRequestEncoder) modify(request SockModifyRequest) error {
 			return err
 		}
 		for _, value := range change.Attribute.Values {
-			if err := encoder.ldifValue(name, value, false); err != nil {
+			if err := encoder.ldifValue(name, value, true); err != nil {
 				return err
 			}
 		}
@@ -907,9 +907,6 @@ func parseSockResultLine(line []byte) (string, []byte, error) {
 	value := line[separator+1:]
 	if len(value) != 0 && (value[0] == ':' || value[0] == '<') {
 		return "", nil, sockProtocolError("RESULT field %q must be plain text", name)
-	}
-	if len(value) != 0 && value[0] == ' ' {
-		value = value[1:]
 	}
 	return name, bytes.Clone(value), nil
 }

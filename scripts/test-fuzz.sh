@@ -26,3 +26,4 @@ run_target ./internal/ldapwire FuzzDecodeFilterRoundTrip
 run_target ./internal/directory FuzzParseDNRoundTrip
 run_target ./internal/schema FuzzSchemaDescriptionRoundTrip
 run_target ./internal/migration FuzzLDIFSemanticRoundTrip
+run_target ./internal/server FuzzParseSockResponse

@@ -87,6 +87,9 @@ func NewBuiltinRegistry() (*Registry, error) {
 	if err := RegisterOpenLDAPMetaSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP back-meta schema: %w", err)
 	}
+	if err := RegisterOpenLDAPSockSchema(registry); err != nil {
+		return nil, fmt.Errorf("register OpenLDAP back-sock schema: %w", err)
+	}
 	return registry, nil
 }
 

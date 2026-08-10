@@ -18,6 +18,7 @@ type runtimeDatabase struct {
 	suffixes              []directory.DN
 	ldapBackend           *ldapBackendRuntimeConfiguration
 	metaBackend           *metaBackendRuntimeConfiguration
+	sockBackend           *sockBackendRuntimeConfiguration
 	metaTargetKey         string
 	relay                 *relayRuntimeConfiguration
 	rwm                   *rwmRuntimeConfiguration
@@ -321,6 +322,16 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			// A meta proxy database never owns a local data partition.
 			database.partition = ""
 		}
+		if isSockBackendDatabase(database) {
+			configuration, err := loadSockBackendRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.sockBackend = configuration
+			// A socket backend delegates all data operations to an external
+			// process and therefore owns no local storage partition.
+			database.partition = ""
+		}
 		database.syncConsumers, err = loadSyncConsumerConfigs(entry, database)
 		if err != nil {
 			return err
@@ -602,10 +613,11 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		database := &databases[databaseIndex]
-		if (database.ldapBackend != nil || database.metaBackend != nil) &&
-			overlayType != "pcache" {
+		if database.sockBackend != nil ||
+			((database.ldapBackend != nil || database.metaBackend != nil) &&
+				overlayType != "pcache") {
 			return fmt.Errorf(
-				"%s %s overlay on remote proxy backend %s is unsupported because local overlays would be bypassed",
+				"%s %s overlay on delegated backend %s is unsupported because local overlays would be bypassed",
 				entry.DN,
 				overlayType,
 				database.name,
@@ -1694,6 +1706,10 @@ func isLDAPBackendDatabase(database runtimeDatabase) bool {
 
 func isMetaBackendDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "meta"
+}
+
+func isSockBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "sock"
 }
 
 func databaseType(name string) string {

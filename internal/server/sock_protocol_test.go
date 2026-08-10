@@ -329,6 +329,49 @@ func TestSockProtocolLDIFSafetyAndFolding(t *testing.T) {
 	if !folded {
 		t.Fatal("long ADD value was not folded")
 	}
+
+	for name, operation := range map[string]SockOperation{
+		"compare": SockCompareRequest{
+			DN:        "uid=alice,dc=example,dc=com",
+			Attribute: "description",
+			Assertion: longValue,
+		},
+		"modify": SockModifyRequest{
+			DN: "uid=alice,dc=example,dc=com",
+			Changes: []ldapwire.Modification{{
+				Operation: ldapwire.ModificationReplace,
+				Attribute: directory.Attribute{
+					Description: "description",
+					Values:      [][]byte{longValue},
+				},
+			}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := EncodeSockRequest(
+				SockRequest{MessageID: 1, Operation: operation},
+				SockProtocolLimits{},
+			)
+			if err != nil {
+				t.Fatalf("EncodeSockRequest(): %v", err)
+			}
+			continuation := false
+			for _, line := range strings.Split(strings.TrimSuffix(string(encoded), "\n"), "\n") {
+				if len(line) > sockLDIFLineWidth {
+					t.Errorf(
+						"physical LDIF line has %d bytes, want <= %d: %q",
+						len(line),
+						sockLDIFLineWidth,
+						line,
+					)
+				}
+				continuation = continuation || strings.HasPrefix(line, " ")
+			}
+			if !continuation {
+				t.Fatal("long value was not folded")
+			}
+		})
+	}
 }
 
 func TestSockProtocolEncodesEveryFilterChoice(t *testing.T) {
@@ -493,8 +536,8 @@ func TestSockProtocolParsesSearchResponse(t *testing.T) {
 		},
 		Result: ldapwire.Result{
 			Code:              ldapwire.ResultSizeLimitExceeded,
-			MatchedDN:         "dc=example,dc=com",
-			DiagnosticMessage: "size limit reached",
+			MatchedDN:         " dc=example,dc=com",
+			DiagnosticMessage: " size limit reached",
 		},
 	}
 	if !reflect.DeepEqual(response, want) {
@@ -511,10 +554,10 @@ func TestSockProtocolParsesMinimalAndCRLFResults(t *testing.T) {
 		want  ldapwire.Result
 	}{
 		{"minimal", "RESULT\n\n", ldapwire.Result{}},
-		{"CRLF", "result\r\nCoDe: 6\r\nMaTcHeD: dc=x\r\nInFo: equal\r\n\r\n", ldapwire.Result{Code: ldapwire.ResultCompareTrue, MatchedDN: "dc=x", DiagnosticMessage: "equal"}},
+		{"CRLF", "result\r\nCoDe: 6\r\nMaTcHeD: dc=x\r\nInFo: equal\r\n\r\n", ldapwire.Result{Code: ldapwire.ResultCompareTrue, MatchedDN: " dc=x", DiagnosticMessage: " equal"}},
 		{"empty optional values", "RESULT\nmatched:\ninfo:\n\n", ldapwire.Result{}},
 		{"OpenLDAP code whitespace", "RESULT\ncode:\t 80 \t\n\n", ldapwire.Result{Code: ldapwire.ResultOther}},
-		{"UTF-8 and significant spaces", "RESULT\ninfo:  caf\xc3\xa9 \n\n", ldapwire.Result{DiagnosticMessage: " caf\xc3\xa9 "}},
+		{"UTF-8 and significant spaces", "RESULT\ninfo:  caf\xc3\xa9 \n\n", ldapwire.Result{DiagnosticMessage: "  caf\xc3\xa9 "}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

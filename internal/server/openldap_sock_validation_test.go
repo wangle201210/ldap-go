@@ -228,6 +228,22 @@ func openLDAPSockValidationCases() []openLDAPSockValidationCase {
 			},
 		},
 		{
+			name: "Compare with first-component assertion syntax",
+			request: func() *ber.Packet {
+				return rawDontUseCopyCompareRequest(
+					openLDAPSockValidationDN,
+					"dITStructureRules",
+					"17",
+				)
+			},
+			want: openLDAPSockValidationObservation{
+				responseTag: ldapwire.ApplicationCompareResponse,
+				code:        int64(ldapwire.ResultCompareTrue),
+				diagnostic:  " compare complete",
+				socket:      "COMPARE",
+			},
+		},
+		{
 			name: "ModifyDN with invalid new RDN",
 			request: func() *ber.Packet {
 				return rawOpenLDAPSockModifyDNRequest(

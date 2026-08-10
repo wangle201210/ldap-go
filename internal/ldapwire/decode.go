@@ -213,9 +213,8 @@ func decodeModifyRequest(packet *ber.Packet) (ModifyRequest, error) {
 		return ModifyRequest{}, malformed("invalid ModifyRequest DN")
 	}
 	changesPacket := packet.Children[1]
-	if !isPacket(changesPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
-		len(changesPacket.Children) == 0 {
-		return ModifyRequest{}, malformed("ModifyRequest has no changes")
+	if !isPacket(changesPacket, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
+		return ModifyRequest{}, malformed("invalid modify changes")
 	}
 
 	request := ModifyRequest{DN: dn, Changes: make([]Modification, 0, len(changesPacket.Children))}

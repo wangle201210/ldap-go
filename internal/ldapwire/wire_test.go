@@ -196,6 +196,39 @@ func TestReadSearchRequestWithFilter(t *testing.T) {
 	}
 }
 
+func TestReadEmptyModifyRequest(t *testing.T) {
+	t.Parallel()
+
+	operation := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationModifyRequest,
+		nil,
+		"ModifyRequest",
+	)
+	operation.AppendChild(ber.NewString(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		"uid=alice,dc=example,dc=com",
+		"object",
+	))
+	operation.AppendChild(ber.NewSequence("changes"))
+
+	decoded, err := ReadMessage(
+		bytes.NewReader(testMessage(9, operation).Bytes()),
+		4096,
+	)
+	if err != nil {
+		t.Fatalf("ReadMessage(): %v", err)
+	}
+	request, ok := decoded.Request.(ModifyRequest)
+	if !ok || request.DN != "uid=alice,dc=example,dc=com" ||
+		len(request.Changes) != 0 {
+		t.Fatalf("decoded empty ModifyRequest = %#v", decoded.Request)
+	}
+}
+
 func TestReadMessageRejectsOversizedFrame(t *testing.T) {
 	t.Parallel()
 

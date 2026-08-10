@@ -152,7 +152,7 @@ esac
 
 missing_features=
 enabled_backends=
-for feature in ldap meta null relay mdb; do
+for feature in ldap meta null relay mdb sock; do
 	case "$configure_help" in
 		*--enable-$feature*)
 			set -- "$@" "--enable-$feature=yes"

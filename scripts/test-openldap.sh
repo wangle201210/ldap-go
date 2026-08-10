@@ -132,7 +132,8 @@ for skipped in $skips; do
 		TestOpenLDAPReferenceNullBackend|\
 		TestOpenLDAPReferencePBindOverlay|\
 		TestOpenLDAPReferenceRemoteAuthOverlay|\
-		TestOpenLDAPReferenceRelayBackend)
+		TestOpenLDAPReferenceRelayBackend|\
+		TestOpenLDAPReferenceSockBackend)
 			if [ "${LDAP_GO_FAIL_ON_OPTIONAL_SKIP:-0}" = "1" ]; then
 				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
 			fi

@@ -95,21 +95,23 @@ functions, configurations, or directory data.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Transactional durable backend | partial | crash, atomicity, recovery, race tests |
+| Transactional durable backend | partial | crash, atomicity, recovery, and race tests pass; configurable equality/substring/ordering indexes and indexed Search planning remain unsupported, so local database Search currently scans the selected partition |
 | Multiple suffixes and subordinate DBs | partial | partition, hidden, glue routing, paging, and syncprov inheritance tests pass |
 | `cn=config` online configuration | partial | OpenLDAP LDIF import and online changes |
-| `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests |
+| `slapcat` content LDIF import/export | partial | lossless fixtures and large-dataset tests pass; offline import assumes trusted `slapcat` output and does not apply the online Add path's complete schema validation |
 | `slapcat` `cn=config` import | partial | boot from imported configuration |
 | Backup, restore, database rebuild, check | partial | offline bbolt page/bucket/key/JSON/DN validation, multi-partition and metadata-preserving snapshot/restore, atomic publication, overwrite protection, corruption/cancellation tests, and rebuild round trips pass; online backup, crash injection at each filesystem boundary, and OpenLDAP tool output parity remain |
 | Monitor backend | partial | Root DSE discovery, all 13 standard monitor branches, dynamic connection/operation/statistics/time/database/overlay state, Search/Compare/ACL/paging/limits, matched DN, runtime read-only/restriction changes, and OpenLDAP 2.6.13 differentials pass; complete backend/overlay inventories and worker/runtime internals remain |
 | Null backend | partial | `olcDbBindAllowed`/`olcDbDoSearch`, synthetic Search, Bind/root Bind, discarded writes, Compare, Assertion, paging, typesOnly, read controls, No-Op, and a null-enabled OpenLDAP differential pass |
 | Relay backend | partial | explicit and suffix-massage-selected local targets, bidirectional storage views, Bind/Search/Compare/writes/transactions, ACL translation, inherited sort and sync-provider configuration, direct attribute/objectClass/DN-value mappings, and an OpenLDAP differential pass; arbitrary rewrites, relay chains, and broader overlay combinations remain |
 | LDAP and meta proxy backends | partial | `olcDatabase=ldap` forwards Bind, Search, Compare, writes, Password Modify, Dynamic Refresh, and Who Am I? with ordered URI failover, health-preferred endpoint recovery, single-URI reconnect, Simple identity reuse, root/native SASL identity assertion, proxy authorization, password-based SASL auxprop/auth-check searches, Abandon/Cancel, remote diagnostics, default five-hop referral chasing, and online rollback; `olcDatabase=meta` adds multi-target routing/Search union, target/default selection, suffix massage, direct and wildcard/drop attribute/objectClass maps, subtree/filter rules, result namespace rewriting, client-pr, onerr, quarantine, DN-route caching, health-preferred URI recovery, connection reuse/expiry/use-temporary, bind polling, controls, Abandon/Cancel, mapped SASL authorization IDs and rules, `olcDbProtocolVersion` 2/3, privileged `olcDbConnectionPoolMax` cross-frontend reuse, pool caps, busy-connection reuse and temporary overflow, plus online target creation, pre-connection URI updates, and sibling-target isolation, with pinned OpenLDAP 2.6.13 differentials/source contracts and local protocol topologies; GSSAPI and SASL security-layer proxy Bind, complete referral rebind behavior, full librewrite, complete multi-target connection categories, active-connection topology mutation, target deletion/reordering, local/frontend overlay execution, and transaction forwarding remain. OpenLDAP 2.6.13 itself can abort in `back-meta/conn.c` when a target URI changes after a multi-target metaconn exists, so that unsafe path is documented rather than treated as a compatibility target. |
-| SQL, sock, and perl-style adapters | planned | backend-specific compatibility suites |
+| Socket backend | partial | exact `olcDbSocketPath`/`olcDbSocketExtensions` schema, fresh Unix socket per request, Bind/Search/Compare/Add/Modify/ModifyDN/Delete/Password Modify/Unbind protocol, connection extension fields, LDIF/Base64/filter encoding, bounded RESULT and Search-entry parsing, limited OpenLDAP back-sock ACL semantics, frontend schema/DN/matching-rule assertion validation, manage-only Relax updates, shadow-aware Don't Use Copy and empty-Modify handling, cancellation, online reload, and pinned OpenLDAP 2.6.13 operation plus frontend-validation differentials pass; socket overlay mode, transaction participation, the complete global-control matrix, streaming response delivery, and bug-for-bug acceptance of a missing RESULT remain unsupported |
+| SQL and perl-style adapters | planned | backend-specific compatibility suites |
 
 OpenLDAP MDB binary files are not a stable interchange format. Canonical
-`slapcat` LDIF is the direct migration contract; all destination indexes are
-rebuilt by `ldap-go`.
+`slapcat` LDIF is the direct migration contract. MDB indexes are not migrated;
+the current bbolt engine uses its own layout and does not yet implement
+configurable OpenLDAP-style Search indexes.
 
 ## Overlays
 
@@ -953,6 +955,42 @@ connection is active; that unstable path is excluded from the differential
 oracle. GSSAPI and SASL security layers, complete referral rebind behavior,
 full librewrite, complete multi-target connection categories, and broader
 dynamic topology remain unsupported compatibility claims.
+
+An imported `olcDatabase=sock` owns no local data partition. The runtime opens
+one Unix stream socket per operation, writes the same command, message ID,
+optional connection metadata, suffix, and operation body used by OpenLDAP
+2.6.13, then consumes LDIF Search entries followed by a RESULT record. Bind,
+Search, Compare, Add, Modify, ModifyDN, Delete, Password Modify through
+EXTENDED, and Unbind are covered by one pinned differential that compares both
+LDAP client outcomes and the external process's request fields. Unbind is sent
+to every configured socket database, while Abandon and Cancel close the active
+socket through the operation context.
+
+A second pinned differential covers the frontend boundary before the socket is
+opened. Add and Modify attribute descriptions, syntaxes, cardinality, and
+duplicate values are checked; Compare assertions are validated against the
+equality matching rule's assertion syntax and normalized; ModifyDN validates
+both destination components and rejects cross-database moves; and anonymous
+Password Modify is rejected. It also pins
+OpenLDAP 2.6.13's acceptance and delegation of an empty Modify change list.
+Relax is accepted on update operations only with manage ACL access. Don't Use
+Copy is accepted on Search and Compare; a shadow Search returns its update
+referrals or the same unavailable diagnostic as OpenLDAP. A critical
+unsupported backend-specific control still fails before delegation.
+
+Database mode preserves back-sock's limited pre-operation ACL checks: Add
+checks `entry` write-add; Bind checks `entry` auth; Compare checks `entry`
+compare; Delete checks `entry` write-delete; Modify checks `entry` write; and
+ModifyDN checks write or write-delete when moving to a new superior. Returned
+Search entries then pass entry and attribute/value read ACLs plus the client's
+attribute projection. The parser requires a terminating RESULT and rejects
+unsafe line injection and trailing records. OpenLDAP 2.6.13 contains a
+documented FIXME where early EOF can accidentally become success; ldap-go
+keeps the fail-closed behavior. RESULT `matched` and `info` text preserves all
+bytes after the colon, including the conventional leading space, matching
+OpenLDAP's `str2result()`. The separately configurable socket overlay,
+CONTINUE callbacks, forwarded response hooks, transactions, and the complete
+global-control matrix remain outside this compatibility claim.
 
 The database-local `remoteauth` overlay takes over Simple Bind only when the
 local target entry exists, has no `userPassword`, and provides the configured

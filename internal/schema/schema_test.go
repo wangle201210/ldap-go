@@ -666,6 +666,44 @@ func TestNormalizeEqualityValue(t *testing.T) {
 	}
 }
 
+func TestNormalizeEqualityAssertionUsesMatchingRuleSyntax(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	for _, test := range []struct {
+		attribute string
+		assertion string
+	}{
+		{attribute: "dITStructureRules", assertion: "17"},
+		{attribute: "attributeTypes", assertion: "2.5.4.3"},
+	} {
+		normalized, err := registry.NormalizeEqualityAssertion(
+			test.attribute,
+			[]byte(test.assertion),
+		)
+		if err != nil {
+			t.Fatalf("NormalizeEqualityAssertion(%s): %v", test.attribute, err)
+		}
+		if string(normalized) != test.assertion {
+			t.Fatalf(
+				"NormalizeEqualityAssertion(%s) = %q, want %q",
+				test.attribute,
+				normalized,
+				test.assertion,
+			)
+		}
+	}
+	if _, err := registry.NormalizeEqualityAssertion(
+		"dITStructureRules",
+		[]byte("not-an-integer"),
+	); err == nil {
+		t.Fatal("NormalizeEqualityAssertion(dITStructureRules) accepted invalid integer")
+	}
+}
+
 func TestObjectClassEqualityMatchesSuperclasses(t *testing.T) {
 	registry, err := NewBuiltinRegistry()
 	if err != nil {
