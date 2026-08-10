@@ -167,6 +167,7 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		OpenLDAPAPR1HashScheme,
 		OpenLDAPBSDMD5HashScheme,
 		OpenLDAPNetscapeMTAHashScheme,
+		OpenLDAPRADIUSHashScheme,
 		SMPBKDF2HashScheme:
 		return scheme, nil
 	default:
@@ -183,8 +184,8 @@ func IsKnownPasswordScheme(value string) bool {
 
 func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, error) {
 	if len(password) == 0 {
-		if strings.EqualFold(strings.TrimSpace(scheme), OpenLDAPNetscapeMTAHashScheme) {
-			return nil, fmt.Errorf("%s: %w", OpenLDAPNetscapeMTAHashScheme, ErrPasswordHashUnavailable)
+		if normalized, ok := openLDAPVerifyOnlyHashScheme(scheme); ok {
+			return nil, fmt.Errorf("%s: %w", normalized, ErrPasswordHashUnavailable)
 		}
 		return nil, errors.New("password must not be empty")
 	}
@@ -316,10 +317,20 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 		)
 	case OpenLDAPAPR1HashScheme, OpenLDAPBSDMD5HashScheme:
 		return hashPasswordOpenLDAPPHK(password, normalized, random)
-	case OpenLDAPNetscapeMTAHashScheme:
+	case OpenLDAPNetscapeMTAHashScheme, OpenLDAPRADIUSHashScheme:
 		return nil, fmt.Errorf("%s: %w", normalized, ErrPasswordHashUnavailable)
 	default:
 		panic("validated password hash scheme was not handled")
+	}
+}
+
+func openLDAPVerifyOnlyHashScheme(value string) (string, bool) {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	switch normalized {
+	case OpenLDAPNetscapeMTAHashScheme, OpenLDAPRADIUSHashScheme:
+		return normalized, true
+	default:
+		return "", false
 	}
 }
 

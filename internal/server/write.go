@@ -227,7 +227,13 @@ func (server *Server) handleAdd(
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
 			return err
 		}
-		if err := server.applyCreateOperationalAttributes(
+		if configurationWrite {
+			if err := validateOpenLDAPModuleOnlineAdd(state.runtime, entry); err != nil {
+				return err
+			}
+		}
+		if err := server.applyCreateOperationalAttributesContext(
+			ctx,
 			&entry,
 			state.boundDN,
 			lastModEnabled(state.runtime, dn),
@@ -531,7 +537,8 @@ func (server *Server) handleAdd(
 				return validationErr
 			}
 		}
-		sourceChange, changeErr := server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChangeContext(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -544,6 +551,7 @@ func (server *Server) handleAdd(
 		syncChanges = appendSyncChanges(syncChanges, sourceChange)
 		writeRecord.after = &entry
 		logChanges, logErr := server.recordAccesslogWrite(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -754,6 +762,27 @@ func (server *Server) handleModify(
 	); handled {
 		return err
 	}
+	policyOptions := passwordPolicyModificationOptions{
+		requestControl: controls.passwordPolicy,
+	}
+	policyOptions.externalMatches, err = server.preverifyPasswordModification(
+		ctx,
+		state.runtime,
+		state.boundDN,
+		*database,
+		dn,
+		request.Changes,
+		controls.assertion,
+		policyOptions,
+	)
+	if err != nil {
+		return server.finishOperation(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			err,
+		)
+	}
 	var responseControls []ldapwire.Control
 	writeRecord := &accesslogWriteRecord{
 		operation:       accesslogModify,
@@ -807,9 +836,7 @@ func (server *Server) handleModify(
 			state.runtime,
 			state.boundDN,
 			*database,
-			passwordPolicyModificationOptions{
-				requestControl: controls.passwordPolicy,
-			},
+			policyOptions,
 		),
 		func(reader storage.Reader, entry directory.Entry) error {
 			postRead, err := server.readResponseControl(
@@ -987,6 +1014,13 @@ func (server *Server) modifyEntry(
 			if err := validateDefaultSearchBaseOnlineChanges(processedChanges); err != nil {
 				return err
 			}
+			if err := validateOpenLDAPModuleOnlineModification(
+				runtime,
+				entry,
+				processedChanges,
+			); err != nil {
+				return err
+			}
 		}
 		for _, change := range processedChanges {
 			if runtime.schema.IsCollective(change.Attribute.Description) &&
@@ -1072,7 +1106,8 @@ func (server *Server) modifyEntry(
 			}
 		}
 		if lastModEnabled(runtime, dn) {
-			server.applyModifyOperationalAttributes(
+			server.applyModifyOperationalAttributesContext(
+				ctx,
 				&entry,
 				boundDN,
 				runtime.serverID,
@@ -1128,7 +1163,8 @@ func (server *Server) modifyEntry(
 			}
 			applyMetaBackendOnlineURIModification(nextRuntime, dn, processedChanges)
 		}
-		sourceChange, changeErr := server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChangeContext(
+			ctx,
 			writer,
 			runtime,
 			database,
@@ -1147,6 +1183,7 @@ func (server *Server) modifyEntry(
 		record.after = &entry
 		record.modifications = processedChanges
 		logChanges, logErr := server.recordAccesslogWrite(
+			ctx,
 			writer,
 			runtime,
 			database,
@@ -1356,6 +1393,13 @@ func (server *Server) handleDelete(
 				"online back-meta target deletion is not supported",
 			)
 		}
+		if configurationWrite &&
+			state.runtime.schema.EntryHasObjectClass(entry, "olcModuleList") {
+			return operationFailed(
+				ldapwire.ResultUnwillingToPerform,
+				"online module deletion is not supported",
+			)
+		}
 		preRead, err := server.readResponseControl(
 			state.runtime,
 			tx,
@@ -1424,7 +1468,8 @@ func (server *Server) handleDelete(
 				return err
 			}
 		}
-		sourceChange, changeErr := server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChangeContext(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -1438,6 +1483,7 @@ func (server *Server) handleDelete(
 		before := entry.Clone()
 		writeRecord.before = &before
 		logChanges, logErr := server.recordAccesslogWrite(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -1946,7 +1992,8 @@ func (server *Server) handleModifyDN(
 				}
 				item.entry.EnsureRDNValues(newDN)
 				if lastModEnabled(state.runtime, oldDN) {
-					server.applyModifyOperationalAttributes(
+					server.applyModifyOperationalAttributesContext(
+						ctx,
 						&item.entry,
 						state.boundDN,
 						state.runtime.serverID,
@@ -2036,7 +2083,8 @@ func (server *Server) handleModifyDN(
 				return err
 			}
 		}
-		sourceChange, changeErr := server.recordSyncChange(
+		sourceChange, changeErr := server.recordSyncChangeContext(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -2056,6 +2104,7 @@ func (server *Server) handleModifyDN(
 		writeRecord.after = renamedEntry
 		writeRecord.newSuperior = logSuperior
 		logChanges, logErr := server.recordAccesslogWrite(
+			ctx,
 			writer,
 			state.runtime,
 			*database,
@@ -2580,6 +2629,19 @@ func (server *Server) applyCreateOperationalAttributes(
 	serverID uint16,
 	registry *schema.Registry,
 ) error {
+	return server.applyCreateOperationalAttributesContext(
+		context.Background(), entry, actor, lastMod, serverID, registry,
+	)
+}
+
+func (server *Server) applyCreateOperationalAttributesContext(
+	ctx context.Context,
+	entry *directory.Entry,
+	actor string,
+	lastMod bool,
+	serverID uint16,
+	registry *schema.Registry,
+) error {
 	attributes := entry.Attributes[:0]
 	for _, attribute := range entry.Attributes {
 		if !isProtectedOperationalAttribute(registry, attribute.Description) {
@@ -2596,7 +2658,7 @@ func (server *Server) applyCreateOperationalAttributes(
 	}
 	timestamp := time.Now().UTC().Format("20060102150405Z")
 	entry.ReplaceValues("entryUUID", [][]byte{[]byte(uuid)})
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN(serverID))})
+	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
 	entry.ReplaceValues("createTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("creatorsName", [][]byte{[]byte(actor)})
@@ -2609,8 +2671,19 @@ func (server *Server) applyModifyOperationalAttributes(
 	actor string,
 	serverID uint16,
 ) {
+	server.applyModifyOperationalAttributesContext(
+		context.Background(), entry, actor, serverID,
+	)
+}
+
+func (server *Server) applyModifyOperationalAttributesContext(
+	ctx context.Context,
+	entry *directory.Entry,
+	actor string,
+	serverID uint16,
+) {
 	timestamp := time.Now().UTC().Format("20060102150405Z")
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSN(serverID))})
+	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
 	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
 }
@@ -2696,6 +2769,28 @@ func (server *Server) nextCSN(serverID uint16) string {
 		"%s#%06x#%03x#000000",
 		server.lastCSN.Format("20060102150405.000000Z"),
 		server.csnCounter,
+		serverID,
+	)
+}
+
+func (server *Server) nextCSNContext(ctx context.Context, serverID uint16) string {
+	clock, ok := ctx.Value(transactionPreflightClockContextKey{}).(*transactionPreflightClock)
+	if !ok {
+		return server.nextCSN(serverID)
+	}
+	if clock.lastCSN.IsZero() || clock.now.After(clock.lastCSN) {
+		clock.lastCSN = clock.now
+		clock.csnCounter = 0
+	} else if clock.csnCounter == openLDAPCSNCounterMax {
+		clock.lastCSN = clock.lastCSN.Add(time.Microsecond)
+		clock.csnCounter = 0
+	} else {
+		clock.csnCounter++
+	}
+	return fmt.Sprintf(
+		"%s#%06x#%03x#000000",
+		clock.lastCSN.Format("20060102150405.000000Z"),
+		clock.csnCounter,
 		serverID,
 	)
 }

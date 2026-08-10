@@ -197,15 +197,43 @@ func (server *Server) handlePasswordModify(
 			Values:      hashes,
 		},
 	}}
+	policyOptions := passwordPolicyModificationOptions{
+		requestControl: controls.passwordPolicy,
+		passwordModify: true,
+		hasOldPassword: passwordRequest.HasOldPassword,
+		oldPassword:    passwordRequest.OldPassword,
+		newPassword:    newPassword,
+	}
+	policyOptions.externalMatches, err = server.preverifyPasswordModification(
+		ctx,
+		state.runtime,
+		state.boundDN,
+		*database,
+		target,
+		changes,
+		nil,
+		policyOptions,
+	)
+	if err != nil {
+		return server.finishPasswordModify(connection, message.ID, nil, err)
+	}
 	var precondition entryModificationPrecondition
 	if passwordRequest.HasOldPassword {
 		precondition = func(reader storage.Reader, entry directory.Entry) error {
+			if err := validateExternalPasswordMatches(
+				policyOptions.externalMatches,
+				state.runtime.schema.AttributeValues(entry, "userPassword"),
+				passwordRequest.OldPassword,
+			); err != nil {
+				return err
+			}
 			if server.entryPasswordMatches(
 				state.runtime,
 				reader,
 				state.boundDN,
 				entry,
 				passwordRequest.OldPassword,
+				policyOptions.externalMatches,
 			) {
 				return nil
 			}
@@ -249,13 +277,7 @@ func (server *Server) handlePasswordModify(
 			state.runtime,
 			state.boundDN,
 			*database,
-			passwordPolicyModificationOptions{
-				requestControl: controls.passwordPolicy,
-				passwordModify: true,
-				hasOldPassword: passwordRequest.HasOldPassword,
-				oldPassword:    passwordRequest.OldPassword,
-				newPassword:    newPassword,
-			},
+			policyOptions,
 		),
 		nil,
 		writeRecord,
@@ -285,6 +307,7 @@ func (server *Server) entryPasswordMatches(
 	boundDN string,
 	entry directory.Entry,
 	password []byte,
+	externalMatches externalPasswordMatches,
 ) bool {
 	matched := false
 	for _, stored := range entry.Values("userPassword") {
@@ -296,7 +319,11 @@ func (server *Server) entryPasswordMatches(
 			"userPassword",
 			stored,
 			acl.Auth,
-		) && auth.VerifyPassword(stored, password) {
+		) && verifyStoredPasswordWithExternalMatches(
+			stored,
+			password,
+			externalMatches,
+		) {
 			matched = true
 		}
 	}

@@ -1733,6 +1733,8 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		{name: "slappasswd unsupported scheme", args: []string{"slappasswd", "-h", "{CRYPT}", "-s", secret}, message: "unsupported password hash scheme"},
 		{name: "slappasswd verify-only Netscape scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPNetscapeMTAHashScheme, "-s", secret}, message: "scheme provided no hash function"},
 		{name: "slappasswd empty verify-only Netscape scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPNetscapeMTAHashScheme, "-s", ""}, message: "scheme provided no hash function"},
+		{name: "slappasswd verify-only RADIUS scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPRADIUSHashScheme, "-s", secret}, message: "scheme provided no hash function"},
+		{name: "slappasswd empty verify-only RADIUS scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPRADIUSHashScheme, "-s", ""}, message: "scheme provided no hash function"},
 		{name: "database selectors", args: []string{"slapadd", "-b", "dc=example,dc=com", "-n", "1"}, message: "mutually exclusive"},
 		{name: "negative database", args: []string{"slapadd", "-n", "-1"}, message: "must be non-negative"},
 		{name: "empty suffix", args: []string{"slapadd", "-b", ""}, message: "requires a non-empty suffix"},

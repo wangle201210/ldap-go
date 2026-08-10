@@ -9,7 +9,6 @@ import (
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
@@ -269,7 +268,12 @@ func (server *Server) bindMetaBackendPseudoRoot(
 	rootPassword []byte,
 ) error {
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
-	if !auth.VerifyPassword(rootPassword, request.Authentication.Simple) {
+	if !server.verifyStoredPassword(
+		ctx,
+		state.runtime,
+		rootPassword,
+		request.Authentication.Simple,
+	) {
 		result = ldapwire.ResultError(ldapwire.ResultInvalidCredentials, "")
 	} else {
 		result = server.bindMetaBackendPseudoRootTargets(ctx, state, database)

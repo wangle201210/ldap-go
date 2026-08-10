@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
-	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -454,7 +453,9 @@ func (server *Server) tryRetcodeOperation(
 		state.runtime.databases,
 		*database,
 	) {
-		retcodeSleep(configuration.sleepSeconds)
+		if !state.transactionPreflight {
+			retcodeSleep(configuration.sleepSeconds)
+		}
 		if configuration.parent.Equal(target) ||
 			configuration.parent.AncestorOf(target) {
 			if request, ok := message.Request.(ldapwire.SearchRequest); ok &&
@@ -514,7 +515,13 @@ func (server *Server) tryRetcodeOperation(
 			request.Scope != directory.ScopeBase {
 			continue
 		}
-		if retcodeSuccessfulRootBind(*database, target, message.Request) {
+		if server.retcodeSuccessfulRootBind(
+			ctx,
+			state.runtime,
+			*database,
+			target,
+			message.Request,
+		) {
 			continue
 		}
 
@@ -610,7 +617,9 @@ func (server *Server) tryRetcodeSearch(
 	)
 }
 
-func retcodeSuccessfulRootBind(
+func (server *Server) retcodeSuccessfulRootBind(
+	ctx context.Context,
+	runtime *runtimeState,
 	database runtimeDatabase,
 	target directory.DN,
 	request ldapwire.Request,
@@ -618,7 +627,12 @@ func retcodeSuccessfulRootBind(
 	bind, ok := request.(ldapwire.BindRequest)
 	return ok && !bind.Authentication.IsSASL && database.rootDN != nil &&
 		database.rootDN.Equal(target) && database.rootPasswordSet &&
-		auth.VerifyPassword(database.rootPassword, bind.Authentication.Simple)
+		server.verifyStoredPassword(
+			ctx,
+			runtime,
+			database.rootPassword,
+			bind.Authentication.Simple,
+		)
 }
 
 func retcodeItemFromDirectoryEntry(

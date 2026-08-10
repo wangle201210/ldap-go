@@ -81,7 +81,7 @@ functions, configurations, or directory data.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors; OpenLDAP contrib SHA-256/384/512 salted and unsalted schemes, `{PBKDF2}`, `{PBKDF2-SHA1}`, `{PBKDF2-SHA256}`, `{PBKDF2-SHA512}`, `{APR1}`, and `{BSDMD5}` pass bidirectional Password Modify/import/Bind differentials; verify-only Netscape `{NS-MTA-MD5}` passes pinned import/Bind differentials; `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants pass hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials; external-service password modules remain |
+| OpenLDAP and SM3 password schemes | partial | portable digest/SSHA/SM3/PBKDF2-SM3 hash and migration vectors; OpenLDAP contrib SHA-256/384/512 salted and unsalted schemes, `{PBKDF2}`, `{PBKDF2-SHA1}`, `{PBKDF2-SHA256}`, `{PBKDF2-SHA512}`, `{APR1}`, and `{BSDMD5}` pass bidirectional Password Modify/import/Bind differentials; verify-only Netscape `{NS-MTA-MD5}` and external `{RADIUS}` pass pinned module, import, Bind, transaction, and wire-level tests; `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants pass hashing, replay, Relax-managed `authTimestamp`, and pinned module differentials; external Kerberos remains |
 | Password policy overlay | partial | OpenLDAP schema/config and LDIF round trips, default/per-entry policy selection, lockout/delay, expiry/warnings/grace, reset restrictions, history, quality/age rules, last-bind/max-idle, hashing, standard/Netscape/account-usability controls, online reload, chain-backed forwarded state updates, race tests, and OpenLDAP 2.6.13 differentials pass; native `check_password()` modules remain |
 | OpenLDAP ACL grammar and evaluation | partial | filter/value/object-class targets; real/effective DN and level selectors; static/dynamic groups and set expressions; DN/value capture expansion; peer/domain/sockname/sockurl and IPv4/IPv6/path selectors; overall/transport/TLS/SASL SSF; `OpenLDAPaci`; and direct OpenLDAP target, expansion/group, connection/level, and ACI differentials pass; unlisted grammar and dynacl modules remain |
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, group/LDAP-URL rules, Cyrus credential forms, proxy-backed auxprop/auth-check searches, OpenLDAP `other(80)` backend-failure mapping, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
@@ -170,7 +170,7 @@ production qualification gate.
 | `slapadd` / `slapcat` equivalents | partial | `slapadd` supports `-l/-b/-n/-g/-s/-u/-S/-w` and `-o schema-check=yes\|no` / `value-check=yes\|no`; `slapcat` supports `-l/-b/-n/-g/-s` for the tested subset; default-primary and explicit selection, glue-subordinate import/export, backend callback policy, schema/options/normalizer, LastMod/CSN, root and `olcSyncUseSubentry` context, atomic `cn=config`, dry-run, round-trip, and exit-code cases pass; imports remain atomic, `-c/-q` are rejected, and exact dry-run, partial-write, parser/normalizer, diagnostic, native backend-file, and historical-option parity remain unsupported |
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
 | `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
-| `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, all four contrib PBKDF2 schemes, `{APR1}`, `{BSDMD5}`, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, verify-only `{NS-MTA-MD5}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
+| `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, all four contrib PBKDF2 schemes, `{APR1}`, `{BSDMD5}`, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, verify-only `{NS-MTA-MD5}` and `{RADIUS}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
 | LDAP client tools | partial | `ldapsearch`, `ldapwhoami`, `ldapcompare`, `ldappasswd`, `ldapexop`, `ldapmodify`/`ldapadd`, `ldapdelete`, and `ldapmodrdn` cover simple Bind, LDAP/LDAPS/StartTLS, password prompting/files, LDIF writes, Compare exit codes, extended-operation binary values, generic `-e`/`-E` controls on applicable commands, and opt-in anonymous referral chasing with DN/scope rewriting, control preservation, loop detection, and a five-hop default; OpenLDAP Compare/ldapexop differentials and pinned ldap-tools/libldap source contracts pass; SASL, generic Compare controls, complete referral URL fields/rebind behavior, and the full historical option surface remain |
 | Load balancer tooling | partial | `ldap-go lloadd` parses standalone OpenLDAP-style configuration, validates the runnable subset and rejects unsupported settings with `-test-config`, serves multiple LDAP and escaped-authority/three-slash LDAPI listeners, exposes listener/log overrides, and is exercised by unit, race, pinned-source, and live OpenLDAP 2.6.13 tests; client TLS/PROXY listeners, config-file-driven upstream TLS/socket tuning, the historical daemon option/signal/logging surface, embedded slapd-module mode, and runtime config/monitor administration remain |
 
@@ -1078,6 +1078,64 @@ Because the module registers no hash function, OpenLDAP accepts the name in
 `password-hash` but Password Modify fails with `other(80)`; ldap-go preserves
 the same configuration and operation behavior. `slappasswd -h` recognizes the
 scheme but reports that it has no hash function.
+
+The contrib `{RADIUS}` scheme is also verify-only. Its payload is the exact
+RADIUS User-Name, including an allowed empty value; the supplied LDAP
+credential becomes RADIUS User-Password and the canonical local hostname
+becomes NAS-Identifier. NUL bytes fail closed. Matching libradius, passwords
+longer than 128 bytes are truncated, User-Name and NAS-Identifier are limited
+to 253 bytes, valid Access-Reject/Access-Challenge responses stop failover, and
+timeouts or malformed responses consume the configured attempts before the
+next authentication server is tried. Nonzero dead-time marks an exhausted
+server dead for the configured interval and allows it to be reprobed later in
+the same request. Retries reuse the same packet and UDP source socket, while a
+server change preserves Identifier and Request Authenticator but re-encrypts
+PAP with that server's complete shared secret. IPv4/FQDN `radius.conf` entries,
+the `radius/udp` service lookup with port 1812 fallback, default
+timeout/attempt counts, ten-server limit, quoted fields,
+dead-time and bind-address behavior, and the 1,023-byte line boundary follow the
+pinned libradius parser. The selected source address and a valid Response
+Authenticator are mandatory. When attribute 80 is present, its
+Message-Authenticator HMAC-MD5 is verified with the request Authenticator,
+matching SSL-enabled libradius. Response authentication covers the declared
+packet length and ignores UDP trailing bytes, while an independently
+authenticated response Identifier is not compared again with the request
+Identifier. Each check reloads the file and all checks in the process are
+serialized by one mutex, as in `pw-radius`; parsed line buffers and temporary
+shared-secret fields are cleared after the server configuration is cloned.
+
+An imported `olcModuleLoad: pw-radius... config=/path/radius.conf` selects the
+first `config=` argument. The command-line `-radius-config` and
+`-radius-nas-identifier` options are ldap-go operator overrides. LDIF migration
+preserves `{RADIUS}<username>` and the module-load value, but never embeds the
+external `radius.conf` or its shared secrets; those files need a separate,
+permission-restricted deployment step. RADIUS PAP protects a password with the
+shared secret on the wire but does not provide channel encryption or server
+identity, so the UDP path still requires a trusted network or an authenticated
+encrypted tunnel. Password Modify and ppolicy can verify existing `{RADIUS}`
+values, but selecting it for a new hash returns `other(80)`. Matching OpenLDAP's
+transaction replay point, LDAP Transactions defer RADIUS verification until
+End Transaction commit. The commit pre-acquires all applicable seqmod locks and
+iterates rollback-only ordered replay: each pass stops at the first unknown
+external pair, performs that ordered RADIUS sequence outside the directory
+writer, and restarts with the real result. Atomic replay then consumes only the
+prepared results. ACL and ppolicy checks rerun in both ordered views. A failed
+old-password check prevents history and later-operation requests, and
+multi-valued passwords follow the exact accepted value. The commit replay
+preserves the first failed message ID, its response controls, and auditlog
+behavior. Rollback passes use private CSN/accesslog clocks and therefore do not
+advance the clocks used by committed writes. A concurrent new external pair
+fails with `busy` and requires a client retry, while an unrelated earlier
+attribute or policy change inside the
+transaction is handled in order. RADIUS-enabled Modify and Password Modify are
+rejected in transactions with active `translucent` or effective `chain`
+configuration because those remote LDAP effects cannot participate in the
+rollback preflight. This prevents stale external-history acceptance, duplicate
+remote effects, and the ordinary-write/transaction lock-order inversion. Online
+`olcModuleLoad` deletion/replacement, every `olcModulePath` modification, and
+deletion of an `olcModuleList` entry are rejected because OpenLDAP cannot unload
+a live password module or insert a module path online. Module attributes added
+to any non-`olcModuleList` configuration entry are rejected as well.
 
 `ldap-go passwd` generates `{PBKDF2-SM3}` values. It reads the cleartext from
 `LDAP_GO_PASSWORD` or bounded standard input and never accepts it as a

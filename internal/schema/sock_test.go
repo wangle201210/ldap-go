@@ -241,13 +241,11 @@ func newSockConfigTestRegistry() (*Registry, error) {
 	); err != nil {
 		return nil, err
 	}
-	for _, description := range []string{
-		"( 1.3.6.1.4.1.4203.1.12.2.4.0.0 NAME 'olcConfig' ABSTRACT SUP top )",
-		"( 1.3.6.1.4.1.4203.1.12.2.4.0.4 NAME 'olcDatabaseConfig' SUP olcConfig STRUCTURAL MUST olcDatabase )",
-	} {
-		if err := registry.ParseAndRegisterObjectClass(description); err != nil {
-			return nil, err
-		}
+	if err := registry.ParseAndRegisterObjectClass(
+		"( 1.3.6.1.4.1.4203.1.12.2.4.0.4 NAME 'olcDatabaseConfig' " +
+			"SUP olcConfig STRUCTURAL MUST olcDatabase )",
+	); err != nil {
+		return nil, err
 	}
 	if err := RegisterOpenLDAPSockSchema(registry); err != nil {
 		return nil, err

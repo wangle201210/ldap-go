@@ -191,6 +191,8 @@ var builtinAttributeTypes = []string{
 }
 
 var builtinHiddenAttributeTypes = []string{
+	"( 1.3.6.1.4.1.4203.1.12.2.3.0.30 NAME 'olcModuleLoad' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " X-ORDERED 'VALUES' )",
+	"( 1.3.6.1.4.1.4203.1.12.2.3.0.31 NAME 'olcModulePath' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.1 NAME ( 'olcPcache' 'olcProxyCache' ) DESC 'Proxy Cache basic parameters' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.2 NAME ( 'olcPcacheAttrset' 'olcProxyAttrset' ) DESC 'A set of attributes to cache' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.3 NAME ( 'olcPcacheTemplate' 'olcProxyCacheTemplate' ) DESC 'Proxy Cache filter template' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
@@ -290,6 +292,8 @@ var builtinHiddenAttributeTypes = []string{
 }
 
 var builtinHiddenObjectClasses = []string{
+	"( 1.3.6.1.4.1.4203.1.12.2.4.0.0 NAME 'olcConfig' DESC 'OpenLDAP configuration object' ABSTRACT SUP top )",
+	"( 1.3.6.1.4.1.4203.1.12.2.4.0.8 NAME 'olcModuleList' DESC 'OpenLDAP dynamic module info' SUP olcConfig STRUCTURAL MAY ( cn $ olcModulePath $ olcModuleLoad ) )",
 	"( 1.3.6.1.4.1.4203.1.12.2.4.3.2.1 NAME 'olcPcacheConfig' SUP top AUXILIARY MUST ( olcPcache $ olcPcacheAttrset $ olcPcacheTemplate ) MAY ( olcPcachePosition $ olcPcacheMaxQueries $ olcPcachePersist $ olcPcacheValidate $ olcPcacheOffline $ olcPcacheBind ) )",
 	"( 1.3.6.1.4.1.4203.1.12.2.4.3.2.2 NAME 'olcPcacheDatabase' SUP top AUXILIARY )",
 	"( 1.3.6.1.4.1.4203.1.12.2.4.3.25.1 NAME 'olcNestGroupConfig' SUP top AUXILIARY MAY ( olcNestGroupMember $ olcNestGroupMemberOf $ olcNestGroupBase $ olcNestGroupFlags ) )",

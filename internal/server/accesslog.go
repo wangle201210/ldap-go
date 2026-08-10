@@ -412,6 +412,7 @@ func (server *Server) ensureAccesslogContainers(
 			continue
 		}
 		if _, _, err := server.ensureAccesslogContainer(
+			context.Background(),
 			writer,
 			runtime,
 			configuration,
@@ -423,6 +424,7 @@ func (server *Server) ensureAccesslogContainers(
 }
 
 func (server *Server) ensureAccesslogContainer(
+	ctx context.Context,
 	writer storage.Writer,
 	runtime *runtimeState,
 	configuration *accesslogRuntimeConfiguration,
@@ -478,7 +480,8 @@ func (server *Server) ensureAccesslogContainer(
 	if target.rootDN != nil {
 		actor = target.rootDN.String()
 	}
-	if err := server.applyCreateOperationalAttributes(
+	if err := server.applyCreateOperationalAttributesContext(
+		ctx,
 		&entry,
 		actor,
 		target.lastMod,
@@ -504,7 +507,8 @@ func (server *Server) ensureAccesslogContainer(
 	if err := tx.Put(entry, false); err != nil {
 		return directory.Entry{}, nil, err
 	}
-	change, err := server.recordSyncChange(
+	change, err := server.recordSyncChangeContext(
+		ctx,
 		writer,
 		runtime,
 		target,
@@ -550,6 +554,7 @@ func accesslogCSNValues(state syncCSNState) [][]byte {
 }
 
 func (server *Server) recordAccesslogWrite(
+	ctx context.Context,
 	writer storage.Writer,
 	runtime *runtimeState,
 	source runtimeDatabase,
@@ -565,6 +570,7 @@ func (server *Server) recordAccesslogWrite(
 		return nil, nil
 	}
 	container, containerChange, err := server.ensureAccesslogContainer(
+		ctx,
 		writer,
 		runtime,
 		configuration,
@@ -574,12 +580,12 @@ func (server *Server) recordAccesslogWrite(
 	}
 	_ = container
 
-	csn, err := server.accesslogCSN(runtime, record, sourceChange)
+	csn, err := server.accesslogCSN(ctx, runtime, record, sourceChange)
 	if err != nil {
 		return nil, err
 	}
-	start := server.nextAccesslogTimestamp()
-	end := server.nextAccesslogTimestamp()
+	start := server.nextAccesslogTimestampContext(ctx)
+	end := server.nextAccesslogTimestampContext(ctx)
 	entry := directory.Entry{
 		DN: "reqStart=" + start + "," + configuration.targetSuffix.String(),
 		Attributes: []directory.Attribute{
@@ -733,6 +739,7 @@ func (server *Server) recordObservedAccesslogOperation(
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		configuration := source.accesslog
 		container, containerChange, err := server.ensureAccesslogContainer(
+			ctx,
 			writer,
 			runtime,
 			configuration,
@@ -1272,6 +1279,7 @@ func addAccesslogMinCSN(
 }
 
 func (server *Server) accesslogCSN(
+	ctx context.Context,
 	runtime *runtimeState,
 	record accesslogWriteRecord,
 	sourceChange *syncChange,
@@ -1287,7 +1295,7 @@ func (server *Server) accesslogCSN(
 			}
 		}
 	}
-	return parseOpenLDAPCSN(server.nextCSN(runtime.serverID))
+	return parseOpenLDAPCSN(server.nextCSNContext(ctx, runtime.serverID))
 }
 
 func (server *Server) nextAccesslogTimestamp() string {
@@ -1298,6 +1306,19 @@ func (server *Server) nextAccesslogTimestamp() string {
 		now = server.lastAccesslogTime.Add(time.Microsecond)
 	}
 	server.lastAccesslogTime = now
+	return now.Format("20060102150405.000000Z")
+}
+
+func (server *Server) nextAccesslogTimestampContext(ctx context.Context) string {
+	clock, ok := ctx.Value(transactionPreflightClockContextKey{}).(*transactionPreflightClock)
+	if !ok {
+		return server.nextAccesslogTimestamp()
+	}
+	now := clock.now
+	if !clock.lastAccesslogTime.IsZero() && !now.After(clock.lastAccesslogTime) {
+		now = clock.lastAccesslogTime.Add(time.Microsecond)
+	}
+	clock.lastAccesslogTime = now
 	return now.Format("20060102150405.000000Z")
 }
 

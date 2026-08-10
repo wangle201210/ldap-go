@@ -534,6 +534,35 @@ requires the exact 32-byte lowercase MD5 hexadecimal prefix and 32-byte salt,
 then compares the reconstructed digest in constant time. It is deliberately
 accepted in hash selection for configuration compatibility, but Password
 Modify returns `other(80)` because the upstream module has no generator.
+The external `{RADIUS}` adapter separates directory reads from network work.
+It first snapshots ACL-visible external password values, closes the storage
+read transaction, then loads `radius.conf` and performs the serialized UDP
+exchange. Simple Bind, SASL PLAIN, root-password paths, Password Modify,
+ppolicy current/history checks, translucent writes, and proxy pseudo-root
+checks all enter this shared verifier. Ordinary password writes call RADIUS
+before opening their directory write transaction. Inside the write, ACL and
+ppolicy are evaluated again and every external stored-value/credential pair
+that is still relevant must have a prepared result. A new external pair fails
+with `busy` instead of being treated as a non-match; unrelated entry changes do
+not invalidate a valid prepared result. At RFC 5805 End Transaction, the server
+acquires all applicable frontend/database seqmod keys in deterministic order.
+It replays the ordered queue in rollback-only storage transactions until the
+first unknown external-password pair is reached, verifies that exact ordered
+sequence without a storage writer, and restarts the replay with the real result.
+This repeats until the evolving transaction view either reaches a deterministic
+LDAP failure or has every required external result. The atomic commit replay
+then consumes only those prepared results. A failed old-password check therefore
+does not expose history or later-operation credentials, and multi-valued
+password selection uses the same real outcome in preflight and commit. The
+rollback passes use a private deterministic CSN/accesslog clock, so they do not
+advance the server clocks that identify committed writes. The
+commit replay still owns the observable result, message ID, response controls,
+and OpenLDAP-compatible auditlog side effects. RADIUS-enabled Modify and
+Password Modify operations are rejected in transactions using `translucent` or
+`chain`, because their remote LDAP I/O cannot be rolled back or repeated safely.
+Replay recognizes held seqmod keys instead of reacquiring them and rejects an
+unprepared external-password pair rather than doing network I/O under the
+global directory write lock.
 RFC 3062 Password Modify runs old-password
 verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is

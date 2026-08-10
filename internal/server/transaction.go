@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
+	"sync"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -35,6 +38,15 @@ type ldapTransactionOperation struct {
 }
 
 type transactionExecutionContextKey struct{}
+
+type transactionPreflightClockContextKey struct{}
+
+type transactionPreflightClock struct {
+	now               time.Time
+	lastCSN           time.Time
+	csnCounter        uint32
+	lastAccesslogTime time.Time
+}
 
 type transactionExecution struct {
 	writer      storage.Writer
@@ -715,6 +727,23 @@ func (server *Server) transactionOperationDatabase(
 	); result != nil {
 		return nil, result
 	}
+	if runtime.externalPasswords.radiusEnabled &&
+		ldapTransactionMayVerifyExternalPasswords([]ldapTransactionOperation{{
+			message: message,
+		}}) {
+		if activeTranslucentConfiguration(database) != nil {
+			return nil, transactionResult(
+				ldapwire.ResultUnwillingToPerform,
+				"RADIUS password verification is not supported in translucent LDAP transactions",
+			)
+		}
+		if effectiveChainConfiguration(runtime, database) != nil {
+			return nil, transactionResult(
+				ldapwire.ResultUnwillingToPerform,
+				"RADIUS password verification is not supported in chained LDAP transactions",
+			)
+		}
+	}
 	return database, nil
 }
 
@@ -815,24 +844,332 @@ func (server *Server) abortLDAPTransactionWithNotice(
 	)
 }
 
+type ldapTransactionSeqmodLock struct {
+	configuration *seqmodRuntimeConfiguration
+	lock          seqmodHeldLock
+	sortKey       string
+}
+
+var errLDAPTransactionPreflightRollback = errors.New(
+	"roll back LDAP transaction external password preflight",
+)
+
+func (server *Server) prepareLDAPTransactionExternalPasswords(
+	ctx context.Context,
+	state *connectionState,
+	transaction *ldapTransaction,
+) (map[int64]externalPasswordMatches, error) {
+	if !transaction.runtime.externalPasswords.radiusEnabled ||
+		!ldapTransactionMayVerifyExternalPasswords(transaction.operations) {
+		return nil, nil
+	}
+	prepared := make(map[int64]externalPasswordMatches, len(transaction.operations))
+	for _, operation := range transaction.operations {
+		prepared[operation.message.ID] = newExternalPasswordMatches()
+	}
+	preflightTime := time.Now().UTC().Truncate(time.Microsecond)
+	for {
+		var pendingMessageID int64
+		var pending *externalPasswordVerificationSequence
+		err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+			execution := transactionExecution{writer: writer}
+			transactionContext := context.WithValue(
+				ctx,
+				transactionExecutionContextKey{},
+				&execution,
+			)
+			transactionContext = context.WithValue(
+				transactionContext,
+				transactionPreflightClockContextKey{},
+				&transactionPreflightClock{now: preflightTime},
+			)
+			transactionState := cloneLDAPTransactionConnectionState(state)
+			defer clear(transactionState.bindCredentials)
+			transactionState.runtime = transaction.runtime
+			transactionState.transaction = nil
+			transactionState.transactionPreflight = true
+
+			for _, operation := range transaction.operations {
+				message := cloneTransactionReplayMessage(operation.message)
+				messageID := message.ID
+				requestTag := message.Request.ApplicationTag()
+				transactionState.boundDN = operation.boundDN
+				transactionState.operationRealDN = operation.realDN
+				collector := &externalPasswordVerificationCollector{
+					matches: prepared[messageID],
+				}
+				operationContext := context.WithValue(
+					transactionContext,
+					collectExternalPasswordVerificationContextKey{},
+					collector,
+				)
+				operationContext = withACLSubject(
+					operationContext,
+					server.connectionACLSubject(&transactionState),
+				)
+				capture := &transactionResultCapture{}
+				if err := server.executeTransactionOperation(
+					operationContext,
+					capture,
+					&transactionState,
+					message,
+				); err != nil {
+					clearLDAPTransactionOperation(&ldapTransactionOperation{message: message})
+					return err
+				}
+				clearLDAPTransactionOperation(&ldapTransactionOperation{message: message})
+				response := capture.response
+				if response == nil {
+					return errors.New("transaction preflight produced no final response")
+				}
+				expectedTag, _ := responseTagFor(requestTag)
+				if response.messageID != messageID || response.responseTag != expectedTag {
+					return errors.New("transaction preflight produced an invalid final response")
+				}
+				if response.responseName != "" || response.responseValue != nil {
+					return errors.New("transaction preflight produced unsupported response data")
+				}
+				if collector.request != nil {
+					pendingMessageID = messageID
+					pending = collector.request
+					return errLDAPTransactionPreflightRollback
+				}
+				if response.result.Code != ldapwire.ResultSuccess {
+					return &transactionCommitFailure{
+						messageID: messageID,
+						result:    response.result,
+					}
+				}
+			}
+			return errLDAPTransactionPreflightRollback
+		})
+		if pending != nil {
+			matches := prepared[pendingMessageID]
+			before := len(matches.values)
+			server.preverifyOrderedPasswords(
+				ctx,
+				transaction.runtime,
+				pending.stored,
+				pending.supplied,
+				matches,
+			)
+			clearExternalPasswordVerificationSequence(pending)
+			if len(matches.values) == before {
+				return nil, errors.New(
+					"transaction external password preflight made no progress",
+				)
+			}
+			continue
+		}
+		var operationFailure *transactionCommitFailure
+		if err != nil &&
+			!errors.Is(err, errLDAPTransactionPreflightRollback) &&
+			!errors.As(err, &operationFailure) {
+			return nil, err
+		}
+		return prepared, nil
+	}
+}
+
+func ldapTransactionMayVerifyExternalPasswords(
+	operations []ldapTransactionOperation,
+) bool {
+	for _, operation := range operations {
+		switch request := operation.message.Request.(type) {
+		case ldapwire.ModifyRequest:
+			return true
+		case ldapwire.ExtendedRequest:
+			if request.Name == passwordModifyOID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cloneLDAPTransactionConnectionState(state *connectionState) connectionState {
+	cloned := *state
+	cloned.bindCredentials = bytes.Clone(state.bindCredentials)
+	return cloned
+}
+
+func clearExternalPasswordVerificationSequence(
+	sequence *externalPasswordVerificationSequence,
+) {
+	if sequence == nil {
+		return
+	}
+	for _, stored := range sequence.stored {
+		clear(stored)
+	}
+	clear(sequence.supplied)
+	sequence.stored = nil
+	sequence.supplied = nil
+}
+
+func acquireLDAPTransactionSeqmods(
+	ctx context.Context,
+	runtime *runtimeState,
+	operations []ldapTransactionOperation,
+) (context.Context, func(), error) {
+	unique := make(map[seqmodHeldLock]ldapTransactionSeqmodLock)
+	appendLock := func(configuration *seqmodRuntimeConfiguration, target directory.DN) {
+		if configuration == nil || configuration.disabled || configuration.coordinator == nil {
+			return
+		}
+		lock := seqmodHeldLock{
+			coordinator: configuration.coordinator,
+			targetKey:   target.Key(),
+		}
+		if _, exists := unique[lock]; exists {
+			return
+		}
+		unique[lock] = ldapTransactionSeqmodLock{
+			configuration: configuration,
+			lock:          lock,
+			sortKey:       configuration.configDNKey + "\x00" + lock.targetKey,
+		}
+	}
+	var frontend *seqmodRuntimeConfiguration
+	for index := range runtime.databases {
+		if databaseType(runtime.databases[index].name) == "frontend" {
+			frontend = runtime.databases[index].seqmod
+			break
+		}
+	}
+	for _, operation := range operations {
+		target, frontendLock, databaseLock, err := ldapTransactionSeqmodTarget(operation)
+		if err != nil {
+			return ctx, seqmodNoopRelease, err
+		}
+		if frontendLock {
+			appendLock(frontend, target)
+		}
+		if databaseLock {
+			database := databaseForDN(runtime, target)
+			if database != nil {
+				appendLock(database.seqmod, target)
+			}
+		}
+	}
+	ordered := make([]ldapTransactionSeqmodLock, 0, len(unique))
+	for _, lock := range unique {
+		ordered = append(ordered, lock)
+	}
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].sortKey < ordered[right].sortKey
+	})
+	held := make(map[seqmodHeldLock]struct{}, len(ordered))
+	releases := make([]func(), 0, len(ordered))
+	for _, request := range ordered {
+		release, err := request.configuration.coordinator.acquire(
+			ctx,
+			request.lock.targetKey,
+		)
+		if err != nil {
+			for index := len(releases) - 1; index >= 0; index-- {
+				releases[index]()
+			}
+			return ctx, seqmodNoopRelease, err
+		}
+		held[request.lock] = struct{}{}
+		releases = append(releases, release)
+	}
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			for index := len(releases) - 1; index >= 0; index-- {
+				releases[index]()
+			}
+		})
+	}
+	return context.WithValue(ctx, seqmodHeldContextKey{}, held), releaseAll, nil
+}
+
+func ldapTransactionSeqmodTarget(
+	operation ldapTransactionOperation,
+) (directory.DN, bool, bool, error) {
+	switch request := operation.message.Request.(type) {
+	case ldapwire.ModifyRequest:
+		target, err := directory.ParseDN(request.DN)
+		return target, true, true, err
+	case ldapwire.ModifyDNRequest:
+		target, err := directory.ParseDN(request.DN)
+		return target, true, true, err
+	case ldapwire.ExtendedRequest:
+		if request.Name != passwordModifyOID {
+			return directory.DN{}, false, false, nil
+		}
+		passwordRequest, err := ldapwire.DecodePasswordModifyRequestValue(
+			request.Value,
+			request.HasValue,
+		)
+		if err != nil {
+			return directory.DN{}, false, false, err
+		}
+		defer clear(passwordRequest.UserIdentity)
+		defer clear(passwordRequest.OldPassword)
+		defer clear(passwordRequest.NewPassword)
+		targetName := operation.boundDN
+		if passwordRequest.HasUserIdentity && len(passwordRequest.UserIdentity) > 0 {
+			targetName = string(passwordRequest.UserIdentity)
+		}
+		target, err := directory.ParseDN(targetName)
+		return target, false, true, err
+	default:
+		return directory.DN{}, false, false, nil
+	}
+}
+
 func (server *Server) commitLDAPTransaction(
 	ctx context.Context,
 	state *connectionState,
 	transaction *ldapTransaction,
 ) (ldapwire.Result, ldapwire.TransactionEndResponseValue) {
+	transactionContext, releaseSeqmods, err := acquireLDAPTransactionSeqmods(
+		ctx,
+		transaction.runtime,
+		transaction.operations,
+	)
+	if err != nil {
+		server.config.Logger.Error("LDAP transaction seqmod acquisition failed", "error", err)
+		return ldapwire.ResultError(
+			ldapwire.ResultOperationsError,
+			"internal transaction error",
+		), ldapwire.TransactionEndResponseValue{}
+	}
+	defer releaseSeqmods()
+	ctx = transactionContext
+	preparedExternalPasswords, err :=
+		server.prepareLDAPTransactionExternalPasswords(ctx, state, transaction)
+	if err != nil {
+		server.config.Logger.Error(
+			"LDAP transaction external password verification failed",
+			"error",
+			err,
+		)
+		return ldapwire.ResultError(
+			ldapwire.ResultOperationsError,
+			"internal transaction error",
+		), ldapwire.TransactionEndResponseValue{}
+	}
 	var (
 		execution                          transactionExecution
 		endResponse                        ldapwire.TransactionEndResponseValue
 		committedPasswordPolicyRestriction string
+		committedBindCredentialDN          string
+		committedBindCredentials           []byte
 	)
-	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	defer clear(committedBindCredentials)
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		execution.writer = writer
 		transactionContext := context.WithValue(
 			ctx,
 			transactionExecutionContextKey{},
 			&execution,
 		)
-		transactionState := *state
+		transactionState := cloneLDAPTransactionConnectionState(state)
+		defer clear(transactionState.bindCredentials)
 		transactionState.runtime = transaction.runtime
 		transactionState.transaction = nil
 
@@ -840,8 +1177,16 @@ func (server *Server) commitLDAPTransaction(
 			message := operation.message
 			transactionState.boundDN = operation.boundDN
 			transactionState.operationRealDN = operation.realDN
-			operationContext := withACLSubject(
-				transactionContext,
+			operationContext := transactionContext
+			if matches, present := preparedExternalPasswords[message.ID]; present {
+				operationContext = context.WithValue(
+					operationContext,
+					preparedExternalPasswordVerificationContextKey{},
+					preparedExternalPasswordVerification{matches: matches},
+				)
+			}
+			operationContext = withACLSubject(
+				operationContext,
 				server.connectionACLSubject(&transactionState),
 			)
 			capture := &transactionResultCapture{}
@@ -884,6 +1229,8 @@ func (server *Server) commitLDAPTransaction(
 		}
 		committedPasswordPolicyRestriction =
 			transactionState.passwordPolicyRestrictedDN
+		committedBindCredentialDN = transactionState.bindCredentialDN
+		committedBindCredentials = bytes.Clone(transactionState.bindCredentials)
 		return nil
 	})
 	if err != nil {
@@ -905,6 +1252,9 @@ func (server *Server) commitLDAPTransaction(
 		server.publishSyncChange(change)
 	}
 	state.passwordPolicyRestrictedDN = committedPasswordPolicyRestriction
+	clear(state.bindCredentials)
+	state.bindCredentialDN = committedBindCredentialDN
+	state.bindCredentials = bytes.Clone(committedBindCredentials)
 	return ldapwire.Result{Code: ldapwire.ResultSuccess}, endResponse
 }
 
@@ -941,9 +1291,23 @@ func cloneTransactionMessage(
 	message ldapwire.Message,
 	transactionControlIndex int,
 ) ldapwire.Message {
+	return cloneTransactionMessageWithControls(
+		message,
+		withoutControl(message.Controls, transactionControlIndex),
+	)
+}
+
+func cloneTransactionReplayMessage(message ldapwire.Message) ldapwire.Message {
+	return cloneTransactionMessageWithControls(message, message.Controls)
+}
+
+func cloneTransactionMessageWithControls(
+	message ldapwire.Message,
+	controls []ldapwire.Control,
+) ldapwire.Message {
 	cloned := ldapwire.Message{
 		ID:       message.ID,
-		Controls: cloneLDAPControls(withoutControl(message.Controls, transactionControlIndex)),
+		Controls: cloneLDAPControls(controls),
 	}
 	switch request := message.Request.(type) {
 	case ldapwire.AddRequest:

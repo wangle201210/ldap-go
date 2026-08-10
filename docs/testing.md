@@ -253,6 +253,38 @@ and ldap-go preserves the same configuration and operation result. Both
 Local ppolicy tests cover the same `other(80)` result for cleartext-hashing Add
 and Modify paths.
 
+The pw-radius differential dynamically builds the official pinned
+`pw-radius` source against a deterministic radlib fixture. It verifies valid
+and invalid Simple Bind, the module's canonical NAS-Identifier input, imported
+`{RADIUS}<username>` values, and the no-hash-function `other(80)` result when
+the scheme is selected for Password Modify. Independent raw-UDP tests decode
+the Access-Request without using the client package's attribute decoder. They
+cover full shared secrets, PAP truncation at 128 bytes, exact retry-wire and
+source-port reuse, per-secret failover re-encryption, Identifier and Response
+Authenticator behavior (including libradius acceptance of an authenticated
+nonmatching Identifier), valid and invalid Message-Authenticator attributes,
+declared-length authentication with ignored trailing bytes,
+invalid-authenticator rejection, timeout failover, dead-time reprobes, and
+immediate termination on a valid reject. Parser tests include quoted secrets and
+malformed input while the implementation clears temporary byte-backed fields.
+Server integration adds SASL PLAIN, Password Modify old-password checks,
+LDIF migration, process-wide module serialization across server instances,
+configuration reload, deterministic ppolicy rejection before network I/O,
+concurrent external password-history key rejection, and LDAP Transaction
+verification at commit rather than queue time. Transaction coverage also proves
+that a blocked RADIUS server does not hold the directory write transaction,
+an earlier unrelated entry update remains valid, an earlier policy update is
+used for history verification, a wrong old password does not expose history or
+later-operation credentials, and an earlier LDAP failure retains its message ID
+without contacting a later deterministic ppolicy operation. A multi-valued
+regression requires the first RADIUS value to reject and the second to accept,
+then verifies that the accepted value drives the next operation and that no
+verification is repeated under the writer. A private-clock regression verifies
+that rollback preflight CSNs and accesslog timestamps do not advance global
+server clocks. Admission tests reject RADIUS write transactions combined with
+`translucent` or `chain` remote effects.
+Seqmod concurrency tests cover deterministic transaction lock ordering.
+
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
 with EOF during the reference-only Sync plus Sort/VLV matrix, while the same

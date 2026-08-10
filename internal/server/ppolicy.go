@@ -82,11 +82,12 @@ type passwordPolicy struct {
 }
 
 type passwordPolicyModificationOptions struct {
-	requestControl bool
-	passwordModify bool
-	hasOldPassword bool
-	oldPassword    []byte
-	newPassword    []byte
+	requestControl  bool
+	passwordModify  bool
+	hasOldPassword  bool
+	oldPassword     []byte
+	newPassword     []byte
+	externalMatches externalPasswordMatches
 }
 
 var errInvalidPasswordPolicy = errors.New("invalid password policy")
@@ -462,7 +463,9 @@ func (server *Server) authenticatePasswordBind(
 				rootPassword,
 			)
 		}
-		result.authenticated = auth.VerifyPassword(
+		result.authenticated = server.verifyStoredPassword(
+			ctx,
+			runtime,
 			rootPassword,
 			password,
 		)
@@ -474,13 +477,24 @@ func (server *Server) authenticatePasswordBind(
 		expirationSeconds:    -1,
 		graceAuthentications: -1,
 	}
+	bindNow := server.clock()
+	externalMatches, err := server.preverifyExternalPasswordBind(
+		ctx,
+		runtime,
+		*database,
+		dn,
+		password,
+		bindNow,
+	)
+	if err != nil {
+		return result, err
+	}
 	var syncChange *syncChange
 	var (
 		forwardPolicyState bool
 		forwardBefore      directory.Entry
 		forwardAfter       directory.Entry
 	)
-	bindNow := server.clock()
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
 		entry, err := tx.Get(dn)
@@ -560,7 +574,11 @@ func (server *Server) authenticatePasswordBind(
 			) {
 				continue
 			}
-			matched := auth.VerifyPassword(stored, password)
+			matched := verifyStoredPasswordWithExternalMatches(
+				stored,
+				password,
+				externalMatches,
+			)
 			if totpPasswordEnabled && auth.IsTOTPPassword(stored) {
 				matched = auth.VerifyTOTPPassword(
 					stored,
@@ -697,7 +715,12 @@ func (server *Server) authenticateTOTPPasswordDatabaseRoot(
 	rootPassword []byte,
 ) (passwordBindResult, error) {
 	result := passwordBindResult{
-		authenticated: auth.VerifyPassword(rootPassword, password),
+		authenticated: server.verifyStoredPassword(
+			ctx,
+			runtime,
+			rootPassword,
+			password,
+		),
 	}
 	totpRootPassword := auth.IsTOTPPassword(rootPassword)
 	bindNow := server.clock()
@@ -1166,72 +1189,24 @@ func (server *Server) passwordPolicyModificationProcessor(
 		entry directory.Entry,
 		changes []ldapwire.Modification,
 	) ([]ldapwire.Modification, entryModificationMutation, error) {
-		policy, hasPolicy := loadPasswordPolicy(
+		prepared, err := server.preparePasswordPolicyModification(
 			runtime,
 			reader,
+			boundDN,
 			database,
 			entry,
-		)
-		processed := clonePasswordPolicyModifications(changes)
-		analysis, err := analyzePasswordPolicyModifications(
-			runtime,
-			policy,
-			processed,
+			changes,
+			options,
 		)
 		if err != nil {
 			return nil, nil, err
 		}
+		policy := prepared.policy
+		processed := prepared.processed
+		analysis := prepared.analysis
 		if !analysis.passwordModified {
 			mutation := passwordPolicyUnlockMutation(entry, analysis)
 			return processed, mutation, nil
-		}
-
-		passwordAdministrator := server.allowed(
-			runtime,
-			reader,
-			boundDN,
-			entry,
-			policy.attribute,
-			nil,
-			acl.Manage,
-		)
-		maintainState := true
-		if hasPolicy && !passwordAdministrator {
-			self := passwordPolicySameDN(boundDN, entry.DN)
-			if !policy.allowUserChange && self {
-				return nil, nil, passwordPolicyOperationFailed(
-					ldapwire.ResultInsufficientAccessRights,
-					"User alteration of password is not allowed",
-					options.requestControl,
-					passwordPolicyModificationNotAllowed,
-				)
-			}
-			if analysis.newPasswordIndex < 0 {
-				maintainState = false
-			} else {
-				if policy.safeModify &&
-					!passwordPolicySuppliesOldPassword(
-						analysis,
-						options,
-					) {
-					return nil, nil, passwordPolicyOperationFailed(
-						ldapwire.ResultInsufficientAccessRights,
-						"Must supply old password to be changed as well as new one",
-						options.requestControl,
-						passwordPolicyMustSupplyOldPassword,
-					)
-				}
-				if !firstPasswordPolicyBoolean(entry, "pwdReset") &&
-					policy.minAge > 0 &&
-					isPasswordPolicyTooYoung(entry, policy, time.Now()) {
-					return nil, nil, passwordPolicyOperationFailed(
-						ldapwire.ResultConstraintViolation,
-						"Password is too young to change",
-						options.requestControl,
-						passwordPolicyTooYoung,
-					)
-				}
-			}
 		}
 
 		if analysis.newPasswordIndex >= 0 {
@@ -1240,12 +1215,21 @@ func (server *Server) passwordPolicyModificationProcessor(
 				options,
 			)
 			if len(oldPassword) > 0 {
-				matched := matchingStoredPassword(
-					runtime.schema.AttributeValues(
-						entry,
-						policy.attribute,
-					),
+				storedValues := runtime.schema.AttributeValues(
+					entry,
+					policy.attribute,
+				)
+				if err := validateExternalPasswordMatches(
+					options.externalMatches,
+					storedValues,
 					oldPassword,
+				); err != nil {
+					return nil, nil, err
+				}
+				matched := matchingStoredPassword(
+					storedValues,
+					oldPassword,
+					options.externalMatches,
 				)
 				if matched == nil {
 					return nil, nil, passwordPolicyOperationFailed(
@@ -1266,38 +1250,26 @@ func (server *Server) passwordPolicyModificationProcessor(
 			if options.passwordModify {
 				candidate = options.newPassword
 			}
-			if hasPolicy && !passwordAdministrator {
-				if policyError := checkPasswordPolicyQuality(
-					candidate,
-					policy,
-				); policyError != passwordPolicyNoError {
-					diagnostic := "Password fails quality checking policy"
-					switch policyError {
-					case passwordPolicyTooShort:
-						diagnostic = "Password is too short"
-					case passwordPolicyTooLong:
-						diagnostic = "Password is too long"
-					}
-					return nil, nil, passwordPolicyOperationFailed(
-						ldapwire.ResultConstraintViolation,
-						diagnostic,
-						options.requestControl,
-						policyError,
-					)
-				}
-				if policy.inHistory > 0 &&
-					passwordPolicyMatchesCurrentOrHistory(
+			if prepared.hasPolicy && !prepared.passwordAdministrator {
+				if policy.inHistory > 0 {
+					inHistory, err := passwordPolicyMatchesCurrentOrHistory(
 						entry,
 						runtime,
 						policy,
 						candidate,
-					) {
-					return nil, nil, passwordPolicyOperationFailed(
-						ldapwire.ResultConstraintViolation,
-						"Password is in history of old passwords",
-						options.requestControl,
-						passwordPolicyInHistory,
+						options.externalMatches,
 					)
+					if err != nil {
+						return nil, nil, err
+					}
+					if inHistory {
+						return nil, nil, passwordPolicyOperationFailed(
+							ldapwire.ResultConstraintViolation,
+							"Password is in history of old passwords",
+							options.requestControl,
+							passwordPolicyInHistory,
+						)
+					}
 				}
 			}
 
@@ -1325,18 +1297,122 @@ func (server *Server) passwordPolicyModificationProcessor(
 			}
 		}
 
-		if !maintainState {
+		if !prepared.maintainState {
 			return processed, nil, nil
 		}
 		mutation := buildPasswordPolicyStateMutation(
 			entry,
 			policy,
-			passwordAdministrator,
+			prepared.passwordAdministrator,
 			analysis,
 			time.Now(),
 		)
 		return processed, mutation, nil
 	}
+}
+
+type preparedPasswordPolicyModification struct {
+	policy                passwordPolicy
+	hasPolicy             bool
+	processed             []ldapwire.Modification
+	analysis              passwordPolicyModificationAnalysis
+	passwordAdministrator bool
+	maintainState         bool
+}
+
+func (server *Server) preparePasswordPolicyModification(
+	runtime *runtimeState,
+	reader storage.Reader,
+	boundDN string,
+	database runtimeDatabase,
+	entry directory.Entry,
+	changes []ldapwire.Modification,
+	options passwordPolicyModificationOptions,
+) (preparedPasswordPolicyModification, error) {
+	policy, hasPolicy := loadPasswordPolicy(runtime, reader, database, entry)
+	processed := clonePasswordPolicyModifications(changes)
+	analysis, err := analyzePasswordPolicyModifications(runtime, policy, processed)
+	prepared := preparedPasswordPolicyModification{
+		policy:        policy,
+		hasPolicy:     hasPolicy,
+		processed:     processed,
+		analysis:      analysis,
+		maintainState: true,
+	}
+	if err != nil || !analysis.passwordModified {
+		return prepared, err
+	}
+
+	prepared.passwordAdministrator = server.allowed(
+		runtime,
+		reader,
+		boundDN,
+		entry,
+		policy.attribute,
+		nil,
+		acl.Manage,
+	)
+	if hasPolicy && !prepared.passwordAdministrator {
+		self := passwordPolicySameDN(boundDN, entry.DN)
+		if !policy.allowUserChange && self {
+			return prepared, passwordPolicyOperationFailed(
+				ldapwire.ResultInsufficientAccessRights,
+				"User alteration of password is not allowed",
+				options.requestControl,
+				passwordPolicyModificationNotAllowed,
+			)
+		}
+		if analysis.newPasswordIndex < 0 {
+			prepared.maintainState = false
+		} else {
+			if policy.safeModify &&
+				!passwordPolicySuppliesOldPassword(analysis, options) {
+				return prepared, passwordPolicyOperationFailed(
+					ldapwire.ResultInsufficientAccessRights,
+					"Must supply old password to be changed as well as new one",
+					options.requestControl,
+					passwordPolicyMustSupplyOldPassword,
+				)
+			}
+			if !firstPasswordPolicyBoolean(entry, "pwdReset") &&
+				policy.minAge > 0 &&
+				isPasswordPolicyTooYoung(entry, policy, time.Now()) {
+				return prepared, passwordPolicyOperationFailed(
+					ldapwire.ResultConstraintViolation,
+					"Password is too young to change",
+					options.requestControl,
+					passwordPolicyTooYoung,
+				)
+			}
+		}
+	}
+
+	if analysis.newPasswordIndex >= 0 && hasPolicy &&
+		!prepared.passwordAdministrator {
+		candidate := processed[analysis.newPasswordIndex].Attribute.Values[0]
+		if options.passwordModify {
+			candidate = options.newPassword
+		}
+		if policyError := checkPasswordPolicyQuality(
+			candidate,
+			policy,
+		); policyError != passwordPolicyNoError {
+			diagnostic := "Password fails quality checking policy"
+			switch policyError {
+			case passwordPolicyTooShort:
+				diagnostic = "Password is too short"
+			case passwordPolicyTooLong:
+				diagnostic = "Password is too long"
+			}
+			return prepared, passwordPolicyOperationFailed(
+				ldapwire.ResultConstraintViolation,
+				diagnostic,
+				options.requestControl,
+				policyError,
+			)
+		}
+	}
+	return prepared, nil
 }
 
 func (server *Server) applyPasswordPolicyAdd(
@@ -1624,9 +1700,13 @@ func passwordPolicyOldPassword(
 	return analysis.suppliedOldPassword
 }
 
-func matchingStoredPassword(storedValues [][]byte, supplied []byte) []byte {
+func matchingStoredPassword(
+	storedValues [][]byte,
+	supplied []byte,
+	externalMatches externalPasswordMatches,
+) []byte {
 	for _, stored := range storedValues {
-		if auth.VerifyPassword(stored, supplied) {
+		if verifyStoredPasswordWithExternalMatches(stored, supplied, externalMatches) {
 			return stored
 		}
 	}
@@ -1699,25 +1779,32 @@ func passwordPolicyMatchesCurrentOrHistory(
 	runtime *runtimeState,
 	policy passwordPolicy,
 	candidate []byte,
-) bool {
-	for _, stored := range runtime.schema.AttributeValues(
+	externalMatches externalPasswordMatches,
+) (bool, error) {
+	storedValues := runtime.schema.AttributeValues(
 		entry,
 		policy.attribute,
-	) {
-		if auth.VerifyPassword(stored, candidate) {
-			return true
-		}
-	}
+	)
 	history := parsePasswordHistory(entry.Values("pwdHistory"))
 	if len(history) > policy.inHistory {
 		history = history[len(history)-policy.inHistory:]
 	}
 	for _, item := range history {
-		if auth.VerifyPassword(item.password, candidate) {
-			return true
+		storedValues = append(storedValues, item.password)
+	}
+	if err := validateExternalPasswordMatches(
+		externalMatches,
+		storedValues,
+		candidate,
+	); err != nil {
+		return false, err
+	}
+	for _, stored := range storedValues {
+		if verifyStoredPasswordWithExternalMatches(stored, candidate, externalMatches) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 type passwordHistoryItem struct {

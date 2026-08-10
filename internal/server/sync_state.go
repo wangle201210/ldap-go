@@ -859,6 +859,19 @@ func (server *Server) recordSyncChange(
 	before *directory.Entry,
 	after *directory.Entry,
 ) (*syncChange, error) {
+	return server.recordSyncChangeContext(
+		context.Background(), writer, runtime, database, before, after,
+	)
+}
+
+func (server *Server) recordSyncChangeContext(
+	ctx context.Context,
+	writer storage.Writer,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	before *directory.Entry,
+	after *directory.Entry,
+) (*syncChange, error) {
 	provider := effectiveSyncProviderDatabase(runtime, database)
 	if provider == nil {
 		return nil, nil
@@ -874,7 +887,7 @@ func (server *Server) recordSyncChange(
 		}
 		rawCSN = string(values[0])
 	} else {
-		rawCSN = server.nextCSN(runtime.serverID)
+		rawCSN = server.nextCSNContext(ctx, runtime.serverID)
 	}
 	csn, err := parseOpenLDAPCSN(rawCSN)
 	if err != nil {

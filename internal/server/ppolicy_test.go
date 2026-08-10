@@ -1936,10 +1936,15 @@ func setPasswordPolicyEntryValues(
 func TestPasswordPolicyStoredSchemeRecognizesVerifyOnlyPassword(t *testing.T) {
 	t.Parallel()
 
-	if !passwordPolicyStoredScheme(
-		[]byte(auth.OpenLDAPNetscapeMTAHashScheme + strings.Repeat("x", 64)),
-	) {
-		t.Fatal("ppolicy treated a verify-only Netscape hash as cleartext")
+	for _, scheme := range []string{
+		auth.OpenLDAPNetscapeMTAHashScheme,
+		auth.OpenLDAPRADIUSHashScheme,
+	} {
+		if !passwordPolicyStoredScheme(
+			[]byte(scheme + strings.Repeat("x", 64)),
+		) {
+			t.Fatalf("ppolicy treated verify-only scheme %s as cleartext", scheme)
+		}
 	}
 	if passwordPolicyStoredScheme([]byte("{UNKNOWN}value")) {
 		t.Fatal("ppolicy accepted an unknown password scheme")
@@ -1948,6 +1953,24 @@ func TestPasswordPolicyStoredSchemeRecognizesVerifyOnlyPassword(t *testing.T) {
 
 func TestPasswordPolicyVerifyOnlyHashFailureReturnsOther(t *testing.T) {
 	t.Parallel()
+
+	for _, scheme := range []string{
+		auth.OpenLDAPNetscapeMTAHashScheme,
+		auth.OpenLDAPRADIUSHashScheme,
+	} {
+		scheme := scheme
+		t.Run(scheme, func(t *testing.T) {
+			t.Parallel()
+			testPasswordPolicyVerifyOnlyHashFailureReturnsOther(t, scheme)
+		})
+	}
+}
+
+func testPasswordPolicyVerifyOnlyHashFailureReturnsOther(
+	t *testing.T,
+	scheme string,
+) {
+	t.Helper()
 
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
@@ -1970,7 +1993,7 @@ func TestPasswordPolicyVerifyOnlyHashFailureReturnsOther(t *testing.T) {
 				},
 				{
 					Description: "olcPasswordHash",
-					Values:      stringValues(auth.OpenLDAPNetscapeMTAHashScheme),
+					Values:      stringValues(scheme),
 				},
 			},
 		}, false)

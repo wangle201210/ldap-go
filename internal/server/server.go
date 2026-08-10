@@ -14,7 +14,6 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/audit"
-	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -49,6 +48,8 @@ type Config struct {
 	SecureHandshakeTimeout    time.Duration
 	ShutdownTimeout           time.Duration
 	Clock                     func() time.Time
+	RADIUSConfigPath          string
+	RADIUSNASIdentifier       string
 }
 
 type Server struct {
@@ -1094,7 +1095,12 @@ func (server *Server) handleBind(
 				*database,
 				requestDN,
 			); ok {
-				authenticated = auth.VerifyPassword(rootPassword, password)
+				authenticated = server.verifyStoredPassword(
+					ctx,
+					state.runtime,
+					rootPassword,
+					password,
+				)
 			}
 		}
 		if !authenticated {
@@ -1194,10 +1200,10 @@ func (server *Server) authenticate(
 		return false, nil
 	}
 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
-		return auth.VerifyPassword(rootPassword, password), nil
+		return server.verifyStoredPassword(ctx, runtime, rootPassword, password), nil
 	}
 
-	var authenticated bool
+	var storedPasswords [][]byte
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, *database)
 		entry, err := tx.Get(dn)
@@ -1216,13 +1222,19 @@ func (server *Server) authenticate(
 			return nil
 		}
 		for _, stored := range entry.Values("userPassword") {
-			if auth.VerifyPassword(stored, password) {
-				authenticated = true
-			}
+			storedPasswords = append(storedPasswords, append([]byte(nil), stored...))
 		}
 		return nil
 	})
-	return authenticated, err
+	if err != nil {
+		return false, err
+	}
+	for _, stored := range storedPasswords {
+		if server.verifyStoredPassword(ctx, runtime, stored, password) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (server *Server) closeConnections() {
@@ -1317,6 +1329,7 @@ type connectionState struct {
 	virtualListViews           map[string]*virtualListViewState
 	sortSessionCounts          map[*serverSideSortLimiter]int
 	transaction                *ldapTransaction
+	transactionPreflight       bool
 	passwordPolicyRestrictedDN string
 	accountUsabilityRequested  bool
 	monitor                    *monitorConnection

@@ -57,6 +57,12 @@ func TestLoadPasswordHashSchemes(t *testing.T) {
 			want:        []string{auth.OpenLDAPNetscapeMTAHashScheme},
 		},
 		{
+			name:        "verify-only RADIUS scheme",
+			frontend:    []string{auth.OpenLDAPRADIUSHashScheme},
+			addFrontend: true,
+			want:        []string{auth.OpenLDAPRADIUSHashScheme},
+		},
+		{
 			name:          "configuration attributes outside config are ignored",
 			outsideConfig: true,
 			want:          []string{auth.OpenLDAPDefaultHashScheme},

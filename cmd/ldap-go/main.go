@@ -1294,6 +1294,16 @@ func runServe(
 	logLevel := flags.String("log-level", "info", "debug, info, warn, or error")
 	auditLogPath := flags.String("audit-log", "", "append-only JSON audit log path")
 	auditKeyFile := flags.String("audit-key-file", "", "file containing the audit HMAC key")
+	radiusConfigPath := flags.String(
+		"radius-config",
+		"",
+		"RADIUS client configuration override for {RADIUS} passwords",
+	)
+	radiusNASIdentifier := flags.String(
+		"radius-nas-identifier",
+		"",
+		"NAS-Identifier override for {RADIUS} password verification",
+	)
 	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
 	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
 	tlsClientCA := flags.String("tls-client-ca", "", "PEM CA bundle for TLS client certificates")
@@ -1468,6 +1478,8 @@ func runServe(
 		ImplicitTLS:               *implicitTLS || *implicitTLCP,
 		SecureHandshakeTimeout:    secureHandshakeTimeout,
 		ShutdownTimeout:           shutdownTimeout,
+		RADIUSConfigPath:          *radiusConfigPath,
+		RADIUSNASIdentifier:       *radiusNASIdentifier,
 	})
 	if err != nil {
 		return err

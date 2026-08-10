@@ -74,7 +74,7 @@ func (server *Server) authenticateSASLPassword(
 		*database,
 		authenticationDN,
 	); ok {
-		return auth.VerifyPassword(rootPassword, password), nil
+		return server.verifyStoredPassword(ctx, runtime, rootPassword, password), nil
 	}
 	entry, err := server.lookupSASLCredentialEntry(
 		ctx,
@@ -90,7 +90,7 @@ func (server *Server) authenticateSASLPassword(
 	}
 	defer clearSASLCredentialEntry(&entry)
 	for _, stored := range entry.Values("userPassword") {
-		if auth.VerifyPassword(stored, password) {
+		if server.verifyStoredPassword(ctx, runtime, stored, password) {
 			return true, nil
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
@@ -430,6 +431,124 @@ func TestLDAPTransactionStateErrors(t *testing.T) {
 		endRawLDAPTransaction(t, connection, 7, false, identifier),
 		int64(ldapwire.ResultTransactionIDInvalid),
 	)
+}
+
+func TestLDAPTransactionRejectsRADIUSPreflightWithRemoteWriteOverlays(t *testing.T) {
+	t.Parallel()
+
+	suffix, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	request := ldapwire.ModifyRequest{
+		DN: "uid=alice,dc=example,dc=com",
+		Changes: []ldapwire.Modification{{
+			Operation: ldapwire.ModificationReplace,
+			Attribute: directory.Attribute{
+				Description: "userPassword",
+				Values:      [][]byte{[]byte("new-secret")},
+			},
+		}},
+	}
+	tests := []struct {
+		name       string
+		configure  func(*runtimeDatabase)
+		diagnostic string
+	}{
+		{
+			name: "translucent",
+			configure: func(database *runtimeDatabase) {
+				database.translucent = &translucentRuntimeConfiguration{}
+			},
+			diagnostic: "RADIUS password verification is not supported in translucent LDAP transactions",
+		},
+		{
+			name: "chain",
+			configure: func(database *runtimeDatabase) {
+				database.chain = &chainRuntimeConfiguration{}
+			},
+			diagnostic: "RADIUS password verification is not supported in chained LDAP transactions",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := runtimeDatabase{
+				name:        "{1}mdb",
+				partition:   configuredDatabasePartition("{1}mdb"),
+				suffixes:    []directory.DN{suffix},
+				configDNKey: "olcdatabase={1}mdb,cn=config",
+			}
+			test.configure(&database)
+			runtime := &runtimeState{
+				databases: []runtimeDatabase{database},
+				externalPasswords: externalPasswordRuntimeConfiguration{
+					radiusEnabled: true,
+				},
+			}
+			state := &connectionState{
+				boundDN: "cn=admin,dc=example,dc=com",
+				transaction: &ldapTransaction{
+					runtime: runtime,
+				},
+			}
+
+			_, result := (&Server{}).transactionOperationDatabase(state, ldapwire.Message{
+				ID:      1,
+				Request: request,
+			})
+			if result == nil || result.Code != ldapwire.ResultUnwillingToPerform {
+				t.Fatalf("result = %#v, want unwillingToPerform", result)
+			}
+			if result.DiagnosticMessage != test.diagnostic {
+				t.Fatalf("diagnostic = %q, want %q", result.DiagnosticMessage, test.diagnostic)
+			}
+		})
+	}
+}
+
+func TestLDAPTransactionPreflightClockDoesNotAdvanceServerClocks(t *testing.T) {
+	t.Parallel()
+
+	initialCSN := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	initialAccesslog := initialCSN.Add(time.Second)
+	instance := &Server{
+		lastCSN:           initialCSN,
+		csnCounter:        41,
+		lastAccesslogTime: initialAccesslog,
+	}
+	clock := &transactionPreflightClock{
+		now: time.Now().UTC().Truncate(time.Microsecond),
+	}
+	ctx := context.WithValue(
+		t.Context(),
+		transactionPreflightClockContextKey{},
+		clock,
+	)
+	firstCSN := instance.nextCSNContext(ctx, 1)
+	secondCSN := instance.nextCSNContext(ctx, 1)
+	firstAccesslog := instance.nextAccesslogTimestampContext(ctx)
+	secondAccesslog := instance.nextAccesslogTimestampContext(ctx)
+	if firstCSN == secondCSN {
+		t.Fatalf("preflight CSNs are equal: %q", firstCSN)
+	}
+	if firstAccesslog == secondAccesslog {
+		t.Fatalf("preflight accesslog timestamps are equal: %q", firstAccesslog)
+	}
+	if !instance.lastCSN.Equal(initialCSN) || instance.csnCounter != 41 {
+		t.Fatalf(
+			"global CSN clock = %s/%d, want %s/41",
+			instance.lastCSN,
+			instance.csnCounter,
+			initialCSN,
+		)
+	}
+	if !instance.lastAccesslogTime.Equal(initialAccesslog) {
+		t.Fatalf(
+			"global accesslog clock = %s, want %s",
+			instance.lastAccesslogTime,
+			initialAccesslog,
+		)
+	}
 }
 
 func TestLDAPTransactionRejectsInvalidSpecificationControls(t *testing.T) {

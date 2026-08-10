@@ -36,8 +36,9 @@ make full
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
-OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, `pw-netscape`, and
-`pw-totp` modules against that build. It rejects reference-test skips, runs the
+OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, `pw-netscape`,
+`pw-radius`, and `pw-totp` modules against that build. It rejects
+reference-test skips, runs the
 Go race detector, and executes
 the parser fuzz suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
@@ -329,6 +330,27 @@ accepts it in imported `olcPasswordHash` configuration but returns `other(80)`
 from Password Modify, matching OpenLDAP. `slappasswd -h` reports that the scheme
 has no hash function; imported values remain readable without pretending the
 format can be generated.
+OpenLDAP's contrib `pw-radius` `{RADIUS}` format is supported as a verify-only
+external password scheme. The stored value is `{RADIUS}<RADIUS-username>`;
+Simple Bind, SASL PLAIN, root-password paths, Password Modify old-password and
+ppolicy history checks use the same verifier. The client configuration is
+loaded for each authentication from the `config=` argument on an imported
+`pw-radius` `olcModuleLoad`, or from `-radius-config`; the default remains
+`/etc/radius.conf`. `-radius-nas-identifier` overrides the default canonical
+local hostname. Authentication-server failover, retry packet and source-port
+reuse, per-server PAP re-encryption, response source and optional
+Message-Authenticator validation, dead-time reprobing, the 128-byte libradius
+password truncation, and process-wide verification serialization match the
+pinned module and libradius behavior.
+`{RADIUS}` may be imported through ordinary `slapcat` LDIF, but `radius.conf`
+and its shared secrets are external files and must be migrated separately.
+RADIUS PAP obfuscation is not transport encryption; deploy it only on a
+protected network or inside an authenticated encrypted tunnel. Selecting
+`{RADIUS}` in `olcPasswordHash` is accepted for configuration compatibility,
+but Password Modify and `ldap-go passwd` reject generation because the module
+has no hash function. RADIUS-enabled Modify and Password Modify operations are
+rejected inside LDAP transactions that use `translucent` or effective `chain`
+configuration, since those remote LDAP effects cannot be rollback-preflighted.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple

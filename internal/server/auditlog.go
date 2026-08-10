@@ -68,6 +68,9 @@ func (server *Server) finishAuditlogWrite(
 	source runtimeDatabase,
 	record accesslogWriteRecord,
 ) {
+	if state.transactionPreflight {
+		return
+	}
 	configurations := auditlogConfigurations(state.runtime, source)
 	if len(configurations) == 0 {
 		return

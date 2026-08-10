@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -474,6 +476,145 @@ func TestSeqmodOperationBoundaries(t *testing.T) {
 		waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 0)
 	})
 
+}
+
+func TestLDAPTransactionSeqmodLockOrderDoesNotInvertStorageLock(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSeqmodDirectory(t, store, true, true, false)
+	instance, address, stop := startSeqmodServer(t, store, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer stop()
+	frontend := seqmodRuntimeDatabase(t, instance.runtime.Load().databases, "frontend").seqmod
+	data := seqmodRuntimeDatabase(t, instance.runtime.Load().databases, "mdb").seqmod
+	alice, _ := directory.ParseDN(aliceDN)
+
+	transactionConnection := dialAndBindRawLDAP(
+		t,
+		address,
+		syncTestRootDN,
+		syncTestRootPassword,
+	)
+	defer transactionConnection.Close()
+	identifier := startRawLDAPTransaction(t, transactionConnection, 2)
+	queued := sendRawLDAPOperation(
+		t,
+		transactionConnection,
+		3,
+		rawModifyReplaceRequest(aliceDN, "description", "transaction update"),
+		rawTransactionSpecificationControl(identifier, true, true),
+	)
+	assertRawLDAPResult(t, queued, int64(ldap.LDAPResultSuccess))
+
+	storageLocked := make(chan struct{})
+	releaseStorage := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseStorage) }) }
+	defer release()
+	storageDone := make(chan error, 1)
+	go func() {
+		storageDone <- store.Update(context.Background(), func(storage.Writer) error {
+			close(storageLocked)
+			<-releaseStorage
+			return nil
+		})
+	}()
+	select {
+	case <-storageLocked:
+	case <-time.After(time.Second):
+		t.Fatal("test storage lock was not acquired")
+	}
+
+	commitDone := make(chan *ber.Packet, 1)
+	go func() {
+		commitDone <- endRawLDAPTransaction(
+			t,
+			transactionConnection,
+			4,
+			true,
+			identifier,
+		)
+	}()
+	waitForSeqmodQueueLength(t, frontend.coordinator, alice.Key(), 1)
+	waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 1)
+
+	ordinary := dialLDAPRoot(t, address)
+	defer ordinary.Close()
+	ordinaryDone := make(chan error, 1)
+	go func() {
+		request := ldap.NewModifyRequest(aliceDN, nil)
+		request.Replace("description", []string{"ordinary update"})
+		ordinaryDone <- ordinary.Modify(request)
+	}()
+	waitForSeqmodQueueLength(t, frontend.coordinator, alice.Key(), 2)
+	release()
+
+	select {
+	case err := <-storageDone:
+		if err != nil {
+			t.Fatalf("release test storage lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("test storage lock did not release")
+	}
+	select {
+	case response := <-commitDone:
+		assertRawLDAPResult(t, response, int64(ldap.LDAPResultSuccess))
+	case <-time.After(2 * time.Second):
+		t.Fatal("transaction commit deadlocked with ordinary seqmod write")
+	}
+	select {
+	case err := <-ordinaryDone:
+		if err != nil {
+			t.Fatalf("ordinary Modify after transaction: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary seqmod write did not complete after transaction")
+	}
+}
+
+func TestLDAPTransactionSeqmodUnknownNamingContextPreservesResult(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSeqmodDirectory(t, store, true, true, false)
+	instance, _, stop := startSeqmodServer(t, store, Config{
+		RootDN:       syncTestRootDN,
+		RootPassword: []byte(syncTestRootPassword),
+	})
+	defer stop()
+	frontend := seqmodRuntimeDatabase(t, instance.runtime.Load().databases, "frontend").seqmod
+
+	unknownDN := "uid=outside,dc=outside"
+	target, _ := directory.ParseDN(unknownDN)
+	ctx, release, err := acquireLDAPTransactionSeqmods(
+		context.Background(),
+		instance.runtime.Load(),
+		[]ldapTransactionOperation{{
+			message: ldapwire.Message{
+				ID:      3,
+				Request: ldapwire.ModifyRequest{DN: unknownDN},
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("acquireLDAPTransactionSeqmods(): %v", err)
+	}
+	held, ok := ctx.Value(seqmodHeldContextKey{}).(map[seqmodHeldLock]struct{})
+	wantLock := seqmodHeldLock{
+		coordinator: frontend.coordinator,
+		targetKey:   target.Key(),
+	}
+	if !ok {
+		t.Fatal("transaction seqmod context has no held-lock set")
+	}
+	if _, ok := held[wantLock]; !ok || len(held) != 1 {
+		t.Fatalf("transaction seqmod locks = %#v, want only frontend lock", held)
+	}
+	waitForSeqmodQueueLength(t, frontend.coordinator, target.Key(), 1)
+	release()
+	waitForSeqmodQueueLength(t, frontend.coordinator, target.Key(), 0)
 }
 
 func seqmodOverlayEntry(dn, value string) directory.Entry {

@@ -25,6 +25,7 @@ type runtimeState struct {
 	disallows           disallowsRuntimeConfiguration
 	defaultSearchBase   defaultSearchBaseConfiguration
 	passwordHashSchemes []string
+	externalPasswords   externalPasswordRuntimeConfiguration
 	sasl                saslRuntimeConfiguration
 	syncContexts        map[string]syncCSNState
 }
@@ -239,6 +240,13 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	externalPasswords, err := loadExternalPasswordRuntimeConfiguration(
+		reader,
+		server.config,
+	)
+	if err != nil {
+		return nil, err
+	}
 	sasl, err := loadSASLRuntimeConfiguration(reader)
 	if err != nil {
 		return nil, err
@@ -261,6 +269,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		disallows:           disallows,
 		defaultSearchBase:   defaultSearchBase,
 		passwordHashSchemes: passwordHashSchemes,
+		externalPasswords:   externalPasswords,
 		sasl:                sasl,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {

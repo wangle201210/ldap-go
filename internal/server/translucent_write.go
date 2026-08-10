@@ -634,6 +634,20 @@ func (server *Server) tryTranslucentPasswordModify(
 		}
 		hashes = append(hashes, stored)
 	}
+	var externalMatches externalPasswordMatches
+	if request.HasOldPassword {
+		externalMatches, err = server.preverifyEntryPasswords(
+			ctx,
+			state.runtime,
+			database,
+			target,
+			"userPassword",
+			request.OldPassword,
+		)
+		if err != nil {
+			return true, server.internalPasswordModifyError(connection, message.ID, err)
+		}
+	}
 
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, database)
@@ -643,9 +657,20 @@ func (server *Server) tryTranslucentPasswordModify(
 			return getErr
 		}
 		if request.HasOldPassword {
+			if err := validateExternalPasswordMatches(
+				externalMatches,
+				local.Values("userPassword"),
+				request.OldPassword,
+			); err != nil {
+				return err
+			}
 			matched := false
 			for _, stored := range local.Values("userPassword") {
-				if auth.VerifyPassword(stored, request.OldPassword) {
+				if verifyStoredPasswordWithExternalMatches(
+					stored,
+					request.OldPassword,
+					externalMatches,
+				) {
 					matched = true
 				}
 			}

@@ -224,7 +224,16 @@ func acquireSeqmodConfiguration(
 	if configuration == nil || configuration.disabled || configuration.coordinator == nil {
 		return seqmodNoopRelease, nil
 	}
-	return configuration.coordinator.acquire(ctx, target.Key())
+	lock := seqmodHeldLock{
+		coordinator: configuration.coordinator,
+		targetKey:   target.Key(),
+	}
+	if held, ok := ctx.Value(seqmodHeldContextKey{}).(map[seqmodHeldLock]struct{}); ok {
+		if _, exists := held[lock]; exists {
+			return seqmodNoopRelease, nil
+		}
+	}
+	return configuration.coordinator.acquire(ctx, lock.targetKey)
 }
 
 func seqmodNoopRelease() {}
@@ -236,6 +245,13 @@ type seqmodCoordinator struct {
 
 type seqmodWaiter struct {
 	ready chan struct{}
+}
+
+type seqmodHeldContextKey struct{}
+
+type seqmodHeldLock struct {
+	coordinator *seqmodCoordinator
+	targetKey   string
 }
 
 func newSeqmodCoordinator() *seqmodCoordinator {
