@@ -1628,6 +1628,18 @@ func TestSlappasswdCompatibilityOptions(t *testing.T) {
 			password: []byte(secret),
 			prefix:   auth.OpenLDAPPBKDF2SHA512HashScheme + "10000$",
 		},
+		{
+			name:     "OpenLDAP contrib APR1",
+			args:     []string{"slappasswd", "-h", auth.OpenLDAPAPR1HashScheme, "-s", secret},
+			password: []byte(secret),
+			prefix:   auth.OpenLDAPAPR1HashScheme,
+		},
+		{
+			name:     "OpenLDAP contrib BSD MD5",
+			args:     []string{"slappasswd", "-h", auth.OpenLDAPBSDMD5HashScheme, "-s", secret},
+			password: []byte(secret),
+			prefix:   auth.OpenLDAPBSDMD5HashScheme,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

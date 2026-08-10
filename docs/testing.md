@@ -226,6 +226,21 @@ the selected stricter parser rules, bounded work, and constant-time compare as
 security hardening rather than bug-for-bug parity with the contrib C
 implementation.
 
+The pw-apr1 differential dynamically builds the pinned contrib module and
+covers both `{APR1}` and `{BSDMD5}`. For each scheme, a ldap-go Password Modify
+value is imported into OpenLDAP and exercised by Simple Bind; OpenLDAP then
+generates a value through Password Modify that is imported and exercised by a
+ldap-go Simple Bind. Local tests additionally cover the eight-character salt
+mapping, noncanonical imported salts, malformed Base64, missing or oversized
+salts, wrong passwords, and random-source failures.
+The reference server accepts valid records for a 4,097-byte credential and a
+65-byte salt, while ldap-go tests verify the documented hardening boundaries:
+credentials above 4 KiB fail closed before PHK-MD5 processing, and imported
+salts above 64 bytes are rejected.
+The same differential imports a valid generated hash with 4,097 embedded
+Base64 whitespace bytes into OpenLDAP, while the local verifier rejects it at
+the documented stored-encoding work bound.
+
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
 with EOF during the reference-only Sync plus Sort/VLV matrix, while the same

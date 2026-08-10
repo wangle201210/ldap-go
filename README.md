@@ -36,8 +36,9 @@ make full
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
-OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, and `pw-totp` modules against that
-build. It rejects reference-test skips, runs the Go race detector, and executes
+OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, and `pw-totp` modules
+against that build. It rejects reference-test skips, runs the Go race detector,
+and executes
 the parser fuzz suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
 the `libltdl` dependency, dependency-prefix, and build-cache options.
@@ -304,6 +305,18 @@ all four names. Verification rejects iterations above 1,000,000 and malformed
 trailing fields before running PBKDF2, and uses a constant-time derived-key
 comparison; these are intentional hardening differences from the contrib
 module's unbounded `atoi` and `memcmp` path.
+OpenLDAP's contrib `pw-apr1` module is data-compatible for `{APR1}` and
+`{BSDMD5}`. ldap-go emits the module's standard-Base64 representation of the
+16-byte PHK-MD5 digest followed by its eight-byte salt; this is intentionally
+not the textual Apache `$apr1$...` or BSD `$1$...` form. Password Modify,
+`olcPasswordHash`, Simple Bind, import, and `slappasswd -h` share the same
+implementation and pass a pinned bidirectional module differential. Imported
+values may retain noncanonical salts up to 64 bytes, and digest comparison is
+constant time. Credentials above 4 KiB fail closed before the 1,000-round loop
+to prevent unauthenticated CPU amplification; stored encodings above 4 KiB
+also fail closed before Base64 scanning. Both schemes use MD5 and only 1,000
+rounds, so they are provided for migration compatibility and should not be
+selected for new passwords.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple

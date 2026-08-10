@@ -519,6 +519,12 @@ PBKDF2 family has a separate parser and SHA-1/256/512 parameter table matching
 the contrib module's generated representation. Both PBKDF2 families bound
 stored iteration counts before derivation and compare keys in constant time,
 so a malicious directory value cannot force unlimited work on a Bind handler.
+The legacy contrib `{APR1}` and `{BSDMD5}` formats use their respective PHK-MD5
+magic values, standard Base64 storage, an eight-byte generated salt, and 1,000
+rounds. They remain available for OpenLDAP migration, use constant-time digest
+comparison, and reject credentials above 4 KiB before entering the repeated
+hash loop. Stored encodings above 4 KiB are rejected before Base64 scanning.
+They are not recommended for newly written credentials.
 RFC 3062 Password Modify runs old-password
 verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is
