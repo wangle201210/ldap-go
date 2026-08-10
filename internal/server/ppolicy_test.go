@@ -1932,3 +1932,109 @@ func setPasswordPolicyEntryValues(
 		t.Fatalf("set password policy entry values: %v", err)
 	}
 }
+
+func TestPasswordPolicyStoredSchemeRecognizesVerifyOnlyPassword(t *testing.T) {
+	t.Parallel()
+
+	if !passwordPolicyStoredScheme(
+		[]byte(auth.OpenLDAPNetscapeMTAHashScheme + strings.Repeat("x", 64)),
+	) {
+		t.Fatal("ppolicy treated a verify-only Netscape hash as cleartext")
+	}
+	if passwordPolicyStoredScheme([]byte("{UNKNOWN}value")) {
+		t.Fatal("ppolicy accepted an unknown password scheme")
+	}
+}
+
+func TestPasswordPolicyVerifyOnlyHashFailureReturnsOther(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedPasswordPolicyDirectory(
+		t,
+		store,
+		nil,
+		[]directory.Attribute{{
+			Description: "olcPPolicyHashCleartext",
+			Values:      stringValues("TRUE"),
+		}},
+	)
+	if err := store.Update(t.Context(), func(writer storage.Writer) error {
+		return writer.Put(directory.Entry{
+			DN: "olcDatabase={-1}frontend,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcDatabase",
+					Values:      stringValues("{-1}frontend"),
+				},
+				{
+					Description: "olcPasswordHash",
+					Values:      stringValues(auth.OpenLDAPNetscapeMTAHashScheme),
+				},
+			},
+		}, false)
+	}); err != nil {
+		t.Fatalf("configure verify-only password hash: %v", err)
+	}
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+	connection := dialAndBindRawLDAP(
+		t,
+		address,
+		"cn=admin,dc=example,dc=com",
+		"admin-secret",
+	)
+	defer connection.Close()
+	wantControl := ldapwire.EncodePasswordPolicyResponseValue(
+		-1,
+		-1,
+		int64(passwordPolicyNoError),
+	)
+
+	add := directory.Entry{
+		DN: "uid=verify-only,ou=people,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: stringValues("inetOrgPerson")},
+			{Description: "uid", Values: stringValues("verify-only")},
+			{Description: "cn", Values: stringValues("Verify Only")},
+			{Description: "sn", Values: stringValues("Only")},
+			{Description: "userPassword", Values: stringValues("cleartext-add")},
+		},
+	}
+	response := sendRawLDAPOperation(
+		t,
+		connection,
+		2,
+		rawAddRequest(add),
+		rawControlWithoutValue(passwordPolicyControlOID),
+	)
+	assertRawLDAPResult(t, response, int64(ldap.LDAPResultOther))
+	if got := rawLDAPDiagnostic(response); got != "Password hashing failed" {
+		t.Fatalf("Add diagnostic = %q, want %q", got, "Password hashing failed")
+	}
+	if controls := rawLDAPResponseControls(response); len(controls) != 0 {
+		t.Fatalf("Add response controls = %v, want none", controls)
+	}
+
+	response = sendRawLDAPOperation(
+		t,
+		connection,
+		3,
+		rawModifyReplaceRequest(aliceDN, "userPassword", "cleartext-modify"),
+		rawControlWithoutValue(passwordPolicyControlOID),
+	)
+	assertRawLDAPResult(t, response, int64(ldap.LDAPResultOther))
+	if got := rawLDAPResponseControl(
+		t,
+		response,
+		passwordPolicyControlOID,
+	); !bytes.Equal(got, wantControl) {
+		t.Fatalf("Modify password policy response = %x, want %x", got, wantControl)
+	}
+	assertBindPassword(t, address, aliceDN, "secret", true)
+	assertBindPassword(t, address, aliceDN, "cleartext-modify", false)
+}

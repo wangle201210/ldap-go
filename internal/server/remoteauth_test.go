@@ -244,6 +244,62 @@ func TestLDAPClientRemoteAuthDelegatesAndStoresPassword(t *testing.T) {
 	}
 }
 
+func TestLDAPClientRemoteAuthVerifyOnlyHashFallsBackToCleartext(t *testing.T) {
+	providerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = providerStore.Close() })
+	seedDirectory(t, providerStore)
+	providerAddress, stopProvider := startServer(t, providerStore, Config{})
+	providerRunning := true
+	t.Cleanup(func() {
+		if providerRunning {
+			stopProvider()
+		}
+	})
+
+	consumerStore := storage.NewMemory()
+	t.Cleanup(func() { _ = consumerStore.Close() })
+	seedDirectory(t, consumerStore)
+	seedRemoteAuthConfiguration(t, consumerStore, providerAddress, true)
+	if err := consumerStore.Update(t.Context(), func(writer storage.Writer) error {
+		return writer.Put(directory.Entry{
+			DN: "olcDatabase={-1}frontend,cn=config",
+			Attributes: []directory.Attribute{
+				{
+					Description: "olcDatabase",
+					Values:      stringValues("{-1}frontend"),
+				},
+				{
+					Description: "olcPasswordHash",
+					Values:      stringValues(auth.OpenLDAPNetscapeMTAHashScheme),
+				},
+			},
+		}, false)
+	}); err != nil {
+		t.Fatalf("configure verify-only password hash: %v", err)
+	}
+	consumerAddress, stopConsumer := startServer(t, consumerStore, Config{})
+	defer stopConsumer()
+
+	client, err := ldap.DialURL("ldap://" + consumerAddress)
+	if err != nil {
+		t.Fatalf("dial consumer: %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind(aliceDN, "secret"); err != nil {
+		t.Fatalf("remoteauth Bind: %v", err)
+	}
+	passwords := readStoredEntry(t, consumerStore, aliceDN).Values("userPassword")
+	if len(passwords) != 1 || string(passwords[0]) != "secret" {
+		t.Fatalf("remoteauth cleartext fallback = %q", passwords)
+	}
+
+	stopProvider()
+	providerRunning = false
+	if err := client.Bind(aliceDN, "secret"); err != nil {
+		t.Fatalf("local cleartext Bind after provider stop: %v", err)
+	}
+}
+
 func TestLDAPClientRemoteAuthUsesLocalPasswordAndReportsUnavailable(t *testing.T) {
 	providerStore := storage.NewMemory()
 	t.Cleanup(func() { _ = providerStore.Close() })

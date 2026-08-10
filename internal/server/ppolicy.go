@@ -1310,6 +1310,14 @@ func (server *Server) passwordPolicyModificationProcessor(
 					nil,
 				)
 				if hashErr != nil {
+					if errors.Is(hashErr, auth.ErrPasswordHashUnavailable) {
+						return nil, nil, passwordPolicyOperationFailed(
+							ldapwire.ResultOther,
+							auth.ErrPasswordHashUnavailable.Error(),
+							options.requestControl,
+							passwordPolicyNoError,
+						)
+					}
 					return nil, nil, hashErr
 				}
 				processed[analysis.newPasswordIndex].
@@ -1416,6 +1424,12 @@ func (server *Server) applyPasswordPolicyAdd(
 			nil,
 		)
 		if err != nil {
+			if errors.Is(err, auth.ErrPasswordHashUnavailable) {
+				return operationFailed(
+					ldapwire.ResultOther,
+					"Password hashing failed",
+				)
+			}
 			return err
 		}
 		entry.Attributes[passwordAttributeIndex].Values = [][]byte{hashed}
@@ -1669,8 +1683,7 @@ func passwordPolicyStoredScheme(value []byte) bool {
 	if end <= 1 {
 		return false
 	}
-	_, err := auth.NormalizePasswordHashScheme(string(value[:end+1]))
-	return err == nil
+	return auth.IsKnownPasswordScheme(string(value[:end+1]))
 }
 
 func passwordPolicyCleartextScheme(value []byte) bool {

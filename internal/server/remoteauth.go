@@ -573,8 +573,14 @@ func (server *Server) storeRemoteAuthPassword(
 	}
 	stored, err := auth.HashPassword(password, runtime.passwordHashSchemes[0], nil)
 	if err != nil {
-		server.config.Logger.Warn("hash remoteauth password", "error", err)
-		return
+		server.config.Logger.Warn(
+			"remoteauth password hashing failed; storing cleartext for OpenLDAP compatibility",
+			"scheme",
+			runtime.passwordHashSchemes[0],
+			"error",
+			err,
+		)
+		stored = bytes.Clone(password)
 	}
 	defer clear(stored)
 	var syncChange *syncChange

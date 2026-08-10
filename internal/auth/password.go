@@ -30,6 +30,8 @@ const (
 	maxSMPBKDF2PayloadSize    = 8 + 1 + 22 + 1 + 43
 )
 
+var ErrPasswordHashUnavailable = errors.New("scheme provided no hash function")
+
 // VerifyPassword accepts portable OpenLDAP digest schemes and ldap-go's SM3
 // extensions without relying on platform-specific crypt(3).
 func VerifyPassword(stored, supplied []byte) bool {
@@ -109,6 +111,8 @@ func VerifyPassword(stored, supplied []byte) bool {
 		return verifyOpenLDAPPBKDF2(scheme, payload, supplied)
 	case "APR1", "BSDMD5":
 		return verifyOpenLDAPPHK(scheme, payload, supplied)
+	case "NS-MTA-MD5":
+		return verifyOpenLDAPNetscape(payload, supplied)
 	default:
 		return false
 	}
@@ -162,6 +166,7 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		OpenLDAPPBKDF2SHA512HashScheme,
 		OpenLDAPAPR1HashScheme,
 		OpenLDAPBSDMD5HashScheme,
+		OpenLDAPNetscapeMTAHashScheme,
 		SMPBKDF2HashScheme:
 		return scheme, nil
 	default:
@@ -169,8 +174,18 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 	}
 }
 
+// IsKnownPasswordScheme reports whether ldap-go can interpret an existing
+// stored value.
+func IsKnownPasswordScheme(value string) bool {
+	_, err := NormalizePasswordHashScheme(value)
+	return err == nil
+}
+
 func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, error) {
 	if len(password) == 0 {
+		if strings.EqualFold(strings.TrimSpace(scheme), OpenLDAPNetscapeMTAHashScheme) {
+			return nil, fmt.Errorf("%s: %w", OpenLDAPNetscapeMTAHashScheme, ErrPasswordHashUnavailable)
+		}
 		return nil, errors.New("password must not be empty")
 	}
 	normalized, err := NormalizePasswordHashScheme(scheme)
@@ -301,6 +316,8 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 		)
 	case OpenLDAPAPR1HashScheme, OpenLDAPBSDMD5HashScheme:
 		return hashPasswordOpenLDAPPHK(password, normalized, random)
+	case OpenLDAPNetscapeMTAHashScheme:
+		return nil, fmt.Errorf("%s: %w", normalized, ErrPasswordHashUnavailable)
 	default:
 		panic("validated password hash scheme was not handled")
 	}

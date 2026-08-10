@@ -377,7 +377,11 @@ credentials stop failover, while connection failures continue it.
 Successful remoteauth can optionally materialize a local credential. The
 server hashes the accepted cleartext with the first effective
 `olcPasswordHash`, reopens the entry in a write transaction, and stores it only
-if no concurrent writer has added `userPassword`. Normal LastMod and Sync
+if no concurrent writer has added `userPassword`. If hash generation fails,
+including when a selected verify-only scheme provides no generator, OpenLDAP
+falls back to storing the accepted password as cleartext; ldap-go preserves
+that behavior for migration
+compatibility and logs a warning. Normal LastMod and Sync
 publication paths are reused. A failed writeback is logged and
 does not turn successful remote authentication into a failed Bind. Subsequent
 Binds use the local hash and bypass remoteauth. The outbound authentication
@@ -525,6 +529,11 @@ rounds. They remain available for OpenLDAP migration, use constant-time digest
 comparison, and reject credentials above 4 KiB before entering the repeated
 hash loop. Stored encodings above 4 KiB are rejected before Base64 scanning.
 They are not recommended for newly written credentials.
+The Netscape `{NS-MTA-MD5}` module is a verify-only migration adapter: it
+requires the exact 32-byte lowercase MD5 hexadecimal prefix and 32-byte salt,
+then compares the reconstructed digest in constant time. It is deliberately
+accepted in hash selection for configuration compatibility, but Password
+Modify returns `other(80)` because the upstream module has no generator.
 RFC 3062 Password Modify runs old-password
 verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is

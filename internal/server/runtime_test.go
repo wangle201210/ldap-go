@@ -51,6 +51,12 @@ func TestLoadPasswordHashSchemes(t *testing.T) {
 			wantError:   true,
 		},
 		{
+			name:        "verify-only Netscape scheme",
+			frontend:    []string{auth.OpenLDAPNetscapeMTAHashScheme},
+			addFrontend: true,
+			want:        []string{auth.OpenLDAPNetscapeMTAHashScheme},
+		},
+		{
 			name:          "configuration attributes outside config are ignored",
 			outsideConfig: true,
 			want:          []string{auth.OpenLDAPDefaultHashScheme},

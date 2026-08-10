@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net"
 
@@ -346,6 +347,17 @@ func (server *Server) internalPasswordModifyError(
 	messageID int64,
 	err error,
 ) error {
+	if errors.Is(err, auth.ErrPasswordHashUnavailable) {
+		return server.writePasswordModifyResult(
+			connection,
+			messageID,
+			ldapwire.ResultError(
+				ldapwire.ResultOther,
+				auth.ErrPasswordHashUnavailable.Error(),
+			),
+			nil,
+		)
+	}
 	server.config.Logger.Error("LDAP operation failed", "message_id", messageID, "error", err)
 	return server.writePasswordModifyResult(
 		connection,

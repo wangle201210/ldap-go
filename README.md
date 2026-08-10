@@ -36,9 +36,9 @@ make full
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
-OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, and `pw-totp` modules
-against that build. It rejects reference-test skips, runs the Go race detector,
-and executes
+OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, `pw-netscape`, and
+`pw-totp` modules against that build. It rejects reference-test skips, runs the
+Go race detector, and executes
 the parser fuzz suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
 the `libltdl` dependency, dependency-prefix, and build-cache options.
@@ -152,7 +152,11 @@ file-backed multi-provider realms, retries, TLS policy, and SHA/SM3 peer-key
 pins are supported. Existing local passwords take precedence. With
 `olcRemoteAuthStore`, a successful remote credential is hashed with the first
 effective `olcPasswordHash` scheme, including `{PBKDF2-SM3}`, and stored
-locally. Local two-server tests pass. A gated OpenLDAP 2.6 differential covers
+locally. Matching OpenLDAP, any hash-generation failure, including selecting a
+verify-only scheme such as `{NS-MTA-MD5}`, makes this explicit store-on-success
+path fall back to cleartext;
+do not combine that setting with verify-only hashes when cleartext persistence
+is unacceptable. Local two-server tests pass. A gated OpenLDAP 2.6 differential covers
 delegation, local-password
 priority, writeback, bad credentials, and provider loss. Live StartTLS tests
 cover SHA-256/SM3 public-key pins, mismatches, and missing host pins; connection
@@ -317,6 +321,14 @@ to prevent unauthenticated CPU amplification; stored encodings above 4 KiB
 also fail closed before Base64 scanning. Both schemes use MD5 and only 1,000
 rounds, so they are provided for migration compatibility and should not be
 selected for new passwords.
+OpenLDAP's contrib `pw-netscape` `{NS-MTA-MD5}` format is supported for
+one-way migration and Simple Bind. Its exact 64-byte payload, lowercase digest,
+binary salt behavior, and embedded-NUL credentials pass a pinned dynamic-module
+import/Bind differential. The upstream module registers no hash function, so ldap-go also
+accepts it in imported `olcPasswordHash` configuration but returns `other(80)`
+from Password Modify, matching OpenLDAP. `slappasswd -h` reports that the scheme
+has no hash function; imported values remain readable without pretending the
+format can be generated.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple

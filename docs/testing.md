@@ -241,6 +241,18 @@ The same differential imports a valid generated hash with 4,097 embedded
 Base64 whitespace bytes into OpenLDAP, while the local verifier rejects it at
 the documented stored-encoding work bound.
 
+The pw-netscape differential dynamically builds the pinned verify-only module.
+A binary-compatible `{NS-MTA-MD5}` value authenticates on OpenLDAP and after
+import into ldap-go, while wrong credentials fail on both. A Base64 LDIF case
+exercises a 32-byte binary salt and a credential containing NUL and `0xff` on
+both servers. The source contract
+and live test also preserve the upstream no-hash-function behavior: OpenLDAP
+accepts the scheme as `password-hash` but Password Modify returns `other(80)`,
+and ldap-go preserves the same configuration and operation result. Both
+`slappasswd` implementations reject generation because no hash function exists.
+Local ppolicy tests cover the same `other(80)` result for cleartext-hashing Add
+and Modify paths.
+
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection
 with EOF during the reference-only Sync plus Sort/VLV matrix, while the same
@@ -400,7 +412,8 @@ retry/store policy, TLS settings, and SHA/SM3 public-key pins. Unit cases cover
 domain truncation and line-oriented `file://` multi-provider realms. Local
 provider/front-end topologies verify no-`userPassword` delegation, invalid
 credentials, provider unavailability, local-password priority, successful
-password storage, and local authentication after the provider stops. Live
+password storage, verify-only-scheme cleartext fallback, and local authentication
+after the provider stops. Live
 StartTLS cases verify SHA-256 and SM3 peer pins plus wrong/missing pins. The
 optional OpenLDAP 2.6 remoteauth differential compares delegation, local
 priority, writeback, invalid credentials, and provider loss; it skips when the
