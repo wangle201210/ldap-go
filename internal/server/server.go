@@ -48,12 +48,14 @@ type Config struct {
 	ImplicitTLS               bool
 	SecureHandshakeTimeout    time.Duration
 	ShutdownTimeout           time.Duration
+	Clock                     func() time.Time
 }
 
 type Server struct {
 	config          Config
 	baseSchema      *schema.Registry
 	secureTransport SecureTransport
+	clock           func() time.Time
 	runtime         atomic.Pointer[runtimeState]
 
 	mu                   sync.Mutex
@@ -113,6 +115,9 @@ func New(config Config) (*Server, error) {
 	if config.ShutdownTimeout == 0 {
 		config.ShutdownTimeout = defaultShutdownTimeout
 	}
+	if config.Clock == nil {
+		config.Clock = time.Now
+	}
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -149,6 +154,7 @@ func New(config Config) (*Server, error) {
 		config:               config,
 		baseSchema:           baseSchema.Clone(),
 		secureTransport:      secureTransport,
+		clock:                config.Clock,
 		connections:          make(map[net.Conn]struct{}),
 		connectionOperations: make(map[net.Conn]*operationRegistry),
 		metaRoutes:           newMetaDNRouteCache(time.Now),

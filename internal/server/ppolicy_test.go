@@ -1564,7 +1564,6 @@ func TestPasswordPolicyCheckerAndForwardWriteSafety(t *testing.T) {
 	checkerPolicy := defaultPasswordPolicy()
 	checkerPolicy.checkQuality = 2
 	checkerPolicy.useCheckModule = true
-	checkerPolicy.checkModuleConfigured = true
 	if got := checkPasswordPolicyQuality(
 		[]byte("valid-length-password"),
 		checkerPolicy,

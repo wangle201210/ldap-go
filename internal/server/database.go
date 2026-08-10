@@ -62,6 +62,7 @@ type runtimeDatabase struct {
 	translucent           *translucentRuntimeConfiguration
 	pcache                *pcacheRuntimeConfiguration
 	otp                   *otpRuntimeConfiguration
+	totpPasswords         []totpPasswordRuntimeConfiguration
 	autoca                *autoCARuntimeConfiguration
 	constraint            *constraintRuntimeConfiguration
 	collect               *collectRuntimeConfiguration
@@ -571,6 +572,7 @@ func loadRuntimeDatabaseOverlays(
 			overlayType != "translucent" &&
 			overlayType != "pcache" &&
 			overlayType != "otp" &&
+			overlayType != "totp" &&
 			overlayType != "autoca" &&
 			overlayType != "constraint" &&
 			overlayType != "collect" &&
@@ -663,6 +665,12 @@ func loadRuntimeDatabaseOverlays(
 				return err
 			}
 			database.otp = &configuration
+		case "totp":
+			configuration, err := loadTOTPPasswordRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.totpPasswords = append(database.totpPasswords, configuration)
 		case "pcache":
 			if database.pcache != nil {
 				return fmt.Errorf(
@@ -1088,7 +1096,7 @@ func loadRuntimeDatabaseOverlays(
 		}
 		if database.pbind != nil || database.remoteAuth != nil {
 			return fmt.Errorf(
-				"%s otp overlay cannot share a database with a Bind-delegating overlay",
+				"%s OTP overlay cannot share a database with a Bind-delegating overlay",
 				database.name,
 			)
 		}

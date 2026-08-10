@@ -369,7 +369,7 @@ func sockAttributeIsManageable(
 	if _, found := sockManageableOperationalAttributes[strings.ToLower(attributeType.OID)]; found {
 		return true
 	}
-	return isManageablePasswordPolicyOperationalAttribute(registry, description)
+	return isManageableOperationalAttribute(registry, description)
 }
 
 func validateSockCompareRequest(

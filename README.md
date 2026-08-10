@@ -35,11 +35,12 @@ make full
 
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
 `ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
-and the reference `lloadd` binary. It rejects reference-test skips, runs the Go
-race detector, and executes the parser fuzz suite. The tagged source is cached
-outside the repository and an explicit checkout is never reset or switched. See
-[docs/testing.md](docs/testing.md) for dependency-prefix and build-cache
-options.
+dynamic-module support, and the reference `lloadd` binary. The suite compiles
+OpenLDAP's contrib `pw-totp` module against that build. It rejects
+reference-test skips, runs the Go race detector, and executes the parser fuzz
+suite. The tagged source is cached outside the repository and an explicit
+checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
+the `libltdl` dependency, dependency-prefix, and build-cache options.
 
 ## Current runnable milestone
 
@@ -286,6 +287,24 @@ in differential tests. Policy configuration and all operational state survive
 `olcPPolicyForwardUpdates` sends policy state changes to the provider without
 mutating the consumer copy. Native C `check_password()` modules remain pending;
 configured native checker paths fail closed.
+OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
+OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
+`{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple
+Bind. Pure TOTP credentials are six digits; `ANDPW` credentials concatenate
+the static password and the final six-digit code. Every successful Simple Bind
+on that database updates the non-replicated `authTimestamp`, and the update is
+part of the authentication transaction so one token cannot be redeemed twice
+concurrently. The schemes fail closed when the overlay is absent or disabled.
+Password Modify and `slappasswd -h` accept a raw seed for pure TOTP schemes and
+`seed|static-password` for `ANDPW`, matching the contrib module's Base32 plus
+`{SSHA}` storage format. Imported `ANDPW` values can nest any password scheme
+implemented by ldap-go; dynamically registered third-party nested schemes are
+not yet executable. Pinned OpenLDAP 2.6.13 module differentials cover all six
+schemes, root and ordinary passwords, database/frontend and duplicate overlay
+placement, current/previous windows, replay, malformed credentials, and
+Relax-managed `authTimestamp` updates. On an entry with no prior timestamp,
+ldap-go intentionally serializes concurrent redemption to one successful Bind;
+OpenLDAP's separate check and update can admit multiple first-use attempts.
 RFC 4533 LDAP Sync provider support is enabled by an imported
 `olcOverlay=syncprov`. It supports `refreshOnly`, `refreshAndPersist`,
 OpenLDAP-compatible multi-SID cookies, present UUID sets, committed

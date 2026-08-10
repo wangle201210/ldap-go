@@ -631,6 +631,23 @@ preserved for compatibility: drift is read from the params entry and written
 to the token entry. HMAC-SM3 and encrypted seed storage are not implied by this
 implementation.
 
+The contrib `pw-totp` path is a separate database or frontend `totp` overlay;
+multiple instances are accepted like OpenLDAP. Its six RFC 2307 schemes decode
+the stored Base32 seed and verify the final six credential digits against the
+current 30-second window; the `ANDPW` variants first verify the credential
+prefix against a nested password scheme implemented by ldap-go. Dynamically
+registered third-party nested password schemes are not executable yet. A
+previous-window code is considered only when the prior `authTimestamp` is set
+and older than that previous window. Every successful Simple Bind, including a
+normal password Bind, replaces `authTimestamp` in the same storage transaction
+without LastMod or sync publication. A failed timestamp write rolls back the
+Bind state and returns invalid credentials, while serialized store updates
+permit only one successful concurrent redemption. Password hashing uses
+OpenLDAP's padded RFC 4648 Base32 representation and fixed `{SSHA}` nested hash
+for `seed|static-password` input. The one-winner first-use behavior is an
+intentional hardening difference: OpenLDAP 2.6.13 checks and updates
+`authTimestamp` separately and can admit concurrent first-use attempts.
+
 The AutoCA overlay is also database-local. Runtime activation reads or creates
 one CA certificate and PKCS#8 private key on the first naming-context suffix.
 Only a Search whose requested attributes resolve, in order, to

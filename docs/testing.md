@@ -84,7 +84,8 @@ make full
 `make compat` runs formatting, vet, all Go tests, the selected OpenLDAP
 reference suite, and a bounded fuzz smoke pass. `make full` additionally runs
 the complete suite with the race detector, builds the fixed OpenLDAP 2.6.13
-source locally with the required backends, overlays, and `lloadd` enabled,
+source locally with the required backends, overlays, dynamic modules, and
+`lloadd` enabled,
 rejects every top-level skip, and fuzzes every parser target for five seconds.
 Set `LDAP_GO_FUZZ_TIME` to extend the fuzz duration before a compatibility row
 is promoted. Corpus minimization is bounded to keep short runs deterministic;
@@ -168,7 +169,13 @@ OpenLDAP 2.6.13 release commit
 `null`, `relay`, and `mdb` backends plus every overlay used by the strict suite
 and the standalone balancer. It builds the libraries, slapd/slap tools,
 `lloadd`, and client tools, emits a sourceable runtime environment, and then
-rejects all optional skips. When `OPENLDAP_SOURCE` is
+rejects all optional skips. Dynamic-module builds require `libltdl` headers and
+the `libltdl` library. Homebrew `libtool` is detected automatically; elsewhere
+set `LIBTOOL_PREFIX` to its installation prefix. The emitted slap-tool wrappers
+are direct links to the built `.libs/slapd`, preserving the
+`slapadd`/`slapcat`/`slaptest` argv[0] name that selects tool behavior. Libtool
+launchers lose that name, while explicit `slapd -T` mode is not equivalent for
+every operation such as configuration conversion. When `OPENLDAP_SOURCE` is
 not set, the tagged source is shallow-cloned once into
 `${TMPDIR:-/tmp}/ldap-go-openldap-source-2.6.13`; set
 `OPENLDAP_SOURCE_CACHE` to move that managed cache:
@@ -184,11 +191,20 @@ An existing clean checkout at that exact commit can instead be selected with
 `OPENLDAP_SOURCE`. A development branch such as `OPENLDAP_REL_ENG_2_6` is
 rejected as compatibility evidence; `OPENLDAP_ALLOW_UNVERIFIED_REFERENCE=1`
 is reserved for upstream diagnostics and emits a warning. `OPENSSL_PREFIX`,
-`CYRUS_SASL_PREFIX`, `LIBEVENT_PREFIX`, `PREFIX`, `JOBS`, and
-`OPENLDAP_ENV_FILE` are optional. On Homebrew systems the script detects
-installed `openssl@3`, `cyrus-sasl`, and `libevent` prefixes. The configuration
-signature permits deterministic incremental rebuilds while recording the exact
-OpenLDAP commit and runtime library paths.
+`LIBTOOL_PREFIX`, `CYRUS_SASL_PREFIX`, `LIBEVENT_PREFIX`, `PREFIX`, `JOBS`,
+and `OPENLDAP_ENV_FILE` are optional. On Homebrew systems the script detects
+installed `openssl@3`, `libtool`, `cyrus-sasl`, and `libevent` prefixes. The
+configuration signature permits deterministic incremental rebuilds while
+recording the exact OpenLDAP commit and runtime library paths.
+
+The pw-totp differential builds the official contrib module from the pinned
+source against the module-enabled reference tree. It compares SHA-1, SHA-256,
+SHA-512, all three `ANDPW` variants, current/future/previous windows, malformed
+credentials, replay rejection, root and ordinary password Bind, database and
+frontend placement, duplicate instances, and Relax-managed `authTimestamp`
+behavior against ldap-go. A separate local concurrency test asserts ldap-go's
+intentional one-winner hardening for simultaneous first use; this is not claimed
+as bug-for-bug parity with OpenLDAP's separate check/update sequence.
 
 This separation is intentional. The 2026-08-03 diagnostic run of branch
 commit `04a19039e8d13dc06316e2d90994d6ff2812eb3d` closed the LDAP connection

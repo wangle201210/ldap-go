@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base32"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -1603,12 +1604,37 @@ func TestSlappasswdCompatibilityOptions(t *testing.T) {
 		})
 	}
 
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slappasswd", "-h", auth.TOTP1HashScheme, "-s", secret},
+		"unused stdin",
+	)
+	wantTOTP := auth.TOTP1HashScheme + base32.StdEncoding.EncodeToString([]byte(secret)) + "\n"
+	if exitCode != 0 || stderr != "" || stdout != wantTOTP {
+		t.Fatalf("slappasswd TOTP exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slappasswd",
+			"-h",
+			auth.TOTP256AndPWHashScheme,
+			"-s",
+			"seed|static-secret",
+		},
+		"unused stdin",
+	)
+	if exitCode != 0 || stderr != "" ||
+		!strings.HasPrefix(stdout, auth.TOTP256AndPWHashScheme+"ONSWKZA=|{SSHA}") {
+		t.Fatalf("slappasswd TOTP ANDPW exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
 	passwordFile := filepath.Join(t.TempDir(), "password.txt")
 	filePassword := []byte("password-from-file\n")
 	if err := os.WriteFile(passwordFile, filePassword, 0o600); err != nil {
 		t.Fatalf("write password file: %v", err)
 	}
-	stdout, stderr, exitCode := runCLIForTest(
+	stdout, stderr, exitCode = runCLIForTest(
 		t,
 		[]string{"slappasswd", "-T", passwordFile, "-h", "{SM3}"},
 		"unused stdin",

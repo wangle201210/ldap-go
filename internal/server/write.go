@@ -38,7 +38,9 @@ var protectedOperationalAttributes = map[string]string{
 	"1.3.6.1.4.1.42.2.27.8.1.21":    "pwdGraceUseTime",
 	"1.3.6.1.4.1.42.2.27.8.1.29":    "pwdLastSuccess",
 	"1.3.6.1.4.1.42.2.27.8.1.33":    "pwdAccountTmpLockoutEnd",
+	"1.3.6.1.4.1.453.16.2.188":      "authTimestamp",
 	"1.2.840.113556.1.2.102":        "memberOf",
+	"authtimestamp":                 "authTimestamp",
 	"createtimestamp":               "createTimestamp",
 	"creatorsname":                  "creatorsName",
 	"collectiveattributesubentries": "collectiveAttributeSubentries",
@@ -61,13 +63,14 @@ var protectedOperationalAttributes = map[string]string{
 	"subschemasubentry":             "subschemaSubentry",
 }
 
-var manageablePasswordPolicyOperationalAttributes = map[string]struct{}{
+var manageableOperationalAttributes = map[string]struct{}{
 	"1.3.6.1.4.1.42.2.27.8.1.16": {},
 	"1.3.6.1.4.1.42.2.27.8.1.19": {},
 	"1.3.6.1.4.1.42.2.27.8.1.20": {},
 	"1.3.6.1.4.1.42.2.27.8.1.21": {},
 	"1.3.6.1.4.1.42.2.27.8.1.29": {},
 	"1.3.6.1.4.1.42.2.27.8.1.33": {},
+	"1.3.6.1.4.1.453.16.2.188":   {},
 }
 
 func (server *Server) handleAdd(
@@ -319,6 +322,25 @@ func (server *Server) handleAdd(
 		logicalEntry, err := collectivePlan.apply(entry)
 		if err != nil {
 			return err
+		}
+		for _, attribute := range request.Entry.Attributes {
+			if isAuthTimestampAttribute(
+				state.runtime.schema,
+				attribute.Description,
+			) && (!controls.relax || !server.allowed(
+				state.runtime,
+				tx,
+				state.boundDN,
+				logicalEntry,
+				attribute.Description,
+				nil,
+				acl.Manage,
+			)) {
+				return operationFailed(
+					ldapwire.ResultConstraintViolation,
+					"operational attribute is not user modifiable",
+				)
+			}
 		}
 		if err := server.checkAssertion(
 			state.runtime,
@@ -980,7 +1002,7 @@ func (server *Server) modifyEntry(
 			if isProtectedOperationalAttribute(
 				runtime.schema,
 				change.Attribute.Description,
-			) && (!isManageablePasswordPolicyOperationalAttribute(
+			) && (!relax || !isManageableOperationalAttribute(
 				runtime.schema,
 				change.Attribute.Description,
 			) || !server.allowed(
@@ -2711,7 +2733,7 @@ func isProtectedOperationalAttribute(
 	return protected
 }
 
-func isManageablePasswordPolicyOperationalAttribute(
+func isManageableOperationalAttribute(
 	registry *schema.Registry,
 	description string,
 ) bool {
@@ -2723,8 +2745,23 @@ func isManageablePasswordPolicyOperationalAttribute(
 	if attributeType, ok := registry.AttributeType(base); ok {
 		key = strings.ToLower(attributeType.OID)
 	}
-	_, manageable := manageablePasswordPolicyOperationalAttributes[key]
+	_, manageable := manageableOperationalAttributes[key]
 	return manageable
+}
+
+func isAuthTimestampAttribute(
+	registry *schema.Registry,
+	description string,
+) bool {
+	base := description
+	if index := strings.IndexByte(base, ';'); index >= 0 {
+		base = base[:index]
+	}
+	if attributeType, ok := registry.AttributeType(base); ok {
+		return attributeType.OID == "1.3.6.1.4.1.453.16.2.188"
+	}
+	return strings.EqualFold(strings.TrimSpace(base), "authTimestamp") ||
+		strings.TrimSpace(base) == "1.3.6.1.4.1.453.16.2.188"
 }
 
 func belowKnownNamingContext(reader storage.Reader, dn directory.DN) (bool, error) {

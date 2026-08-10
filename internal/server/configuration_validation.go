@@ -160,7 +160,7 @@ func summarizeConfiguration(
 
 func runtimeDatabaseOverlayCount(database runtimeDatabase) int {
 	count := len(database.retcodes) + len(database.memberOf) + len(database.refint) +
-		len(database.nestGroups)
+		len(database.nestGroups) + len(database.totpPasswords)
 	for _, configured := range []bool{
 		database.rwm != nil,
 		database.serverSideSort,

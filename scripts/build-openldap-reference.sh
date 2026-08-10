@@ -42,7 +42,7 @@ ensure_symlink() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, and OPENLDAP_ENV_FILE"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, and OPENLDAP_ENV_FILE"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -144,7 +144,7 @@ set -- \
 	--with-tls=openssl
 
 case "$configure_help" in
-	*--enable-modules*) set -- "$@" --enable-modules=no ;;
+	*--enable-modules*) set -- "$@" --enable-modules=yes ;;
 esac
 case "$configure_help" in
 	*--with-systemd*) set -- "$@" --without-systemd ;;
@@ -215,6 +215,27 @@ if [ -n "$openssl_prefix" ]; then
 		pkg_config_path="$openssl_prefix/lib/pkgconfig${pkg_config_path:+:$pkg_config_path}"
 	fi
 	runtime_dependency_path=$openssl_prefix/lib
+fi
+
+libtool_prefix=${LIBTOOL_PREFIX:-}
+if [ -z "$libtool_prefix" ] && [ "$(uname -s 2>/dev/null || true)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+	brew_libtool=$(brew --prefix libtool 2>/dev/null || true)
+	if [ -n "$brew_libtool" ] && [ -f "$brew_libtool/include/ltdl.h" ]; then
+		libtool_prefix=$brew_libtool
+	fi
+fi
+if [ -n "$libtool_prefix" ]; then
+	if [ ! -f "$libtool_prefix/include/ltdl.h" ]; then
+		die "libltdl headers were not found below LIBTOOL_PREFIX: $libtool_prefix"
+	fi
+	if [ ! -f "$libtool_prefix/lib/libltdl.dylib" ] &&
+		[ ! -f "$libtool_prefix/lib/libltdl.so" ] &&
+		[ ! -f "$libtool_prefix/lib/libltdl.a" ]; then
+		die "libltdl library was not found below LIBTOOL_PREFIX: $libtool_prefix"
+	fi
+	cppflags="-I$libtool_prefix/include${cppflags:+ $cppflags}"
+	ldflags="-L$libtool_prefix/lib${ldflags:+ $ldflags}"
+	runtime_dependency_path="$libtool_prefix/lib${runtime_dependency_path:+:$runtime_dependency_path}"
 fi
 
 libevent_prefix=${LIBEVENT_PREFIX:-}
@@ -321,6 +342,7 @@ configuration_signature=$(
 		printf 'LDFLAGS=%s\n' "$ldflags"
 		printf 'LIBS=%s\n' "${LIBS:-}"
 		printf 'PKG_CONFIG_PATH=%s\n' "$pkg_config_path"
+		printf 'LIBTOOL_PREFIX=%s\n' "$libtool_prefix"
 		printf 'CYRUS_SASL_PREFIX=%s\n' "$cyrus_sasl_prefix"
 		printf 'LIBEVENT_PREFIX=%s\n' "$libevent_prefix"
 		for argument in "$@"; do
@@ -336,6 +358,7 @@ printf 'Verified reference: OpenLDAP %s (%s)\n' "$verified_version" "$verified_r
 printf 'Build directory: %s\n' "$requested_build_dir"
 printf 'Configure prefix: %s\n' "$prefix_dir"
 printf 'OpenSSL prefix: %s\n' "${openssl_prefix:-system default}"
+printf 'libtool prefix: %s\n' "${libtool_prefix:-system default}"
 printf 'Cyrus SASL prefix: %s\n' "${cyrus_sasl_prefix:-system default}"
 printf 'libevent prefix: %s\n' "${libevent_prefix:-system default}"
 if [ "$effective_build_dir" != "$requested_build_dir" ]; then
@@ -386,12 +409,12 @@ printf 'Building LDAP client tools...\n'
 "$make_command" -C "$effective_build_dir/clients/tools" -j "$jobs"
 
 slapd=$artifact_build_dir/servers/slapd/slapd
-slapadd=$artifact_build_dir/servers/slapd/slapadd
 lloadd=$artifact_build_dir/servers/lloadd/lloadd
 built_slapd=$effective_build_dir/servers/slapd/slapd
 schema_dir=$source_dir/servers/slapd/schema
 for required_path in \
 	"$built_slapd" \
+	"$effective_build_dir/servers/slapd/.libs/slapd" \
 	"$effective_build_dir/servers/lloadd/lloadd" \
 	"$effective_build_dir/servers/slapd/slapadd" \
 	"$effective_build_dir/servers/slapd/slapcat" \
@@ -408,6 +431,30 @@ done
 if [ ! -f "$schema_dir/core.schema" ]; then
 	die "OpenLDAP core schema is missing: $schema_dir/core.schema"
 fi
+
+# A module-enabled libtool wrapper invokes .libs/slapd with "slapd" as argv[0]
+# for every generated slap* tool. Link each tool name directly to the real
+# binary so basename dispatch is preserved. The -T interface is not equivalent:
+# notably, "slapd -T test -f ... -F ..." exits 1 during config conversion.
+slap_tool_dir=$artifact_build_dir/reference-tools
+mkdir -p "$slap_tool_dir" || die "cannot create slap tool wrapper directory: $slap_tool_dir"
+slap_tool_binary=$effective_build_dir/servers/slapd/.libs/slapd
+for tool_name in \
+	slapacl \
+	slapadd \
+	slapauth \
+	slapcat \
+	slapdn \
+	slapindex \
+	slapmodify \
+	slappasswd \
+	slaptest
+do
+	tool_pathname=$slap_tool_dir/$tool_name
+	ln -sf "$slap_tool_binary" "$tool_pathname" ||
+		die "cannot create slap tool link: $tool_pathname"
+done
+slapadd=$slap_tool_dir/slapadd
 
 openldap_library_path=$artifact_build_dir/libraries/libldap/.libs:$artifact_build_dir/libraries/liblber/.libs
 runtime_library_path=$openldap_library_path
@@ -454,7 +501,7 @@ if [ "$allow_unverified_reference" -eq 1 ]; then
 	expected_runtime_version=$version
 fi
 
-tool_path=$artifact_build_dir/servers/slapd:$artifact_build_dir/servers/lloadd:$artifact_build_dir/clients/tools
+tool_path=$slap_tool_dir:$artifact_build_dir/servers/slapd:$artifact_build_dir/servers/lloadd:$artifact_build_dir/clients/tools
 {
 	printf '# Generated by scripts/build-openldap-reference.sh.\n'
 	write_export OPENLDAP_SOURCE "$source_dir"
@@ -464,6 +511,10 @@ tool_path=$artifact_build_dir/servers/slapd:$artifact_build_dir/servers/lloadd:$
 	write_export OPENLDAP_BUILD "$requested_build_dir"
 	write_export OPENLDAP_BUILD_WORK "$effective_build_dir"
 	write_export OPENLDAP_PREFIX "$prefix_dir"
+	write_export OPENLDAP_CPPFLAGS "$cppflags"
+	write_export OPENLDAP_LDFLAGS "$ldflags"
+	write_export OPENLDAP_OPENSSL_PREFIX "$openssl_prefix"
+	write_export OPENLDAP_LIBTOOL_PREFIX "$libtool_prefix"
 	write_export OPENLDAP_SLAPD "$slapd"
 	write_export OPENLDAP_SLAPADD "$slapadd"
 	write_export OPENLDAP_LLOADD "$lloadd"

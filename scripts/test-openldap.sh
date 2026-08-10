@@ -37,7 +37,10 @@ lloadd=$(find_tool lloadd \
 OPENLDAP_LLOADD=$lloadd
 export OPENLDAP_LLOADD
 
-tool_dirs="$(dirname "$slapd"):$(dirname "$slapadd"):$(dirname "$lloadd")"
+# The reference builder places argv[0]-preserving slap* links next to slapadd.
+# Keep that directory ahead of libtool's servers/slapd wrappers, which lose the
+# requested tool name when they exec .libs/slapd.
+tool_dirs="$(dirname "$slapadd"):$(dirname "$slapd"):$(dirname "$lloadd")"
 for directory in \
 	/opt/homebrew/opt/openldap/bin \
 	/opt/homebrew/opt/openldap/sbin \

@@ -56,30 +56,29 @@ type passwordPolicyRuntimeConfiguration struct {
 }
 
 type passwordPolicy struct {
-	attribute             string
-	minAge                int
-	maxAge                int
-	maxIdle               int
-	inHistory             int
-	checkQuality          int
-	minLength             int
-	maxLength             int
-	expireWarning         int
-	graceExpiry           int
-	graceAuthentication   int
-	lockout               bool
-	lockoutDuration       int
-	minDelay              int
-	maxDelay              int
-	maxFailure            int
-	maxRecordedFailure    int
-	failureCountInterval  int
-	mustChange            bool
-	allowUserChange       bool
-	safeModify            bool
-	useCheckModule        bool
-	checkModuleConfigured bool
-	checkModuleArgument   []byte
+	attribute            string
+	minAge               int
+	maxAge               int
+	maxIdle              int
+	inHistory            int
+	checkQuality         int
+	minLength            int
+	maxLength            int
+	expireWarning        int
+	graceExpiry          int
+	graceAuthentication  int
+	lockout              bool
+	lockoutDuration      int
+	minDelay             int
+	maxDelay             int
+	maxFailure           int
+	maxRecordedFailure   int
+	failureCountInterval int
+	mustChange           bool
+	allowUserChange      bool
+	safeModify           bool
+	useCheckModule       bool
+	checkModuleArgument  []byte
 }
 
 type passwordPolicyModificationOptions struct {
@@ -210,8 +209,6 @@ func loadPasswordPolicy(
 	if err := parsePasswordPolicyEntry(policyEntry, &policy); err != nil {
 		return defaultPasswordPolicy(), false
 	}
-	policy.checkModuleConfigured =
-		database.ppolicy.passwordCheckModule != ""
 	return policy, true
 }
 
@@ -455,6 +452,16 @@ func (server *Server) authenticatePasswordBind(
 		return result, nil
 	}
 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
+		if activeTOTPPasswordConfiguration(runtime, database) != nil {
+			return server.authenticateTOTPPasswordDatabaseRoot(
+				ctx,
+				runtime,
+				*database,
+				dn,
+				password,
+				rootPassword,
+			)
+		}
 		result.authenticated = auth.VerifyPassword(
 			rootPassword,
 			password,
@@ -473,6 +480,7 @@ func (server *Server) authenticatePasswordBind(
 		forwardBefore      directory.Entry
 		forwardAfter       directory.Entry
 	)
+	bindNow := server.clock()
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
 		entry, err := tx.Get(dn)
@@ -513,7 +521,7 @@ func (server *Server) authenticatePasswordBind(
 				entry,
 				policy,
 				*database,
-				time.Now(),
+				bindNow,
 			)
 			if clearExpiredLock && (writePolicyState || forwardPolicyState) {
 				policyStateEntry.ReplaceValues("pwdAccountLockedTime", nil)
@@ -532,8 +540,16 @@ func (server *Server) authenticatePasswordBind(
 		}
 
 		passwordPresent := entry.HasAttribute(policy.attribute)
+		totpPasswordEnabled := activeTOTPPasswordConfiguration(runtime, database) != nil
+		lastTOTPAuthentication := time.Time{}
+		if totpPasswordEnabled {
+			lastTOTPAuthentication = totpPasswordLastAuthentication(
+				runtime.schema,
+				entry,
+			)
+		}
 		for _, stored := range entry.Values(policy.attribute) {
-			if server.allowed(
+			if !server.allowed(
 				runtime,
 				tx,
 				"",
@@ -541,21 +557,32 @@ func (server *Server) authenticatePasswordBind(
 				policy.attribute,
 				stored,
 				acl.Auth,
-			) && auth.VerifyPassword(stored, password) {
+			) {
+				continue
+			}
+			matched := auth.VerifyPassword(stored, password)
+			if totpPasswordEnabled && auth.IsTOTPPassword(stored) {
+				matched = auth.VerifyTOTPPassword(
+					stored,
+					password,
+					bindNow,
+					lastTOTPAuthentication,
+				)
+			}
+			if matched {
 				evaluation.authenticated = true
 			}
 		}
 		if overlayEnabled && passwordPresent {
-			now := time.Now()
 			if !evaluation.authenticated {
 				if hasPolicy && (writePolicyState || forwardPolicyState) {
-					applyPasswordPolicyBindFailure(policyStateEntry, policy, now)
+					applyPasswordPolicyBindFailure(policyStateEntry, policy, bindNow)
 				}
 			} else if hasPolicy {
 				evaluateSuccessfulPasswordPolicyBind(
 					policyStateEntry,
 					policy,
-					now,
+					bindNow,
 					&evaluation,
 					writePolicyState || forwardPolicyState,
 				)
@@ -564,20 +591,45 @@ func (server *Server) authenticatePasswordBind(
 		if evaluation.authenticated && database.lastBind {
 			applyPasswordLastSuccess(
 				&entry,
-				time.Now(),
+				bindNow,
 				database.lastBindPrecision,
 			)
 		}
-		return server.finishPasswordBindStateWrite(
+		if err := server.finishPasswordBindStateWrite(
 			writer,
 			runtime,
 			*database,
 			before,
 			&entry,
 			&syncChange,
-		)
+		); err != nil {
+			if evaluation.authenticated && totpPasswordEnabled {
+				return fmt.Errorf("%w: %v", errTOTPPasswordStateUpdate, err)
+			}
+			return err
+		}
+		if evaluation.authenticated && totpPasswordEnabled {
+			entry.ReplaceValues(
+				"authTimestamp",
+				[][]byte{[]byte(formatPasswordPolicyTime(bindNow))},
+			)
+			if err := tx.Put(entry, true); err != nil {
+				return fmt.Errorf("%w: %v", errTOTPPasswordStateUpdate, err)
+			}
+		}
+		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errTOTPPasswordStateUpdate) {
+			server.config.Logger.Debug(
+				"TOTP authentication state update failed",
+				"dn",
+				rawDN,
+				"error",
+				err,
+			)
+			return passwordBindResult{}, nil
+		}
 		return passwordBindResult{}, err
 	}
 	server.finishWriteEffects(ctx, nil, syncChange)
@@ -634,6 +686,63 @@ func (server *Server) authenticatePasswordBind(
 		}
 	}
 	return result, nil
+}
+
+func (server *Server) authenticateTOTPPasswordDatabaseRoot(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	dn directory.DN,
+	password,
+	rootPassword []byte,
+) (passwordBindResult, error) {
+	result := passwordBindResult{
+		authenticated: auth.VerifyPassword(rootPassword, password),
+	}
+	totpRootPassword := auth.IsTOTPPassword(rootPassword)
+	bindNow := server.clock()
+	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		tx := writerForDatabase(writer, database)
+		entry, err := tx.Get(dn)
+		if err != nil {
+			if totpRootPassword {
+				result.authenticated = false
+			}
+			// OpenLDAP leaves an ordinary successful root Bind unchanged when
+			// the root DN has no corresponding entry for authTimestamp.
+			return nil
+		}
+		if totpRootPassword {
+			result.authenticated = auth.VerifyTOTPPassword(
+				rootPassword,
+				password,
+				bindNow,
+				totpPasswordLastAuthentication(runtime.schema, entry),
+			)
+		}
+		if !result.authenticated {
+			return nil
+		}
+		entry.ReplaceValues(
+			"authTimestamp",
+			[][]byte{[]byte(formatPasswordPolicyTime(bindNow))},
+		)
+		if err := tx.Put(entry, true); err != nil {
+			return fmt.Errorf("%w: %v", errTOTPPasswordStateUpdate, err)
+		}
+		return nil
+	})
+	if errors.Is(err, errTOTPPasswordStateUpdate) {
+		server.config.Logger.Debug(
+			"TOTP root authentication state update failed",
+			"dn",
+			dn.String(),
+			"error",
+			err,
+		)
+		return passwordBindResult{}, nil
+	}
+	return result, err
 }
 
 func (server *Server) finishPasswordBindStateWrite(
@@ -1544,7 +1653,7 @@ func checkPasswordPolicyQuality(
 		}
 		return passwordPolicyNoError
 	}
-	if policy.useCheckModule && policy.checkModuleConfigured {
+	if policy.useCheckModule {
 		// OpenLDAP fails closed when a policy requests a checker but no
 		// check_password() implementation can be called.
 		return passwordPolicyInsufficientQuality
