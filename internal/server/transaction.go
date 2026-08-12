@@ -338,7 +338,8 @@ func (server *Server) handleTransactionSpecification(
 	}
 	if result == nil &&
 		(database.partition == configurationStoragePartition ||
-			databaseUsesNullBackend(state.transaction.runtime, *database)) {
+			databaseUsesNullBackend(state.transaction.runtime, *database) ||
+			database.sqlBackend != nil) {
 		result = transactionResult(
 			ldapwire.ResultUnwillingToPerform,
 			"backend doesn't support transactions",

@@ -87,9 +87,21 @@ func ValidateConfigurationReader(
 		}
 	}
 	validator := &Server{
-		config:     config,
-		baseSchema: baseSchema.Clone(),
+		config:      config,
+		baseSchema:  baseSchema.Clone(),
+		sqlBackends: make(map[*sqlBackendRuntimeConfiguration]struct{}),
 	}
+	defer func() {
+		validator.sqlBackendsMu.Lock()
+		configurations := make([]*sqlBackendRuntimeConfiguration, 0, len(validator.sqlBackends))
+		for configuration := range validator.sqlBackends {
+			configurations = append(configurations, configuration)
+		}
+		validator.sqlBackendsMu.Unlock()
+		for _, configuration := range configurations {
+			_ = configuration.close()
+		}
+	}()
 
 	listenerURLs, err := configurationValidationListenerURLs(
 		reader,
@@ -101,6 +113,9 @@ func ValidateConfigurationReader(
 	validator.config.ListenerURLs = listenerURLs
 	runtime, err := validator.buildRuntimeState(reader)
 	if err != nil {
+		return ConfigurationSummary{}, err
+	}
+	if err := validator.validateSQLBackends(ctx, runtime); err != nil {
 		return ConfigurationSummary{}, err
 	}
 	var aclResult acl.LoadResult

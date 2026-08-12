@@ -1016,12 +1016,14 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	}
 	previous := server.runtime.Load()
 	if previous != nil && runtime.revision <= previous.revision {
+		server.closeCandidateSQLBackends(runtime, previous)
 		return
 	}
 	server.prepareMetaTransportLifecycle(previous, runtime)
 	server.configureMetaTransportOwners(metaBackendTransportOwners(runtime))
 	server.syncChanges.configure(runtime)
 	server.runtime.Store(runtime)
+	server.retireSQLBackends(previous, runtime)
 	server.syncConsumers.configure(runtime)
 	select {
 	case server.ddsWake <- struct{}{}:
@@ -1046,6 +1048,17 @@ func (server *Server) closeSQLBackends() {
 			server.config.Logger.Error("close SQL backend", "error", err)
 		}
 	}
+}
+
+func (server *Server) unregisterSQLBackend(
+	configuration *sqlBackendRuntimeConfiguration,
+) {
+	if configuration == nil {
+		return
+	}
+	server.sqlBackendsMu.Lock()
+	delete(server.sqlBackends, configuration)
+	server.sqlBackendsMu.Unlock()
 }
 
 func (server *Server) registerSQLBackend(configuration *sqlBackendRuntimeConfiguration) {

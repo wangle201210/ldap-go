@@ -920,9 +920,9 @@ func (store *homedirEffectStore) Update(
 	defer store.mu.Unlock()
 
 	runtime := store.server.runtime.Load()
-	if runtime == nil {
-		return store.Store.Update(ctx, update)
-	}
+	coordinator := newSQLBackendTransactionCoordinator(ctx)
+	ctx = withSQLBackendTransactionCoordinator(ctx, coordinator)
+	defer coordinator.rollback()
 	var changes []homedirStorageChange
 	err := store.Store.Update(ctx, func(writer storage.Writer) error {
 		tracker := newHomedirTrackingWriter(writer)
@@ -930,12 +930,15 @@ func (store *homedirEffectStore) Update(
 			return err
 		}
 		changes = tracker.changes()
-		return nil
+		return coordinator.commit()
 	})
 	if err != nil {
 		return err
 	}
-	store.server.applyHomedirStorageChanges(runtime, changes)
+	coordinator.completeUpdate()
+	if runtime != nil {
+		store.server.applyHomedirStorageChanges(runtime, changes)
+	}
 	return nil
 }
 

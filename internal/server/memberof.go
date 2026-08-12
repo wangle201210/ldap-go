@@ -217,6 +217,7 @@ var memberOfResultCodes = map[string]ldapwire.ResultCode{
 	"aliasproblem":                 ldapwire.ResultAliasProblem,
 	"invaliddnsyntax":              ldapwire.ResultInvalidDNSyntax,
 	"aliasderefproblem":            ldapwire.ResultAliasDereferencingProblem,
+	"proxyauthzfailure":            ldapwire.ResultProxyAuthorizationFailure,
 	"inappropriateauth":            ldapwire.ResultInappropriateAuthentication,
 	"invalidcredentials":           ldapwire.ResultInvalidCredentials,
 	"insufficientaccess":           ldapwire.ResultInsufficientAccessRights,

@@ -18,6 +18,9 @@ func (store *accessContextStore) View(
 	ctx context.Context,
 	view func(storage.Reader) error,
 ) error {
+	coordinator := newSQLBackendReadCoordinator(ctx)
+	ctx = withSQLBackendReadCoordinator(ctx, coordinator)
+	defer coordinator.close()
 	return store.Store.View(ctx, func(reader storage.Reader) error {
 		return view(accessReaderFromContext(ctx, reader))
 	})

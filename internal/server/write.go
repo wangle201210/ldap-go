@@ -921,6 +921,11 @@ func (server *Server) modifyEntry(
 	accesslogRecord *accesslogWriteRecord,
 ) (*runtimeState, []*syncChange, error) {
 	configurationWrite := isConfigurationDN(dn)
+	var sqlModify *sqlBackendModifyContext
+	if database.sqlBackend != nil {
+		sqlModify = &sqlBackendModifyContext{dn: dn}
+		ctx = withSQLBackendModify(ctx, sqlModify)
+	}
 
 	var (
 		nextRuntime *runtimeState
@@ -1050,6 +1055,16 @@ func (server *Server) modifyEntry(
 			)) {
 				return operationFailed(ldapwire.ResultConstraintViolation, "operational attribute is not user modifiable")
 			}
+			if sqlModify != nil &&
+				change.Operation == ldapwire.ModificationIncrement &&
+				!database.sqlBackend.failIfNoMapping {
+				sqlModify.changes = append(
+					sqlModify.changes,
+					cloneLDAPModifications([]ldapwire.Modification{change})[0],
+				)
+				continue
+			}
+			beforeChange := entry.Clone()
 			if failure := applyModificationWithPermissive(
 				&entry,
 				change,
@@ -1057,6 +1072,19 @@ func (server *Server) modifyEntry(
 			); failure != nil {
 				return failure
 			}
+			if sqlModify != nil {
+				if effective, present := effectiveSQLModification(
+					beforeChange,
+					entry,
+					change,
+				); present {
+					sqlModify.changes = append(sqlModify.changes, effective)
+				}
+			}
+		}
+		var sqlProcessedEntry directory.Entry
+		if sqlModify != nil {
+			sqlProcessedEntry = entry.Clone()
 		}
 		if mutation != nil {
 			if err := mutation(&entry); err != nil {
@@ -1133,6 +1161,12 @@ func (server *Server) modifyEntry(
 				return err
 			}
 		}
+		if sqlModify != nil {
+			sqlModify.changes = append(
+				sqlModify.changes,
+				syntheticSQLModifications(sqlProcessedEntry, entry)...,
+			)
+		}
 		if err := tx.Put(entry, true); err != nil {
 			return err
 		}
@@ -1198,6 +1232,85 @@ func (server *Server) modifyEntry(
 		return nil
 	})
 	return nextRuntime, syncChanges, err
+}
+
+func effectiveSQLModification(
+	before,
+	after directory.Entry,
+	change ldapwire.Modification,
+) (ldapwire.Modification, bool) {
+	effective := cloneLDAPModifications([]ldapwire.Modification{change})[0]
+	switch change.Operation {
+	case ldapwire.ModificationAdd:
+		effective.Attribute.Values = nil
+		for _, value := range change.Attribute.Values {
+			if !before.HasValue(change.Attribute.Description, value) &&
+				after.HasValue(change.Attribute.Description, value) {
+				effective.Attribute.Values = append(
+					effective.Attribute.Values,
+					append([]byte(nil), value...),
+				)
+			}
+		}
+		return effective, len(effective.Attribute.Values) != 0
+	case ldapwire.ModificationDelete:
+		if len(change.Attribute.Values) == 0 {
+			return effective, before.HasAttribute(change.Attribute.Description) &&
+				!after.HasAttribute(change.Attribute.Description)
+		}
+		effective.Attribute.Values = nil
+		for _, value := range change.Attribute.Values {
+			if before.HasValue(change.Attribute.Description, value) &&
+				!after.HasValue(change.Attribute.Description, value) {
+				effective.Attribute.Values = append(
+					effective.Attribute.Values,
+					append([]byte(nil), value...),
+				)
+			}
+		}
+		return effective, len(effective.Attribute.Values) != 0
+	case ldapwire.ModificationReplace, ldapwire.ModificationIncrement:
+		return effective, true
+	default:
+		return ldapwire.Modification{}, false
+	}
+}
+
+func syntheticSQLModifications(
+	before,
+	after directory.Entry,
+) []ldapwire.Modification {
+	names := make(map[string]string)
+	for _, attribute := range before.Attributes {
+		base := strings.Split(attribute.Description, ";")[0]
+		names[strings.ToLower(base)] = attribute.Description
+	}
+	for _, attribute := range after.Attributes {
+		base := strings.Split(attribute.Description, ";")[0]
+		names[strings.ToLower(base)] = attribute.Description
+	}
+	keys := make([]string, 0, len(names))
+	for name := range names {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	changes := make([]ldapwire.Modification, 0, len(keys))
+	for _, name := range keys {
+		description := names[name]
+		beforeValues := before.Values(description)
+		afterValues := after.Values(description)
+		if sqlValuesEqual(beforeValues, afterValues) {
+			continue
+		}
+		changes = append(changes, ldapwire.Modification{
+			Operation: ldapwire.ModificationReplace,
+			Attribute: directory.Attribute{
+				Description: description,
+				Values:      afterValues,
+			},
+		})
+	}
+	return changes
 }
 
 func (server *Server) handleDelete(
@@ -1707,6 +1820,9 @@ func (server *Server) handleModifyDN(
 		newRDN:          request.NewRDN,
 		deleteOldRDN:    request.DeleteOldRDN,
 	}
+	if database.sqlBackend != nil {
+		ctx = withSQLBackendRename(ctx, oldDN, newDN)
+	}
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
 		sourceEntry, err := server.entryOrReferral(
@@ -1962,6 +2078,12 @@ func (server *Server) handleModifyDN(
 			return nil
 		}); err != nil {
 			return err
+		}
+		if database.sqlBackend != nil && len(moves) > 1 {
+			return operationFailed(
+				ldapwire.ResultNotAllowedOnNonLeaf,
+				"subtree rename not supported",
+			)
 		}
 
 		for _, item := range moves {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -522,7 +523,7 @@ func lastModEnabled(runtime *runtimeState, target directory.DN) bool {
 
 func (server *Server) validateRuntimeConfiguration(
 	writer storage.Writer,
-) (*runtimeState, error) {
+) (runtime *runtimeState, returnErr error) {
 	runtime, err := server.buildRuntimeState(writer)
 	if err != nil {
 		if result, ok := collectConfigurationResult(err); ok {
@@ -540,8 +541,33 @@ func (server *Server) validateRuntimeConfiguration(
 		)
 	}
 	previous := server.runtime.Load()
+	ctx := context.Background()
+	if provider, ok := writer.(interface {
+		StorageContext() context.Context
+	}); ok && provider.StorageContext() != nil {
+		ctx = provider.StorageContext()
+	}
+	coordinator := sqlBackendTransactionCoordinatorFromContext(ctx)
+	cleanupCandidate := func() {
+		server.closeCandidateSQLBackends(runtime, previous)
+	}
+	defer func() {
+		if returnErr != nil {
+			if coordinator != nil {
+				coordinator.deferCleanup(cleanupCandidate)
+			} else {
+				cleanupCandidate()
+			}
+		}
+	}()
 	applyMetaBackendOnlineConfigurationState(previous, runtime)
 	reuseSQLBackendOnlineConfigurationState(previous, runtime)
+	if err := server.validateSQLBackends(ctx, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid SQL backend: "+err.Error(),
+		)
+	}
 	reuseSeqmodCoordinators(previous, runtime)
 	reusePcacheStates(previous, runtime)
 	if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
@@ -563,6 +589,9 @@ func (server *Server) validateRuntimeConfiguration(
 		)
 	}
 	runtime.revision = server.nextRuntimeRevision()
+	if coordinator != nil {
+		coordinator.setCandidateCleanup(cleanupCandidate)
+	}
 	return runtime, nil
 }
 

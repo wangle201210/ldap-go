@@ -544,10 +544,15 @@ func readerForDatabase(
 		}); ok && provider.StorageContext() != nil {
 			ctx = provider.StorageContext()
 		}
-		backend := &sqlBackendReader{
-			Reader:        reader,
-			configuration: database.sqlBackend,
-			ctx:           ctx,
+		var backend *sqlBackendReader
+		if coordinator := sqlBackendReadCoordinatorFromContext(ctx); coordinator != nil {
+			backend = coordinator.reader(database.sqlBackend, reader)
+		} else {
+			backend = &sqlBackendReader{
+				Reader:        reader,
+				configuration: database.sqlBackend,
+				ctx:           ctx,
+			}
 		}
 		if database.rwm == nil {
 			return backend
@@ -571,6 +576,17 @@ func writerForDatabase(
 			StorageContext() context.Context
 		}); ok && provider.StorageContext() != nil {
 			ctx = provider.StorageContext()
+		}
+		if coordinator := sqlBackendTransactionCoordinatorFromContext(ctx); coordinator != nil {
+			backend := coordinator.writer(database.sqlBackend, writer)
+			if database.rwm == nil {
+				return backend
+			}
+			mappedReader := &rwmStorageReader{Reader: backend, configuration: database.rwm}
+			return &rwmStorageWriter{
+				rwmStorageReader: mappedReader,
+				writer:           backend,
+			}
 		}
 		reader := &sqlBackendReader{
 			Reader:        writer,

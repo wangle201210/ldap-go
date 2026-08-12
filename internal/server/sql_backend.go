@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/slingdata-io/godbc"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -29,7 +28,12 @@ const (
 	defaultSQLATQuery = "SELECT name,sel_expr,from_tbls,join_where,add_proc," +
 		"delete_proc,param_order,expect_return,sel_expr_u " +
 		"FROM ldap_attr_mappings WHERE oc_map_id=?"
-	defaultSQLIDQuery = "SELECT id,keyval,oc_map_id,dn FROM ldap_entries WHERE dn=?"
+	defaultSQLIDQuery              = "SELECT id,keyval,oc_map_id,dn FROM ldap_entries WHERE dn=?"
+	defaultSQLInsertEntryStatement = "INSERT INTO ldap_entries " +
+		"(dn,oc_map_id,parent,keyval) VALUES (?,?,?,?)"
+	defaultSQLDeleteEntryStatement         = "DELETE FROM ldap_entries WHERE id=?"
+	defaultSQLRenameEntryStatement         = "UPDATE ldap_entries SET dn=?,parent=?,keyval=? WHERE id=?"
+	defaultSQLDeleteObjectClassesStatement = "DELETE FROM ldap_entry_objclasses WHERE entry_id=?"
 )
 
 type sqlBackendRuntimeConfiguration struct {
@@ -55,6 +59,10 @@ type sqlBackendRuntimeConfiguration struct {
 	aliasingKeyword   string
 	aliasingQuote     string
 	autocommit        bool
+	insertEntry       string
+	deleteEntry       string
+	renameEntry       string
+	deleteObjectClass string
 
 	registry *schema.Registry
 	server   *Server
@@ -63,6 +71,8 @@ type sqlBackendRuntimeConfiguration struct {
 	db             *sql.DB
 	objectClasses  map[int64]*sqlObjectClassMapping
 	objectClassIDs map[string]*sqlObjectClassMapping
+	retired        bool
+	references     int
 }
 
 type sqlBackendSettings struct {
@@ -87,6 +97,10 @@ type sqlBackendSettings struct {
 	aliasingKeyword   string
 	aliasingQuote     string
 	autocommit        bool
+	insertEntry       string
+	deleteEntry       string
+	renameEntry       string
+	deleteObjectClass string
 }
 
 type sqlObjectClassMapping struct {
@@ -123,6 +137,16 @@ type sqlEntryID struct {
 	dn            string
 }
 
+type sqlBackendQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type sqlBackendExecutor interface {
+	sqlBackendQueryer
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func loadSQLBackendRuntimeConfiguration(
 	entry directory.Entry,
 ) (*sqlBackendRuntimeConfiguration, error) {
@@ -135,13 +159,17 @@ func loadSQLBackendRuntimeConfiguration(
 		return nil, err
 	}
 	configuration := &sqlBackendRuntimeConfiguration{
-		databaseName:    databaseName,
-		databaseUser:    databaseUser,
-		driverName:      defaultSQLDriver,
-		ocQuery:         defaultSQLOCQuery,
-		attributeQuery:  defaultSQLATQuery,
-		idQuery:         defaultSQLIDQuery,
-		aliasingKeyword: "AS ",
+		databaseName:      databaseName,
+		databaseUser:      databaseUser,
+		driverName:        defaultSQLDriver,
+		ocQuery:           defaultSQLOCQuery,
+		attributeQuery:    defaultSQLATQuery,
+		idQuery:           defaultSQLIDQuery,
+		aliasingKeyword:   "AS ",
+		insertEntry:       defaultSQLInsertEntryStatement,
+		deleteEntry:       defaultSQLDeleteEntryStatement,
+		renameEntry:       defaultSQLRenameEntryStatement,
+		deleteObjectClass: defaultSQLDeleteObjectClassesStatement,
 	}
 	if configuration.databasePass, err = optionalSQLString(entry, "olcDbPass"); err != nil {
 		return nil, err
@@ -166,6 +194,10 @@ func loadSQLBackendRuntimeConfiguration(
 		{"olcSqlBaseObject", &configuration.baseObject},
 		{"olcSqlAliasingKeyword", &configuration.aliasingKeyword},
 		{"olcSqlAliasingQuote", &configuration.aliasingQuote},
+		{"olcSqlInsEntryStmt", &configuration.insertEntry},
+		{"olcSqlDelEntryStmt", &configuration.deleteEntry},
+		{"olcSqlRenEntryStmt", &configuration.renameEntry},
+		{"olcSqlDelObjclassesStmt", &configuration.deleteObjectClass},
 	}
 	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlIdQuery"); valueErr != nil {
 		return nil, valueErr
@@ -275,6 +307,10 @@ func (configuration *sqlBackendRuntimeConfiguration) setRuntime(
 func (configuration *sqlBackendRuntimeConfiguration) close() error {
 	configuration.mu.Lock()
 	defer configuration.mu.Unlock()
+	return configuration.closeLocked()
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) closeLocked() error {
 	if configuration.db == nil {
 		return nil
 	}
@@ -283,6 +319,46 @@ func (configuration *sqlBackendRuntimeConfiguration) close() error {
 	configuration.objectClasses = nil
 	configuration.objectClassIDs = nil
 	return err
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) retain() bool {
+	configuration.mu.Lock()
+	defer configuration.mu.Unlock()
+	if configuration.retired {
+		return false
+	}
+	configuration.references++
+	return true
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) release() bool {
+	configuration.mu.Lock()
+	defer configuration.mu.Unlock()
+	if configuration.references > 0 {
+		configuration.references--
+	}
+	if !configuration.retired || configuration.references != 0 {
+		return false
+	}
+	_ = configuration.closeLocked()
+	return true
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) retire() bool {
+	configuration.mu.Lock()
+	defer configuration.mu.Unlock()
+	configuration.retired = true
+	if configuration.references != 0 {
+		return false
+	}
+	_ = configuration.closeLocked()
+	return true
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) opened() bool {
+	configuration.mu.Lock()
+	defer configuration.mu.Unlock()
+	return configuration.db != nil
 }
 
 func (configuration *sqlBackendRuntimeConfiguration) equivalent(
@@ -330,6 +406,10 @@ func (configuration *sqlBackendRuntimeConfiguration) settings() sqlBackendSettin
 		aliasingKeyword:   configuration.aliasingKeyword,
 		aliasingQuote:     configuration.aliasingQuote,
 		autocommit:        configuration.autocommit,
+		insertEntry:       configuration.insertEntry,
+		deleteEntry:       configuration.deleteEntry,
+		renameEntry:       configuration.renameEntry,
+		deleteObjectClass: configuration.deleteObjectClass,
 	}
 }
 
@@ -367,11 +447,102 @@ func reuseSQLBackendOnlineConfigurationState(previous, next *runtimeState) {
 	}
 }
 
+func sqlBackendConfigurations(
+	runtime *runtimeState,
+) map[*sqlBackendRuntimeConfiguration]struct{} {
+	configurations := make(map[*sqlBackendRuntimeConfiguration]struct{})
+	if runtime == nil {
+		return configurations
+	}
+	for index := range runtime.databases {
+		if configuration := runtime.databases[index].sqlBackend; configuration != nil {
+			configurations[configuration] = struct{}{}
+		}
+	}
+	return configurations
+}
+
+func (server *Server) retainActiveRuntime() *runtimeState {
+	server.runtimeActivationMu.Lock()
+	defer server.runtimeActivationMu.Unlock()
+	runtime := server.runtime.Load()
+	retained := make([]*sqlBackendRuntimeConfiguration, 0)
+	for configuration := range sqlBackendConfigurations(runtime) {
+		if !configuration.retain() {
+			for _, previous := range retained {
+				previous.release()
+			}
+			return nil
+		}
+		retained = append(retained, configuration)
+	}
+	return runtime
+}
+
+func (server *Server) releaseRuntimeSQLBackends(runtime *runtimeState) {
+	for configuration := range sqlBackendConfigurations(runtime) {
+		if configuration.release() {
+			server.unregisterSQLBackend(configuration)
+		}
+	}
+}
+
+func (server *Server) retireSQLBackends(previous, next *runtimeState) {
+	nextConfigurations := sqlBackendConfigurations(next)
+	for configuration := range sqlBackendConfigurations(previous) {
+		if _, active := nextConfigurations[configuration]; active {
+			continue
+		}
+		if configuration.retire() {
+			server.unregisterSQLBackend(configuration)
+		}
+	}
+}
+
+func (server *Server) closeCandidateSQLBackends(
+	runtime *runtimeState,
+	except *runtimeState,
+) {
+	retained := sqlBackendConfigurations(except)
+	for configuration := range sqlBackendConfigurations(runtime) {
+		if _, keep := retained[configuration]; keep {
+			continue
+		}
+		if configuration.retire() {
+			server.unregisterSQLBackend(configuration)
+		}
+	}
+}
+
+func (server *Server) validateSQLBackends(
+	ctx context.Context,
+	runtime *runtimeState,
+) error {
+	if runtime == nil {
+		return nil
+	}
+	for index := range runtime.databases {
+		database := &runtime.databases[index]
+		if database.sqlBackend == nil {
+			continue
+		}
+		if _, err := database.sqlBackend.database(ctx); err != nil {
+			return fmt.Errorf("%s: %w", database.name, err)
+		}
+	}
+	return nil
+}
+
 func (configuration *sqlBackendRuntimeConfiguration) database(
 	ctx context.Context,
 ) (*sql.DB, error) {
 	configuration.mu.Lock()
 	defer configuration.mu.Unlock()
+	if configuration.retired && configuration.references == 0 {
+		return nil, &sqlBackendUnavailableError{
+			err: errors.New("SQL backend configuration is retired"),
+		}
+	}
 	if configuration.db != nil {
 		return configuration.db, nil
 	}
@@ -381,9 +552,19 @@ func (configuration *sqlBackendRuntimeConfiguration) database(
 			";UID=" + quoteODBCValue(configuration.databaseUser) +
 			";PWD=" + quoteODBCValue(configuration.databasePass)
 	}
-	database, err := sql.Open(configuration.driverName, dsn)
-	if err != nil {
-		return nil, &sqlBackendUnavailableError{err: err}
+	var database *sql.DB
+	if configuration.driverName == defaultSQLDriver {
+		connector, err := newSQLBackendODBCConnector(dsn)
+		if err != nil {
+			return nil, &sqlBackendUnavailableError{err: err}
+		}
+		database = sql.OpenDB(connector)
+	} else {
+		var err error
+		database, err = sql.Open(configuration.driverName, dsn)
+		if err != nil {
+			return nil, &sqlBackendUnavailableError{err: err}
+		}
 	}
 	if err := database.PingContext(ctx); err != nil {
 		_ = database.Close()
@@ -612,8 +793,9 @@ func (configuration *sqlBackendRuntimeConfiguration) attributeSelectQuery(
 	attribute sqlAttributeMapping,
 ) string {
 	alias := configuration.aliasingQuote + attribute.name + configuration.aliasingQuote
+	fromTables := mergeSQLFromTable(attribute.fromTables, objectClass.keyTable)
 	query := "SELECT " + attribute.selectExpression + " " +
-		configuration.aliasingKeyword + alias + " FROM " + attribute.fromTables +
+		configuration.aliasingKeyword + alias + " FROM " + fromTables +
 		" WHERE " + objectClass.keyTable + "." + objectClass.keyColumn + "=?"
 	if attribute.joinWhere != "" {
 		query += " AND " + attribute.joinWhere
@@ -621,10 +803,74 @@ func (configuration *sqlBackendRuntimeConfiguration) attributeSelectQuery(
 	return query + " ORDER BY " + alias
 }
 
+func mergeSQLFromTable(fromTables, keyTable string) string {
+	keyName := strings.ToLower(sqlTableName(keyTable))
+	for _, specification := range splitSQLTableSpecifications(fromTables) {
+		if strings.ToLower(sqlTableName(specification)) == keyName {
+			return fromTables
+		}
+	}
+	if strings.TrimSpace(fromTables) == "" {
+		return keyTable
+	}
+	return fromTables + "," + keyTable
+}
+
+func splitSQLTableSpecifications(value string) []string {
+	var result []string
+	start := 0
+	depth := 0
+	var quote rune
+	escaped := false
+	for index, character := range value {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"', '`':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				result = append(result, strings.TrimSpace(value[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	result = append(result, strings.TrimSpace(value[start:]))
+	return result
+}
+
+func sqlTableName(specification string) string {
+	fields := strings.Fields(strings.TrimSpace(specification))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Trim(fields[0], "\"`[]")
+}
+
 type sqlBackendReader struct {
 	storage.Reader
-	configuration *sqlBackendRuntimeConfiguration
-	ctx           context.Context
+	configuration     *sqlBackendRuntimeConfiguration
+	ctx               context.Context
+	queryer           sqlBackendQueryer
+	initializationErr error
 }
 
 func (reader *sqlBackendReader) AccessContext() any {
@@ -638,36 +884,40 @@ func (reader *sqlBackendReader) Get(
 	dn directory.DN,
 ) (entry directory.Entry, err error) {
 	defer func() { err = sqlBackendLDAPError(err) }()
+	if reader.initializationErr != nil {
+		return directory.Entry{}, reader.initializationErr
+	}
 	database, err := reader.configuration.database(reader.ctx)
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	parameter := dn.Key()
-	if reader.configuration.hasReversedDN {
-		parameter = reverseUpperASCII(parameter)
+	queryer := reader.queryer
+	if queryer == nil {
+		queryer = database
 	}
-	var id sqlEntryID
-	err = database.QueryRowContext(reader.ctx, reader.configuration.idQuery, parameter).Scan(
-		&id.id, &id.keyValue, &id.objectClassID, &id.dn,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return directory.Entry{}, storage.ErrEntryNotFound
-	}
+	id, err := reader.entryIDWithQueryer(queryer, dn)
 	if err != nil {
-		return directory.Entry{}, fmt.Errorf("SQL-backend entry ID query: %w", err)
+		return directory.Entry{}, err
 	}
-	return reader.loadEntry(database, id)
+	return reader.loadEntry(queryer, id)
 }
 
 func (reader *sqlBackendReader) ForEach(
 	visit func(directory.Entry) error,
 ) (err error) {
 	defer func() { err = sqlBackendLDAPError(err) }()
+	if reader.initializationErr != nil {
+		return reader.initializationErr
+	}
 	database, err := reader.configuration.database(reader.ctx)
 	if err != nil {
 		return err
 	}
-	rows, err := database.QueryContext(
+	queryer := reader.queryer
+	if queryer == nil {
+		queryer = database
+	}
+	rows, err := queryer.QueryContext(
 		reader.ctx,
 		"SELECT id,keyval,oc_map_id,dn FROM ldap_entries ORDER BY id",
 	)
@@ -691,7 +941,7 @@ func (reader *sqlBackendReader) ForEach(
 		return fmt.Errorf("SQL-backend entry scan close: %w", err)
 	}
 	for _, id := range ids {
-		entry, err := reader.loadEntry(database, id)
+		entry, err := reader.loadEntry(queryer, id)
 		if err != nil {
 			return err
 		}
@@ -723,7 +973,7 @@ func (reader *sqlBackendReader) ForEachPartition(
 }
 
 func (reader *sqlBackendReader) loadEntry(
-	database *sql.DB,
+	queryer sqlBackendQueryer,
 	id sqlEntryID,
 ) (directory.Entry, error) {
 	objectClass := reader.configuration.objectClasses[id.objectClassID]
@@ -738,7 +988,7 @@ func (reader *sqlBackendReader) loadEntry(
 	}
 	entry := directory.Entry{DN: id.dn}
 	appendSQLAttributeValue(&entry, "objectClass", []byte(objectClass.name))
-	auxiliaryRows, err := database.QueryContext(
+	auxiliaryRows, err := queryer.QueryContext(
 		reader.ctx,
 		"SELECT oc_name FROM ldap_entry_objclasses WHERE entry_id=? ORDER BY oc_name",
 		id.id,
@@ -771,7 +1021,7 @@ func (reader *sqlBackendReader) loadEntry(
 	for _, name := range attributeNames {
 		mappings := objectClass.attributes[name]
 		for _, mapping := range mappings {
-			values, err := reader.readAttributeValues(database, id.keyValue, mapping)
+			values, err := reader.readAttributeValues(queryer, id.keyValue, mapping)
 			if err != nil {
 				return directory.Entry{}, fmt.Errorf(
 					"SQL-backend attribute %s for entry %d: %w",
@@ -786,7 +1036,7 @@ func (reader *sqlBackendReader) loadEntry(
 	appendSQLAttributeValue(&entry, "structuralObjectClass", []byte(objectClass.name))
 	appendSQLAttributeValue(&entry, "entryUUID", []byte(sqlEntryUUID(id.objectClassID, id.keyValue)))
 	var childCount int64
-	if err := database.QueryRowContext(
+	if err := queryer.QueryRowContext(
 		reader.ctx,
 		"SELECT COUNT(*) FROM ldap_entries WHERE parent=?",
 		id.id,
@@ -802,11 +1052,11 @@ func (reader *sqlBackendReader) loadEntry(
 }
 
 func (reader *sqlBackendReader) readAttributeValues(
-	database *sql.DB,
+	queryer sqlBackendQueryer,
 	keyValue int64,
 	mapping sqlAttributeMapping,
 ) ([][]byte, error) {
-	rows, err := database.QueryContext(reader.ctx, mapping.query, keyValue)
+	rows, err := queryer.QueryContext(reader.ctx, mapping.query, keyValue)
 	if err != nil {
 		return nil, err
 	}
@@ -827,6 +1077,44 @@ func (reader *sqlBackendReader) readAttributeValues(
 		values = append(values, value)
 	}
 	return values, rows.Err()
+}
+
+func (reader *sqlBackendReader) entryID(dn directory.DN) (sqlEntryID, error) {
+	if reader.initializationErr != nil {
+		return sqlEntryID{}, reader.initializationErr
+	}
+	database, err := reader.configuration.database(reader.ctx)
+	if err != nil {
+		return sqlEntryID{}, err
+	}
+	queryer := reader.queryer
+	if queryer == nil {
+		queryer = database
+	}
+	return reader.entryIDWithQueryer(queryer, dn)
+}
+
+func (reader *sqlBackendReader) entryIDWithQueryer(
+	queryer sqlBackendQueryer,
+	dn directory.DN,
+) (sqlEntryID, error) {
+	parameter := dn.Key()
+	if reader.configuration.hasReversedDN {
+		parameter = reverseUpperASCII(parameter)
+	}
+	var id sqlEntryID
+	err := queryer.QueryRowContext(
+		reader.ctx,
+		reader.configuration.idQuery,
+		parameter,
+	).Scan(&id.id, &id.keyValue, &id.objectClassID, &id.dn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sqlEntryID{}, storage.ErrEntryNotFound
+	}
+	if err != nil {
+		return sqlEntryID{}, fmt.Errorf("SQL-backend entry ID query: %w", err)
+	}
+	return id, nil
 }
 
 func sqlAttributeBytes(value any) ([]byte, error) {
@@ -892,7 +1180,19 @@ type sqlBackendUnavailableError struct {
 
 type sqlBackendWriter struct {
 	storage.Writer
-	reader *sqlBackendReader
+	reader            *sqlBackendReader
+	tx                *sql.Tx
+	conn              *sql.Conn
+	executor          sqlBackendExecutor
+	initializationErr error
+	rename            *sqlBackendRenameContext
+	modify            *sqlBackendModifyContext
+	pendingRename     *sqlBackendPendingRename
+}
+
+type sqlBackendPendingRename struct {
+	id    sqlEntryID
+	entry directory.Entry
 }
 
 func (writer *sqlBackendWriter) AccessContext() any {
@@ -909,26 +1209,6 @@ func (writer *sqlBackendWriter) Get(dn directory.DN) (directory.Entry, error) {
 
 func (writer *sqlBackendWriter) ForEach(visit func(directory.Entry) error) error {
 	return writer.reader.ForEach(visit)
-}
-
-func (writer *sqlBackendWriter) Put(directory.Entry, bool) error {
-	return sqlBackendWriteUnsupported()
-}
-
-func (writer *sqlBackendWriter) PutIn(string, directory.Entry, bool) error {
-	return sqlBackendWriteUnsupported()
-}
-
-func (writer *sqlBackendWriter) Delete(directory.DN) error {
-	return sqlBackendWriteUnsupported()
-}
-
-func (writer *sqlBackendWriter) DeleteIn(string, directory.DN) error {
-	return sqlBackendWriteUnsupported()
-}
-
-func (writer *sqlBackendWriter) Clear() error {
-	return sqlBackendWriteUnsupported()
 }
 
 func sqlBackendWriteUnsupported() error {

@@ -173,6 +173,12 @@ func New(config Config) (*Server, error) {
 		accesslogWake:        make(chan struct{}, 1),
 		monitor:              newMonitorState(),
 	}
+	started := false
+	defer func() {
+		if !started {
+			server.closeSQLBackends()
+		}
+	}()
 	server.config.Store = &homedirEffectStore{
 		Store:  server.config.Store,
 		server: server,
@@ -187,6 +193,9 @@ func New(config Config) (*Server, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if err := server.validateSQLBackends(context.Background(), runtime); err != nil {
+		return nil, fmt.Errorf("initialize SQL backend: %w", err)
 	}
 	if err := normalizeDefaultSearchBaseConfiguration(
 		context.Background(),
@@ -208,6 +217,7 @@ func New(config Config) (*Server, error) {
 	); err != nil {
 		return nil, fmt.Errorf("initialize runtime-owned entries: %w", err)
 	}
+	previousRuntime := runtime
 	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
 		var err error
 		runtime, err = server.buildRuntimeState(reader)
@@ -216,6 +226,11 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	reuseSQLBackendOnlineConfigurationState(previousRuntime, runtime)
+	if err := server.validateSQLBackends(context.Background(), runtime); err != nil {
+		return nil, fmt.Errorf("initialize SQL backend: %w", err)
+	}
+	server.retireSQLBackends(previousRuntime, runtime)
 	if err := server.seedCSNClock(runtime); err != nil {
 		return nil, fmt.Errorf("initialize CSN clock: %w", err)
 	}
@@ -224,6 +239,7 @@ func New(config Config) (*Server, error) {
 	}
 	runtime.revision = server.nextRuntimeRevision()
 	server.activateRuntime(runtime)
+	started = true
 	return server, nil
 }
 
@@ -238,9 +254,9 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	server.draining.Store(false)
-	defer server.syncConsumers.stop()
-	defer server.metaTransports.close()
 	defer server.closeSQLBackends()
+	defer server.metaTransports.close()
+	defer server.syncConsumers.stop()
 
 	ddsContext, stopDDS := context.WithCancel(ctx)
 	ddsDone := make(chan struct{})
@@ -726,7 +742,18 @@ func (server *Server) dispatch(
 	state *connectionState,
 	message ldapwire.Message,
 ) (bool, error) {
-	runtime := server.runtime.Load()
+	runtime := server.retainActiveRuntime()
+	if runtime == nil {
+		return false, writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultUnavailable,
+				"runtime configuration is unavailable",
+			),
+		)
+	}
+	defer server.releaseRuntimeSQLBackends(runtime)
 	if state.runtime != nil && state.runtime != runtime {
 		clearSearchSessions(state)
 	}

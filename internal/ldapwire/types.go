@@ -183,6 +183,7 @@ const (
 	ResultAliasProblem                 ResultCode = 33
 	ResultInvalidDNSyntax              ResultCode = 34
 	ResultAliasDereferencingProblem    ResultCode = 36
+	ResultProxyAuthorizationFailure    ResultCode = 47
 	ResultInappropriateAuthentication  ResultCode = 48
 	ResultInvalidCredentials           ResultCode = 49
 	ResultInsufficientAccessRights     ResultCode = 50

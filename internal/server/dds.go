@@ -941,9 +941,13 @@ func (server *Server) expireDDSDatabase(
 	scheduled runtimeDatabase,
 	now time.Time,
 ) error {
+	runtime := server.retainActiveRuntime()
+	if runtime == nil {
+		return nil
+	}
+	defer server.releaseRuntimeSQLBackends(runtime)
 	var changes []*syncChange
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
-		runtime := server.runtime.Load()
 		database := runtimeDatabaseForPartition(runtime, scheduled.partition)
 		if database == nil ||
 			database.dds == nil ||
