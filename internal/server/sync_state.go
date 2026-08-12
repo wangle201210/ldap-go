@@ -1033,6 +1033,30 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	}
 }
 
+func (server *Server) closeSQLBackends() {
+	server.sqlBackendsMu.Lock()
+	configurations := make([]*sqlBackendRuntimeConfiguration, 0, len(server.sqlBackends))
+	for configuration := range server.sqlBackends {
+		configurations = append(configurations, configuration)
+	}
+	clear(server.sqlBackends)
+	server.sqlBackendsMu.Unlock()
+	for _, configuration := range configurations {
+		if err := configuration.close(); err != nil {
+			server.config.Logger.Error("close SQL backend", "error", err)
+		}
+	}
+}
+
+func (server *Server) registerSQLBackend(configuration *sqlBackendRuntimeConfiguration) {
+	if configuration == nil {
+		return
+	}
+	server.sqlBackendsMu.Lock()
+	server.sqlBackends[configuration] = struct{}{}
+	server.sqlBackendsMu.Unlock()
+}
+
 func (server *Server) nextRuntimeRevision() uint64 {
 	return server.runtimeSequence.Add(1)
 }

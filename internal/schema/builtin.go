@@ -99,6 +99,9 @@ func NewBuiltinRegistry() (*Registry, error) {
 	if err := RegisterOpenLDAPSockSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP back-sock schema: %w", err)
 	}
+	if err := RegisterOpenLDAPSQLSchema(registry); err != nil {
+		return nil, fmt.Errorf("register OpenLDAP back-sql schema: %w", err)
+	}
 	return registry, nil
 }
 

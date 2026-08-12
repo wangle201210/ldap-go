@@ -965,6 +965,15 @@ func (writer *homedirTrackingWriter) AccessContext() any {
 	return nil
 }
 
+func (writer *homedirTrackingWriter) StorageContext() context.Context {
+	if provider, ok := writer.Writer.(interface {
+		StorageContext() context.Context
+	}); ok {
+		return provider.StorageContext()
+	}
+	return nil
+}
+
 func (writer *homedirTrackingWriter) Put(entry directory.Entry, replace bool) error {
 	return writer.putIn("", entry, replace, false)
 }

@@ -50,6 +50,10 @@ type Config struct {
 	Clock                     func() time.Time
 	RADIUSConfigPath          string
 	RADIUSNASIdentifier       string
+	// SQLDriver selects the database/sql driver used by OpenLDAP back-sql
+	// databases. The default is "odbc"; tests and embedded deployments may
+	// register and select another compatible driver.
+	SQLDriver string
 }
 
 type Server struct {
@@ -84,6 +88,8 @@ type Server struct {
 	metaTransports        *metaTransportPool
 	metaTransportCachesMu sync.Mutex
 	metaTransportCaches   map[*metaTransportCache]struct{}
+	sqlBackendsMu         sync.Mutex
+	sqlBackends           map[*sqlBackendRuntimeConfiguration]struct{}
 	runtimeSequence       atomic.Uint64
 	metaTransportSequence atomic.Uint64
 }
@@ -161,6 +167,7 @@ func New(config Config) (*Server, error) {
 		metaRoutes:           newMetaDNRouteCache(time.Now),
 		metaTransports:       newMetaTransportPool(time.Now),
 		metaTransportCaches:  make(map[*metaTransportCache]struct{}),
+		sqlBackends:          make(map[*sqlBackendRuntimeConfiguration]struct{}),
 		syncChanges:          newSyncChangeHub(),
 		ddsWake:              make(chan struct{}, 1),
 		accesslogWake:        make(chan struct{}, 1),
@@ -233,6 +240,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 	server.draining.Store(false)
 	defer server.syncConsumers.stop()
 	defer server.metaTransports.close()
+	defer server.closeSQLBackends()
 
 	ddsContext, stopDDS := context.WithCancel(ctx)
 	ddsDone := make(chan struct{})
@@ -1155,6 +1163,13 @@ func (server *Server) handleBind(
 		controls.passwordPolicy,
 	)
 	if err != nil {
+		if failure := asOperationFailure(err); failure != nil {
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				failure.result,
+				failure.controls,
+			))
+		}
 		return err
 	}
 	if !bindResult.authenticated {
@@ -1205,7 +1220,7 @@ func (server *Server) authenticate(
 
 	var storedPasswords [][]byte
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := readerForDatabase(reader, *database)
+		tx := readerForDatabase(reader, *database, ctx)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil

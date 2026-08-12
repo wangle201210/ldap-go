@@ -1500,6 +1500,13 @@ func (server *Server) handleSearch(
 		if paging != nil {
 			clearPagedSearch(state)
 		}
+		if failure := asOperationFailure(err); failure != nil {
+			return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
+				message.ID,
+				failure.result,
+				failure.controls,
+			))
+		}
 		return fmt.Errorf("search directory: %w", err)
 	}
 	if inDirectoryRetcodeResult != nil {

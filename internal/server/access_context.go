@@ -35,19 +35,29 @@ func (store *accessContextStore) Update(
 type accessContextReader struct {
 	storage.Reader
 	subject acl.Subject
+	ctx     context.Context
 }
 
 func (reader accessContextReader) AccessContext() any {
 	return reader.subject
 }
 
+func (reader accessContextReader) StorageContext() context.Context {
+	return reader.ctx
+}
+
 type accessContextWriter struct {
 	storage.Writer
 	subject acl.Subject
+	ctx     context.Context
 }
 
 func (writer accessContextWriter) AccessContext() any {
 	return writer.subject
+}
+
+func (writer accessContextWriter) StorageContext() context.Context {
+	return writer.ctx
 }
 
 func withACLSubject(ctx context.Context, subject acl.Subject) context.Context {
@@ -55,19 +65,13 @@ func withACLSubject(ctx context.Context, subject acl.Subject) context.Context {
 }
 
 func accessReaderFromContext(ctx context.Context, reader storage.Reader) storage.Reader {
-	subject, ok := ctx.Value(aclSubjectContextKey{}).(acl.Subject)
-	if !ok {
-		return reader
-	}
-	return accessContextReader{Reader: reader, subject: subject}
+	subject, _ := ctx.Value(aclSubjectContextKey{}).(acl.Subject)
+	return accessContextReader{Reader: reader, subject: subject, ctx: ctx}
 }
 
 func accessWriterFromContext(ctx context.Context, writer storage.Writer) storage.Writer {
-	subject, ok := ctx.Value(aclSubjectContextKey{}).(acl.Subject)
-	if !ok {
-		return writer
-	}
-	return accessContextWriter{Writer: writer, subject: subject}
+	subject, _ := ctx.Value(aclSubjectContextKey{}).(acl.Subject)
+	return accessContextWriter{Writer: writer, subject: subject, ctx: ctx}
 }
 
 func accessSubject(reader storage.Reader, subjectDN string) acl.Subject {

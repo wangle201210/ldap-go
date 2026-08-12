@@ -70,6 +70,9 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, err
 	}
 	for index := range databases {
+		if databases[index].sqlBackend != nil {
+			databases[index].sqlBackend.setRuntime(registry, server.config.SQLDriver, server)
+		}
 		if databases[index].rwm != nil {
 			databases[index].rwm.schema = registry
 		}
@@ -538,6 +541,7 @@ func (server *Server) validateRuntimeConfiguration(
 	}
 	previous := server.runtime.Load()
 	applyMetaBackendOnlineConfigurationState(previous, runtime)
+	reuseSQLBackendOnlineConfigurationState(previous, runtime)
 	reuseSeqmodCoordinators(previous, runtime)
 	reusePcacheStates(previous, runtime)
 	if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {

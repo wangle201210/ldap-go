@@ -19,6 +19,7 @@ type runtimeDatabase struct {
 	ldapBackend           *ldapBackendRuntimeConfiguration
 	metaBackend           *metaBackendRuntimeConfiguration
 	sockBackend           *sockBackendRuntimeConfiguration
+	sqlBackend            *sqlBackendRuntimeConfiguration
 	metaTargetKey         string
 	relay                 *relayRuntimeConfiguration
 	rwm                   *rwmRuntimeConfiguration
@@ -331,6 +332,15 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			database.sockBackend = configuration
 			// A socket backend delegates all data operations to an external
 			// process and therefore owns no local storage partition.
+			database.partition = ""
+		}
+		if isSQLBackendDatabase(database) {
+			configuration, err := loadSQLBackendRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.sqlBackend = configuration
+			// back-sql stores directory entries in the configured SQL database.
 			database.partition = ""
 		}
 		database.syncConsumers, err = loadSyncConsumerConfigs(entry, database)
@@ -1718,6 +1728,10 @@ func isMetaBackendDatabase(database runtimeDatabase) bool {
 
 func isSockBackendDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "sock"
+}
+
+func isSQLBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "sql"
 }
 
 func databaseType(name string) string {

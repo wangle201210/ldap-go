@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -532,7 +533,27 @@ func databaseUsesNullBackend(runtime *runtimeState, database runtimeDatabase) bo
 func readerForDatabase(
 	reader storage.Reader,
 	database runtimeDatabase,
+	contexts ...context.Context,
 ) storage.Reader {
+	if database.sqlBackend != nil {
+		ctx := context.Background()
+		if len(contexts) != 0 && contexts[0] != nil {
+			ctx = contexts[0]
+		} else if provider, ok := reader.(interface {
+			StorageContext() context.Context
+		}); ok && provider.StorageContext() != nil {
+			ctx = provider.StorageContext()
+		}
+		backend := &sqlBackendReader{
+			Reader:        reader,
+			configuration: database.sqlBackend,
+			ctx:           ctx,
+		}
+		if database.rwm == nil {
+			return backend
+		}
+		return &rwmStorageReader{Reader: backend, configuration: database.rwm}
+	}
 	partitioned := storage.ReaderInPartition(reader, database.partition)
 	if database.rwm == nil {
 		return partitioned
@@ -544,6 +565,28 @@ func writerForDatabase(
 	writer storage.Writer,
 	database runtimeDatabase,
 ) storage.Writer {
+	if database.sqlBackend != nil {
+		ctx := context.Background()
+		if provider, ok := writer.(interface {
+			StorageContext() context.Context
+		}); ok && provider.StorageContext() != nil {
+			ctx = provider.StorageContext()
+		}
+		reader := &sqlBackendReader{
+			Reader:        writer,
+			configuration: database.sqlBackend,
+			ctx:           ctx,
+		}
+		backend := &sqlBackendWriter{Writer: writer, reader: reader}
+		if database.rwm == nil {
+			return backend
+		}
+		mappedReader := &rwmStorageReader{Reader: backend, configuration: database.rwm}
+		return &rwmStorageWriter{
+			rwmStorageReader: mappedReader,
+			writer:           backend,
+		}
+	}
 	partitioned := storage.WriterInPartition(writer, database.partition)
 	if database.rwm == nil {
 		return partitioned
