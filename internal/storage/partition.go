@@ -214,6 +214,23 @@ func (writer schemaAwarePartitionWriter) Put(
 	if err != nil {
 		return err
 	}
+	if _, canonical := writer.normalizer.(directory.DNAttributeCanonicalNamer); canonical {
+		entry.DN = dn.String()
+		dn, err = directory.ParseDNWithNormalizer(entry.DN, writer.normalizer)
+		if err != nil {
+			return err
+		}
+	}
+	if handled, err := putPartitionEntryWithEqualityIndexes(
+		writer.Writer,
+		writer.partition,
+		entry,
+		dn,
+		replace,
+		writer.normalizer,
+	); handled {
+		return err
+	}
 	existing, err := schemaAwareGetIn(
 		writer.Writer,
 		writer.partition,
@@ -238,17 +255,22 @@ func (writer schemaAwarePartitionWriter) Put(
 	case err != nil:
 		return err
 	}
-	if _, canonical := writer.normalizer.(directory.DNAttributeCanonicalNamer); canonical {
-		entry.DN = dn.String()
-		dn, err = directory.ParseDNWithNormalizer(entry.DN, writer.normalizer)
-		if err != nil {
-			return err
-		}
-	}
 	return PutInWithDN(writer.Writer, writer.partition, entry, dn, false)
 }
 
 func (writer schemaAwarePartitionWriter) Delete(dn directory.DN) error {
+	normalized, err := writer.NormalizeDNIdentity(dn)
+	if err != nil {
+		return err
+	}
+	if handled, err := deletePartitionEntryWithEqualityIndexes(
+		writer.Writer,
+		writer.partition,
+		normalized,
+		writer.normalizer,
+	); handled {
+		return err
+	}
 	entry, err := writer.Get(dn)
 	if err != nil {
 		return err

@@ -117,6 +117,7 @@ type Scheduler struct {
 	mu          sync.Mutex
 	random      RandomSource
 	now         func() time.Time
+	capacity    chan struct{}
 	tiers       []*tierState
 	backends    map[string]*backendState
 	connections map[string]*connectionState
@@ -224,6 +225,7 @@ func newScheduler(
 	scheduler := &Scheduler{
 		random:      random,
 		now:         now,
+		capacity:    make(chan struct{}),
 		backends:    make(map[string]*backendState),
 		connections: make(map[string]*connectionState),
 	}
@@ -445,8 +447,31 @@ func (scheduler *Scheduler) SetConnectionState(
 	if connection == nil {
 		return fmt.Errorf("lloadd: unknown connection %q", connectionID)
 	}
+	if connection.state == state {
+		return nil
+	}
 	connection.state = state
+	scheduler.signalCapacityLocked()
 	return nil
+}
+
+// capacitySignal returns a generation channel that closes whenever pending
+// capacity is released or an established connection changes state. Callers
+// take the signal before attempting a reservation to avoid missed wakeups.
+func (scheduler *Scheduler) capacitySignal() <-chan struct{} {
+	if scheduler == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	scheduler.mu.Lock()
+	defer scheduler.mu.Unlock()
+	return scheduler.capacity
+}
+
+func (scheduler *Scheduler) signalCapacityLocked() {
+	close(scheduler.capacity)
+	scheduler.capacity = make(chan struct{})
 }
 
 // Snapshot returns stable, configuration-order scheduler statistics.
@@ -553,6 +578,7 @@ func (lease *Lease) Release() bool {
 	if token.connection.pending > 0 {
 		token.connection.pending--
 	}
+	scheduler.signalCapacityLocked()
 	return true
 }
 

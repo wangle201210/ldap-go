@@ -1,6 +1,7 @@
 package lloadd
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
@@ -27,6 +29,7 @@ const (
 	defaultBackendRetry        = 5 * time.Second
 	serviceBindMessageID       = int64(1)
 	upstreamStartTLSOID        = "1.3.6.1.4.1.1466.20037"
+	verifyCredentialsOID       = "1.3.6.1.4.1.4203.666.6.5"
 )
 
 var ErrProxyClosed = errors.New("lloadd proxy is closed")
@@ -44,6 +47,8 @@ type RuntimeConfig struct {
 	NetworkTimeout         time.Duration
 	IOTimeout              time.Duration
 	ProxyAuthz             bool
+	VerifyCredentials      bool
+	ReadPause              bool
 	PrivilegedIdentity     string
 	UpstreamKeepAliveSet   bool
 	UpstreamKeepAlive      net.KeepAliveConfig
@@ -163,14 +168,15 @@ type clientConnection struct {
 	proxy *Proxy
 	conn  net.Conn
 
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	closed  bool
-	done    chan struct{}
-	binding bool
-	bindPin *upstreamConnection
-	authzID []byte
-	ops     map[int64]*proxyOperation
+	writeMu  sync.Mutex
+	mu       sync.Mutex
+	closed   bool
+	done     chan struct{}
+	readWake chan struct{}
+	binding  bool
+	bindPin  *upstreamConnection
+	authzID  []byte
+	ops      map[int64]*proxyOperation
 
 	restriction      RuntimeRestriction
 	backendAffinity  *runtimeBackend
@@ -184,27 +190,28 @@ type clientConnection struct {
 }
 
 type proxyOperation struct {
-	mu             sync.Mutex
-	responseMu     sync.Mutex
-	client         *clientConnection
-	clientID       int64
-	requestTag     uint64
-	upstream       *upstreamConnection
-	upstreamID     int64
-	lease          *Lease
-	restriction    RuntimeRestriction
-	bind           bool
-	bindSASL       bool
-	bindDN         string
-	bindGeneration uint64
-	cancel         bool
-	cancelTarget   *proxyOperation
-	cancelInFlight bool
-	requestSent    bool
-	abandoning     bool
-	started        time.Time
-	firstSeen      atomic.Bool
-	finished       atomic.Bool
+	mu                sync.Mutex
+	responseMu        sync.Mutex
+	client            *clientConnection
+	clientID          int64
+	requestTag        uint64
+	upstream          *upstreamConnection
+	upstreamID        int64
+	lease             *Lease
+	restriction       RuntimeRestriction
+	bind              bool
+	bindSASL          bool
+	verifyCredentials bool
+	bindDN            string
+	bindGeneration    uint64
+	cancel            bool
+	cancelTarget      *proxyOperation
+	cancelInFlight    bool
+	requestSent       bool
+	abandoning        bool
+	started           time.Time
+	firstSeen         atomic.Bool
+	finished          atomic.Bool
 }
 
 type frameCodec interface {
@@ -233,6 +240,192 @@ type proxyFrame struct {
 	ResultCode       ldapwire.ResultCode
 	HasResultCode    bool
 	FinalResponse    bool
+}
+
+type trackedUpstreamConnection struct {
+	net.Conn
+	upstream *upstreamConnection
+}
+
+func (connection *trackedUpstreamConnection) NetConn() net.Conn {
+	return connection.Conn
+}
+
+// runtimeFrameCodec translates the experimental Verify Credentials exchange
+// at the transport boundary. The ordinary response state machine therefore
+// continues to see a strict BindResponse and cannot accidentally forward an
+// ExtendedResponse to a Bind request.
+type runtimeFrameCodec struct {
+	frameCodec
+}
+
+func (codec runtimeFrameCodec) Read(reader io.Reader, max int64) (proxyFrame, error) {
+	frame, err := codec.frameCodec.Read(reader, max)
+	if err != nil {
+		return proxyFrame{}, err
+	}
+	connection, ok := reader.(*trackedUpstreamConnection)
+	if !ok || connection.upstream == nil || frame.MessageID == 0 {
+		return frame, nil
+	}
+	connection.upstream.mu.Lock()
+	operation := connection.upstream.pending[frame.MessageID]
+	connection.upstream.mu.Unlock()
+	if operation == nil || !operation.verifyCredentials {
+		return frame, nil
+	}
+	return translateVerifyCredentialsResponse(frame, operation)
+}
+
+func translateVerifyCredentialsResponse(
+	frame proxyFrame,
+	operation *proxyOperation,
+) (proxyFrame, error) {
+	if frame.ProtocolTag != ldapwire.ApplicationExtendedResponse || !frame.HasResultCode {
+		return proxyFrame{}, errors.New("Verify Credentials backend returned a non-ExtendedResponse")
+	}
+	parsed, err := parseProxyFrame(frame)
+	if err != nil {
+		return proxyFrame{}, fmt.Errorf("parse Verify Credentials response: %w", err)
+	}
+	protocol := []byte(parsed.ProtocolOp)
+	outer, next, err := parseElement(protocol, 0)
+	if err != nil || next != len(protocol) ||
+		!elementIs(outer, berClassApplication, true, ldapwire.ApplicationExtendedResponse) {
+		return proxyFrame{}, errors.New("Verify Credentials backend returned a malformed ExtendedResponse")
+	}
+	cursor := outer.contentStart
+	resultStart := cursor
+	for index, expectedTag := range []uint64{berTagEnumerated, berTagOctetString, berTagOctetString} {
+		field, fieldEnd, fieldErr := parseElement(protocol, cursor)
+		if fieldErr != nil || !elementIs(field, berClassUniversal, false, expectedTag) {
+			return proxyFrame{}, fmt.Errorf("Verify Credentials response has invalid LDAPResult field %d", index)
+		}
+		cursor = fieldEnd
+	}
+	resultEnd := cursor
+	if frame.ResultCode != ldapwire.ResultSuccess {
+		if cursor < outer.end {
+			referral, referralEnd, referralErr := parseElement(protocol, cursor)
+			if referralErr == nil && elementIs(referral, berClassContext, true, 3) {
+				resultEnd = referralEnd
+			}
+		}
+		return readTranslatedBindResponse(encodeFrame(
+			frame.MessageID,
+			encodeTLV(0x61, bytes.Clone(protocol[resultStart:resultEnd])),
+			bytes.Clone(parsed.ControlsRaw),
+		))
+	}
+	if len(parsed.ControlsRaw) != 0 {
+		return proxyFrame{}, errors.New("Verify Credentials response contains unsupported outer controls")
+	}
+
+	var responseValue []byte
+	seenName := false
+	for cursor < outer.end {
+		field, fieldEnd, fieldErr := parseElement(protocol, cursor)
+		if fieldErr != nil {
+			return proxyFrame{}, fmt.Errorf("parse Verify Credentials response field: %w", fieldErr)
+		}
+		switch {
+		case elementIs(field, berClassContext, false, 10):
+			if seenName || responseValue != nil {
+				return proxyFrame{}, errors.New("Verify Credentials response has duplicate or out-of-order responseName")
+			}
+			seenName = true
+			name := string(protocol[field.contentStart:field.end])
+			if name != "" && name != verifyCredentialsOID {
+				return proxyFrame{}, fmt.Errorf("Verify Credentials responseName %q is not supported", name)
+			}
+		case elementIs(field, berClassContext, false, 11):
+			if responseValue != nil {
+				return proxyFrame{}, errors.New("Verify Credentials response has duplicate responseValue")
+			}
+			responseValue = bytes.Clone(protocol[field.contentStart:field.end])
+		default:
+			return proxyFrame{}, errors.New("Verify Credentials response contains an unexpected field")
+		}
+		cursor = fieldEnd
+	}
+	if responseValue == nil {
+		return proxyFrame{}, errors.New("Verify Credentials success response has no responseValue")
+	}
+	return translateVerifyCredentialsValue(frame.MessageID, responseValue, operation)
+}
+
+func translateVerifyCredentialsValue(
+	messageID int64,
+	value []byte,
+	operation *proxyOperation,
+) (proxyFrame, error) {
+	sequence, next, err := parseElement(value, 0)
+	if err != nil || next != len(value) ||
+		!elementIs(sequence, berClassUniversal, true, berTagSequence) {
+		return proxyFrame{}, errors.New("Verify Credentials responseValue is not a BER sequence")
+	}
+	cursor := sequence.contentStart
+	result, fieldEnd, err := parseElement(value, cursor)
+	if err != nil || result.class != berClassUniversal || result.constructed ||
+		(result.tag != berTagInteger && result.tag != berTagEnumerated) {
+		return proxyFrame{}, errors.New("Verify Credentials responseValue has an invalid resultCode")
+	}
+	code, err := decodeNonnegativeInteger(value[result.contentStart:result.end], MaxMessageID)
+	if err != nil {
+		return proxyFrame{}, errors.New("Verify Credentials responseValue has an invalid resultCode")
+	}
+	cursor = fieldEnd
+	diagnostic, fieldEnd, err := parseElement(value, cursor)
+	if err != nil || !elementIs(diagnostic, berClassUniversal, false, berTagOctetString) ||
+		!utf8.Valid(value[diagnostic.contentStart:diagnostic.end]) {
+		return proxyFrame{}, errors.New("Verify Credentials responseValue has an invalid diagnosticMessage")
+	}
+	diagnosticValue := bytes.Clone(value[diagnostic.contentStart:diagnostic.end])
+	cursor = fieldEnd
+
+	var cookie, serverCredentials, controls []byte
+	for cursor < sequence.end {
+		field, nextField, fieldErr := parseElement(value, cursor)
+		if fieldErr != nil {
+			return proxyFrame{}, fmt.Errorf("parse Verify Credentials responseValue: %w", fieldErr)
+		}
+		switch {
+		case elementIs(field, berClassContext, false, 0) && cookie == nil && serverCredentials == nil && controls == nil:
+			cookie = bytes.Clone(value[field.contentStart:field.end])
+		case elementIs(field, berClassContext, false, 1) && serverCredentials == nil && controls == nil:
+			serverCredentials = bytes.Clone(value[field.contentStart:field.end])
+		case elementIs(field, berClassContext, true, 2) && controls == nil:
+			controls = encodeTLV(0xa0, bytes.Clone(value[field.contentStart:field.end]))
+		default:
+			return proxyFrame{}, errors.New("Verify Credentials responseValue has duplicate or out-of-order fields")
+		}
+		cursor = nextField
+	}
+	resultCode := ldapwire.ResultCode(code)
+	if resultCode == ldapwire.ResultSASLBindInProgress {
+		return proxyFrame{}, errors.New("Verify Credentials SASL continuation is outside the supported simple-Bind subset")
+	}
+	bindFields := joinBER(
+		encodeTLV(0x0a, encodeNonnegativeInteger(code)),
+		encodeTLV(0x04, nil),
+		encodeTLV(0x04, diagnosticValue),
+	)
+	if serverCredentials != nil {
+		bindFields = append(bindFields, encodeTLV(0x87, serverCredentials)...)
+	}
+	return readTranslatedBindResponse(encodeFrame(
+		messageID,
+		encodeTLV(0x61, bindFields),
+		controls,
+	))
+}
+
+func readTranslatedBindResponse(encoded []byte) (proxyFrame, error) {
+	translated, err := (berFrameCodec{}).Read(bytes.NewReader(encoded), int64(len(encoded)))
+	if err != nil {
+		return proxyFrame{}, fmt.Errorf("encode Verify Credentials BindResponse: %w", err)
+	}
+	return translated, nil
 }
 
 func NewProxy(config RuntimeConfig) (*Proxy, error) {
@@ -305,13 +498,16 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	if config.Bind.Method != "" && !config.ProxyAuthz {
 		return nil, errors.New("upstream service bind requires ProxyAuthz")
 	}
+	if config.VerifyCredentials && !config.ProxyAuthz {
+		return nil, errors.New("Verify Credentials requires ProxyAuthz")
+	}
 
 	proxy := &Proxy{
 		config:    config,
-		codec:     berFrameCodec{},
 		clients:   make(map[*clientConnection]struct{}),
 		upstreams: make(map[string]*upstreamConnection),
 	}
+	proxy.codec = runtimeFrameCodec{frameCodec: berFrameCodec{}}
 	schedulerConfig := SchedulerConfig{}
 	for tierIndex, tierConfig := range config.Tiers {
 		strategy := strings.ToLower(strings.TrimSpace(tierConfig.Strategy))
@@ -372,7 +568,11 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 					},
 				)
 			}
-			for connectionIndex := 0; connectionIndex < normalized.BindConnections; connectionIndex++ {
+			bindConnections := normalized.BindConnections
+			if config.VerifyCredentials {
+				bindConnections = 0
+			}
+			for connectionIndex := 0; connectionIndex < bindConnections; connectionIndex++ {
 				schedulerBackend.Connections = append(
 					schedulerBackend.Connections,
 					SchedulerConnectionConfig{
@@ -564,6 +764,7 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 			conn:            connection,
 			ops:             make(map[int64]*proxyOperation),
 			done:            make(chan struct{}),
+			readWake:        make(chan struct{}),
 			protocolVersion: 3,
 		}
 		_, client.tlsActive = connection.(*tls.Conn)
@@ -669,8 +870,10 @@ func (backend *runtimeBackend) maintainConnections(
 	for index := 0; index < backend.config.RegularConnections; index++ {
 		start(backendConnectionID(backend.id, false, index), false)
 	}
-	for index := 0; index < backend.config.BindConnections; index++ {
-		start(backendConnectionID(backend.id, true, index), true)
+	if !backend.proxy.config.VerifyCredentials {
+		for index := 0; index < backend.config.BindConnections; index++ {
+			start(backendConnectionID(backend.id, true, index), true)
+		}
 	}
 	workers.Wait()
 }
@@ -809,7 +1012,7 @@ func (backend *runtimeBackend) connect(
 			}
 		}
 	}
-	return &upstreamConnection{
+	upstream := &upstreamConnection{
 		backend: backend,
 		id:      connectionID,
 		bind:    bind,
@@ -818,7 +1021,9 @@ func (backend *runtimeBackend) connect(
 		nextID:  nextID,
 		done:    make(chan struct{}),
 		retired: make(chan struct{}),
-	}, nil
+	}
+	upstream.conn = &trackedUpstreamConnection{Conn: connection, upstream: upstream}
+	return upstream, nil
 }
 
 func (backend *runtimeBackend) dial(ctx context.Context) (net.Conn, error) {

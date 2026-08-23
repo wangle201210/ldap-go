@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -103,6 +105,319 @@ func TestGlobalTLSCRLCheckNoneIsAnInertImportDefault(t *testing.T) {
 	defer instance.closeSQLBackends()
 	if instance.runtime.Load().secureTransport != nil {
 		t.Fatal("olcTLSCRLCheck=none enabled TLS without certificate material")
+	}
+}
+
+func TestGlobalTLSCRLPoliciesFromOpenLDAPConfigurationImport(t *testing.T) {
+	authority := newGlobalTLSTestAuthority(t)
+	now := time.Now().UTC()
+	crl := createGlobalTLSTestCRL(
+		t,
+		authority,
+		authority.privateKey,
+		1,
+		now.Add(-time.Minute),
+		now.Add(time.Hour),
+		nil,
+	)
+	crlPath := filepath.Join(t.TempDir(), "clients.crl")
+	if err := os.WriteFile(crlPath, crl.pem, 0o600); err != nil {
+		t.Fatalf("write CRL: %v", err)
+	}
+	for _, test := range []struct {
+		policy  string
+		crlFile string
+	}{
+		{policy: "none"},
+		{policy: "peer", crlFile: crlPath},
+	} {
+		t.Run(test.policy, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			ldif := fmt.Sprintf(
+				"dn: cn=config\nobjectClass: olcGlobal\ncn: config\nolcTLSCRLCheck: %s\n",
+				test.policy,
+			)
+			if test.crlFile != "" {
+				ldif += "olcTLSCRLFile: " + test.crlFile + "\n"
+			}
+			if _, err := migration.ImportLDIF(
+				context.Background(),
+				store,
+				strings.NewReader(ldif),
+				migration.ImportOptions{
+					Database:             "0",
+					Replace:              true,
+					SkipSchemaValidation: true,
+				},
+			); err != nil {
+				t.Fatalf("ImportLDIF(OpenLDAP cn=config): %v\n%s", err, ldif)
+			}
+			instance, err := New(Config{Store: store})
+			if err != nil {
+				t.Fatalf("New(imported cn=config): %v", err)
+			}
+			defer instance.closeSQLBackends()
+			if instance.runtime.Load().secureTransport != nil {
+				t.Fatalf("imported olcTLSCRLCheck=%s enabled TLS without server material", test.policy)
+			}
+			if err := store.View(context.Background(), func(reader storage.Reader) error {
+				entry, err := reader.GetIn(configurationStoragePartition, configurationSuffix)
+				if err != nil {
+					return err
+				}
+				attributes, err := parseGlobalTLSAttributes(entry)
+				if err != nil {
+					return err
+				}
+				if attributes.crlCheck != test.policy || attributes.crlFile != test.crlFile {
+					return fmt.Errorf(
+						"imported CRL attributes = %q, %q; want %q, %q",
+						attributes.crlCheck,
+						attributes.crlFile,
+						test.policy,
+						test.crlFile,
+					)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGlobalTLSCRLConfigurationParsesPEMAndDERWithoutServerMaterial(t *testing.T) {
+	authority := newGlobalTLSTestAuthority(t)
+	now := time.Now().UTC()
+	crl := createGlobalTLSTestCRL(
+		t,
+		authority,
+		authority.privateKey,
+		1,
+		now.Add(-time.Minute),
+		now.Add(time.Hour),
+		nil,
+	)
+	for _, test := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "PEM", data: crl.pem},
+		{name: "DER", data: crl.der},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "clients.crl")
+			if err := os.WriteFile(path, test.data, 0o600); err != nil {
+				t.Fatalf("write CRL: %v", err)
+			}
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedGlobalTLSAttributes(t, store, map[string][][]byte{
+				"olcTLSCRLCheck": {[]byte("peer")},
+				"olcTLSCRLFile":  {[]byte(path)},
+			})
+			instance, err := New(Config{Store: store})
+			if err != nil {
+				t.Fatalf("New(): %v", err)
+			}
+			defer instance.closeSQLBackends()
+			if instance.runtime.Load().secureTransport != nil {
+				t.Fatal("CRL-only configuration enabled TLS")
+			}
+		})
+	}
+	for _, data := range [][]byte{
+		append([]byte("not PEM\n"), crl.pem...),
+		append(append([]byte(nil), crl.pem...), []byte("not PEM")...),
+	} {
+		if _, err := parseGlobalTLSCRLs(data); err == nil {
+			t.Fatal("CRL parser accepted non-PEM bytes around a PEM CRL")
+		}
+	}
+}
+
+func TestGlobalTLSCRLLazyConfigurationRejectsInvalidSyntax(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		policy      string
+		fileData    []byte
+		want        string
+		includeFile bool
+	}{
+		{name: "policy", policy: "sometimes", want: "expected none, peer, or all"},
+		{
+			name:        "malformed file",
+			policy:      "peer",
+			fileData:    []byte("not a CRL"),
+			want:        "parse DER CRL",
+			includeFile: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			attributes := map[string][][]byte{
+				"olcTLSCRLCheck": {[]byte(test.policy)},
+			}
+			if test.includeFile {
+				path := filepath.Join(t.TempDir(), "clients.crl")
+				if err := os.WriteFile(path, test.fileData, 0o600); err != nil {
+					t.Fatalf("write malformed CRL: %v", err)
+				}
+				attributes["olcTLSCRLFile"] = [][]byte{[]byte(path)}
+			}
+			seedGlobalTLSAttributes(t, store, attributes)
+			_, err := New(Config{Store: store})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("New() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestGlobalTLSCRLVerificationMatchesPeerAndAllSemantics(t *testing.T) {
+	now := time.Now().UTC()
+	root := newGlobalTLSTestAuthority(t)
+	intermediate := root.issueAuthority(t, "ldap-go intermediate CA")
+	client := intermediate.issue(t, "chain-client", false)
+	leafCRL := createGlobalTLSTestCRL(
+		t,
+		intermediate,
+		intermediate.privateKey,
+		1,
+		now.Add(-time.Minute),
+		now.Add(time.Hour),
+		nil,
+	)
+	issuerCRL := createGlobalTLSTestCRL(
+		t,
+		root,
+		root.privateKey,
+		1,
+		now.Add(-time.Minute),
+		now.Add(time.Hour),
+		nil,
+	)
+	chain := []*x509.Certificate{
+		client.certificate,
+		intermediate.certificate,
+		root.certificate,
+	}
+	if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{leafCRL.crl}, "peer", now); err != nil {
+		t.Fatalf("peer CRL check: %v", err)
+	}
+	if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{leafCRL.crl}, "all", now); err == nil {
+		t.Fatal("all CRL check accepted a chain without the intermediate issuer CRL")
+	}
+	if err := verifyGlobalTLSCRLs(
+		chain,
+		[]*x509.RevocationList{leafCRL.crl, issuerCRL.crl},
+		"all",
+		now,
+	); err != nil {
+		t.Fatalf("all CRL check: %v", err)
+	}
+
+	revoked := createGlobalTLSTestCRL(
+		t,
+		intermediate,
+		intermediate.privateKey,
+		2,
+		now,
+		now.Add(time.Hour),
+		[]x509.RevocationListEntry{{
+			SerialNumber:   client.certificate.SerialNumber,
+			RevocationTime: now.Add(-time.Minute),
+		}},
+	)
+	if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{leafCRL.crl, revoked.crl}, "peer", now); err == nil {
+		t.Fatal("newer CRL did not revoke the client certificate")
+	}
+	removed := createGlobalTLSTestCRL(
+		t,
+		intermediate,
+		intermediate.privateKey,
+		3,
+		now.Add(time.Minute),
+		now.Add(time.Hour),
+		[]x509.RevocationListEntry{{
+			SerialNumber:   client.certificate.SerialNumber,
+			RevocationTime: now.Add(-time.Minute),
+			ReasonCode:     8,
+		}},
+	)
+	if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{revoked.crl, removed.crl}, "peer", now.Add(time.Minute)); err != nil {
+		t.Fatalf("removeFromCRL entry rejected client certificate: %v", err)
+	}
+
+	wrongKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(wrong CRL signer): %v", err)
+	}
+	badSignature := createGlobalTLSTestCRL(
+		t,
+		intermediate,
+		wrongKey,
+		4,
+		now,
+		now.Add(time.Hour),
+		nil,
+	)
+	if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{badSignature.crl}, "peer", now); err == nil {
+		t.Fatal("CRL with an invalid issuer signature was accepted")
+	}
+	for _, crl := range []globalTLSTestCRL{
+		createGlobalTLSTestCRL(t, intermediate, intermediate.privateKey, 5, now.Add(time.Minute), now.Add(time.Hour), nil),
+		createGlobalTLSTestCRL(t, intermediate, intermediate.privateKey, 6, now.Add(-time.Hour), now.Add(-time.Minute), nil),
+	} {
+		if err := verifyGlobalTLSCRLs(chain, []*x509.RevocationList{crl.crl}, "peer", now); err == nil {
+			t.Fatal("CRL outside its ThisUpdate/NextUpdate window was accepted")
+		}
+	}
+}
+
+func TestGlobalTLSCRLCheckRequiresCurrentCRLWhenTLSIsEnabled(t *testing.T) {
+	authority := newGlobalTLSTestAuthority(t)
+	serverCertificate := authority.issue(t, "crl-required-server", true)
+	now := time.Now().UTC()
+	expired := createGlobalTLSTestCRL(
+		t,
+		authority,
+		authority.privateKey,
+		1,
+		now.Add(-2*time.Hour),
+		now.Add(-time.Hour),
+		nil,
+	)
+	expiredPath := filepath.Join(t.TempDir(), "expired.crl")
+	if err := os.WriteFile(expiredPath, expired.pem, 0o600); err != nil {
+		t.Fatalf("write expired CRL: %v", err)
+	}
+	for _, test := range []struct {
+		name    string
+		crlFile string
+	}{
+		{name: "missing"},
+		{name: "expired", crlFile: expiredPath},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			attributes := map[string][][]byte{
+				"olcTLSCertificate;binary":    {serverCertificate.certificateDER},
+				"olcTLSCertificateKey;binary": {serverCertificate.privateKeyDER},
+				"olcTLSCRLCheck":              {[]byte("peer")},
+			}
+			if test.crlFile != "" {
+				attributes["olcTLSCRLFile"] = [][]byte{[]byte(test.crlFile)}
+			}
+			seedGlobalTLSAttributes(t, store, attributes)
+			_, err := New(Config{Store: store})
+			if err == nil || !strings.Contains(err.Error(), "current olcTLSCRLFile CRL") {
+				t.Fatalf("New() error = %v, want current CRL requirement", err)
+			}
+		})
 	}
 }
 
@@ -257,7 +572,7 @@ func TestGlobalTLSConfigurationRequiresCompleteMaterial(t *testing.T) {
 	}
 }
 
-func TestOnlineConfigurationRejectsUnsupportedGlobalTLSDirectiveAndRollsBack(t *testing.T) {
+func TestOnlineConfigurationRejectsInvalidGlobalTLSCRLPolicyAndRollsBack(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	seedOnlineConfiguration(t, store)
@@ -274,7 +589,7 @@ func TestOnlineConfigurationRejectsUnsupportedGlobalTLSDirectiveAndRollsBack(t *
 	}
 
 	request := ldap.NewModifyRequest("cn=config", nil)
-	request.Replace("olcTLSCRLCheck", []string{"peer"})
+	request.Replace("olcTLSCRLCheck", []string{"sometimes"})
 	err = client.Modify(request)
 	var ldapErr *ldap.Error
 	if !errors.As(err, &ldapErr) ||
@@ -312,6 +627,25 @@ func TestOpenLDAPGlobalTLSConfigurationRebuildsContextSourceContract(t *testing.
 			t.Errorf("OpenLDAP TLS configuration source missing %s", attribute)
 		}
 	}
+	openSSLSource, err := os.ReadFile(filepath.Join(
+		sourceRoot,
+		"libraries",
+		"libldap",
+		"tls_o.c",
+	))
+	if err != nil {
+		t.Fatalf("read OpenLDAP tls_o.c: %v", err)
+	}
+	for _, anchor := range []string{
+		"LDAP_OPT_X_TLS_CRL_PEER",
+		"X509_V_FLAG_CRL_CHECK",
+		"LDAP_OPT_X_TLS_CRL_ALL",
+		"X509_V_FLAG_CRL_CHECK_ALL",
+	} {
+		if !strings.Contains(string(openSSLSource), anchor) {
+			t.Errorf("OpenLDAP TLS CRL source missing %q", anchor)
+		}
+	}
 }
 
 type globalTLSTestCertificate struct {
@@ -320,6 +654,13 @@ type globalTLSTestCertificate struct {
 	certificatePEM []byte
 	privateKeyPEM  []byte
 	tlsCertificate tls.Certificate
+	certificate    *x509.Certificate
+}
+
+type globalTLSTestCRL struct {
+	der []byte
+	pem []byte
+	crl *x509.RevocationList
 }
 
 type globalTLSTestAuthority struct {
@@ -336,11 +677,14 @@ func newGlobalTLSTestAuthority(t *testing.T) globalTLSTestAuthority {
 	}
 	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(100),
-		Subject:               pkix.Name{CommonName: "ldap-go test CA"},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		SerialNumber: big.NewInt(100),
+		Subject:      pkix.Name{CommonName: "ldap-go test CA"},
+		SubjectKeyId: []byte("ldap-go test root CA"),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageCertSign |
+			x509.KeyUsageCRLSign |
+			x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
@@ -357,6 +701,47 @@ func newGlobalTLSTestAuthority(t *testing.T) globalTLSTestAuthority {
 	certificate, err := x509.ParseCertificate(der)
 	if err != nil {
 		t.Fatalf("ParseCertificate(CA): %v", err)
+	}
+	return globalTLSTestAuthority{
+		certificateDER: der,
+		certificate:    certificate,
+		privateKey:     privateKey,
+	}
+}
+
+func (authority globalTLSTestAuthority) issueAuthority(
+	t *testing.T,
+	commonName string,
+) globalTLSTestAuthority {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(%s): %v", commonName, err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(now.UnixNano()),
+		Subject:               pkix.Name{CommonName: commonName},
+		SubjectKeyId:          []byte(commonName),
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(
+		rand.Reader,
+		template,
+		authority.certificate,
+		&privateKey.PublicKey,
+		authority.privateKey,
+	)
+	if err != nil {
+		t.Fatalf("CreateCertificate(%s): %v", commonName, err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate(%s): %v", commonName, err)
 	}
 	return globalTLSTestAuthority{
 		certificateDER: der,
@@ -421,6 +806,54 @@ func (authority globalTLSTestAuthority) issue(
 		certificatePEM: certificatePEM,
 		privateKeyPEM:  privateKeyPEM,
 		tlsCertificate: tlsCertificate,
+		certificate:    mustParseGlobalTLSTestCertificate(t, certificateDER),
+	}
+}
+
+func mustParseGlobalTLSTestCertificate(
+	t *testing.T,
+	der []byte,
+) *x509.Certificate {
+	t.Helper()
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate(): %v", err)
+	}
+	return certificate
+}
+
+func createGlobalTLSTestCRL(
+	t *testing.T,
+	issuer globalTLSTestAuthority,
+	signer *ecdsa.PrivateKey,
+	number int64,
+	thisUpdate,
+	nextUpdate time.Time,
+	revoked []x509.RevocationListEntry,
+) globalTLSTestCRL {
+	t.Helper()
+	der, err := x509.CreateRevocationList(
+		rand.Reader,
+		&x509.RevocationList{
+			Number:                    big.NewInt(number),
+			ThisUpdate:                thisUpdate,
+			NextUpdate:                nextUpdate,
+			RevokedCertificateEntries: revoked,
+		},
+		issuer.certificate,
+		signer,
+	)
+	if err != nil {
+		t.Fatalf("CreateRevocationList(): %v", err)
+	}
+	crl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		t.Fatalf("ParseRevocationList(): %v", err)
+	}
+	return globalTLSTestCRL{
+		der: der,
+		pem: pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}),
+		crl: crl,
 	}
 }
 

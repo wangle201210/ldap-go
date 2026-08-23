@@ -3,12 +3,16 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -33,6 +37,8 @@ type runtimeDatabase struct {
 	advertise             bool
 	readOnly              bool
 	searchSizeLimits      []databaseSearchSizeLimit
+	equalityIndexes       storage.EqualityIndexConfig
+	equalityIndexInit     *databaseEqualityIndexInitialization
 	restrictions          databaseRestrictions
 	shadow                bool
 	multiProvider         bool
@@ -207,6 +213,26 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			// cn=config RDNs use configuration attributes such as olcDatabase
 			// that are intentionally outside the content schema registry.
 			database.dnNormalizer = nil
+		}
+		if !isConfigDatabase(database) &&
+			!isMonitorDatabase(database) &&
+			!isNullDatabase(database) &&
+			!isLDAPBackendDatabase(database) &&
+			!isMetaBackendDatabase(database) &&
+			!isSockBackendDatabase(database) &&
+			!isSQLBackendDatabase(database) {
+			indexedNormalizer, indexes, err := loadDatabaseEqualityIndexes(
+				entry,
+				database.dnNormalizer,
+			)
+			if err != nil {
+				return err
+			}
+			database.equalityIndexes = indexes
+			if indexedNormalizer != nil {
+				database.dnNormalizer = indexedNormalizer
+				database.equalityIndexInit = &databaseEqualityIndexInitialization{}
+			}
 		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
 			suffix, err := parseRuntimeDN(
@@ -456,6 +482,260 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 	}
 	applyFrontendDatabaseDefaults(databases)
 	return databases, nil
+}
+
+type databaseEqualityIndexRegistry interface {
+	directory.DNAttributeNormalizer
+	directory.DNAttributeCanonicalNamer
+	EffectiveAttributeType(string) (schema.AttributeType, bool, error)
+	NormalizeEqualityValue(string, []byte) ([]byte, error)
+	NormalizeEqualityAssertion(string, []byte) ([]byte, error)
+	AttributeValues(directory.Entry, string) [][]byte
+	ObjectClass(string) (schema.ObjectClass, bool)
+}
+
+type databaseEqualityIndexInitialization struct {
+	mu    sync.Mutex
+	ready bool
+}
+
+type databaseEqualityIndexNormalizer struct {
+	registry databaseEqualityIndexRegistry
+	config   storage.EqualityIndexConfig
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) NormalizeDNAttribute(
+	attributeType string,
+	value []byte,
+) (string, []byte, error) {
+	return normalizer.registry.NormalizeDNAttribute(attributeType, value)
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) CanonicalDNAttributeName(
+	attributeType string,
+) (string, error) {
+	return normalizer.registry.CanonicalDNAttributeName(attributeType)
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexConfiguration() storage.EqualityIndexConfig {
+	config := normalizer.config
+	config.Attributes = append(
+		[]storage.EqualityIndexAttribute(nil),
+		config.Attributes...,
+	)
+	return config
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ResolveEqualityIndexAttribute(
+	description string,
+) (canonical string, equality, presence bool, err error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !found {
+		return "", false, false, err
+	}
+	canonical = strings.ToLower(attribute.OID)
+	for _, configured := range normalizer.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.Equality, configured.Presence, nil
+		}
+	}
+	return canonical, false, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) NormalizeEqualityIndexAssertion(
+	description string,
+	value []byte,
+) ([]byte, error) {
+	return normalizer.registry.NormalizeEqualityAssertion(description, value)
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	values := normalizer.registry.AttributeValues(entry, canonicalAttribute)
+	if canonicalAttribute == "2.5.4.0" {
+		values = normalizer.expandObjectClassIndexValues(values)
+	}
+	result := make([][]byte, 0, len(values))
+	for _, value := range values {
+		normalized, err := normalizer.registry.NormalizeEqualityValue(
+			canonicalAttribute,
+			value,
+		)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) expandObjectClassIndexValues(
+	values [][]byte,
+) [][]byte {
+	result := make([][]byte, 0, len(values))
+	seen := make(map[string]struct{})
+	var add func(string)
+	add = func(identifier string) {
+		key := strings.ToLower(strings.TrimSpace(identifier))
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		result = append(result, []byte(identifier))
+		objectClass, found := normalizer.registry.ObjectClass(identifier)
+		if !found {
+			return
+		}
+		for _, superior := range objectClass.Superiors {
+			add(superior)
+		}
+	}
+	for _, value := range values {
+		add(string(value))
+	}
+	return result
+}
+
+func loadDatabaseEqualityIndexes(
+	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DNAttributeNormalizer, storage.EqualityIndexConfig, error) {
+	values := entry.Values("olcDbIndex")
+	if len(values) == 0 {
+		return normalizer, storage.EqualityIndexConfig{}, nil
+	}
+	registry, ok := normalizer.(databaseEqualityIndexRegistry)
+	if !ok {
+		return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+			"%s olcDbIndex requires a schema registry",
+			entry.DN,
+		)
+	}
+	byAttribute := make(map[string]storage.EqualityIndexAttribute)
+	for _, raw := range values {
+		value, err := stripOrderedDatabaseIndexPrefix(string(raw))
+		if err != nil {
+			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+				"%s olcDbIndex: %w",
+				entry.DN,
+				err,
+			)
+		}
+		arguments, err := tokenizeOpenLDAPConfig(value)
+		if err != nil {
+			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+				"%s olcDbIndex: %w",
+				entry.DN,
+				err,
+			)
+		}
+		if len(arguments) < 2 {
+			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+				"%s olcDbIndex requires attributes and index types",
+				entry.DN,
+			)
+		}
+		var equality, presence bool
+		for _, argument := range arguments[1:] {
+			for _, indexType := range strings.Split(argument, ",") {
+				switch strings.ToLower(strings.TrimSpace(indexType)) {
+				case "eq":
+					equality = true
+				case "pres":
+					presence = true
+				case "":
+				case "sub", "approx", "ordering", "subinitial", "subany", "subfinal", "nolang":
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex type %q is unsupported in the equality-index phase",
+						entry.DN,
+						indexType,
+					)
+				default:
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex has unknown index type %q",
+						entry.DN,
+						indexType,
+					)
+				}
+			}
+		}
+		if !equality && !presence {
+			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+				"%s olcDbIndex does not configure eq or pres",
+				entry.DN,
+			)
+		}
+		for _, description := range strings.Split(arguments[0], ",") {
+			description = strings.TrimSpace(description)
+			if strings.EqualFold(description, "default") {
+				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+					"%s olcDbIndex default is unsupported in the equality-index phase",
+					entry.DN,
+				)
+			}
+			attribute, found, err := registry.EffectiveAttributeType(description)
+			if err != nil {
+				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+					"%s olcDbIndex attribute %q: %w",
+					entry.DN,
+					description,
+					err,
+				)
+			}
+			if !found {
+				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+					"%s olcDbIndex attribute %q is undefined",
+					entry.DN,
+					description,
+				)
+			}
+			if equality && attribute.Equality == "" {
+				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+					"%s olcDbIndex attribute %q has no equality matching rule",
+					entry.DN,
+					description,
+				)
+			}
+			key := strings.ToLower(attribute.OID)
+			configured := byAttribute[key]
+			configured.Attribute = key
+			configured.EqualityRule = strings.ToLower(attribute.Equality)
+			configured.Equality = configured.Equality || equality
+			configured.Presence = configured.Presence || presence
+			byAttribute[key] = configured
+		}
+	}
+	config := storage.EqualityIndexConfig{Version: 1}
+	for _, attribute := range byAttribute {
+		config.Attributes = append(config.Attributes, attribute)
+	}
+	sort.Slice(config.Attributes, func(left, right int) bool {
+		return config.Attributes[left].Attribute < config.Attributes[right].Attribute
+	})
+	return &databaseEqualityIndexNormalizer{
+		registry: registry,
+		config:   config,
+	}, config, nil
+}
+
+func stripOrderedDatabaseIndexPrefix(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "{") {
+		return value, nil
+	}
+	end := strings.IndexByte(value, '}')
+	if end <= 1 {
+		return "", errors.New("invalid ordered prefix")
+	}
+	if _, err := strconv.Atoi(value[1:end]); err != nil {
+		return "", errors.New("invalid ordered prefix")
+	}
+	return strings.TrimSpace(value[end+1:]), nil
 }
 
 func loadDatabaseSearchSizeLimits(

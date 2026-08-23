@@ -50,6 +50,14 @@ func TestLoadPcacheRuntimeConfiguration(t *testing.T) {
 			Description: "olcPcachePersist",
 			Values:      stringValues("TRUE"),
 		},
+		directory.Attribute{
+			Description: "olcPcachePosition",
+			Values:      stringValues("HEAD"),
+		},
+		directory.Attribute{
+			Description: "olcPcacheValidate",
+			Values:      stringValues("TRUE"),
+		},
 	)
 	configuration, err := loadPcacheRuntimeConfiguration(overlay)
 	if err != nil {
@@ -58,6 +66,7 @@ func TestLoadPcacheRuntimeConfiguration(t *testing.T) {
 	if configuration.maxEntries != 100 || configuration.maxQueries != 25 ||
 		configuration.entryLimit != 10 || !configuration.offline ||
 		!configuration.persist ||
+		configuration.position != pcacheResponseHead || !configuration.validate ||
 		configuration.consistencyPeriod != time.Second ||
 		len(configuration.attributeSets) != 1 ||
 		len(configuration.templates) != 1 ||
@@ -93,19 +102,25 @@ func TestLoadPcacheRuntimeConfiguration(t *testing.T) {
 			Description: "olcProxySaveQueries",
 			Values:      stringValues("TRUE"),
 		},
+		directory.Attribute{
+			Description: "olcProxyCheckCacheability",
+			Values:      stringValues("TRUE"),
+		},
 	)
 	legacyConfiguration, err := loadPcacheRuntimeConfiguration(legacy)
 	if err != nil {
 		t.Fatalf("legacy pcache aliases: %v", err)
 	}
-	if legacyConfiguration.maxQueries != 12 || !legacyConfiguration.persist {
+	if legacyConfiguration.maxQueries != 12 || !legacyConfiguration.persist ||
+		!legacyConfiguration.validate {
 		t.Fatalf("legacy pcache Phase 2 configuration = %#v", legacyConfiguration)
 	}
 	defaults, err := loadPcacheRuntimeConfiguration(testPcacheOverlay())
 	if err != nil {
 		t.Fatalf("default pcache configuration: %v", err)
 	}
-	if defaults.maxQueries != pcacheDefaultMaxQueries || defaults.offline || defaults.persist {
+	if defaults.maxQueries != pcacheDefaultMaxQueries || defaults.offline ||
+		defaults.persist || defaults.validate || defaults.position != pcacheResponseTail {
 		t.Fatalf("default pcache Phase 2 configuration = %#v", defaults)
 	}
 
@@ -123,7 +138,9 @@ func TestLoadPcacheRuntimeConfiguration(t *testing.T) {
 		{"invalid TTR", "olcPcacheTemplate", []string{"(sn=) 0 30 20 10 invalid"}, "TTR"},
 		{"invalid max queries", "olcPcacheMaxQueries", []string{"0"}, "positive"},
 		{"invalid persist", "olcPcachePersist", []string{"sometimes"}, "invalid value"},
-		{"unsupported option", "olcPcacheValidate", []string{"TRUE"}, "not implemented"},
+		{"invalid validate", "olcPcacheValidate", []string{"sometimes"}, "invalid value"},
+		{"invalid position", "olcPcachePosition", []string{"middle"}, "unknown specifier"},
+		{"duplicate position", "olcPcachePosition", []string{"head", "tail"}, "single-valued"},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
@@ -134,6 +151,22 @@ func TestLoadPcacheRuntimeConfiguration(t *testing.T) {
 				t.Fatalf("configuration error = %v, want substring %q", err, test.contains)
 			}
 		})
+	}
+
+	aliases := testPcacheOverlay()
+	aliases.Attributes = append(aliases.Attributes,
+		directory.Attribute{
+			Description: "olcPcacheValidate",
+			Values:      stringValues("TRUE"),
+		},
+		directory.Attribute{
+			Description: "olcProxyCheckCacheability",
+			Values:      stringValues("TRUE"),
+		},
+	)
+	if _, err := loadPcacheRuntimeConfiguration(aliases); err == nil ||
+		!strings.Contains(err.Error(), "both olcPcacheValidate and alias") {
+		t.Fatalf("validate alias collision error = %v", err)
 	}
 }
 

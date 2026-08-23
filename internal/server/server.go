@@ -731,6 +731,8 @@ func connectionBarrier(message ldapwire.Message) bool {
 	switch request := message.Request.(type) {
 	case ldapwire.BindRequest:
 		return true
+	case ldapwire.UnsupportedRequest:
+		return true
 	case ldapwire.ExtendedRequest:
 		return request.Name == startTLSOID
 	default:
@@ -880,16 +882,15 @@ func (server *Server) dispatch(
 			request,
 		)
 	case ldapwire.UnsupportedRequest:
-		responseTag, responds := responseTagFor(request.Tag)
-		if !responds {
-			return false, nil
-		}
-		return false, ldapwire.Write(connection, ldapwire.EncodeResultResponse(
-			message.ID,
-			responseTag,
-			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "operation is not implemented"),
-			nil,
-		))
+		return true, ldapwire.Write(
+			connection,
+			ldapwire.EncodeNoticeOfDisconnection(
+				ldapwire.ResultError(
+					ldapwire.ResultProtocolError,
+					"unknown LDAP request",
+				),
+			),
+		)
 	default:
 		return false, errors.New("unknown request type")
 	}

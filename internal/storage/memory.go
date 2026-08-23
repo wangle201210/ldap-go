@@ -11,21 +11,27 @@ import (
 )
 
 type Memory struct {
-	mu             sync.RWMutex
-	entries        map[string]directory.Entry
-	dnIdentities   map[string]string
-	dnSources      map[string]string
-	namingContexts []string
-	metadata       map[string][]byte
-	closed         bool
+	mu                   sync.RWMutex
+	entries              map[string]directory.Entry
+	dnIdentities         map[string]string
+	dnSources            map[string]string
+	equalityIndexConfigs map[string]EqualityIndexConfig
+	equalityPostings     map[string]map[string]map[string]struct{}
+	namingContexts       []string
+	metadata             map[string][]byte
+	closed               bool
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		entries:      make(map[string]directory.Entry),
-		dnIdentities: make(map[string]string),
-		dnSources:    make(map[string]string),
-		metadata:     make(map[string][]byte),
+		entries:              make(map[string]directory.Entry),
+		dnIdentities:         make(map[string]string),
+		dnSources:            make(map[string]string),
+		equalityIndexConfigs: make(map[string]EqualityIndexConfig),
+		equalityPostings: make(
+			map[string]map[string]map[string]struct{},
+		),
+		metadata: make(map[string][]byte),
 	}
 }
 
@@ -40,13 +46,15 @@ func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
 		return context.Canceled
 	}
 	return fn(&memoryTx{
-		ctx:            ctx,
-		entries:        store.entries,
-		dnIdentities:   store.dnIdentities,
-		dnSources:      store.dnSources,
-		namingContexts: store.namingContexts,
-		metadata:       store.metadata,
-		readOnly:       true,
+		ctx:                  ctx,
+		entries:              store.entries,
+		dnIdentities:         store.dnIdentities,
+		dnSources:            store.dnSources,
+		equalityIndexConfigs: store.equalityIndexConfigs,
+		equalityPostings:     store.equalityPostings,
+		namingContexts:       store.namingContexts,
+		metadata:             store.metadata,
+		readOnly:             true,
 	})
 }
 
@@ -62,12 +70,14 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	}
 
 	tx := &memoryTx{
-		ctx:            ctx,
-		entries:        cloneEntryMap(store.entries),
-		dnIdentities:   cloneStringMap(store.dnIdentities),
-		dnSources:      cloneStringMap(store.dnSources),
-		namingContexts: append([]string(nil), store.namingContexts...),
-		metadata:       cloneMetadataMap(store.metadata),
+		ctx:                  ctx,
+		entries:              cloneEntryMap(store.entries),
+		dnIdentities:         cloneStringMap(store.dnIdentities),
+		dnSources:            cloneStringMap(store.dnSources),
+		equalityIndexConfigs: cloneEqualityIndexConfigs(store.equalityIndexConfigs),
+		equalityPostings:     cloneEqualityIndexPostings(store.equalityPostings),
+		namingContexts:       append([]string(nil), store.namingContexts...),
+		metadata:             cloneMetadataMap(store.metadata),
 	}
 	if err := fn(tx); err != nil {
 		return err
@@ -79,6 +89,8 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	store.entries = tx.entries
 	store.dnIdentities = tx.dnIdentities
 	store.dnSources = tx.dnSources
+	store.equalityIndexConfigs = tx.equalityIndexConfigs
+	store.equalityPostings = tx.equalityPostings
 	store.namingContexts = tx.namingContexts
 	store.metadata = tx.metadata
 	return nil
@@ -91,19 +103,23 @@ func (store *Memory) Close() error {
 	store.entries = nil
 	store.dnIdentities = nil
 	store.dnSources = nil
+	store.equalityIndexConfigs = nil
+	store.equalityPostings = nil
 	store.namingContexts = nil
 	store.metadata = nil
 	return nil
 }
 
 type memoryTx struct {
-	ctx            context.Context
-	entries        map[string]directory.Entry
-	dnIdentities   map[string]string
-	dnSources      map[string]string
-	namingContexts []string
-	metadata       map[string][]byte
-	readOnly       bool
+	ctx                  context.Context
+	entries              map[string]directory.Entry
+	dnIdentities         map[string]string
+	dnSources            map[string]string
+	equalityIndexConfigs map[string]EqualityIndexConfig
+	equalityPostings     map[string]map[string]map[string]struct{}
+	namingContexts       []string
+	metadata             map[string][]byte
+	readOnly             bool
 }
 
 func (tx *memoryTx) Get(dn directory.DN) (directory.Entry, error) {
@@ -303,7 +319,17 @@ func (tx *memoryTx) PutIn(
 	if err := dn.ValidateIdentityKey(identity); err != nil {
 		return fmt.Errorf("entry %q DN identity: %w", entry.DN, err)
 	}
-	return tx.putInWithDN(partition, entry.WithoutDNIdentity(), dn, identity, replace)
+	if err := tx.putInWithDN(
+		partition,
+		entry.WithoutDNIdentity(),
+		dn,
+		identity,
+		replace,
+	); err != nil {
+		return err
+	}
+	tx.invalidateEqualityIndexes(partition)
+	return nil
 }
 
 func (tx *memoryTx) putInWithDN(
@@ -381,6 +407,8 @@ func (tx *memoryTx) Delete(dn directory.DN) error {
 	delete(tx.entries, foundKey)
 	delete(tx.dnIdentities, foundKey)
 	delete(tx.dnSources, foundKey)
+	partition, _ := splitPartitionedEntryKey(foundKey)
+	tx.invalidateEqualityIndexes(partition)
 	return nil
 }
 
@@ -422,6 +450,7 @@ func (tx *memoryTx) DeleteIn(partition string, dn directory.DN) error {
 	delete(tx.entries, foundKey)
 	delete(tx.dnIdentities, foundKey)
 	delete(tx.dnSources, foundKey)
+	tx.invalidateEqualityIndexes(partition)
 	return nil
 }
 
@@ -432,6 +461,8 @@ func (tx *memoryTx) Clear() error {
 	tx.entries = make(map[string]directory.Entry)
 	tx.dnIdentities = make(map[string]string)
 	tx.dnSources = make(map[string]string)
+	tx.equalityIndexConfigs = make(map[string]EqualityIndexConfig)
+	tx.equalityPostings = make(map[string]map[string]map[string]struct{})
 	tx.namingContexts = nil
 	tx.metadata = make(map[string][]byte)
 	return nil

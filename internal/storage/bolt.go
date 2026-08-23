@@ -15,10 +15,12 @@ import (
 )
 
 var (
-	entriesBucket  = []byte("entries")
-	metaBucket     = []byte("metadata")
-	contextsKey    = []byte("naming-contexts")
-	metadataPrefix = []byte("value:")
+	entriesBucket             = []byte("entries")
+	metaBucket                = []byte("metadata")
+	equalityIndexBucket       = []byte("indexes:eq")
+	equalityIndexConfigBucket = []byte("indexes:eq:config")
+	contextsKey               = []byte("naming-contexts")
+	metadataPrefix            = []byte("value:")
 )
 
 type Bolt struct {
@@ -42,7 +44,13 @@ func OpenBolt(path string) (*Bolt, error) {
 		if _, err := tx.CreateBucketIfNotExists(entriesBucket); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists(metaBucket)
+		if _, err := tx.CreateBucketIfNotExists(metaBucket); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(equalityIndexBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket)
 		return err
 	}); err != nil {
 		_ = db.Close()
@@ -78,7 +86,7 @@ func (store *Bolt) View(ctx context.Context, fn func(Reader) error) error {
 		return err
 	}
 	return store.db.View(func(tx *bolt.Tx) error {
-		return fn(&boltTx{ctx: ctx, tx: tx, entries: tx.Bucket(entriesBucket), meta: tx.Bucket(metaBucket)})
+		return fn(newBoltTx(ctx, tx))
 	})
 }
 
@@ -87,7 +95,7 @@ func (store *Bolt) Update(ctx context.Context, fn func(Writer) error) error {
 		return err
 	}
 	return store.db.Update(func(tx *bolt.Tx) error {
-		writer := &boltTx{ctx: ctx, tx: tx, entries: tx.Bucket(entriesBucket), meta: tx.Bucket(metaBucket)}
+		writer := newBoltTx(ctx, tx)
 		if err := fn(writer); err != nil {
 			return err
 		}
@@ -100,10 +108,23 @@ func (store *Bolt) Close() error {
 }
 
 type boltTx struct {
-	ctx     context.Context
-	tx      *bolt.Tx
-	entries *bolt.Bucket
-	meta    *bolt.Bucket
+	ctx                  context.Context
+	tx                   *bolt.Tx
+	entries              *bolt.Bucket
+	meta                 *bolt.Bucket
+	equalityIndexes      *bolt.Bucket
+	equalityIndexConfigs *bolt.Bucket
+}
+
+func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
+	return &boltTx{
+		ctx:                  ctx,
+		tx:                   tx,
+		entries:              tx.Bucket(entriesBucket),
+		meta:                 tx.Bucket(metaBucket),
+		equalityIndexes:      tx.Bucket(equalityIndexBucket),
+		equalityIndexConfigs: tx.Bucket(equalityIndexConfigBucket),
+	}
 }
 
 func (tx *boltTx) Get(dn directory.DN) (directory.Entry, error) {
@@ -336,7 +357,16 @@ func (tx *boltTx) PutIn(
 	if err := dn.ValidateIdentityKey(identity); err != nil {
 		return fmt.Errorf("entry %q DN identity: %w", entry.DN, err)
 	}
-	return tx.putInWithDN(partition, entry.WithoutDNIdentity(), dn, identity, replace)
+	if err := tx.putInWithDN(
+		partition,
+		entry.WithoutDNIdentity(),
+		dn,
+		identity,
+		replace,
+	); err != nil {
+		return err
+	}
+	return tx.invalidateEqualityIndexes(partition)
 }
 
 func (tx *boltTx) putInWithDN(
@@ -481,7 +511,10 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 	if foundKey == nil {
 		return ErrEntryNotFound
 	}
-	return tx.entries.Delete(foundKey)
+	if err := tx.entries.Delete(foundKey); err != nil {
+		return err
+	}
+	return tx.invalidateEqualityIndexes(partition)
 }
 
 func (tx *boltTx) Clear() error {
@@ -504,6 +537,26 @@ func (tx *boltTx) Clear() error {
 		return err
 	}
 	tx.meta = meta
+	for _, bucketName := range [][]byte{
+		equalityIndexBucket,
+		equalityIndexConfigBucket,
+	} {
+		if tx.tx.Bucket(bucketName) != nil {
+			if err := tx.tx.DeleteBucket(bucketName); err != nil {
+				return err
+			}
+		}
+	}
+	indexes, err := tx.tx.CreateBucket(equalityIndexBucket)
+	if err != nil {
+		return err
+	}
+	configs, err := tx.tx.CreateBucket(equalityIndexConfigBucket)
+	if err != nil {
+		return err
+	}
+	tx.equalityIndexes = indexes
+	tx.equalityIndexConfigs = configs
 	return nil
 }
 

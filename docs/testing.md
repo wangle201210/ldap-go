@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The pinned local strict run on 2026-08-23 passed 1,359 top-level tests against
+The latest pinned local strict run passed 1,405 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC. Its only allowed skip was the Linux-only TCP user-timeout test on
 macOS; mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache,

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -204,6 +205,24 @@ func (server *Server) trySockBackendOperation(
 		state.operationRealDN,
 		operation,
 	)
+	search, isSearch := message.Request.(ldapwire.SearchRequest)
+	if isSearch {
+		sockSearch := operation.(SockSearchRequest)
+		result, err := server.executeSockBackendSearch(
+			ctx,
+			connection,
+			state,
+			*database,
+			search,
+			request,
+			sockSearch.SizeLimit,
+		)
+		if err != nil {
+			return true, err
+		}
+		return true, server.writeSearchDone(connection, message.ID, result)
+	}
+
 	response, failure, err := server.executeSockBackendRequest(
 		ctx,
 		database.sockBackend,
@@ -217,53 +236,28 @@ func (server *Server) trySockBackendOperation(
 		return true, writeResultForMessage(connection, message, *failure)
 	}
 
-	search, isSearch := message.Request.(ldapwire.SearchRequest)
-	if !isSearch {
-		if len(response.Entries) != 0 {
-			return true, writeResultForMessage(
-				connection,
-				message,
-				ldapwire.ResultError(
-					ldapwire.ResultOther,
-					sockBackendFailureDiagnostic,
-				),
-			)
-		}
-		if request, ok := message.Request.(ldapwire.ExtendedRequest); ok &&
-			request.Name == passwordModifyOID &&
-			response.Result.Code == ldapwire.ResultSuccess &&
-			generatedPassword != nil {
-			return true, server.writePasswordModifyResult(
-				connection,
-				message.ID,
-				response.Result,
-				ldapwire.EncodePasswordModifyResponseValue(generatedPassword),
-			)
-		}
-		return true, writeResultForMessage(connection, message, response.Result)
+	if len(response.Entries) != 0 || len(response.References) != 0 {
+		return true, writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultOther,
+				sockBackendFailureDiagnostic,
+			),
+		)
 	}
-
-	entries, err := server.sockBackendSearchEntries(
-		ctx,
-		state,
-		*database,
-		search,
-		response.Entries,
-	)
-	if err != nil {
-		return true, err
+	if request, ok := message.Request.(ldapwire.ExtendedRequest); ok &&
+		request.Name == passwordModifyOID &&
+		response.Result.Code == ldapwire.ResultSuccess &&
+		generatedPassword != nil {
+		return true, server.writePasswordModifyResult(
+			connection,
+			message.ID,
+			response.Result,
+			ldapwire.EncodePasswordModifyResponseValue(generatedPassword),
+		)
 	}
-	return true, server.writeSearchResult(
-		connection,
-		message.ID,
-		state,
-		nil,
-		nil,
-		entries,
-		response.Result,
-		pagedSearchCursor{},
-		false,
-	)
+	return true, writeResultForMessage(connection, message, response.Result)
 }
 
 func prepareSockPasswordModify(
@@ -370,7 +364,7 @@ func (server *Server) trySockBackendBind(
 	}
 	if failure != nil {
 		response.Result = *failure
-	} else if len(response.Entries) != 0 {
+	} else if len(response.Entries) != 0 || len(response.References) != 0 {
 		response.Result = ldapwire.ResultError(
 			ldapwire.ResultOther,
 			sockBackendFailureDiagnostic,
@@ -519,6 +513,39 @@ func (server *Server) executeSockBackendRequest(
 	request SockRequest,
 	expectResponse bool,
 ) (SockResponse, *ldapwire.Result, error) {
+	connection, closeConnection, failure, err := server.openSockBackendRequest(
+		ctx,
+		configuration,
+		request,
+	)
+	if err != nil || failure != nil {
+		return SockResponse{}, failure, err
+	}
+	defer closeConnection()
+	if !expectResponse {
+		return SockResponse{}, nil, nil
+	}
+
+	response, err := ParseSockResponse(connection, SockProtocolLimits{})
+	if err != nil {
+		if ctx.Err() != nil {
+			return SockResponse{}, nil, ctx.Err()
+		}
+		server.logSockBackendResponseFailure(configuration, request, err)
+		result := ldapwire.ResultError(
+			ldapwire.ResultOther,
+			sockBackendFailureDiagnostic,
+		)
+		return SockResponse{}, &result, nil
+	}
+	return response, nil, nil
+}
+
+func (server *Server) openSockBackendRequest(
+	ctx context.Context,
+	configuration *sockBackendRuntimeConfiguration,
+	request SockRequest,
+) (net.Conn, func(), *ldapwire.Result, error) {
 	encoded, err := EncodeSockRequest(request, SockProtocolLimits{})
 	if err != nil {
 		server.config.Logger.Debug(
@@ -531,29 +558,32 @@ func (server *Server) executeSockBackendRequest(
 			ldapwire.ResultOther,
 			sockBackendFailureDiagnostic,
 		)
-		return SockResponse{}, &result, nil
+		return nil, nil, &result, nil
 	}
 
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", configuration.path)
 	if err != nil {
 		if ctx.Err() != nil {
-			return SockResponse{}, nil, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		result := ldapwire.ResultError(
 			ldapwire.ResultOther,
 			sockBackendOpenDiagnostic,
 		)
-		return SockResponse{}, &result, nil
+		return nil, nil, &result, nil
 	}
-	defer connection.Close()
 	stopCancellation := context.AfterFunc(ctx, func() {
 		_ = connection.Close()
 	})
-	defer stopCancellation()
+	closeConnection := func() {
+		stopCancellation()
+		_ = connection.Close()
+	}
 
 	if err := writeAll(connection, encoded); err != nil {
+		closeConnection()
 		if ctx.Err() != nil {
-			return SockResponse{}, nil, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		server.config.Logger.Debug(
 			"back-sock request write failed",
@@ -565,30 +595,121 @@ func (server *Server) executeSockBackendRequest(
 			ldapwire.ResultOther,
 			sockBackendFailureDiagnostic,
 		)
-		return SockResponse{}, &result, nil
+		return nil, nil, &result, nil
 	}
-	if !expectResponse {
-		return SockResponse{}, nil, nil
-	}
+	return connection, closeConnection, nil, nil
+}
 
-	response, err := ParseSockResponse(connection, SockProtocolLimits{})
+func (server *Server) logSockBackendResponseFailure(
+	configuration *sockBackendRuntimeConfiguration,
+	request SockRequest,
+	err error,
+) {
+	server.config.Logger.Debug(
+		"back-sock response parsing failed",
+		"path", configuration.path,
+		"message_id", request.MessageID,
+		"error", err,
+	)
+}
+
+var errSockBackendSearchSizeLimit = errors.New("back-sock Search size limit reached")
+
+func (server *Server) executeSockBackendSearch(
+	ctx context.Context,
+	clientConnection net.Conn,
+	state *connectionState,
+	database runtimeDatabase,
+	search ldapwire.SearchRequest,
+	request SockRequest,
+	sizeLimit int,
+) (ldapwire.Result, error) {
+	connection, closeConnection, failure, err := server.openSockBackendRequest(
+		ctx,
+		database.sockBackend,
+		request,
+	)
 	if err != nil {
-		if ctx.Err() != nil {
-			return SockResponse{}, nil, ctx.Err()
-		}
-		server.config.Logger.Debug(
-			"back-sock response parsing failed",
-			"path", configuration.path,
-			"message_id", request.MessageID,
-			"error", err,
-		)
-		result := ldapwire.ResultError(
-			ldapwire.ResultOther,
-			sockBackendFailureDiagnostic,
-		)
-		return SockResponse{}, &result, nil
+		return ldapwire.Result{}, err
 	}
-	return response, nil, nil
+	if failure != nil {
+		return *failure, nil
+	}
+	defer closeConnection()
+
+	delivered := 0
+	var emitFailure error
+	result, err := StreamSockResponse(
+		connection,
+		SockProtocolLimits{},
+		func(record SockResponseRecord) error {
+			if record.Entry != nil {
+				selected, selectErr := server.sockBackendSearchEntry(
+					ctx,
+					state,
+					database,
+					search,
+					*record.Entry,
+				)
+				if selectErr != nil {
+					emitFailure = selectErr
+					return selectErr
+				}
+				if selected == nil {
+					return nil
+				}
+				if sizeLimit > 0 && delivered >= sizeLimit {
+					emitFailure = errSockBackendSearchSizeLimit
+					return emitFailure
+				}
+				controls := server.passwordPolicySearchEntryControls(ctx, state, *selected)
+				writeErr := ldapwire.Write(
+					clientConnection,
+					ldapwire.EncodeSearchResultEntry(
+						request.MessageID,
+						*selected,
+						controls,
+					),
+				)
+				if writeErr != nil {
+					emitFailure = writeErr
+					return writeErr
+				}
+				delivered++
+				return nil
+			}
+
+			writeErr := ldapwire.Write(
+				clientConnection,
+				ldapwire.EncodeSearchResultReference(
+					request.MessageID,
+					record.Referrals,
+					nil,
+				),
+			)
+			if writeErr != nil {
+				emitFailure = writeErr
+			}
+			return writeErr
+		},
+	)
+	if err == nil {
+		return result, nil
+	}
+	if ctx.Err() != nil {
+		return ldapwire.Result{}, ctx.Err()
+	}
+	if errors.Is(err, errSockBackendSearchSizeLimit) {
+		return ldapwire.Result{Code: ldapwire.ResultSizeLimitExceeded}, nil
+	}
+	if emitFailure != nil {
+		return ldapwire.Result{}, emitFailure
+	}
+	server.logSockBackendResponseFailure(database.sockBackend, request, err)
+	return ldapwire.ResultError(
+		ldapwire.ResultOther,
+		sockBackendFailureDiagnostic,
+	), nil
 }
 
 func (server *Server) sockBackendAccessAllowed(
@@ -661,43 +782,42 @@ func (server *Server) sockBackendAccessAllowed(
 	return allowed, err
 }
 
-func (server *Server) sockBackendSearchEntries(
+func (server *Server) sockBackendSearchEntry(
 	ctx context.Context,
 	state *connectionState,
 	database runtimeDatabase,
 	request ldapwire.SearchRequest,
-	entries []directory.Entry,
-) ([]directory.Entry, error) {
-	selected := make([]directory.Entry, 0, len(entries))
+	entry directory.Entry,
+) (*directory.Entry, error) {
+	var selected *directory.Entry
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
-		for _, entry := range entries {
-			if !server.allowed(
-				state.runtime,
-				tx,
-				state.boundDN,
-				entry,
-				"entry",
-				nil,
-				acl.Read,
-			) {
-				continue
-			}
-			readable := server.attributesWithPrivilege(
-				state.runtime,
-				tx,
-				state.boundDN,
-				entry,
-				acl.Read,
-				request.TypesOnly,
-			)
-			selected = append(selected, server.selectEntry(
-				state.runtime,
-				readable,
-				request.Attributes,
-				request.TypesOnly,
-			))
+		if !server.allowed(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			"entry",
+			nil,
+			acl.Read,
+		) {
+			return nil
 		}
+		readable := server.attributesWithPrivilege(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			acl.Read,
+			request.TypesOnly,
+		)
+		value := server.selectEntry(
+			state.runtime,
+			readable,
+			request.Attributes,
+			request.TypesOnly,
+		)
+		selected = &value
 		return nil
 	})
 	return selected, err

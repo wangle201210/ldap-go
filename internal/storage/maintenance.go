@@ -19,10 +19,12 @@ import (
 const maintenanceTransactionSize = 64 << 20
 
 type CheckReport struct {
-	Entries    int
-	Partitions []string
-	Metadata   int
-	FileSize   int64
+	Entries               int
+	Partitions            []string
+	Metadata              int
+	EqualityIndexConfigs  int
+	EqualityIndexPostings int
+	FileSize              int64
 }
 
 func CheckBolt(ctx context.Context, path string) (CheckReport, error) {
@@ -314,7 +316,7 @@ func checkBoltDatabase(
 			return err
 		}
 		namingContexts := make(map[string]string)
-		return metadata.ForEach(func(key, value []byte) error {
+		if err := metadata.ForEach(func(key, value []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -347,7 +349,15 @@ func checkBoltDatabase(
 				return fmt.Errorf("unknown metadata key %q", key)
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		return checkBoltEqualityIndexes(
+			ctx,
+			tx,
+			normalizer,
+			&report,
+		)
 	})
 	if err != nil {
 		return CheckReport{}, err
@@ -358,6 +368,138 @@ func checkBoltDatabase(
 	}
 	sort.Strings(report.Partitions)
 	return report, nil
+}
+
+func checkBoltEqualityIndexes(
+	ctx context.Context,
+	tx *bolt.Tx,
+	normalizer directory.DNAttributeNormalizer,
+	report *CheckReport,
+) error {
+	configsBucket := tx.Bucket(equalityIndexConfigBucket)
+	postingsBucket := tx.Bucket(equalityIndexBucket)
+	if configsBucket == nil && postingsBucket == nil {
+		return nil
+	}
+	if configsBucket == nil || postingsBucket == nil {
+		return errors.New("equality index config and postings buckets must both exist")
+	}
+	configs := make(map[string]EqualityIndexConfig)
+	if err := configsBucket.ForEach(func(key, value []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if value == nil {
+			return fmt.Errorf("equality index config bucket contains nested bucket %q", key)
+		}
+		var config EqualityIndexConfig
+		if err := json.Unmarshal(value, &config); err != nil {
+			return fmt.Errorf("decode equality index config %q: %w", key, err)
+		}
+		normalized, err := normalizeEqualityIndexConfig(config)
+		if err != nil {
+			return fmt.Errorf("equality index config %q: %w", key, err)
+		}
+		configs[string(key)] = normalized
+		report.EqualityIndexConfigs++
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	actual := make(map[string]struct{})
+	if err := postingsBucket.ForEach(func(key, value []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if value == nil {
+			return fmt.Errorf("equality index bucket contains nested bucket %q", key)
+		}
+		partition, attribute, _, presence, entryKey, err := decodeEqualityIndexPostingKey(key)
+		if err != nil {
+			return fmt.Errorf("equality index posting %q: %w", key, err)
+		}
+		config, ok := configs[partition]
+		if !ok {
+			return fmt.Errorf("equality index posting %q has no partition config", key)
+		}
+		definition, ok := equalityIndexAttributeDefinition(config, attribute)
+		if !ok || presence && !definition.Presence || !presence && !definition.Equality {
+			return fmt.Errorf("equality index posting %q is not enabled by its config", key)
+		}
+		entryPartition, _ := splitPartitionedEntryKey(entryKey)
+		if entryPartition != partition {
+			return fmt.Errorf("equality index posting %q crosses partitions", key)
+		}
+		if tx.Bucket(entriesBucket).Get([]byte(entryKey)) == nil {
+			return fmt.Errorf("equality index posting %q references a missing entry", key)
+		}
+		actual[string(key)] = struct{}{}
+		report.EqualityIndexPostings++
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	schema, ok := normalizer.(interface {
+		EqualityIndexValues(directory.Entry, string) ([][]byte, error)
+	})
+	if !ok {
+		return nil
+	}
+	expected := make(map[string]struct{})
+	entries := tx.Bucket(entriesBucket)
+	if err := entries.ForEach(func(key, value []byte) error {
+		partition, entryKey := splitPartitionedEntryKey(string(key))
+		config, configured := configs[partition]
+		if !configured {
+			return nil
+		}
+		entry, err := decodeAndValidateEntry(entryKey, value)
+		if err != nil {
+			return err
+		}
+		for _, definition := range config.Attributes {
+			values, err := schema.EqualityIndexValues(entry, definition.Attribute)
+			if err != nil {
+				return fmt.Errorf("verify equality index entry %q: %w", entry.DN, err)
+			}
+			if definition.Presence && len(values) > 0 {
+				expected[string(equalityIndexPostingKey(
+					partition,
+					definition.Attribute,
+					nil,
+					true,
+					string(key),
+				))] = struct{}{}
+			}
+			if definition.Equality {
+				for _, normalized := range values {
+					expected[string(equalityIndexPostingKey(
+						partition,
+						definition.Attribute,
+						normalized,
+						false,
+						string(key),
+					))] = struct{}{}
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for posting := range expected {
+		if _, ok := actual[posting]; !ok {
+			return fmt.Errorf("equality index is missing posting %x", []byte(posting))
+		}
+	}
+	for posting := range actual {
+		if _, ok := expected[posting]; !ok {
+			return fmt.Errorf("equality index has stale posting %x", []byte(posting))
+		}
+	}
+	return nil
 }
 
 func writeAtomicDatabaseFile(

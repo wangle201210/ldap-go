@@ -40,6 +40,9 @@ func (client *clientConnection) serve(ctx context.Context) {
 		}
 	}()
 	for {
+		if !client.waitForReadCapacity(ctx) {
+			return
+		}
 		frame, err := client.proxy.codec.Read(
 			client.currentConnection(),
 			client.proxy.config.ClientMaxMessageSize,
@@ -74,7 +77,7 @@ func (client *clientConnection) handleFrame(ctx context.Context, frame proxyFram
 		client.handleAbandon(frame)
 		return true
 	case ldapwire.ApplicationBindRequest:
-		client.handleBind(frame)
+		client.handleBind(ctx, frame)
 		return true
 	}
 	if frame.ProtocolTag == ldapwire.ApplicationExtendedRequest &&
@@ -100,7 +103,7 @@ func (client *clientConnection) handleFrame(ctx context.Context, frame proxyFram
 			return true
 		}
 	}
-	client.route(frame, false)
+	client.route(ctx, frame, false)
 	return true
 }
 
@@ -239,7 +242,7 @@ func isClientRequestTag(tag uint64) bool {
 	}
 }
 
-func (client *clientConnection) handleBind(frame proxyFrame) {
+func (client *clientConnection) handleBind(ctx context.Context, frame proxyFrame) {
 	client.mu.Lock()
 	client.bindGeneration++
 	client.protocolVersion = frame.BindVersion
@@ -251,6 +254,16 @@ func (client *clientConnection) handleBind(frame proxyFrame) {
 			ldapwire.ApplicationBindRequest,
 			ldapwire.ResultProtocolError,
 			"LDAP version unsupported",
+		)
+		return
+	}
+	if client.proxy.config.VerifyCredentials && frame.BindSASL {
+		client.resetForBind(false)
+		client.sendResult(
+			frame.MessageID,
+			ldapwire.ApplicationBindRequest,
+			ldapwire.ResultAuthMethodNotSupported,
+			"Verify Credentials supports simple Bind only",
 		)
 		return
 	}
@@ -274,7 +287,7 @@ func (client *clientConnection) handleBind(frame proxyFrame) {
 	client.mu.Lock()
 	client.binding = true
 	client.mu.Unlock()
-	client.route(frame, true)
+	client.route(ctx, frame, true)
 }
 
 func (client *clientConnection) resetForBind(reuseBindPin bool) {
@@ -309,7 +322,7 @@ func (client *clientConnection) resetForBind(reuseBindPin bool) {
 	}
 }
 
-func (client *clientConnection) route(frame proxyFrame, bind bool) {
+func (client *clientConnection) route(ctx context.Context, frame proxyFrame, bind bool) {
 	restriction := RuntimeRestrictionNone
 	if !bind {
 		restriction = client.requestRestriction(frame)
@@ -325,14 +338,15 @@ func (client *clientConnection) route(frame proxyFrame, bind bool) {
 	}
 
 	operation := &proxyOperation{
-		client:      client,
-		clientID:    frame.MessageID,
-		requestTag:  frame.ProtocolTag,
-		restriction: restriction,
-		bind:        bind,
-		bindSASL:    frame.BindSASL,
-		bindDN:      frame.BindDN,
-		started:     time.Now(),
+		client:            client,
+		clientID:          frame.MessageID,
+		requestTag:        frame.ProtocolTag,
+		restriction:       restriction,
+		bind:              bind,
+		bindSASL:          frame.BindSASL,
+		verifyCredentials: bind && client.proxy.config.VerifyCredentials,
+		bindDN:            frame.BindDN,
+		started:           time.Now(),
 	}
 	if bind {
 		client.mu.Lock()
@@ -349,7 +363,26 @@ func (client *clientConnection) route(frame proxyFrame, bind bool) {
 		return
 	}
 
-	upstream, selection := client.proxy.selectUpstream(client, operation, bind)
+	var upstream *upstreamConnection
+	selection := reserveUnavailable
+	for {
+		capacity := client.proxy.scheduler.capacitySignal()
+		upstream, selection = client.proxy.selectUpstream(client, operation, bind)
+		if selection != reserveBusy || !client.proxy.config.ReadPause {
+			break
+		}
+		select {
+		case <-capacity:
+		case <-client.done:
+			operation.finish(false)
+			client.clearBindAttempt(operation)
+			return
+		case <-ctx.Done():
+			operation.finish(false)
+			client.clearBindAttempt(operation)
+			return
+		}
+	}
 	if selection != reserveSuccess {
 		if !operation.finish(false) {
 			return
@@ -369,7 +402,9 @@ func (client *clientConnection) route(frame proxyFrame, bind bool) {
 	var err error
 	useProxyAuthz := !bind && client.proxy.config.ProxyAuthz &&
 		!client.privileged() && !upstream.ownerFor(client)
-	if useProxyAuthz {
+	if operation.verifyCredentials {
+		encoded, err = encodeVerifyCredentialsRequest(frame, operation.upstreamID)
+	} else if useProxyAuthz {
 		encoded, err = client.proxy.codec.PrependProxyAuthz(
 			frame,
 			operation.upstreamID,
@@ -399,6 +434,57 @@ func (client *clientConnection) route(frame proxyFrame, bind bool) {
 		operation.responseMu.Unlock()
 		upstream.closeWithError(err)
 	}
+}
+
+func encodeVerifyCredentialsRequest(frame proxyFrame, messageID int64) ([]byte, error) {
+	parsed, err := parseProxyFrame(frame)
+	if err != nil {
+		return nil, fmt.Errorf("parse Bind for Verify Credentials: %w", err)
+	}
+	protocol := []byte(parsed.ProtocolOp)
+	bind, next, err := parseElement(protocol, 0)
+	if err != nil || next != len(protocol) ||
+		!elementIs(bind, berClassApplication, true, ldapwire.ApplicationBindRequest) {
+		return nil, errors.New("Verify Credentials requires a valid BindRequest")
+	}
+	cursor := bind.contentStart
+	version, fieldEnd, err := parseElement(protocol, cursor)
+	if err != nil || !elementIs(version, berClassUniversal, false, berTagInteger) {
+		return nil, errors.New("Verify Credentials Bind has an invalid version")
+	}
+	cursor = fieldEnd
+	dn, fieldEnd, err := parseElement(protocol, cursor)
+	if err != nil || !elementIs(dn, berClassUniversal, false, berTagOctetString) {
+		return nil, errors.New("Verify Credentials Bind has an invalid DN")
+	}
+	cursor = fieldEnd
+	authentication, fieldEnd, err := parseElement(protocol, cursor)
+	if err != nil || fieldEnd != bind.end ||
+		!elementIs(authentication, berClassContext, false, 0) {
+		return nil, errors.New("Verify Credentials supports simple Bind only")
+	}
+	requestValue := joinBER(
+		bytes.Clone(protocol[dn.start:dn.end]),
+		bytes.Clone(protocol[authentication.start:authentication.end]),
+	)
+	if len(parsed.ControlsRaw) != 0 {
+		controls := []byte(parsed.ControlsRaw)
+		wrapper, controlsEnd, controlsErr := parseElement(controls, 0)
+		if controlsErr != nil || controlsEnd != len(controls) ||
+			!elementIs(wrapper, berClassContext, true, 0) {
+			return nil, errors.New("Verify Credentials Bind has malformed controls")
+		}
+		requestValue = append(
+			requestValue,
+			encodeTLV(0xa2, bytes.Clone(controls[wrapper.contentStart:wrapper.end]))...,
+		)
+	}
+	requestValue = encodeTLV(0x30, requestValue)
+	extended := encodeTLV(0x77, joinBER(
+		encodeTLV(0x80, []byte(verifyCredentialsOID)),
+		encodeTLV(0x81, requestValue),
+	))
+	return encodeFrame(messageID, extended, nil), nil
 }
 
 func (operation *proxyOperation) writeRequest(encoded []byte) error {
@@ -703,6 +789,46 @@ func (client *clientConnection) currentConnection() net.Conn {
 	return client.conn
 }
 
+func (client *clientConnection) waitForReadCapacity(ctx context.Context) bool {
+	if !client.proxy.config.ReadPause {
+		return true
+	}
+	for {
+		client.mu.Lock()
+		if client.closed {
+			client.mu.Unlock()
+			return false
+		}
+		if client.readWake == nil {
+			client.readWake = make(chan struct{})
+		}
+		wake := client.readWake
+		limit := client.proxy.config.ClientMaxPending
+		pending := len(client.ops)
+		paused := limit > 0 && pending > 0 && pending+1 >= limit
+		client.mu.Unlock()
+		if !paused {
+			return true
+		}
+		select {
+		case <-wake:
+		case <-client.done:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+func (client *clientConnection) signalReadCapacityLocked() {
+	if client.readWake == nil {
+		client.readWake = make(chan struct{})
+		return
+	}
+	close(client.readWake)
+	client.readWake = make(chan struct{})
+}
+
 func (client *clientConnection) authorizationIdentity() []byte {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -765,7 +891,7 @@ func (proxy *Proxy) selectUpstream(
 
 	if forcedUpstream != nil {
 		pendingLimit := forcedUpstream.backend.config.ConnectionMaxPending
-		if bind {
+		if bind && !operation.verifyCredentials {
 			pendingLimit = 1
 		}
 		lease, err := proxy.scheduler.reserveOwnedConnection(
@@ -808,7 +934,7 @@ func (proxy *Proxy) selectUpstream(
 	}
 
 	pool := PoolRegular
-	if bind {
+	if bind && !operation.verifyCredentials {
 		pool = PoolBind
 	}
 	affinity := Affinity{}
@@ -873,10 +999,11 @@ func (upstream *upstreamConnection) attach(
 	if client.closed {
 		return false
 	}
-	if upstream.closed || bind && !upstream.bind {
+	if upstream.closed || bind && !operation.verifyCredentials && !upstream.bind ||
+		operation.verifyCredentials && upstream.bind {
 		return false
 	}
-	if bind {
+	if bind && !operation.verifyCredentials {
 		if upstream.owner != nil && upstream.owner != client {
 			return false
 		}
@@ -902,7 +1029,7 @@ func (upstream *upstreamConnection) attach(
 	operation.upstreamID = messageID
 	operation.lease = lease
 	upstream.pending[messageID] = operation
-	if bind {
+	if bind && !operation.verifyCredentials {
 		client.bindPin = upstream
 	}
 	client.commitRestrictionLocked(operation, existingRestriction)
@@ -1067,6 +1194,7 @@ func (operation *proxyOperation) finish(response bool) bool {
 	client.mu.Lock()
 	if client.ops[operation.clientID] == operation {
 		delete(client.ops, operation.clientID)
+		client.signalReadCapacityLocked()
 	}
 	if operation.restriction == RuntimeRestrictionWrite && client.writeInflight > 0 {
 		client.writeInflight--

@@ -68,7 +68,6 @@ func (config Config) RuntimeConfig() (RuntimeConfig, error) {
 		switch feature {
 		case FeatureProxyAuthz:
 		case FeatureVerifyCredentials, FeatureReadPause:
-			return RuntimeConfig{}, fmt.Errorf("lloadd feature %q is not implemented", feature)
 		}
 	}
 	runtime := RuntimeConfig{
@@ -79,6 +78,8 @@ func (config Config) RuntimeConfig() (RuntimeConfig, error) {
 		NetworkTimeout:         config.NetworkTimeout,
 		IOTimeout:              config.IOTimeout,
 		ProxyAuthz:             config.ProxyAuthz,
+		VerifyCredentials:      config.HasFeature(FeatureVerifyCredentials),
+		ReadPause:              config.HasFeature(FeatureReadPause),
 		UpstreamTCPUserTimeout: config.BindConf.TCPUserTimeout,
 		RestrictExtended:       make(map[string]RuntimeRestriction),
 		RestrictControls:       make(map[string]RuntimeRestriction),
@@ -93,6 +94,9 @@ func (config Config) RuntimeConfig() (RuntimeConfig, error) {
 			SecurityProperties: config.BindConf.SecurityProperties,
 			Timeout:            config.BindConf.Timeout,
 		},
+	}
+	if runtime.VerifyCredentials && !runtime.ProxyAuthz {
+		return RuntimeConfig{}, errors.New("lloadd feature \"vc\" requires feature \"proxyauthz\"")
 	}
 	if config.BindConf.KeepAlive.Set {
 		idle, err := runtimeKeepAliveDuration(config.BindConf.KeepAlive.Idle)

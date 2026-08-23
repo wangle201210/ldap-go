@@ -421,8 +421,8 @@ func TestLDAPClientPasswordFileLimitAndConflicts(t *testing.T) {
 		{name: "deref", args: []string{"ldapsearch", "-x", "-a", "invalid"}, message: "-a must be"},
 		{name: "negative size", args: []string{"ldapsearch", "-x", "-z", "-1"}, message: "-z must be non-negative"},
 		{name: "unsupported search extension", args: []string{"ldapsearch", "-x", "-E", "sss=cn"}, message: "invalid LDAP control OID"},
-		{name: "critical paging", args: []string{"ldapsearch", "-x", "-E", "!pr=2"}, message: "critical"},
-		{name: "interactive paging", args: []string{"ldapsearch", "-x", "-E", "pr=2/prompt"}, message: "interactive paging prompts"},
+		{name: "critical paging size", args: []string{"ldapsearch", "-x", "-E", "!pr=0"}, message: "invalid paging size"},
+		{name: "interactive paging mode", args: []string{"ldapsearch", "-x", "-E", "pr=2/ask"}, message: "invalid paging prompt mode"},
 		{name: "paging conflict", args: []string{"ldapsearch", "-x", "-page-size", "2", "-E", "pr=2"}, message: "mutually exclusive"},
 		{name: "unsupported LDAP option", args: []string{"ldapsearch", "-x", "-o", "nettimeout=1"}, message: "option -o is not supported"},
 	}

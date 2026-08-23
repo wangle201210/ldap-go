@@ -975,6 +975,7 @@ func (server *Server) handleSearch(
 	)
 
 	server.prepareAutoCASearch(ctx, state, request, routes)
+	server.ensureSearchEqualityIndexes(ctx, state.runtime, routes)
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		if syncSearch != nil {
 			if err := syncSearch.captureSnapshot(reader); err != nil {
@@ -1511,7 +1512,15 @@ func (server *Server) handleSearch(
 			}
 			var err error
 			if translucentRoute == nil {
-				err = tx.ForEach(visitEntry)
+				var planned bool
+				planned, _, err = storage.ForEachFilterCandidate(
+					tx,
+					request.Filter,
+					visitEntry,
+				)
+				if err == nil && !planned {
+					err = tx.ForEach(visitEntry)
+				}
 			} else {
 				for _, remoteEntry := range translucentRoute.entries {
 					if err = visitEntry(remoteEntry); err != nil {
@@ -1791,6 +1800,48 @@ func (server *Server) handleSearch(
 		sortLease = nil
 	}
 	return writeErr
+}
+
+func (server *Server) ensureSearchEqualityIndexes(
+	ctx context.Context,
+	runtime *runtimeState,
+	routes []databaseSearchRoute,
+) {
+	seen := make(map[int]struct{}, len(routes))
+	for _, route := range routes {
+		if _, duplicate := seen[route.databaseIndex]; duplicate {
+			continue
+		}
+		seen[route.databaseIndex] = struct{}{}
+		if route.databaseIndex < 0 || route.databaseIndex >= len(runtime.databases) {
+			continue
+		}
+		database := &runtime.databases[route.databaseIndex]
+		initialization := database.equalityIndexInit
+		if initialization == nil || database.partition == "" {
+			continue
+		}
+		schema, ok := database.dnNormalizer.(storage.EqualityIndexSchema)
+		if !ok {
+			continue
+		}
+		initialization.mu.Lock()
+		if initialization.ready {
+			initialization.mu.Unlock()
+			continue
+		}
+		err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+			return storage.EnsureEqualityIndexes(
+				writer,
+				database.partition,
+				schema,
+			)
+		})
+		if err == nil {
+			initialization.ready = true
+		}
+		initialization.mu.Unlock()
+	}
 }
 
 func selectedSearchEntries(candidates []searchCandidate) []directory.Entry {

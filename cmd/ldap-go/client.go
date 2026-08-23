@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,11 +15,13 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"golang.org/x/term"
 )
@@ -26,6 +32,11 @@ const (
 	defaultLDAPReferralHops  = 5
 	maxClientCAFileSize      = 16 << 20
 	ldapSearchLDIFLineWidth  = 76
+	maxLDAPSearchBatchSize   = 8 << 20
+	maxLDAPSearchBatchLine   = 1 << 20
+	maxLDAPSearchBatchCount  = 100000
+	maxLDAPSearchValueSize   = 64 << 20
+	maxLDAPSearchPromptLine  = 32
 )
 
 type ldapClientOptions struct {
@@ -621,7 +632,7 @@ func runLDAPSearch(
 	args []string,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
-) error {
+) (runErr error) {
 	flags := flag.NewFlagSet("ldapsearch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var client ldapClientOptions
@@ -636,28 +647,24 @@ func runLDAPSearch(
 	typesOnly := flags.Bool("A", false, "request attribute names without values")
 	minimalLDIF := flags.Bool("LLL", false, "omit LDIF version and comments")
 	pageSize := flags.Uint64("page-size", 0, "RFC 2696 page size")
+	batchPath := flags.String("f", "", "read batch filter values from a file, or - for stdin")
+	valueURLPrefix := flags.String("F", "", "URL prefix for temporary value files")
+	valuesToFiles := flags.Bool("t", false, "write non-printable values to temporary files")
+	temporaryDirectory := flags.String("T", "", "directory for temporary value files")
 	var extensions repeatedStringFlag
-	flags.Var(&extensions, "E", "search extension; pr=<size>[/noprompt] is supported")
+	flags.Var(&extensions, "E", "search extension; [!]pr=<size>[/prompt|noprompt] is supported")
 
 	searchUnsupported := []unsupportedFlag{
 		{name: "c", reason: "continuous operation mode is not implemented"},
-		{name: "f", reason: "batch searches from a file are not implemented"},
-		{name: "F", reason: "value-file URL prefixes are not implemented"},
 		{name: "L", reason: "only -LLL is implemented"},
 		{name: "LL", reason: "only -LLL is implemented"},
 		{name: "S", reason: "client-side sorting is not implemented"},
-		{name: "t", reason: "writing values to temporary files is not implemented"},
-		{name: "T", reason: "temporary-file directory selection is not implemented"},
 		{name: "u", reason: "user-friendly DN output is not implemented"},
 	}
 	flags.Bool("c", false, "unsupported: continuous operation mode")
-	flags.String("f", "", "unsupported: batch search file")
-	flags.String("F", "", "unsupported: value-file URL prefix")
 	flags.Bool("L", false, "unsupported: use -LLL")
 	flags.Bool("LL", false, "unsupported: use -LLL")
 	flags.String("S", "", "unsupported: client-side sort attribute")
-	flags.Bool("t", false, "unsupported: write values to files")
-	flags.String("T", "", "unsupported: temporary-file directory")
 	flags.Bool("u", false, "unsupported: user-friendly DN output")
 
 	if err := flags.Parse(args); err != nil {
@@ -681,6 +688,18 @@ func runLDAPSearch(
 	if flagWasSet(flags, "LLL") && !*minimalLDIF {
 		return errors.New("-LLL=false is not supported")
 	}
+	if flagWasSet(flags, "f") && *batchPath == "" {
+		return errors.New("-f requires a non-empty batch file path or - for stdin")
+	}
+	if flagWasSet(flags, "F") && *valueURLPrefix == "" {
+		return errors.New("-F requires a non-empty URL prefix")
+	}
+	if flagWasSet(flags, "t") && !*valuesToFiles {
+		return errors.New("-t=false is not supported")
+	}
+	if flagWasSet(flags, "T") && *temporaryDirectory == "" {
+		return errors.New("-T requires a non-empty directory path")
+	}
 
 	scope, err := parseLDAPSearchScope(*scopeName)
 	if err != nil {
@@ -701,7 +720,13 @@ func runLDAPSearch(
 		filter = flags.Arg(0)
 		attributes = flags.Args()[1:]
 	}
-	if _, err := ldap.CompileFilter(filter); err != nil {
+	batchPatternIndex := -1
+	if *batchPath != "" {
+		batchPatternIndex, err = validateLDAPSearchBatchPattern(filter)
+		if err != nil {
+			return err
+		}
+	} else if _, err := ldap.CompileFilter(filter); err != nil {
 		return fmt.Errorf("parse search filter: %w", err)
 	}
 	for _, attribute := range attributes {
@@ -710,7 +735,7 @@ func runLDAPSearch(
 		}
 	}
 
-	resolvedPageSize, extensionControls, err := resolveLDAPSearchExtensions(
+	paging, extensionControls, err := resolveLDAPSearchExtensions(
 		flags,
 		*pageSize,
 		extensions,
@@ -719,43 +744,84 @@ func runLDAPSearch(
 		return err
 	}
 	defer clearLDAPControls(extensionControls)
+	if client.chaseReferrals && paging.size > 0 && (paging.critical || paging.prompt) {
+		return errors.New(
+			"critical or prompt RFC 2696 paging cannot be combined with referral chasing; use non-critical pr=<size>/noprompt or disable -C",
+		)
+	}
 	controls, err := mergeLDAPControls(client.generalControls, extensionControls)
 	if err != nil {
 		return fmt.Errorf("ldapsearch controls: %w", err)
+	}
+	valueFiles, err := openLDAPSearchValueFiles(
+		*valuesToFiles,
+		*temporaryDirectory,
+		*valueURLPrefix,
+	)
+	if err != nil {
+		return err
+	}
+	if valueFiles != nil {
+		defer func() {
+			runErr = errors.Join(runErr, valueFiles.Close())
+		}()
+	}
+
+	queries := []string{filter}
+	if *batchPath != "" && *batchPath != "-" {
+		queries, err = readLDAPSearchBatchFile(*batchPath, filter, batchPatternIndex)
+		if err != nil {
+			return err
+		}
 	}
 	connection, err := client.connectAndBind(flags, stdin, stderr)
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
-
-	request := ldap.NewSearchRequest(
-		*baseDN,
-		scope,
-		derefAliases,
-		*sizeLimit,
-		*timeLimit,
-		*typesOnly,
-		filter,
-		attributes,
-		controls,
-	)
-	result, searchErr := client.searchWithReferrals(connection, request, resolvedPageSize)
-	var outputErr error
-	if result != nil {
-		outputErr = writeLDAPSearchLDIF(stdout, result.Entries, *typesOnly, *minimalLDIF)
-	}
-	if searchErr != nil {
-		if code, name, ok := ldapReferralClientResult(searchErr); ok {
-			_, diagnosticErr := fmt.Fprintf(stderr, "ldap_result: %s (%d)\n", name, code)
-			return &ldapClientExitError{
-				code:  int(code),
-				cause: errors.Join(outputErr, diagnosticErr),
-			}
+	if *batchPath == "-" {
+		queries, err = readLDAPSearchBatch(stdin, filter, batchPatternIndex, "standard input")
+		if err != nil {
+			return err
 		}
-		searchErr = fmt.Errorf("search: %w", searchErr)
 	}
-	return errors.Join(outputErr, searchErr)
+
+	output := &ldapSearchLDIFOutput{
+		writer:     stdout,
+		typesOnly:  *typesOnly,
+		minimal:    *minimalLDIF,
+		valueFiles: valueFiles,
+	}
+	var promptReader *bufio.Reader
+	if paging.prompt {
+		promptReader = bufio.NewReader(stdin)
+	}
+	for _, query := range queries {
+		request := ldap.NewSearchRequest(
+			*baseDN,
+			scope,
+			derefAliases,
+			*sizeLimit,
+			*timeLimit,
+			*typesOnly,
+			query,
+			attributes,
+			controls,
+		)
+		if err := runLDAPSearchQuery(
+			&client,
+			connection,
+			request,
+			paging,
+			promptReader,
+			stdout,
+			stderr,
+			output,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runLDAPWhoAmI(
@@ -825,11 +891,17 @@ func parseLDAPSearchDeref(value string) (int, error) {
 	}
 }
 
+type ldapSearchPagingOptions struct {
+	size     uint32
+	critical bool
+	prompt   bool
+}
+
 func resolveLDAPSearchExtensions(
 	flags *flag.FlagSet,
 	pageSize uint64,
 	extensions repeatedStringFlag,
-) (uint32, []ldap.Control, error) {
+) (ldapSearchPagingOptions, []ldap.Control, error) {
 	pageExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
@@ -837,7 +909,7 @@ func resolveLDAPSearchExtensions(
 		name, _, _ = strings.Cut(name, "=")
 		if strings.EqualFold(name, "pr") {
 			if pageExtension != "" {
-				return 0, nil, errors.New(
+				return ldapSearchPagingOptions{}, nil, errors.New(
 					"ldapsearch paging extension was provided more than once",
 				)
 			}
@@ -847,79 +919,340 @@ func resolveLDAPSearchExtensions(
 		controlSpecs = append(controlSpecs, extension)
 	}
 	if flagWasSet(flags, "page-size") && pageExtension != "" {
-		return 0, nil, errors.New("-page-size and -E pr=... are mutually exclusive")
+		return ldapSearchPagingOptions{}, nil, errors.New("-page-size and -E pr=... are mutually exclusive")
 	}
 	controls, err := parseLDAPControlSpecs(controlSpecs, ldapControlValueLDIF)
 	if err != nil {
-		return 0, nil, fmt.Errorf("ldapsearch -E: %w", err)
+		return ldapSearchPagingOptions{}, nil, fmt.Errorf("ldapsearch -E: %w", err)
 	}
-	resolvedPageSize := uint32(0)
+	paging := ldapSearchPagingOptions{}
 	if pageExtension != "" {
-		resolvedPageSize, err = parseLDAPSearchPagingExtension(pageExtension)
+		paging, err = parseLDAPSearchPagingExtension(pageExtension)
 		if err != nil {
 			clearLDAPControls(controls)
-			return 0, nil, err
+			return ldapSearchPagingOptions{}, nil, err
 		}
 	} else if flagWasSet(flags, "page-size") {
 		if pageSize == 0 || pageSize > uint64(^uint32(0)) {
 			clearLDAPControls(controls)
-			return 0, nil, errors.New("-page-size must be between 1 and 4294967295")
+			return ldapSearchPagingOptions{}, nil, errors.New("-page-size must be between 1 and 4294967295")
 		}
-		resolvedPageSize = uint32(pageSize)
+		paging.size = uint32(pageSize)
 	}
-	return resolvedPageSize, controls, nil
+	return paging, controls, nil
 }
 
-func parseLDAPSearchPagingExtension(value string) (uint32, error) {
-	if strings.HasPrefix(value, "!") {
-		return 0, errors.New("critical -E !pr paging is not implemented")
-	}
+func parseLDAPSearchPagingExtension(value string) (ldapSearchPagingOptions, error) {
+	paging := ldapSearchPagingOptions{critical: strings.HasPrefix(value, "!"), prompt: true}
+	value = strings.TrimLeft(value, "!")
 	name, parameter, found := strings.Cut(value, "=")
 	if !found || !strings.EqualFold(name, "pr") {
-		return 0, fmt.Errorf(
+		return ldapSearchPagingOptions{}, fmt.Errorf(
 			"ldapsearch extension %q is not supported; use pr=<size>[/noprompt]",
 			value,
 		)
 	}
 	parts := strings.Split(parameter, "/")
 	if len(parts) > 2 || parts[0] == "" {
-		return 0, fmt.Errorf("invalid paging extension %q", value)
+		return ldapSearchPagingOptions{}, fmt.Errorf("invalid paging extension %q", value)
 	}
 	if len(parts) == 2 {
 		switch strings.ToLower(parts[1]) {
 		case "noprompt":
+			paging.prompt = false
 		case "prompt":
-			return 0, errors.New("interactive paging prompts are not implemented; use /noprompt")
 		default:
-			return 0, fmt.Errorf("invalid paging prompt mode %q", parts[1])
+			return ldapSearchPagingOptions{}, fmt.Errorf("invalid paging prompt mode %q", parts[1])
 		}
 	}
 	size, err := strconv.ParseUint(parts[0], 10, 32)
 	if err != nil || size == 0 {
-		return 0, fmt.Errorf("invalid paging size %q", parts[0])
+		return ldapSearchPagingOptions{}, fmt.Errorf("invalid paging size %q", parts[0])
 	}
-	return uint32(size), nil
+	paging.size = uint32(size)
+	return paging, nil
 }
 
-func writeLDAPSearchLDIF(
-	writer io.Writer,
-	entries []*ldap.Entry,
-	typesOnly,
-	minimal bool,
+func validateLDAPSearchBatchPattern(pattern string) (int, error) {
+	placeholder := -1
+	for index := 0; index < len(pattern); index++ {
+		if pattern[index] != '%' {
+			continue
+		}
+		if placeholder >= 0 || index+1 >= len(pattern) || pattern[index+1] != 's' {
+			return -1, errors.New("-f filter pattern may contain at most one %s and no other % characters")
+		}
+		placeholder = index
+		index++
+	}
+	return placeholder, nil
+}
+
+func readLDAPSearchBatchFile(path, pattern string, placeholder int) ([]string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve -f batch file path: %w", err)
+	}
+	before, err := os.Lstat(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("inspect -f batch file: %w", err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, errors.New("-f batch input must be a non-symlink regular file")
+	}
+	if runtime.GOOS != "windows" && before.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("-f batch input must not be writable by group or other users")
+	}
+	if before.Size() > maxLDAPSearchBatchSize {
+		return nil, fmt.Errorf("-f batch input exceeds %d bytes", maxLDAPSearchBatchSize)
+	}
+	file, err := os.Open(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("open -f batch file: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened -f batch file: %w", err)
+	}
+	after, err := os.Lstat(absolute)
+	if err != nil || !os.SameFile(before, opened) || !os.SameFile(before, after) {
+		return nil, errors.New("-f batch file changed while it was being opened")
+	}
+	return readLDAPSearchBatch(file, pattern, placeholder, "-f batch file")
+}
+
+func readLDAPSearchBatch(
+	reader io.Reader,
+	pattern string,
+	placeholder int,
+	source string,
+) ([]string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxLDAPSearchBatchSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", source, err)
+	}
+	defer clear(data)
+	if len(data) > maxLDAPSearchBatchSize {
+		return nil, fmt.Errorf("%s exceeds %d bytes", source, maxLDAPSearchBatchSize)
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 && len(data) > 0 {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > maxLDAPSearchBatchCount {
+		return nil, fmt.Errorf("%s exceeds %d queries", source, maxLDAPSearchBatchCount)
+	}
+	queries := make([]string, 0, len(lines))
+	for index, line := range lines {
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) > maxLDAPSearchBatchLine {
+			return nil, fmt.Errorf("%s line %d exceeds %d bytes", source, index+1, maxLDAPSearchBatchLine)
+		}
+		if bytes.IndexByte(line, 0) >= 0 || bytes.IndexByte(line, '\r') >= 0 {
+			return nil, fmt.Errorf("%s line %d contains a prohibited control character", source, index+1)
+		}
+		query := pattern
+		if placeholder >= 0 {
+			var builder strings.Builder
+			builder.Grow(len(pattern) - 2 + len(line))
+			builder.WriteString(pattern[:placeholder])
+			_, _ = builder.Write(line)
+			builder.WriteString(pattern[placeholder+2:])
+			query = builder.String()
+		}
+		if len(query) > maxLDAPSearchBatchLine*2 {
+			return nil, fmt.Errorf("%s line %d produces an oversized search filter", source, index+1)
+		}
+		if _, err := ldap.CompileFilter(query); err != nil {
+			return nil, fmt.Errorf("%s line %d produces an invalid search filter", source, index+1)
+		}
+		queries = append(queries, query)
+	}
+	return queries, nil
+}
+
+func runLDAPSearchQuery(
+	client *ldapClientOptions,
+	connection *ldap.Conn,
+	request *ldap.SearchRequest,
+	paging ldapSearchPagingOptions,
+	promptReader *bufio.Reader,
+	stdout, stderr io.Writer,
+	output *ldapSearchLDIFOutput,
 ) error {
-	if !minimal {
-		if err := writeFoldedLDIFLine(writer, []byte("version: 1")); err != nil {
+	if paging.size == 0 || (!paging.critical && !paging.prompt) {
+		result, searchErr := client.searchWithReferrals(connection, request, paging.size)
+		var outputErr error
+		if result != nil {
+			outputErr = output.writeEntries(result.Entries)
+		}
+		return ldapSearchResultError(searchErr, outputErr, stderr)
+	}
+
+	pageSize := paging.size
+	var cookie []byte
+	defer clear(cookie)
+	for {
+		pagingControl := newLDAPSearchPagingControl(pageSize, cookie, paging.critical)
+		sent := *request
+		sent.Controls = append(cloneLDAPControls(request.Controls), pagingControl)
+		result, searchErr := client.searchWithReferrals(connection, &sent, 0)
+		clearLDAPControls(sent.Controls)
+		var outputErr error
+		if result != nil {
+			outputErr = output.writeEntries(result.Entries)
+		}
+		if err := ldapSearchResultError(searchErr, outputErr, stderr); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(writer, "\n"); err != nil {
+		if result == nil {
+			return errors.New("search completed without a result")
+		}
+		responseControl := ldap.FindControl(result.Controls, ldap.ControlTypePaging)
+		if responseControl == nil {
+			return nil
+		}
+		responsePaging, ok := responseControl.(*ldap.ControlPaging)
+		if !ok {
+			return errors.New("search returned a malformed RFC 2696 paging control")
+		}
+		clear(cookie)
+		cookie = append(cookie[:0], responsePaging.Cookie...)
+		if len(cookie) == 0 {
+			return nil
+		}
+		if !paging.prompt {
+			continue
+		}
+		if responsePaging.PagingSize > 0 {
+			if _, err := fmt.Fprintf(stdout, "Estimate entries: %d\n", responsePaging.PagingSize); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(
+			stdout,
+			"Press [size] Enter for the next {%d|size} entries.\n",
+			pageSize,
+		); err != nil {
 			return err
 		}
+		updated, provided, err := readLDAPSearchPagingPrompt(promptReader)
+		if err != nil {
+			return err
+		}
+		if provided {
+			pageSize = updated
+		}
+	}
+}
+
+func ldapSearchResultError(searchErr, outputErr error, stderr io.Writer) error {
+	if searchErr == nil {
+		return outputErr
+	}
+	if code, name, ok := ldapReferralClientResult(searchErr); ok {
+		_, diagnosticErr := fmt.Fprintf(stderr, "ldap_result: %s (%d)\n", name, code)
+		return &ldapClientExitError{
+			code:  int(code),
+			cause: errors.Join(outputErr, diagnosticErr),
+		}
+	}
+	return errors.Join(outputErr, fmt.Errorf("search: %w", searchErr))
+}
+
+func newLDAPSearchPagingControl(size uint32, cookie []byte, critical bool) *ldapRawControl {
+	sequence := ber.NewSequence("Search Control Value")
+	sequence.AppendChild(ber.NewInteger(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagInteger,
+		int64(size),
+		"Paging Size",
+	))
+	cookiePacket := ber.Encode(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagOctetString,
+		nil,
+		"Cookie",
+	)
+	cookiePacket.Value = cookie
+	_, _ = cookiePacket.Data.Write(cookie)
+	sequence.AppendChild(cookiePacket)
+	return &ldapRawControl{
+		oid:      ldap.ControlTypePaging,
+		critical: critical,
+		value:    sequence.Bytes(),
+		hasValue: true,
+	}
+}
+
+func readLDAPSearchPagingPrompt(reader *bufio.Reader) (uint32, bool, error) {
+	if reader == nil {
+		return 0, false, nil
+	}
+	line := make([]byte, 0, 10)
+	defer clear(line)
+	for {
+		character, err := reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(line) == 0 {
+					return 0, false, nil
+				}
+				break
+			}
+			return 0, false, fmt.Errorf("read paging prompt: %w", err)
+		}
+		if character == '\n' {
+			break
+		}
+		if character == '\r' {
+			continue
+		}
+		if len(line) >= maxLDAPSearchPromptLine {
+			return 0, false, fmt.Errorf("paging prompt input exceeds %d bytes", maxLDAPSearchPromptLine)
+		}
+		line = append(line, character)
+	}
+	if len(line) == 0 {
+		return 0, false, nil
+	}
+	size, err := strconv.ParseUint(string(line), 10, 32)
+	if err != nil || size == 0 {
+		return 0, false, errors.New("paging prompt input must be a positive 32-bit page size or an empty line")
+	}
+	return uint32(size), true, nil
+}
+
+type ldapSearchLDIFOutput struct {
+	writer     io.Writer
+	typesOnly  bool
+	minimal    bool
+	started    bool
+	valueFiles *ldapSearchValueFiles
+}
+
+func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
+	if !output.started {
+		if !output.minimal {
+			if err := writeFoldedLDIFLine(output.writer, []byte("version: 1")); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(output.writer, "\n"); err != nil {
+				return err
+			}
+		}
+		output.started = true
 	}
 	for _, entry := range entries {
 		if entry == nil {
 			return errors.New("search returned a nil LDAP entry")
 		}
-		if err := writeLDIFAttribute(writer, "dn", []byte(entry.DN)); err != nil {
+		if err := writeLDIFAttribute(output.writer, "dn", []byte(entry.DN)); err != nil {
 			return err
 		}
 		for _, attribute := range entry.Attributes {
@@ -933,8 +1266,8 @@ func writeLDAPSearchLDIF(
 					attribute.Name,
 				)
 			}
-			if typesOnly {
-				if err := writeLDIFAttribute(writer, attribute.Name, nil); err != nil {
+			if output.typesOnly {
+				if err := writeLDIFAttribute(output.writer, attribute.Name, nil); err != nil {
 					return err
 				}
 				continue
@@ -947,16 +1280,216 @@ func writeLDAPSearchLDIF(
 				}
 			}
 			for _, value := range values {
-				if err := writeLDIFAttribute(writer, attribute.Name, value); err != nil {
+				if output.valueFiles != nil && ldifValueRequiresBase64(value) {
+					reference, err := output.valueFiles.Write(attribute.Name, value)
+					if err != nil {
+						return fmt.Errorf("write search value for attribute %s: %w", attribute.Name, err)
+					}
+					if err := writeLDIFURLAttribute(output.writer, attribute.Name, reference); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := writeLDIFAttribute(output.writer, attribute.Name, value); err != nil {
 					return err
 				}
 			}
 		}
-		if _, err := io.WriteString(writer, "\n"); err != nil {
+		if _, err := io.WriteString(output.writer, "\n"); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func writeLDAPSearchLDIF(
+	writer io.Writer,
+	entries []*ldap.Entry,
+	typesOnly,
+	minimal bool,
+) error {
+	return (&ldapSearchLDIFOutput{
+		writer:    writer,
+		typesOnly: typesOnly,
+		minimal:   minimal,
+	}).writeEntries(entries)
+}
+
+type ldapSearchValueFiles struct {
+	root      *os.Root
+	urlPrefix string
+}
+
+func openLDAPSearchValueFiles(
+	enabled bool,
+	directory,
+	urlPrefix string,
+) (*ldapSearchValueFiles, error) {
+	if len(urlPrefix) > 4096 || strings.ContainsAny(urlPrefix, "\x00\r\n") {
+		return nil, errors.New("-F URL prefix is too long or contains a prohibited control character")
+	}
+	if !enabled && directory == "" && urlPrefix == "" {
+		return nil, nil
+	}
+	if directory == "" {
+		directory = os.TempDir()
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, fmt.Errorf("resolve temporary value directory: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	before, err := os.Lstat(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("inspect temporary value directory: %w", err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		return nil, errors.New("temporary value path must be a non-symlink directory")
+	}
+	if runtime.GOOS != "windows" {
+		permissions := before.Mode().Perm()
+		if permissions&0o300 != 0o300 {
+			return nil, errors.New("temporary value directory must be writable and searchable by its owner")
+		}
+		if permissions&0o022 != 0 && before.Mode()&os.ModeSticky == 0 {
+			return nil, errors.New("group- or other-writable temporary value directory must have the sticky bit")
+		}
+	}
+	prefix, err := normalizeLDAPSearchValueURLPrefix(urlPrefix, absolute)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, nil
+	}
+	root, err := os.OpenRoot(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("open temporary value directory: %w", err)
+	}
+	closeOnError := func(err error) (*ldapSearchValueFiles, error) {
+		return nil, errors.Join(err, root.Close())
+	}
+	opened, err := root.Stat(".")
+	if err != nil {
+		return closeOnError(fmt.Errorf("inspect opened temporary value directory: %w", err))
+	}
+	after, err := os.Lstat(absolute)
+	if err != nil || !os.SameFile(before, opened) || !os.SameFile(before, after) {
+		return closeOnError(errors.New("temporary value directory changed while it was being opened"))
+	}
+	return &ldapSearchValueFiles{root: root, urlPrefix: prefix}, nil
+}
+
+func normalizeLDAPSearchValueURLPrefix(prefix, directory string) (string, error) {
+	if prefix == "" {
+		path := filepath.ToSlash(directory)
+		if !strings.HasSuffix(path, "/") {
+			path += "/"
+		}
+		return (&url.URL{Scheme: "file", Path: path}).String(), nil
+	}
+	parsed, err := url.Parse(prefix)
+	if err != nil {
+		return "", fmt.Errorf("parse -F URL prefix: %w", err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "file" && parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("-F URL prefix must use file://, http://, or https://")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", errors.New("-F URL prefix must not contain userinfo, a query, a fragment, or opaque data")
+	}
+	if parsed.Scheme == "file" && parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost") {
+		return "", errors.New("-F file URL prefix host must be empty or localhost")
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() == "" {
+		return "", errors.New("-F HTTP URL prefix requires a host")
+	}
+	if !strings.HasSuffix(parsed.Path, "/") {
+		parsed.Path += "/"
+	}
+	return parsed.String(), nil
+}
+
+func (files *ldapSearchValueFiles) Close() error {
+	if files == nil || files.root == nil {
+		return nil
+	}
+	err := files.root.Close()
+	files.root = nil
+	return err
+}
+
+func (files *ldapSearchValueFiles) Write(attribute string, value []byte) (string, error) {
+	if len(value) > maxLDAPSearchValueSize {
+		return "", fmt.Errorf("value exceeds %d bytes", maxLDAPSearchValueSize)
+	}
+	random := make([]byte, 16)
+	defer clear(random)
+	prefix := ldapSearchTemporaryNamePrefix(attribute)
+	for attempt := 0; attempt < 10; attempt++ {
+		if _, err := rand.Read(random); err != nil {
+			return "", fmt.Errorf("generate temporary value filename: %w", err)
+		}
+		name := prefix + hex.EncodeToString(random)
+		file, err := files.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("create temporary value file: %w", err)
+		}
+		removeOnError := func(err error) (string, error) {
+			return "", errors.Join(err, file.Close(), files.root.Remove(name))
+		}
+		if err := file.Chmod(0o600); err != nil {
+			return removeOnError(fmt.Errorf("secure temporary value file: %w", err))
+		}
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() ||
+			(runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+			return removeOnError(errors.New("temporary value output is not a secure regular file"))
+		}
+		written, err := file.Write(value)
+		if err != nil {
+			return removeOnError(fmt.Errorf("write temporary value file: %w", err))
+		}
+		if written != len(value) {
+			return removeOnError(io.ErrShortWrite)
+		}
+		if err := file.Close(); err != nil {
+			_ = files.root.Remove(name)
+			return "", fmt.Errorf("close temporary value file: %w", err)
+		}
+		return files.urlPrefix + url.PathEscape(name), nil
+	}
+	return "", errors.New("could not allocate a unique temporary value file")
+}
+
+func ldapSearchTemporaryNamePrefix(attribute string) string {
+	var builder strings.Builder
+	builder.WriteString("ldapsearch-")
+	for index := 0; index < len(attribute) && builder.Len() < 59; index++ {
+		character := attribute[index]
+		if isASCIIAlpha(character) || character >= '0' && character <= '9' || character == '-' {
+			builder.WriteByte(character)
+		} else {
+			builder.WriteByte('-')
+		}
+	}
+	builder.WriteByte('-')
+	return builder.String()
+}
+
+func writeLDIFURLAttribute(writer io.Writer, name, reference string) error {
+	if reference == "" || strings.ContainsAny(reference, "\x00\r\n") {
+		return errors.New("temporary value file produced an invalid URL")
+	}
+	line := make([]byte, 0, len(name)+3+len(reference))
+	line = append(line, name...)
+	line = append(line, ':', '<', ' ')
+	line = append(line, reference...)
+	return writeFoldedLDIFLine(writer, line)
 }
 
 func writeLDIFAttribute(writer io.Writer, name string, value []byte) error {

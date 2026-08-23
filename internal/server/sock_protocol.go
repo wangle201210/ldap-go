@@ -148,8 +148,18 @@ func (SockUnbindRequest) sockOperation() {}
 // RESULT record. The parser intentionally requires RESULT even though the
 // OpenLDAP 2.6.13 implementation accidentally accepts an early EOF as success.
 type SockResponse struct {
-	Entries []directory.Entry
-	Result  ldapwire.Result
+	Entries    []directory.Entry
+	References [][]string
+	Result     ldapwire.Result
+}
+
+// SockResponseRecord is one non-final Search response record. OpenLDAP emits
+// bare LDIF entries; ENTRY is also accepted for symmetry with its overlay
+// response protocol. REFERRAL is an ldap-go extension for preserving LDAP
+// SearchResultReference responses across the socket boundary.
+type SockResponseRecord struct {
+	Entry     *directory.Entry
+	Referrals []string
 }
 
 // EncodeSockRequest renders a complete request, including its terminating
@@ -188,19 +198,54 @@ func WriteSockRequest(writer io.Writer, request SockRequest, limits SockProtocol
 // It accepts LF and CRLF, unfolds LDIF continuation lines, and rejects trailing
 // data after RESULT.
 func ParseSockResponse(reader io.Reader, limits SockProtocolLimits) (SockResponse, error) {
-	if reader == nil {
-		return SockResponse{}, sockProtocolError("response reader is nil")
-	}
-	limits = limits.withDefaults()
-	if err := limits.validate(); err != nil {
-		return SockResponse{}, err
-	}
-
-	data, err := readSockResponse(reader, limits.MaxResponseBytes)
+	var response SockResponse
+	result, err := StreamSockResponse(
+		reader,
+		limits,
+		func(record SockResponseRecord) error {
+			if record.Entry != nil {
+				response.Entries = append(response.Entries, record.Entry.Clone())
+			}
+			if record.Referrals != nil {
+				response.References = append(
+					response.References,
+					append([]string(nil), record.Referrals...),
+				)
+			}
+			return nil
+		},
+	)
 	if err != nil {
 		return SockResponse{}, err
 	}
-	return parseSockResponse(data, limits)
+	response.Result = result
+	return response, nil
+}
+
+// StreamSockResponse parses and emits each Search entry or referral before
+// reading the next record. RESULT remains mandatory and is returned only after
+// EOF confirms that no trailing data followed it.
+func StreamSockResponse(
+	reader io.Reader,
+	limits SockProtocolLimits,
+	emit func(SockResponseRecord) error,
+) (ldapwire.Result, error) {
+	if reader == nil {
+		return ldapwire.Result{}, sockProtocolError("response reader is nil")
+	}
+	limits = limits.withDefaults()
+	if err := limits.validate(); err != nil {
+		return ldapwire.Result{}, err
+	}
+	if emit == nil {
+		emit = func(SockResponseRecord) error { return nil }
+	}
+	decoder := sockResponseDecoder{
+		reader: bufio.NewReaderSize(reader, sockResponseReaderBufferSize(limits)),
+		limits: limits,
+		emit:   emit,
+	}
+	return decoder.decode()
 }
 
 type sockRequestEncoder struct {
@@ -747,21 +792,6 @@ func appendSockFilter(output *strings.Builder, filter directory.Filter, depth in
 	return nil
 }
 
-func readSockResponse(reader io.Reader, maximum int64) ([]byte, error) {
-	limited := io.LimitReader(reader, maximum+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, fmt.Errorf("read back-sock response: %w", err)
-	}
-	if int64(len(data)) > maximum {
-		return nil, sockLimitError("response exceeds %d bytes", maximum)
-	}
-	if len(data) == 0 {
-		return nil, sockProtocolError("response is empty")
-	}
-	return data, nil
-}
-
 type sockResponseBlock struct {
 	lines   [][]byte
 	bytes   int
@@ -769,92 +799,223 @@ type sockResponseBlock struct {
 	started bool
 }
 
-func parseSockResponse(data []byte, limits SockProtocolLimits) (SockResponse, error) {
-	if data[len(data)-1] != '\n' {
-		return SockResponse{}, sockProtocolError("response is truncated before a newline")
-	}
+type sockResponseDecoder struct {
+	reader       *bufio.Reader
+	limits       SockProtocolLimits
+	emit         func(SockResponseRecord) error
+	responseSize int64
+	lineNumber   int
+	records      int
+	block        sockResponseBlock
+	result       ldapwire.Result
+	resultSeen   bool
+	inputSeen    bool
+}
 
-	physicalLines := bytes.Split(data, []byte{'\n'})
-	var response SockResponse
-	var block sockResponseBlock
-	resultSeen := false
-	for index, raw := range physicalLines[:len(physicalLines)-1] {
-		if resultSeen {
-			return SockResponse{}, sockProtocolError("response has trailing data after RESULT")
+func sockResponseReaderBufferSize(limits SockProtocolLimits) int {
+	const maximumBuffer = 64 << 10
+	size := limits.MaxLineBytes + 2
+	if size > maximumBuffer {
+		size = maximumBuffer
+	}
+	if size < 16 {
+		size = 16
+	}
+	return size
+}
+
+func (decoder *sockResponseDecoder) decode() (ldapwire.Result, error) {
+	for {
+		raw, eof, err := decoder.readPhysicalLine()
+		if err != nil {
+			return ldapwire.Result{}, err
 		}
-		if len(raw) > 0 && raw[len(raw)-1] == '\r' {
-			raw = raw[:len(raw)-1]
+		if eof {
+			break
 		}
-		if bytes.IndexByte(raw, '\r') >= 0 || bytes.IndexByte(raw, 0) >= 0 {
-			return SockResponse{}, sockProtocolError("response line %d contains CR or NUL", index+1)
+		decoder.inputSeen = true
+		if decoder.resultSeen {
+			return ldapwire.Result{}, sockProtocolError("response has trailing data after RESULT")
 		}
-		if len(raw) > limits.MaxLineBytes {
-			return SockResponse{}, sockLimitError("response line %d is %d bytes; maximum is %d", index+1, len(raw), limits.MaxLineBytes)
-		}
-		if len(raw) != 0 && (raw[0] == '#' || hasASCIIPrefixFold(raw, []byte("DEBUG:"))) {
+		if len(raw) != 0 &&
+			(raw[0] == '#' || hasASCIIPrefixFold(raw, []byte("DEBUG:"))) {
 			continue
 		}
 		if len(raw) == 0 {
-			if !block.started {
+			if !decoder.block.started {
 				continue
 			}
-			seen, err := finishSockResponseBlock(&response, block, limits)
-			if err != nil {
-				return SockResponse{}, err
+			if err := decoder.finishBlock(); err != nil {
+				return ldapwire.Result{}, err
 			}
-			resultSeen = seen
-			block = sockResponseBlock{}
+			decoder.block = sockResponseBlock{}
 			continue
 		}
 
-		block.started = true
-		block.bytes += len(raw) + 1
-		if block.bytes > limits.MaxEntryBytes {
-			return SockResponse{}, sockLimitError("response record exceeds %d bytes", limits.MaxEntryBytes)
+		decoder.block.started = true
+		decoder.block.bytes += len(raw) + 1
+		if decoder.block.bytes > decoder.limits.MaxEntryBytes {
+			return ldapwire.Result{}, sockLimitError(
+				"response record exceeds %d bytes",
+				decoder.limits.MaxEntryBytes,
+			)
 		}
 		if raw[0] == ' ' {
-			if len(block.lines) == 0 {
-				return SockResponse{}, sockProtocolError("response line %d is an orphan LDIF continuation", index+1)
+			if len(decoder.block.lines) == 0 {
+				return ldapwire.Result{}, sockProtocolError(
+					"response line %d is an orphan LDIF continuation",
+					decoder.lineNumber,
+				)
 			}
-			block.lines[len(block.lines)-1] = append(block.lines[len(block.lines)-1], raw[1:]...)
-			block.folded = true
+			decoder.block.lines[len(decoder.block.lines)-1] = append(
+				decoder.block.lines[len(decoder.block.lines)-1],
+				raw[1:]...,
+			)
+			decoder.block.folded = true
 			continue
 		}
-		block.lines = append(block.lines, bytes.Clone(raw))
+		decoder.block.lines = append(decoder.block.lines, bytes.Clone(raw))
 	}
-	if block.started {
-		return SockResponse{}, sockProtocolError("response is truncated before the terminating blank line")
+
+	if !decoder.inputSeen {
+		return ldapwire.Result{}, sockProtocolError("response is empty")
 	}
-	if !resultSeen {
-		return SockResponse{}, sockProtocolError("response has no RESULT record")
+	if decoder.block.started {
+		return ldapwire.Result{}, sockProtocolError(
+			"response is truncated before the terminating blank line",
+		)
 	}
-	return response, nil
+	if !decoder.resultSeen {
+		return ldapwire.Result{}, sockProtocolError("response has no RESULT record")
+	}
+	return decoder.result, nil
 }
 
-func finishSockResponseBlock(response *SockResponse, block sockResponseBlock, limits SockProtocolLimits) (bool, error) {
-	if len(block.lines) == 0 {
-		return false, sockProtocolError("response record has no content")
-	}
-	if bytes.EqualFold(block.lines[0], []byte("RESULT")) {
-		if block.folded {
-			return false, sockProtocolError("RESULT fields must not use LDIF continuation lines")
+func (decoder *sockResponseDecoder) readPhysicalLine() ([]byte, bool, error) {
+	line := make([]byte, 0, min(decoder.limits.MaxLineBytes+2, 4096))
+	for {
+		fragment, err := decoder.reader.ReadSlice('\n')
+		if int64(len(fragment)) > decoder.limits.MaxResponseBytes-decoder.responseSize {
+			return nil, false, sockLimitError(
+				"response exceeds %d bytes",
+				decoder.limits.MaxResponseBytes,
+			)
 		}
-		result, err := parseSockResult(block.lines)
+		decoder.responseSize += int64(len(fragment))
+		if len(line)+len(fragment) > decoder.limits.MaxLineBytes+2 {
+			return nil, false, sockLimitError(
+				"response line %d exceeds %d bytes",
+				decoder.lineNumber+1,
+				decoder.limits.MaxLineBytes,
+			)
+		}
+		line = append(line, fragment...)
+
+		switch {
+		case err == nil:
+			decoder.lineNumber++
+			line = line[:len(line)-1]
+			if len(line) != 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
+			}
+			if len(line) > decoder.limits.MaxLineBytes {
+				return nil, false, sockLimitError(
+					"response line %d is %d bytes; maximum is %d",
+					decoder.lineNumber,
+					len(line),
+					decoder.limits.MaxLineBytes,
+				)
+			}
+			if bytes.IndexByte(line, '\r') >= 0 || bytes.IndexByte(line, 0) >= 0 {
+				return nil, false, sockProtocolError(
+					"response line %d contains CR or NUL",
+					decoder.lineNumber,
+				)
+			}
+			return line, false, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(line) == 0 {
+				return nil, true, nil
+			}
+			return nil, false, sockProtocolError(
+				"response is truncated before a newline",
+			)
+		default:
+			return nil, false, fmt.Errorf("read back-sock response: %w", err)
+		}
+	}
+}
+
+func (decoder *sockResponseDecoder) finishBlock() error {
+	if len(decoder.block.lines) == 0 {
+		return sockProtocolError("response record has no content")
+	}
+	header := decoder.block.lines[0]
+	if bytes.EqualFold(header, []byte("RESULT")) {
+		if decoder.block.folded {
+			return sockProtocolError("RESULT fields must not use LDIF continuation lines")
+		}
+		result, err := parseSockResult(decoder.block.lines)
 		if err != nil {
-			return false, err
+			return err
 		}
-		response.Result = result
-		return true, nil
+		decoder.result = result
+		decoder.resultSeen = true
+		return nil
 	}
-	if len(response.Entries) >= limits.MaxEntries {
-		return false, sockLimitError("response has more than %d entries", limits.MaxEntries)
+
+	decoder.records++
+	if decoder.records > decoder.limits.MaxEntries {
+		return sockLimitError(
+			"response has more than %d entry or referral records",
+			decoder.limits.MaxEntries,
+		)
 	}
-	entry, err := parseSockEntry(block.lines, limits)
+	if bytes.EqualFold(header, []byte("REFERRAL")) {
+		if decoder.block.folded {
+			return sockProtocolError("REFERRAL fields must not use LDIF continuation lines")
+		}
+		referrals, err := parseSockReferral(decoder.block.lines)
+		if err != nil {
+			return err
+		}
+		return decoder.emit(SockResponseRecord{Referrals: referrals})
+	}
+
+	lines := decoder.block.lines
+	if bytes.EqualFold(header, []byte("ENTRY")) {
+		lines = lines[1:]
+	}
+	entry, err := parseSockEntry(lines, decoder.limits)
 	if err != nil {
-		return false, err
+		return err
 	}
-	response.Entries = append(response.Entries, entry)
-	return false, nil
+	return decoder.emit(SockResponseRecord{Entry: &entry})
+}
+
+func parseSockReferral(lines [][]byte) ([]string, error) {
+	if len(lines) < 2 {
+		return nil, sockProtocolError("REFERRAL record has no URI")
+	}
+	referrals := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		name, value, _, err := parseSockLDIFLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("REFERRAL: %w", err)
+		}
+		switch strings.ToLower(name) {
+		case "uri", "ref", "referral":
+		default:
+			return nil, sockProtocolError("REFERRAL field %q is unknown", name)
+		}
+		if len(value) == 0 || !utf8.Valid(value) || containsLineBreakOrNUL(value) {
+			return nil, sockProtocolError("REFERRAL URI is empty or invalid")
+		}
+		referrals = append(referrals, string(value))
+	}
+	return referrals, nil
 }
 
 func parseSockResult(lines [][]byte) (ldapwire.Result, error) {

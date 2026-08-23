@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -200,6 +202,197 @@ func TestGlobalTLSVerifyClientDemand(t *testing.T) {
 	}
 }
 
+func TestGlobalTLSCRLMutualTLSTopology(t *testing.T) {
+	for _, policy := range []string{"peer", "all"} {
+		t.Run(policy, func(t *testing.T) {
+			root := newGlobalTLSTestAuthority(t)
+			issuer := root
+			if policy == "all" {
+				issuer = root.issueAuthority(t, "mTLS intermediate CA")
+			}
+			serverCertificate := root.issue(t, "crl-mtls-server", true)
+			trustedClient := issuer.issue(t, "trusted-crl-client", false)
+			revokedClient := issuer.issue(t, "revoked-crl-client", false)
+			now := time.Now().UTC()
+			leafCRL := createGlobalTLSTestCRL(
+				t,
+				issuer,
+				issuer.privateKey,
+				1,
+				now.Add(-time.Minute),
+				now.Add(time.Hour),
+				[]x509.RevocationListEntry{{
+					SerialNumber:   revokedClient.certificate.SerialNumber,
+					RevocationTime: now.Add(-time.Minute),
+				}},
+			)
+			crlData := append([]byte(nil), leafCRL.pem...)
+			if policy == "all" {
+				issuerCRL := createGlobalTLSTestCRL(
+					t,
+					root,
+					root.privateKey,
+					1,
+					now.Add(-time.Minute),
+					now.Add(time.Hour),
+					nil,
+				)
+				crlData = append(crlData, issuerCRL.pem...)
+				trustedClient.tlsCertificate.Certificate = append(
+					trustedClient.tlsCertificate.Certificate,
+					issuer.certificateDER,
+				)
+				revokedClient.tlsCertificate.Certificate = append(
+					revokedClient.tlsCertificate.Certificate,
+					issuer.certificateDER,
+				)
+			}
+
+			directory := t.TempDir()
+			serverCertificateFile, serverKeyFile := writeGlobalTLSTestFiles(
+				t,
+				directory,
+				"server",
+				serverCertificate,
+			)
+			caFile := writeGlobalTLSTestCAFile(t, directory, root)
+			crlFile := writeGlobalTLSTestCRLFile(t, directory, "clients", crlData)
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedOnlineConfiguration(t, store)
+			seedGlobalTLSAttributes(t, store, map[string][][]byte{
+				"olcTLSCertificateFile":    {[]byte(serverCertificateFile)},
+				"olcTLSCertificateKeyFile": {[]byte(serverKeyFile)},
+				"olcTLSCACertificateFile":  {[]byte(caFile)},
+				"olcTLSVerifyClient":       {[]byte("demand")},
+				"olcTLSCRLCheck":           {[]byte(policy)},
+				"olcTLSCRLFile":            {[]byte(crlFile)},
+			})
+
+			address, stop := startServer(t, store, Config{})
+			defer stop()
+			trusted := dialGlobalTLSTestClient(
+				t,
+				address,
+				false,
+				[]tls.Certificate{trustedClient.tlsCertificate},
+			)
+			assertGlobalTLSConnectionWorks(t, trusted)
+			trusted.Close()
+			assertGlobalTLSClientCertificateRejected(
+				t,
+				address,
+				revokedClient.tlsCertificate,
+			)
+		})
+	}
+}
+
+func TestGlobalTLSCRLOnlineRotationAndRollback(t *testing.T) {
+	authority := newGlobalTLSTestAuthority(t)
+	serverCertificate := authority.issue(t, "crl-rotation-server", true)
+	clientCertificate := authority.issue(t, "crl-rotation-client", false)
+	now := time.Now().UTC()
+	validCRL := createGlobalTLSTestCRL(
+		t,
+		authority,
+		authority.privateKey,
+		1,
+		now.Add(-time.Minute),
+		now.Add(time.Hour),
+		nil,
+	)
+	revokedCRL := createGlobalTLSTestCRL(
+		t,
+		authority,
+		authority.privateKey,
+		2,
+		now,
+		now.Add(time.Hour),
+		[]x509.RevocationListEntry{{
+			SerialNumber:   clientCertificate.certificate.SerialNumber,
+			RevocationTime: now.Add(-time.Minute),
+		}},
+	)
+	directory := t.TempDir()
+	serverCertificateFile, serverKeyFile := writeGlobalTLSTestFiles(
+		t,
+		directory,
+		"server",
+		serverCertificate,
+	)
+	caFile := writeGlobalTLSTestCAFile(t, directory, authority)
+	validCRLFile := writeGlobalTLSTestCRLFile(t, directory, "valid", validCRL.pem)
+	revokedCRLFile := writeGlobalTLSTestCRLFile(t, directory, "revoked", revokedCRL.pem)
+	invalidCRLFile := writeGlobalTLSTestCRLFile(t, directory, "invalid", []byte("not a CRL"))
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	seedGlobalTLSAttributes(t, store, map[string][][]byte{
+		"olcTLSCertificateFile":    {[]byte(serverCertificateFile)},
+		"olcTLSCertificateKeyFile": {[]byte(serverKeyFile)},
+		"olcTLSCACertificateFile":  {[]byte(caFile)},
+		"olcTLSVerifyClient":       {[]byte("demand")},
+		"olcTLSCRLCheck":           {[]byte("peer")},
+		"olcTLSCRLFile":            {[]byte(validCRLFile)},
+	})
+
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+	admin := dialGlobalTLSTestClient(
+		t,
+		address,
+		false,
+		[]tls.Certificate{clientCertificate.tlsCertificate},
+	)
+	defer admin.Close()
+	if err := admin.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("Bind(cn=config): %v", err)
+	}
+
+	rotate := ldap.NewModifyRequest("cn=config", nil)
+	rotate.Replace("olcTLSCRLFile", []string{revokedCRLFile})
+	if err := admin.Modify(rotate); err != nil {
+		t.Fatalf("rotate to revoked CRL: %v", err)
+	}
+	assertGlobalTLSConnectionWorks(t, admin)
+	assertGlobalTLSClientCertificateRejected(
+		t,
+		address,
+		clientCertificate.tlsCertificate,
+	)
+
+	invalid := ldap.NewModifyRequest("cn=config", nil)
+	invalid.Replace("olcTLSCRLFile", []string{invalidCRLFile})
+	err := admin.Modify(invalid)
+	var ldapErr *ldap.Error
+	if !errors.As(err, &ldapErr) ||
+		ldapErr.ResultCode != ldap.LDAPResultConstraintViolation {
+		t.Fatalf("invalid CRL rotation error = %v, want constraintViolation", err)
+	}
+	assertGlobalTLSStoredFile(t, store, "olcTLSCRLFile", revokedCRLFile)
+	assertGlobalTLSClientCertificateRejected(
+		t,
+		address,
+		clientCertificate.tlsCertificate,
+	)
+
+	restore := ldap.NewModifyRequest("cn=config", nil)
+	restore.Replace("olcTLSCRLFile", []string{validCRLFile})
+	if err := admin.Modify(restore); err != nil {
+		t.Fatalf("restore valid CRL: %v", err)
+	}
+	client := dialGlobalTLSTestClient(
+		t,
+		address,
+		false,
+		[]tls.Certificate{clientCertificate.tlsCertificate},
+	)
+	defer client.Close()
+	assertGlobalTLSConnectionWorks(t, client)
+}
+
 func TestGlobalTLSOnlineEnableAndDisableStartTLS(t *testing.T) {
 	authority := newGlobalTLSTestAuthority(t)
 	certificate := authority.issue(t, "dynamic-server", true)
@@ -280,6 +473,70 @@ func writeGlobalTLSTestFiles(
 		t.Fatalf("write private key: %v", err)
 	}
 	return certificatePath, keyPath
+}
+
+func writeGlobalTLSTestCAFile(
+	t *testing.T,
+	directory string,
+	authority globalTLSTestAuthority,
+) string {
+	t.Helper()
+	path := filepath.Join(directory, "ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: authority.certificateDER,
+	}), 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+	return path
+}
+
+func writeGlobalTLSTestCRLFile(
+	t *testing.T,
+	directory,
+	prefix string,
+	data []byte,
+) string {
+	t.Helper()
+	path := filepath.Join(directory, prefix+".crl")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write CRL file: %v", err)
+	}
+	return path
+}
+
+func assertGlobalTLSClientCertificateRejected(
+	t *testing.T,
+	address string,
+	certificate tls.Certificate,
+) {
+	t.Helper()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	err = client.StartTLS(&tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		Certificates:       []tls.Certificate{certificate},
+	})
+	if err == nil {
+		_, err = client.Search(ldap.NewSearchRequest(
+			"",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"supportedLDAPVersion"},
+			nil,
+		))
+	}
+	if err == nil {
+		t.Fatal("TLS connection accepted a revoked client certificate")
+	}
 }
 
 func dialGlobalTLSTestClient(

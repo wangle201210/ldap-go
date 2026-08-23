@@ -22,11 +22,17 @@ import (
 const (
 	pcacheMaxAttributeSets  = 500
 	pcacheDefaultMaxQueries = 10000
+	pcachePrivateDBControl  = "1.3.6.1.4.1.4203.666.11.9.5.1"
 )
 
 type pcacheRuntimeConfiguration struct {
-	configDNKey       string
-	disabled          bool
+	configDNKey string
+	disabled    bool
+	// Delegated back-ldap databases reject every local overlay except pcache
+	// and bypass the local response pipeline. Head and tail are therefore
+	// observably equivalent until ordered delegated-overlay chains exist.
+	position          pcacheResponsePosition
+	validate          bool
 	maxEntries        int
 	maxQueries        int
 	entryLimit        int
@@ -38,6 +44,20 @@ type pcacheRuntimeConfiguration struct {
 	binds             []pcacheBindRuntimeConfiguration
 	fingerprint       string
 	state             *pcacheState
+}
+
+type pcacheResponsePosition uint8
+
+const (
+	pcacheResponseHead pcacheResponsePosition = iota
+	pcacheResponseTail
+)
+
+func (position pcacheResponsePosition) String() string {
+	if position == pcacheResponseHead {
+		return "head"
+	}
+	return "tail"
 }
 
 type pcacheAttributeSet struct {
@@ -146,6 +166,7 @@ func loadPcacheRuntimeConfiguration(
 	configuration := pcacheRuntimeConfiguration{
 		configDNKey: mustRuntimeDNKey(overlay.DN),
 		maxQueries:  pcacheDefaultMaxQueries,
+		position:    pcacheResponseTail,
 	}
 	if !pcacheHasObjectClass(overlay, "olcPcacheConfig") {
 		return configuration, fmt.Errorf(
@@ -159,17 +180,34 @@ func loadPcacheRuntimeConfiguration(
 	}
 	configuration.disabled = disabled
 
-	for _, name := range []string{
-		"olcPcachePosition",
-		"olcPcacheValidate", "olcProxyCheckCacheability",
-	} {
-		if len(overlay.Values(name)) != 0 {
+	positionValues := overlay.Values("olcPcachePosition")
+	if len(positionValues) > 1 {
+		return configuration, fmt.Errorf(
+			"%s olcPcachePosition must be single-valued",
+			overlay.DN,
+		)
+	}
+	if len(positionValues) == 1 {
+		switch strings.ToLower(strings.TrimSpace(string(positionValues[0]))) {
+		case "head":
+			configuration.position = pcacheResponseHead
+		case "tail":
+			configuration.position = pcacheResponseTail
+		default:
 			return configuration, fmt.Errorf(
-				"%s %s is not implemented by pcache",
+				"%s olcPcachePosition has unknown specifier %q",
 				overlay.DN,
-				name,
+				positionValues[0],
 			)
 		}
+	}
+	configuration.validate, _, err = pcacheAliasedBoolean(
+		overlay,
+		"olcPcacheValidate",
+		"olcProxyCheckCacheability",
+	)
+	if err != nil {
+		return configuration, err
 	}
 
 	maxQueryValues, err := pcacheAliasedValues(
@@ -680,13 +718,15 @@ func pcacheConfigurationFingerprint(configuration pcacheRuntimeConfiguration) st
 	var value strings.Builder
 	fmt.Fprintf(
 		&value,
-		"%d/%d/%d/%d/%t/%t/",
+		"%d/%d/%d/%d/%t/%t/%s/%t/",
 		configuration.maxEntries,
 		configuration.maxQueries,
 		configuration.entryLimit,
 		configuration.consistencyPeriod,
 		configuration.offline,
 		configuration.persist,
+		configuration.position,
+		configuration.validate,
 	)
 	for _, set := range configuration.attributeSets {
 		fmt.Fprintf(&value, "%d:%s;", set.index, strings.Join(set.attributes, ","))
@@ -891,6 +931,16 @@ func (server *Server) tryPcacheSearch(
 	forwarded := message
 	forwarded.Controls = cloneLDAPControls(message.Controls)
 	for _, control := range forwarded.Controls {
+		if control.OID == pcachePrivateDBControl {
+			return true, server.writeSearchDone(
+				connection,
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"pcache private database control is unsupported",
+				),
+			)
+		}
 		if control.OID == pagedResultsControlOID && control.Critical {
 			return true, server.writeSearchDone(
 				connection,
@@ -902,11 +952,29 @@ func (server *Server) tryPcacheSearch(
 	forwarded.Controls = pcacheWithoutPagingControls(forwarded.Controls)
 
 	now := database.pcache.state.clock()
-	if cached, found, refresh := database.pcache.state.lookup(
-		match.key,
-		now,
-		database.pcache.offline,
-	); found {
+	lookup := database.pcache.state.lookup
+	if database.pcache.validate {
+		lookup = func(
+			key string,
+			now time.Time,
+			offline bool,
+		) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
+			return database.pcache.state.lookupValidated(
+				key,
+				now,
+				offline,
+				func(response pcacheSearchResponse) bool {
+					return pcacheResponseCacheable(
+						state.runtime.schema,
+						request.Filter,
+						response,
+						true,
+					)
+				},
+			)
+		}
+	}
+	if cached, found, refresh := lookup(match.key, now, database.pcache.offline); found {
 		if refresh != nil {
 			if refreshed, ok := server.refreshPcacheSearch(
 				ctx,
@@ -951,7 +1019,14 @@ func (server *Server) tryPcacheSearch(
 		return true, server.writeLDAPBackendAttempt(connection, message, attempt)
 	}
 	entryCount := response.entryCount()
-	if response.result.Code == ldapwire.ResultSuccess && entryCount <= database.pcache.entryLimit {
+	if response.result.Code == ldapwire.ResultSuccess &&
+		entryCount <= database.pcache.entryLimit &&
+		pcacheResponseCacheable(
+			state.runtime.schema,
+			request.Filter,
+			response,
+			database.pcache.validate,
+		) {
 		ttl := match.template.ttl
 		if entryCount == 0 {
 			ttl = match.template.negativeTTL
@@ -1009,6 +1084,21 @@ func (server *Server) refreshPcacheSearch(
 	if err != nil || response.result.Code != ldapwire.ResultSuccess ||
 		response.entryCount() > refresh.policy.entryLimit {
 		database.pcache.state.abortRefresh(refresh, now)
+		return pcacheSearchResponse{}, false
+	}
+	request, ok := refresh.replay.Request.(ldapwire.SearchRequest)
+	if !ok || !pcacheResponseCacheable(
+		connectionState.runtime.schema,
+		request.Filter,
+		response,
+		database.pcache.validate,
+	) {
+		if database.pcache.state.invalidateRefresh(refresh) {
+			// OpenLDAP returns provider entries even when validation makes the
+			// query non-cacheable. The synchronous TTR path does the same for
+			// this request while atomically discarding the stale cached query.
+			return response, true
+		}
 		return pcacheSearchResponse{}, false
 	}
 	if !database.pcache.state.completeRefresh(refresh, response, now) {
@@ -1695,6 +1785,116 @@ func (response pcacheSearchResponse) entryCount() int {
 	return count
 }
 
+func pcacheResponseCacheable(
+	registry *schema.Registry,
+	filter directory.Filter,
+	response pcacheSearchResponse,
+	validateFilter bool,
+) bool {
+	if validateFilter && registry == nil {
+		return false
+	}
+	for _, item := range response.items {
+		if item.entry == nil {
+			continue
+		}
+		for _, attribute := range item.entry.Attributes {
+			// OpenLDAP rejects malformed response attributes even when
+			// pcacheValidate is disabled.
+			if len(attribute.Values) == 0 {
+				return false
+			}
+		}
+		if !validateFilter {
+			continue
+		}
+		matches, err := pcacheResponseFilterMatches(
+			registry,
+			filter,
+			*item.entry,
+		)
+		if err != nil || !matches {
+			return false
+		}
+	}
+	return true
+}
+
+func pcacheResponseFilterMatches(
+	registry *schema.Registry,
+	filter directory.Filter,
+	entry directory.Entry,
+) (bool, error) {
+	switch filter.Kind {
+	case directory.FilterAnd:
+		for _, child := range filter.Children {
+			matches, err := pcacheResponseFilterMatches(registry, child, entry)
+			if err != nil || !matches {
+				return matches, err
+			}
+		}
+		return true, nil
+	case directory.FilterOr:
+		for _, child := range filter.Children {
+			matches, err := pcacheResponseFilterMatches(registry, child, entry)
+			if err != nil {
+				return false, err
+			}
+			if matches {
+				return true, nil
+			}
+		}
+		return false, nil
+	case directory.FilterNot:
+		if len(filter.Children) != 1 {
+			return false, errors.New("not filter requires exactly one child")
+		}
+		matches, err := pcacheResponseFilterMatches(
+			registry,
+			filter.Children[0],
+			entry,
+		)
+		return !matches, err
+	case directory.FilterExtensible:
+		if !filter.DNAttributes {
+			return filter.MatchWith(entry, registry)
+		}
+		withDNAttributes, err := pcacheEntryWithDNAttributes(registry, entry)
+		if err != nil {
+			return false, err
+		}
+		filter.DNAttributes = false
+		return filter.MatchWith(withDNAttributes, registry)
+	default:
+		return filter.MatchWith(entry, registry)
+	}
+}
+
+func pcacheEntryWithDNAttributes(
+	registry *schema.Registry,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	dn, err := registry.NormalizeDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	result := entry.Clone()
+	for dn.Depth() > 0 {
+		for _, value := range dn.RDNValues() {
+			result.Attributes = append(result.Attributes, directory.Attribute{
+				Description: value.Type,
+				Values:      [][]byte{bytes.Clone(value.Value)},
+			})
+		}
+		parent, ok := dn.Parent()
+		if !ok {
+			break
+		}
+		dn = parent
+	}
+	return result, nil
+}
+
 func (server *Server) writePcacheResponse(
 	connection net.Conn,
 	messageID int64,
@@ -1749,6 +1949,15 @@ func (state *pcacheState) lookup(
 	now time.Time,
 	offline bool,
 ) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
+	return state.lookupValidated(key, now, offline, nil)
+}
+
+func (state *pcacheState) lookupValidated(
+	key string,
+	now time.Time,
+	offline bool,
+	validate func(pcacheSearchResponse) bool,
+) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if !offline {
@@ -1756,6 +1965,10 @@ func (state *pcacheState) lookup(
 	}
 	query, found := state.queries[key]
 	if !found {
+		return pcacheSearchResponse{}, false, nil
+	}
+	if validate != nil && !validate(query.response) {
+		state.removeQueryLocked(key, query)
 		return pcacheSearchResponse{}, false, nil
 	}
 	state.sequence++
@@ -2002,6 +2215,17 @@ func (state *pcacheState) completeRefresh(
 	return true
 }
 
+func (state *pcacheState) invalidateRefresh(refresh pcacheRefreshLease) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	query, found := state.queries[refresh.key]
+	if !found || query.generation != refresh.generation || !query.refreshing {
+		return false
+	}
+	state.removeQueryLocked(refresh.key, query)
+	return true
+}
+
 func (state *pcacheState) abortRefresh(refresh pcacheRefreshLease, now time.Time) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -2069,9 +2293,7 @@ func (state *pcacheState) evictLeastRecentlyUsed() bool {
 	if !found {
 		return false
 	}
-	state.entries -= candidate.entries
-	clear(candidate.remote.bindCredentials)
-	delete(state.queries, candidateKey)
+	state.removeQueryLocked(candidateKey, candidate)
 	return true
 }
 
@@ -2080,9 +2302,7 @@ func (state *pcacheState) purgeExpired(now time.Time) {
 		if now.Before(query.purgeAt) {
 			continue
 		}
-		state.entries -= query.entries
-		clear(query.remote.bindCredentials)
-		delete(state.queries, key)
+		state.removeQueryLocked(key, query)
 	}
 	for key, bind := range state.binds {
 		if now.Before(bind.purgeAt) {
@@ -2092,6 +2312,18 @@ func (state *pcacheState) purgeExpired(now time.Time) {
 		clear(bind.passwordHash)
 		delete(state.binds, key)
 	}
+}
+
+func (state *pcacheState) removeQueryLocked(
+	key string,
+	query pcacheCachedQuery,
+) {
+	state.entries -= query.entries
+	if state.entries < 0 {
+		state.entries = 0
+	}
+	clear(query.remote.bindCredentials)
+	delete(state.queries, key)
 }
 
 func clonePcacheMessage(message ldapwire.Message) ldapwire.Message {

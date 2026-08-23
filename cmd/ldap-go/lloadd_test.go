@@ -36,7 +36,13 @@ listen ldap://127.0.0.1:0/
 bindconf bindmethod=none keepalive=30:3:10
 tier roundrobin
 backend-server uri=ldap://127.0.0.1:1389 numconns=1 bindconns=1
-		`},
+			`},
+		{name: "read pause", contents: `
+listen ldap://127.0.0.1:0/
+feature read_pause
+tier roundrobin
+backend-server uri=ldap://127.0.0.1:1389 max-pending-ops=1 conn-max-pending=1
+			`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "lloadd.conf")
@@ -90,14 +96,6 @@ feature proxyauthz
 bindconf bindmethod=sasl saslmech=GSSAPI authcid=alice credentials=secret
 `,
 			want: "GSSAPI is not supported",
-		},
-		{
-			name: "experimental feature",
-			contents: `
-listen ldap://127.0.0.1:0/
-feature read_pause
-`,
-			want: `feature "read_pause" is not implemented`,
 		},
 		{
 			name: "service Bind without ProxyAuthz",

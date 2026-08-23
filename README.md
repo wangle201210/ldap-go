@@ -106,7 +106,9 @@ DN or filter spellings from creating distinct cache entries. The implemented
 Bind, honors TTL/offline and size limits, reuses query state on compatible
 reloads, clears verifiers on every successful runtime reload, preserves the active
 cache when a candidate configuration rolls back, and never stores the
-cleartext credential. Private cache-database management,
+cleartext credential. `olcPcacheValidate` rechecks provider responses and TTR
+refreshes; `olcPcachePosition=head|tail` is accepted for the current exclusive
+back-ldap callback path. Private cache-database management,
 all advanced controls, and arbitrary overlay-order combinations remain out of
 scope.
 
@@ -115,7 +117,10 @@ ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
 OpenLDAP's line-oriented back-sock protocol. Each operation gets a fresh
 socket, optional `binddn`/`peername`/`ssf`/`connid` fields come from the
 frontend connection, Search entries pass local read ACLs, and Abandon/Cancel
-close a blocked external request. Before delegation, the frontend applies the
+close a blocked external request. Search responses are parsed and delivered
+record by record with bounded line, record, value, entry, and total sizes;
+partial cancellation and malformed-midstream behavior are explicit. Before
+delegation, the frontend applies the
 same tested Add/Modify schema checks, matching-rule assertion validation for
 Compare, ModifyDN validation, manage-only Relax updates, shadow-aware Don't Use
 Copy handling, and empty-Modify behavior as OpenLDAP 2.6.13. The
@@ -146,6 +151,10 @@ ProxyAuthz, and client SASL EXTERNAL is rejected rather than forwarded with an
 identity the proxy cannot safely restore. GSSAPI, SASL security layers and
 channel binding, client PROXY v2, dynamic topology, embedded
 `cn=config`/`cn=monitor`, and complete lloadd daemon parity remain unsupported.
+The `read_pause` feature applies capacity backpressure before reading more
+client requests. The `vc` feature maps Simple Bind to OpenLDAP's Verify
+Credentials exop and fails explicitly when the backend does not provide it;
+SASL VC continuation remains unsupported.
 
 ```sh
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
@@ -538,6 +547,10 @@ control preservation, loop detection, and the OpenLDAP default five-hop limit.
 They also implement auth-only `-Y` SASL for PLAIN, CRAM-MD5, DIGEST-MD5,
 SCRAM-SHA-1/256/512, and EXTERNAL, with `-U`, `-X`, and `-R`, strict server
 proof validation, and client certificates for EXTERNAL over LDAPS or StartTLS.
+`ldapsearch` supports bounded `-f` batch filters with `%s`, `-F` file-URL
+prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
+paging. Critical/prompt paging with referral chasing is explicitly rejected
+because each referral requires an independent cookie stream.
 GSSAPI, SCRAM-PLUS/channel binding, SASL security layers, interactive SASL
 callbacks, and the complete historical ldap-tools option set remain outside
 this subset.
@@ -626,11 +639,13 @@ makes a verified certificate mandatory. For example, append:
 
 When transport TLS is not supplied explicitly on the command line/API, an
 imported global `cn=config` entry can provide certificate, private-key, CA,
-client-verification, minimum-protocol, and exactly mapped cipher settings via
+CRL, client-verification, minimum-protocol, and exactly mapped cipher settings via
 the supported `olcTLS*` attributes. A successful online change atomically
 publishes a new context for later StartTLS and LDAPS handshakes; existing
 connections continue on their original context. Invalid or unsupported TLS
 directives roll back instead of weakening the active configuration.
+CRL policies `none`, `peer`, and `all` validate current issuer-signed PEM/DER
+lists before accepting a client certificate.
 
 GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
 
@@ -807,11 +822,14 @@ access to OpenLDAP backend files. Custom schema/matching-rule modules are not
 executed. Import parsing,
 pending-entry validation, and commit
 currently occupy one write transaction and retain the pending content set, so
-memory use and lock duration grow with a large LDIF. The current bbolt backend
-also has no independent attribute indexes, so local Search scans the selected
-partition; migration size, lock time, and Search latency must be qualified
-before production use. These limits are part of why ldap-go is not yet a
-complete OpenLDAP drop-in replacement.
+memory use and lock duration grow with a large LDIF. Memory and bbolt maintain
+configured `olcDbIndex` equality/presence indexes and use them to reduce
+equality/presence AND/OR Search candidates before the full scope, filter,
+overlay, and ACL pipeline. Unsupported modes and invalidated indexes safely
+fall back to scans; substring, approximate, and ordering indexes remain
+unimplemented. Migration size, lock time, and the remaining scan paths must be
+qualified before production use. These limits are part of why ldap-go is not
+yet a complete OpenLDAP drop-in replacement.
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit

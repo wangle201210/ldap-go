@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -16,7 +17,6 @@ import (
 
 var unsupportedGlobalTLSDirectives = []string{
 	"olcTLSCACertificatePath",
-	"olcTLSCRLFile",
 	"olcTLSRandFile",
 	"olcTLSDHParamFile",
 	"olcTLSECName",
@@ -31,6 +31,7 @@ var recognizedGlobalTLSDirectives = append([]string{
 	"olcTLSCertificateKeyFile",
 	"olcTLSCipherSuite",
 	"olcTLSCRLCheck",
+	"olcTLSCRLFile",
 	"olcTLSVerifyClient",
 	"olcTLSProtocolMin",
 }, unsupportedGlobalTLSDirectives...)
@@ -44,6 +45,7 @@ type globalTLSAttributes struct {
 	certificateKeyFile string
 	cipherSuite        string
 	crlCheck           string
+	crlFile            string
 	verifyClient       string
 	protocolMin        string
 }
@@ -92,13 +94,13 @@ func (server *Server) loadGlobalTLSConfiguration(
 	if err != nil {
 		return nil, err
 	}
-	if attributes.crlCheck != "" &&
-		!strings.EqualFold(attributes.crlCheck, "none") {
-		return nil, fmt.Errorf(
-			"%s olcTLSCRLCheck policy %q is unsupported; only none is available",
-			entry.DN,
-			attributes.crlCheck,
-		)
+	crlPolicy, err := parseGlobalTLSCRLCheck(attributes.crlCheck)
+	if err != nil {
+		return nil, fmt.Errorf("%s olcTLSCRLCheck: %w", entry.DN, err)
+	}
+	crls, err := loadGlobalTLSCRLs(attributes.crlFile)
+	if err != nil {
+		return nil, fmt.Errorf("%s olcTLSCRLFile: %w", entry.DN, err)
 	}
 	if !globalTLSServerMaterialPresent(attributes) {
 		if server.config.ImplicitTLS && !server.hasExplicitSecureTransport() {
@@ -106,7 +108,12 @@ func (server *Server) loadGlobalTLSConfiguration(
 		}
 		return nil, nil
 	}
-	configuration, err := server.buildGlobalTLSConfig(entry.DN, attributes)
+	configuration, err := server.buildGlobalTLSConfig(
+		entry.DN,
+		attributes,
+		crlPolicy,
+		crls,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +245,12 @@ func parseGlobalTLSAttributes(entry directory.Entry) (globalTLSAttributes, error
 	); err != nil {
 		return globalTLSAttributes{}, err
 	}
+	if attributes.crlFile, err = globalTLSSingleString(
+		entry,
+		"olcTLSCRLFile",
+	); err != nil {
+		return globalTLSAttributes{}, err
+	}
 	if attributes.verifyClient, err = globalTLSSingleString(
 		entry,
 		"olcTLSVerifyClient",
@@ -278,6 +291,8 @@ func globalTLSSingleString(
 func (server *Server) buildGlobalTLSConfig(
 	entryDN string,
 	attributes globalTLSAttributes,
+	crlPolicy string,
+	crls []*x509.RevocationList,
 ) (*tls.Config, error) {
 	certificateData, err := globalTLSData(
 		attributes.certificate,
@@ -390,7 +405,209 @@ func (server *Server) buildGlobalTLSConfig(
 			return nil, fmt.Errorf("%s load system client CA pool: %w", entryDN, err)
 		}
 	}
+	if crlPolicy != "none" {
+		if !globalTLSCRLCurrentAt(crls, now) {
+			return nil, fmt.Errorf(
+				"%s olcTLSCRLCheck=%s requires at least one current olcTLSCRLFile CRL",
+				entryDN,
+				crlPolicy,
+			)
+		}
+		if configuration.ClientAuth == tls.RequestClientCert &&
+			configuration.ClientCAs == nil {
+			configuration.ClientCAs, err = x509.SystemCertPool()
+			if err != nil {
+				return nil, fmt.Errorf("%s load system client CA pool: %w", entryDN, err)
+			}
+		}
+		configureGlobalTLSCRLVerification(
+			configuration,
+			crls,
+			crlPolicy,
+			server.clock,
+		)
+	}
 	return configuration, nil
+}
+
+func parseGlobalTLSCRLCheck(value string) (string, error) {
+	policy := strings.ToLower(strings.TrimSpace(value))
+	switch policy {
+	case "", "none":
+		return "none", nil
+	case "peer", "all":
+		return policy, nil
+	default:
+		return "", fmt.Errorf(
+			"unsupported policy %q; expected none, peer, or all",
+			value,
+		)
+	}
+}
+
+func loadGlobalTLSCRLs(path string) ([]*x509.RevocationList, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := globalTLSData(nil, path, "olcTLSCRLFile")
+	if err != nil {
+		return nil, err
+	}
+	return parseGlobalTLSCRLs(data)
+}
+
+func parseGlobalTLSCRLs(data []byte) ([]*x509.RevocationList, error) {
+	remaining := bytes.TrimSpace(data)
+	var crls []*x509.RevocationList
+	for bytes.HasPrefix(remaining, []byte("-----BEGIN")) {
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			return nil, errors.New("CRL data contains invalid PEM encoding")
+		}
+		remaining = bytes.TrimSpace(rest)
+		if block.Type != "X509 CRL" && block.Type != "CRL" {
+			return nil, fmt.Errorf("unexpected PEM block %q", block.Type)
+		}
+		crl, err := x509.ParseRevocationList(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse PEM CRL: %w", err)
+		}
+		crls = append(crls, crl)
+	}
+	if len(crls) > 0 {
+		if len(remaining) != 0 {
+			return nil, errors.New("CRL data contains trailing non-PEM bytes")
+		}
+		return crls, nil
+	}
+	crl, err := x509.ParseRevocationList(remaining)
+	if err != nil {
+		return nil, fmt.Errorf("parse DER CRL: %w", err)
+	}
+	return []*x509.RevocationList{crl}, nil
+}
+
+func globalTLSCRLCurrentAt(crls []*x509.RevocationList, now time.Time) bool {
+	for _, crl := range crls {
+		if globalTLSCRLValidAt(crl, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func globalTLSCRLValidAt(crl *x509.RevocationList, now time.Time) bool {
+	return crl != nil &&
+		!now.Before(crl.ThisUpdate) &&
+		(crl.NextUpdate.IsZero() || !now.After(crl.NextUpdate))
+}
+
+func configureGlobalTLSCRLVerification(
+	configuration *tls.Config,
+	crls []*x509.RevocationList,
+	policy string,
+	clock func() time.Time,
+) {
+	configuration.VerifyConnection = func(state tls.ConnectionState) error {
+		if len(state.PeerCertificates) == 0 {
+			return nil
+		}
+		chains := state.VerifiedChains
+		if len(chains) == 0 {
+			leaf := state.PeerCertificates[0]
+			intermediates := x509.NewCertPool()
+			for _, certificate := range state.PeerCertificates[1:] {
+				intermediates.AddCert(certificate)
+			}
+			var err error
+			chains, err = leaf.Verify(x509.VerifyOptions{
+				Roots:         configuration.ClientCAs,
+				Intermediates: intermediates,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			})
+			if err != nil {
+				return fmt.Errorf("verify TLS client certificate for CRL checking: %w", err)
+			}
+		}
+		now := time.Now()
+		if clock != nil {
+			now = clock()
+		}
+		var lastErr error
+		for _, chain := range chains {
+			if err := verifyGlobalTLSCRLs(chain, crls, policy, now); err == nil {
+				return nil
+			} else {
+				lastErr = err
+			}
+		}
+		if lastErr == nil {
+			return errors.New("TLS client certificate has no verified chain")
+		}
+		return lastErr
+	}
+}
+
+func verifyGlobalTLSCRLs(
+	chain []*x509.Certificate,
+	crls []*x509.RevocationList,
+	policy string,
+	now time.Time,
+) error {
+	if len(chain) < 2 {
+		return errors.New("TLS verified client chain has no issuer")
+	}
+	checkCount := 1
+	if policy == "all" {
+		checkCount = len(chain) - 1
+	}
+	for index := 0; index < checkCount; index++ {
+		certificate := chain[index]
+		issuer := chain[index+1]
+		var newest *x509.RevocationList
+		for _, crl := range crls {
+			if !globalTLSCRLValidAt(crl, now) ||
+				!bytes.Equal(crl.RawIssuer, certificate.RawIssuer) ||
+				crl.CheckSignatureFrom(issuer) != nil {
+				continue
+			}
+			if newest == nil || crl.ThisUpdate.After(newest.ThisUpdate) ||
+				(crl.ThisUpdate.Equal(newest.ThisUpdate) &&
+					globalTLSCRLNumberAfter(crl, newest)) {
+				newest = crl
+			}
+		}
+		if newest == nil {
+			return fmt.Errorf(
+				"no current issuer-signed CRL is available for TLS client certificate %s",
+				certificate.Subject.String(),
+			)
+		}
+		for _, revoked := range newest.RevokedCertificateEntries {
+			if revoked.SerialNumber == nil ||
+				revoked.ReasonCode == 8 ||
+				revoked.RevocationTime.After(now) {
+				continue
+			}
+			if certificate.SerialNumber.Cmp(revoked.SerialNumber) == 0 {
+				return fmt.Errorf(
+					"TLS client certificate %s is revoked",
+					certificate.Subject.String(),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func globalTLSCRLNumberAfter(
+	left,
+	right *x509.RevocationList,
+) bool {
+	if left.Number == nil {
+		return false
+	}
+	return right.Number == nil || left.Number.Cmp(right.Number) > 0
 }
 
 func globalTLSData(inline []byte, path, kind string) ([]byte, error) {
