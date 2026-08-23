@@ -99,6 +99,7 @@ type syncConsumerConfig struct {
 	realm                  string
 	securityProperties     syncConsumerSASLSecurityProperties
 	securityPropertiesText string
+	gssapiChannelBinding   string
 
 	startTLS         syncConsumerStartTLS
 	tls              syncConsumerTLSConfig

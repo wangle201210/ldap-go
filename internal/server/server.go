@@ -875,12 +875,23 @@ func (server *Server) dispatch(
 				); failure != nil {
 					return false, writeResultForMessage(connection, message, *failure)
 				}
+				message = applyDatabaseSearchLimits(
+					state,
+					message,
+					server.config.MaxSearchEntries,
+				)
+			} else {
+				var failure *ldapwire.Result
+				message, failure = server.applyLocalSearchLimitsBeforeDispatch(
+					ctx,
+					state,
+					message,
+					*database,
+				)
+				if failure != nil {
+					return false, writeResultForMessage(connection, message, *failure)
+				}
 			}
-			message = applyDatabaseSearchLimits(
-				state,
-				message,
-				server.config.MaxSearchEntries,
-			)
 		}
 	}
 	overlayConnection, handled, err := server.trySockOverlayOperation(
@@ -914,6 +925,7 @@ func (server *Server) dispatch(
 		}
 	}
 	if handled, err := server.tryUnsupportedPcachePrivateOperation(
+		ctx,
 		connection,
 		state,
 		message,
@@ -1019,6 +1031,69 @@ func (server *Server) dispatch(
 	}
 }
 
+func (server *Server) applyLocalSearchLimitsBeforeDispatch(
+	ctx context.Context,
+	state *connectionState,
+	message ldapwire.Message,
+	database runtimeDatabase,
+) (ldapwire.Message, *ldapwire.Result) {
+	request, ok := message.Request.(ldapwire.SearchRequest)
+	if !ok {
+		return message, nil
+	}
+	hasGroupRule := false
+	for _, rule := range database.searchSizeLimits {
+		if rule.selector == databaseSearchLimitGroup {
+			hasGroupRule = true
+			break
+		}
+	}
+	if !hasGroupRule {
+		return applyDatabaseSearchLimits(
+			state,
+			message,
+			server.config.MaxSearchEntries,
+		), nil
+	}
+	base, err := normalizeSearchRequestBase(state.runtime, request.BaseDN)
+	if err != nil {
+		return message, nil
+	}
+	var limits databaseSearchExecutionLimits
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		databaseReader := readerForDatabase(reader, database, ctx)
+		requestDN, normalizeErr := storage.NormalizeReaderDN(databaseReader, base)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		limits, normalizeErr = server.effectiveDatabaseSearchLimitsForRequest(
+			state.runtime,
+			database,
+			state.boundDN,
+			requestDN,
+			reader,
+			server.config.MaxSearchEntries,
+			request.SizeLimit,
+			request.TimeLimit,
+		)
+		return normalizeErr
+	})
+	if err != nil {
+		server.config.Logger.Warn(
+			"rejecting search after limit policy evaluation failed",
+			"database", database.name,
+			"base_dn", request.BaseDN,
+			"error", err,
+		)
+		failure := ldapwire.ResultError(
+			ldapwire.ResultAdminLimitExceeded,
+			"search limit policy evaluation failed",
+		)
+		return message, &failure
+	}
+	return applyDatabaseSearchExecutionLimits(message, limits), nil
+}
+
 func (server *Server) delegatedSearchPreflight(
 	state *connectionState,
 	database runtimeDatabase,
@@ -1046,14 +1121,36 @@ func (server *Server) delegatedSearchLimitFailure(
 	request ldapwire.SearchRequest,
 	paging *pagedResultsRequest,
 ) *ldapwire.Result {
-	limits := effectiveDatabaseSearchExecutionLimits(
+	requestDN, err := parseRuntimeDN(request.BaseDN, database.dnNormalizer)
+	if err != nil {
+		return nil
+	}
+	limits, err := server.effectiveDatabaseSearchLimitsForRequest(
 		state.runtime,
 		database,
 		state.boundDN,
+		requestDN,
+		nil,
 		server.config.MaxSearchEntries,
 		request.SizeLimit,
 		request.TimeLimit,
 	)
+	if errors.Is(err, errDatabaseSearchLimitGroupUnverifiable) {
+		server.config.Logger.Warn(
+			"rejecting delegated search with unverifiable group limit",
+			"database", database.name,
+			"base_dn", request.BaseDN,
+		)
+		result := ldapwire.ResultError(
+			ldapwire.ResultAdminLimitExceeded,
+			"group limit membership unavailable for delegated backend",
+		)
+		return &result
+	}
+	if err != nil {
+		result := ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, "")
+		return &result
+	}
 	if limits.unchecked == 0 {
 		result := ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, "")
 		return &result
@@ -1349,10 +1446,23 @@ func (server *Server) handleBind(
 		)
 		if handled {
 			if result.Code == ldapwire.ResultSuccess {
-				state.boundDN = requestDN.String()
-				state.authMechanism = "SIMPLE"
-				state.bindCredentialDN = requestDN.String()
-				state.bindCredentials = append([]byte(nil), password...)
+				server.runtimeActivationMu.Lock()
+				current := server.remoteAuthConfigurationCurrent(
+					requestDN,
+					database.remoteAuth.connections,
+				)
+				if current {
+					state.boundDN = requestDN.String()
+					state.authMechanism = "SIMPLE"
+					state.bindCredentialDN = requestDN.String()
+					state.bindCredentials = append([]byte(nil), password...)
+				} else {
+					result = ldapwire.ResultError(
+						ldapwire.ResultOperationsError,
+						"remoteauth configuration changed",
+					)
+				}
+				server.runtimeActivationMu.Unlock()
 			}
 			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 				message.ID,
@@ -1370,10 +1480,23 @@ func (server *Server) handleBind(
 			request,
 		)
 		if result.Code == ldapwire.ResultSuccess {
-			state.boundDN = requestDN.String()
-			state.authMechanism = "SIMPLE"
-			state.bindCredentialDN = requestDN.String()
-			state.bindCredentials = append([]byte(nil), password...)
+			server.runtimeActivationMu.Lock()
+			current := server.pbindConfigurationCurrent(
+				requestDN.String(),
+				database.pbind.identity,
+			)
+			if current {
+				state.boundDN = requestDN.String()
+				state.authMechanism = "SIMPLE"
+				state.bindCredentialDN = requestDN.String()
+				state.bindCredentials = append([]byte(nil), password...)
+			} else {
+				result = ldapwire.ResultError(
+					ldapwire.ResultUnavailable,
+					"proxy bind target configuration changed",
+				)
+			}
+			server.runtimeActivationMu.Unlock()
 		}
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,

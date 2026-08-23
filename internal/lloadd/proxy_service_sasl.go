@@ -2,6 +2,7 @@ package lloadd
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // CRAM-MD5 and DIGEST-MD5 require MD5.
 	"crypto/rand"
@@ -11,13 +12,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
+	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jcmturner/gokrb5/v8/credentials"
+	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/saslkrb5"
 	"github.com/xdg-go/scram"
 	"github.com/xdg-go/stringprep"
 )
@@ -29,6 +38,7 @@ const (
 	serviceSCRAMMaxIterations   = 10_000_000
 	serviceSCRAMMaxSaltSize     = 1024
 	serviceDigestMaxBufferSize  = 0xFFFFFF
+	serviceGSSAPIDefaultBuffer  = 64 << 10
 )
 
 func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, error) {
@@ -77,16 +87,16 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 		}
 	}
 	securityProperties := strings.ToLower(strings.TrimSpace(config.SecurityProperties))
-	if securityProperties != "" && securityProperties != "none" {
-		return RuntimeBindConfig{}, errors.New("upstream SASL auth-only mode supports only empty secprops or secprops=none")
-	}
 	config.SecurityProperties = securityProperties
-	if len(config.Credentials) == 0 {
-		return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
-	}
 
 	switch config.SASLMechanism {
 	case "PLAIN":
+		if len(config.Credentials) == 0 {
+			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
+		}
+		if securityProperties != "" && securityProperties != "none" {
+			return RuntimeBindConfig{}, errors.New("upstream SASL auth-only mode supports only empty secprops or secprops=none")
+		}
 		if config.AuthenticationID == "" {
 			return RuntimeBindConfig{}, errors.New("upstream SASL PLAIN requires authcid")
 		}
@@ -97,6 +107,12 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 			return RuntimeBindConfig{}, errors.New("upstream SASL PLAIN credentials contain NUL")
 		}
 	case "CRAM-MD5":
+		if len(config.Credentials) == 0 {
+			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
+		}
+		if securityProperties != "" && securityProperties != "none" {
+			return RuntimeBindConfig{}, errors.New("upstream SASL auth-only mode supports only empty secprops or secprops=none")
+		}
 		if config.AuthenticationID == "" {
 			return RuntimeBindConfig{}, errors.New("upstream SASL CRAM-MD5 requires authcid")
 		}
@@ -110,10 +126,22 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 			return RuntimeBindConfig{}, errors.New("upstream SASL CRAM-MD5 does not support realm")
 		}
 	case "DIGEST-MD5":
+		if len(config.Credentials) == 0 {
+			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
+		}
+		if securityProperties != "" && securityProperties != "none" {
+			return RuntimeBindConfig{}, errors.New("upstream SASL auth-only mode supports only empty secprops or secprops=none")
+		}
 		if config.AuthenticationID == "" {
 			return RuntimeBindConfig{}, errors.New("upstream SASL DIGEST-MD5 requires authcid")
 		}
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+		if len(config.Credentials) == 0 {
+			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
+		}
+		if securityProperties != "" && securityProperties != "none" {
+			return RuntimeBindConfig{}, errors.New("upstream SASL auth-only mode supports only empty secprops or secprops=none")
+		}
 		if config.AuthenticationID == "" {
 			return RuntimeBindConfig{}, fmt.Errorf("upstream SASL %s requires authcid", config.SASLMechanism)
 		}
@@ -121,7 +149,19 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 			return RuntimeBindConfig{}, fmt.Errorf("upstream SASL %s does not support realm", config.SASLMechanism)
 		}
 	case "GSSAPI":
-		return RuntimeBindConfig{}, errors.New("upstream SASL GSSAPI is not supported by the auth-only proxy")
+		if err := validateServiceGSSAPIStaticConfig(
+			config.AuthenticationID,
+			config.Realm,
+			config.SecurityProperties,
+			config.Credentials,
+		); err != nil {
+			return RuntimeBindConfig{}, err
+		}
+		settings, err := resolveServiceGSSAPISettings(config, os.LookupEnv)
+		if err != nil {
+			return RuntimeBindConfig{}, err
+		}
+		settings.clear()
 	default:
 		if strings.HasPrefix(config.SASLMechanism, "SCRAM-") &&
 			strings.HasSuffix(config.SASLMechanism, "-PLUS") {
@@ -133,22 +173,731 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 }
 
 func (backend *runtimeBackend) bindServiceSASL(
+	ctx context.Context,
 	connection net.Conn,
 	nextMessageID *int64,
-) error {
+) (net.Conn, error) {
 	config := backend.proxy.config.Bind
 	switch config.SASLMechanism {
 	case "PLAIN":
-		return backend.bindServiceSASLPlain(connection, nextMessageID)
+		return connection, backend.bindServiceSASLPlain(connection, nextMessageID)
 	case "CRAM-MD5":
-		return backend.bindServiceSASLCRAMMD5(connection, nextMessageID)
+		return connection, backend.bindServiceSASLCRAMMD5(connection, nextMessageID)
 	case "DIGEST-MD5":
-		return backend.bindServiceSASLDigestMD5(connection, nextMessageID)
+		return connection, backend.bindServiceSASLDigestMD5(connection, nextMessageID)
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
-		return backend.bindServiceSASLSCRAM(connection, nextMessageID)
+		return connection, backend.bindServiceSASLSCRAM(connection, nextMessageID)
+	case "GSSAPI":
+		return backend.bindServiceSASLGSSAPI(ctx, connection, nextMessageID)
 	default:
-		return fmt.Errorf("unsupported upstream SASL mechanism %q", config.SASLMechanism)
+		return nil, fmt.Errorf("unsupported upstream SASL mechanism %q", config.SASLMechanism)
 	}
+}
+
+type serviceGSSAPICredentialSource uint8
+
+const (
+	serviceGSSAPIPassword serviceGSSAPICredentialSource = iota
+	serviceGSSAPIKeytab
+	serviceGSSAPICCache
+)
+
+type serviceGSSAPISettings struct {
+	source         serviceGSSAPICredentialSource
+	username       string
+	realm          string
+	password       []byte
+	credentialPath string
+	configuration  string
+	target         string
+	authorization  string
+}
+
+func (settings *serviceGSSAPISettings) clear() {
+	if settings == nil {
+		return
+	}
+	clear(settings.password)
+	settings.password = nil
+	settings.username = ""
+	settings.realm = ""
+	settings.credentialPath = ""
+	settings.configuration = ""
+	settings.target = ""
+	settings.authorization = ""
+}
+
+type serviceGSSAPISecurityProperties struct {
+	minimumSSF    uint32
+	maximumSSF    uint32
+	maxBufferSize uint32
+}
+
+func validateServiceGSSAPIStaticConfig(
+	authenticationID string,
+	realm string,
+	securityProperties string,
+	password []byte,
+) error {
+	if _, err := parseServiceGSSAPISecurityProperties(securityProperties); err != nil {
+		return fmt.Errorf("invalid upstream SASL GSSAPI secprops: %w", err)
+	}
+	username, normalizedRealm, err := normalizeServiceGSSAPIPrincipal(
+		authenticationID,
+		realm,
+	)
+	if err != nil {
+		return err
+	}
+	if len(password) == 0 {
+		return nil
+	}
+	if username == "" || normalizedRealm == "" {
+		return errors.New("upstream SASL GSSAPI password credentials require authcid and realm")
+	}
+	if !utf8.Valid(password) || bytes.IndexByte(password, 0) >= 0 {
+		return errors.New("upstream SASL GSSAPI password must be valid UTF-8 without NUL")
+	}
+	return nil
+}
+
+func parseServiceGSSAPISecurityProperties(
+	value string,
+) (serviceGSSAPISecurityProperties, error) {
+	properties := serviceGSSAPISecurityProperties{
+		maximumSSF:    math.MaxInt32,
+		maxBufferSize: serviceGSSAPIDefaultBuffer,
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return properties, nil
+	}
+	parts := strings.Split(value, ",")
+	for _, raw := range parts {
+		part := strings.ToLower(strings.TrimSpace(raw))
+		if part == "" {
+			return serviceGSSAPISecurityProperties{}, errors.New("empty property")
+		}
+		switch part {
+		case "none":
+			if len(parts) != 1 {
+				return serviceGSSAPISecurityProperties{}, errors.New("none cannot be combined with other properties")
+			}
+			continue
+		case "noplain", "noactive", "nodict", "noanonymous":
+			continue
+		case "forwardsec", "passcred":
+			return serviceGSSAPISecurityProperties{}, fmt.Errorf(
+				"%s is not supported by the GSSAPI provider",
+				part,
+			)
+		}
+		name, encoded, ok := strings.Cut(part, "=")
+		if !ok || encoded == "" {
+			return serviceGSSAPISecurityProperties{}, fmt.Errorf("unsupported property %q", raw)
+		}
+		parsed, err := strconv.ParseUint(encoded, 10, 31)
+		if err != nil {
+			return serviceGSSAPISecurityProperties{}, fmt.Errorf("invalid %s value", name)
+		}
+		switch name {
+		case "minssf":
+			properties.minimumSSF = uint32(parsed)
+		case "maxssf":
+			properties.maximumSSF = uint32(parsed)
+		case "maxbufsize":
+			if parsed > saslkrb5.MaxBufferSize {
+				return serviceGSSAPISecurityProperties{}, errors.New("maxbufsize exceeds the RFC 4752 limit")
+			}
+			properties.maxBufferSize = uint32(parsed)
+		default:
+			return serviceGSSAPISecurityProperties{}, fmt.Errorf("unsupported property %q", name)
+		}
+	}
+	if properties.minimumSSF > properties.maximumSSF {
+		return serviceGSSAPISecurityProperties{}, errors.New("minssf exceeds maxssf")
+	}
+	return properties, nil
+}
+
+func resolveServiceGSSAPISettings(
+	config RuntimeBindConfig,
+	lookupEnv func(string) (string, bool),
+) (serviceGSSAPISettings, error) {
+	username, realm, err := normalizeServiceGSSAPIPrincipal(
+		config.AuthenticationID,
+		config.Realm,
+	)
+	if err != nil {
+		return serviceGSSAPISettings{}, err
+	}
+	settings := serviceGSSAPISettings{
+		username:      username,
+		realm:         realm,
+		configuration: serviceGSSAPIConfigurationPath(lookupEnv),
+		authorization: config.AuthorizationID,
+	}
+	if len(config.Credentials) != 0 {
+		if username == "" || realm == "" {
+			return serviceGSSAPISettings{}, errors.New(
+				"upstream SASL GSSAPI password credentials require authcid and realm",
+			)
+		}
+		settings.source = serviceGSSAPIPassword
+		settings.password = bytes.Clone(config.Credentials)
+		return settings, nil
+	}
+
+	keytab, variable := serviceGSSAPIFirstEnvironment(
+		lookupEnv,
+		"KRB5_CLIENT_KTNAME",
+		"KRB5_KTNAME",
+	)
+	if keytab != "" {
+		path, parseErr := parseServiceGSSAPIFileProvider(keytab, variable)
+		if parseErr != nil {
+			return serviceGSSAPISettings{}, parseErr
+		}
+		if username == "" || realm == "" {
+			return serviceGSSAPISettings{}, errors.New(
+				"upstream SASL GSSAPI keytab credentials require authcid and realm",
+			)
+		}
+		settings.source = serviceGSSAPIKeytab
+		settings.credentialPath = path
+		return settings, nil
+	}
+
+	cache, configured := lookupEnv("KRB5CCNAME")
+	if configured && strings.TrimSpace(cache) != "" {
+		path, parseErr := parseServiceGSSAPIFileProvider(cache, "KRB5CCNAME")
+		if parseErr != nil {
+			return serviceGSSAPISettings{}, parseErr
+		}
+		settings.credentialPath = path
+	} else {
+		path, pathErr := defaultServiceGSSAPICCache()
+		if pathErr != nil {
+			return serviceGSSAPISettings{}, pathErr
+		}
+		settings.credentialPath = path
+	}
+	settings.source = serviceGSSAPICCache
+	return settings, nil
+}
+
+func normalizeServiceGSSAPIPrincipal(
+	authenticationID string,
+	configuredRealm string,
+) (string, string, error) {
+	authenticationID = strings.TrimSpace(authenticationID)
+	configuredRealm = strings.TrimSpace(configuredRealm)
+	if strings.ContainsAny(authenticationID, "\x00\r\n") ||
+		strings.ContainsAny(configuredRealm, "\x00\r\n") {
+		return "", "", errors.New("upstream SASL GSSAPI principal contains an invalid character")
+	}
+	at := strings.LastIndexByte(authenticationID, '@')
+	if at < 0 {
+		return authenticationID, configuredRealm, nil
+	}
+	if at == 0 || at == len(authenticationID)-1 {
+		return "", "", errors.New("upstream SASL GSSAPI authcid is not a valid Kerberos principal")
+	}
+	principalRealm := authenticationID[at+1:]
+	if configuredRealm != "" && !strings.EqualFold(configuredRealm, principalRealm) {
+		return "", "", fmt.Errorf(
+			"upstream SASL GSSAPI authcid realm %q conflicts with realm %q",
+			principalRealm,
+			configuredRealm,
+		)
+	}
+	return authenticationID[:at], principalRealm, nil
+}
+
+func serviceGSSAPIConfigurationPath(lookupEnv func(string) (string, bool)) string {
+	if configured, ok := lookupEnv("KRB5_CONFIG"); ok {
+		for _, candidate := range filepath.SplitList(configured) {
+			if candidate = strings.TrimSpace(candidate); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if root, ok := lookupEnv("SystemRoot"); ok && strings.TrimSpace(root) != "" {
+			return filepath.Join(root, "krb5.ini")
+		}
+		return `C:\Windows\krb5.ini`
+	}
+	if runtime.GOOS == "darwin" {
+		const path = "/Library/Preferences/edu.mit.Kerberos"
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return "/etc/krb5.conf"
+}
+
+func serviceGSSAPIFirstEnvironment(
+	lookupEnv func(string) (string, bool),
+	names ...string,
+) (string, string) {
+	for _, name := range names {
+		if value, ok := lookupEnv(name); ok && strings.TrimSpace(value) != "" {
+			return value, name
+		}
+	}
+	return "", ""
+}
+
+func parseServiceGSSAPIFileProvider(value, variable string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s is empty", variable)
+	}
+	if serviceGSSAPIWindowsDrivePath(value) {
+		return value, nil
+	}
+	provider, path, hasProvider := strings.Cut(value, ":")
+	if !hasProvider {
+		return value, nil
+	}
+	if !strings.EqualFold(provider, "FILE") {
+		return "", fmt.Errorf(
+			"%s credential provider %q is unsupported; use FILE",
+			variable,
+			provider,
+		)
+	}
+	if path == "" {
+		return "", fmt.Errorf("%s FILE credential path is empty", variable)
+	}
+	return path, nil
+}
+
+func serviceGSSAPIWindowsDrivePath(value string) bool {
+	if len(value) < 3 || value[1] != ':' {
+		return false
+	}
+	drive := value[0]
+	return ((drive >= 'a' && drive <= 'z') ||
+		(drive >= 'A' && drive <= 'Z')) &&
+		(value[2] == '\\' || value[2] == '/')
+}
+
+func defaultServiceGSSAPICCache() (string, error) {
+	current, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("resolve default Kerberos credential cache: %w", err)
+	}
+	uid := strings.TrimSpace(current.Uid)
+	if _, err := strconv.ParseUint(uid, 10, 64); err != nil {
+		return "", errors.New(
+			"KRB5CCNAME is required when the operating system has no numeric UID",
+		)
+	}
+	return filepath.Join(os.TempDir(), "krb5cc_"+uid), nil
+}
+
+type serviceGSSAPIInitiator interface {
+	InitialToken(string, []byte) ([]byte, error)
+	AcceptAPRep([]byte) error
+	ContextKey() (types.EncryptionKey, error)
+	SecurityState() (saslkrb5.SecurityState, error)
+	Close() error
+}
+
+type serviceGSSAPIInitiatorFactory func(
+	serviceGSSAPISettings,
+) (serviceGSSAPIInitiator, error)
+
+func newServiceGSSAPIInitiator(
+	settings serviceGSSAPISettings,
+) (serviceGSSAPIInitiator, error) {
+	switch settings.source {
+	case serviceGSSAPIPassword:
+		return saslkrb5.NewInitiatorWithPassword(
+			settings.username,
+			settings.realm,
+			string(settings.password),
+			settings.configuration,
+		)
+	case serviceGSSAPIKeytab:
+		return saslkrb5.NewInitiatorWithKeytab(
+			settings.username,
+			settings.realm,
+			settings.credentialPath,
+			settings.configuration,
+		)
+	case serviceGSSAPICCache:
+		cache, err := credentials.LoadCCache(settings.credentialPath)
+		if err != nil {
+			return nil, fmt.Errorf("load FILE credential cache: %w", err)
+		}
+		cacheUsername := cache.GetClientPrincipalName().PrincipalNameString()
+		cacheRealm := cache.GetClientRealm()
+		if settings.username != "" && settings.username != cacheUsername {
+			return nil, fmt.Errorf(
+				"upstream SASL GSSAPI authcid %q does not match FILE credential cache principal %q",
+				settings.username,
+				cacheUsername,
+			)
+		}
+		if settings.realm != "" && !strings.EqualFold(settings.realm, cacheRealm) {
+			return nil, fmt.Errorf(
+				"upstream SASL GSSAPI realm %q does not match FILE credential cache realm %q",
+				settings.realm,
+				cacheRealm,
+			)
+		}
+		return saslkrb5.NewInitiatorFromCCache(
+			settings.credentialPath,
+			settings.configuration,
+		)
+	default:
+		return nil, errors.New("unknown upstream GSSAPI credential source")
+	}
+}
+
+type serviceGSSAPIBindResult struct {
+	connection net.Conn
+	err        error
+}
+
+const serviceGSSAPIMaxConcurrentInitializations = 16
+
+var serviceGSSAPIInitializationSlots = make(
+	chan struct{},
+	serviceGSSAPIMaxConcurrentInitializations,
+)
+
+func (backend *runtimeBackend) bindServiceSASLGSSAPI(
+	ctx context.Context,
+	connection net.Conn,
+	nextMessageID *int64,
+) (net.Conn, error) {
+	return backend.bindServiceSASLGSSAPIWithFactory(
+		ctx,
+		connection,
+		nextMessageID,
+		newServiceGSSAPIInitiator,
+	)
+}
+
+func (backend *runtimeBackend) bindServiceSASLGSSAPIWithFactory(
+	ctx context.Context,
+	connection net.Conn,
+	nextMessageID *int64,
+	factory serviceGSSAPIInitiatorFactory,
+) (net.Conn, error) {
+	if factory == nil {
+		return connection, errors.New("upstream SASL GSSAPI credential factory is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout := backend.proxy.config.Bind.Timeout; timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		_ = connection.Close()
+		return connection, fmt.Errorf("upstream SASL GSSAPI bind: %w", err)
+	}
+	select {
+	case serviceGSSAPIInitializationSlots <- struct{}{}:
+	case <-ctx.Done():
+		_ = connection.Close()
+		return connection, fmt.Errorf("upstream SASL GSSAPI bind: %w", ctx.Err())
+	}
+	settings, err := resolveServiceGSSAPISettings(
+		backend.proxy.config.Bind,
+		os.LookupEnv,
+	)
+	if err != nil {
+		<-serviceGSSAPIInitializationSlots
+		return connection, err
+	}
+	target, err := backend.serviceGSSAPITarget()
+	if err != nil {
+		settings.clear()
+		<-serviceGSSAPIInitializationSlots
+		return connection, err
+	}
+	settings.target = target
+
+	// gokrb5's service-ticket API has no context-aware variant. Cancellation can
+	// close LDAP I/O immediately, but this single worker can only exit after an
+	// in-flight Kerberos call returns. The cancellation handoff avoids adding a
+	// second goroutine that waits indefinitely just to reap the worker.
+	done := make(chan serviceGSSAPIBindResult)
+	abandoned := make(chan struct{})
+	workerMessageID := *nextMessageID
+	go func() {
+		defer func() { <-serviceGSSAPIInitializationSlots }()
+		secured, bindErr := backend.bindServiceSASLGSSAPIBlocking(
+			connection,
+			&workerMessageID,
+			settings,
+			factory,
+		)
+		result := serviceGSSAPIBindResult{connection: secured, err: bindErr}
+		select {
+		case done <- result:
+		case <-abandoned:
+			if result.connection != nil {
+				_ = result.connection.Close()
+			}
+		}
+	}()
+	select {
+	case result := <-done:
+		if result.connection == nil {
+			result.connection = connection
+		}
+		if err := ctx.Err(); err != nil {
+			_ = result.connection.Close()
+			return connection, fmt.Errorf("upstream SASL GSSAPI bind: %w", err)
+		}
+		*nextMessageID = workerMessageID
+		return result.connection, result.err
+	case <-ctx.Done():
+		close(abandoned)
+		_ = connection.Close()
+		return connection, fmt.Errorf("upstream SASL GSSAPI bind: %w", ctx.Err())
+	}
+}
+
+func (backend *runtimeBackend) serviceGSSAPITarget() (string, error) {
+	if runtimeLDAPURLScheme(backend.config.URI) == "ldapi" {
+		return "", errors.New("upstream SASL GSSAPI requires a hostname and is not supported for ldapi")
+	}
+	parsed, err := url.Parse(backend.config.URI)
+	if err != nil {
+		return "", fmt.Errorf("parse upstream GSSAPI provider URI: %w", err)
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" || strings.IndexByte(host, 0) >= 0 {
+		return "", errors.New("upstream SASL GSSAPI provider has no valid hostname")
+	}
+	return "ldap/" + host, nil
+}
+
+func (backend *runtimeBackend) bindServiceSASLGSSAPIBlocking(
+	connection net.Conn,
+	nextMessageID *int64,
+	settings serviceGSSAPISettings,
+	factory serviceGSSAPIInitiatorFactory,
+) (net.Conn, error) {
+	defer settings.clear()
+	initiator, err := factory(settings)
+	if err != nil {
+		return connection, fmt.Errorf("initialize upstream SASL GSSAPI credentials: %w", err)
+	}
+	return backend.bindServiceSASLGSSAPIWithInitiator(
+		connection,
+		nextMessageID,
+		settings.target,
+		settings.authorization,
+		initiator,
+	)
+}
+
+func (backend *runtimeBackend) bindServiceSASLGSSAPIWithInitiator(
+	connection net.Conn,
+	nextMessageID *int64,
+	target string,
+	authorizationID string,
+	initiator serviceGSSAPIInitiator,
+) (net.Conn, error) {
+	if initiator == nil {
+		return connection, errors.New("upstream SASL GSSAPI initiator is nil")
+	}
+	defer initiator.Close()
+	initial, err := initiator.InitialToken(target, nil)
+	if err != nil {
+		return connection, fmt.Errorf("create upstream SASL GSSAPI AP-REQ: %w", err)
+	}
+	first, err := backend.exchangeServiceSASLBind(
+		connection,
+		nextMessageID,
+		"GSSAPI",
+		initial,
+		true,
+	)
+	clear(initial)
+	if err != nil {
+		return connection, err
+	}
+	if first.code != ldapwire.ResultSASLBindInProgress {
+		first.clear()
+		return connection, serviceSASLResultError("GSSAPI AP-REQ", first.code)
+	}
+	if !first.hasServerCredentials || len(first.serverCredentials) == 0 {
+		first.clear()
+		return connection, errors.New("service SASL GSSAPI acceptor omitted AP-REP")
+	}
+	err = initiator.AcceptAPRep(first.serverCredentials)
+	first.clear()
+	if err != nil {
+		return connection, fmt.Errorf("verify service SASL GSSAPI AP-REP: %w", err)
+	}
+
+	second, err := backend.exchangeServiceSASLBind(
+		connection,
+		nextMessageID,
+		"GSSAPI",
+		nil,
+		false,
+	)
+	if err != nil {
+		return connection, err
+	}
+	if second.code != ldapwire.ResultSASLBindInProgress {
+		second.clear()
+		return connection, serviceSASLResultError("GSSAPI security negotiation", second.code)
+	}
+	if !second.hasServerCredentials || len(second.serverCredentials) == 0 {
+		second.clear()
+		return connection, errors.New("service SASL GSSAPI acceptor omitted its security-layer offer")
+	}
+
+	key, err := initiator.ContextKey()
+	if err != nil {
+		second.clear()
+		return connection, err
+	}
+	defer clear(key.KeyValue)
+	securityState, err := initiator.SecurityState()
+	if err != nil {
+		second.clear()
+		return connection, err
+	}
+	offer, err := saslkrb5.Unwrap(
+		second.serverCredentials,
+		key,
+		true,
+		securityState.AcceptorSubkey,
+		securityState.ReceiveSequence,
+	)
+	second.clear()
+	if err != nil {
+		return connection, fmt.Errorf("verify service SASL GSSAPI security-layer offer: %w", err)
+	}
+	securityState.ReceiveSequence++
+	layers, peerMaximum, err := saslkrb5.DecodeOffer(offer)
+	clear(offer)
+	if err != nil {
+		return connection, err
+	}
+	properties, err := parseServiceGSSAPISecurityProperties(
+		backend.proxy.config.Bind.SecurityProperties,
+	)
+	if err != nil {
+		return connection, err
+	}
+	selection, localMaximum, err := selectServiceGSSAPISecurityLayer(
+		layers,
+		key,
+		properties,
+	)
+	if err != nil {
+		return connection, err
+	}
+	payload, err := saslkrb5.EncodeNegotiation(
+		selection,
+		localMaximum,
+		authorizationID,
+	)
+	if err != nil {
+		return connection, err
+	}
+	wrapped, err := saslkrb5.Wrap(
+		payload,
+		key,
+		false,
+		securityState.AcceptorSubkey,
+		securityState.SendSequence,
+	)
+	clear(payload)
+	if err != nil {
+		return connection, fmt.Errorf("encode service SASL GSSAPI security-layer selection: %w", err)
+	}
+	securityState.SendSequence++
+	final, err := backend.exchangeServiceSASLBind(
+		connection,
+		nextMessageID,
+		"GSSAPI",
+		wrapped,
+		true,
+	)
+	clear(wrapped)
+	if err != nil {
+		return connection, err
+	}
+	defer final.clear()
+	if final.code != ldapwire.ResultSuccess {
+		return connection, serviceSASLResultError("GSSAPI completion", final.code)
+	}
+	if final.hasServerCredentials {
+		return connection, errors.New("service SASL GSSAPI acceptor returned unexpected completion data")
+	}
+	if selection == saslkrb5.SecurityNone {
+		return connection, nil
+	}
+	if selection == saslkrb5.SecurityConfidentiality {
+		secured, layerErr := saslkrb5.NewConfidentialityConnection(
+			connection,
+			key,
+			false,
+			securityState,
+			peerMaximum,
+			localMaximum,
+		)
+		if layerErr != nil {
+			return connection, fmt.Errorf("install service SASL GSSAPI confidentiality layer: %w", layerErr)
+		}
+		return secured, nil
+	}
+	secured, err := saslkrb5.NewIntegrityConnection(
+		connection,
+		key,
+		false,
+		securityState,
+		peerMaximum,
+		localMaximum,
+	)
+	if err != nil {
+		return connection, fmt.Errorf("install service SASL GSSAPI integrity layer: %w", err)
+	}
+	return secured, nil
+}
+
+func selectServiceGSSAPISecurityLayer(
+	layers byte,
+	key types.EncryptionKey,
+	properties serviceGSSAPISecurityProperties,
+) (byte, uint32, error) {
+	keySSF, err := saslkrb5.SecurityStrength(key)
+	if err != nil {
+		return 0, 0, fmt.Errorf("determine service SASL GSSAPI context strength: %w", err)
+	}
+	if layers&saslkrb5.SecurityConfidentiality != 0 &&
+		properties.maxBufferSize != 0 &&
+		properties.minimumSSF <= keySSF && properties.maximumSSF >= keySSF {
+		return saslkrb5.SecurityConfidentiality, properties.maxBufferSize, nil
+	}
+	if layers&saslkrb5.SecurityIntegrity != 0 &&
+		properties.maxBufferSize != 0 &&
+		properties.minimumSSF <= 1 && properties.maximumSSF >= 1 {
+		return saslkrb5.SecurityIntegrity, properties.maxBufferSize, nil
+	}
+	if layers&saslkrb5.SecurityNone != 0 && properties.minimumSSF == 0 {
+		return saslkrb5.SecurityNone, 0, nil
+	}
+	return 0, 0, errors.New(
+		"service SASL GSSAPI acceptor offers no security layer allowed by secprops",
+	)
 }
 
 type serviceSASLResult struct {

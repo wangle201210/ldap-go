@@ -20,6 +20,155 @@ import (
 
 const haproxyProxyProtocolCommit = "23cc52d34b89fa1f2ec2c4b3ac1526bae84aff93"
 
+func TestLloaddProxyTrustedSourcesNormalizeAndAuthorize(t *testing.T) {
+	trusted, err := parseLloaddProxyTrustedSources([]string{
+		"127.0.0.1",
+		"127.0.0.1/32",
+		"::ffff:127.0.0.0/120",
+		"2001:db8::/32",
+	})
+	if err != nil {
+		t.Fatalf("parse trusted sources: %v", err)
+	}
+	if len(trusted) != 3 {
+		t.Fatalf("normalized trusted sources = %#v, want 3 unique prefixes", trusted)
+	}
+	for _, test := range []struct {
+		name    string
+		remote  net.Addr
+		allowed bool
+	}{
+		{
+			name:    "IPv4",
+			remote:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 41000},
+			allowed: true,
+		},
+		{
+			name:    "IPv4 mapped IPv6",
+			remote:  &net.TCPAddr{IP: net.ParseIP("::ffff:127.0.0.2"), Port: 41001},
+			allowed: true,
+		},
+		{
+			name:    "IPv6",
+			remote:  &net.TCPAddr{IP: net.ParseIP("2001:db8::10"), Port: 41002},
+			allowed: true,
+		},
+		{
+			name:   "untrusted IPv4",
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 41003},
+		},
+		{
+			name:   "untrusted IPv6",
+			remote: &net.TCPAddr{IP: net.ParseIP("2001:db9::10"), Port: 41004},
+		},
+		{
+			name:   "non TCP",
+			remote: &net.UnixAddr{Name: "/run/untrusted.sock", Net: "unix"},
+		},
+		{
+			name:   "invalid TCP IP",
+			remote: &net.TCPAddr{Port: 41005},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := trusted.authorize(test.remote)
+			if test.allowed && err != nil {
+				t.Fatalf("authorize(%s): %v", test.remote, err)
+			}
+			if !test.allowed && err == nil {
+				t.Fatalf("authorize(%s) succeeded", test.remote)
+			}
+		})
+	}
+	if err := (lloaddProxyTrustedSources(nil)).authorize(
+		&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 41006},
+	); err == nil || !strings.Contains(err.Error(), "no trusted sources") {
+		t.Fatalf("authorize without allowlist = %v", err)
+	}
+}
+
+func TestLloaddProxyTrustedSourcesRejectBeforeReadingHeaderAndRecover(t *testing.T) {
+	source, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := source.Addr().(*net.TCPAddr).Port
+	untrustedIP := lloaddTestNonLoopbackIPv4(t)
+	trusted, err := parseLloaddProxyTrustedSources([]string{"127.0.0.1/32"})
+	if err != nil {
+		t.Fatalf("parse trusted sources: %v", err)
+	}
+	listener := newProxyProtocolListener(source, 5*time.Second, trusted)
+	defer listener.Close()
+	accepted := make(chan proxyProtocolAcceptResult, 1)
+	go acceptProxyProtocolTestConnection(listener, accepted)
+
+	untrustedDialer := net.Dialer{
+		Timeout:   time.Second,
+		LocalAddr: &net.TCPAddr{IP: untrustedIP},
+	}
+	untrustedAddress := net.JoinHostPort(untrustedIP.String(), fmt.Sprint(port))
+	untrusted, err := untrustedDialer.Dial("tcp4", untrustedAddress)
+	if err != nil {
+		t.Fatalf("dial from non-loopback source %s: %v", untrustedIP, err)
+	}
+	if got := untrusted.LocalAddr().(*net.TCPAddr).IP.String(); got != untrustedIP.String() {
+		_ = untrusted.Close()
+		t.Fatalf("untrusted physical source = %s", got)
+	}
+	started := time.Now()
+	expectProxyProtocolConnectionClosed(t, untrusted)
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("untrusted peer was not rejected before the 5s PROXY header timeout: %s", elapsed)
+	}
+
+	trustedAddress := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
+	trustedClient, err := net.DialTimeout("tcp4", trustedAddress, time.Second)
+	if err != nil {
+		t.Fatalf("dial trusted source: %v", err)
+	}
+	defer trustedClient.Close()
+	if _, err := trustedClient.Write([]byte(
+		"PROXY TCP4 192.0.2.80 198.51.100.80 48000 389\r\nldap-payload",
+	)); err != nil {
+		t.Fatalf("write trusted PROXY header: %v", err)
+	}
+	server := awaitProxyProtocolAccept(t, accepted)
+	defer server.Close()
+	if server.RemoteAddr().String() != "192.0.2.80:48000" {
+		t.Fatalf("trusted logical source = %s", server.RemoteAddr())
+	}
+	payload := make([]byte, len("ldap-payload"))
+	if _, err := io.ReadFull(server, payload); err != nil || string(payload) != "ldap-payload" {
+		t.Fatalf("trusted LDAP payload = %q, %v", payload, err)
+	}
+}
+
+func TestPrepareLloaddProxyConnectionRejectsUntrustedSourceWithoutReading(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	connection := &lloaddReadTrackingConn{
+		Conn:   server,
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.90"), Port: 49000},
+	}
+	trusted, err := parseLloaddProxyTrustedSources([]string{"198.51.100.0/24"})
+	if err != nil {
+		t.Fatalf("parse trusted sources: %v", err)
+	}
+	if _, err := prepareLloaddAcceptedConnectionWithTrustedSources(
+		"pldap://127.0.0.1:389/",
+		lloaddruntime.RuntimeConfig{},
+		connection,
+		trusted,
+	); err == nil || !strings.Contains(err.Error(), "untrusted physical source") {
+		t.Fatalf("prepare untrusted connection = %v", err)
+	}
+	if connection.reads != 0 {
+		t.Fatalf("prepare read %d times before rejecting the physical source", connection.reads)
+	}
+}
+
 func TestLloaddProxyProtocolV1AddressesAndMetadata(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -75,7 +224,7 @@ func TestLloaddProxyProtocolV1AddressesAndMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listen: %v", err)
 			}
-			listener := newProxyProtocolListener(source, time.Second)
+			listener := newProxyProtocolListener(source, time.Second, loopbackProxyTrustedSources(t))
 			defer listener.Close()
 			accepted := make(chan proxyProtocolAcceptResult, 1)
 			go acceptProxyProtocolTestConnection(listener, accepted)
@@ -133,7 +282,7 @@ func TestLloaddProxyProtocolV1RejectsMalformedAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	listener := newProxyProtocolListener(source, 100*time.Millisecond)
+	listener := newProxyProtocolListener(source, 100*time.Millisecond, loopbackProxyTrustedSources(t))
 	defer listener.Close()
 	accepted := make(chan proxyProtocolAcceptResult, 1)
 	go acceptProxyProtocolTestConnection(listener, accepted)
@@ -274,7 +423,7 @@ func TestLloaddProxyProtocolV2AddressesAndMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listen: %v", err)
 			}
-			listener := newProxyProtocolListener(source, time.Second)
+			listener := newProxyProtocolListener(source, time.Second, loopbackProxyTrustedSources(t))
 			defer listener.Close()
 			accepted := make(chan proxyProtocolAcceptResult, 1)
 			go acceptProxyProtocolTestConnection(listener, accepted)
@@ -361,7 +510,7 @@ func TestLloaddProxyProtocolV2UnixStreamAddressesAndTLVs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listen: %v", err)
 			}
-			listener := newProxyProtocolListener(source, time.Second)
+			listener := newProxyProtocolListener(source, time.Second, loopbackProxyTrustedSources(t))
 			defer listener.Close()
 			accepted := make(chan proxyProtocolAcceptResult, 1)
 			go acceptProxyProtocolTestConnection(listener, accepted)
@@ -456,7 +605,7 @@ func TestLloaddProxyProtocolV2RejectsMalformedAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	listener := newProxyProtocolListener(source, 100*time.Millisecond)
+	listener := newProxyProtocolListener(source, 100*time.Millisecond, loopbackProxyTrustedSources(t))
 	defer listener.Close()
 	accepted := make(chan proxyProtocolAcceptResult, 1)
 	go acceptProxyProtocolTestConnection(listener, accepted)
@@ -574,7 +723,7 @@ func TestLloaddProxyProtocolV2AcceptsOpaqueProxyOptions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listen: %v", err)
 			}
-			listener := newProxyProtocolListener(source, time.Second)
+			listener := newProxyProtocolListener(source, time.Second, loopbackProxyTrustedSources(t))
 			defer listener.Close()
 			accepted := make(chan proxyProtocolAcceptResult, 1)
 			go acceptProxyProtocolTestConnection(listener, accepted)
@@ -727,7 +876,11 @@ func TestLloaddPLDAPSReadsProxyHeaderBeforeTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load listener TLS: %v", err)
 	}
-	listener, description, err := listenLloaddURL("pldaps://127.0.0.1:0/", serverTLS)
+	listener, description, err := listenLloaddURL(
+		"pldaps://127.0.0.1:0/",
+		serverTLS,
+		loopbackProxyTrustedSources(t),
+	)
 	if err != nil {
 		t.Fatalf("listen PLDAPS: %v", err)
 	}
@@ -792,14 +945,16 @@ func TestLloaddPLDAPSReadsProxyV1HeaderBeforeTLS(t *testing.T) {
 		t.Fatalf("listen PLDAPS: %v", err)
 	}
 	defer listener.Close()
+	trustedSources := loopbackProxyTrustedSources(t)
 	accepted := make(chan proxyProtocolAcceptResult, 1)
 	go func() {
 		connection, acceptErr := listener.Accept()
 		if acceptErr == nil {
-			connection, acceptErr = prepareLloaddAcceptedConnection(
+			connection, acceptErr = prepareLloaddAcceptedConnectionWithTrustedSources(
 				"pldaps://127.0.0.1:0/",
 				lloaddruntime.RuntimeConfig{ClientTLS: serverTLS, IOTimeout: time.Second},
 				connection,
+				trustedSources,
 			)
 		}
 		accepted <- proxyProtocolAcceptResult{connection: connection, err: acceptErr}
@@ -839,7 +994,11 @@ func TestLloaddPLDAPSReadsProxyUnixStreamBeforeTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load listener TLS: %v", err)
 	}
-	listener, _, err := listenLloaddURL("pldaps://127.0.0.1:0/", serverTLS)
+	listener, _, err := listenLloaddURL(
+		"pldaps://127.0.0.1:0/",
+		serverTLS,
+		loopbackProxyTrustedSources(t),
+	)
 	if err != nil {
 		t.Fatalf("listen PLDAPS: %v", err)
 	}
@@ -920,7 +1079,11 @@ func TestLloaddProxyProtocolRealTopologyAndConnectionSnapshot(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			listener, _, err := listenLloaddURL(test.scheme+"://127.0.0.1:0/", test.serverTLS)
+			listener, _, err := listenLloaddURL(
+				test.scheme+"://127.0.0.1:0/",
+				test.serverTLS,
+				loopbackProxyTrustedSources(t),
+			)
 			if err != nil {
 				t.Fatalf("listen %s: %v", test.scheme, err)
 			}
@@ -1071,6 +1234,21 @@ type proxyProtocolAcceptResult struct {
 	err        error
 }
 
+type lloaddReadTrackingConn struct {
+	net.Conn
+	remote net.Addr
+	reads  int
+}
+
+func (connection *lloaddReadTrackingConn) Read(buffer []byte) (int, error) {
+	connection.reads++
+	return connection.Conn.Read(buffer)
+}
+
+func (connection *lloaddReadTrackingConn) RemoteAddr() net.Addr {
+	return connection.remote
+}
+
 func acceptProxyProtocolTestConnection(
 	listener net.Listener,
 	result chan<- proxyProtocolAcceptResult,
@@ -1108,6 +1286,39 @@ func expectProxyProtocolConnectionClosed(t *testing.T, connection net.Conn) {
 	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
 		t.Fatalf("malformed PROXY connection was not closed: %v", err)
 	}
+}
+
+func loopbackProxyTrustedSources(t *testing.T) lloaddProxyTrustedSources {
+	t.Helper()
+	trusted, err := parseLloaddProxyTrustedSources([]string{"127.0.0.0/8", "::1/128"})
+	if err != nil {
+		t.Fatalf("parse loopback trusted sources: %v", err)
+	}
+	return trusted
+}
+
+func lloaddTestNonLoopbackIPv4(t *testing.T) net.IP {
+	t.Helper()
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatalf("list interface addresses: %v", err)
+	}
+	for _, address := range addresses {
+		var ip net.IP
+		switch value := address.(type) {
+		case *net.IPNet:
+			ip = value.IP
+		case *net.IPAddr:
+			ip = value.IP
+		}
+		ipv4 := ip.To4()
+		if ipv4 == nil || ipv4.IsLoopback() || ipv4.IsUnspecified() || ipv4.IsMulticast() {
+			continue
+		}
+		return append(net.IP(nil), ipv4...)
+	}
+	t.Skip("host has no non-loopback IPv4 address for the real untrusted-source topology")
+	return nil
 }
 
 func lloaddProxyProtocolTCP4Packet(

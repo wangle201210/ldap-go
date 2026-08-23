@@ -64,12 +64,6 @@ func TestRuntimeServiceSASLRejectsUnsupportedModes(t *testing.T) {
 		message string
 	}{
 		{
-			name: "GSSAPI",
-			bind: RuntimeBindConfig{Method: "sasl", SASLMechanism: "GSSAPI",
-				AuthenticationID: "service", Credentials: []byte("hidden")},
-			message: "GSSAPI is not supported",
-		},
-		{
 			name: "SCRAM PLUS",
 			bind: RuntimeBindConfig{Method: "sasl", SASLMechanism: "SCRAM-SHA-256-PLUS",
 				AuthenticationID: "service", Credentials: []byte("hidden")},
@@ -314,7 +308,7 @@ func TestServiceSASLSCRAMRejectsInvalidServerSignature(t *testing.T) {
 		Credentials:      []byte(serviceSASLTestPassword),
 	})
 	nextID := int64(1)
-	err = backend.bindServiceSASL(client, &nextID)
+	_, err = backend.bindServiceSASL(context.Background(), client, &nextID)
 	if err == nil || !strings.Contains(err.Error(), "server signature is invalid") {
 		t.Fatalf("invalid SCRAM server signature error = %v", err)
 	}
@@ -372,7 +366,7 @@ func TestServiceSASLDigestMD5RejectsInvalidServerProof(t *testing.T) {
 		Credentials:      []byte(serviceSASLTestPassword),
 	})
 	nextID := int64(1)
-	err := backend.bindServiceSASL(client, &nextID)
+	_, err := backend.bindServiceSASL(context.Background(), client, &nextID)
 	if err == nil || !strings.Contains(err.Error(), "server proof is invalid") {
 		t.Fatalf("invalid DIGEST-MD5 server proof error = %v", err)
 	}

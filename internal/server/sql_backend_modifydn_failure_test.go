@@ -499,22 +499,6 @@ func TestSQLBackendModifyDNODBCExecuteFailureClassification(t *testing.T) {
 	root := t.TempDir()
 	databaseName := filepath.Join(root, "odbc-execute.db")
 	seedWritableSQLBackendDatabase(t, databaseName)
-	if err := os.WriteFile(filepath.Join(root, "odbcinst.ini"), []byte(fmt.Sprintf(
-		"[SQLite3]\nDescription=SQLite3 ODBC Driver\nDriver=%s\nSetup=%s\nThreading=2\n",
-		driverPath,
-		driverPath,
-	)), 0o600); err != nil {
-		t.Fatalf("write odbcinst.ini: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "odbc.ini"), []byte(fmt.Sprintf(
-		"[ldap-go-modifydn-failure]\nDriver=SQLite3\nDatabase=%s\nTimeout=5000\nNoWCHAR=1\n",
-		databaseName,
-	)), 0o600); err != nil {
-		t.Fatalf("write odbc.ini: %v", err)
-	}
-	t.Setenv("ODBCSYSINI", root)
-	t.Setenv("ODBCINSTINI", "odbcinst.ini")
-	t.Setenv("ODBCINI", filepath.Join(root, "odbc.ini"))
 
 	fixture, err := sql.Open("sqlite", databaseName)
 	if err != nil {
@@ -544,7 +528,11 @@ func TestSQLBackendModifyDNODBCExecuteFailureClassification(t *testing.T) {
 	}
 
 	connector, err := newSQLBackendODBCConnector(
-		"DSN=ldap-go-modifydn-failure;UID=unused;PWD=unused",
+		fmt.Sprintf(
+			"Driver={%s};Database=%s;Timeout=5000;NoWCHAR=1",
+			driverPath,
+			databaseName,
+		),
 	)
 	if err != nil {
 		t.Fatalf("newSQLBackendODBCConnector(): %v", err)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,125 @@ import (
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
+
+var errDatabaseSearchLimitGroupUnverifiable = errors.New(
+	"group limit membership cannot be verified by this backend",
+)
+
+func (server *Server) effectiveDatabaseSearchLimitsForRequest(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	boundDN string,
+	requestDN directory.DN,
+	reader storage.Reader,
+	serverLimit,
+	requestSize,
+	requestTime int,
+) (databaseSearchExecutionLimits, error) {
+	return effectiveDatabaseSearchExecutionLimitsWithMatcher(
+		runtime,
+		database,
+		boundDN,
+		serverLimit,
+		requestSize,
+		requestTime,
+		func(rule databaseSearchSizeLimit, subject directory.DN) (bool, error) {
+			if rule.selector == databaseSearchLimitGroup {
+				if reader == nil {
+					return false, errDatabaseSearchLimitGroupUnverifiable
+				}
+				return server.databaseSearchLimitGroupMatches(
+					runtime,
+					reader,
+					subject,
+					rule,
+				)
+			}
+			if rule.requestDN {
+				subject = requestDN
+			}
+			return databaseSearchLimitMatches(database, rule, subject), nil
+		},
+	)
+}
+
+func (server *Server) databaseSearchLimitGroupMatches(
+	runtime *runtimeState,
+	reader storage.Reader,
+	bound directory.DN,
+	rule databaseSearchSizeLimit,
+) (bool, error) {
+	if runtime == nil || runtime.schema == nil || bound.Depth() == 0 {
+		return false, nil
+	}
+	groupDatabase := databaseForDN(runtime, rule.subject)
+	if groupDatabase == nil {
+		return false, nil
+	}
+	if databaseSearchCandidatesAreDelegated(runtime, *groupDatabase) {
+		return false, errDatabaseSearchLimitGroupUnverifiable
+	}
+	groupReader := readerForDatabase(reader, *groupDatabase)
+	groupDN, err := storage.NormalizeReaderDN(groupReader, rule.subject)
+	if err != nil {
+		return false, err
+	}
+	group, err := groupReader.Get(groupDN)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	classMatches := false
+	for _, attribute := range group.Attributes {
+		if !runtime.schema.AttributeDescriptionSubtype(attribute.Description, "objectClass") {
+			continue
+		}
+		for _, value := range attribute.Values {
+			candidate := directory.Entry{Attributes: []directory.Attribute{{
+				Description: "objectClass",
+				Values:      [][]byte{value},
+			}}}
+			if runtime.schema.EntryHasObjectClass(candidate, rule.groupObjectClass) {
+				classMatches = true
+				break
+			}
+		}
+		if classMatches {
+			break
+		}
+	}
+	if !classMatches {
+		return false, nil
+	}
+
+	assertion, err := runtime.schema.NormalizeEqualityAssertion(
+		rule.groupAttribute,
+		[]byte(bound.String()),
+	)
+	if err != nil {
+		return false, err
+	}
+	for _, attribute := range group.Attributes {
+		if !runtime.schema.AttributeDescriptionSubtype(
+			attribute.Description,
+			rule.groupAttribute,
+		) {
+			continue
+		}
+		for _, value := range attribute.Values {
+			normalized, normalizeErr := runtime.schema.NormalizeEqualityValue(
+				rule.groupAttribute,
+				value,
+			)
+			if normalizeErr == nil && bytes.Equal(normalized, assertion) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
 
 func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 	support := supportsAssertion |
@@ -141,14 +261,28 @@ func (server *Server) handleSearch(
 		state.runtime.databases,
 		limitBase,
 	); databaseIndex >= 0 {
-		limits = effectiveDatabaseSearchExecutionLimits(
-			state.runtime,
-			state.runtime.databases[databaseIndex],
-			state.boundDN,
-			server.config.MaxSearchEntries,
-			request.SizeLimit,
-			request.TimeLimit,
-		)
+		database := state.runtime.databases[databaseIndex]
+		err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+			tx := readerForDatabase(reader, database, ctx)
+			requestDN, err := storage.NormalizeReaderDN(tx, base)
+			if err != nil {
+				return err
+			}
+			limits, err = server.effectiveDatabaseSearchLimitsForRequest(
+				state.runtime,
+				database,
+				state.boundDN,
+				requestDN,
+				reader,
+				server.config.MaxSearchEntries,
+				request.SizeLimit,
+				request.TimeLimit,
+			)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("evaluate database search limits: %w", err)
+		}
 	}
 	request.TimeLimit = limits.time
 	limit := limits.size
@@ -1267,14 +1401,19 @@ func (server *Server) handleSearch(
 					continue
 				}
 			}
-			routeLimits := effectiveDatabaseSearchExecutionLimits(
+			routeLimits, limitErr := server.effectiveDatabaseSearchLimitsForRequest(
 				state.runtime,
 				*database,
 				state.boundDN,
+				comparisonBase,
+				reader,
 				server.config.MaxSearchEntries,
 				request.SizeLimit,
 				request.TimeLimit,
 			)
+			if limitErr != nil {
+				return limitErr
+			}
 			if routeLimits.unchecked == 0 {
 				candidates = nil
 				result = ldapwire.ResultError(

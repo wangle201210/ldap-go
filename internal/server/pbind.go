@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +25,16 @@ type pbindRuntimeConfiguration struct {
 	identity     *pbindRuntimeIdentity
 }
 
-type pbindRuntimeIdentity struct{}
+const (
+	// OpenLDAP bounds explicit pbind connections through slapd's worker pool,
+	// whose default maximum is 16. Go handlers need an equivalent local bound.
+	defaultPBindConcurrentAttempts = 16
+	pbindProviderRetries           = 1
+)
+
+type pbindRuntimeIdentity struct {
+	attempts chan struct{}
+}
 
 type pbindQuarantineState struct {
 	mu          sync.Mutex
@@ -42,7 +53,9 @@ func loadPBindRuntimeConfiguration(
 		connection: syncConsumerConfig{
 			securityProperties: defaultSyncConsumerSASLSecurityProperties(),
 		},
-		identity: &pbindRuntimeIdentity{},
+		identity: &pbindRuntimeIdentity{
+			attempts: make(chan struct{}, defaultPBindConcurrentAttempts),
+		},
 	}
 
 	uri, present, err := singleChainString(entry, "olcDbURI")
@@ -211,6 +224,22 @@ func (server *Server) proxySimpleBind(
 	if failure != nil {
 		return *failure, nil
 	}
+	release, acquired := configuration.acquirePBindAttempt(ctx)
+	if !acquired {
+		return ldapwire.ResultError(
+			ldapwire.ResultUnavailable,
+			"proxy bind attempt canceled",
+		), nil
+	}
+	defer release()
+	request, failure = preparePBindRequest(
+		server.runtime.Load(),
+		configuration,
+		request,
+	)
+	if failure != nil {
+		return *failure, nil
+	}
 	if !configuration.beginPBindAttempt() {
 		return ldapwire.ResultError(
 			ldapwire.ResultUnavailable,
@@ -218,22 +247,74 @@ func (server *Server) proxySimpleBind(
 		), nil
 	}
 
-	var lastError error
+	var (
+		lastError    error
+		lastResult   *ldapwire.Result
+		lastControls []ldapwire.Control
+	)
 	for _, provider := range configuration.providers {
-		result, controls, err := executePBind(
-			ctx,
-			configuration.connection,
-			provider,
-			message.Controls,
-			request,
-		)
-		if err == nil {
-			configuration.finishPBindAttempt(result.Code)
-			return result, controls
+		for retry := 0; retry <= pbindProviderRetries; retry++ {
+			attemptContext, cancel := configuration.providerAttemptContext(ctx)
+			result, controls, err := executePBind(
+				attemptContext,
+				configuration.connection,
+				provider,
+				message.Controls,
+				request,
+			)
+			attemptFailure := attemptContext.Err()
+			cancel()
+			if err == nil && result.Code != ldapwire.ResultUnavailable {
+				if !server.pbindConfigurationCurrent(request.Name, configuration.identity) {
+					configuration.cancelPBindAttempt()
+					return ldapwire.ResultError(
+						ldapwire.ResultUnavailable,
+						"proxy bind target configuration changed",
+					), nil
+				}
+				configuration.finishPBindAttempt(result.Code)
+				return result, controls
+			}
+			if err == nil {
+				resultCopy := result
+				lastResult = &resultCopy
+				lastControls = controls
+				lastError = fmt.Errorf(
+					"pbind provider %s returned unavailable",
+					provider,
+				)
+			} else {
+				lastResult = nil
+				lastControls = nil
+				lastError = fmt.Errorf("pbind provider %s: %w", provider, err)
+			}
+
+			// A canceled client/server request must not start another outbound
+			// connection. A provider attempt timeout moves directly to failover;
+			// immediate connection loss gets one OpenLDAP-compatible retry.
+			if ctx.Err() != nil {
+				break
+			}
+			if attemptFailure != nil || !pbindRetryableError(err) ||
+				retry == pbindProviderRetries {
+				break
+			}
 		}
-		lastError = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if ctx.Err() != nil {
+		configuration.cancelPBindAttempt()
+		return ldapwire.ResultError(
+			ldapwire.ResultUnavailable,
+			"proxy bind attempt canceled",
+		), nil
 	}
 	configuration.finishPBindAttempt(ldapwire.ResultUnavailable)
+	if lastResult != nil {
+		return *lastResult, lastControls
+	}
 
 	diagnostic := "proxy bind provider is unavailable"
 	if lastError != nil {
@@ -244,6 +325,53 @@ func (server *Server) proxySimpleBind(
 		)
 	}
 	return ldapwire.ResultError(ldapwire.ResultUnavailable, diagnostic), nil
+}
+
+func pbindRetryableError(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || pbindAttemptTimedOut(err) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var operationError *net.OpError
+	return errors.As(err, &operationError) && !operationError.Timeout()
+}
+
+func pbindAttemptTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	var networkError net.Error
+	return errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &networkError) && networkError.Timeout())
+}
+
+func (configuration pbindRuntimeConfiguration) acquirePBindAttempt(
+	ctx context.Context,
+) (func(), bool) {
+	if configuration.identity == nil || configuration.identity.attempts == nil {
+		return func() {}, true
+	}
+	select {
+	case configuration.identity.attempts <- struct{}{}:
+		return func() { <-configuration.identity.attempts }, true
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
+func (configuration pbindRuntimeConfiguration) providerAttemptContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	if configuration.connection.networkTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, configuration.connection.networkTimeout)
 }
 
 func preparePBindRequest(
@@ -281,6 +409,23 @@ func preparePBindRequest(
 	return request, nil
 }
 
+func (server *Server) pbindConfigurationCurrent(
+	rawDN string,
+	identity *pbindRuntimeIdentity,
+) bool {
+	active := server.runtime.Load()
+	if active == nil {
+		return false
+	}
+	target, err := parseRuntimeConnectionDN(active, rawDN)
+	if err != nil {
+		return false
+	}
+	database := databaseForDN(active, target)
+	return database != nil && database.pbind != nil &&
+		(identity == nil || database.pbind.identity == identity)
+}
+
 func (configuration pbindRuntimeConfiguration) beginPBindAttempt() bool {
 	return beginProxyQuarantineAttempt(configuration.health, configuration.quarantine)
 }
@@ -314,6 +459,19 @@ func (configuration pbindRuntimeConfiguration) finishPBindAttempt(
 	code ldapwire.ResultCode,
 ) {
 	finishProxyQuarantineAttempt(configuration.health, configuration.quarantine, code)
+}
+
+func (configuration pbindRuntimeConfiguration) cancelPBindAttempt() {
+	cancelProxyQuarantineAttempt(configuration.health)
+}
+
+func cancelProxyQuarantineAttempt(state *pbindQuarantineState) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.retrying = false
+	state.mu.Unlock()
 }
 
 func finishProxyQuarantineAttempt(
@@ -370,6 +528,10 @@ func executePBind(
 	if err != nil {
 		return ldapwire.Result{}, nil, err
 	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = transport.close()
+	})
+	defer stopCancellation()
 	defer transport.close()
 
 	parsed, err := parseSyncConsumerProviderURL(provider)

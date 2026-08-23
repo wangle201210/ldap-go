@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,710 top-level tests against the pinned commit.
+The latest strict run passed 1,769 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -134,8 +134,11 @@ CAS and fingerprint checks prevent stale publication, and cancellation/failure
 roll back both memory and metadata. Database roots can inspect the
 private cache through OpenLDAP's critical privateDB control, including
 `pcacheQueryID`, persisted query URLs, Compare membership, and selected-query
-removal through the queryDelete exop. Unsupported private-database writes fail
-explicitly; arbitrary overlay-order combinations remain out of scope.
+removal through the queryDelete exop. Database roots can Add/Modify/Delete/
+ModifyDN private entries; shared query responses, counts, UUIDs, URLs and
+persistent manual entries reconcile atomically with No-Op/control/rollback
+semantics. Private Bind remains explicitly unwilling; arbitrary overlay-order
+combinations remain out of scope.
 
 An imported `olcDatabase=sock` delegates Bind, Search, Compare, Add, Modify,
 ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
@@ -201,7 +204,11 @@ implicit LDAPS with one configured certificate. Upstream connections support
 LDAPS and optional/critical StartTLS with CA, hostname/SAN, client-certificate,
 protocol, cipher, curve, and CRL policy validation. Service authentication can
 use Simple Bind or PLAIN, CRAM-MD5, DIGEST-MD5, and
-SCRAM-SHA-1/256/512 before ordinary traffic, and upstream TCP keepalive plus
+SCRAM-SHA-1/256/512 before ordinary traffic. GSSAPI service Bind supports
+password, `FILE` keytab, and `FILE` ccache credentials plus RFC 4752
+no-layer/integrity/confidentiality framing. Credential initialization is
+limited to 16 concurrent workers so a non-cancellable Kerberos library call
+cannot create unbounded background work. Upstream TCP keepalive plus
 Linux `TCP_USER_TIMEOUT` are applied before TLS. Its standalone configuration
 parser and runtime pass package/race tests, pinned-source contracts, and the
 existing live OpenLDAP 2.6.13 differential subset. Service Bind still requires
@@ -226,8 +233,14 @@ SASL VC continuation remains unsupported.
 
 Trusted TCP listeners using `pldap://` or `pldaps://` require a PROXY protocol
 v1 or v2 header before LDAP framing; `pldaps://` consumes that header before
-the TLS handshake. They require an explicit non-wildcard listen address because
-every peer on that port is trusted to assert logical endpoints. V1 accepts
+the TLS handshake. They require an explicit non-wildcard listen address and at
+least one repeated `-proxy-trusted-source <IP-or-CIDR>` option. The physical TCP
+peer is checked against this allowlist before any PROXY header byte is read;
+untrusted peers are closed immediately and cannot assert logical endpoints.
+Single IPs, IPv4/IPv6 CIDRs, IPv4-mapped IPv6 peers, DNS listen addresses, and
+loopback listeners are supported. Empty allowlists and all-address `/0`
+allowlists fail closed during startup, `-test-config`, and hot reload. This CLI
+allowlist is an ldap-go extension to OpenLDAP lloadd configuration. V1 accepts
 bounded `TCP4`, `TCP6`, and `UNKNOWN` records.
 V2 accepts TCP4, TCP6, and UNIX stream addresses and retains logical and
 transport endpoints, including full-width and Linux abstract UNIX names.
@@ -244,6 +257,9 @@ documented extension over the pinned OpenLDAP 2.6.13 lloadd build.
 ```sh
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf
+go run ./cmd/ldap-go lloadd -f ./lloadd-proxy.conf \
+  -proxy-trusted-source 10.20.0.0/16 \
+  -proxy-trusted-source 2001:db8:20::/48
 ```
 
 Pinned OpenLDAP 2.6.13 differentials additionally cover
@@ -256,8 +272,13 @@ unavailable until restart; deleting the sole `olcMetaTargetConfig` or
 `olcMetaSub` entry returns 53; and adding the same target DN again returns 68.
 Adding a second target while OpenLDAP has an active target connection is not a
 stable oracle because the pinned upstream server triggers an assertion in that
-scenario. This remains a partial back-meta implementation: GSSAPI and SASL
-security-layer proxy Bind, complete referral rebind behavior, full librewrite,
+scenario. GSSAPI identity assertion now performs AP-REQ/AP-REP and negotiates
+RFC 4752 no-layer/integrity/confidentiality on the pooled proxy transport, with
+external TLS SSF accounting and credential-source pool-key isolation. GSSAPI
+channel binding defaults to the RFC-mandated NULL value; the explicit global
+`-gssapi-channel-binding tls-server-end-point` setting also applies to verified
+TLS proxy transports. This remains a partial back-meta
+implementation: complete referral rebind behavior, full librewrite,
 complete multi-target connection categories and dynamic topology,
 frontend-overlay wrapping, and transaction forwarding remain.
 The database-local `pbind` overlay forwards non-anonymous Simple Bind requests
@@ -266,10 +287,13 @@ It loads `olcDbStartTLS` and its TLS parameters, `olcDbNetworkTimeout`, and the
 `olcDbQuarantine` schedule; the request controls and remote result code,
 matched DN, diagnostic, referrals, and response controls are preserved. A
 local provider/front-end topology and an optional OpenLDAP `back_ldap`
-differential pass. Connections are still created per attempt, and the parsed
-quarantine schedule drives a shared endpoint-health state machine that permits
-one probe at each configured retry interval. Connection pooling is not yet
-implemented.
+differential pass. Each endpoint gets an independent timeout budget; transient
+disconnect/`unavailable` retries once, deterministic LDAP results do not retry,
+and cancellation closes the active upstream. At most 16 outbound Binds run
+concurrently. Connections intentionally remain one-shot because a successful
+transport is user-bound and no later operation reuses it; pooling would risk
+cross-user identity leakage. The quarantine schedule permits one probe per
+configured retry interval.
 The `remoteauth` overlay delegates only local entries that have configured
 remote-DN/domain attributes and no `userPassword`. Ordered domain mappings,
 default domain/realm fallback, `DOMAIN\user` and `DOMAIN:user` truncation,
@@ -285,7 +309,9 @@ is unacceptable. Local two-server tests pass. A gated OpenLDAP 2.6 differential 
 delegation, local-password
 priority, writeback, bad credentials, and provider loss. Live StartTLS tests
 cover SHA-256/SM3 public-key pins, mismatches, and missing host pins; connection
-pooling and a broader platform TLS failure matrix are not claimed.
+reuse is intentionally one-shot after user Bind. Provider/realm/TLS groups have
+a 16-attempt bound and one-minute lifetime; cancellation/reload retire sockets
+and secrets. A broader platform TLS failure matrix is not claimed.
 The `homedir` overlay applies POSIX account lifecycle changes only after the
 LDAP storage transaction commits. It can provision a home from `olcSkeletonPath`,
 rename and selectively chown it when `homeDirectory`, `uidNumber`, or

@@ -210,15 +210,52 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 		t.Fatalf("private query ID %q: %v", identifiers[0], err)
 	}
 	privateAdd := ldap.NewAddRequest(
-		"uid=private-write,"+ldapBackendTestPeopleDN,
+		"uid=private-write,"+ldapBackendTestSuffix,
 		[]ldap.Control{privateControl},
 	)
 	privateAdd.Attribute("objectClass", []string{"inetOrgPerson"})
 	privateAdd.Attribute("uid", []string{"private-write"})
 	privateAdd.Attribute("cn", []string{"Private Write"})
 	privateAdd.Attribute("sn", []string{"Write"})
-	if code := ldapBackendResultCode(root.Add(privateAdd)); code != ldap.LDAPResultUnwillingToPerform {
+	if code := ldapBackendResultCode(root.Add(privateAdd)); code != ldap.LDAPResultSuccess {
 		t.Fatalf("private database Add result = %d", code)
+	}
+	privateWriteDN := "uid=private-write," + ldapBackendTestSuffix
+	privateModify := ldap.NewModifyRequest(privateWriteDN, []ldap.Control{privateControl})
+	privateModify.Replace("cn", []string{"Private Updated"})
+	if err := root.Modify(privateModify); err != nil {
+		t.Fatalf("private database Modify: %v", err)
+	}
+	privateRenamedDN := "uid=private-renamed," + ldapBackendTestSuffix
+	privateRename := ldap.NewModifyDNWithControlsRequest(
+		privateWriteDN,
+		"uid=private-renamed",
+		true,
+		"",
+		[]ldap.Control{privateControl},
+	)
+	if err := root.ModifyDN(privateRename); err != nil {
+		t.Fatalf("private database ModifyDN: %v", err)
+	}
+	renamedResult, err := root.Search(ldap.NewSearchRequest(
+		privateRenamedDN,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"uid", "cn"},
+		[]ldap.Control{privateControl},
+	))
+	if err != nil || len(renamedResult.Entries) != 1 ||
+		renamedResult.Entries[0].GetAttributeValue("cn") != "Private Updated" {
+		t.Fatalf("private renamed entry = %#v, %v", renamedResult, err)
+	}
+	protected := ldap.NewModifyRequest(privateRenamedDN, []ldap.Control{privateControl})
+	protected.Replace(pcacheQueryIDAttribute, []string{uuid.NewString()})
+	if code := ldapBackendResultCode(root.Modify(protected)); code != ldap.LDAPResultConstraintViolation {
+		t.Fatalf("protected private metadata Modify result = %d", code)
 	}
 
 	urlResult, err := root.Search(ldap.NewSearchRequest(
@@ -242,10 +279,15 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 
 	anonymous := dialLDAPBackendClient(t, firstAddress)
 	_, anonymousErr := anonymous.Search(privateSearch)
-	anonymous.Close()
 	if code := ldapBackendResultCode(anonymousErr); code != ldap.LDAPResultUnwillingToPerform {
 		t.Fatalf("anonymous private Search = %d (%v)", code, anonymousErr)
 	}
+	anonymousAdd := ldap.NewAddRequest("uid=anonymous,"+ldapBackendTestSuffix, []ldap.Control{privateControl})
+	anonymousAdd.Attribute("objectClass", []string{"top"})
+	if code := ldapBackendResultCode(anonymous.Add(anonymousAdd)); code != ldap.LDAPResultUnwillingToPerform {
+		t.Fatalf("anonymous private Add = %d", code)
+	}
+	anonymous.Close()
 
 	raw := dialAndBindRawLDAP(
 		t,
@@ -265,6 +307,43 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 		rawPcachePrivateControl(true, false),
 	)
 	assertRawLDAPResult(t, compareResponse, int64(ldap.LDAPResultCompareTrue))
+	bindResponse := sendRawLDAPOperation(
+		t,
+		raw,
+		3,
+		rawSimpleBindRequest(ldapBackendTestLocalRootDN, ldapBackendTestLocalRootPW),
+		rawPcachePrivateControl(true, false),
+	)
+	assertRawLDAPResult(t, bindResponse, int64(ldap.LDAPResultUnwillingToPerform))
+	invalidPrivateResponse := sendRawLDAPOperation(
+		t,
+		raw,
+		4,
+		rawAddRequest(directory.Entry{
+			DN: "cn=invalid,",
+			Attributes: []directory.Attribute{{
+				Description: "objectClass",
+				Values:      stringValues("top"),
+			}},
+		}),
+		rawPcachePrivateControl(false, false),
+	)
+	assertRawLDAPResult(t, invalidPrivateResponse, int64(ldap.LDAPResultProtocolError))
+	unknownBeforeDN := sendRawLDAPOperation(
+		t,
+		raw,
+		5,
+		rawAddRequest(directory.Entry{
+			DN: "cn=invalid,",
+			Attributes: []directory.Attribute{{
+				Description: "objectClass",
+				Values:      stringValues("top"),
+			}},
+		}),
+		rawPcachePrivateControl(true, false),
+		rawPcacheUnknownCriticalControl(),
+	)
+	assertRawLDAPResult(t, unknownBeforeDN, int64(ldap.LDAPResultUnavailableCriticalExtension))
 	_ = raw.Close()
 	root.Close()
 	stopFirst()
@@ -284,6 +363,24 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 	}
 	if result, err := restarted.Search(pcacheValidateSearchRequest()); err != nil || len(result.Entries) != 1 {
 		t.Fatalf("persisted cache hit = %#v, %v", result, err)
+	}
+	restartedPrivate, err := restarted.Search(ldap.NewSearchRequest(
+		privateRenamedDN,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"uid", "cn"},
+		[]ldap.Control{privateControl},
+	))
+	if err != nil || len(restartedPrivate.Entries) != 1 ||
+		restartedPrivate.Entries[0].GetAttributeValue("cn") != "Private Updated" {
+		t.Fatalf("restarted private entry = %#v, %v", restartedPrivate, err)
+	}
+	if err := restarted.Del(ldap.NewDelRequest(privateRenamedDN, []ldap.Control{privateControl})); err != nil {
+		t.Fatalf("private database Delete: %v", err)
 	}
 	deleteValue, err := pcacheEncodeQueryDeleteRequest(
 		pcacheQueryDeleteBaseTag,
@@ -1420,6 +1517,19 @@ func rawPcachePrivateControl(critical, hasValue bool) *ber.Packet {
 	if hasValue {
 		control.AppendChild(rawOctetString(nil))
 	}
+	return control
+}
+
+func rawPcacheUnknownCriticalControl() *ber.Packet {
+	control := ber.NewSequence("unknown critical control")
+	control.AppendChild(rawOctetString([]byte("1.3.6.1.4.1.99999.999")))
+	control.AppendChild(ber.NewLDAPBoolean(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagBoolean,
+		true,
+		"criticality",
+	))
 	return control
 }
 

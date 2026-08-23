@@ -52,6 +52,12 @@ func runLloaddWithSignals(
 	logLevel := flags.String("log-level", "info", "debug, info, warn, error, or an integer")
 	tlsCertificate := flags.String("tls-cert", "", "PEM certificate for client StartTLS and LDAPS listeners")
 	tlsKey := flags.String("tls-key", "", "PEM private key for client StartTLS and LDAPS listeners")
+	var proxyTrustedSourceValues repeatableStringFlag
+	flags.Var(
+		&proxyTrustedSourceValues,
+		"proxy-trusted-source",
+		"trusted PROXY listener source IP or CIDR (repeatable; required by pldap/pldaps)",
+	)
 	checkConfig := flags.Bool("test-config", false, "validate configuration and exit")
 	hotReload := flags.Bool("hot-reload", false, "reload configuration on SIGUSR1")
 	drainTimeout := flags.Duration("drain-timeout", 30*time.Second, "maximum graceful drain duration")
@@ -63,6 +69,10 @@ func runLloaddWithSignals(
 	}
 	if *drainTimeout <= 0 {
 		return errors.New("-drain-timeout must be positive")
+	}
+	proxyTrustedSources, err := parseLloaddProxyTrustedSources(proxyTrustedSourceValues)
+	if err != nil {
+		return err
 	}
 	config, err := lloadd.ParseConfigFile(*configPath)
 	if err != nil {
@@ -78,7 +88,7 @@ func runLloaddWithSignals(
 	if err != nil {
 		return err
 	}
-	if err := validateLloaddListeners(config.ListenURLs, clientTLS); err != nil {
+	if err := validateLloaddListeners(config.ListenURLs, clientTLS, proxyTrustedSources); err != nil {
 		return err
 	}
 	if *checkConfig {
@@ -112,7 +122,11 @@ func runLloaddWithSignals(
 			if err != nil {
 				return lloadd.DaemonTopology{}, err
 			}
-			if err := validateLloaddListeners(candidate.ListenURLs, loadedTLS); err != nil {
+			if err := validateLloaddListeners(
+				candidate.ListenURLs,
+				loadedTLS,
+				proxyTrustedSources,
+			); err != nil {
 				return lloadd.DaemonTopology{}, err
 			}
 			runtime, err := candidate.RuntimeConfig()
@@ -133,7 +147,18 @@ func runLloaddWithSignals(
 		Listen: func(raw string) (net.Listener, string, error) {
 			return listenLloaddRawURL(raw)
 		},
-		Prepare:      prepareLloaddAcceptedConnection,
+		Prepare: func(
+			raw string,
+			runtime lloadd.RuntimeConfig,
+			connection net.Conn,
+		) (net.Conn, error) {
+			return prepareLloaddAcceptedConnectionWithTrustedSources(
+				raw,
+				runtime,
+				connection,
+				proxyTrustedSources,
+			)
+		},
 		DrainTimeout: *drainTimeout,
 		Logger:       logger,
 	})
@@ -189,19 +214,30 @@ func listenLloaddRawURL(raw string) (net.Listener, string, error) {
 	if network == "unix" {
 		return listener, "ldapi://" + address, nil
 	}
+	if (scheme == "pldap" || scheme == "pldaps") && lloaddTCPAddressIsUnspecified(listener.Addr()) {
+		_ = listener.Close()
+		return nil, "", fmt.Errorf(
+			"trusted PROXY listener %q resolved to a wildcard address",
+			raw,
+		)
+	}
 	return listener, scheme + "://" + listener.Addr().String(), nil
 }
 
-func prepareLloaddAcceptedConnection(
+func prepareLloaddAcceptedConnectionWithTrustedSources(
 	raw string,
 	runtime lloadd.RuntimeConfig,
 	connection net.Conn,
+	trustedSources lloaddProxyTrustedSources,
 ) (net.Conn, error) {
 	scheme, _, _, err := parseLloaddListenerURL(raw)
 	if err != nil {
 		return nil, err
 	}
 	if scheme == "pldap" || scheme == "pldaps" {
+		if err := trustedSources.authorize(connection.RemoteAddr()); err != nil {
+			return nil, err
+		}
 		connection, err = readLloaddProxyProtocol(connection, lloaddProxyProtocolTimeout)
 		if err != nil {
 			return nil, err
@@ -265,9 +301,13 @@ func newLloaddProxy(
 	return lloadd.NewProxy(runtime)
 }
 
-func validateLloaddListeners(urls []string, clientTLS *tls.Config) error {
+func validateLloaddListeners(
+	urls []string,
+	clientTLS *tls.Config,
+	trustedSources lloaddProxyTrustedSources,
+) error {
 	for _, rawURL := range urls {
-		scheme, _, _, err := parseLloaddListenerURL(rawURL)
+		scheme, network, address, err := parseLloaddListenerURL(rawURL)
 		if err != nil {
 			return err
 		}
@@ -277,6 +317,17 @@ func validateLloaddListeners(urls []string, clientTLS *tls.Config) error {
 				rawURL,
 			)
 		}
+		if scheme == "pldap" || scheme == "pldaps" {
+			if len(trustedSources) == 0 {
+				return fmt.Errorf(
+					"lloadd listener %q requires at least one -proxy-trusted-source",
+					rawURL,
+				)
+			}
+			if err := validateLloaddProxyListenerAddress(rawURL, network, address); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -284,6 +335,7 @@ func validateLloaddListeners(urls []string, clientTLS *tls.Config) error {
 func listenLloaddURL(
 	raw string,
 	clientTLS *tls.Config,
+	trustedSourceOptions ...lloaddProxyTrustedSources,
 ) (net.Listener, string, error) {
 	scheme, network, address, err := parseLloaddListenerURL(raw)
 	if err != nil {
@@ -297,6 +349,24 @@ func listenLloaddURL(
 			raw,
 		)
 	}
+	var trustedSources lloaddProxyTrustedSources
+	if len(trustedSourceOptions) > 0 {
+		trustedSources = trustedSourceOptions[0]
+	}
+	if len(trustedSourceOptions) > 1 {
+		return nil, "", errors.New("multiple PROXY trusted source sets are not supported")
+	}
+	if proxied {
+		if len(trustedSources) == 0 {
+			return nil, "", fmt.Errorf(
+				"lloadd listener %q requires at least one -proxy-trusted-source",
+				raw,
+			)
+		}
+		if err := validateLloaddProxyListenerAddress(raw, network, address); err != nil {
+			return nil, "", err
+		}
+	}
 	listener, err := net.Listen(network, address)
 	if err != nil {
 		return nil, "", fmt.Errorf("listen on %s: %w", raw, err)
@@ -304,8 +374,19 @@ func listenLloaddURL(
 	if network == "unix" {
 		return listener, "ldapi://" + address, nil
 	}
+	if proxied && lloaddTCPAddressIsUnspecified(listener.Addr()) {
+		_ = listener.Close()
+		return nil, "", fmt.Errorf(
+			"trusted PROXY listener %q resolved to a wildcard address",
+			raw,
+		)
+	}
 	if proxied {
-		listener = newProxyProtocolListener(listener, lloaddProxyProtocolTimeout)
+		listener = newProxyProtocolListener(
+			listener,
+			lloaddProxyProtocolTimeout,
+			trustedSources,
+		)
 	}
 	if secure {
 		listener = tls.NewListener(listener, clientTLS.Clone())
@@ -365,7 +446,154 @@ func lloaddListenerKey(raw string) (string, error) {
 	return scheme + "|" + network + "|" + address, nil
 }
 
+type repeatableStringFlag []string
+
+func (values *repeatableStringFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func (values *repeatableStringFlag) String() string {
+	if values == nil {
+		return ""
+	}
+	return strings.Join(*values, ",")
+}
+
+type lloaddProxyTrustedSources []netip.Prefix
+
+func parseLloaddProxyTrustedSources(values []string) (lloaddProxyTrustedSources, error) {
+	trusted := make(lloaddProxyTrustedSources, 0, len(values))
+	seen := make(map[netip.Prefix]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, errors.New("-proxy-trusted-source must not be empty")
+		}
+		var prefix netip.Prefix
+		if strings.Contains(value, "/") {
+			parsed, err := netip.ParsePrefix(value)
+			if err != nil {
+				return nil, fmt.Errorf("parse -proxy-trusted-source %q: %w", value, err)
+			}
+			prefix = parsed.Masked()
+		} else {
+			address, err := netip.ParseAddr(value)
+			if err != nil {
+				return nil, fmt.Errorf("parse -proxy-trusted-source %q: %w", value, err)
+			}
+			if address.Zone() != "" {
+				return nil, fmt.Errorf(
+					"parse -proxy-trusted-source %q: IPv6 zones are not supported",
+					value,
+				)
+			}
+			address = address.Unmap()
+			prefix = netip.PrefixFrom(address, address.BitLen())
+		}
+		if prefix.Addr().Zone() != "" {
+			return nil, fmt.Errorf(
+				"parse -proxy-trusted-source %q: IPv6 zones are not supported",
+				value,
+			)
+		}
+		if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96).Masked()
+		}
+		if prefix.Bits() == 0 {
+			return nil, fmt.Errorf(
+				"parse -proxy-trusted-source %q: an all-address prefix is not a trusted allowlist",
+				value,
+			)
+		}
+		if _, duplicate := seen[prefix]; duplicate {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		trusted = append(trusted, prefix)
+	}
+	return trusted, nil
+}
+
+func (trusted lloaddProxyTrustedSources) authorize(remote net.Addr) error {
+	if len(trusted) == 0 {
+		return errors.New("trusted PROXY connection rejected: no trusted sources configured")
+	}
+	tcpAddress, ok := remote.(*net.TCPAddr)
+	if !ok || tcpAddress == nil {
+		return fmt.Errorf("trusted PROXY connection has non-TCP physical source %T", remote)
+	}
+	physical, ok := netip.AddrFromSlice(tcpAddress.IP)
+	if !ok {
+		return fmt.Errorf("trusted PROXY connection has invalid physical source %q", remote)
+	}
+	unmapped := physical.Unmap()
+	for _, prefix := range trusted {
+		if prefix.Contains(physical) || prefix.Contains(unmapped) {
+			return nil
+		}
+	}
+	return fmt.Errorf("PROXY connection from untrusted physical source %s", remote)
+}
+
+func validateLloaddProxyListenerAddress(raw, network, address string) error {
+	if network != "tcp" {
+		return fmt.Errorf("trusted PROXY listener %q must use TCP", raw)
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("parse trusted PROXY listener %q: %w", raw, err)
+	}
+	if host == "" {
+		return fmt.Errorf(
+			"trusted PROXY listener %q requires an explicit non-wildcard address",
+			raw,
+		)
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		if address.IsUnspecified() {
+			return fmt.Errorf(
+				"trusted PROXY listener %q requires an explicit non-wildcard address",
+				raw,
+			)
+		}
+		return nil
+	}
+	resolveContext, cancel := context.WithTimeout(
+		context.Background(),
+		lloaddProxyListenerResolveTimeout,
+	)
+	defer cancel()
+	resolved, err := net.DefaultResolver.LookupNetIP(resolveContext, "ip", host)
+	if err != nil {
+		return fmt.Errorf("resolve trusted PROXY listener %q: %w", raw, err)
+	}
+	if len(resolved) == 0 {
+		return fmt.Errorf("resolve trusted PROXY listener %q: no addresses", raw)
+	}
+	for _, candidate := range resolved {
+		if candidate.IsUnspecified() {
+			return fmt.Errorf(
+				"trusted PROXY listener %q resolves to wildcard address %s",
+				raw,
+				candidate,
+			)
+		}
+	}
+	return nil
+}
+
+func lloaddTCPAddressIsUnspecified(address net.Addr) bool {
+	tcpAddress, ok := address.(*net.TCPAddr)
+	if !ok || tcpAddress == nil {
+		return false
+	}
+	ip, ok := netip.AddrFromSlice(tcpAddress.IP)
+	return ok && ip.IsUnspecified()
+}
+
 const (
+	lloaddProxyListenerResolveTimeout = 5 * time.Second
 	lloaddProxyProtocolTimeout        = 5 * time.Second
 	lloaddProxyProtocolV1MaxHeader    = 107
 	lloaddProxyProtocolUnixPathBytes  = 108
@@ -382,6 +610,7 @@ var lloaddProxyProtocolV2Signature = []byte{
 type proxyProtocolListener struct {
 	source  net.Listener
 	timeout time.Duration
+	trusted lloaddProxyTrustedSources
 
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -393,10 +622,12 @@ type proxyProtocolListener struct {
 func newProxyProtocolListener(
 	source net.Listener,
 	timeout time.Duration,
+	trusted lloaddProxyTrustedSources,
 ) *proxyProtocolListener {
 	return &proxyProtocolListener{
 		source:   source,
 		timeout:  timeout,
+		trusted:  append(lloaddProxyTrustedSources(nil), trusted...),
 		done:     make(chan struct{}),
 		accepted: make(chan combinedAccept),
 		parsers:  make(chan struct{}, lloaddProxyProtocolParsers),
@@ -435,6 +666,10 @@ func (listener *proxyProtocolListener) acceptLoop() {
 
 func (listener *proxyProtocolListener) prepare(connection net.Conn) {
 	defer func() { <-listener.parsers }()
+	if err := listener.trusted.authorize(connection.RemoteAddr()); err != nil {
+		_ = connection.Close()
+		return
+	}
 	prepared, err := readLloaddProxyProtocol(connection, listener.timeout)
 	if err != nil {
 		_ = connection.Close()

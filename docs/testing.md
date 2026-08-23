@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,710 top-level tests against
+The latest pinned local strict run passed 1,769 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -484,9 +484,10 @@ and project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
 SCRAM-SHA-1/256/512 with all three `-PLUS` variants, and mutual-TLS EXTERNAL.
 It validates GS2/authzid, server proofs, RFC 5929 certificate hash selection,
 malformed challenges, binding mismatch, downgrade/replay rejection,
-secret-free diagnostics, StartTLS ordering, and option conflicts. This is
-auth-only coverage; GSSAPI and SASL security layers remain outside the client
-subset.
+secret-free diagnostics, StartTLS ordering, and option conflicts. GSSAPI client
+tests cover password, FILE keytab, and FILE ccache credentials plus RFC 4121
+no-layer, integrity, and confidentiality negotiation. Repeatable native
+real-KDC automation and platform-specific credential stores remain external.
 
 Global server TLS configuration has separate transaction and live-handshake
 coverage. `TestGlobalTLSConfiguration*` validates supported inline/file

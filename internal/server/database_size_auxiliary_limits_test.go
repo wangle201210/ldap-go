@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -60,35 +61,42 @@ func TestDatabaseAuxiliarySizeLimitParsing(t *testing.T) {
 	}
 }
 
-func TestDatabaseUnsupportedLimitSelectorsFailClosed(t *testing.T) {
-	for _, selector := range []string{
-		`group="cn=limit-admins,dc=example,dc=com"`,
-		`dn.regex="^uid=.*"`,
-		`dn.this.subtree="ou=people,dc=example,dc=com"`,
-	} {
-		entry := directory.Entry{
-			DN: "olcDatabase={1}mdb,cn=config",
-			Attributes: []directory.Attribute{{
-				Description: "olcLimits",
-				Values:      stringValues(selector + " size=2"),
-			}},
-		}
-		_, err := loadDatabaseSearchSizeLimits(entry)
-		if err == nil || !strings.Contains(err.Error(), "is not supported") {
-			t.Fatalf("selector %q error = %v", selector, err)
-		}
-	}
-
+func TestDatabaseGroupAndThisLimitSelectorParsing(t *testing.T) {
 	entry := directory.Entry{
 		DN: "olcDatabase={1}mdb,cn=config",
 		Attributes: []directory.Attribute{{
 			Description: "olcLimits",
-			Values:      stringValues(`dn.regex=".*" size=2`),
+			Values: stringValues(
+				`group="cn=limit-admins,dc=example,dc=com" size=2`,
+				`group/groupOfUniqueNames/uniqueMember="cn=unique,dc=example,dc=com" size=3`,
+				`dn.this="ou=people,dc=example,dc=com" size=4`,
+				`dn.this.onelevel="ou=people,dc=example,dc=com" size=5`,
+				`dn.this.subtree="ou=people,dc=example,dc=com" size=6`,
+				`dn.this.children="ou=people,dc=example,dc=com" size=7`,
+				`dn.this.regex="^ou=people,dc=example,dc=com$" size=8`,
+				`dn.regex=".*" size=9`,
+			),
 		}},
 	}
 	limits, err := loadDatabaseSearchSizeLimits(entry)
-	if err != nil || len(limits) != 1 || limits[0].selector != databaseSearchLimitAny {
-		t.Fatalf("universal regex limit = %#v, %v", limits, err)
+	if err != nil || len(limits) != 8 {
+		t.Fatalf("parsed limits = %#v, %v", limits, err)
+	}
+	if limits[0].selector != databaseSearchLimitGroup ||
+		limits[0].groupObjectClass != "groupOfNames" ||
+		limits[0].groupAttribute != "member" ||
+		limits[1].groupObjectClass != "groupofuniquenames" ||
+		limits[1].groupAttribute != "uniquemember" {
+		t.Fatalf("group selectors = %#v, %#v", limits[0], limits[1])
+	}
+	for index := 2; index <= 6; index++ {
+		if !limits[index].requestDN {
+			t.Fatalf("dn.this selector %d did not retain request-DN source", index)
+		}
+	}
+	if limits[6].selector != databaseSearchLimitRegex ||
+		limits[7].selector != databaseSearchLimitAny {
+		t.Fatalf("regex selectors = %#v, %#v", limits[6], limits[7])
 	}
 }
 
@@ -116,9 +124,8 @@ func TestDatabaseUnsupportedLimitSelectorOnlineRollback(t *testing.T) {
 	}
 
 	for _, invalid := range []string{
-		`group="cn=limit-admins,dc=example,dc=com" size=3`,
-		`dn.regex="^uid=.*" size=3`,
-		`dn.this.subtree="ou=people,dc=example,dc=com" size=3`,
+		`group/groupOfNames/member/extra="cn=limit-admins,dc=example,dc=com" size=3`,
+		`dn.this.unknown="ou=people,dc=example,dc=com" size=3`,
 	} {
 		modify = ldap.NewModifyRequest(databaseDN, nil)
 		modify.Replace("olcLimits", []string{invalid})
@@ -166,6 +173,101 @@ func TestDatabaseUnsupportedLimitSelectorOnlineRollback(t *testing.T) {
 	assertAuxiliaryLDAPError(t, err, ldap.LDAPResultSizeLimitExceeded, "")
 	if len(result.Entries) != 2 {
 		t.Fatalf("entries after rollback = %d, want 2", len(result.Entries))
+	}
+}
+
+func TestDatabaseLimitsReachSockOverlayShortCircuit(t *testing.T) {
+	requireSockRuntimeUnix(t)
+	fixture := startSockRuntimeFixture(t, func(
+		connection net.Conn,
+		request sockRuntimeCapturedRequest,
+	) error {
+		if request.command != "SEARCH" {
+			return nil
+		}
+		return writeAll(connection, []byte(
+			"RESULT\ncode: 0\nmatched:\ninfo:\n\n",
+		))
+	})
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSockOverlayRuntimeConfiguration(
+		t,
+		store,
+		fixture.path,
+		[]string{"search"},
+		nil,
+	)
+	setDatabaseAuxiliaryLimits(
+		t,
+		store,
+		"anonymous size.soft=2 size.hard=2 time.soft=3 time.hard=3",
+	)
+	address, stop := startServer(t, store, Config{MaxSearchEntries: 100})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Search(ldap.NewSearchRequest(
+		"ou=people,dc=example,dc=com",
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=inetOrgPerson)",
+		[]string{"uid"},
+		nil,
+	)); err != nil {
+		t.Fatalf("short-circuit search: %v", err)
+	}
+	captured := fixture.take(t)
+	assertSockRuntimeField(t, captured, "sizelimit", "2")
+	assertSockRuntimeField(t, captured, "timelimit", "3")
+}
+
+func TestDatabaseRegexLimitSelector(t *testing.T) {
+	entry := directory.Entry{
+		DN: "olcDatabase={1}mdb,cn=config",
+		Attributes: []directory.Attribute{{
+			Description: "olcLimits",
+			Values: stringValues(
+				`dn.regex="^uid=service-[^,]*,ou=people,dc=example,dc=com$" size=4`,
+				`users size=9`,
+			),
+		}},
+	}
+	limits, err := loadDatabaseSearchSizeLimits(entry)
+	if err != nil {
+		t.Fatalf("load regex limits: %v", err)
+	}
+	database := runtimeDatabase{searchSizeLimits: limits}
+	runtime := &runtimeState{}
+	for _, test := range []struct {
+		boundDN string
+		want    int
+	}{
+		{boundDN: "uid=service-api,ou=people,dc=example,dc=com", want: 4},
+		{boundDN: "uid=ordinary,ou=people,dc=example,dc=com", want: 9},
+	} {
+		if got := effectiveDatabaseSearchLimit(
+			runtime,
+			database,
+			test.boundDN,
+			100,
+			0,
+		); got != test.want {
+			t.Fatalf("regex limit for %q = %d, want %d", test.boundDN, got, test.want)
+		}
+	}
+
+	invalid := entry.Clone()
+	invalid.ReplaceValues("olcLimits", stringValues(`dn.regex="[" size=4`))
+	if _, err := loadDatabaseSearchSizeLimits(invalid); err == nil ||
+		!strings.Contains(err.Error(), "POSIX") {
+		t.Fatalf("invalid DN regex error = %v", err)
 	}
 }
 
@@ -589,6 +691,25 @@ func TestDelegatedPositiveUncheckedIsRejectedAndLogged(t *testing.T) {
 		!strings.Contains(text, "size_unchecked=4") {
 		t.Fatalf("delegated boundary log = %q", text)
 	}
+	groupEntry := entry.Clone()
+	groupEntry.ReplaceValues("olcLimits", stringValues(
+		`group="cn=limit-admins,dc=example,dc=com" size=2`,
+		"users size=9",
+	))
+	database.searchSizeLimits, err = loadDatabaseSearchSizeLimits(groupEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure = instance.delegatedSearchLimitFailure(
+		state,
+		database,
+		ldapwire.SearchRequest{BaseDN: suffix.String()},
+		nil,
+	)
+	if failure == nil || failure.Code != ldapwire.ResultAdminLimitExceeded ||
+		failure.DiagnosticMessage != "group limit membership unavailable for delegated backend" {
+		t.Fatalf("delegated group failure = %#v", failure)
+	}
 	relay := runtimeDatabase{relay: &relayRuntimeConfiguration{targetDatabaseIndex: 1}}
 	relayRuntime := &runtimeState{databases: []runtimeDatabase{relay, database}}
 	if !databaseSearchCandidatesAreDelegated(relayRuntime, relay) {
@@ -947,6 +1068,33 @@ func TestOpenLDAPReferenceAuxiliarySizeLimitDifferential(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("DN regex does not select anonymous", func(t *testing.T) {
+		const limit = `dn.regex="^$" size.soft=1 size.hard=1`
+		referenceURI, stopReference := startOpenLDAPReferenceServerWithConfig(
+			t,
+			tools,
+			nil,
+			"",
+			"limits "+limit,
+			auxiliaryLimitOpenLDAPExtraData,
+		)
+		defer stopReference()
+		localAddress, stopLocal := startAuxiliaryDifferentialServer(t, limit)
+		defer stopLocal()
+		referenceCode, referenceEntries := observeAuxiliarySizedSearch(t, referenceURI, 0)
+		localCode, localEntries := observeAuxiliarySizedSearch(t, "ldap://"+localAddress, 0)
+		if referenceCode != ldap.LDAPResultSuccess || referenceEntries != 7 ||
+			localCode != referenceCode || localEntries != referenceEntries {
+			t.Fatalf(
+				"anonymous regex local=(%d,%d) reference=(%d,%d)",
+				localCode,
+				localEntries,
+				referenceCode,
+				referenceEntries,
+			)
+		}
+	})
 }
 
 type auxiliaryLimitObservation struct {

@@ -55,6 +55,7 @@ type pcachePersistedSnapshot struct {
 	Entries          int                    `json:"entries"`
 	Queries          []pcachePersistedQuery `json:"queries,omitempty"`
 	Binds            []pcachePersistedBind  `json:"binds,omitempty"`
+	PrivateEntries   []directory.Entry      `json:"privateEntries,omitempty"`
 }
 
 type pcachePersistenceGuard struct {
@@ -113,6 +114,7 @@ type pcachePersistedRemote struct {
 type pcacheStateBackup struct {
 	queries    map[string]pcacheCachedQuery
 	binds      map[string]pcacheCachedBind
+	private    map[string]directory.Entry
 	entries    int
 	sequence   uint64
 	generation uint64
@@ -251,16 +253,21 @@ func (server *Server) preparePcachePersistence(
 					case snapshotErr != nil:
 						return fmt.Errorf("load pcache persistence for %s: %w", database.name, snapshotErr)
 					case len(raw) > pcacheMaxPersistedSnapshotBytes:
+						clear(raw)
 						return fmt.Errorf("pcache persistence for %s exceeds %d bytes", database.name, pcacheMaxPersistedSnapshotBytes)
 					default:
 						var restored pcachePersistedSnapshot
-						if err := json.Unmarshal(raw, &restored); err != nil {
-							return fmt.Errorf("decode pcache persistence for %s: %w", database.name, err)
+						decodeErr := json.Unmarshal(raw, &restored)
+						clear(raw)
+						if decodeErr != nil {
+							return fmt.Errorf("decode pcache persistence for %s: %w", database.name, decodeErr)
 						}
 						if restored.Version == pcachePersistenceVersion &&
 							restored.Fingerprint == configuration.fingerprint &&
 							restored.PersistenceEpoch == persistence.epoch {
 							snapshot = &restored
+						} else {
+							clearPcachePersistedSnapshot(&restored)
 						}
 					}
 				}
@@ -371,14 +378,18 @@ func (server *Server) ensurePcachePersistence(
 		}
 		guard, encodeErr := encodePcachePersistenceGuard(persistence, false)
 		if encodeErr != nil {
+			clear(encoded)
 			return encodeErr
 		}
 		if err := writer.SetMetadata(persistence.guardKey, guard); err != nil {
+			clear(encoded)
 			return err
 		}
 		if err := writer.SetMetadata(persistence.metadataKey, encoded); err != nil {
+			clear(encoded)
 			return err
 		}
+		clear(encoded)
 	}
 	return nil
 }
@@ -388,6 +399,7 @@ func (server *Server) restorePcacheSnapshot(
 	database *runtimeDatabase,
 	snapshot pcachePersistedSnapshot,
 ) error {
+	defer clearPcachePersistedSnapshot(&snapshot)
 	configuration := database.pcache
 	state := configuration.state
 	now := state.clock()
@@ -473,8 +485,56 @@ func (server *Server) restorePcacheSnapshot(
 		entries > configuration.maxEntries {
 		return errors.New("persisted cache exceeds configured limits")
 	}
+	restoredPrivate := make(map[string]directory.Entry, len(snapshot.PrivateEntries))
+	for _, persisted := range snapshot.PrivateEntries {
+		dn, err := runtime.schema.NormalizeDN(persisted.DN)
+		if err != nil || !databaseContainsDN(*database, dn) {
+			return fmt.Errorf("invalid private cache entry DN %q", persisted.DN)
+		}
+		if _, duplicate := restoredPrivate[dn.Key()]; duplicate {
+			return fmt.Errorf("duplicate private cache entry DN %q", persisted.DN)
+		}
+		if failure := pcachePrivateValidateAddEntry(persisted); failure != nil {
+			return fmt.Errorf(
+				"invalid private cache entry %q: %s",
+				persisted.DN,
+				failure.DiagnosticMessage,
+			)
+		}
+		persisted.DN = dn.String()
+		if failure := pcachePrivateSchemaResult(runtime, persisted, dn); failure != nil {
+			return fmt.Errorf(
+				"invalid private cache entry %q: %s",
+				persisted.DN,
+				failure.DiagnosticMessage,
+			)
+		}
+		restoredPrivate[dn.Key()] = persisted.Clone()
+		entries++
+	}
+	if entries > configuration.maxEntries {
+		return errors.New("persisted private cache exceeds configured limits")
+	}
+	restoredState := &pcacheState{
+		queries: restoredQueries,
+		private: restoredPrivate,
+		entries: entries,
+	}
+	visible := restoredState.privateEntriesUnlocked(
+		runtime,
+		*database,
+		configuration.persist,
+		now,
+	)
+	for _, entry := range restoredPrivate {
+		dn, _ := runtime.schema.NormalizeDN(entry.DN)
+		if !pcachePrivateParentExists(*database, dn, visible) {
+			return fmt.Errorf("private cache entry %q has no parent", entry.DN)
+		}
+	}
 	state.queries = restoredQueries
 	state.binds = restoredBinds
+	state.private = restoredPrivate
 	state.entries = entries
 	state.sequence = snapshot.Sequence
 	state.generation = snapshot.Generation
@@ -520,6 +580,17 @@ func encodePcachePersistedSnapshot(
 		Generation:       candidate.generation,
 		Entries:          candidate.entries,
 	}
+	privateKeys := make([]string, 0, len(candidate.private))
+	for key := range candidate.private {
+		privateKeys = append(privateKeys, key)
+	}
+	sort.Strings(privateKeys)
+	for _, key := range privateKeys {
+		snapshot.PrivateEntries = append(
+			snapshot.PrivateEntries,
+			candidate.private[key].Clone(),
+		)
+	}
 	queryKeys := make([]string, 0, len(candidate.queries))
 	for key := range candidate.queries {
 		queryKeys = append(queryKeys, key)
@@ -561,13 +632,12 @@ func encodePcachePersistedSnapshot(
 		})
 	}
 	encoded, err := json.Marshal(snapshot)
-	for index := range snapshot.Binds {
-		clear(snapshot.Binds[index].PasswordHash)
-	}
+	clearPcachePersistedSnapshot(&snapshot)
 	if err != nil {
 		return nil, err
 	}
 	if len(encoded) > pcacheMaxPersistedSnapshotBytes {
+		clear(encoded)
 		return nil, fmt.Errorf("pcache persistence exceeds %d bytes", pcacheMaxPersistedSnapshotBytes)
 	}
 	return encoded, nil
@@ -677,6 +747,7 @@ func (state *pcacheState) backupLocked() pcacheStateBackup {
 	backup := pcacheStateBackup{
 		queries:    make(map[string]pcacheCachedQuery, len(state.queries)),
 		binds:      make(map[string]pcacheCachedBind, len(state.binds)),
+		private:    make(map[string]directory.Entry, len(state.private)),
 		entries:    state.entries,
 		sequence:   state.sequence,
 		generation: state.generation,
@@ -687,6 +758,9 @@ func (state *pcacheState) backupLocked() pcacheStateBackup {
 	for key, bind := range state.binds {
 		bind.passwordHash = bytes.Clone(bind.passwordHash)
 		backup.binds[key] = bind
+	}
+	for key, entry := range state.private {
+		backup.private[key] = entry.Clone()
 	}
 	return backup
 }
@@ -699,6 +773,7 @@ func snapshotPcacheStateLocked(state *pcacheState) pcacheStateBackup {
 	snapshot := pcacheStateBackup{
 		queries:    make(map[string]pcacheCachedQuery, len(state.queries)),
 		binds:      make(map[string]pcacheCachedBind, len(state.binds)),
+		private:    make(map[string]directory.Entry, len(state.private)),
 		entries:    state.entries,
 		sequence:   state.sequence,
 		generation: state.generation,
@@ -711,6 +786,9 @@ func snapshotPcacheStateLocked(state *pcacheState) pcacheStateBackup {
 		bind.passwordHash = bytes.Clone(bind.passwordHash)
 		snapshot.binds[key] = bind
 	}
+	for key, entry := range state.private {
+		snapshot.private[key] = entry.Clone()
+	}
 	return snapshot
 }
 
@@ -718,6 +796,7 @@ func detachPcacheSnapshot(snapshot pcacheStateBackup) pcacheStateBackup {
 	detached := pcacheStateBackup{
 		queries:    make(map[string]pcacheCachedQuery, len(snapshot.queries)),
 		binds:      make(map[string]pcacheCachedBind, len(snapshot.binds)),
+		private:    make(map[string]directory.Entry, len(snapshot.private)),
 		entries:    snapshot.entries,
 		sequence:   snapshot.sequence,
 		generation: snapshot.generation,
@@ -731,6 +810,9 @@ func detachPcacheSnapshot(snapshot pcacheStateBackup) pcacheStateBackup {
 	for key, bind := range snapshot.binds {
 		bind.passwordHash = bytes.Clone(bind.passwordHash)
 		detached.binds[key] = bind
+	}
+	for key, entry := range snapshot.private {
+		detached.private[key] = entry.Clone()
 	}
 	return detached
 }
@@ -752,20 +834,25 @@ func (state *pcacheState) mutate(
 	}
 
 	for {
+		state.privateSnapshotMu.Lock()
 		state.mu.Lock()
 		persistence := state.persistence
 		if persistence == nil || !persistence.enabled || persistence.store == nil {
 			backup := state.backupLocked()
+			previousPrivate := snapshotPcachePrivateEntriesShallow(state.private)
 			changed, accepted := mutation(state)
+			clearRetiredPcachePrivateValues(previousPrivate, state.private)
 			if !accepted || !changed {
 				state.restoreBackupLocked(backup)
 			} else {
 				clearPcacheBackup(backup)
 			}
 			state.mu.Unlock()
+			state.privateSnapshotMu.Unlock()
 			return accepted
 		}
 		state.mu.Unlock()
+		state.privateSnapshotMu.Unlock()
 
 		if !persistence.acquire(ctx) {
 			return false
@@ -795,16 +882,20 @@ func (state *pcacheState) mutate(
 			clock:       clock,
 			queries:     candidate.queries,
 			binds:       candidate.binds,
+			private:     candidate.private,
 			entries:     candidate.entries,
 			sequence:    candidate.sequence,
 			generation:  candidate.generation,
 			persistence: persistence,
 		}
 
+		previousPrivate := snapshotPcachePrivateEntriesShallow(working.private)
 		changed, accepted := mutation(working)
+		clearRetiredPcachePrivateValues(previousPrivate, working.private)
 		candidate = pcacheStateBackup{
 			queries:    working.queries,
 			binds:      working.binds,
+			private:    working.private,
 			entries:    working.entries,
 			sequence:   working.sequence,
 			generation: working.generation,
@@ -831,28 +922,34 @@ func (state *pcacheState) mutate(
 		}
 
 		err = persistence.persistSnapshot(ctx, baseline.generation, encoded)
+		clear(encoded)
 		if err != nil {
 			persistence.release()
 			clearPcacheBackup(candidate)
 			return false
 		}
 
+		state.privateSnapshotMu.Lock()
 		state.mu.Lock()
 		if state.persistence != persistence ||
 			state.generation != baseline.generation {
 			state.mu.Unlock()
+			state.privateSnapshotMu.Unlock()
 			persistence.release()
 			clearPcacheBackup(candidate)
 			return false
 		}
 		mergePcacheConcurrentReadsLocked(state, baseline, &candidate)
 		clearPcacheStateSecrets(state.queries, state.binds)
+		clearPcachePrivateEntries(state.private)
 		state.queries = candidate.queries
 		state.binds = candidate.binds
+		state.private = candidate.private
 		state.entries = candidate.entries
 		state.sequence = candidate.sequence
 		state.generation = candidate.generation
 		state.mu.Unlock()
+		state.privateSnapshotMu.Unlock()
 		persistence.release()
 		return true
 	}
@@ -939,8 +1036,10 @@ func addPcacheSequence(value, delta uint64) uint64 {
 
 func (state *pcacheState) restoreBackupLocked(backup pcacheStateBackup) {
 	clearPcacheStateSecrets(state.queries, state.binds)
+	clearPcachePrivateEntries(state.private)
 	state.queries = backup.queries
 	state.binds = backup.binds
+	state.private = backup.private
 	state.entries = backup.entries
 	state.sequence = backup.sequence
 	state.generation = backup.generation
@@ -948,6 +1047,74 @@ func (state *pcacheState) restoreBackupLocked(backup pcacheStateBackup) {
 
 func clearPcacheBackup(backup pcacheStateBackup) {
 	clearPcacheStateSecrets(backup.queries, backup.binds)
+	clearPcachePrivateEntries(backup.private)
+}
+
+func clearPcachePrivateEntries(entries map[string]directory.Entry) {
+	for key, entry := range entries {
+		clearEntryValues(entry)
+		delete(entries, key)
+	}
+}
+
+func snapshotPcachePrivateEntriesShallow(
+	entries map[string]directory.Entry,
+) map[string]directory.Entry {
+	snapshot := make(map[string]directory.Entry, len(entries))
+	for key, entry := range entries {
+		snapshot[key] = entry
+	}
+	return snapshot
+}
+
+func clearRetiredPcachePrivateValues(
+	previous,
+	current map[string]directory.Entry,
+) {
+	retained := make(map[*byte]struct{})
+	for _, entry := range current {
+		for _, attribute := range entry.Attributes {
+			for _, value := range attribute.Values {
+				if len(value) != 0 {
+					retained[&value[0]] = struct{}{}
+				}
+			}
+		}
+	}
+	for previousKey, entry := range previous {
+		for attributeIndex := range entry.Attributes {
+			for valueIndex := range entry.Attributes[attributeIndex].Values {
+				value := entry.Attributes[attributeIndex].Values[valueIndex]
+				if len(value) == 0 {
+					continue
+				}
+				if _, retained := retained[&value[0]]; !retained {
+					clear(value)
+				}
+			}
+		}
+		delete(previous, previousKey)
+	}
+}
+
+func clearPcachePersistedSnapshot(snapshot *pcachePersistedSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	for index := range snapshot.PrivateEntries {
+		clearEntryValues(snapshot.PrivateEntries[index])
+	}
+	for queryIndex := range snapshot.Queries {
+		for itemIndex := range snapshot.Queries[queryIndex].Response.Items {
+			entry := snapshot.Queries[queryIndex].Response.Items[itemIndex].Entry
+			if entry != nil {
+				clearEntryValues(*entry)
+			}
+		}
+	}
+	for index := range snapshot.Binds {
+		clear(snapshot.Binds[index].PasswordHash)
+	}
 }
 
 func clearPcacheStateSecrets(

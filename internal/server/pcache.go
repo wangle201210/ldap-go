@@ -84,11 +84,14 @@ type pcacheBindRuntimeConfiguration struct {
 }
 
 type pcacheState struct {
-	mu                  sync.Mutex
+	mu sync.Mutex
+	// Keeps immutable private-entry values alive while they are cloned outside mu.
+	privateSnapshotMu   sync.RWMutex
 	epoch               time.Time
 	clock               func() time.Time
 	queries             map[string]pcacheCachedQuery
 	binds               map[string]pcacheCachedBind
+	private             map[string]directory.Entry
 	entries             int
 	sequence            uint64
 	generation          uint64
@@ -778,6 +781,7 @@ func newPcacheStateWithClock(clock func() time.Time) *pcacheState {
 		clock:   clock,
 		queries: make(map[string]pcacheCachedQuery),
 		binds:   make(map[string]pcacheCachedBind),
+		private: make(map[string]directory.Entry),
 	}
 }
 

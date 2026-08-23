@@ -15,6 +15,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/emmansun/gmsm/sm3"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -23,7 +25,14 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-const remoteAuthDefaultRetryCount = 3
+const (
+	remoteAuthDefaultRetryCount            = 3
+	defaultRemoteAuthConcurrentAttempts    = 16
+	defaultRemoteAuthMaxConnectionLifetime = time.Minute
+	remoteAuthRuntimePollInterval          = 10 * time.Millisecond
+)
+
+var errRemoteAuthConfigurationRetired = errors.New("remoteauth configuration retired")
 
 type remoteAuthTLSPin struct {
 	hash  string
@@ -40,6 +49,122 @@ type remoteAuthRuntimeConfiguration struct {
 	retryCount      int
 	connection      syncConsumerConfig
 	pins            map[string]remoteAuthTLSPin
+	connections     *remoteAuthConnectionManager
+}
+
+// remoteauth performs a Simple Bind and has no operation that can safely prove
+// the connection anonymous again. Keep every transport one-shot; this manager
+// only bounds independent attempts and retires an old runtime configuration.
+type remoteAuthConnectionManager struct {
+	mu          sync.Mutex
+	groups      map[string]*remoteAuthAttemptGroup
+	limit       int
+	maxLifetime time.Duration
+	lifecycle   context.Context
+	retire      context.CancelFunc
+	retireOnce  sync.Once
+}
+
+type remoteAuthAttemptGroup struct {
+	attempts   chan struct{}
+	references int
+}
+
+func newRemoteAuthConnectionManager(
+	limit int,
+	maxLifetime time.Duration,
+) *remoteAuthConnectionManager {
+	if limit <= 0 {
+		limit = defaultRemoteAuthConcurrentAttempts
+	}
+	if maxLifetime <= 0 {
+		maxLifetime = defaultRemoteAuthMaxConnectionLifetime
+	}
+	lifecycle, retire := context.WithCancel(context.Background())
+	return &remoteAuthConnectionManager{
+		groups:      make(map[string]*remoteAuthAttemptGroup),
+		limit:       limit,
+		maxLifetime: maxLifetime,
+		lifecycle:   lifecycle,
+		retire:      retire,
+	}
+}
+
+func (manager *remoteAuthConnectionManager) acquire(
+	ctx context.Context,
+	realm string,
+	provider string,
+) (func(), error) {
+	if manager == nil {
+		return func() {}, nil
+	}
+	if err := manager.lifecycle.Err(); err != nil {
+		return nil, errRemoteAuthConfigurationRetired
+	}
+	key := realm + "\x00" + provider
+	manager.mu.Lock()
+	group := manager.groups[key]
+	if group == nil {
+		group = &remoteAuthAttemptGroup{
+			attempts: make(chan struct{}, manager.limit),
+		}
+		manager.groups[key] = group
+	}
+	group.references++
+	manager.mu.Unlock()
+
+	releaseReference := func() {
+		manager.mu.Lock()
+		group.references--
+		if group.references == 0 && len(group.attempts) == 0 {
+			delete(manager.groups, key)
+		}
+		manager.mu.Unlock()
+	}
+	select {
+	case group.attempts <- struct{}{}:
+		if manager.lifecycle.Err() != nil {
+			<-group.attempts
+			releaseReference()
+			return nil, errRemoteAuthConfigurationRetired
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				<-group.attempts
+				releaseReference()
+			})
+		}, nil
+	case <-ctx.Done():
+		releaseReference()
+		return nil, ctx.Err()
+	case <-manager.lifecycle.Done():
+		releaseReference()
+		return nil, errRemoteAuthConfigurationRetired
+	}
+}
+
+func (manager *remoteAuthConnectionManager) attemptContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	if manager == nil {
+		return context.WithCancel(ctx)
+	}
+	lifetimeContext, lifetimeCancel := context.WithTimeout(ctx, manager.maxLifetime)
+	attemptContext, attemptCancel := context.WithCancel(lifetimeContext)
+	stopRetirement := context.AfterFunc(manager.lifecycle, attemptCancel)
+	return attemptContext, func() {
+		stopRetirement()
+		attemptCancel()
+		lifetimeCancel()
+	}
+}
+
+func (manager *remoteAuthConnectionManager) retireConfiguration() {
+	if manager == nil {
+		return
+	}
+	manager.retireOnce.Do(manager.retire)
 }
 
 func loadRemoteAuthRuntimeConfiguration(
@@ -180,6 +305,10 @@ func loadRemoteAuthRuntimeConfiguration(
 		}
 		configuration.pins[host] = pin
 	}
+	configuration.connections = newRemoteAuthConnectionManager(
+		defaultRemoteAuthConcurrentAttempts,
+		defaultRemoteAuthMaxConnectionLifetime,
+	)
 	return configuration, nil
 }
 
@@ -384,6 +513,29 @@ func (server *Server) remoteAuthSimpleBind(
 	if !localEligible {
 		return false, ldapwire.Result{}, nil
 	}
+	configurationCurrent := func() bool {
+		if server.runtime.Load() == nil {
+			return database.remoteAuth != nil &&
+				database.remoteAuth.connections == configuration.connections
+		}
+		return server.remoteAuthConfigurationCurrent(
+			localDN,
+			configuration.connections,
+		)
+	}
+	if !configurationCurrent() {
+		configuration.connections.retireConfiguration()
+		return true, ldapwire.ResultError(
+			ldapwire.ResultOperationsError,
+			"remoteauth configuration changed",
+		), nil
+	}
+	stopRetirementWatch := watchRemoteAuthRuntime(
+		ctx,
+		configuration.connections,
+		configurationCurrent,
+	)
+	defer stopRetirementWatch()
 
 	realm := remoteAuthRealm(*configuration, domain)
 	providers, err := remoteAuthRealmProviders(realm)
@@ -405,16 +557,28 @@ func (server *Server) remoteAuthSimpleBind(
 	var lastResult *ldapwire.Result
 	var lastError error
 	for attempt := 0; attempt <= configuration.retryCount; attempt++ {
+		retryBindResult := false
 		for _, provider := range providers {
 			result, err := executeRemoteAuthBind(
 				ctx,
 				*configuration,
+				realm,
 				provider,
 				request,
 			)
 			if err != nil {
 				lastError = err
+				if ctx.Err() != nil ||
+					errors.Is(err, errRemoteAuthConfigurationRetired) {
+					break
+				}
 				continue
+			}
+			if !configurationCurrent() {
+				configuration.connections.retireConfiguration()
+				lastResult = nil
+				lastError = errRemoteAuthConfigurationRetired
+				break
 			}
 			lastResult = &result
 			switch result.Code {
@@ -422,10 +586,24 @@ func (server *Server) remoteAuthSimpleBind(
 				if configuration.storeOnSuccess {
 					server.storeRemoteAuthPassword(ctx, runtime, database, localDN, password)
 				}
+				if !configurationCurrent() {
+					configuration.connections.retireConfiguration()
+					lastResult = nil
+					lastError = errRemoteAuthConfigurationRetired
+					break
+				}
 				return true, result, nil
 			case ldapwire.ResultInvalidCredentials:
 				return true, result, nil
 			}
+			retryBindResult = true
+		}
+		if ctx.Err() != nil ||
+			errors.Is(lastError, errRemoteAuthConfigurationRetired) {
+			break
+		}
+		if !retryBindResult {
+			break
 		}
 	}
 	if lastResult != nil {
@@ -438,6 +616,49 @@ func (server *Server) remoteAuthSimpleBind(
 		ldapwire.ResultOperationsError,
 		"remoteauth bind operation failed",
 	), nil
+}
+
+func (server *Server) remoteAuthConfigurationCurrent(
+	dn directory.DN,
+	manager *remoteAuthConnectionManager,
+) bool {
+	active := server.runtime.Load()
+	if active == nil {
+		return false
+	}
+	activeDatabase := databaseForDN(active, dn)
+	return activeDatabase != nil &&
+		activeDatabase.remoteAuth != nil &&
+		activeDatabase.remoteAuth.connections == manager
+}
+
+func watchRemoteAuthRuntime(
+	ctx context.Context,
+	manager *remoteAuthConnectionManager,
+	current func() bool,
+) func() {
+	if manager == nil || current == nil {
+		return func() {}
+	}
+	watchContext, stop := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(remoteAuthRuntimePollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchContext.Done():
+				return
+			case <-manager.lifecycle.Done():
+				return
+			case <-ticker.C:
+				if !current() {
+					manager.retireConfiguration()
+					return
+				}
+			}
+		}
+	}()
+	return stop
 }
 
 func remoteAuthDNNormalizer(
@@ -507,14 +728,36 @@ func remoteAuthLDAPURL(value string) string {
 func executeRemoteAuthBind(
 	ctx context.Context,
 	configuration remoteAuthRuntimeConfiguration,
+	realm string,
 	provider string,
 	request ldapwire.BindRequest,
 ) (ldapwire.Result, error) {
-	transport, err := dialSyncConsumer(ctx, configuration.connection, provider)
+	release, err := configuration.connections.acquire(ctx, realm, provider)
 	if err != nil {
 		return ldapwire.Result{}, err
 	}
+	defer release()
+	attemptContext, cancelAttempt := configuration.connections.attemptContext(ctx)
+	defer cancelAttempt()
+
+	transport, err := dialSyncConsumer(
+		attemptContext,
+		configuration.connection,
+		provider,
+	)
+	if err != nil {
+		return ldapwire.Result{}, err
+	}
+	stopCancellation := context.AfterFunc(attemptContext, func() {
+		_ = transport.close()
+	})
+	defer stopCancellation()
 	defer transport.close()
+	attemptRequest := request
+	attemptRequest.Authentication.Simple = bytes.Clone(
+		request.Authentication.Simple,
+	)
+	defer clear(attemptRequest.Authentication.Simple)
 	parsed, err := parseSyncConsumerProviderURL(provider)
 	if err != nil {
 		return ldapwire.Result{}, err
@@ -541,7 +784,7 @@ func executeRemoteAuthBind(
 	result, _, err := exchangePBind(
 		transport,
 		nil,
-		request,
+		attemptRequest,
 	)
 	if err != nil {
 		return ldapwire.Result{}, err

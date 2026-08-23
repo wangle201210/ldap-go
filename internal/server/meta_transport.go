@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -332,11 +333,46 @@ func metaTransportKey(targetKey string, remote chainRemoteConfiguration) string 
 		remote.bind.authenticationID,
 		remote.bind.authorizationID,
 		remote.bind.realm,
+		remote.bind.securityPropertiesText,
 		remote.startTLSMode,
+		remote.bind.tls.certificateFile,
+		remote.bind.tls.keyFile,
+		remote.bind.tls.caCertificate,
+		remote.bind.tls.caDirectory,
+		remote.bind.tls.requireCert,
+		remote.bind.tls.requireSAN,
+		remote.bind.tls.cipherSuite,
+		remote.bind.tls.protocolMinimum,
+		remote.bind.tls.ecName,
+		remote.bind.tls.crlCheck,
 		fmt.Sprint(remote.protocolVersion),
 	} {
 		_, _ = hash.Write([]byte(value))
 		_, _ = hash.Write([]byte{0})
+	}
+	if ldapBackendGSSAPIConfigured(remote.bind) {
+		settings, err := resolveSyncConsumerGSSAPISettings(
+			remote.bind,
+			remote.uri,
+			os.LookupEnv,
+		)
+		if err != nil {
+			_, _ = hash.Write([]byte("gssapi-settings-error:" + err.Error()))
+		} else {
+			for _, value := range []string{
+				fmt.Sprint(settings.source),
+				settings.username,
+				settings.realm,
+				settings.credentialPath,
+				settings.configuration,
+				settings.servicePrincipal,
+				settings.authorizationID,
+			} {
+				_, _ = hash.Write([]byte(value))
+				_, _ = hash.Write([]byte{0})
+			}
+		}
+		settings.password = ""
 	}
 	_, _ = hash.Write(remote.bind.credentials)
 	return fmt.Sprintf("%x", hash.Sum(nil))

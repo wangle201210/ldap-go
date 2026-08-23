@@ -132,6 +132,7 @@ type Proxy struct {
 	operations           [2]monitorCounters
 	monitorSchema        *schema.Registry
 	monitorAccess        *acl.Policy
+	monitorRuntime       monitorRuntimeState
 	monitorSnapshotBytes atomic.Int64
 }
 
@@ -637,6 +638,10 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	proxy.scheduler, err = NewScheduler(schedulerConfig)
 	if err != nil {
 		return nil, err
+	}
+	proxy.monitorRuntime = monitorRuntimeState{
+		generation: monitorGenerationSequence.Add(1),
+		startedAt:  time.Now().UTC(),
 	}
 	return proxy, nil
 }
@@ -1252,10 +1257,16 @@ func (backend *runtimeBackend) connect(
 			}
 			nextID++
 		case "sasl":
-			if err := backend.bindServiceSASL(connection, &nextID); err != nil {
+			securedConnection, bindErr := backend.bindServiceSASL(
+				ctx,
+				connection,
+				&nextID,
+			)
+			if bindErr != nil {
 				_ = connection.Close()
-				return nil, err
+				return nil, bindErr
 			}
+			connection = securedConnection
 		}
 	}
 	upstream := &upstreamConnection{

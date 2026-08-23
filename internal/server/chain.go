@@ -1422,6 +1422,10 @@ func (server *Server) openChainTransport(
 	if timeout, found := remote.operationTimeouts[request.ApplicationTag()]; found {
 		requestTimeout = timeout
 	}
+	bindTimeout := configuration.operationTimeout
+	if requestTimeout > 0 && (bindTimeout <= 0 || requestTimeout < bindTimeout) {
+		bindTimeout = requestTimeout
+	}
 	configuration.operationTimeout = 0
 	parsed, err := parseSyncConsumerProviderURL(remote.uri)
 	if err != nil {
@@ -1475,7 +1479,7 @@ func (server *Server) openChainTransport(
 	case "":
 		return ready()
 	case "simple":
-		transport.operationTimeout = requestTimeout
+		transport.operationTimeout = bindTimeout
 		pollRetries := remote.bindPollRetries
 		if _, search := request.(ldapwire.SearchRequest); search {
 			// OpenLDAP keeps polling an identity-assertion Bind for the
@@ -1493,8 +1497,27 @@ func (server *Server) openChainTransport(
 		}
 		return ready()
 	case "sasl":
-		if err := bindSyncConsumerSASL(transport, configuration, remote.uri); err != nil {
-			return fail(fmt.Errorf("chain SASL bind: %w", err))
+		transport.operationTimeout = bindTimeout
+		configuration.gssapiChannelBinding = server.config.GSSAPIChannelBinding
+		var bindErr error
+		if ldapBackendGSSAPIConfigured(configuration) {
+			bindContext := ctx
+			var cancel context.CancelFunc
+			if bindTimeout > 0 {
+				bindContext, cancel = context.WithTimeout(ctx, bindTimeout)
+				defer cancel()
+			}
+			bindErr = bindLDAPBackendGSSAPI(
+				bindContext,
+				transport,
+				configuration,
+				remote.uri,
+			)
+		} else {
+			bindErr = bindSyncConsumerSASL(transport, configuration, remote.uri)
+		}
+		if bindErr != nil {
+			return fail(fmt.Errorf("chain SASL bind: %w", bindErr))
 		}
 		return ready()
 	default:

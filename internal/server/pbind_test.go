@@ -3,10 +3,15 @@ package server
 import (
 	"context"
 	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +141,31 @@ func TestPBindQuarantineAllowsOneConcurrentProbe(t *testing.T) {
 	}
 }
 
+func TestPBindCancellationDoesNotRecordProviderFailure(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	configuration := pbindRuntimeConfiguration{
+		quarantine: []syncConsumerRetry{{interval: time.Second, attempts: -1}},
+		health:     &pbindQuarantineState{now: func() time.Time { return now }},
+	}
+	if !configuration.beginPBindAttempt() {
+		t.Fatal("initial pbind attempt was rejected")
+	}
+	configuration.cancelPBindAttempt()
+	if configuration.health.quarantined || configuration.health.retrying ||
+		!configuration.health.lastFailure.IsZero() {
+		t.Fatalf("canceled initial attempt changed provider health: %#v", configuration.health)
+	}
+
+	configuration.health.quarantined = true
+	configuration.health.retrying = true
+	configuration.health.lastFailure = now
+	configuration.cancelPBindAttempt()
+	if !configuration.health.quarantined || configuration.health.retrying ||
+		!configuration.health.lastFailure.Equal(now) {
+		t.Fatalf("canceled quarantine probe changed provider health: %#v", configuration.health)
+	}
+}
+
 func TestLoadPBindRuntimeConfigurationRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 
@@ -244,6 +274,480 @@ func TestLDAPClientPBindUsesRemoteCredentialsAndFailover(t *testing.T) {
 		t.Fatal("pbind succeeded after every provider stopped")
 	} else {
 		assertLDAPResultCode(t, err, ldap.LDAPResultUnavailable)
+	}
+}
+
+func TestLDAPClientPBindRetriesUnavailableProvider(t *testing.T) {
+	tests := []struct {
+		name  string
+		first func(net.Conn) error
+	}{
+		{
+			name: "remote unavailable",
+			first: func(connection net.Conn) error {
+				return writePBindTestResult(connection, ldapwire.ResultUnavailable)
+			},
+		},
+		{
+			name: "connection lost",
+			first: func(connection net.Conn) error {
+				_, err := readSyncConsumerPacket(connection)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			providerAddress, provider := startPBindTestProvider(
+				t,
+				func(attempt int, connection net.Conn) error {
+					if attempt == 1 {
+						return test.first(connection)
+					}
+					return writePBindTestResult(
+						connection,
+						ldapwire.ResultSuccess,
+					)
+				},
+			)
+
+			consumerAddress, stopConsumer := startPBindTestConsumer(
+				t,
+				"ldap://"+providerAddress,
+				"1s",
+			)
+			defer stopConsumer()
+
+			client, err := ldap.DialURL("ldap://" + consumerAddress)
+			if err != nil {
+				t.Fatalf("DialURL(): %v", err)
+			}
+			defer client.Close()
+			if err := client.Bind(
+				"uid=alice,ou=people,dc=example,dc=com",
+				"secret",
+			); err != nil {
+				t.Fatalf("Bind after one retry: %v", err)
+			}
+			provider.waitForAttempts(t, 2)
+			time.Sleep(25 * time.Millisecond)
+			if got := provider.accepted.Load(); got != 2 {
+				t.Fatalf("provider connection attempts = %d, want 2", got)
+			}
+		})
+	}
+}
+
+func TestLDAPClientPBindUnavailableFailsOverAfterOneRetry(t *testing.T) {
+	firstAddress, first := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			return writePBindTestResult(connection, ldapwire.ResultUnavailable)
+		},
+	)
+	secondAddress, second := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			return writePBindTestResult(connection, ldapwire.ResultSuccess)
+		},
+	)
+	consumerAddress, stopConsumer := startPBindTestConsumer(
+		t,
+		"ldap://"+firstAddress+" ldap://"+secondAddress,
+		"1s",
+	)
+	defer stopConsumer()
+
+	client, err := ldap.DialURL("ldap://" + consumerAddress)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind(
+		"uid=alice,ou=people,dc=example,dc=com",
+		"secret",
+	); err != nil {
+		t.Fatalf("Bind after unavailable provider failover: %v", err)
+	}
+	first.waitForAttempts(t, 2)
+	second.waitForAttempts(t, 1)
+	if got := first.accepted.Load(); got != 2 {
+		t.Fatalf("unavailable provider attempts = %d, want exactly 2", got)
+	}
+}
+
+func TestLDAPClientPBindDoesNotRetryDefinitiveResult(t *testing.T) {
+	providerAddress, provider := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			return writePBindTestResult(
+				connection,
+				ldapwire.ResultInvalidCredentials,
+			)
+		},
+	)
+	consumerAddress, stopConsumer := startPBindTestConsumer(
+		t,
+		"ldap://"+providerAddress,
+		"1s",
+	)
+	defer stopConsumer()
+
+	client, err := ldap.DialURL("ldap://" + consumerAddress)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	err = client.Bind("uid=alice,ou=people,dc=example,dc=com", "wrong")
+	if err == nil {
+		t.Fatal("pbind accepted invalid credentials")
+	}
+	assertLDAPResultCode(t, err, ldap.LDAPResultInvalidCredentials)
+	provider.waitForAttempts(t, 1)
+	time.Sleep(25 * time.Millisecond)
+	if got := provider.accepted.Load(); got != 1 {
+		t.Fatalf("definitive result provider attempts = %d, want 1", got)
+	}
+}
+
+func TestLDAPClientPBindDoesNotRetryProtocolFailure(t *testing.T) {
+	providerAddress, provider := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			messageID, err := readPBindTestRequest(connection)
+			if err != nil {
+				return err
+			}
+			response := ber.NewSequence("LDAPMessage")
+			response.AppendChild(ber.NewInteger(
+				ber.ClassUniversal,
+				ber.TypePrimitive,
+				ber.TagInteger,
+				messageID,
+				"messageID",
+			))
+			response.AppendChild(ber.Encode(
+				ber.ClassApplication,
+				ber.TypeConstructed,
+				ldapwire.ApplicationBindResponse,
+				nil,
+				"malformed BindResponse",
+			))
+			return writeAll(connection, response.Bytes())
+		},
+	)
+	consumerAddress, stopConsumer := startPBindTestConsumer(
+		t,
+		"ldap://"+providerAddress,
+		"1s",
+	)
+	defer stopConsumer()
+
+	client, err := ldap.DialURL("ldap://" + consumerAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	err = client.Bind("uid=alice,ou=people,dc=example,dc=com", "secret")
+	assertLDAPResultCode(t, err, ldap.LDAPResultUnavailable)
+	provider.waitForAttempts(t, 1)
+	time.Sleep(50 * time.Millisecond)
+	if got := provider.accepted.Load(); got != 1 {
+		t.Fatalf("protocol failure attempts = %d, want 1", got)
+	}
+}
+
+func TestPBindRetryableErrorClassification(t *testing.T) {
+	if !pbindRetryableError(io.EOF) {
+		t.Fatal("connection loss was not retryable")
+	}
+	if pbindRetryableError(errors.New("malformed LDAP response")) {
+		t.Fatal("deterministic protocol error was retryable")
+	}
+	if pbindRetryableError(context.DeadlineExceeded) {
+		t.Fatal("attempt timeout was retryable")
+	}
+}
+
+func TestPBindRejectsSuccessFromRetiredRuntime(t *testing.T) {
+	requestReceived := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	providerAddress, _ := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			messageID, err := readPBindTestRequest(connection)
+			if err != nil {
+				return err
+			}
+			close(requestReceived)
+			<-releaseProvider
+			return writePBindTestResponse(connection, messageID, ldapwire.ResultSuccess)
+		},
+	)
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	seedPBindConfiguration(t, store, "ldap://"+providerAddress, "local-only")
+	instance, err := New(Config{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDN, err := parseRuntimeConnectionDN(
+		instance.runtime.Load(),
+		"uid=alice,ou=people,dc=example,dc=com",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := databaseForDN(instance.runtime.Load(), requestDN)
+	if database == nil || database.pbind == nil {
+		t.Fatal("pbind runtime configuration is missing")
+	}
+	configuration := *database.pbind
+	done := make(chan ldapwire.Result, 1)
+	go func() {
+		result, _ := instance.proxySimpleBind(
+			t.Context(),
+			configuration,
+			ldapwire.Message{ID: 1},
+			ldapwire.BindRequest{
+				Version: 3,
+				Name:    requestDN.String(),
+				Authentication: ldapwire.Authentication{
+					Simple: []byte("secret"),
+				},
+			},
+		)
+		done <- result
+	}()
+	<-requestReceived
+	retired := *instance.runtime.Load()
+	retired.databases = append([]runtimeDatabase(nil), retired.databases...)
+	for index := range retired.databases {
+		retired.databases[index].pbind = nil
+	}
+	instance.runtime.Store(&retired)
+	close(releaseProvider)
+	if result := <-done; result.Code != ldapwire.ResultUnavailable {
+		t.Fatalf("retired pbind result = %#v", result)
+	}
+}
+
+func TestLDAPClientPBindAttemptTimeoutFailsOver(t *testing.T) {
+	firstAddress, first := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			if _, err := readSyncConsumerPacket(connection); err != nil {
+				return err
+			}
+			time.Sleep(1500 * time.Millisecond)
+			return nil
+		},
+	)
+	secondAddress, second := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			return writePBindTestResult(connection, ldapwire.ResultSuccess)
+		},
+	)
+	consumerAddress, stopConsumer := startPBindTestConsumer(
+		t,
+		"ldap://"+firstAddress+" ldap://"+secondAddress,
+		"1s",
+	)
+	defer stopConsumer()
+
+	client, err := ldap.DialURL("ldap://" + consumerAddress)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	started := time.Now()
+	if err := client.Bind(
+		"uid=alice,ou=people,dc=example,dc=com",
+		"secret",
+	); err != nil {
+		t.Fatalf("Bind after timed-out provider: %v", err)
+	}
+	elapsed := time.Since(started)
+	if elapsed < 800*time.Millisecond || elapsed >= 1800*time.Millisecond {
+		t.Fatalf("failover elapsed = %v, want one independent attempt budget", elapsed)
+	}
+	first.waitForAttempts(t, 1)
+	second.waitForAttempts(t, 1)
+	if got := first.accepted.Load(); got != 1 {
+		t.Fatalf("timed-out provider attempts = %d, want no timeout retry", got)
+	}
+}
+
+func TestExecutePBindCancellationClosesActiveConnection(t *testing.T) {
+	requestReceived := make(chan struct{})
+	providerAddress, _ := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			if _, err := readPBindTestRequest(connection); err != nil {
+				return err
+			}
+			close(requestReceived)
+			buffer := make([]byte, 1)
+			_, _ = connection.Read(buffer)
+			return nil
+		},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := executePBind(
+			ctx,
+			syncConsumerConfig{},
+			"ldap://"+providerAddress,
+			nil,
+			ldapwire.BindRequest{
+				Version: 3,
+				Name:    "uid=alice,ou=people,dc=example,dc=com",
+				Authentication: ldapwire.Authentication{
+					Simple: []byte("secret"),
+				},
+			},
+		)
+		result <- err
+	}()
+	select {
+	case <-requestReceived:
+	case <-time.After(time.Second):
+		t.Fatal("pbind provider did not receive the request")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled pbind returned without an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active pbind connection ignored context cancellation")
+	}
+}
+
+func TestLDAPClientPBindBoundsConcurrentAttempts(t *testing.T) {
+	const callers = defaultPBindConcurrentAttempts + 8
+	release := make(chan struct{})
+	started := make(chan struct{}, callers)
+	var active, maximum atomic.Int32
+	providerAddress, provider := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			messageID, err := readPBindTestRequest(connection)
+			if err != nil {
+				return err
+			}
+			current := active.Add(1)
+			for {
+				observed := maximum.Load()
+				if current <= observed || maximum.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			started <- struct{}{}
+			<-release
+			active.Add(-1)
+			return writePBindTestResponse(
+				connection,
+				messageID,
+				ldapwire.ResultSuccess,
+			)
+		},
+	)
+	consumerAddress, stopConsumer := startPBindTestConsumer(
+		t,
+		"ldap://"+providerAddress,
+		"5s",
+	)
+	defer stopConsumer()
+
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			client, err := ldap.DialURL("ldap://" + consumerAddress)
+			if err == nil {
+				err = client.Bind(
+					"uid=alice,ou=people,dc=example,dc=com",
+					"secret",
+				)
+				client.Close()
+			}
+			results <- err
+		}()
+	}
+	for range defaultPBindConcurrentAttempts {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out filling the pbind attempt limit")
+		}
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := provider.accepted.Load(); got != defaultPBindConcurrentAttempts {
+		t.Fatalf(
+			"concurrent provider connections = %d, want %d before release",
+			got,
+			defaultPBindConcurrentAttempts,
+		)
+	}
+	close(release)
+	for range callers {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("concurrent pbind: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out draining concurrent pbind attempts")
+		}
+	}
+	provider.waitForAttempts(t, callers)
+	if got := maximum.Load(); got > defaultPBindConcurrentAttempts {
+		t.Fatalf("maximum active provider attempts = %d", got)
+	}
+}
+
+func TestOpenLDAPPBindConnectionLifecycleSourceContract(t *testing.T) {
+	sourceRoot := os.Getenv("OPENLDAP_SOURCE")
+	if sourceRoot == "" {
+		t.Skip("OPENLDAP_SOURCE is not set")
+	}
+	bindSource, err := os.ReadFile(filepath.Join(
+		sourceRoot,
+		"servers",
+		"slapd",
+		"back-ldap",
+		"bind.c",
+	))
+	if err != nil {
+		t.Fatalf("read pinned OpenLDAP bind.c: %v", err)
+	}
+	for _, contract := range []string{
+		"Explicit Bind requests always get their own conn",
+		"if ( rc == LDAP_UNAVAILABLE && retrying )",
+		"retrying &= ~LDAP_BACK_RETRYING",
+	} {
+		if !strings.Contains(string(bindSource), contract) {
+			t.Fatalf("pinned OpenLDAP bind.c lacks %q", contract)
+		}
+	}
+	slapHeader, err := os.ReadFile(filepath.Join(
+		sourceRoot,
+		"servers",
+		"slapd",
+		"slap.h",
+	))
+	if err != nil {
+		t.Fatalf("read pinned OpenLDAP slap.h: %v", err)
+	}
+	if !strings.Contains(
+		string(slapHeader),
+		"#define SLAP_MAX_WORKER_THREADS\t\t(16)",
+	) {
+		t.Fatal("pinned OpenLDAP worker concurrency default changed")
 	}
 }
 
@@ -546,4 +1050,143 @@ func writePBindTestCertificate(t *testing.T, der []byte) string {
 		t.Fatalf("WriteFile(): %v", err)
 	}
 	return path
+}
+
+type pbindTestProvider struct {
+	listener net.Listener
+	accepted atomic.Int32
+	errors   chan error
+	wait     sync.WaitGroup
+}
+
+func startPBindTestProvider(
+	t *testing.T,
+	handler func(int, net.Conn) error,
+) (string, *pbindTestProvider) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for pbind provider: %v", err)
+	}
+	provider := &pbindTestProvider{
+		listener: listener,
+		errors:   make(chan error, 256),
+	}
+	provider.wait.Add(1)
+	go func() {
+		defer provider.wait.Done()
+		for {
+			connection, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			attempt := int(provider.accepted.Add(1))
+			provider.wait.Add(1)
+			go func() {
+				defer provider.wait.Done()
+				defer connection.Close()
+				if handlerErr := handler(attempt, connection); handlerErr != nil {
+					provider.errors <- handlerErr
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		provider.wait.Wait()
+		close(provider.errors)
+		for providerErr := range provider.errors {
+			t.Errorf("pbind provider: %v", providerErr)
+		}
+	})
+	return listener.Addr().String(), provider
+}
+
+func (provider *pbindTestProvider) waitForAttempts(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for int(provider.accepted.Load()) < want {
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"pbind provider attempts = %d, want at least %d",
+				provider.accepted.Load(),
+				want,
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func startPBindTestConsumer(
+	t *testing.T,
+	providers string,
+	networkTimeout string,
+) (string, func()) {
+	t.Helper()
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	seedPBindConfiguration(t, store, providers, "local-only")
+	setPBindNetworkTimeout(t, store, networkTimeout)
+	return startServer(t, store, Config{})
+}
+
+func setPBindNetworkTimeout(t *testing.T, store storage.Store, value string) {
+	t.Helper()
+	dn, err := directory.ParseDN(
+		"olcOverlay={0}pbind,olcDatabase={1}mdb,cn=config",
+	)
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcDbNetworkTimeout", stringValues(value))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("configure pbind network timeout: %v", err)
+	}
+}
+
+func readPBindTestRequest(connection net.Conn) (int64, error) {
+	request, err := readSyncConsumerPacket(connection)
+	if err != nil {
+		return 0, err
+	}
+	if len(request.Children) < 2 ||
+		request.Children[1].ClassType != ber.ClassApplication ||
+		request.Children[1].Tag != ldapwire.ApplicationBindRequest {
+		return 0, fmt.Errorf("unexpected pbind request %#v", request)
+	}
+	messageID, err := syncConsumerPacketInteger(request.Children[0])
+	if err != nil {
+		return 0, fmt.Errorf("pbind message ID: %w", err)
+	}
+	return messageID, nil
+}
+
+func writePBindTestResult(
+	connection net.Conn,
+	code ldapwire.ResultCode,
+) error {
+	messageID, err := readPBindTestRequest(connection)
+	if err != nil {
+		return err
+	}
+	return writePBindTestResponse(connection, messageID, code)
+}
+
+func writePBindTestResponse(
+	connection net.Conn,
+	messageID int64,
+	code ldapwire.ResultCode,
+) error {
+	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+		messageID,
+		ldapwire.Result{Code: code},
+		nil,
+	))
 }

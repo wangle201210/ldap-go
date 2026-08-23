@@ -281,6 +281,7 @@ func (client *clientConnection) handleBind(ctx context.Context, frame proxyFrame
 	client.mu.Unlock()
 	if frame.BindVersion != 3 {
 		client.resetForBind(false)
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			ldapwire.ApplicationBindRequest,
@@ -291,6 +292,7 @@ func (client *clientConnection) handleBind(ctx context.Context, frame proxyFrame
 	}
 	if client.proxy.config.VerifyCredentials && frame.BindSASL {
 		client.resetForBind(false)
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			ldapwire.ApplicationBindRequest,
@@ -301,6 +303,7 @@ func (client *clientConnection) handleBind(ctx context.Context, frame proxyFrame
 	}
 	if frame.BindSASL && strings.EqualFold(frame.BindMechanism, "EXTERNAL") {
 		client.resetForBind(false)
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			ldapwire.ApplicationBindRequest,

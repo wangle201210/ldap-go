@@ -997,6 +997,16 @@ func validateBindConfig(config BindConfig) error {
 		if strings.TrimSpace(config.SASLMechanism) == "" {
 			return errors.New("bindmethod=sasl requires saslmech")
 		}
+		if strings.EqualFold(strings.TrimSpace(config.SASLMechanism), "GSSAPI") {
+			if err := validateServiceGSSAPIStaticConfig(
+				config.AuthCID,
+				config.Realm,
+				config.SecurityProperties,
+				[]byte(config.Credentials),
+			); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("invalid bind method %q", config.Method)
 	}

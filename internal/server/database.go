@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,25 +97,29 @@ type runtimeDatabase struct {
 }
 
 type databaseSearchSizeLimit struct {
-	selector        databaseSearchLimitSelector
-	subject         directory.DN
-	soft            int
-	hard            int
-	softSet         bool
-	hardSet         bool
-	timeSoft        int
-	timeHard        int
-	timeSoftSet     bool
-	timeHardSet     bool
-	unchecked       int
-	uncheckedSet    bool
-	pageSize        int
-	pageSizeSet     bool
-	pageNoEstimate  bool
-	pageEstimateSet bool
-	pageTotal       int
-	pageTotalSet    bool
-	databaseDefault bool
+	selector         databaseSearchLimitSelector
+	subject          directory.DN
+	requestDN        bool
+	groupObjectClass string
+	groupAttribute   string
+	soft             int
+	hard             int
+	softSet          bool
+	hardSet          bool
+	timeSoft         int
+	timeHard         int
+	timeSoftSet      bool
+	timeHardSet      bool
+	unchecked        int
+	uncheckedSet     bool
+	pageSize         int
+	pageSizeSet      bool
+	pageNoEstimate   bool
+	pageEstimateSet  bool
+	pageTotal        int
+	pageTotalSet     bool
+	databaseDefault  bool
+	subjectRegex     *regexp.Regexp
 }
 
 type databaseSearchExecutionLimits struct {
@@ -137,6 +142,8 @@ const (
 	databaseSearchLimitAnonymous
 	databaseSearchLimitUsers
 	databaseSearchLimitAny
+	databaseSearchLimitRegex
+	databaseSearchLimitGroup
 )
 
 type databaseRestrictions uint32
@@ -1524,17 +1531,31 @@ func parseDatabaseSearchLimitSelector(
 	}
 	modifier := strings.ToLower(strings.TrimSpace(trimmed[:separator]))
 	rawDN := strings.TrimSpace(trimmed[separator+1:])
-	if modifier == "dn.this" || strings.HasPrefix(modifier, "dn.this.") {
-		return databaseSearchSizeLimit{}, false, nil
+	if modifier == "group" || strings.HasPrefix(modifier, "group/") {
+		return parseDatabaseSearchGroupLimitSelector(modifier, rawDN, normalizer)
 	}
-	if modifier == "dn.regex" || modifier == "dn.self.regex" {
+	if modifier == "dn.regex" || modifier == "dn.self.regex" ||
+		modifier == "dn.this.regex" {
 		if rawDN == ".*" {
 			return databaseSearchSizeLimit{selector: databaseSearchLimitAny}, true, nil
 		}
-		return databaseSearchSizeLimit{}, false, nil
+		compiled, err := regexp.CompilePOSIX(rawDN)
+		if err != nil {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"invalid POSIX DN regular expression %q: %w",
+				rawDN,
+				err,
+			)
+		}
+		return databaseSearchSizeLimit{
+			selector:     databaseSearchLimitRegex,
+			requestDN:    modifier == "dn.this.regex",
+			subjectRegex: compiled,
+		}, true, nil
 	}
 
 	selector := databaseSearchLimitExact
+	requestDN := false
 	switch modifier {
 	case "dn", "dn.self", "dn.exact", "dn.base", "dn.self.exact", "dn.self.base":
 	case "dn.one", "dn.onelevel", "dn.self.one", "dn.self.onelevel":
@@ -1543,20 +1564,120 @@ func parseDatabaseSearchLimitSelector(
 		selector = databaseSearchLimitSubtree
 	case "dn.children", "dn.self.children":
 		selector = databaseSearchLimitChildren
+	case "dn.this", "dn.this.exact", "dn.this.base":
+		requestDN = true
+	case "dn.this.one", "dn.this.onelevel":
+		selector = databaseSearchLimitOneLevel
+		requestDN = true
+	case "dn.this.sub", "dn.this.subtree":
+		selector = databaseSearchLimitSubtree
+		requestDN = true
+	case "dn.this.children":
+		selector = databaseSearchLimitChildren
+		requestDN = true
 	default:
 		return databaseSearchSizeLimit{}, false, nil
 	}
 	if rawDN == "*" {
-		return databaseSearchSizeLimit{selector: databaseSearchLimitAny}, true, nil
+		return databaseSearchSizeLimit{
+			selector:  databaseSearchLimitAny,
+			requestDN: requestDN,
+		}, true, nil
 	}
 	subject, err := parseRuntimeDN(rawDN, normalizer)
 	if err != nil {
 		return databaseSearchSizeLimit{}, false, err
 	}
 	return databaseSearchSizeLimit{
-		selector: selector,
-		subject:  subject,
+		selector:  selector,
+		subject:   subject,
+		requestDN: requestDN,
 	}, true, nil
+}
+
+type databaseSearchLimitSchema interface {
+	directory.DNAttributeNormalizer
+	EffectiveAttributeType(string) (schema.AttributeType, bool, error)
+	ObjectClass(string) (schema.ObjectClass, bool)
+}
+
+func parseDatabaseSearchGroupLimitSelector(
+	modifier,
+	rawDN string,
+	normalizer directory.DNAttributeNormalizer,
+) (databaseSearchSizeLimit, bool, error) {
+	parts := strings.Split(modifier, "/")
+	if len(parts) > 3 || parts[0] != "group" {
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	objectClass := "groupOfNames"
+	memberAttribute := "member"
+	if len(parts) > 1 {
+		if strings.TrimSpace(parts[1]) == "" {
+			return databaseSearchSizeLimit{}, false, errors.New("empty group objectClass")
+		}
+		objectClass = strings.TrimSpace(parts[1])
+	}
+	if len(parts) > 2 {
+		if strings.TrimSpace(parts[2]) == "" {
+			return databaseSearchSizeLimit{}, false, errors.New("empty group member attribute")
+		}
+		memberAttribute = strings.TrimSpace(parts[2])
+	}
+
+	if registry := databaseSearchLimitSchemaForNormalizer(normalizer); registry != nil {
+		configuredClass, found := registry.ObjectClass(objectClass)
+		if !found {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"undefined group objectClass %q",
+				objectClass,
+			)
+		}
+		attribute, found, err := registry.EffectiveAttributeType(memberAttribute)
+		if err != nil {
+			return databaseSearchSizeLimit{}, false, err
+		}
+		if !found {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"undefined group member attribute %q",
+				memberAttribute,
+			)
+		}
+		if attribute.Syntax != schema.SyntaxDistinguishedName &&
+			attribute.Syntax != schema.SyntaxNameAndOptionalUID {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"group member attribute %q is not DN-valued",
+				memberAttribute,
+			)
+		}
+		objectClass = configuredClass.Name()
+		memberAttribute = attribute.Name()
+	}
+
+	subject, err := parseRuntimeDN(rawDN, normalizer)
+	if err != nil {
+		return databaseSearchSizeLimit{}, false, err
+	}
+	return databaseSearchSizeLimit{
+		selector:         databaseSearchLimitGroup,
+		subject:          subject,
+		groupObjectClass: objectClass,
+		groupAttribute:   memberAttribute,
+	}, true, nil
+}
+
+func databaseSearchLimitSchemaForNormalizer(
+	normalizer directory.DNAttributeNormalizer,
+) databaseSearchLimitSchema {
+	if registry, ok := normalizer.(databaseSearchLimitSchema); ok {
+		return registry
+	}
+	if indexed, ok := normalizer.(*databaseEqualityIndexNormalizer); ok {
+		if registry, ok := indexed.registry.(databaseSearchLimitSchema); ok {
+			return registry
+		}
+	}
+	return nil
 }
 
 func parseDatabaseSearchSizeLimit(value string, hard bool) (int, error) {
@@ -1878,6 +1999,25 @@ func effectiveDatabaseSearchExecutionLimits(
 	boundDN string,
 	serverLimit, requestSize, requestTime int,
 ) databaseSearchExecutionLimits {
+	limits, _ := effectiveDatabaseSearchExecutionLimitsWithMatcher(
+		runtime,
+		database,
+		boundDN,
+		serverLimit,
+		requestSize,
+		requestTime,
+		nil,
+	)
+	return limits
+}
+
+func effectiveDatabaseSearchExecutionLimitsWithMatcher(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	boundDN string,
+	serverLimit, requestSize, requestTime int,
+	matcher func(databaseSearchSizeLimit, directory.DN) (bool, error),
+) (databaseSearchExecutionLimits, error) {
 	if database.dnNormalizer == nil &&
 		runtime != nil &&
 		runtime.schema != nil &&
@@ -1895,7 +2035,7 @@ func effectiveDatabaseSearchExecutionLimits(
 			pageSize:  -1,
 			pageTotal: size,
 			root:      root,
-		}
+		}, nil
 	}
 
 	selected := databaseSearchSizeLimit{
@@ -1922,8 +2062,18 @@ func effectiveDatabaseSearchExecutionLimits(
 		mergeDatabaseSearchLimit(&selected, defaults)
 	}
 	for _, rule := range database.searchSizeLimits {
-		if rule.databaseDefault ||
-			!databaseSearchLimitMatches(database, rule, subject) {
+		if rule.databaseDefault {
+			continue
+		}
+		matched := databaseSearchLimitMatches(database, rule, subject)
+		if matcher != nil {
+			var err error
+			matched, err = matcher(rule, subject)
+			if err != nil {
+				return databaseSearchExecutionLimits{}, err
+			}
+		}
+		if !matched {
 			continue
 		}
 		mergeDatabaseSearchLimit(&selected, rule)
@@ -1946,7 +2096,7 @@ func effectiveDatabaseSearchExecutionLimits(
 		pageSize:       selected.pageSize,
 		pageNoEstimate: selected.pageNoEstimate,
 		pageTotal:      effectivePagedTotalLimit(selected, requestSize, serverLimit),
-	}
+	}, nil
 }
 
 func normalizeDatabaseSearchLimitHardValues(limit *databaseSearchSizeLimit) {
@@ -2066,14 +2216,37 @@ func applyDatabaseSearchLimits(
 	if database == nil {
 		return message
 	}
-	limits := effectiveDatabaseSearchExecutionLimits(
+	limits, err := effectiveDatabaseSearchExecutionLimitsWithMatcher(
 		state.runtime,
 		*database,
 		state.boundDN,
 		serverSizeLimit,
 		request.SizeLimit,
 		request.TimeLimit,
+		func(rule databaseSearchSizeLimit, subject directory.DN) (bool, error) {
+			if rule.selector == databaseSearchLimitGroup {
+				return false, errDatabaseSearchLimitGroupUnverifiable
+			}
+			if rule.requestDN {
+				subject = base
+			}
+			return databaseSearchLimitMatches(*database, rule, subject), nil
+		},
 	)
+	if err != nil {
+		return message
+	}
+	return applyDatabaseSearchExecutionLimits(message, limits)
+}
+
+func applyDatabaseSearchExecutionLimits(
+	message ldapwire.Message,
+	limits databaseSearchExecutionLimits,
+) ldapwire.Message {
+	request, ok := message.Request.(ldapwire.SearchRequest)
+	if !ok {
+		return message
+	}
 	request.SizeLimit = limits.size
 	for _, control := range message.Controls {
 		if control.OID != pagedResultsControlOID || !control.HasValue {
@@ -2142,6 +2315,9 @@ func databaseSearchLimitMatches(
 		return subject.Depth() > 0
 	case databaseSearchLimitAny:
 		return true
+	case databaseSearchLimitRegex:
+		return subject.Depth() > 0 && configured.subjectRegex != nil &&
+			configured.subjectRegex.MatchString(subject.NormalizedString())
 	case databaseSearchLimitOneLevel:
 		return subject.Depth() == configured.subject.Depth()+1 &&
 			databaseDNStrictlyBelow(database, subject, configured.subject)

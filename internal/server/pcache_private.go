@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -18,6 +19,10 @@ import (
 const (
 	pcacheQueryIDAttribute  = "pcacheQueryID"
 	pcacheQueryURLAttribute = "pcacheQueryURL"
+	pcacheQueryIDOID        = "1.3.6.1.4.1.4203.666.11.9.1.1"
+	pcacheQueryURLOID       = "1.3.6.1.4.1.4203.666.11.9.1.2"
+	pcacheNumQueriesOID     = "1.3.6.1.4.1.4203.666.11.9.1.3"
+	pcacheNumEntriesOID     = "1.3.6.1.4.1.4203.666.11.9.1.4"
 
 	pcacheQueryDeleteBaseTag = 0xa0
 	pcacheQueryDeleteDNTag   = 0xa1
@@ -287,6 +292,7 @@ func (server *Server) tryPcachePrivateCompare(
 }
 
 func (server *Server) tryUnsupportedPcachePrivateOperation(
+	ctx context.Context,
 	connection net.Conn,
 	state *connectionState,
 	message ldapwire.Message,
@@ -297,6 +303,25 @@ func (server *Server) tryUnsupportedPcachePrivateOperation(
 	}
 	if failure != nil {
 		return true, writeResultForMessage(connection, message, *failure)
+	}
+	switch request := message.Request.(type) {
+	case ldapwire.AddRequest:
+		return true, server.handlePcachePrivateAdd(ctx, connection, state, message, request)
+	case ldapwire.ModifyRequest:
+		return true, server.handlePcachePrivateModify(ctx, connection, state, message, request)
+	case ldapwire.DeleteRequest:
+		return true, server.handlePcachePrivateDelete(ctx, connection, state, message, request)
+	case ldapwire.ModifyDNRequest:
+		return true, server.handlePcachePrivateModifyDN(ctx, connection, state, message, request)
+	case ldapwire.BindRequest:
+		return true, writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"Bind is not supported with pcachePrivDB control",
+			),
+		)
 	}
 	target, _, _, ok := chainOperationTarget(state, message.Request)
 	if !ok {
@@ -350,6 +375,719 @@ func (server *Server) tryUnsupportedPcachePrivateOperation(
 	)
 }
 
+func pcachePrivateWriteControls(
+	controls []ldapwire.Control,
+	supported requestControlSupport,
+) (requestControls, *ldapwire.Result) {
+	filtered := make([]ldapwire.Control, 0, len(controls))
+	for _, control := range controls {
+		if control.OID != pcachePrivateDBControl {
+			filtered = append(filtered, control)
+		}
+	}
+	return parseRequestControls(filtered, supported)
+}
+
+func (server *Server) pcachePrivateWriteDatabase(
+	state *connectionState,
+	dn directory.DN,
+	operation databaseRestrictions,
+) (*runtimeDatabase, *ldapwire.Result) {
+	database := databaseForDN(state.runtime, dn)
+	if database == nil || database.pcache == nil || database.pcache.disabled {
+		result := ldapwire.ResultError(
+			ldapwire.ResultUnavailableCriticalExtension,
+			"private database is not available",
+		)
+		return nil, &result
+	}
+	if !pcachePrivateDBRoot(state.runtime, *database, state.boundDN) {
+		result := ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"pcachePrivDB: operation not allowed",
+		)
+		return nil, &result
+	}
+	if frontendRestricts(state.runtime, operation) || databaseRestricts(*database, operation) {
+		result := ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"operation restricted",
+		)
+		return nil, &result
+	}
+	if state.passwordPolicyRestrictedDN != "" {
+		result := passwordPolicyRestrictionResult()
+		return nil, &result
+	}
+	return database, nil
+}
+
+func pcachePrivateAssertionResult(
+	runtime *runtimeState,
+	entry directory.Entry,
+	filter *directory.Filter,
+) *ldapwire.Result {
+	if filter == nil {
+		return nil
+	}
+	matches, err := filter.MatchWith(entry, runtime.schema)
+	if err != nil || !matches {
+		result := ldapwire.ResultError(ldapwire.ResultAssertionFailed, "")
+		return &result
+	}
+	return nil
+}
+
+func (server *Server) pcachePrivateReadControl(
+	runtime *runtimeState,
+	entry directory.Entry,
+	request *readControlRequest,
+	oid string,
+) (*ldapwire.Control, *ldapwire.Result) {
+	if request == nil {
+		return nil, nil
+	}
+	for _, attribute := range request.attributes {
+		if isSpecialAttributeSelection(attribute) {
+			continue
+		}
+		if _, exists := runtime.schema.AttributeType(attribute); !exists && request.critical {
+			result := ldapwire.ResultError(
+				ldapwire.ResultUndefinedAttributeType,
+				"unknown attribute type in read control",
+			)
+			return nil, &result
+		}
+	}
+	selected := server.selectEntry(runtime, entry, request.attributes, false)
+	return &ldapwire.Control{
+		OID: oid, Value: ldapwire.EncodeReadControlValue(selected), HasValue: true,
+	}, nil
+}
+
+func pcachePrivateResultFromError(err error) ldapwire.Result {
+	if failure := asOperationFailure(err); failure != nil {
+		return failure.result
+	}
+	return ldapwire.ResultError(ldapwire.ResultOther, err.Error())
+}
+
+func pcachePrivateValidateAddEntry(entry directory.Entry) *ldapwire.Result {
+	if len(entry.Attributes) == 0 {
+		result := ldapwire.ResultError(ldapwire.ResultProtocolError, "no attributes provided")
+		return &result
+	}
+	seen := make(map[string]struct{}, len(entry.Attributes))
+	for _, attribute := range entry.Attributes {
+		name := strings.ToLower(attribute.Description)
+		if _, duplicate := seen[name]; duplicate {
+			result := ldapwire.ResultError(ldapwire.ResultAttributeOrValueExists, "")
+			return &result
+		}
+		seen[name] = struct{}{}
+		if pcachePrivateProtectedAttribute(attribute.Description) {
+			result := ldapwire.ResultError(
+				ldapwire.ResultConstraintViolation,
+				"pcache operational metadata is not user modifiable",
+			)
+			return &result
+		}
+		if len(attribute.Values) == 0 {
+			result := ldapwire.ResultError(
+				ldapwire.ResultConstraintViolation,
+				"attribute requires at least one value",
+			)
+			return &result
+		}
+		for index, value := range attribute.Values {
+			for previous := 0; previous < index; previous++ {
+				if directory.EqualValue(attribute.Values[previous], value) {
+					result := ldapwire.ResultError(ldapwire.ResultAttributeOrValueExists, "")
+					return &result
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func pcachePrivateSchemaResult(
+	runtime *runtimeState,
+	entry directory.Entry,
+	dn directory.DN,
+) *ldapwire.Result {
+	if runtime == nil || runtime.schema == nil {
+		result := ldapwire.ResultError(ldapwire.ResultOther, "schema is unavailable")
+		return &result
+	}
+	if result := validateNewEntryWithSchema(entry, dn, runtime.schema); result != nil {
+		return result
+	}
+	if err := runtime.schema.ValidateEntry(entry); err != nil {
+		result := schemaValidationResult(err)
+		return &result
+	}
+	return nil
+}
+
+func pcachePrivateChangesProtected(changes []ldapwire.Modification) bool {
+	for _, change := range changes {
+		if pcachePrivateProtectedAttribute(change.Attribute.Description) {
+			return true
+		}
+	}
+	return false
+}
+
+func pcachePrivateProtectedRDN(dn directory.DN) bool {
+	for _, value := range dn.RDNValues() {
+		if pcachePrivateProtectedAttribute(value.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+func (state *pcacheState) reconcilePrivateQueries(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	physical map[string]directory.Entry,
+	nextGeneration uint64,
+) *ldapwire.Result {
+	keys := make([]string, 0, len(physical))
+	for key := range physical {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	total := len(state.private) + len(state.binds)
+	for key, query := range state.queries {
+		request, ok := query.replay.Request.(ldapwire.SearchRequest)
+		if !ok {
+			result := ldapwire.ResultError(ldapwire.ResultOther, "pcache query replay is invalid")
+			return &result
+		}
+		base, err := runtime.schema.NormalizeDN(request.BaseDN)
+		if err != nil {
+			result := ldapwire.ResultError(ldapwire.ResultOther, "pcache query base is invalid")
+			return &result
+		}
+		controlsByDN := make(map[string][]ldapwire.Control)
+		references := make([]pcacheSearchItem, 0)
+		for _, item := range query.response.items {
+			if item.entry == nil {
+				references = append(references, pcacheSearchItem{
+					references: append([]string(nil), item.references...),
+					controls:   cloneLDAPControls(item.controls),
+				})
+				continue
+			}
+			dn, normalizeErr := runtime.schema.NormalizeDN(item.entry.DN)
+			if normalizeErr == nil {
+				controlsByDN[dn.Key()] = cloneLDAPControls(item.controls)
+			}
+		}
+		items := make([]pcacheSearchItem, 0, len(keys)+len(references))
+		for _, entryKey := range keys {
+			entry := physical[entryKey]
+			dn, normalizeErr := runtime.schema.NormalizeDN(entry.DN)
+			if normalizeErr != nil || !directory.InScope(base, dn, request.Scope) {
+				continue
+			}
+			matches, matchErr := request.Filter.MatchWith(entry, runtime.schema)
+			if matchErr != nil {
+				result := ldapwire.ResultError(ldapwire.ResultOther, matchErr.Error())
+				return &result
+			}
+			if !matches {
+				continue
+			}
+			cloned := entry.Clone()
+			items = append(items, pcacheSearchItem{
+				entry:    &cloned,
+				controls: cloneLDAPControls(controlsByDN[entryKey]),
+			})
+		}
+		items = append(items, references...)
+		query.response.items = items
+		query.entries = len(items) - len(references)
+		if query.entries == 0 {
+			query.identifier = ""
+		} else if query.identifier == "" {
+			query.identifier = newPcacheQueryIdentifier(query.entries)
+		}
+		query.generation = nextGeneration
+		query.refreshing = false
+		state.queries[key] = query
+		total += query.entries
+	}
+	if database.pcache.maxEntries > 0 && total > database.pcache.maxEntries {
+		result := ldapwire.ResultError(
+			ldapwire.ResultAdminLimitExceeded,
+			"private cache entry limit exceeded",
+		)
+		return &result
+	}
+	state.entries = total
+	return nil
+}
+
+func pcachePrivateParentExists(
+	database runtimeDatabase,
+	dn directory.DN,
+	entries map[string]directory.Entry,
+) bool {
+	for _, suffix := range database.suffixes {
+		if dn.Equal(suffix) {
+			return true
+		}
+	}
+	parent, ok := dn.Parent()
+	if !ok || parent.Depth() == 0 {
+		return true
+	}
+	_, exists := entries[parent.Key()]
+	return exists
+}
+
+func (server *Server) handlePcachePrivateAdd(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.AddRequest,
+) error {
+	controls, failure := pcachePrivateWriteControls(
+		message.Controls,
+		supportsAssertion|supportsPostRead|supportsManageDsaIT|supportsRelax|supportsNoOp,
+	)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *failure)
+	}
+	dn, err := parseCoreWriteDN(state.runtime, request.Entry.DN)
+	if err != nil || dn.Depth() == 0 {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	database, failure := server.pcachePrivateWriteDatabase(state, dn, restrictAdd)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *failure)
+	}
+	request.Entry.DN = dn.String()
+	if failure := pcachePrivateValidateAddEntry(request.Entry); failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *failure)
+	}
+	if failure := pcachePrivateSchemaResult(state.runtime, request.Entry, dn); failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *failure)
+	}
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	var post *ldapwire.Control
+	accepted := database.pcache.state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		candidate.purgeExpired(candidate.clock())
+		visible := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())
+		if _, exists := visible[dn.Key()]; exists {
+			result = ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, "")
+			return false, true
+		}
+		if !pcachePrivateParentExists(*database, dn, visible) {
+			result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+			return false, true
+		}
+		if assertion := pcachePrivateAssertionResult(state.runtime, request.Entry, controls.assertion); assertion != nil {
+			result = *assertion
+			return false, true
+		}
+		if candidate.private == nil {
+			candidate.private = make(map[string]directory.Entry)
+		}
+		candidate.private[dn.Key()] = request.Entry.Clone()
+		physical := candidate.privatePhysicalEntriesUnlocked(state.runtime, candidate.clock())
+		nextGeneration := candidate.generation + 1
+		if failure := candidate.reconcilePrivateQueries(state.runtime, *database, physical, nextGeneration); failure != nil {
+			result = *failure
+			return false, true
+		}
+		after := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())[dn.Key()]
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, after, controls.postRead, postReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			post = control
+		}
+		if controls.noOp {
+			result.Code = ldapwire.ResultNoOperation
+			return false, true
+		}
+		candidate.generation = nextGeneration
+		return true, true
+	})
+	if !accepted {
+		result = ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
+		post = nil
+	}
+	var responseControls []ldapwire.Control
+	if result.Code == ldapwire.ResultSuccess && post != nil {
+		responseControls = append(responseControls, *post)
+	}
+	return server.writeOperationResultWithControls(connection, message.ID, ldapwire.ApplicationAddResponse, result, responseControls)
+}
+
+func (server *Server) handlePcachePrivateModify(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.ModifyRequest,
+) error {
+	controls, failure := pcachePrivateWriteControls(message.Controls,
+		supportsAssertion|supportsPreRead|supportsPostRead|supportsManageDsaIT|
+			supportsRelax|supportsNoOp|supportsPermissiveModify)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *failure)
+	}
+	dn, err := parseCoreWriteDN(state.runtime, request.DN)
+	if err != nil || dn.Depth() == 0 {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	database, failure := server.pcachePrivateWriteDatabase(state, dn, restrictModify)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *failure)
+	}
+	if pcachePrivateChangesProtected(request.Changes) {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse,
+			ldapwire.ResultError(ldapwire.ResultConstraintViolation, "pcache operational metadata is not user modifiable"))
+	}
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	var pre, post *ldapwire.Control
+	accepted := database.pcache.state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		candidate.purgeExpired(candidate.clock())
+		visible := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())
+		before, exists := visible[dn.Key()]
+		if !exists {
+			result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+			return false, true
+		}
+		if assertion := pcachePrivateAssertionResult(state.runtime, before, controls.assertion); assertion != nil {
+			result = *assertion
+			return false, true
+		}
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, before, controls.preRead, preReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			pre = control
+		}
+		after := before.Clone()
+		for _, change := range request.Changes {
+			if err := applyModificationWithPermissive(&after, change, controls.permissiveModify); err != nil {
+				result = pcachePrivateResultFromError(err)
+				return false, true
+			}
+		}
+		if !entryHasSchemaRDNValues(after, dn, state.runtime.schema) {
+			result = ldapwire.ResultError(ldapwire.ResultNotAllowedOnRDN, "")
+			return false, true
+		}
+		if failure := pcachePrivateSchemaResult(state.runtime, after, dn); failure != nil {
+			result = *failure
+			return false, true
+		}
+		physical := candidate.privatePhysicalEntriesUnlocked(state.runtime, candidate.clock())
+		stored := pcachePrivateEntryWithoutProtectedMetadata(after)
+		physical[dn.Key()] = stored.Clone()
+		candidate.private[dn.Key()] = stored
+		nextGeneration := candidate.generation + 1
+		if failure := candidate.reconcilePrivateQueries(state.runtime, *database, physical, nextGeneration); failure != nil {
+			result = *failure
+			return false, true
+		}
+		updated := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())[dn.Key()]
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, updated, controls.postRead, postReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			post = control
+		}
+		if controls.noOp {
+			result.Code = ldapwire.ResultNoOperation
+			return false, true
+		}
+		if before.Equal(after) {
+			return false, true
+		}
+		candidate.generation = nextGeneration
+		return true, true
+	})
+	if !accepted {
+		result = ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
+		pre, post = nil, nil
+	}
+	var responseControls []ldapwire.Control
+	if result.Code == ldapwire.ResultSuccess {
+		if pre != nil {
+			responseControls = append(responseControls, *pre)
+		}
+		if post != nil {
+			responseControls = append(responseControls, *post)
+		}
+	}
+	return server.writeOperationResultWithControls(connection, message.ID, ldapwire.ApplicationModifyResponse, result, responseControls)
+}
+
+func (server *Server) handlePcachePrivateDelete(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.DeleteRequest,
+) error {
+	controls, failure := pcachePrivateWriteControls(message.Controls,
+		supportsAssertion|supportsPreRead|supportsManageDsaIT|supportsRelax|supportsNoOp)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *failure)
+	}
+	dn, err := parseCoreWriteDN(state.runtime, request.DN)
+	if err != nil || dn.Depth() == 0 {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	database, failure := server.pcachePrivateWriteDatabase(state, dn, restrictDelete)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *failure)
+	}
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	var pre *ldapwire.Control
+	accepted := database.pcache.state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		candidate.purgeExpired(candidate.clock())
+		visible := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())
+		before, exists := visible[dn.Key()]
+		if !exists {
+			result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+			return false, true
+		}
+		if assertion := pcachePrivateAssertionResult(state.runtime, before, controls.assertion); assertion != nil {
+			result = *assertion
+			return false, true
+		}
+		for key, entry := range visible {
+			if key == dn.Key() {
+				continue
+			}
+			child, parseErr := state.runtime.schema.NormalizeDN(entry.DN)
+			if parseErr == nil && dn.AncestorOf(child) {
+				result = ldapwire.ResultError(ldapwire.ResultNotAllowedOnNonLeaf, "subordinate objects must be deleted first")
+				return false, true
+			}
+		}
+		physical := candidate.privatePhysicalEntriesUnlocked(state.runtime, candidate.clock())
+		if _, stored := physical[dn.Key()]; !stored {
+			result = ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "pcache operational metadata entry cannot be deleted")
+			return false, true
+		}
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, before, controls.preRead, preReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			pre = control
+		}
+		delete(physical, dn.Key())
+		delete(candidate.private, dn.Key())
+		nextGeneration := candidate.generation + 1
+		if failure := candidate.reconcilePrivateQueries(state.runtime, *database, physical, nextGeneration); failure != nil {
+			result = *failure
+			return false, true
+		}
+		if controls.noOp {
+			result.Code = ldapwire.ResultNoOperation
+			return false, true
+		}
+		candidate.generation = nextGeneration
+		return true, true
+	})
+	if !accepted {
+		result = ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
+		pre = nil
+	}
+	var responseControls []ldapwire.Control
+	if result.Code == ldapwire.ResultSuccess && pre != nil {
+		responseControls = append(responseControls, *pre)
+	}
+	return server.writeOperationResultWithControls(connection, message.ID, ldapwire.ApplicationDeleteResponse, result, responseControls)
+}
+
+func (server *Server) handlePcachePrivateModifyDN(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.ModifyDNRequest,
+) error {
+	controls, failure := pcachePrivateWriteControls(message.Controls,
+		supportsAssertion|supportsPreRead|supportsPostRead|supportsManageDsaIT|supportsRelax|supportsNoOp)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *failure)
+	}
+	oldDN, err := parseCoreWriteDN(state.runtime, request.DN)
+	if err != nil || oldDN.Depth() == 0 {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	database, failure := server.pcachePrivateWriteDatabase(state, oldDN, restrictRename)
+	if failure != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *failure)
+	}
+	newRDN, err := parseRuntimeDN(request.NewRDN, database.dnNormalizer)
+	if err != nil || newRDN.Depth() != 1 || pcachePrivateProtectedRDN(newRDN) {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	var superior directory.DN
+	if request.HasNewSuperior {
+		superior, err = parseCoreWriteDN(state.runtime, request.NewSuperior)
+	} else {
+		superior, _ = oldDN.Parent()
+	}
+	if err != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	newDN, err := directory.ComposeLocalName(newRDN, superior)
+	if err != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""))
+	}
+	if oldDN.Equal(newDN) {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, ""))
+	}
+	destination := databaseForDN(state.runtime, newDN)
+	if destination == nil || destination.partition != database.partition {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultAffectsMultipleDSAs, "cannot rename between DSAs"))
+	}
+	if oldDN.Equal(superior) || oldDN.AncestorOf(superior) {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultLoopDetect, ""))
+	}
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	var pre, post *ldapwire.Control
+	accepted := database.pcache.state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		candidate.purgeExpired(candidate.clock())
+		visible := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())
+		before, exists := visible[oldDN.Key()]
+		if !exists {
+			result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+			return false, true
+		}
+		if assertion := pcachePrivateAssertionResult(state.runtime, before, controls.assertion); assertion != nil {
+			result = *assertion
+			return false, true
+		}
+		if superior.Depth() > 0 {
+			if _, exists := visible[superior.Key()]; !exists {
+				result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+				return false, true
+			}
+		}
+		if existing, exists := visible[newDN.Key()]; exists {
+			existingDN, _ := state.runtime.schema.NormalizeDN(existing.DN)
+			if !oldDN.Equal(existingDN) && !oldDN.AncestorOf(existingDN) {
+				result = ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, "")
+				return false, true
+			}
+		}
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, before, controls.preRead, preReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			pre = control
+		}
+		physical := candidate.privatePhysicalEntriesUnlocked(state.runtime, candidate.clock())
+		if _, stored := physical[oldDN.Key()]; !stored {
+			result = ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "pcache operational metadata entry cannot be renamed")
+			return false, true
+		}
+		renamed := make(map[string]directory.Entry, len(physical))
+		materialized := make(map[string]directory.Entry)
+		for key, entry := range physical {
+			entryDN, parseErr := state.runtime.schema.NormalizeDN(entry.DN)
+			if parseErr != nil || (!oldDN.Equal(entryDN) && !oldDN.AncestorOf(entryDN)) {
+				renamed[key] = entry
+				continue
+			}
+			replacement, replaceErr := entryDN.ReplaceAncestor(oldDN, newDN)
+			if replaceErr != nil {
+				result = ldapwire.ResultError(ldapwire.ResultOther, replaceErr.Error())
+				return false, true
+			}
+			entry.DN = replacement.String()
+			if entryDN.Equal(oldDN) {
+				if request.DeleteOldRDN {
+					deleteSchemaRDNValues(&entry, oldDN, state.runtime.schema)
+				}
+				ensureSchemaRDNValues(&entry, newDN, state.runtime.schema)
+			}
+			if failure := pcachePrivateSchemaResult(state.runtime, entry, replacement); failure != nil {
+				result = *failure
+				return false, true
+			}
+			if _, collision := renamed[replacement.Key()]; collision {
+				result = ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, "")
+				return false, true
+			}
+			renamed[replacement.Key()] = entry
+			materialized[replacement.Key()] = pcachePrivateEntryWithoutProtectedMetadata(entry)
+		}
+		movedPrivate := make(map[string]directory.Entry, len(candidate.private))
+		for key, entry := range candidate.private {
+			entryDN, parseErr := state.runtime.schema.NormalizeDN(entry.DN)
+			if parseErr != nil || (!oldDN.Equal(entryDN) && !oldDN.AncestorOf(entryDN)) {
+				movedPrivate[key] = entry
+				continue
+			}
+			replacement, _ := entryDN.ReplaceAncestor(oldDN, newDN)
+			entry = renamed[replacement.Key()].Clone()
+			movedPrivate[replacement.Key()] = entry
+		}
+		for key, entry := range materialized {
+			movedPrivate[key] = entry
+		}
+		candidate.private = movedPrivate
+		nextGeneration := candidate.generation + 1
+		if failure := candidate.reconcilePrivateQueries(state.runtime, *database, renamed, nextGeneration); failure != nil {
+			result = *failure
+			return false, true
+		}
+		after := candidate.privateEntriesUnlocked(state.runtime, *database, database.pcache.persist, candidate.clock())[newDN.Key()]
+		if control, controlFailure := server.pcachePrivateReadControl(state.runtime, after, controls.postRead, postReadControlOID); controlFailure != nil {
+			result = *controlFailure
+			return false, true
+		} else {
+			post = control
+		}
+		if controls.noOp {
+			result.Code = ldapwire.ResultNoOperation
+			return false, true
+		}
+		candidate.generation = nextGeneration
+		return true, true
+	})
+	if !accepted {
+		result = ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
+		pre, post = nil, nil
+	}
+	var responseControls []ldapwire.Control
+	if result.Code == ldapwire.ResultSuccess {
+		if pre != nil {
+			responseControls = append(responseControls, *pre)
+		}
+		if post != nil {
+			responseControls = append(responseControls, *post)
+		}
+	}
+	return server.writeOperationResultWithControls(connection, message.ID, ldapwire.ApplicationModifyDNResponse, result, responseControls)
+}
+
 func pcachePrivateDBRoot(
 	runtime *runtimeState,
 	database runtimeDatabase,
@@ -367,21 +1105,93 @@ func (state *pcacheState) privateEntries(
 	database runtimeDatabase,
 	persistQueries bool,
 ) (map[string]directory.Entry, bool) {
+	// Mutations take the write side before mu, so waiting for a snapshot never
+	// blocks ordinary cache operations on mu. Only shallow map copies happen
+	// while mu is held; entry values are cloned by the unlocked snapshot below.
+	state.privateSnapshotMu.RLock()
+	defer state.privateSnapshotMu.RUnlock()
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	now := state.clock()
 	persistent := state.persistence != nil && state.persistence.enabled &&
 		state.persistence.store != nil
 	if !persistent {
 		state.purgeExpired(now)
 	}
-	entries := make(map[string]directory.Entry, state.entries+1)
+	snapshot := &pcacheState{
+		queries: make(map[string]pcacheCachedQuery, len(state.queries)),
+		private: make(map[string]directory.Entry, len(state.private)),
+		entries: state.entries,
+	}
+	for key, query := range state.queries {
+		snapshot.queries[key] = query
+	}
+	for key, entry := range state.private {
+		snapshot.private[key] = entry
+	}
+	state.mu.Unlock()
+	return snapshot.privateEntriesUnlocked(runtime, database, persistQueries, now), true
+}
+
+func (state *pcacheState) privateEntriesUnlocked(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	persistQueries bool,
+	now time.Time,
+) map[string]directory.Entry {
+	entries := state.privatePhysicalEntriesUnlocked(runtime, now)
 	visibleQueries := 0
 	for _, query := range state.queries {
-		if persistent && !now.Before(query.purgeAt) {
+		if !now.Before(query.purgeAt) {
 			continue
 		}
 		visibleQueries++
+		for key, entry := range entries {
+			if !pcacheQueryContainsDN(runtime, query, key) {
+				continue
+			}
+			if query.identifier != "" {
+				appendPcachePrivateValue(&entry, pcacheQueryIDAttribute, []byte(query.identifier))
+			}
+			entries[key] = entry
+		}
+	}
+	if len(database.suffixes) != 0 && visibleQueries != 0 {
+		suffix := database.suffixes[0]
+		entry := entries[suffix.Key()]
+		if entry.DN == "" {
+			entry = directory.Entry{DN: suffix.String()}
+			entry.ReplaceValues("objectClass", stringValues("top"))
+		}
+		if persistQueries {
+			for _, query := range state.queries {
+				if !now.Before(query.purgeAt) {
+					continue
+				}
+				if value := pcacheQueryURL(query); value != "" {
+					appendPcachePrivateValue(&entry, pcacheQueryURLAttribute, []byte(value))
+				}
+			}
+		}
+		entries[suffix.Key()] = entry
+	}
+	return entries
+}
+
+func (state *pcacheState) privatePhysicalEntriesUnlocked(
+	runtime *runtimeState,
+	now time.Time,
+) map[string]directory.Entry {
+	entries := make(map[string]directory.Entry, state.entries+len(state.private)+1)
+	for key, entry := range state.private {
+		clean := pcachePrivateEntryWithoutProtectedMetadata(entry)
+		if clean.DN != "" {
+			entries[key] = clean
+		}
+	}
+	for _, query := range state.queries {
+		if !now.Before(query.purgeAt) {
+			continue
+		}
 		for _, item := range query.response.items {
 			if item.entry == nil {
 				continue
@@ -395,40 +1205,86 @@ func (state *pcacheState) privateEntries(
 				entry = directory.Entry{DN: dn.String()}
 			}
 			mergePcachePrivateEntry(&entry, *item.entry)
-			if query.identifier != "" {
-				appendPcachePrivateValue(&entry, pcacheQueryIDAttribute, []byte(query.identifier))
-			}
 			entries[dn.Key()] = entry
 		}
 	}
-	if len(database.suffixes) != 0 && visibleQueries != 0 {
-		suffix := database.suffixes[0]
-		entry := entries[suffix.Key()]
-		if entry.DN == "" {
-			entry = directory.Entry{DN: suffix.String()}
-			entry.ReplaceValues("objectClass", stringValues("top"))
+	return entries
+}
+
+func pcacheQueryContainsDN(
+	runtime *runtimeState,
+	query pcacheCachedQuery,
+	key string,
+) bool {
+	for _, item := range query.response.items {
+		if item.entry == nil {
+			continue
 		}
-		if persistQueries {
-			for _, query := range state.queries {
-				if persistent && !now.Before(query.purgeAt) {
-					continue
-				}
-				if value := pcacheQueryURL(query); value != "" {
-					appendPcachePrivateValue(&entry, pcacheQueryURLAttribute, []byte(value))
-				}
-			}
+		dn, err := runtime.schema.NormalizeDN(item.entry.DN)
+		if err == nil && dn.Key() == key {
+			return true
 		}
-		entries[suffix.Key()] = entry
 	}
-	return entries, true
+	return false
 }
 
 func mergePcachePrivateEntry(target *directory.Entry, source directory.Entry) {
 	for _, attribute := range source.Attributes {
+		if pcachePrivateProtectedAttribute(attribute.Description) {
+			continue
+		}
 		for _, value := range attribute.Values {
 			appendPcachePrivateValue(target, attribute.Description, value)
 		}
 	}
+}
+
+func pcachePrivateProtectedAttribute(description string) bool {
+	name, _, _ := strings.Cut(strings.TrimSpace(description), ";")
+	switch strings.ToLower(name) {
+	case strings.ToLower(pcacheQueryIDAttribute),
+		strings.ToLower(pcacheQueryURLAttribute),
+		"pcachenumqueries",
+		"pcachenumentries",
+		pcacheQueryIDOID,
+		pcacheQueryURLOID,
+		pcacheNumQueriesOID,
+		pcacheNumEntriesOID:
+		return true
+	default:
+		return false
+	}
+}
+
+func pcachePrivateEntryHasProtectedMetadata(entry directory.Entry) bool {
+	for _, attribute := range entry.Attributes {
+		if pcachePrivateProtectedAttribute(attribute.Description) {
+			return true
+		}
+	}
+	return false
+}
+
+func pcachePrivateEntryWithoutProtectedMetadata(entry directory.Entry) directory.Entry {
+	clean := directory.Entry{DN: entry.DN}
+	for _, attribute := range entry.Attributes {
+		if pcachePrivateProtectedAttribute(attribute.Description) {
+			continue
+		}
+		clean.Attributes = append(clean.Attributes, directory.Attribute{
+			Description: attribute.Description,
+			Values:      pcacheCloneValues(attribute.Values),
+		})
+	}
+	return clean
+}
+
+func pcacheCloneValues(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for index := range values {
+		cloned[index] = bytes.Clone(values[index])
+	}
+	return cloned
 }
 
 func appendPcachePrivateValue(

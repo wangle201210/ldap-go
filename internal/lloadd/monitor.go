@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,13 @@ const (
 	monitorVLVSortControlMissing ldapwire.ResultCode = 76
 	monitorVLVOffsetRangeError   ldapwire.ResultCode = 77
 )
+
+type monitorRuntimeState struct {
+	generation uint64
+	startedAt  time.Time
+}
+
+var monitorGenerationSequence atomic.Uint64
 
 type monitorSnapshot struct {
 	id          []byte
@@ -94,11 +102,14 @@ type monitorVLVRequest struct {
 }
 
 type monitorCounters struct {
+	mu        sync.Mutex
 	received  atomic.Uint64
 	forwarded atomic.Uint64
 	rejected  atomic.Uint64
 	completed atomic.Uint64
 	failed    atomic.Uint64
+	pending   atomic.Uint64
+	abandoned atomic.Uint64
 }
 
 type ProxyMonitorCounters struct {
@@ -107,19 +118,71 @@ type ProxyMonitorCounters struct {
 	Rejected  uint64
 	Completed uint64
 	Failed    uint64
+	Pending   uint64
 }
 
 func (counters *monitorCounters) snapshot() ProxyMonitorCounters {
 	if counters == nil {
 		return ProxyMonitorCounters{}
 	}
+	counters.mu.Lock()
+	defer counters.mu.Unlock()
 	return ProxyMonitorCounters{
 		Received:  counters.received.Load(),
 		Forwarded: counters.forwarded.Load(),
 		Rejected:  counters.rejected.Load(),
 		Completed: counters.completed.Load(),
 		Failed:    counters.failed.Load(),
+		Pending:   counters.pending.Load(),
 	}
+}
+
+func (counters *monitorCounters) abandonedCount() uint64 {
+	if counters == nil {
+		return 0
+	}
+	counters.mu.Lock()
+	defer counters.mu.Unlock()
+	return counters.abandoned.Load()
+}
+
+func (counters *monitorCounters) begin() {
+	counters.mu.Lock()
+	counters.received.Add(1)
+	counters.pending.Add(1)
+	counters.mu.Unlock()
+}
+
+func (counters *monitorCounters) forwardedOperation() {
+	counters.mu.Lock()
+	counters.forwarded.Add(1)
+	counters.mu.Unlock()
+}
+
+func (counters *monitorCounters) complete(abandoned bool) {
+	counters.terminal(&counters.completed, abandoned)
+}
+
+func (counters *monitorCounters) fail() {
+	counters.terminal(&counters.failed, false)
+}
+
+func (counters *monitorCounters) reject() {
+	counters.terminal(&counters.rejected, false)
+}
+
+func (counters *monitorCounters) terminal(result *atomic.Uint64, abandoned bool) {
+	counters.mu.Lock()
+	if counters.pending.Load() == 0 {
+		counters.mu.Unlock()
+		return
+	}
+	counters.pending.Add(^uint64(0))
+	result.Add(1)
+	if abandoned {
+		counters.abandoned.Add(1)
+	}
+	counters.mu.Unlock()
 }
 
 func monitorOperationIndex(tag uint64) int {
@@ -130,56 +193,62 @@ func monitorOperationIndex(tag uint64) int {
 }
 
 func (client *clientConnection) recordMonitorReceived(tag uint64) {
-	client.monitor.received.Add(1)
-	client.proxy.operations[monitorOperationIndex(tag)].received.Add(1)
+	client.monitor.begin()
+	client.proxy.operations[monitorOperationIndex(tag)].begin()
 }
 
 func (client *clientConnection) recordMonitorRejected(tag uint64) {
-	client.monitor.failed.Add(1)
-	client.proxy.operations[monitorOperationIndex(tag)].rejected.Add(1)
+	client.monitor.fail()
+	client.proxy.operations[monitorOperationIndex(tag)].reject()
 }
 
 func (client *clientConnection) recordMonitorCompleted(tag uint64) {
-	client.monitor.completed.Add(1)
-	client.proxy.operations[monitorOperationIndex(tag)].completed.Add(1)
+	client.monitor.complete(false)
+	client.proxy.operations[monitorOperationIndex(tag)].complete(false)
 }
 
 func (client *clientConnection) recordMonitorFailed(tag uint64) {
-	client.monitor.failed.Add(1)
-	client.proxy.operations[monitorOperationIndex(tag)].failed.Add(1)
+	client.monitor.fail()
+	client.proxy.operations[monitorOperationIndex(tag)].fail()
 }
 
 func (operation *proxyOperation) recordMonitorForwarded() {
 	index := monitorOperationIndex(operation.requestTag)
-	operation.client.monitor.forwarded.Add(1)
-	operation.client.proxy.operations[index].forwarded.Add(1)
+	operation.client.monitor.forwardedOperation()
+	operation.client.proxy.operations[index].forwardedOperation()
 	if operation.upstream != nil {
-		operation.upstream.monitor.received.Add(1)
-		operation.upstream.backend.monitor.received.Add(1)
+		operation.upstream.monitor.begin()
+		operation.upstream.backend.monitor.begin()
 	}
 }
 
 func (operation *proxyOperation) recordMonitorFinished(forwarded, response bool) {
 	index := monitorOperationIndex(operation.requestTag)
 	if !forwarded {
-		operation.client.monitor.failed.Add(1)
-		operation.client.proxy.operations[index].rejected.Add(1)
+		operation.client.monitor.fail()
+		operation.client.proxy.operations[index].reject()
 		return
 	}
 	if response {
-		operation.client.monitor.completed.Add(1)
-		operation.client.proxy.operations[index].completed.Add(1)
-		operation.upstream.monitor.completed.Add(1)
-		operation.upstream.backend.monitor.completed.Add(1)
+		operation.mu.Lock()
+		abandoned := operation.abandoning
+		operation.mu.Unlock()
+		operation.client.monitor.complete(abandoned)
+		operation.client.proxy.operations[index].complete(abandoned)
+		operation.upstream.monitor.complete(abandoned)
+		operation.upstream.backend.monitor.complete(abandoned)
 		return
 	}
-	operation.client.monitor.failed.Add(1)
-	operation.client.proxy.operations[index].failed.Add(1)
-	operation.upstream.monitor.failed.Add(1)
-	operation.upstream.backend.monitor.failed.Add(1)
+	operation.client.monitor.fail()
+	operation.client.proxy.operations[index].fail()
+	operation.upstream.monitor.fail()
+	operation.upstream.backend.monitor.fail()
 }
 
 type ProxyMonitorSnapshot struct {
+	Generation          uint64
+	StartedAt           time.Time
+	Uptime              time.Duration
 	IncomingConnections int
 	OutgoingConnections int
 	PendingOperations   int
@@ -189,17 +258,19 @@ type ProxyMonitorSnapshot struct {
 }
 
 type ProxyMonitorOperation struct {
-	Name     string
-	Counters ProxyMonitorCounters
+	Name      string
+	Counters  ProxyMonitorCounters
+	Abandoned uint64
 }
 
 type ProxyMonitorConnection struct {
-	ID       string
-	Type     string
-	State    string
-	Pending  int
-	Created  time.Time
-	Counters ProxyMonitorCounters
+	ID        string
+	Type      string
+	State     string
+	Pending   int
+	Created   time.Time
+	Counters  ProxyMonitorCounters
+	Abandoned uint64
 }
 
 type ProxyMonitorBackend struct {
@@ -210,6 +281,7 @@ type ProxyMonitorBackend struct {
 	ActiveConnections  int
 	PendingConnections int
 	Counters           ProxyMonitorCounters
+	Abandoned          uint64
 	Connections        []ProxyMonitorConnection
 }
 
@@ -230,16 +302,21 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 	proxy.mu.Unlock()
 
 	scheduler := proxy.scheduler.Snapshot()
+	runtimeState := proxy.monitorRuntimeState()
 	result := ProxyMonitorSnapshot{
+		Generation:          runtimeState.generation,
+		StartedAt:           runtimeState.startedAt,
+		Uptime:              max(time.Since(runtimeState.startedAt), 0),
 		IncomingConnections: len(clients),
 		Operations: []ProxyMonitorOperation{
-			{Name: "Bind", Counters: proxy.operations[0].snapshot()},
-			{Name: "Other", Counters: proxy.operations[1].snapshot()},
+			{Name: "Bind", Counters: proxy.operations[0].snapshot(), Abandoned: proxy.operations[0].abandonedCount()},
+			{Name: "Other", Counters: proxy.operations[1].snapshot(), Abandoned: proxy.operations[1].abandonedCount()},
 		},
 	}
 	for _, client := range clients {
 		client.mu.Lock()
 		if !client.closed {
+			counters := client.monitor.snapshot()
 			state := "ready"
 			if client.draining {
 				state = "closing"
@@ -249,12 +326,13 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 				state = "active"
 			}
 			result.Incoming = append(result.Incoming, ProxyMonitorConnection{
-				ID:       strconv.FormatUint(client.id, 10),
-				Type:     "regular",
-				State:    state,
-				Pending:  len(client.ops),
-				Created:  client.created,
-				Counters: client.monitor.snapshot(),
+				ID:        strconv.FormatUint(client.id, 10),
+				Type:      "regular",
+				State:     state,
+				Pending:   int(counters.Pending),
+				Created:   client.created,
+				Counters:  counters,
+				Abandoned: client.monitor.abandonedCount(),
 			})
 		}
 		client.mu.Unlock()
@@ -269,14 +347,15 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 				BackendID: id,
 				URI:       backend.URI,
 				Counters:  proxy.tiers[tierIndex].backends[backendIndex].monitor.snapshot(),
+				Abandoned: proxy.tiers[tierIndex].backends[backendIndex].monitor.abandonedCount(),
 			})
 			byID[id] = &result.Backends[len(result.Backends)-1]
 		}
 	}
 	for _, backend := range scheduler.Backends {
 		if monitored := byID[backend.BackendID]; monitored != nil {
-			monitored.PendingOperations = backend.Pending
-			result.PendingOperations += backend.Pending
+			monitored.PendingOperations = int(monitored.Counters.Pending)
+			result.PendingOperations += monitored.PendingOperations
 		}
 	}
 	for _, connection := range scheduler.Connections {
@@ -300,6 +379,7 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 		}
 		created := time.Time{}
 		counters := ProxyMonitorCounters{}
+		abandoned := uint64(0)
 		if upstream := upstreams[connection.ID]; upstream != nil {
 			upstream.mu.Lock()
 			if upstream.closed {
@@ -307,18 +387,27 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 			}
 			created = upstream.created
 			counters = upstream.monitor.snapshot()
+			abandoned = upstream.monitor.abandonedCount()
 			upstream.mu.Unlock()
 		}
 		monitored.Connections = append(monitored.Connections, ProxyMonitorConnection{
-			ID:       connection.ID,
-			Type:     kind,
-			State:    state,
-			Pending:  connection.Pending,
-			Created:  created,
-			Counters: counters,
+			ID:        connection.ID,
+			Type:      kind,
+			State:     state,
+			Pending:   int(counters.Pending),
+			Created:   created,
+			Counters:  counters,
+			Abandoned: abandoned,
 		})
 	}
 	return result
+}
+
+func (proxy *Proxy) monitorRuntimeState() monitorRuntimeState {
+	if proxy != nil {
+		return proxy.monitorRuntime
+	}
+	return monitorRuntimeState{}
 }
 
 func (client *clientConnection) handleMonitorSearch(frame proxyFrame) (bool, bool) {
@@ -714,13 +803,16 @@ var monitorAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.666.100.11 NAME 'olmIncomingConnections' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + schema.SyntaxInteger + " NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.100.12 NAME 'olmOutgoingConnections' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + schema.SyntaxInteger + " NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.100.13 NAME 'olmConnectionState' EQUALITY caseIgnoreMatch ORDERING caseIgnoreOrderingMatch SYNTAX " + schema.SyntaxDirectoryString + " NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.4203.666.100.14 NAME 'olmAbandonedOps' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + schema.SyntaxInteger + " NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.4203.666.100.15 NAME 'olmGeneration' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + schema.SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.4203.666.100.16 NAME 'olmUptime' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + schema.SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
 }
 
 var monitorObjectClasses = []string{
-	"( 1.3.6.1.4.1.4203.666.101.1 NAME 'olmBalancer' SUP top STRUCTURAL MAY ( olmIncomingConnections $ olmOutgoingConnections ) )",
-	"( 1.3.6.1.4.1.4203.666.101.2 NAME 'olmBalancerServer' SUP top STRUCTURAL MAY ( olmServerURI $ olmActiveConnections $ olmPendingConnections $ olmPendingOps $ olmReceivedOps $ olmCompletedOps $ olmFailedOps ) )",
-	"( 1.3.6.1.4.1.4203.666.101.3 NAME 'olmBalancerOperation' SUP top STRUCTURAL MAY ( olmReceivedOps $ olmForwardedOps $ olmRejectedOps $ olmCompletedOps $ olmFailedOps ) )",
-	"( 1.3.6.1.4.1.4203.666.101.4 NAME 'olmBalancerConnection' SUP top STRUCTURAL MAY ( olmConnectionType $ olmConnectionState $ olmPendingOps $ olmReceivedOps $ olmCompletedOps $ olmFailedOps ) )",
+	"( 1.3.6.1.4.1.4203.666.101.1 NAME 'olmBalancer' SUP top STRUCTURAL MAY ( olmIncomingConnections $ olmOutgoingConnections $ olmGeneration $ olmUptime ) )",
+	"( 1.3.6.1.4.1.4203.666.101.2 NAME 'olmBalancerServer' SUP top STRUCTURAL MAY ( olmServerURI $ olmActiveConnections $ olmPendingConnections $ olmPendingOps $ olmReceivedOps $ olmCompletedOps $ olmFailedOps $ olmAbandonedOps ) )",
+	"( 1.3.6.1.4.1.4203.666.101.3 NAME 'olmBalancerOperation' SUP top STRUCTURAL MAY ( olmReceivedOps $ olmForwardedOps $ olmRejectedOps $ olmCompletedOps $ olmFailedOps $ olmPendingOps $ olmAbandonedOps ) )",
+	"( 1.3.6.1.4.1.4203.666.101.4 NAME 'olmBalancerConnection' SUP top STRUCTURAL MAY ( olmConnectionType $ olmConnectionState $ olmPendingOps $ olmReceivedOps $ olmCompletedOps $ olmFailedOps $ olmAbandonedOps ) )",
 }
 
 func (client *clientConnection) monitorACLSubject() acl.Subject {
@@ -1683,11 +1775,17 @@ func (client *clientConnection) sendMonitorDone(
 
 func (proxy *Proxy) monitorEntries() []directory.Entry {
 	snapshot := proxy.MonitorSnapshot()
+	pendingOperations := uint64(0)
+	for _, operation := range snapshot.Operations {
+		pendingOperations += operation.Counters.Pending
+	}
 	entries := []directory.Entry{
 		monitorEntry(MonitorBaseDN, "Monitor", []string{"top", "monitorServer"},
 			monitorAttribute("description", "LDAP load balancer monitor")),
 		monitorEntry(MonitorLoadBalancerDN, "Load Balancer", []string{"top", "olmBalancer"},
 			monitorAttribute("description", "Load Balancer information"),
+			monitorInteger64("olmGeneration", snapshot.Generation),
+			monitorInteger64("olmUptime", uint64(snapshot.Uptime/time.Second)),
 			monitorInteger("olmIncomingConnections", snapshot.IncomingConnections),
 			monitorInteger("olmOutgoingConnections", snapshot.OutgoingConnections)),
 		monitorEntry(monitorIncomingDN, "Incoming Connections", []string{"top", "monitorContainer"},
@@ -1695,7 +1793,7 @@ func (proxy *Proxy) monitorEntries() []directory.Entry {
 			monitorInteger("monitorCounter", snapshot.IncomingConnections)),
 		monitorEntry(monitorOperationsDN, "Operations", []string{"top", "monitorContainer"},
 			monitorAttribute("description", "Load Balancer global operation statistics"),
-			monitorInteger("olmPendingOps", snapshot.PendingOperations)),
+			monitorInteger64("olmPendingOps", pendingOperations)),
 		monitorEntry(monitorBackendTiersDN, "Backend Tiers", []string{"top", "monitorContainer"},
 			monitorAttribute("description", "Load Balancer Backends information")),
 	}
@@ -1704,7 +1802,7 @@ func (proxy *Proxy) monitorEntries() []directory.Entry {
 			"cn="+operation.Name+","+monitorOperationsDN,
 			operation.Name,
 			[]string{"top", "olmBalancerOperation"},
-			monitorCounterAttributes(operation.Counters)...,
+			monitorCounterAttributes(operation.Counters, operation.Abandoned)...,
 		))
 	}
 	for _, connection := range snapshot.Incoming {
@@ -1741,6 +1839,7 @@ func (proxy *Proxy) monitorEntries() []directory.Entry {
 			monitorInteger64("olmReceivedOps", backend.Counters.Received),
 			monitorInteger64("olmCompletedOps", backend.Counters.Completed),
 			monitorInteger64("olmFailedOps", backend.Counters.Failed),
+			monitorInteger64("olmAbandonedOps", backend.Abandoned),
 		))
 		backendDN := "cn=" + backendName + "," + tierDN
 		for _, connection := range backend.Connections {
@@ -1765,6 +1864,7 @@ func monitorConnectionEntry(dn, cn string, connection ProxyMonitorConnection) di
 		monitorInteger64("olmReceivedOps", connection.Counters.Received),
 		monitorInteger64("olmCompletedOps", connection.Counters.Completed),
 		monitorInteger64("olmFailedOps", connection.Counters.Failed),
+		monitorInteger64("olmAbandonedOps", connection.Abandoned),
 	)
 	if !connection.Created.IsZero() {
 		stamp := connection.Created.UTC().Format("20060102150405Z")
@@ -1776,13 +1876,15 @@ func monitorConnectionEntry(dn, cn string, connection ProxyMonitorConnection) di
 	return entry
 }
 
-func monitorCounterAttributes(counters ProxyMonitorCounters) []directory.Attribute {
+func monitorCounterAttributes(counters ProxyMonitorCounters, abandoned uint64) []directory.Attribute {
 	return []directory.Attribute{
 		monitorInteger64("olmReceivedOps", counters.Received),
 		monitorInteger64("olmForwardedOps", counters.Forwarded),
 		monitorInteger64("olmRejectedOps", counters.Rejected),
 		monitorInteger64("olmCompletedOps", counters.Completed),
 		monitorInteger64("olmFailedOps", counters.Failed),
+		monitorInteger64("olmPendingOps", counters.Pending),
+		monitorInteger64("olmAbandonedOps", abandoned),
 	}
 }
 
