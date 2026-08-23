@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	ldap "github.com/go-ldap/ldap/v3"
@@ -221,6 +223,206 @@ func TestOpenLDAPReferenceAttributeOptionConfiguration(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+const languageOptionTestDN = "uid=language-options,ou=people,dc=example,dc=com"
+
+var languageOptionTestEntry = directory.Entry{
+	DN: languageOptionTestDN,
+	Attributes: []directory.Attribute{
+		{Description: "objectClass", Values: stringValues(
+			"top", "person", "organizationalPerson", "inetOrgPerson",
+		)},
+		{Description: "uid", Values: stringValues("language-options")},
+		{Description: "cn", Values: stringValues("Bare CN")},
+		{Description: "cn;lang-en", Values: stringValues("English CN")},
+		{Description: "cn;lang-en-us", Values: stringValues("American CN")},
+		{Description: "cn;lang-fr", Values: stringValues("French CN")},
+		{Description: "sn", Values: stringValues("Bare SN")},
+		{Description: "sn;lang-en", Values: stringValues("English SN")},
+		{Description: "description", Values: stringValues("Bare description")},
+		{Description: "description;lang-fr", Values: stringValues("French description")},
+	},
+}
+
+func TestLanguageAttributeOptionProjection(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.Put(languageOptionTestEntry, false)
+	}); err != nil {
+		t.Fatalf("seed language option entry: %v", err)
+	}
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+		Schema:       registry,
+	})
+	defer stop()
+
+	got := observeLanguageAttributeOptionProjection(t, "ldap://"+address, "admin-secret")
+	assertLanguageAttributeOptionProjection(t, got)
+}
+
+func TestOpenLDAPReferenceLanguageAttributeOptionProjection(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	uri, stop := startOpenLDAPReferenceServerWithConfig(
+		t,
+		tools,
+		nil,
+		"",
+		"",
+		`
+
+dn: uid=language-options,ou=people,dc=example,dc=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: language-options
+cn: Bare CN
+cn;lang-en: English CN
+cn;lang-en-us: American CN
+cn;lang-fr: French CN
+sn: Bare SN
+sn;lang-en: English SN
+description: Bare description
+description;lang-fr: French description
+`,
+	)
+	defer stop()
+
+	reference := observeLanguageAttributeOptionProjection(t, uri, "secret")
+	assertLanguageAttributeOptionProjection(t, reference)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.Put(languageOptionTestEntry, false)
+	}); err != nil {
+		t.Fatalf("seed local language option entry: %v", err)
+	}
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	address, stopLocal := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+		Schema:       registry,
+	})
+	defer stopLocal()
+	local := observeLanguageAttributeOptionProjection(t, "ldap://"+address, "admin-secret")
+	if !reflect.DeepEqual(local, reference) {
+		t.Fatalf("language option projection\nlocal:     %#v\nOpenLDAP: %#v", local, reference)
+	}
+}
+
+type languageAttributeProjection map[string]map[string][]string
+
+func observeLanguageAttributeOptionProjection(
+	t *testing.T,
+	uri,
+	password string,
+) languageAttributeProjection {
+	t.Helper()
+	client, err := ldap.DialURL(uri)
+	if err != nil {
+		t.Fatalf("DialURL(%s): %v", uri, err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", password); err != nil {
+		t.Fatalf("Bind(%s): %v", uri, err)
+	}
+	tests := []struct {
+		name      string
+		requested []string
+		typesOnly bool
+	}{
+		{name: "bare", requested: []string{"cn"}},
+		{name: "exact", requested: []string{"cn;lang-en"}},
+		{name: "range", requested: []string{"cn;lang-"}},
+		{name: "supertype", requested: []string{"name;lang-en"}},
+		{name: "wildcard", requested: []string{"*"}},
+		{name: "types-only", requested: []string{"cn;lang-"}, typesOnly: true},
+	}
+	result := make(languageAttributeProjection, len(tests))
+	for _, test := range tests {
+		search, searchErr := client.Search(ldap.NewSearchRequest(
+			languageOptionTestDN,
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			test.typesOnly,
+			"(objectClass=*)",
+			test.requested,
+			nil,
+		))
+		if searchErr != nil || len(search.Entries) != 1 {
+			t.Fatalf("Search(%s, %v): entries=%d err=%v", test.name, test.requested, len(search.Entries), searchErr)
+		}
+		attributes := make(map[string][]string)
+		for _, attribute := range search.Entries[0].Attributes {
+			base := strings.ToLower(strings.SplitN(attribute.Name, ";", 2)[0])
+			if base != "cn" && base != "sn" && base != "description" {
+				continue
+			}
+			values := append([]string(nil), attribute.Values...)
+			slices.Sort(values)
+			attributes[strings.ToLower(attribute.Name)] = values
+		}
+		result[test.name] = attributes
+	}
+	return result
+}
+
+func assertLanguageAttributeOptionProjection(t *testing.T, got languageAttributeProjection) {
+	t.Helper()
+	want := languageAttributeProjection{
+		"bare": {
+			"cn":            {"Bare CN"},
+			"cn;lang-en":    {"English CN"},
+			"cn;lang-en-us": {"American CN"},
+			"cn;lang-fr":    {"French CN"},
+		},
+		"exact": {
+			"cn;lang-en": {"English CN"},
+		},
+		"range": {
+			"cn;lang-en":    {"English CN"},
+			"cn;lang-en-us": {"American CN"},
+			"cn;lang-fr":    {"French CN"},
+		},
+		"supertype": {
+			"cn;lang-en": {"English CN"},
+			"sn;lang-en": {"English SN"},
+		},
+		"wildcard": {
+			"cn":                  {"Bare CN"},
+			"cn;lang-en":          {"English CN"},
+			"cn;lang-en-us":       {"American CN"},
+			"cn;lang-fr":          {"French CN"},
+			"sn":                  {"Bare SN"},
+			"sn;lang-en":          {"English SN"},
+			"description":         {"Bare description"},
+			"description;lang-fr": {"French description"},
+		},
+		"types-only": {
+			"cn;lang-en":    nil,
+			"cn;lang-en-us": nil,
+			"cn;lang-fr":    nil,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("language attribute projection = %#v, want %#v", got, want)
 	}
 }
 

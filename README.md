@@ -338,7 +338,12 @@ server-initiated notice; Bind and Unbind abort without notice as required by the
 RFC. OpenLDAP `ldapmodify -E txn=commit/abort` plus direct slapd rollback and
 Bind differentials pass. A separate wire differential records that OpenLDAP
 2.6.13 rejects transactional Password Modify, while ldap-go implements the RFC
-5805/RFC 3062 composition described above.
+5805/RFC 3062 composition described above. Matching OpenLDAP 2.6.13, a Start
+Transaction request carrying critical ProxyAuthz is rejected with
+`unavailableCriticalExtension`, and transactional updates carrying pre-read or
+post-read are rejected with `unwillingToPerform` without response controls;
+these are tested compatibility rejections rather than silently ignored
+controls.
 RFC 6171 Don't Use Copy is available on Search and Compare. Authoritative
 databases answer normally; a single-provider shadow Search returns its
 OpenLDAP-rewritten `olcUpdateRef` or `unwillingToPerform`, while shadow Compare
@@ -588,6 +593,12 @@ proof validation, and client certificates for EXTERNAL over LDAPS or StartTLS.
 prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
 paging. Critical/prompt paging with referral chasing is explicitly rejected
 because each referral requires an independent cookie stream.
+Its default output is OpenLDAP-style extended LDIF with query metadata, UFN
+comments, result metadata, SearchReference URLs, and counts. `-L`, `-LL`, and
+`-LLL` progressively suppress extended output; arbitrary repeated `L` forms
+are accepted, and `--` ends that option parsing. In a batch, `-c` processes
+filters one at a time, continues after malformed filters or LDAP operation
+errors, and retains a nonzero final LDAP status instead of discarding failures.
 It also supports client-side `-S <attribute>` sorting, `-S ''` sorting by
 user-friendly DN components, and `-u` output of an LDIF `ufn` line. Sorting is
 stable for equal keys, compares all returned values with the covered
@@ -598,9 +609,21 @@ joins multi-valued RDNs with ` + `, folds a trailing run of `dc` RDNs into a
 dotted domain, emits escaped bytes as uppercase hexadecimal such as `\2C`, and
 preserves hexadecimal BER AVAs. Focused tests and a pinned OpenLDAP 2.6.13
 fixture cover these forms; arbitrary locale-dependent ordering is not claimed.
+Referral URLs are parsed into RFC 4516 DN, attributes, scope, filter, and
+extension fields. Following OpenLDAP 2.6.13 referral chasing, only DN and scope
+replace the original Search request; malformed URLs map to LDAP parameter error
+89, while unsupported or multiple critical extensions map to 92. An empty or
+missing referral DN deliberately retains the original base DN, avoiding the
+root-search expansion observed in the 2.6.13 binary.
+`ldapmodify -a` defaults records without `changetype` to Add, while ordinary
+`ldapmodify` parses the same records as Modify and supports `add`, `delete`,
+`replace`, and `increment` blocks with an optional final separator.
 `ldapcompare` carries generic `-e` controls and noncritical `-M` or critical
 `-MM` ManageDsaIT through its raw Compare path, including referral chasing;
-its separate historical `-E` surface remains unsupported. `ldapexop passwd`
+`-v` renders TRUE, FALSE, UNDEFINED, LDAP result details, referrals, and
+response controls. OpenLDAP 2.6.13 contains an unreachable `-E` handler but
+does not register the option, so all `ldapcompare -E` forms are compatibly
+rejected before connecting rather than sent as a control. `ldapexop passwd`
 uses the same old/new password, prompt/file, control, dry-run, target identity,
 and generated-password response behavior as `ldappasswd`.
 GSSAPI, SCRAM-PLUS/channel binding, SASL security layers, interactive SASL
@@ -697,7 +720,16 @@ publishes a new context for later StartTLS and LDAPS handshakes; existing
 connections continue on their original context. Invalid or unsupported TLS
 directives roll back instead of weakening the active configuration.
 CRL policies `none`, `peer`, and `all` validate current issuer-signed PEM/DER
-lists before accepting a client certificate.
+lists before accepting a client certificate. `olcTLSCACertificatePath` accepts
+up to 16 semicolon-separated OpenSSL hash directories, loads only `hash.N`
+entries, de-duplicates certificates, blocks directory escape, and applies
+bounded file, byte, and certificate budgets. Traditional RFC 1423 encrypted
+PEM private keys use a permission-restricted password file named by
+`LDAP_GO_TLS_KEY_PASSWORD_FILE`; encrypted PKCS#8 remains unsupported.
+`olcTLSECName` maps one `X25519`, P-256, P-384, or P-521 name, including common
+OpenSSL aliases. Multi-group selectors, unsupported groups, DH/random-file
+directives, complete OpenSSL cipher expressions, and TLS 1.3 cipher-suite
+selection are rejected because Go TLS cannot reproduce those semantics.
 
 GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
 
@@ -826,7 +858,10 @@ DN, Name And Optional UID, UUID, arbitrary-precision INTEGER, generalized-time,
 authzMatch, CSN, OpenLDAP ACI, and UTF-8 equality normalizers are checked.
 Imported `olcAttributeOptions` replace the default `lang-` option family and
 support OpenLDAP-style exact, trailing-`-`, and `range=` prefix definitions,
-including range selection on Search and range rejection on Modify. Imported
+including range selection on Search and range rejection on Modify. Search
+projection covers a bare attribute, an exact language option, a trailing
+language-option range, attribute-type subtypes, `*`, and `typesOnly` with the
+same tested value selection as OpenLDAP 2.6.13. Imported
 `olcLdapSyntaxes` preserve ordinary declarations and ordered `X-SUBST` chains;
 a substitute inherits the known syntax's validator and binary-transfer flags.
 Full value checking covers built-in and supported substituted syntaxes;
@@ -898,8 +933,13 @@ requires every child to be indexed. Every candidate still passes the full
 scope, filter, overlay, and ACL pipeline. Indexes are transactionally
 maintained across writes and renames, rebuilt for legacy/config changes, and
 checked through backup/restore/compact; raw writes invalidate them and fall
-back to scans. `approx`, `nolang`, `default`, attributes without the requested
-matching rule, and rules without a proven equivalent normalization are rejected.
+back to scans. Ordered `olcDbIndex` values support accumulated `default` modes,
+the synonymous `nolang`/`notags` tag-suppression mode, and `approx` where
+OpenLDAP associates a supported approximate rule. Final approximate matching
+uses OpenLDAP-compatible UTF-8 normalization and Metaphone behavior; phonetic
+postings are not yet stored, so those filters safely scan. Option-specific
+index databases and `nosubtypes` remain unsupported, as do requested matching
+rules without a proven equivalent normalization.
 Migration size, lock time, and remaining scan paths must still be qualified
 before production use. These limits are part of why ldap-go is not yet a
 complete OpenLDAP drop-in replacement.

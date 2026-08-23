@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -19,6 +20,8 @@ func ldapReferralClientResult(err error) (uint16, string, bool) {
 		return 0, "", false
 	}
 	switch ldapError.ResultCode {
+	case ldap.LDAPResultParamError:
+		return ldapError.ResultCode, "Bad parameter to an ldap routine", true
 	case ldap.LDAPResultClientLoop:
 		return ldapError.ResultCode, "Client Loop", true
 	case ldap.LDAPResultReferralLimitExceeded:
@@ -33,67 +36,101 @@ type ldapReferralTarget struct {
 	endpoint         string
 	dn               string
 	hasDN            bool
+	attributes       []string
+	hasAttributes    bool
 	scope            int
 	hasScope         bool
+	filter           string
+	hasFilter        bool
 	startTLS         bool
 	startTLSRequired bool
 }
 
 func parseLDAPReferralTarget(raw string) (ldapReferralTarget, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ldapReferralTarget{}, fmt.Errorf("parse referral URL %q: %w", raw, err)
+	target, err := parseLDAPReferralTargetURL(raw)
+	if err == nil {
+		return target, nil
 	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	if parsed.Scheme != "ldap" && parsed.Scheme != "ldaps" {
+	var ldapError *ldap.Error
+	if errors.As(err, &ldapError) {
+		return ldapReferralTarget{}, err
+	}
+	return ldapReferralTarget{}, ldap.NewError(ldap.LDAPResultParamError, err)
+}
+
+func parseLDAPReferralTargetURL(raw string) (ldapReferralTarget, error) {
+	schemeEnd := strings.Index(raw, "://")
+	if schemeEnd <= 0 {
+		return ldapReferralTarget{}, fmt.Errorf("referral URL %q is invalid", raw)
+	}
+	scheme := strings.ToLower(raw[:schemeEnd])
+	if scheme != "ldap" && scheme != "ldaps" {
 		return ldapReferralTarget{}, fmt.Errorf(
 			"referral URL %q must use ldap:// or ldaps://",
 			raw,
 		)
 	}
-	if parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil ||
-		parsed.Fragment != "" || parsed.Opaque != "" {
+	remainder := raw[schemeEnd+3:]
+	if strings.ContainsRune(remainder, '#') {
 		return ldapReferralTarget{}, fmt.Errorf("referral URL %q is invalid", raw)
+	}
+	authorityEnd := strings.IndexAny(remainder, "/?")
+	if authorityEnd < 0 {
+		authorityEnd = len(remainder)
+	}
+	if authorityEnd < len(remainder) && remainder[authorityEnd] != '/' {
+		return ldapReferralTarget{}, fmt.Errorf("referral URL %q is invalid", raw)
+	}
+	endpoint, err := parseLDAPReferralEndpoint(raw, scheme, remainder[:authorityEnd])
+	if err != nil {
+		return ldapReferralTarget{}, err
 	}
 
 	target := ldapReferralTarget{
 		raw:      raw,
-		endpoint: (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String(),
-		hasDN:    parsed.EscapedPath() != "",
+		endpoint: endpoint,
 	}
-	if target.hasDN {
-		escapedDN := strings.TrimPrefix(parsed.EscapedPath(), "/")
-		target.dn, err = url.PathUnescape(escapedDN)
+	if authorityEnd == len(remainder) {
+		return target, nil
+	}
+
+	components := strings.Split(remainder[authorityEnd+1:], "?")
+	if len(components) > 5 {
+		return ldapReferralTarget{}, fmt.Errorf("referral URL %q has too many fields", raw)
+	}
+	if components[0] != "" {
+		target.dn, err = url.PathUnescape(components[0])
 		if err != nil {
 			return ldapReferralTarget{}, fmt.Errorf("decode referral DN in %q: %w", raw, err)
 		}
-		if target.dn != "" {
-			if _, err := ldap.ParseDN(target.dn); err != nil {
-				return ldapReferralTarget{}, fmt.Errorf(
-					"parse referral DN %q: %w",
-					target.dn,
-					err,
-				)
-			}
-		}
-	}
-
-	components := strings.Split(parsed.RawQuery, "?")
-	if len(components) > 4 {
-		return ldapReferralTarget{}, fmt.Errorf("referral URL %q has too many query components", raw)
+		target.hasDN = target.dn != ""
 	}
 	if len(components) > 1 && components[1] != "" {
-		scopeName, err := url.PathUnescape(components[1])
+		decoded, decodeErr := url.PathUnescape(components[1])
+		if decodeErr != nil {
+			return ldapReferralTarget{}, fmt.Errorf(
+				"decode referral attributes in %q: %w",
+				raw,
+				decodeErr,
+			)
+		}
+		target.attributes = splitLDAPReferralList(decoded)
+		target.hasAttributes = true
+	}
+	if len(components) > 2 && components[2] != "" {
+		scopeName, err := url.PathUnescape(components[2])
 		if err != nil {
 			return ldapReferralTarget{}, fmt.Errorf("decode referral scope in %q: %w", raw, err)
 		}
 		switch strings.ToLower(scopeName) {
 		case "base":
 			target.scope = ldap.ScopeBaseObject
-		case "one":
+		case "one", "onelevel":
 			target.scope = ldap.ScopeSingleLevel
-		case "sub":
+		case "sub", "subtree":
 			target.scope = ldap.ScopeWholeSubtree
+		case "subord", "subordinate", "children":
+			target.scope = ldap.ScopeChildren
 		default:
 			return ldapReferralTarget{}, fmt.Errorf(
 				"referral URL %q has invalid search scope %q",
@@ -103,8 +140,20 @@ func parseLDAPReferralTarget(raw string) (ldapReferralTarget, error) {
 		}
 		target.hasScope = true
 	}
-	if len(components) == 4 && components[3] != "" {
-		for _, rawExtension := range strings.Split(components[3], ",") {
+	if len(components) > 3 && components[3] != "" {
+		target.filter, err = url.PathUnescape(components[3])
+		if err != nil {
+			return ldapReferralTarget{}, fmt.Errorf("decode referral filter in %q: %w", raw, err)
+		}
+		target.hasFilter = true
+	}
+	if len(components) == 5 {
+		rawExtensions := splitLDAPReferralList(components[4])
+		if len(rawExtensions) == 0 {
+			return ldapReferralTarget{}, fmt.Errorf("referral URL %q has empty extensions", raw)
+		}
+		criticalExtensions := 0
+		for _, rawExtension := range rawExtensions {
 			extension, err := url.PathUnescape(rawExtension)
 			if err != nil {
 				return ldapReferralTarget{}, fmt.Errorf(
@@ -114,29 +163,121 @@ func parseLDAPReferralTarget(raw string) (ldapReferralTarget, error) {
 				)
 			}
 			critical := strings.HasPrefix(extension, "!")
-			extension = strings.TrimPrefix(extension, "!")
-			name, _, _ := strings.Cut(extension, "=")
-			if strings.EqualFold(name, "StartTLS") || name == ldapStartTLSOID {
+			if critical {
+				criticalExtensions++
+				extension = strings.TrimPrefix(extension, "!")
+			}
+			if strings.EqualFold(extension, "StartTLS") ||
+				strings.EqualFold(extension, "X-StartTLS") ||
+				extension == ldapStartTLSOID {
 				target.startTLS = true
 				target.startTLSRequired = target.startTLSRequired || critical
 				continue
 			}
 			if critical {
-				return ldapReferralTarget{}, fmt.Errorf(
-					"referral URL %q has unsupported critical extension %q",
-					raw,
-					name,
+				return ldapReferralTarget{}, ldap.NewError(
+					ldap.LDAPResultNotSupported,
+					fmt.Errorf(
+						"referral URL %q has unsupported critical extension %q",
+						raw,
+						extension,
+					),
 				)
 			}
 		}
-	}
-	if target.startTLS && parsed.Scheme == "ldaps" {
-		return ldapReferralTarget{}, fmt.Errorf(
-			"referral URL %q cannot combine ldaps:// and StartTLS",
-			raw,
-		)
+		if criticalExtensions > 1 {
+			return ldapReferralTarget{}, ldap.NewError(
+				ldap.LDAPResultNotSupported,
+				fmt.Errorf("referral URL %q has multiple critical extensions", raw),
+			)
+		}
 	}
 	return target, nil
+}
+
+func parseLDAPReferralEndpoint(rawURL, scheme, authority string) (string, error) {
+	if strings.ContainsRune(authority, '@') {
+		return "", fmt.Errorf("referral URL %q must not contain userinfo", rawURL)
+	}
+
+	hostPart := authority
+	portPart := ""
+	hasPort := false
+	ipv6 := false
+	if strings.HasPrefix(hostPart, "[") {
+		closing := strings.IndexByte(hostPart, ']')
+		if closing < 0 {
+			return "", fmt.Errorf("referral URL %q has an invalid IPv6 host", rawURL)
+		}
+		ipv6 = true
+		remainder := hostPart[closing+1:]
+		hostPart = hostPart[1:closing]
+		if remainder != "" {
+			if !strings.HasPrefix(remainder, ":") || strings.Contains(remainder[1:], ":") {
+				return "", fmt.Errorf("referral URL %q has an invalid host or port", rawURL)
+			}
+			hasPort = true
+			portPart = remainder[1:]
+		}
+	} else {
+		if strings.ContainsRune(hostPart, ']') {
+			return "", fmt.Errorf("referral URL %q has an invalid host", rawURL)
+		}
+		if colon := strings.IndexByte(hostPart, ':'); colon >= 0 {
+			hasPort = true
+			portPart = hostPart[colon+1:]
+			hostPart = hostPart[:colon]
+			if strings.ContainsRune(portPart, ':') {
+				return "", fmt.Errorf("referral URL %q has an invalid port", rawURL)
+			}
+		}
+	}
+
+	host, err := url.PathUnescape(hostPart)
+	if err != nil {
+		return "", fmt.Errorf("decode referral host in %q: %w", rawURL, err)
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	if strings.ContainsAny(host, "\x00\r\n/?#@") || (!ipv6 && strings.ContainsRune(host, ':')) {
+		return "", fmt.Errorf("referral URL %q has an invalid host", rawURL)
+	}
+
+	port := ""
+	if hasPort {
+		port, err = url.PathUnescape(portPart)
+		if err != nil {
+			return "", fmt.Errorf("decode referral port in %q: %w", rawURL, err)
+		}
+		value, parseErr := strconv.Atoi(port)
+		if parseErr != nil || value < 0 || value > 65535 || port == "" {
+			return "", fmt.Errorf("referral URL %q has an invalid port", rawURL)
+		}
+		if value == 0 {
+			port = ""
+		}
+	}
+
+	endpointHost := host
+	if ipv6 {
+		endpointHost = "[" + host + "]"
+	}
+	if port != "" {
+		endpointHost = net.JoinHostPort(host, port)
+	}
+	return (&url.URL{Scheme: scheme, Host: endpointHost}).String(), nil
+}
+
+func splitLDAPReferralList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func (options *ldapClientOptions) connectLDAPReferral(
@@ -323,8 +464,6 @@ func applyLDAPSearchReferral(
 ) {
 	if target.hasDN {
 		request.BaseDN = target.dn
-	} else if searchReference {
-		request.BaseDN = ""
 	}
 	if target.hasScope {
 		request.Scope = target.scope

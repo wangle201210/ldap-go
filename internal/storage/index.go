@@ -48,14 +48,17 @@ func equalityIndexPostingKindConfigured(definition EqualityIndexAttribute, kind 
 type EqualityIndexAttribute struct {
 	Attribute        string `json:"attribute"`
 	EqualityRule     string `json:"equalityRule,omitempty"`
+	ApproximateRule  string `json:"approximateRule,omitempty"`
 	SubstringRule    string `json:"substringRule,omitempty"`
 	OrderingRule     string `json:"orderingRule,omitempty"`
 	Equality         bool   `json:"equality,omitempty"`
 	Presence         bool   `json:"presence,omitempty"`
+	Approximate      bool   `json:"approximate,omitempty"`
 	SubstringInitial bool   `json:"substringInitial,omitempty"`
 	SubstringAny     bool   `json:"substringAny,omitempty"`
 	SubstringFinal   bool   `json:"substringFinal,omitempty"`
 	Ordering         bool   `json:"ordering,omitempty"`
+	NoTags           bool   `json:"noTags,omitempty"`
 }
 
 // EqualityIndexConfig is the storage-neutral representation of olcDbIndex eq
@@ -78,6 +81,15 @@ type EqualityIndexSchema interface {
 	ResolveOrderingIndexAttribute(description string) (canonical string, ordering bool, err error)
 	NormalizeOrderingIndexAssertion(description string, value []byte) ([]byte, error)
 	OrderingIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
+}
+
+// approximateEqualityIndexSchema is optional because approximate filters are
+// normally scan-only. Implementations may expose the OpenLDAP equality-index
+// fallback used only by attribute types that have no associated approximate
+// matching rule.
+type approximateEqualityIndexSchema interface {
+	ResolveApproximateIndexAttribute(description string) (canonical string, equalityFallback bool, err error)
+	NormalizeApproximateIndexAssertion(description string, value []byte) ([]byte, error)
 }
 
 type equalityIndexStorageReader interface {
@@ -284,6 +296,31 @@ func planEqualityIndexFilter(
 			return nil, false, err
 		}
 		normalized, err := schema.NormalizeEqualityIndexAssertion(
+			filter.Attribute,
+			filter.Assertion,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		keys, err := reader.equalityIndexPostings(
+			partition,
+			attribute,
+			equalityIndexValue,
+			normalized,
+		)
+		return stringSet(keys), true, err
+	case directory.FilterApprox:
+		approximate, ok := schema.(approximateEqualityIndexSchema)
+		if !ok {
+			return nil, false, nil
+		}
+		attribute, equalityFallback, err := approximate.ResolveApproximateIndexAttribute(
+			filter.Attribute,
+		)
+		if err != nil || !equalityFallback {
+			return nil, false, err
+		}
+		normalized, err := approximate.NormalizeApproximateIndexAssertion(
 			filter.Attribute,
 			filter.Assertion,
 		)
@@ -526,20 +563,24 @@ func normalizeEqualityIndexConfig(
 	for _, attribute := range config.Attributes {
 		attribute.Attribute = strings.ToLower(strings.TrimSpace(attribute.Attribute))
 		attribute.EqualityRule = strings.ToLower(strings.TrimSpace(attribute.EqualityRule))
+		attribute.ApproximateRule = strings.ToLower(strings.TrimSpace(attribute.ApproximateRule))
 		attribute.SubstringRule = strings.ToLower(strings.TrimSpace(attribute.SubstringRule))
 		attribute.OrderingRule = strings.ToLower(strings.TrimSpace(attribute.OrderingRule))
 		hasSubstring := attribute.SubstringInitial || attribute.SubstringAny || attribute.SubstringFinal
 		if attribute.Attribute == "" ||
 			(attribute.Equality && attribute.EqualityRule == "") ||
+			(attribute.Approximate && attribute.ApproximateRule == "") ||
 			(hasSubstring && attribute.SubstringRule == "") ||
 			(attribute.Ordering && attribute.OrderingRule == "") ||
-			(!attribute.Equality && !attribute.Presence && !hasSubstring && !attribute.Ordering) {
+			(!attribute.Equality && !attribute.Presence && !attribute.Approximate &&
+				!hasSubstring && !attribute.Ordering && !attribute.NoTags) {
 			return EqualityIndexConfig{}, errors.New(
 				"index attribute, enabled mode, and matching rules are required",
 			)
 		}
 		if existing, ok := byAttribute[attribute.Attribute]; ok {
 			if rulesConflict(existing.EqualityRule, attribute.EqualityRule) ||
+				rulesConflict(existing.ApproximateRule, attribute.ApproximateRule) ||
 				rulesConflict(existing.SubstringRule, attribute.SubstringRule) ||
 				rulesConflict(existing.OrderingRule, attribute.OrderingRule) {
 				return EqualityIndexConfig{}, fmt.Errorf(
@@ -550,6 +591,9 @@ func normalizeEqualityIndexConfig(
 			if attribute.EqualityRule == "" {
 				attribute.EqualityRule = existing.EqualityRule
 			}
+			if attribute.ApproximateRule == "" {
+				attribute.ApproximateRule = existing.ApproximateRule
+			}
 			if attribute.SubstringRule == "" {
 				attribute.SubstringRule = existing.SubstringRule
 			}
@@ -558,10 +602,12 @@ func normalizeEqualityIndexConfig(
 			}
 			attribute.Equality = attribute.Equality || existing.Equality
 			attribute.Presence = attribute.Presence || existing.Presence
+			attribute.Approximate = attribute.Approximate || existing.Approximate
 			attribute.SubstringInitial = attribute.SubstringInitial || existing.SubstringInitial
 			attribute.SubstringAny = attribute.SubstringAny || existing.SubstringAny
 			attribute.SubstringFinal = attribute.SubstringFinal || existing.SubstringFinal
 			attribute.Ordering = attribute.Ordering || existing.Ordering
+			attribute.NoTags = attribute.NoTags || existing.NoTags
 		}
 		byAttribute[attribute.Attribute] = attribute
 	}

@@ -140,10 +140,11 @@ func runLDAPModify(
 	inputPath := flags.String("f", "", "read LDIF from a file instead of stdin")
 	continueOnError := flags.Bool("c", false, "continue after failed records")
 	failurePath := flags.String("S", "", "write failed records as LDIF")
+	addMode := false
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "operation control: [!]<oid>[=:<string>|::<base64>|:<file URI>]")
 	if command == "ldapmodify" {
-		flags.Bool("a", false, "unsupported: use the ldapadd command")
+		flags.BoolVar(&addMode, "a", false, "treat content records as Add requests")
 	}
 
 	if err := flags.Parse(args); err != nil {
@@ -155,13 +156,7 @@ func runLDAPModify(
 	if err := client.validateWrite(flags); err != nil {
 		return err
 	}
-	unsupported := []unsupportedFlag{}
-	if command == "ldapmodify" {
-		unsupported = append(unsupported, unsupportedFlag{
-			name: "a", reason: "use the ldapadd command for content records",
-		})
-	}
-	if err := rejectUnsupportedFlags(command, flags, unsupported); err != nil {
+	if err := rejectUnsupportedFlags(command, flags, nil); err != nil {
 		return err
 	}
 	extensionControls, err := parseLDAPControlSpecs(extensions, ldapControlValueLDIF)
@@ -175,6 +170,9 @@ func runLDAPModify(
 	}
 	if flagWasSet(flags, "c") && !*continueOnError {
 		return errors.New("-c=false is not supported")
+	}
+	if flagWasSet(flags, "a") && !addMode {
+		return errors.New("-a=false is not supported")
 	}
 	if flagWasSet(flags, "f") && *inputPath == "" {
 		return errors.New("-f requires a non-empty path or - for stdin")
@@ -219,7 +217,7 @@ func runLDAPModify(
 	succeeded := 0
 	failed := 0
 	var firstFailure error
-	allowContentAdd := command == "ldapadd"
+	allowContentAdd := command == "ldapadd" || addMode
 	for index, rawRecord := range records {
 		operation, parseErr := parseLDAPWriteRecord(
 			rawRecord,
@@ -573,7 +571,14 @@ func parseLDAPWriteRecord(
 		return operation, validateLDAPWriteOperation(operation)
 	}
 	if changeType == "modify" {
-		operation, err := parseLDAPModifyRecord(logicalLines)
+		operation, err := parseLDAPModifyRecord(logicalLines, true)
+		if err != nil {
+			return nil, err
+		}
+		return operation, validateLDAPWriteOperation(operation)
+	}
+	if changeType == "" && !allowContentAdd {
+		operation, err := parseLDAPModifyRecord(logicalLines, false)
 		if err != nil {
 			return nil, err
 		}
@@ -604,22 +609,30 @@ func parseLDAPWriteRecord(
 	return operation, validateLDAPWriteOperation(operation)
 }
 
-func parseLDAPModifyRecord(lines []string) (*ldapWriteOperation, error) {
-	if len(lines) < 4 {
+func parseLDAPModifyRecord(lines []string, explicitChangeType bool) (*ldapWriteOperation, error) {
+	minimumLines := 2
+	changeStart := 1
+	if explicitChangeType {
+		minimumLines = 3
+		changeStart = 2
+	}
+	if len(lines) < minimumLines {
 		return nil, errors.New("modify record requires at least one change")
 	}
 	dnName, dnValue, _, err := parseLDAPWriteLine(lines[0])
 	if err != nil || !strings.EqualFold(dnName, "dn") {
 		return nil, errors.New("invalid modify DN")
 	}
-	changeName, changeValue, changeMode, err := parseLDAPWriteLine(lines[1])
-	if err != nil || !strings.EqualFold(changeName, "changetype") ||
-		changeMode == ldapWriteValueURL || !strings.EqualFold(string(changeValue), "modify") {
-		return nil, errors.New("modify record requires changetype: modify")
+	if explicitChangeType {
+		changeName, changeValue, changeMode, err := parseLDAPWriteLine(lines[1])
+		if err != nil || !strings.EqualFold(changeName, "changetype") ||
+			changeMode == ldapWriteValueURL || !strings.EqualFold(string(changeValue), "modify") {
+			return nil, errors.New("modify record requires changetype: modify")
+		}
 	}
 
 	request := ldap.NewModifyRequest(string(dnValue), nil)
-	for index := 2; index < len(lines); {
+	for index := changeStart; index < len(lines); {
 		operationName, attributeValue, mode, err := parseLDAPWriteLine(lines[index])
 		if err != nil || mode == ldapWriteValueURL {
 			return nil, fmt.Errorf("invalid modify change at line %d", index+1)
@@ -650,10 +663,12 @@ func parseLDAPModifyRecord(lines []string) (*ldapWriteOperation, error) {
 			values = append(values, string(value))
 			index++
 		}
-		if index >= len(lines) {
-			return nil, fmt.Errorf("modify %s for %q must end with -", operationName, attribute)
+		if index < len(lines) {
+			if lines[index] != "-" {
+				return nil, fmt.Errorf("modify %s for %q must end with -", operationName, attribute)
+			}
+			index++
 		}
-		index++
 
 		switch operationName {
 		case "add":

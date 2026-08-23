@@ -634,6 +634,7 @@ func runLDAPSearch(
 	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) (runErr error) {
+	args, ldifLevel := normalizeLDAPSearchLDIFArgs(args)
 	flags := flag.NewFlagSet("ldapsearch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var client ldapClientOptions
@@ -646,7 +647,8 @@ func runLDAPSearch(
 	sizeLimit := flags.Int("z", 0, "search size limit")
 	timeLimit := flags.Int("l", 0, "server-side search time limit in seconds")
 	typesOnly := flags.Bool("A", false, "request attribute names without values")
-	minimalLDIF := flags.Bool("LLL", false, "omit LDIF version and comments")
+	continuous := flags.Bool("c", false, "continue batch searches after LDAP operation errors")
+	ldifOutput := flags.Bool("L", false, "increase LDIF output level")
 	pageSize := flags.Uint64("page-size", 0, "RFC 2696 page size")
 	batchPath := flags.String("f", "", "read batch filter values from a file, or - for stdin")
 	valueURLPrefix := flags.String("F", "", "URL prefix for temporary value files")
@@ -657,22 +659,10 @@ func runLDAPSearch(
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "search extension; [!]pr=<size>[/prompt|noprompt] is supported")
 
-	searchUnsupported := []unsupportedFlag{
-		{name: "c", reason: "continuous operation mode is not implemented"},
-		{name: "L", reason: "only -LLL is implemented"},
-		{name: "LL", reason: "only -LLL is implemented"},
-	}
-	flags.Bool("c", false, "unsupported: continuous operation mode")
-	flags.Bool("L", false, "unsupported: use -LLL")
-	flags.Bool("LL", false, "unsupported: use -LLL")
-
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if err := client.validate(flags); err != nil {
-		return err
-	}
-	if err := rejectUnsupportedFlags("ldapsearch", flags, searchUnsupported); err != nil {
 		return err
 	}
 	if *sizeLimit < 0 {
@@ -684,8 +674,11 @@ func runLDAPSearch(
 	if flagWasSet(flags, "A") && !*typesOnly {
 		return errors.New("-A=false is not supported")
 	}
-	if flagWasSet(flags, "LLL") && !*minimalLDIF {
-		return errors.New("-LLL=false is not supported")
+	if flagWasSet(flags, "c") && !*continuous {
+		return errors.New("-c=false is not supported")
+	}
+	if flagWasSet(flags, "L") && !*ldifOutput {
+		return errors.New("-L=false is not supported")
 	}
 	if flagWasSet(flags, "f") && *batchPath == "" {
 		return errors.New("-f requires a non-empty batch file path or - for stdin")
@@ -732,8 +725,6 @@ func runLDAPSearch(
 		if err != nil {
 			return err
 		}
-	} else if _, err := ldap.CompileFilter(filter); err != nil {
-		return fmt.Errorf("parse search filter: %w", err)
 	}
 	for _, attribute := range attributes {
 		if attribute == "" || strings.ContainsAny(attribute, "\x00\r\n") {
@@ -775,7 +766,7 @@ func runLDAPSearch(
 
 	queries := []string{filter}
 	if *batchPath != "" && *batchPath != "-" {
-		queries, err = readLDAPSearchBatchFile(*batchPath, filter, batchPatternIndex)
+		queries, err = readLDAPSearchBatchFileForSearch(*batchPath, filter, batchPatternIndex)
 		if err != nil {
 			return err
 		}
@@ -786,7 +777,12 @@ func runLDAPSearch(
 	}
 	defer connection.Close()
 	if *batchPath == "-" {
-		queries, err = readLDAPSearchBatch(stdin, filter, batchPatternIndex, "standard input")
+		queries, err = readLDAPSearchBatchForSearch(
+			stdin,
+			filter,
+			batchPatternIndex,
+			"standard input",
+		)
 		if err != nil {
 			return err
 		}
@@ -795,17 +791,38 @@ func runLDAPSearch(
 	output := &ldapSearchLDIFOutput{
 		writer:        stdout,
 		typesOnly:     *typesOnly,
-		minimal:       *minimalLDIF,
+		level:         ldifLevel,
 		valueFiles:    valueFiles,
 		sort:          flagWasSet(flags, "S"),
 		sortAttribute: *sortAttribute,
 		includeUFN:    *includeUFN,
 	}
+	if err := output.start(ldapSearchOutputMetadata{
+		baseDN:        *baseDN,
+		scope:         scope,
+		filterPattern: filter,
+		attributes:    attributes,
+		batch:         *batchPath != "",
+	}); err != nil {
+		return err
+	}
 	var promptReader *bufio.Reader
 	if paging.prompt {
 		promptReader = bufio.NewReader(stdin)
 	}
-	for _, query := range queries {
+	var continuousErr error
+	for index, query := range queries {
+		if err := output.startQuery(query, index); err != nil {
+			return err
+		}
+		if _, err := ldap.CompileFilter(query); err != nil {
+			queryErr := ldapSearchFilterCompileError(stderr)
+			if !*continuous {
+				return queryErr
+			}
+			continuousErr = queryErr
+			continue
+		}
 		request := ldap.NewSearchRequest(
 			*baseDN,
 			scope,
@@ -827,10 +844,37 @@ func runLDAPSearch(
 			stderr,
 			output,
 		); err != nil {
-			return err
+			if !*continuous || !ldapSearchCanContinue(err) {
+				return err
+			}
+			continuousErr = err
 		}
 	}
-	return nil
+	return continuousErr
+}
+
+func normalizeLDAPSearchLDIFArgs(args []string) ([]string, int) {
+	normalized := make([]string, 0, len(args))
+	level := 0
+	options := true
+	for _, argument := range args {
+		if options && argument == "--" {
+			options = false
+			normalized = append(normalized, argument)
+			continue
+		}
+		if options && len(argument) > 1 && argument[0] == '-' &&
+			strings.Trim(argument[1:], "L") == "" {
+			count := len(argument) - 1
+			level += count
+			for range count {
+				normalized = append(normalized, "-L")
+			}
+			continue
+		}
+		normalized = append(normalized, argument)
+	}
+	return normalized, min(level, 3)
 }
 
 func runLDAPWhoAmI(
@@ -998,6 +1042,21 @@ func validateLDAPSearchBatchPattern(pattern string) (int, error) {
 }
 
 func readLDAPSearchBatchFile(path, pattern string, placeholder int) ([]string, error) {
+	return readLDAPSearchBatchFileMode(path, pattern, placeholder, true)
+}
+
+func readLDAPSearchBatchFileForSearch(
+	path, pattern string,
+	placeholder int,
+) ([]string, error) {
+	return readLDAPSearchBatchFileMode(path, pattern, placeholder, false)
+}
+
+func readLDAPSearchBatchFileMode(
+	path, pattern string,
+	placeholder int,
+	validateFilters bool,
+) ([]string, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve -f batch file path: %w", err)
@@ -1028,7 +1087,13 @@ func readLDAPSearchBatchFile(path, pattern string, placeholder int) ([]string, e
 	if err != nil || !os.SameFile(before, opened) || !os.SameFile(before, after) {
 		return nil, errors.New("-f batch file changed while it was being opened")
 	}
-	return readLDAPSearchBatch(file, pattern, placeholder, "-f batch file")
+	return readLDAPSearchBatchMode(
+		file,
+		pattern,
+		placeholder,
+		"-f batch file",
+		validateFilters,
+	)
 }
 
 func readLDAPSearchBatch(
@@ -1036,6 +1101,25 @@ func readLDAPSearchBatch(
 	pattern string,
 	placeholder int,
 	source string,
+) ([]string, error) {
+	return readLDAPSearchBatchMode(reader, pattern, placeholder, source, true)
+}
+
+func readLDAPSearchBatchForSearch(
+	reader io.Reader,
+	pattern string,
+	placeholder int,
+	source string,
+) ([]string, error) {
+	return readLDAPSearchBatchMode(reader, pattern, placeholder, source, false)
+}
+
+func readLDAPSearchBatchMode(
+	reader io.Reader,
+	pattern string,
+	placeholder int,
+	source string,
+	validateFilters bool,
 ) ([]string, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, maxLDAPSearchBatchSize+1))
 	if err != nil {
@@ -1075,8 +1159,10 @@ func readLDAPSearchBatch(
 		if len(query) > maxLDAPSearchBatchLine*2 {
 			return nil, fmt.Errorf("%s line %d produces an oversized search filter", source, index+1)
 		}
-		if _, err := ldap.CompileFilter(query); err != nil {
-			return nil, fmt.Errorf("%s line %d produces an invalid search filter", source, index+1)
+		if validateFilters {
+			if _, err := ldap.CompileFilter(query); err != nil {
+				return nil, fmt.Errorf("%s line %d produces an invalid search filter", source, index+1)
+			}
 		}
 		queries = append(queries, query)
 	}
@@ -1092,19 +1178,25 @@ func runLDAPSearchQuery(
 	stdout, stderr io.Writer,
 	output *ldapSearchLDIFOutput,
 ) error {
-	if paging.size == 0 || (!paging.critical && !paging.prompt && !output.sort) {
+	if paging.size == 0 ||
+		(!paging.critical && !paging.prompt && !output.sort && output.level >= 2) {
+		messageID := output.nextSearchMessageID()
 		result, searchErr := client.searchWithReferrals(connection, request, paging.size)
 		var outputErr error
 		if result != nil {
 			outputErr = output.writeEntries(result.Entries)
 		}
-		return ldapSearchResultError(searchErr, outputErr, stderr)
+		if outputErr == nil {
+			outputErr = output.writeResult(result, searchErr, true, messageID)
+		}
+		return ldapSearchResultError(searchErr, outputErr, stderr, output.level)
 	}
 
 	pageSize := paging.size
 	var cookie []byte
 	defer clear(cookie)
 	for {
+		messageID := output.nextSearchMessageID()
 		pagingControl := newLDAPSearchPagingControl(pageSize, cookie, paging.critical)
 		sent := *request
 		sent.Controls = append(cloneLDAPControls(request.Controls), pagingControl)
@@ -1114,14 +1206,23 @@ func runLDAPSearchQuery(
 		if result != nil {
 			outputErr = output.writeEntries(result.Entries)
 		}
-		if err := ldapSearchResultError(searchErr, outputErr, stderr); err != nil {
-			return err
+		if outputErr != nil {
+			return outputErr
+		}
+		if searchErr != nil {
+			if err := output.writeResult(result, searchErr, true, messageID); err != nil {
+				return errors.Join(err, searchErr)
+			}
+			return ldapSearchResultError(searchErr, nil, stderr, output.level)
 		}
 		if result == nil {
 			return errors.New("search completed without a result")
 		}
 		responseControl := ldap.FindControl(result.Controls, ldap.ControlTypePaging)
 		if responseControl == nil {
+			if err := output.writeResult(result, nil, true, messageID); err != nil {
+				return err
+			}
 			return nil
 		}
 		responsePaging, ok := responseControl.(*ldap.ControlPaging)
@@ -1130,6 +1231,9 @@ func runLDAPSearchQuery(
 		}
 		clear(cookie)
 		cookie = append(cookie[:0], responsePaging.Cookie...)
+		if err := output.writeResult(result, nil, len(cookie) == 0, messageID); err != nil {
+			return err
+		}
 		if len(cookie) == 0 {
 			return nil
 		}
@@ -1158,9 +1262,12 @@ func runLDAPSearchQuery(
 	}
 }
 
-func ldapSearchResultError(searchErr, outputErr error, stderr io.Writer) error {
+func ldapSearchResultError(searchErr, outputErr error, stderr io.Writer, ldifLevel int) error {
 	if searchErr == nil {
 		return outputErr
+	}
+	if outputErr != nil {
+		return errors.Join(outputErr, searchErr)
 	}
 	if code, name, ok := ldapReferralClientResult(searchErr); ok {
 		_, diagnosticErr := fmt.Fprintf(stderr, "ldap_result: %s (%d)\n", name, code)
@@ -1169,7 +1276,96 @@ func ldapSearchResultError(searchErr, outputErr error, stderr io.Writer) error {
 			cause: errors.Join(outputErr, diagnosticErr),
 		}
 	}
+	var ldapError *ldap.Error
+	if errors.As(searchErr, &ldapError) {
+		code := ldapError.ResultCode
+		var diagnosticErr error
+		if ldifLevel > 0 {
+			_, diagnosticErr = fmt.Fprintf(
+				stderr,
+				"%s (%d)\n",
+				openLDAPResultName(code),
+				code,
+			)
+			if ldapError.MatchedDN != "" {
+				_, err := fmt.Fprintf(stderr, "Matched DN: %s\n", ldapError.MatchedDN)
+				diagnosticErr = errors.Join(diagnosticErr, err)
+			}
+			if information := ldapErrorDiagnostic(ldapError); information != "" {
+				_, err := fmt.Fprintf(stderr, "Additional information: %s\n", information)
+				diagnosticErr = errors.Join(diagnosticErr, err)
+			}
+			for _, referral := range ldapSearchResultReferrals(searchErr) {
+				_, err := fmt.Fprintf(stderr, "Referral: %s\n", referral)
+				diagnosticErr = errors.Join(diagnosticErr, err)
+			}
+		}
+		return &ldapClientExitError{code: int(code), cause: diagnosticErr}
+	}
 	return errors.Join(outputErr, fmt.Errorf("search: %w", searchErr))
+}
+
+func ldapSearchFilterCompileError(stderr io.Writer) error {
+	_, err := io.WriteString(stderr, "ldap_search_ext: Bad search filter (-7)\n")
+	return &ldapClientExitError{code: 249, cause: err}
+}
+
+func ldapSearchResultReferrals(err error) []string {
+	if referrals := ldapReferralURLs(err); len(referrals) > 0 {
+		return referrals
+	}
+	var ldapError *ldap.Error
+	if !errors.As(err, &ldapError) || ldapError.Packet == nil ||
+		len(ldapError.Packet.Children) < 2 {
+		return nil
+	}
+	operation := ldapError.Packet.Children[1]
+	if operation == nil {
+		return nil
+	}
+	var referrals []string
+	for _, child := range operation.Children {
+		if child == nil || child.ClassType != ber.ClassContext || child.Tag != 3 {
+			continue
+		}
+		for _, value := range child.Children {
+			if value == nil {
+				continue
+			}
+			referral, _ := value.Value.(string)
+			if referral == "" && value.Data != nil {
+				referral = value.Data.String()
+			}
+			if referral != "" {
+				referrals = append(referrals, referral)
+			}
+		}
+	}
+	return referrals
+}
+
+func ldapSearchCanContinue(err error) bool {
+	var exitError *ldapClientExitError
+	return errors.As(err, &exitError)
+}
+
+func openLDAPResultName(code uint16) string {
+	name := strings.ToLower(ldap.LDAPResultCodeMap[code])
+	if name == "" {
+		return "Unknown error"
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+func ldapErrorDiagnostic(ldapError *ldap.Error) string {
+	if ldapError == nil || ldapError.Err == nil {
+		return ""
+	}
+	diagnostic := ldapError.Err.Error()
+	if diagnostic == "<nil>" {
+		return ""
+	}
+	return diagnostic
 }
 
 func newLDAPSearchPagingControl(size uint32, cookie []byte, critical bool) *ldapRawControl {
@@ -1240,15 +1436,239 @@ func readLDAPSearchPagingPrompt(reader *bufio.Reader) (uint32, bool, error) {
 type ldapSearchLDIFOutput struct {
 	writer        io.Writer
 	typesOnly     bool
+	level         int
 	minimal       bool
 	started       bool
 	valueFiles    *ldapSearchValueFiles
 	sort          bool
 	sortAttribute string
 	includeUFN    bool
+	batch         bool
+	responses     int
+	entries       int
+	references    int
+	messageID     int64
+}
+
+type ldapSearchOutputMetadata struct {
+	baseDN        string
+	scope         int
+	filterPattern string
+	attributes    []string
+	batch         bool
+}
+
+func (output *ldapSearchLDIFOutput) start(metadata ldapSearchOutputMetadata) error {
+	output.batch = metadata.batch
+	if err := output.ensureStarted(); err != nil {
+		return err
+	}
+	if output.level >= 2 {
+		return nil
+	}
+	scope := "subtree"
+	switch metadata.scope {
+	case ldap.ScopeBaseObject:
+		scope = "baseObject"
+	case ldap.ScopeSingleLevel:
+		scope = "oneLevel"
+	case ldap.ScopeChildren:
+		scope = "children"
+	}
+	filterLabel := "filter"
+	if metadata.batch {
+		filterLabel = "filter pattern"
+	}
+	if _, err := fmt.Fprintf(
+		output.writer,
+		"#\n# LDAPv3\n# base <%s> with scope %s\n# %s: %s\n# requesting: ",
+		metadata.baseDN,
+		scope,
+		filterLabel,
+		metadata.filterPattern,
+	); err != nil {
+		return err
+	}
+	if len(metadata.attributes) == 0 {
+		if _, err := io.WriteString(output.writer, "ALL"); err != nil {
+			return err
+		}
+	} else {
+		for _, attribute := range metadata.attributes {
+			if _, err := fmt.Fprintf(output.writer, "%s ", attribute); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := io.WriteString(output.writer, "\n#\n\n")
+	return err
+}
+
+func (output *ldapSearchLDIFOutput) ensureStarted() error {
+	if output.started {
+		return nil
+	}
+	if output.minimal {
+		output.level = 3
+	}
+	switch output.level {
+	case 0:
+		if _, err := io.WriteString(output.writer, "# extended LDIF\n"); err != nil {
+			return err
+		}
+	case 1, 2:
+		if err := writeFoldedLDIFLine(output.writer, []byte("version: 1")); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(output.writer, "\n"); err != nil {
+			return err
+		}
+	}
+	output.started = true
+	return nil
+}
+
+func (output *ldapSearchLDIFOutput) startQuery(query string, index int) error {
+	output.responses = 0
+	output.entries = 0
+	output.references = 0
+	if output.batch && index > 0 {
+		if _, err := io.WriteString(output.writer, "\n"); err != nil {
+			return err
+		}
+	}
+	if output.level >= 2 || !output.batch {
+		return nil
+	}
+	_, err := fmt.Fprintf(output.writer, "#\n# filter: %s\n#\n", query)
+	return err
+}
+
+func (output *ldapSearchLDIFOutput) nextSearchMessageID() int64 {
+	if output.messageID == 0 {
+		output.messageID = 1
+	}
+	output.messageID++
+	return output.messageID
+}
+
+func (output *ldapSearchLDIFOutput) writeResult(
+	result *ldap.SearchResult,
+	searchErr error,
+	final bool,
+	messageID int64,
+) error {
+	if result != nil {
+		output.responses += len(result.Entries)
+		output.entries += len(result.Entries)
+		if err := output.writeReferences(result.Referrals); err != nil {
+			return err
+		}
+	}
+
+	var ldapError *ldap.Error
+	hasLDAPResult := searchErr == nil || errors.As(searchErr, &ldapError)
+	if hasLDAPResult {
+		output.responses++
+		if output.level < 2 {
+			if _, err := io.WriteString(output.writer, "# search result\n"); err != nil {
+				return err
+			}
+			if output.level == 0 {
+				code := uint16(ldap.LDAPResultSuccess)
+				if ldapError != nil {
+					code = ldapError.ResultCode
+				}
+				if _, err := fmt.Fprintf(
+					output.writer,
+					"search: %d\nresult: %d %s\n",
+					messageID,
+					code,
+					openLDAPResultName(code),
+				); err != nil {
+					return err
+				}
+				if ldapError != nil {
+					if ldapError.MatchedDN != "" {
+						if err := writeLDIFAttribute(
+							output.writer,
+							"matchedDN",
+							[]byte(ldapError.MatchedDN),
+						); err != nil {
+							return err
+						}
+					}
+					if information := ldapErrorDiagnostic(ldapError); information != "" {
+						if err := writeLDIFAttribute(
+							output.writer,
+							"text",
+							[]byte(information),
+						); err != nil {
+							return err
+						}
+					}
+					for _, referral := range ldapSearchResultReferrals(searchErr) {
+						if err := writeLDIFAttribute(output.writer, "ref", []byte(referral)); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+	if !final {
+		return nil
+	}
+	if output.level >= 2 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output.writer, "\n# numResponses: %d\n", output.responses); err != nil {
+		return err
+	}
+	if output.entries > 0 {
+		if _, err := fmt.Fprintf(output.writer, "# numEntries: %d\n", output.entries); err != nil {
+			return err
+		}
+	}
+	if output.references > 0 {
+		if _, err := fmt.Fprintf(output.writer, "# numReferences: %d\n", output.references); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (output *ldapSearchLDIFOutput) writeReferences(referrals []string) error {
+	for _, referral := range referrals {
+		output.responses++
+		output.references++
+		if output.level >= 2 {
+			continue
+		}
+		if _, err := io.WriteString(output.writer, "# search reference\n"); err != nil {
+			return err
+		}
+		if output.level == 0 {
+			if err := writeLDIFAttribute(output.writer, "ref", []byte(referral)); err != nil {
+				return err
+			}
+		} else if err := writeFoldedLDIFLine(
+			output.writer,
+			[]byte("# ref"+referral),
+		); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(output.writer, "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
+	if err := output.ensureStarted(); err != nil {
+		return err
+	}
 	if output.sort {
 		var err error
 		entries, err = sortLDAPSearchEntries(entries, output.sortAttribute)
@@ -1256,20 +1676,22 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 			return err
 		}
 	}
-	if !output.started {
-		if !output.minimal {
-			if err := writeFoldedLDIFLine(output.writer, []byte("version: 1")); err != nil {
-				return err
-			}
-			if _, err := io.WriteString(output.writer, "\n"); err != nil {
-				return err
-			}
-		}
-		output.started = true
-	}
 	for _, entry := range entries {
 		if entry == nil {
 			return errors.New("search returned a nil LDAP entry")
+		}
+		if output.level < 2 {
+			ufn, _, err := ldapSearchUserFriendlyDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf("format user-friendly DN comment %q: %w", entry.DN, err)
+			}
+			comment := "#"
+			if ufn != "" {
+				comment += " " + ufn
+			}
+			if err := writeFoldedLDIFLine(output.writer, []byte(comment)); err != nil {
+				return err
+			}
 		}
 		if err := writeLDIFAttribute(output.writer, "dn", []byte(entry.DN)); err != nil {
 			return err
@@ -1530,6 +1952,7 @@ func writeLDAPSearchLDIF(
 	return (&ldapSearchLDIFOutput{
 		writer:    writer,
 		typesOnly: typesOnly,
+		level:     2,
 		minimal:   minimal,
 	}).writeEntries(entries)
 }

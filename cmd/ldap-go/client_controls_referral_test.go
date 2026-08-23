@@ -446,6 +446,7 @@ func TestOpenLDAPClientControlReferralSourceContract(t *testing.T) {
 		"tool_exit( ld, rc );",
 	})
 	assertOpenLDAPClientSourceAnchors(t, source, "libraries/libldap/error.c", []string{
+		"N_(\"Bad parameter to an ldap routine\")",
 		"N_(\"Client Loop\")",
 		"N_(\"Referral Limit Exceeded\")",
 	})
@@ -453,11 +454,28 @@ func TestOpenLDAPClientControlReferralSourceContract(t *testing.T) {
 		"#define LDAP_DEFAULT_REFHOPLIMIT 5",
 	})
 	assertOpenLDAPClientSourceAnchors(t, source, "libraries/libldap/request.c", []string{
+		"ldap_url_parse_ext( refarray[i], &srv, LDAP_PVT_URL_PARSE_NOEMPTY_DN )",
+		"ld->ld_errno = LDAP_PARAM_ERROR;",
+		"if( srv->lud_crit_exts ) {",
+		"ld->ld_errno = LDAP_NOT_SUPPORTED;",
+		"In the future we also need to replace the filter",
+		"if ( srv->lud_dn ) {",
 		"if ( lr->lr_parentcnt >= ld->ld_refhoplimit ) {",
 		"rc = ldap_sasl_bind( ld, \"\", LDAP_SASL_SIMPLE, &passwd,",
 		"else if ( sref ) {",
 		"scope = LDAP_SCOPE_BASE;",
 		"scope = LDAP_SCOPE_SUBTREE;",
+	})
+	assertOpenLDAPClientSourceAnchors(t, source, "libraries/libldap/url.c", []string{
+		"ludp->lud_attrs = ldap_str2charray( p, \",\" );",
+		"ludp->lud_scope = ldap_pvt_str2scope( p );",
+		"ludp->lud_filter = LDAP_STRDUP( p );",
+		"ludp->lud_exts = ldap_str2charray( p, \",\" );",
+		"if( *ludp->lud_exts[i] == '!' ) {",
+	})
+	assertOpenLDAPClientSourceAnchors(t, source, "libraries/libldap/os-ip.c", []string{
+		"srv->lud_host == NULL || *srv->lud_host == 0",
+		"host = \"localhost\";",
 	})
 }
 

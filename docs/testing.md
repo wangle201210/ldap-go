@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,445 top-level tests against
+The latest pinned local strict run passed 1,492 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC. Its only allowed skip was the Linux-only TCP user-timeout test on
 macOS; mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache,
@@ -345,7 +345,12 @@ mixed boolean filters, long-value overflow, replace/delete/rename, rollback,
 raw-write invalidation, reopen, backup/restore, check, and compact. Server tests
 also validate `olcDbIndex` aliases/OIDs, matching-rule admission, LDAP INTEGER
 ordering, generalizedTime whole/fractional-second ordering against the schema
-comparator, initial build, and configuration reload. These tests prove that an
+comparator, ordered `default` inheritance, `nolang`/`notags`, supported
+`approx`, duplicate definitions, initial build, and configuration reload.
+Approximate matching tests compare OpenLDAP's UTF-8 normalization, word order,
+and Metaphone result, including `Alice Smith ~= Alice Smyth`, on Memory and
+bbolt. Associated phonetic approximate queries are also checked to use a full
+scan because phonetic postings are not implemented. These tests prove that an
 accepted index does not omit a matching candidate; they do not qualify index
 selectivity or throughput at production scale. Run them with:
 
@@ -353,7 +358,7 @@ selectivity or throughput at production scale. Run them with:
 go test -race ./internal/storage \
   -run '^(TestEqualityIndex|TestSubstringAndOrderingIndex)' -count=1
 go test -race ./internal/server \
-  -run '^(TestSortableLDAPInteger|TestLoadDatabaseEqualityIndexes|TestEnsureSearchEqualityIndexes)' \
+  -run '^(TestSortableLDAPInteger|TestLoadDatabaseEqualityIndexes|TestEnsureSearchEqualityIndexes|TestDatabaseIndexDefaultNoLangApproximateMemoryAndBolt|TestOpenLDAPReferenceApproximateMatching)' \
   -count=1
 ```
 
@@ -448,16 +453,30 @@ preservation, loops, and the five-hop limit. A pinned source contract anchors
 the corresponding `clients/tools`, libldap request/error, and default-hop
 behavior. The raw Compare fixture verifies generic `-e`, noncritical `-M`,
 critical `-MM`, duplicate rejection, unavailable-critical result propagation,
-referral control preservation, and SASL PLAIN. `ldapexop passwd` tests cover
+referral control preservation, SASL PLAIN, and verbose TRUE/FALSE/UNDEFINED,
+matched-DN, diagnostic, referral, and response-control output. Source and binary
+differentials verify that every `ldapcompare -E` spelling is rejected before a
+connection because OpenLDAP 2.6.13 does not register its otherwise present
+handler. `ldapexop passwd` tests cover
 target/current identities, old/new/generated passwords, password sources,
-controls, response decoding, and dry-run validation. Client-side Search tests
+controls, response decoding, and dry-run validation. `ldapmodify` fixtures
+cover `-a` Add records and default no-`changetype` Modify records with
+add/delete/replace/increment blocks and an omitted final separator. Client-side
+Search tests
 cover stable ASCII case-insensitive multi-value/missing-value sorting, empty
 `-S` UFN-component sorting, per-page rather than global paged sorting, trailing
 `dc` domain folding, uppercase hexadecimal escapes, preserved hexadecimal BER
 AVAs, escaped multi-AVA formatting, end-to-end `-S/-u` LDIF, and unsafe
 sort-attribute rejection. A pinned OpenLDAP 2.6.13 client differential compares
-the covered page order and UFN output; locale-dependent ordering outside that
-fixture remains unclaimed. `TestLDAPClientSASL*` drives raw-wire
+the covered page order and UFN output. Additional byte-for-byte differentials
+cover default extended LDIF, `-L/-LL/-LLL`, arbitrary repeated `L`,
+SearchReference output, result diagnostics/counts, and per-query `-c` behavior
+for malformed filters and LDAP operation errors. RFC 4516 referral tests cover
+all URL fields, percent decoding, scope aliases, result 89/92 mapping, and the
+intentional empty-DN base-preservation rule. Language-option projection is
+compared with OpenLDAP for bare/exact/range descriptions, subtypes, `*`, and
+`typesOnly`. Locale-dependent ordering outside the fixture remains unclaimed.
+`TestLDAPClientSASL*` drives raw-wire
 and project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
 SCRAM-SHA-1/256/512, and mutual-TLS EXTERNAL. It validates server proofs,
 malformed challenges, secret-free diagnostics, StartTLS ordering, and option
@@ -466,7 +485,12 @@ security layers remain outside the client subset.
 
 Global server TLS configuration has separate transaction and live-handshake
 coverage. `TestGlobalTLSConfiguration*` validates supported inline/file
-material and rejects unsupported or inexact OpenSSL directives.
+material and rejects unsupported or inexact OpenSSL directives. Extended cases
+cover semicolon-separated OpenSSL hash directories, ignored non-hash files,
+DER de-duplication, internal and escaping symlinks, descriptor-consistent size
+checks, directory/file/byte/certificate budgets, traditional encrypted PEM,
+password-file path/permission/size rules, supported single-curve aliases, and
+explicit rejection of PKCS#8 encryption or inexact multi-curve selectors.
 `TestGlobalTLSOnlineCertificateReload` rotates a live LDAPS/StartTLS
 certificate, checks that new connections see the candidate only after commit,
 and verifies invalid replacement rollback; `TestGlobalTLSVerifyClientDemand`
@@ -656,6 +680,10 @@ wire tests cover generated-password commit and rollback, operation/encoded-byte
 queue limits, the exact message-ID/OID/value shape of Aborted Transaction
 Notice, and Bind/Unbind no-notice aborts. Pinned OpenLDAP 2.6.13 source and live
 slapd tests record its transaction-control applicability and Bind behavior.
+Compatibility-control cases run against Memory and bbolt and verify that
+critical ProxyAuthz on Start returns `unavailableCriticalExtension`, while
+pre-read or post-read on a transaction update returns `unwillingToPerform`
+without response controls and leaves the transaction available for abort.
 The accesslog differentials run Add, multi-operation Modify, Password Modify,
 ModDN, Delete, failed Add/Modify, Search, Compare, Bind, Unbind, and an active
 operation Abandon against slapd and ldap-go. They compare audit classes,

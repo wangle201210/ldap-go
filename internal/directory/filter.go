@@ -43,6 +43,14 @@ type ValueMatcher interface {
 	MatchSubstring(attribute string, value []byte, substring Substring) (bool, error)
 }
 
+// ApproximateMatcher lets schema-aware matchers provide the approximate rule
+// associated with an attribute's equality rule. Matchers without this optional
+// interface retain the LDAP equality fallback used when no approximate rule is
+// associated with an attribute type.
+type ApproximateMatcher interface {
+	MatchApproximate(attribute string, value, assertion []byte) (bool, error)
+}
+
 type AttributeResolver interface {
 	AttributeValues(entry Entry, description string) [][]byte
 	HasAttributeDescription(entry Entry, description string) bool
@@ -85,7 +93,35 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 	case FilterPresent:
 		return resolvedHasAttribute(matcher, entry, filter.Attribute), nil
 
-	case FilterEquality, FilterApprox, FilterGreaterOrEqual, FilterLessOrEqual:
+	case FilterApprox:
+		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+		approximate, hasApproximateMatcher := matcher.(ApproximateMatcher)
+		for _, value := range values {
+			if hasApproximateMatcher {
+				matches, err := approximate.MatchApproximate(
+					filter.Attribute,
+					value,
+					filter.Assertion,
+				)
+				if err != nil {
+					return false, err
+				}
+				if matches {
+					return true, nil
+				}
+				continue
+			}
+			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
+			if err != nil {
+				return false, err
+			}
+			if comparison == 0 {
+				return true, nil
+			}
+		}
+		return false, nil
+
+	case FilterEquality, FilterGreaterOrEqual, FilterLessOrEqual:
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
 		for _, value := range values {
 			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
@@ -93,7 +129,7 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 				return false, err
 			}
 			switch filter.Kind {
-			case FilterEquality, FilterApprox:
+			case FilterEquality:
 				if comparison == 0 {
 					return true, nil
 				}

@@ -72,6 +72,10 @@ discards it and writes an Aborted Transaction Notice with message ID zero; Bind,
 Unbind, and connection teardown discard it without that notice. Password Modify
 generates an omitted new password once while cloning the request, returns it in
 that operation's immediate RFC 3062 response, and commits the same value.
+Control admission also preserves OpenLDAP 2.6.13 rejection behavior: critical
+ProxyAuthz on Start Transaction fails before state creation, and pre-read or
+post-read on a queued update fails without producing response controls. The
+transaction remains abortable after an update-control rejection.
 
 ### LDAP load balancer
 
@@ -149,6 +153,33 @@ applies member exclusions before filters and authorization. Storage and write
 validation continue to use the raw entry, so derived values and generated
 source references are never persisted.
 
+Attribute selection is also schema-aware. A requested bare attribute can
+project optioned language values, an exact language option selects that
+description, and a trailing language-option range selects its option family.
+Attribute subtypes, `*`, and `typesOnly` use the same projection path before
+ACL value filtering and LDIF encoding.
+
+### Client tooling
+
+The built-in client tools keep command parsing, LDAP wire behavior, and output
+rendering separate. `ldapsearch` streams OpenLDAP-style extended LDIF by
+default; cumulative `-L` levels control comments, version headers, result
+records, references, and counts. Batch filters are compiled immediately before
+each operation so `-c` can continue after either a local filter error or an
+LDAP result without suppressing the final failure status. Client-side sorting
+is applied to each received page before rendering.
+
+Referral URLs are represented as parsed RFC 4516 DN, attributes, scope, filter,
+and extension fields. Chasing applies only the DN and scope overrides used by
+OpenLDAP 2.6.13, maps malformed URLs to result 89 and unsupported critical
+extensions to 92, and deliberately preserves the original base when the URL
+has no DN. This last rule is a safety boundary: it does not reproduce the
+reference binary's root-search expansion. `ldapmodify` chooses Add for omitted
+`changetype` only under `-a`, otherwise parsing change blocks as Modify.
+`ldapcompare` uses its raw request path to retain result metadata, referrals,
+and controls for verbose output; Compare `-E` is rejected before dialing because
+the 2.6.13 executable never registers its otherwise present handler.
+
 ### Schema and matching
 
 DN parsing, attribute descriptions, syntaxes, matching rules, object classes,
@@ -192,8 +223,12 @@ GeneralizedTime keys remove the terminal `Z` after equality normalization so
 their byte order matches the schema comparator for whole and fractional
 seconds.
 Only matching-rule pairs whose equality normalization is proven equivalent to
-the requested substring or ordering semantics are admitted. Approximate,
-language-suppression, default, and unproven rules reject at configuration time.
+the requested substring or ordering semantics are admitted. Ordered
+`olcDbIndex` declarations accumulate `default` modes for later omitted mode
+lists, treat `nolang` and `notags` as the same tag-suppression flag, reject
+duplicate AttributeDescription definitions, and admit `approx` only when
+OpenLDAP associates a supported approximate rule. Option-specific index
+databases and `nosubtypes` are not represented.
 
 Candidate planning handles equality, presence, substring, `>=`, and `<=`.
 `AND` can intersect whichever children are planned; `OR` is planned only when
@@ -205,7 +240,11 @@ transaction for Add/replace/Delete/ModifyDN. Raw storage writes invalidate the
 configuration fingerprint, while startup/config changes and offline maintenance
 rebuild or validate the postings. These indexes are an internal bbolt format,
 not imported OpenLDAP MDB index pages, and their performance at production
-scale remains unqualified.
+scale remains unqualified. Approximate filter evaluation uses OpenLDAP-style
+UTF-8 compatibility normalization, word ordering, and Metaphone for associated
+Directory String and IA5 rules, with equality fallback where no approximate
+rule is associated. Phonetic postings are not stored, so associated approximate
+queries intentionally retain the full scan candidate set.
 
 OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
@@ -582,7 +621,22 @@ use the same `SecureTransport` server-handshake contract for explicit and
 implicit upgrades. The TLCP provider implements GB/T 38636 with separate SM2
 signing and encryption certificates and SM4/SM3 cipher suites without forking
 the operation engine. RFC 8998 TLS 1.3 support is a separate provider because
-it is not wire-compatible with TLCP. Password schemes are registered modules
+it is not wire-compatible with TLCP.
+
+Global TLS configuration is built as an immutable candidate and published only
+with its `cn=config` transaction. CA files and semicolon-separated
+`olcTLSCACertificatePath` directories merge into one de-duplicated pool. The
+directory loader accepts only OpenSSL `hash.N` names through a root-confined
+file descriptor, bounds directories/files/bytes/certificates, and prevents
+symlink escape. Traditional RFC 1423 encrypted PEM keys use an absolute,
+non-symlink password file with restrictive permissions and bounded reads;
+temporary password and key buffers are cleared after parsing. The curve mapper
+accepts one X25519, P-256, P-384, or P-521 selector. Encrypted PKCS#8, multiple
+curve groups, unsupported OpenSSL groups, provider-style lazy hash lookup,
+DH/random directives, and TLS 1.3 suite selection remain outside the Go TLS
+contract and fail configuration rather than being approximated.
+
+Password schemes are registered modules
 and constant-time verification is mandatory. Imported OpenLDAP digest schemes
 remain readable. The contrib SHA-2 schemes use Go's SHA-256/384/512 primitives,
 strict Base64 decoding, exact unsalted digest lengths, and OpenLDAP's eight-byte
@@ -878,8 +932,12 @@ content is represented in bbolt rather than native backend files. Arbitrary
 custom syntax/matching-rule modules, exact OpenLDAP dry-run diagnostics, and
 broader nested glue/backend combinations are not implemented.
 MDB indexes are never imported. The destination rebuilds its own configured
-equality, presence, substring, and ordering postings, while unsupported or
-invalidated plans scan the selected partition. These are explicit non-drop-in
+equality, presence, substring, and ordering postings. `default`,
+`nolang`/`notags`, and supported `approx` declarations are retained in the
+configuration fingerprint, but associated phonetic approximate queries scan
+until a semantics-equivalent posting format exists. Option-specific indexes,
+`nosubtypes`, unsupported rules, and invalidated plans either reject at load or
+scan the selected partition as documented. These are explicit non-drop-in
 boundaries.
 
 ## Dependency policy

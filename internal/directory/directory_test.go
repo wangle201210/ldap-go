@@ -125,6 +125,57 @@ func TestFilterMatch(t *testing.T) {
 	}
 }
 
+func TestFilterApproxUsesOptionalMatcher(t *testing.T) {
+	t.Parallel()
+
+	entry := Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []Attribute{{
+			Description: "cn",
+			Values:      [][]byte{[]byte("Alice Smith")},
+		}},
+	}
+	filter := Filter{
+		Kind:      FilterApprox,
+		Attribute: "cn",
+		Assertion: []byte("Alice Smyth"),
+	}
+	matcher := &recordingApproximateMatcher{}
+	matches, err := filter.MatchWith(entry, matcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matches || matcher.calls != 1 {
+		t.Fatalf("approximate match = %v, calls = %d", matches, matcher.calls)
+	}
+
+	// A matcher that does not implement ApproximateMatcher retains equality
+	// fallback semantics for attribute types without an associated rule.
+	fallback := Filter{
+		Kind:      FilterApprox,
+		Attribute: "cn",
+		Assertion: []byte(" alice   smith "),
+	}
+	matches, err = fallback.MatchWith(entry, BasicMatcher{})
+	if err != nil || !matches {
+		t.Fatalf("equality fallback = %v, err = %v", matches, err)
+	}
+}
+
+type recordingApproximateMatcher struct {
+	BasicMatcher
+	calls int
+}
+
+func (matcher *recordingApproximateMatcher) MatchApproximate(
+	attribute string,
+	value, assertion []byte,
+) (bool, error) {
+	matcher.calls++
+	return attribute == "cn" && string(value) == "Alice Smith" &&
+		string(assertion) == "Alice Smyth", nil
+}
+
 func TestEntrySelectsUserAndOperationalAttributes(t *testing.T) {
 	t.Parallel()
 

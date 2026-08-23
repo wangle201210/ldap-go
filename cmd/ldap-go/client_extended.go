@@ -66,24 +66,27 @@ func runLDAPCompare(
 	var client ldapClientOptions
 	client.register(flags)
 	client.unsupportedFlags = withoutLDAPClientUnsupportedFlag(client.unsupportedFlags, "M")
+	client.unsupportedFlags = withoutLDAPClientUnsupportedFlag(client.unsupportedFlags, "v")
 	flags.Lookup("M").Usage = "enable ManageDsaIT control"
+	flags.Lookup("v").Usage = "write verbose Compare diagnostics"
 	defer client.clear()
 
 	quiet := flags.Bool("z", false, "suppress TRUE or FALSE output")
-	flags.String("E", "", "unsupported: compare extensions and controls")
 	criticalManageDsaIT := flags.Bool("MM", false, "critical ManageDsaIT control")
+	if ldapCompareHasHistoricalExtensionOption(args) {
+		return rejectLDAPCompareExtension(stderr, flags)
+	}
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {
 		return err
 	}
-	if err := rejectUnsupportedFlags("ldapcompare", flags, []unsupportedFlag{
-		{name: "E", reason: "compare extensions and controls are not implemented"},
-	}); err != nil {
+	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
+	if err != nil {
 		return err
 	}
-	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
+	verbose, err := ldapBooleanFlagValue(flags, "v")
 	if err != nil {
 		return err
 	}
@@ -99,6 +102,9 @@ func runLDAPCompare(
 	if flagWasSet(flags, "z") && !*quiet {
 		return errors.New("-z=false is not supported")
 	}
+	if flagWasSet(flags, "v") && !verbose {
+		return errors.New("-v=false is not supported")
+	}
 	if flags.NArg() != 2 {
 		return errors.New("ldapcompare requires DN and attr:value or attr::base64")
 	}
@@ -112,6 +118,17 @@ func runLDAPCompare(
 		return err
 	}
 	defer clear(value)
+	if verbose {
+		if _, err := fmt.Fprintf(
+			stderr,
+			"DN:%s, attr:%s, value:%s\n",
+			dn,
+			attribute,
+			ldapCompareDisplayValue(flags.Arg(1)),
+		); err != nil {
+			return err
+		}
+	}
 	controls := client.generalControls
 	if manageDsaIT || *criticalManageDsaIT {
 		manageControl := &ldapRawControl{
@@ -127,62 +144,169 @@ func runLDAPCompare(
 		return nil
 	}
 
-	var matched bool
-	if len(controls) == 0 {
-		connection, connectErr := client.connectAndBind(flags, stdin, stderr)
-		if connectErr != nil {
-			return connectErr
-		}
-		defer connection.Close()
-		matched, err = client.compareWithReferrals(
-			connection,
-			dn,
-			attribute,
-			string(value),
-		)
-	} else {
-		connection, connectErr := connectLDAPCompareRaw(
-			&client,
-			flags,
-			stdin,
-			stderr,
-		)
-		if connectErr != nil {
-			return connectErr
-		}
-		defer connection.Close()
-		matched, err = client.compareRawWithReferrals(
-			connection,
-			dn,
-			attribute,
-			value,
-			controls,
-		)
+	connection, connectErr := connectLDAPCompareRaw(
+		&client,
+		flags,
+		stdin,
+		stderr,
+	)
+	if connectErr != nil {
+		return connectErr
 	}
+	defer connection.Close()
+	result, err := client.compareRawWithReferrals(
+		connection,
+		dn,
+		attribute,
+		value,
+		controls,
+	)
 	if err != nil {
-		cause := fmt.Errorf("compare DN %q attribute %q: %w", dn, attribute, err)
-		var ldapError *ldap.Error
-		if errors.As(err, &ldapError) && ldapCompareExitCode(ldapError.ResultCode) {
-			if *quiet {
-				cause = nil
-			}
-			return &ldapClientExitError{code: int(ldapError.ResultCode), cause: cause}
-		}
-		return cause
+		return fmt.Errorf("compare DN %q attribute %q: %w", dn, attribute, err)
 	}
-	if !*quiet {
-		result := "FALSE"
-		if matched {
-			result = "TRUE"
+	if !verbose && result.code != ldap.LDAPResultSuccess &&
+		result.code != ldap.LDAPResultCompareTrue &&
+		result.code != ldap.LDAPResultCompareFalse {
+		if err := writeLDAPCompareOutput(stdout, result, true, false); err != nil {
+			return err
 		}
-		if _, err := fmt.Fprintln(stdout, result); err != nil {
+		if *quiet {
+			return &ldapClientExitError{code: int(result.code)}
+		}
+		message := result.diagnostic
+		if message == "" {
+			message = ldapCompareResultName(result.code)
+		}
+		cause := fmt.Errorf(
+			"compare DN %q attribute %q: %w",
+			dn,
+			attribute,
+			&ldap.Error{
+				ResultCode: result.code,
+				MatchedDN:  result.matchedDN,
+				Err:        errors.New(message),
+			},
+		)
+		return &ldapClientExitError{code: int(result.code), cause: cause}
+	}
+	if err := writeLDAPCompareOutput(stdout, result, *quiet, verbose); err != nil {
+		return err
+	}
+	return &ldapClientExitError{code: int(result.code)}
+}
+
+func ldapCompareHasHistoricalExtensionOption(args []string) bool {
+	for _, argument := range args {
+		if argument == "--" {
+			return false
+		}
+		if strings.HasPrefix(argument, "-E") || strings.HasPrefix(argument, "--E") {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectLDAPCompareExtension(stderr io.Writer, flags *flag.FlagSet) error {
+	const message = `ldapcompare: unrecognized option -E
+usage: ldapcompare [options] DN <attr:value|attr::b64value>
+where:
+  DN    Distinguished Name
+  attr  assertion attribute
+  value assertion value
+  b64value base64 encoding of assertion value
+Compare options:
+  -E [!]<ext>[=<extparam>] compare extensions (! indicates criticality)
+             !dontUseCopy                (Don't Use Copy)
+  -M         enable Manage DSA IT control (-MM to make critical)
+  -P version protocol version (default: 3)
+  -z         Quiet mode, don't print anything, use return values
+Common options:
+`
+	if _, err := io.WriteString(stderr, message); err != nil {
+		return err
+	}
+	flags.PrintDefaults()
+	return &ldapClientExitError{code: 1}
+}
+
+func ldapCompareDisplayValue(assertion string) string {
+	separator := strings.IndexByte(assertion, ':')
+	if separator < 0 {
+		return ""
+	}
+	return assertion[separator+1:]
+}
+
+func writeLDAPCompareResult(writer io.Writer, code uint16) error {
+	_, err := fmt.Fprintf(writer, "Compare Result: %s (%d)\n", ldapCompareResultName(code), code)
+	return err
+}
+
+type ldapCompareResult struct {
+	code       uint16
+	matchedDN  string
+	diagnostic string
+	referrals  []string
+	controls   []ldapwire.Control
+}
+
+func writeLDAPCompareOutput(
+	writer io.Writer,
+	result ldapCompareResult,
+	quiet, verbose bool,
+) error {
+	showResult := verbose ||
+		(result.code != ldap.LDAPResultSuccess &&
+			result.code != ldap.LDAPResultCompareTrue &&
+			result.code != ldap.LDAPResultCompareFalse) ||
+		result.matchedDN != "" || result.diagnostic != "" || len(result.referrals) > 0
+	if !quiet && showResult {
+		if err := writeLDAPCompareResult(writer, result.code); err != nil {
+			return err
+		}
+		if result.diagnostic != "" {
+			if _, err := fmt.Fprintf(writer, "Additional info: %s\n", result.diagnostic); err != nil {
+				return err
+			}
+		}
+		if result.matchedDN != "" {
+			if _, err := fmt.Fprintf(writer, "Matched DN: %s\n", result.matchedDN); err != nil {
+				return err
+			}
+		}
+		for _, referral := range result.referrals {
+			if _, err := fmt.Fprintf(writer, "Referral: %s\n", referral); err != nil {
+				return err
+			}
+		}
+	}
+	if !quiet {
+		outcome := "UNDEFINED"
+		switch result.code {
+		case ldap.LDAPResultCompareTrue:
+			outcome = "TRUE"
+		case ldap.LDAPResultCompareFalse:
+			outcome = "FALSE"
+		}
+		if _, err := fmt.Fprintln(writer, outcome); err != nil {
 			return err
 		}
 	}
-	if !matched {
-		return &ldapClientExitError{code: ldap.LDAPResultCompareFalse}
+	for _, control := range result.controls {
+		if _, err := fmt.Fprintf(writer, "control: %s %t", control.OID, control.Critical); err != nil {
+			return err
+		}
+		if control.HasValue && len(control.Value) > 0 {
+			if _, err := fmt.Fprintf(writer, " %s", base64.StdEncoding.EncodeToString(control.Value)); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(writer, "\n"); err != nil {
+			return err
+		}
 	}
-	return &ldapClientExitError{code: ldap.LDAPResultCompareTrue}
+	return nil
 }
 
 func withoutLDAPClientUnsupportedFlag(
@@ -414,7 +538,7 @@ func (client *ldapClientOptions) compareRawWithReferrals(
 	dn, attribute string,
 	value []byte,
 	controls []ldap.Control,
-) (bool, error) {
+) (ldapCompareResult, error) {
 	seen := map[string]struct{}{
 		client.referralKey(client.uri, "compare", dn): {},
 	}
@@ -436,8 +560,8 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 	controls []ldap.Control,
 	depth int,
 	seen map[string]struct{},
-) (bool, error) {
-	matched, err := ldapRawCompare(
+) (ldapCompareResult, error) {
+	result, err := ldapRawCompare(
 		connection,
 		client.timeout,
 		dn,
@@ -445,15 +569,15 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 		value,
 		controls,
 	)
-	if !client.chaseReferrals {
-		return matched, err
+	if err != nil || !client.chaseReferrals || result.code != ldap.LDAPResultReferral {
+		return result, err
 	}
-	referrals := ldapReferralURLs(err)
+	referrals := result.referrals
 	if len(referrals) == 0 {
-		return matched, err
+		return result, nil
 	}
 	if depth >= client.referralHopLimit {
-		return false, ldap.NewError(
+		return ldapCompareResult{}, ldap.NewError(
 			ldap.LDAPResultReferralLimitExceeded,
 			fmt.Errorf("referral hop limit %d exceeded", client.referralHopLimit),
 		)
@@ -484,7 +608,7 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 		}
 		branchSeen := cloneLDAPReferralSet(seen)
 		branchSeen[key] = struct{}{}
-		matched, compareErr := client.compareRawWithReferralsAt(
+		followedResult, compareErr := client.compareRawWithReferralsAt(
 			referralConnection,
 			followedDN,
 			attribute,
@@ -494,12 +618,15 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 			branchSeen,
 		)
 		_ = referralConnection.Close()
-		return matched, compareErr
+		return followedResult, compareErr
 	}
 	if lastErr == nil {
-		lastErr = err
+		lastErr = ldap.NewError(
+			result.code,
+			errors.New(ldapCompareResultName(result.code)),
+		)
 	}
-	return false, fmt.Errorf("chase LDAP referral: %w", lastErr)
+	return ldapCompareResult{}, fmt.Errorf("chase LDAP referral: %w", lastErr)
 }
 
 func (client *ldapClientOptions) connectLDAPRawReferral(
@@ -580,12 +707,12 @@ func ldapRawCompare(
 	dn, attribute string,
 	value []byte,
 	controls []ldap.Control,
-) (bool, error) {
+) (ldapCompareResult, error) {
 	wireControls := make([]ldapwire.Control, 0, len(controls))
 	for _, control := range controls {
 		raw, ok := control.(*ldapRawControl)
 		if !ok {
-			return false, fmt.Errorf(
+			return ldapCompareResult{}, fmt.Errorf(
 				"ldapcompare cannot encode control %s of type %T",
 				control.GetControlType(),
 				control,
@@ -610,15 +737,15 @@ func ldapRawCompare(
 		Controls: wireControls,
 	})
 	if err != nil {
-		return false, err
+		return ldapCompareResult{}, err
 	}
 	defer clear(request)
 	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return false, err
+		return ldapCompareResult{}, err
 	}
 	defer connection.SetDeadline(time.Time{})
 	if err := ldapwire.Write(connection, request); err != nil {
-		return false, err
+		return ldapCompareResult{}, err
 	}
 	result, err := readLDAPClientSASLResult(
 		connection,
@@ -626,16 +753,107 @@ func ldapRawCompare(
 		ldap.ApplicationCompareResponse,
 	)
 	if err != nil {
-		return false, err
+		return ldapCompareResult{}, err
 	}
-	switch result.code {
-	case ldap.LDAPResultCompareTrue:
-		return true, nil
-	case ldap.LDAPResultCompareFalse:
-		return false, nil
-	default:
-		return false, ldapRawResultError(result)
+	return decodeLDAPCompareResult(result)
+}
+
+func decodeLDAPCompareResult(result ldapClientSASLResult) (ldapCompareResult, error) {
+	if result.packet == nil || len(result.packet.Children) < 2 {
+		return ldapCompareResult{}, errors.New("LDAP Compare response packet is missing")
 	}
+	operation := result.packet.Children[1]
+	diagnostic, ok := ldapClientPacketBytes(operation.Children[2])
+	if !ok {
+		return ldapCompareResult{}, errors.New("malformed LDAP Compare diagnostic message")
+	}
+	decoded := ldapCompareResult{
+		code:       result.code,
+		matchedDN:  result.matchedDN,
+		diagnostic: string(diagnostic),
+	}
+	for _, child := range operation.Children[3:] {
+		if !ldapClientPacketIs(child, ber.ClassContext, ber.TypeConstructed, 3) {
+			continue
+		}
+		for _, referralPacket := range child.Children {
+			referral, ok := ldapClientPacketBytes(referralPacket)
+			if !ok {
+				return ldapCompareResult{}, errors.New("malformed LDAP Compare referral")
+			}
+			decoded.referrals = append(decoded.referrals, string(referral))
+		}
+	}
+	if len(result.packet.Children) == 3 {
+		controls, err := decodeLDAPCompareControls(result.packet.Children[2])
+		if err != nil {
+			return ldapCompareResult{}, err
+		}
+		decoded.controls = controls
+	}
+	return decoded, nil
+}
+
+func decodeLDAPCompareControls(wrapper *ber.Packet) ([]ldapwire.Control, error) {
+	if !ldapClientPacketIs(wrapper, ber.ClassContext, ber.TypeConstructed, 0) {
+		return nil, errors.New("malformed LDAP Compare response controls")
+	}
+	controls := make([]ldapwire.Control, 0, len(wrapper.Children))
+	for _, packet := range wrapper.Children {
+		if !ldapClientPacketIs(packet, ber.ClassUniversal, ber.TypeConstructed, uint64(ber.TagSequence)) ||
+			len(packet.Children) < 1 || len(packet.Children) > 3 {
+			return nil, errors.New("malformed LDAP Compare response control")
+		}
+		oid, ok := ldapClientPacketBytes(packet.Children[0])
+		if !ok || len(oid) == 0 {
+			return nil, errors.New("malformed LDAP Compare response control OID")
+		}
+		control := ldapwire.Control{OID: string(oid)}
+		position := 1
+		if position < len(packet.Children) &&
+			ldapClientPacketIs(packet.Children[position], ber.ClassUniversal, ber.TypePrimitive, uint64(ber.TagBoolean)) {
+			_, ok := ldapComparePacketBoolean(packet.Children[position])
+			if !ok {
+				return nil, errors.New("malformed LDAP Compare response control criticality")
+			}
+			position++
+		}
+		if position < len(packet.Children) {
+			value, ok := ldapClientPacketBytes(packet.Children[position])
+			if !ok {
+				return nil, errors.New("malformed LDAP Compare response control value")
+			}
+			control.Value = value
+			control.HasValue = true
+			position++
+		}
+		if position != len(packet.Children) {
+			return nil, errors.New("malformed LDAP Compare response control")
+		}
+		controls = append(controls, control)
+	}
+	return controls, nil
+}
+
+func ldapComparePacketBoolean(packet *ber.Packet) (bool, bool) {
+	if value, ok := packet.Value.(bool); ok {
+		return value, true
+	}
+	if packet.Data == nil || packet.Data.Len() != 1 {
+		return false, false
+	}
+	return packet.Data.Bytes()[0] != 0, true
+}
+
+func ldapCompareResultName(code uint16) string {
+	switch code {
+	case ldap.LDAPResultNoSuchObject:
+		return "No such object"
+	}
+	if name := ldap.LDAPResultCodeMap[code]; name != "" {
+		return name
+	}
+	return "Unknown Error"
 }
 
 func ldapRawResultError(result ldapClientSASLResult) error {

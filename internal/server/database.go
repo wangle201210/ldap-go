@@ -539,10 +539,45 @@ func (normalizer *databaseEqualityIndexNormalizer) ResolveEqualityIndexAttribute
 	canonical = strings.ToLower(attribute.OID)
 	for _, configured := range normalizer.config.Attributes {
 		if configured.Attribute == canonical {
+			if configured.NoTags && strings.Contains(description, ";") {
+				return canonical, false, false, nil
+			}
 			return canonical, configured.Equality, configured.Presence, nil
 		}
 	}
 	return canonical, false, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ResolveApproximateIndexAttribute(
+	description string,
+) (canonical string, equalityFallback bool, err error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !found {
+		return "", false, err
+	}
+	canonical = strings.ToLower(attribute.OID)
+	for _, configured := range normalizer.config.Attributes {
+		if configured.Attribute != canonical {
+			continue
+		}
+		if configured.NoTags && strings.Contains(description, ";") {
+			return canonical, false, nil
+		}
+		// OpenLDAP falls back to the equality index only when the attribute's
+		// equality rule has no associated approximate rule. Associated rules
+		// use a phonetic, multi-key normalization that this index does not
+		// reproduce, so those filters must retain the complete scan candidate set.
+		_, hasAssociatedApproximateRule := openLDAPApproximateMatchingRule(attribute.Equality)
+		return canonical, configured.Equality && !hasAssociatedApproximateRule, nil
+	}
+	return canonical, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) NormalizeApproximateIndexAssertion(
+	description string,
+	value []byte,
+) ([]byte, error) {
+	return normalizer.registry.NormalizeEqualityAssertion(description, value)
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeEqualityIndexAssertion(
@@ -584,6 +619,9 @@ func (normalizer *databaseEqualityIndexNormalizer) ResolveSubstringIndexAttribut
 	canonical = strings.ToLower(attribute.OID)
 	for _, configured := range normalizer.config.Attributes {
 		if configured.Attribute == canonical {
+			if configured.NoTags && strings.Contains(description, ";") {
+				return canonical, false, false, false, nil
+			}
 			return canonical, configured.SubstringInitial, configured.SubstringAny, configured.SubstringFinal, nil
 		}
 	}
@@ -639,6 +677,9 @@ func (normalizer *databaseEqualityIndexNormalizer) ResolveOrderingIndexAttribute
 	canonical = strings.ToLower(attribute.OID)
 	for _, configured := range normalizer.config.Attributes {
 		if configured.Attribute == canonical {
+			if configured.NoTags && strings.Contains(description, ";") {
+				return canonical, false, nil
+			}
 			return canonical, configured.Ordering, nil
 		}
 	}
@@ -841,6 +882,10 @@ func orderingIndexRulesEquivalent(equality, ordering string) bool {
 	return pairs[ordering] == equality
 }
 
+func openLDAPApproximateMatchingRule(equality string) (string, bool) {
+	return schema.AssociatedApproximateMatchingRule(equality)
+}
+
 func (normalizer *databaseEqualityIndexNormalizer) expandObjectClassIndexValues(
 	values [][]byte,
 ) [][]byte {
@@ -886,16 +931,18 @@ func loadDatabaseEqualityIndexes(
 			entry.DN,
 		)
 	}
+	directives, err := orderedDatabaseIndexDirectives(values)
+	if err != nil {
+		return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+			"%s olcDbIndex: %w",
+			entry.DN,
+			err,
+		)
+	}
 	byAttribute := make(map[string]storage.EqualityIndexAttribute)
-	for _, raw := range values {
-		value, err := stripOrderedDatabaseIndexPrefix(string(raw))
-		if err != nil {
-			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-				"%s olcDbIndex: %w",
-				entry.DN,
-				err,
-			)
-		}
+	definedAttributes := make(map[string]string)
+	var defaultModes databaseIndexModes
+	for _, value := range directives {
 		arguments, err := tokenizeOpenLDAPConfig(value)
 		if err != nil {
 			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
@@ -904,45 +951,38 @@ func loadDatabaseEqualityIndexes(
 				err,
 			)
 		}
-		if len(arguments) < 2 {
+		if len(arguments) < 1 {
 			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-				"%s olcDbIndex requires attributes and index types",
+				"%s olcDbIndex requires attributes",
 				entry.DN,
 			)
 		}
-		var equality, presence, substringInitial, substringAny, substringFinal, ordering bool
+		var modes databaseIndexModes
 		for _, argument := range arguments[1:] {
 			for _, indexType := range strings.Split(argument, ",") {
 				switch strings.ToLower(strings.TrimSpace(indexType)) {
 				case "eq":
-					equality = true
+					modes.equality = true
 				case "pres":
-					presence = true
+					modes.presence = true
 				case "sub":
-					substringInitial = true
-					substringAny = true
-					substringFinal = true
+					modes.substringInitial = true
+					modes.substringAny = true
+					modes.substringFinal = true
 				case "subinitial":
-					substringInitial = true
+					modes.substringInitial = true
 				case "subany":
-					substringAny = true
+					modes.substringAny = true
 				case "subfinal":
-					substringFinal = true
+					modes.substringFinal = true
 				case "ordering":
-					ordering = true
+					modes.ordering = true
 				case "":
 				case "approx":
-					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-						"%s olcDbIndex type %q requires an explicit approximate matching rule; the active schema exposes none",
-						entry.DN,
-						indexType,
-					)
-				case "nolang":
-					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-						"%s olcDbIndex type %q is unsupported",
-						entry.DN,
-						indexType,
-					)
+					modes.approximate = true
+				case "nolang", "notags":
+					// slap_str2index maps the legacy nolang spelling to NOTAGS.
+					modes.noTags = true
 				default:
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 						"%s olcDbIndex has unknown index type %q",
@@ -952,18 +992,26 @@ func loadDatabaseEqualityIndexes(
 				}
 			}
 		}
-		if !equality && !presence && !substringInitial && !substringAny && !substringFinal && !ordering {
+		if len(arguments) == 1 {
+			modes = defaultModes
+		}
+		if !modes.enabled() {
 			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-				"%s olcDbIndex does not configure a supported index type",
+				"%s olcDbIndex has no indexes selected",
 				entry.DN,
 			)
 		}
 		for _, description := range strings.Split(arguments[0], ",") {
 			description = strings.TrimSpace(description)
 			if strings.EqualFold(description, "default") {
+				defaultModes.merge(modes)
+				continue
+			}
+			if strings.Contains(description, ";") {
 				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-					"%s olcDbIndex default is unsupported in the equality-index phase",
+					"%s olcDbIndex attribute %q has options; option-specific index databases are not implemented, use a base attribute with nolang/notags when tagged filters must scan",
 					entry.DN,
+					description,
 				)
 			}
 			attribute, found, err := registry.EffectiveAttributeType(description)
@@ -982,14 +1030,14 @@ func loadDatabaseEqualityIndexes(
 					description,
 				)
 			}
-			if equality && attribute.Equality == "" {
+			if modes.equality && attribute.Equality == "" {
 				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 					"%s olcDbIndex attribute %q has no equality matching rule",
 					entry.DN,
 					description,
 				)
 			}
-			hasSubstring := substringInitial || substringAny || substringFinal
+			hasSubstring := modes.substringInitial || modes.substringAny || modes.substringFinal
 			if hasSubstring {
 				if attribute.Substring == "" {
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
@@ -1007,7 +1055,7 @@ func loadDatabaseEqualityIndexes(
 					)
 				}
 			}
-			if ordering {
+			if modes.ordering {
 				if attribute.Ordering == "" {
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 						"%s olcDbIndex attribute %q has no ordering matching rule",
@@ -1024,7 +1072,27 @@ func loadDatabaseEqualityIndexes(
 					)
 				}
 			}
+			approximateRule := ""
+			if modes.approximate {
+				approximateRule, found = openLDAPApproximateMatchingRule(attribute.Equality)
+				if !found {
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex attribute %q has no OpenLDAP 2.6.13 associated approximate matching rule; back-mdb disallows this approx index",
+						entry.DN,
+						description,
+					)
+				}
+			}
 			key := strings.ToLower(attribute.OID)
+			if previous, duplicate := definedAttributes[key]; duplicate {
+				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+					"%s olcDbIndex duplicate index definition for attr %q (already defined as %q)",
+					entry.DN,
+					description,
+					previous,
+				)
+			}
+			definedAttributes[key] = description
 			configured := byAttribute[key]
 			configured.Attribute = key
 			if attribute.Equality != "" {
@@ -1033,15 +1101,20 @@ func loadDatabaseEqualityIndexes(
 			if hasSubstring {
 				configured.SubstringRule = canonicalIndexMatchingRule(attribute.Substring)
 			}
-			if ordering {
+			if modes.ordering {
 				configured.OrderingRule = canonicalIndexMatchingRule(attribute.Ordering)
 			}
-			configured.Equality = configured.Equality || equality
-			configured.Presence = configured.Presence || presence
-			configured.SubstringInitial = configured.SubstringInitial || substringInitial
-			configured.SubstringAny = configured.SubstringAny || substringAny
-			configured.SubstringFinal = configured.SubstringFinal || substringFinal
-			configured.Ordering = configured.Ordering || ordering
+			if modes.approximate {
+				configured.ApproximateRule = approximateRule
+			}
+			configured.Equality = configured.Equality || modes.equality
+			configured.Presence = configured.Presence || modes.presence
+			configured.Approximate = configured.Approximate || modes.approximate
+			configured.SubstringInitial = configured.SubstringInitial || modes.substringInitial
+			configured.SubstringAny = configured.SubstringAny || modes.substringAny
+			configured.SubstringFinal = configured.SubstringFinal || modes.substringFinal
+			configured.Ordering = configured.Ordering || modes.ordering
+			configured.NoTags = configured.NoTags || modes.noTags
 			byAttribute[key] = configured
 		}
 	}
@@ -1058,19 +1131,93 @@ func loadDatabaseEqualityIndexes(
 	}, config, nil
 }
 
+type databaseIndexModes struct {
+	equality         bool
+	presence         bool
+	approximate      bool
+	substringInitial bool
+	substringAny     bool
+	substringFinal   bool
+	ordering         bool
+	noTags           bool
+}
+
+func (modes databaseIndexModes) enabled() bool {
+	return modes.equality || modes.presence || modes.approximate ||
+		modes.substringInitial || modes.substringAny || modes.substringFinal ||
+		modes.ordering || modes.noTags
+}
+
+func (modes *databaseIndexModes) merge(other databaseIndexModes) {
+	modes.equality = modes.equality || other.equality
+	modes.presence = modes.presence || other.presence
+	modes.approximate = modes.approximate || other.approximate
+	modes.substringInitial = modes.substringInitial || other.substringInitial
+	modes.substringAny = modes.substringAny || other.substringAny
+	modes.substringFinal = modes.substringFinal || other.substringFinal
+	modes.ordering = modes.ordering || other.ordering
+	modes.noTags = modes.noTags || other.noTags
+}
+
+type orderedDatabaseIndexDirective struct {
+	value    string
+	order    int
+	position int
+	ordered  bool
+}
+
+func orderedDatabaseIndexDirectives(values [][]byte) ([]string, error) {
+	directives := make([]orderedDatabaseIndexDirective, 0, len(values))
+	allOrdered := len(values) > 0
+	seenOrders := make(map[int]struct{}, len(values))
+	for position, raw := range values {
+		value, order, ordered, err := parseOrderedDatabaseIndexPrefix(string(raw))
+		if err != nil {
+			return nil, err
+		}
+		if ordered {
+			if _, duplicate := seenOrders[order]; duplicate {
+				return nil, fmt.Errorf("duplicate ordered prefix {%d}", order)
+			}
+			seenOrders[order] = struct{}{}
+		} else {
+			allOrdered = false
+		}
+		directives = append(directives, orderedDatabaseIndexDirective{
+			value: value, order: order, position: position, ordered: ordered,
+		})
+	}
+	if allOrdered {
+		sort.SliceStable(directives, func(left, right int) bool {
+			return directives[left].order < directives[right].order
+		})
+	}
+	result := make([]string, len(directives))
+	for index := range directives {
+		result[index] = directives[index].value
+	}
+	return result, nil
+}
+
 func stripOrderedDatabaseIndexPrefix(value string) (string, error) {
+	value, _, _, err := parseOrderedDatabaseIndexPrefix(value)
+	return value, err
+}
+
+func parseOrderedDatabaseIndexPrefix(value string) (string, int, bool, error) {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "{") {
-		return value, nil
+		return value, 0, false, nil
 	}
 	end := strings.IndexByte(value, '}')
 	if end <= 1 {
-		return "", errors.New("invalid ordered prefix")
+		return "", 0, false, errors.New("invalid ordered prefix")
 	}
-	if _, err := strconv.Atoi(value[1:end]); err != nil {
-		return "", errors.New("invalid ordered prefix")
+	order, err := strconv.Atoi(value[1:end])
+	if err != nil || order < 0 {
+		return "", 0, false, errors.New("invalid ordered prefix")
 	}
-	return strings.TrimSpace(value[end+1:]), nil
+	return strings.TrimSpace(value[end+1:]), order, true, nil
 }
 
 func loadDatabaseSearchSizeLimits(

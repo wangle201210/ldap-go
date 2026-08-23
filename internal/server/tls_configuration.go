@@ -7,7 +7,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,15 +20,14 @@ import (
 )
 
 var unsupportedGlobalTLSDirectives = []string{
-	"olcTLSCACertificatePath",
 	"olcTLSRandFile",
 	"olcTLSDHParamFile",
-	"olcTLSECName",
 }
 
 var recognizedGlobalTLSDirectives = append([]string{
 	"olcTLSCACertificate",
 	"olcTLSCACertificateFile",
+	"olcTLSCACertificatePath",
 	"olcTLSCertificate",
 	"olcTLSCertificateFile",
 	"olcTLSCertificateKey",
@@ -32,6 +35,7 @@ var recognizedGlobalTLSDirectives = append([]string{
 	"olcTLSCipherSuite",
 	"olcTLSCRLCheck",
 	"olcTLSCRLFile",
+	"olcTLSECName",
 	"olcTLSVerifyClient",
 	"olcTLSProtocolMin",
 }, unsupportedGlobalTLSDirectives...)
@@ -39,6 +43,7 @@ var recognizedGlobalTLSDirectives = append([]string{
 type globalTLSAttributes struct {
 	caCertificate      []byte
 	caCertificateFile  string
+	caCertificatePath  string
 	certificate        []byte
 	certificateFile    string
 	certificateKey     []byte
@@ -46,6 +51,7 @@ type globalTLSAttributes struct {
 	cipherSuite        string
 	crlCheck           string
 	crlFile            string
+	ecName             string
 	verifyClient       string
 	protocolMin        string
 }
@@ -194,6 +200,12 @@ func parseGlobalTLSAttributes(entry directory.Entry) (globalTLSAttributes, error
 			entry.DN,
 		)
 	}
+	if attributes.caCertificatePath, err = globalTLSSingleString(
+		entry,
+		"olcTLSCACertificatePath",
+	); err != nil {
+		return globalTLSAttributes{}, err
+	}
 
 	if attributes.certificate, _, err = globalTLSSingleValue(
 		entry,
@@ -251,6 +263,12 @@ func parseGlobalTLSAttributes(entry directory.Entry) (globalTLSAttributes, error
 	); err != nil {
 		return globalTLSAttributes{}, err
 	}
+	if attributes.ecName, err = globalTLSSingleString(
+		entry,
+		"olcTLSECName",
+	); err != nil {
+		return globalTLSAttributes{}, err
+	}
 	if attributes.verifyClient, err = globalTLSSingleString(
 		entry,
 		"olcTLSVerifyClient",
@@ -302,14 +320,14 @@ func (server *Server) buildGlobalTLSConfig(
 	if err != nil {
 		return nil, fmt.Errorf("%s TLS certificate: %w", entryDN, err)
 	}
-	keyData, err := globalTLSData(
+	keyData, err := globalTLSPrivateKeyData(
 		attributes.certificateKey,
 		attributes.certificateKeyFile,
-		"olcTLSCertificateKeyFile",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%s TLS private key: %w", entryDN, err)
 	}
+	defer clearGlobalTLSSecret(keyData)
 	if len(certificateData) == 0 {
 		return nil, fmt.Errorf(
 			"%s olcTLSCertificate or olcTLSCertificateFile is required",
@@ -322,7 +340,6 @@ func (server *Server) buildGlobalTLSConfig(
 			entryDN,
 		)
 	}
-
 	certificate, err := parseGlobalTLSKeyPair(certificateData, keyData)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -377,6 +394,12 @@ func (server *Server) buildGlobalTLSConfig(
 			return nil, fmt.Errorf("%s olcTLSCipherSuite: %w", entryDN, err)
 		}
 	}
+	if attributes.ecName != "" {
+		configuration.CurvePreferences, err = parseGlobalTLSECName(attributes.ecName)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcTLSECName: %w", entryDN, err)
+		}
+	}
 
 	configuration.ClientAuth, err = parseGlobalTLSVerifyClient(
 		attributes.verifyClient,
@@ -392,10 +415,13 @@ func (server *Server) buildGlobalTLSConfig(
 	if err != nil {
 		return nil, fmt.Errorf("%s TLS CA certificate: %w", entryDN, err)
 	}
-	if len(caData) > 0 {
-		configuration.ClientCAs, err = parseGlobalTLSCAPool(caData)
+	if len(caData) > 0 || attributes.caCertificatePath != "" {
+		configuration.ClientCAs, err = buildGlobalTLSCAPool(
+			caData,
+			attributes.caCertificatePath,
+		)
 		if err != nil {
-			return nil, fmt.Errorf("%s olcTLSCACertificate: %w", entryDN, err)
+			return nil, fmt.Errorf("%s TLS CA certificate configuration: %w", entryDN, err)
 		}
 	}
 	if globalTLSClientVerificationRequired(configuration.ClientAuth) &&
@@ -617,14 +643,73 @@ func globalTLSData(inline []byte, path, kind string) ([]byte, error) {
 	if path == "" {
 		return nil, nil
 	}
-	value, err := os.ReadFile(path)
+	value, _, err := readGlobalTLSFile(path, kind)
 	if err != nil {
-		return nil, fmt.Errorf("read %s file %q: %w", kind, path, err)
-	}
-	if len(value) == 0 {
-		return nil, fmt.Errorf("%s file %q is empty", kind, path)
+		return nil, err
 	}
 	return value, nil
+}
+
+const (
+	globalTLSMaximumFileSize                         = 16 << 20
+	globalTLSMaximumPassword                         = 4 << 10
+	globalTLSMaximumCADirectories                    = 16
+	globalTLSMaximumCADirectoryFiles                 = 4096
+	globalTLSMaximumCADirectoryBytes           int64 = 64 << 20
+	globalTLSMaximumCADirectoryCertificates          = 4096
+	globalTLSPrivateKeyPasswordFileEnvironment       = "LDAP_GO_TLS_KEY_PASSWORD_FILE"
+)
+
+var globalTLSCAHashFileName = regexp.MustCompile(`^[0-9A-Fa-f]{8}\.[0-9]+$`)
+
+func readGlobalTLSFile(path, kind string) ([]byte, os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %s file %q: %w", kind, path, err)
+	}
+	defer file.Close()
+	information, err := file.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat %s file %q: %w", kind, path, err)
+	}
+	if !information.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s file %q is not a regular file", kind, path)
+	}
+	if information.Size() > globalTLSMaximumFileSize {
+		return nil, nil, fmt.Errorf(
+			"%s file %q exceeds the %d-byte limit",
+			kind,
+			path,
+			globalTLSMaximumFileSize,
+		)
+	}
+	value, err := io.ReadAll(io.LimitReader(file, globalTLSMaximumFileSize+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s file %q: %w", kind, path, err)
+	}
+	if len(value) == 0 {
+		return nil, nil, fmt.Errorf("%s file %q is empty", kind, path)
+	}
+	if len(value) > globalTLSMaximumFileSize {
+		return nil, nil, fmt.Errorf(
+			"%s file %q exceeds the %d-byte limit",
+			kind,
+			path,
+			globalTLSMaximumFileSize,
+		)
+	}
+	return value, information, nil
+}
+
+func globalTLSPrivateKeyData(inline []byte, path string) ([]byte, error) {
+	if len(inline) > 0 {
+		return append([]byte(nil), inline...), nil
+	}
+	if path == "" {
+		return nil, nil
+	}
+	value, _, err := readGlobalTLSFile(path, "olcTLSCertificateKeyFile")
+	return value, err
 }
 
 func parseGlobalTLSKeyPair(
@@ -646,6 +731,7 @@ func parseGlobalTLSKeyPair(
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+	defer clearGlobalTLSSecret(keyPEM)
 	keyPair, err := tls.X509KeyPair(certificatePEM, keyPEM)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -700,7 +786,33 @@ func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
 			continue
 		}
 		if x509.IsEncryptedPEMBlock(block) {
-			return nil, errors.New("encrypted private keys are unsupported")
+			password, err := loadGlobalTLSPrivateKeyPassword()
+			if err != nil {
+				return nil, err
+			}
+			decrypted, err := x509.DecryptPEMBlock(block, password)
+			clearGlobalTLSSecret(password)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt traditional encrypted PEM private key: %w", err)
+			}
+			privateKey, parseErr := parseGlobalTLSDERPrivateKey(decrypted)
+			clearGlobalTLSSecret(decrypted)
+			if parseErr != nil {
+				return nil, errors.New(
+					"decrypt traditional encrypted PEM private key: incorrect password or invalid private key",
+				)
+			}
+			der, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			if err != nil {
+				return nil, fmt.Errorf("marshal decrypted private key: %w", err)
+			}
+			defer clearGlobalTLSSecret(der)
+			return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+		}
+		if block.Type == "ENCRYPTED PRIVATE KEY" {
+			return nil, errors.New(
+				"PKCS#8 encrypted private keys cannot be decoded by the Go standard library; use traditional RFC 1423 PEM encryption",
+			)
 		}
 		return pem.EncodeToMemory(block), nil
 	}
@@ -712,7 +824,88 @@ func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal private key: %w", err)
 	}
+	defer clearGlobalTLSSecret(der)
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
+func loadGlobalTLSPrivateKeyPassword() ([]byte, error) {
+	path, configured := os.LookupEnv(globalTLSPrivateKeyPasswordFileEnvironment)
+	if !configured || path == "" {
+		return nil, fmt.Errorf(
+			"traditional encrypted PEM private key requires %s",
+			globalTLSPrivateKeyPasswordFileEnvironment,
+		)
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf(
+			"%s must name an absolute password file path",
+			globalTLSPrivateKeyPasswordFileEnvironment,
+		)
+	}
+	linkInformation, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat TLS private key password file %q: %w", path, err)
+	}
+	if linkInformation.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("TLS private key password file %q must not be a symbolic link", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open TLS private key password file %q: %w", path, err)
+	}
+	defer file.Close()
+	information, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat TLS private key password file %q: %w", path, err)
+	}
+	if !os.SameFile(linkInformation, information) {
+		return nil, fmt.Errorf("TLS private key password file %q changed while it was opened", path)
+	}
+	if !information.Mode().IsRegular() {
+		return nil, fmt.Errorf("TLS private key password file %q is not a regular file", path)
+	}
+	if runtime.GOOS != "windows" && information.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf(
+			"TLS private key password file %q permissions %04o expose the password to group or other users",
+			path,
+			information.Mode().Perm(),
+		)
+	}
+	if information.Size() > globalTLSMaximumPassword {
+		return nil, fmt.Errorf(
+			"TLS private key password file %q exceeds the %d-byte limit",
+			path,
+			globalTLSMaximumPassword,
+		)
+	}
+	value, err := io.ReadAll(io.LimitReader(file, globalTLSMaximumPassword+1))
+	if err != nil {
+		return nil, fmt.Errorf("read TLS private key password file %q: %w", path, err)
+	}
+	if len(value) == 0 {
+		return nil, fmt.Errorf("TLS private key password file %q is empty", path)
+	}
+	if len(value) > globalTLSMaximumPassword {
+		clearGlobalTLSSecret(value)
+		return nil, fmt.Errorf(
+			"TLS private key password file %q exceeds the %d-byte limit",
+			path,
+			globalTLSMaximumPassword,
+		)
+	}
+	value = bytes.TrimSuffix(value, []byte("\n"))
+	value = bytes.TrimSuffix(value, []byte("\r"))
+	if bytes.IndexByte(value, 0) >= 0 {
+		clearGlobalTLSSecret(value)
+		return nil, errors.New("TLS private key password contains a NUL byte")
+	}
+	return value, nil
+}
+
+func clearGlobalTLSSecret(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func parseGlobalTLSDERPrivateKey(data []byte) (any, error) {
@@ -745,11 +938,227 @@ func parseGlobalTLSCAPool(data []byte) (*x509.CertPool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return globalTLSCAPool(certificates), nil
+}
+
+func buildGlobalTLSCAPool(data []byte, pathList string) (*x509.CertPool, error) {
+	certificates := make([]*x509.Certificate, 0)
+	if len(data) > 0 {
+		parsed, err := parseGlobalTLSCertificates(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse CA certificate data: %w", err)
+		}
+		certificates = append(certificates, parsed...)
+	}
+	if pathList != "" {
+		fromDirectories, err := loadGlobalTLSCAPath(pathList)
+		if err != nil {
+			return nil, fmt.Errorf("olcTLSCACertificatePath: %w", err)
+		}
+		certificates = append(certificates, fromDirectories...)
+	}
+	certificates = deduplicateGlobalTLSCertificates(certificates)
+	if len(certificates) == 0 {
+		return nil, errors.New("CA configuration contains no PEM certificates")
+	}
+	return globalTLSCAPool(certificates), nil
+}
+
+func globalTLSCAPool(certificates []*x509.Certificate) *x509.CertPool {
 	pool := x509.NewCertPool()
 	for _, certificate := range certificates {
 		pool.AddCert(certificate)
 	}
-	return pool, nil
+	return pool
+}
+
+func deduplicateGlobalTLSCertificates(
+	certificates []*x509.Certificate,
+) []*x509.Certificate {
+	unique := make([]*x509.Certificate, 0, len(certificates))
+	seen := make(map[string]struct{}, len(certificates))
+	for _, certificate := range certificates {
+		if certificate == nil {
+			continue
+		}
+		fingerprint := string(certificate.Raw)
+		if _, exists := seen[fingerprint]; exists {
+			continue
+		}
+		seen[fingerprint] = struct{}{}
+		unique = append(unique, certificate)
+	}
+	return unique
+}
+
+func loadGlobalTLSCAPath(configuredPath string) ([]*x509.Certificate, error) {
+	return loadGlobalTLSCAPathWithLimits(configuredPath, globalTLSCAPathLimits{
+		maximumDirectories:  globalTLSMaximumCADirectories,
+		maximumFiles:        globalTLSMaximumCADirectoryFiles,
+		maximumBytes:        globalTLSMaximumCADirectoryBytes,
+		maximumCertificates: globalTLSMaximumCADirectoryCertificates,
+	})
+}
+
+type globalTLSCAPathLimits struct {
+	maximumDirectories  int
+	maximumFiles        int
+	maximumBytes        int64
+	maximumCertificates int
+}
+
+type globalTLSCAPathBudget struct {
+	limits       globalTLSCAPathLimits
+	directories  int
+	files        int
+	bytes        int64
+	certificates int
+}
+
+func loadGlobalTLSCAPathWithLimits(
+	configuredPath string,
+	limits globalTLSCAPathLimits,
+) ([]*x509.Certificate, error) {
+	directories := strings.Split(configuredPath, ";")
+	budget := globalTLSCAPathBudget{limits: limits}
+	certificates := make([]*x509.Certificate, 0)
+	for _, configuredDirectory := range directories {
+		if configuredDirectory == "" {
+			return nil, errors.New("CA directory list contains an empty path")
+		}
+		budget.directories++
+		if budget.directories > budget.limits.maximumDirectories {
+			return nil, fmt.Errorf(
+				"CA directory list exceeds the %d-directory limit",
+				budget.limits.maximumDirectories,
+			)
+		}
+		absolutePath, err := filepath.Abs(configuredDirectory)
+		if err != nil {
+			return nil, fmt.Errorf("resolve CA directory %q: %w", configuredDirectory, err)
+		}
+		root, err := os.OpenRoot(absolutePath)
+		if err != nil {
+			return nil, fmt.Errorf("open CA directory %q: %w", configuredDirectory, err)
+		}
+		loaded, loadErr := loadGlobalTLSCADirectory(root, configuredDirectory, &budget)
+		closeErr := root.Close()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close CA directory %q: %w", configuredDirectory, closeErr)
+		}
+		certificates = append(certificates, loaded...)
+	}
+	return deduplicateGlobalTLSCertificates(certificates), nil
+}
+
+func loadGlobalTLSCADirectory(
+	root *os.Root,
+	configuredPath string,
+	budget *globalTLSCAPathBudget,
+) ([]*x509.Certificate, error) {
+	directory, err := root.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("read CA directory %q: %w", configuredPath, err)
+	}
+	defer directory.Close()
+	certificates := make([]*x509.Certificate, 0)
+	for {
+		entries, readErr := directory.ReadDir(128)
+		for _, entry := range entries {
+			budget.files++
+			if budget.files > budget.limits.maximumFiles {
+				return nil, fmt.Errorf(
+					"CA directories exceed the %d-file limit",
+					budget.limits.maximumFiles,
+				)
+			}
+			if !globalTLSCAHashFileName.MatchString(entry.Name()) {
+				continue
+			}
+			parsed, err := loadGlobalTLSCAHashFile(root, configuredPath, entry.Name(), budget)
+			if err != nil {
+				return nil, err
+			}
+			certificates = append(certificates, parsed...)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read CA directory %q: %w", configuredPath, readErr)
+		}
+	}
+	return certificates, nil
+}
+
+func loadGlobalTLSCAHashFile(
+	root *os.Root,
+	configuredPath,
+	name string,
+	budget *globalTLSCAPathBudget,
+) ([]*x509.Certificate, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open CA directory entry %q in %q: %w", name, configuredPath, err)
+	}
+	defer file.Close()
+	information, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect CA directory entry %q in %q: %w", name, configuredPath, err)
+	}
+	if !information.Mode().IsRegular() {
+		return nil, nil
+	}
+	if information.Size() > globalTLSMaximumFileSize {
+		return nil, fmt.Errorf(
+			"CA directory entry %q in %q exceeds the %d-byte limit",
+			name,
+			configuredPath,
+			globalTLSMaximumFileSize,
+		)
+	}
+	remaining := budget.limits.maximumBytes - budget.bytes
+	if remaining < 0 {
+		remaining = 0
+	}
+	readLimit := int64(globalTLSMaximumFileSize)
+	if remaining < readLimit {
+		readLimit = remaining
+	}
+	data, err := io.ReadAll(io.LimitReader(file, readLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read CA directory entry %q in %q: %w", name, configuredPath, err)
+	}
+	if int64(len(data)) > remaining {
+		return nil, fmt.Errorf(
+			"CA directories exceed the %d-byte total limit",
+			budget.limits.maximumBytes,
+		)
+	}
+	if len(data) > globalTLSMaximumFileSize {
+		return nil, fmt.Errorf(
+			"CA directory entry %q in %q exceeds the %d-byte limit",
+			name,
+			configuredPath,
+			globalTLSMaximumFileSize,
+		)
+	}
+	budget.bytes += int64(len(data))
+	parsed, err := parseGlobalTLSCertificates(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse CA directory entry %q in %q: %w", name, configuredPath, err)
+	}
+	if len(parsed) > budget.limits.maximumCertificates-budget.certificates {
+		return nil, fmt.Errorf(
+			"CA directories exceed the %d-certificate limit",
+			budget.limits.maximumCertificates,
+		)
+	}
+	budget.certificates += len(parsed)
+	return parsed, nil
 }
 
 func parseGlobalTLSVerifyClient(value string) (tls.ClientAuthType, error) {
@@ -788,6 +1197,36 @@ func parseGlobalTLSProtocolMin(value string) (uint16, error) {
 			value,
 		)
 	}
+}
+
+func parseGlobalTLSECName(value string) ([]tls.CurveID, error) {
+	selector := strings.TrimSpace(value)
+	if selector == "" {
+		return nil, errors.New("curve name is empty")
+	}
+	if strings.ContainsAny(selector, ":, \t\r\n?*+/{ }") {
+		return nil, fmt.Errorf(
+			"OpenSSL group selector %q cannot be mapped exactly to Go TLS; configure one named group",
+			value,
+		)
+	}
+	var curve tls.CurveID
+	switch strings.ToUpper(selector) {
+	case "X25519":
+		curve = tls.X25519
+	case "P-256", "PRIME256V1", "SECP256R1":
+		curve = tls.CurveP256
+	case "P-384", "SECP384R1":
+		curve = tls.CurveP384
+	case "P-521", "SECP521R1":
+		curve = tls.CurveP521
+	default:
+		return nil, fmt.Errorf(
+			"OpenSSL named group %q is not available in crypto/tls",
+			value,
+		)
+	}
+	return []tls.CurveID{curve}, nil
 }
 
 func parseGlobalTLSCipherSuites(value string) ([]uint16, error) {

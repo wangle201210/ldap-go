@@ -41,7 +41,7 @@ functions, configurations, or directory data.
 | Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | partial | RFC 3296 referrals, RFC 4511/4512 aliases, OpenLDAP 2.6.13 differentials, and chain-overlay integration tests pass |
-| LDAP URLs and attribute options | partial | referral DN/scope rewrite passes; full RFC 4516 and language options remain |
+| LDAP URLs and attribute options | partial | RFC 4516 referral DN/attributes/scope/filter/extensions parsing, percent decoding, OpenLDAP DN/scope rewrite behavior, malformed-URL result 89, critical-extension result 92, and Search projection for bare/exact/range language options, subtypes, `*`, and `typesOnly` pass. Referral attributes/filter are parsed but, matching OpenLDAP 2.6.13 chasing, do not replace the original Search request. An empty or absent referral DN intentionally retains the original base instead of reproducing the 2.6.13 binary's root-search expansion; direct `ldapsearch -H` URL mode and the complete attribute-option matrix remain |
 
 ## Controls and extended operations
 
@@ -62,7 +62,7 @@ functions, configurations, or directory data.
 | Subentries | partial | RFC 3672 schema/control, visibility, paging, write rules, and OpenLDAP 2.6.13 differential tests pass |
 | Don't Use Copy | partial | RFC 6171 Search/Compare, shadow referrals, chain routing, alias/referral ordering, `dontusecopy_non_critical`, OpenLDAP `ldapsearch`, and slapd differentials pass |
 | LDAP Sync | partial | RFC 4533 BER, refreshOnly, refreshAndPersist, present/session-log refresh, `delcsn`, dynamic contextCSN, cancellation, restart, Sort/VLV, glue, OpenLDAP 2.6.13 ldapsearch, and schema-aware base/scope/present/delete DN routing pass; broader provider and overlay-order topologies remain |
-| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, generated-password commit/rollback, bounded configurable queues, Aborted Transaction Notice, Bind/Unbind no-notice aborts, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and pinned source/slapd differential tests pass; pre/post-read, proxied authorization on Start, and broader extension interactions remain |
+| LDAP transactions (RFC 5805/OpenLDAP) | partial | strict BER, connection state, Add/Modify/Delete/ModifyDN/Password Modify, generated-password commit/rollback, bounded configurable queues, Aborted Transaction Notice, Bind/Unbind no-notice aborts, per-update proxy identities, memory/bbolt rollback, OpenLDAP `ldapmodify`, and pinned source/slapd differential tests pass. Matching OpenLDAP 2.6.13, critical ProxyAuthz on Start is rejected with `unavailableCriticalExtension`, while transactional updates with pre/post-read are rejected with `unwillingToPerform` and no response controls; broader extension interactions remain |
 | Dynamic refresh | partial | RFC 2589 BER/TTL/ACL behavior, OpenLDAP `ldapexop`, and slapd differentials pass; broader overlay-order and replication topologies remain |
 
 ## Data model and schema
@@ -87,7 +87,7 @@ functions, configurations, or directory data.
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5 `qop=auth`, SCRAM-SHA-1/256/512, transport SSF policy, `olcSaslHost`, direct/LDAP-URL `olcAuthzRegexp`, `olcAuthzPolicy`, `authzTo`/`authzFrom`, group/LDAP-URL rules, Cyrus credential forms, proxy-backed auxprop/auth-check searches, OpenLDAP `other(80)` backend-failure mapping, and OpenLDAP CLI interoperability pass; GSSAPI, SCRAM-PLUS, and DIGEST security layers remain |
 | SASL client authentication | partial | syncrepl EXTERNAL/PLAIN/CRAM-MD5/DIGEST-MD5/SCRAM-SHA-1/256/512 pass; DIGEST-MD5 covers multiple offered realms, configured realm validation, `authzid`, provider-host `digest-uri`, and strict `rspauth`; GSSAPI password/keytab/FILE-cache paths pass unit coverage; only DIGEST `qop=auth` is supported, and a real KDC topology, SCRAM-PLUS, and SASL security layers remain |
 | Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, minimum SSF, PLAIN advertisement policy, and ACL `ssf`/`transport_ssf`/`tls_ssf`/`sasl_ssf` selectors pass; negotiated SASL-layer SSF remains unavailable |
-| TLS and mutual TLS | partial | LDAPS/StartTLS/client cert and syncrepl CA/SAN/CRL policies pass; global `olcTLS*` certificate/key/CA/CRL, client verification, protocol minimum, exact ciphers, and `olcTLSCRLCheck=none/peer/all` build or stage an immutable context. PEM/DER CRLs enforce issuer signature, validity, serial revocation and `removeFromCRL`; online TLS/CRL rotation preserves old connections and rolls back invalid updates. Unsupported OpenSSL selectors, CA-directory lookup, indirect/delta CRLs, DH/random/curve directives, TLS 1.3 cipher selection, and the broader slapd TLS matrix remain |
+| TLS and mutual TLS | partial | LDAPS/StartTLS/client cert and syncrepl CA/SAN/CRL policies pass; global `olcTLS*` certificate/key/CA/CRL, client verification, protocol minimum, exact ciphers, and `olcTLSCRLCheck=none/peer/all` build or stage an immutable context. `olcTLSCACertificatePath` accepts bounded semicolon-separated OpenSSL `hash.N` directories with DER de-duplication and symlink-escape protection. Traditional RFC 1423 encrypted PEM keys use a bounded, permission-restricted password file; one X25519/P-256/P-384/P-521 `olcTLSECName` selector is mapped. PEM/DER CRLs enforce issuer signature, validity, serial revocation and `removeFromCRL`; online TLS/CRL rotation preserves old connections and rolls back invalid updates. PKCS#8 encrypted keys, multi-group/unsupported curve selectors, indirect/delta CRLs, DH/random directives, complete OpenSSL selectors, TLS 1.3 cipher selection, provider/hash-directory lazy lookup details, and the broader slapd TLS matrix remain |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
 | Audit and security logging | partial | credential-free operation metadata, result codes, identities, transport SSF, malformed-message coverage, HMAC-SHA-256 chaining, verified restart append, CLI verification, concurrency/race, and tamper tests pass; OpenLDAP accesslog and flat-file auditlog records, rotation, proxy identities, frontend scope, and transaction behavior pass slapd differentials; broader cross-overlay and OS fault matrices remain |
 
@@ -95,7 +95,7 @@ functions, configurations, or directory data.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Transactional durable backend | partial | crash, atomicity, recovery, and race tests pass; schema-aware v2 DN keys preserve caseExact and merge caseIgnore/alias/OID/multi-AVA equivalents. Memory and bbolt persist configured `eq`, `pres`, `sub`, `subinitial`, `subany`, `subfinal`, and `ordering` indexes, maintain them transactionally across writes/renames, rebuild for legacy/config changes, and preserve/check them through backup/restore/compact. Substring indexes use bounded initial/final anchors and 3-grams with an overflow candidate set that prevents false negatives; short unconstrained `subany` filters fall back to scans. Ordering serves `>=`/`<=`, including order-preserving LDAP INTEGER keys and generalizedTime keys aligned with the schema comparator for whole and fractional seconds. `AND` may use an indexed subset, while `OR` requires every branch; all candidates still receive full LDAP evaluation. Raw writes invalidate indexes and safely fall back to scans. `approx`, `nolang`, `default`, missing matching rules, and rules without a proven equivalent normalization are rejected |
+| Transactional durable backend | partial | crash, atomicity, recovery, and race tests pass; schema-aware v2 DN keys preserve caseExact and merge caseIgnore/alias/OID/multi-AVA equivalents. Memory and bbolt persist configured `eq`, `pres`, `sub`, `subinitial`, `subany`, `subfinal`, and `ordering` indexes, maintain them transactionally across writes/renames, rebuild for legacy/config changes, and preserve/check them through backup/restore/compact. Substring indexes use bounded initial/final anchors and 3-grams with an overflow candidate set that prevents false negatives; short unconstrained `subany` filters fall back to scans. Ordering serves `>=`/`<=`, including order-preserving LDAP INTEGER keys and generalizedTime keys aligned with the schema comparator for whole and fractional seconds. Ordered `olcDbIndex` configuration supports accumulated `default`, synonymous `nolang`/`notags`, and supported `approx` modes. Final approximate matching uses OpenLDAP-compatible UTF-8 normalization and Metaphone; associated phonetic indexes safely scan because phonetic postings are not stored. `AND` may use an indexed subset, while `OR` requires every branch; all candidates still receive full LDAP evaluation. Raw writes invalidate indexes and safely fall back to scans. Option-specific index databases, `nosubtypes`, missing matching rules, and rules without a proven equivalent normalization remain unsupported |
 | Multiple suffixes and subordinate DBs | partial | runtime partition/hidden/glue/paging/syncprov tests plus pinned offline default-primary, most-specific `-b`, hidden/disabled fallback, selected-superior-to-subordinate routing, superior LastMod/root-DN policy, glued replacement, glued `slapcat`, physical `-g`, and duplicate-suffix rejection pass; broader nested glue/backend combinations remain |
 | `cn=config` online configuration | partial | OpenLDAP LDIF import, online changes, and immutable runtime publication pass; complete backend/module-specific validation hooks remain |
 | `slapcat` content LDIF import/export | partial | semantic round trips, atomic rollback including API dry-run, default/explicit database selection and no-database rejection, glue-subordinate import/export/replacement and `-g`, `config`/`mdb`/`ldif`/`wt`/`null` callback policy, proxy-backend rejection, built-in and supported imported schema validation, ordered `olcLdapSyntaxes`/`X-SUBST`, AttributeDescription/options/`;binary` checks, selected default equality normalizers, RDN-value completion, `structuralObjectClass`, selected-database LastMod, `-S`, root/subentry/config `contextCSN`, selected-database suffix/final-parent checks, and supplied operational metadata pass; complete slapd parser/normalizer behavior, executable custom syntax and matching-rule modules, diagnostics, native backend file layouts, and every OpenLDAP data shape remain unverified |
@@ -111,11 +111,14 @@ functions, configurations, or directory data.
 OpenLDAP MDB binary files are not a stable interchange format. Canonical
 `slapcat` LDIF is the direct migration contract. MDB indexes are not migrated;
 the memory and bbolt engines rebuild their own `olcDbIndex`-derived
-equality/presence/substring/ordering layout. Atomic imports parse and validate
-all pending content inside one write transaction, retaining the pending entry
-set until database routing is known; `slapadd -c` is the documented exception
-and commits independent successful content records. Large-import memory use,
-write-lock duration, index selectivity, and crash/fault behavior at scale do
+equality/presence/substring/ordering layout and preserve supported
+`default`/`nolang`/`notags`/`approx` configuration. Approximate filters with an
+associated phonetic rule scan rather than importing or synthesizing OpenLDAP
+index pages. Atomic imports parse and validate all pending content inside one
+write transaction, retaining the pending entry set until database routing is
+known; `slapadd -c` is the documented exception and commits independent
+successful content records. Large-import memory use, write-lock duration,
+index selectivity, and crash/fault behavior at scale do
 not yet have a production qualification gate.
 
 ## Overlays
@@ -172,7 +175,7 @@ not yet have a production qualification gate.
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
 | `slaptest` / `slapdn` equivalents | partial | strict read-only database/config/schema validation, normalized/pretty DN output, multi-DN handling, option validation, no-create behavior, and exit-code tests pass; exact diagnostic formatting and the full slapd.conf conversion surface remain |
 | `slappasswd` equivalent | partial | `{SSHA}`, all six contrib SHA-2 schemes, all four contrib PBKDF2 schemes, `{APR1}`, `{BSDMD5}`, `{SM3}`, `{SSM3}`, `{PBKDF2-SM3}`, and all six pw-totp schemes, stdin/file/argument/random input, newline control, secret clearing, unsupported `{CRYPT}` rejection, verify-only `{NS-MTA-MD5}` and `{RADIUS}` rejection, and option/exit-code tests pass; other OpenLDAP module-provided schemes remain |
-| LDAP client tools | partial | built-in search/whoami/compare/passwd/exop/write/delete/modrdn cover simple/SASL Bind, LDAP/LDAPS/StartTLS, LDIF, controls and referral chasing. `ldapsearch` adds bounded `-f` batch filters with `%s`, `-F` file-URL prefixes, secure `-t/-T` value files, critical paging, client-side `-S` attribute or UFN-component sorting, and `-u` UFN output. Paging is sorted page by page, not globally. The covered OpenLDAP UFN forms omit attribute types, join multi-AVA RDNs, fold trailing `dc` RDNs into a dotted domain, emit escaped bytes as uppercase hexadecimal, and preserve hexadecimal BER AVAs. Prompt/critical paging with referral chasing is explicitly rejected; arbitrary locale-dependent ordering is not claimed. `ldapcompare` sends generic `-e` and `-M`/`-MM` ManageDsaIT controls through a raw Compare path with referrals and SASL PLAIN; historical Compare `-E` remains rejected. `ldapexop passwd` reuses `ldappasswd` password sources/options, controls, generated-password decoding, and dry-run behavior. Auth-only SASL supports PLAIN/CRAM/DIGEST/SCRAM/EXTERNAL. GSSAPI, channel binding/security layers, `-c`, repeated `-tt`, interactive SASL, complete referral rebind behavior and full historical options remain |
+| LDAP client tools | partial | built-in search/whoami/compare/passwd/exop/write/delete/modrdn cover simple/SASL Bind, LDAP/LDAPS/StartTLS, LDIF, controls and referral chasing. `ldapsearch` defaults to OpenLDAP extended LDIF with metadata, UFN, result details, SearchReference URLs, and counts; `-L/-LL/-LLL` and arbitrary repeated `L` forms progressively reduce output. Batch `-c` compiles and runs one filter at a time, continues after malformed filters and LDAP operation errors, and retains the final failure status. It also supports bounded `-f` filters with `%s`, `-F` file-URL prefixes, secure `-t/-T` value files, critical paging, client-side `-S` attribute or UFN-component sorting, and `-u` UFN output. Paging is sorted page by page, not globally. The covered UFN forms omit attribute types, join multi-AVA RDNs, fold trailing `dc` RDNs into a dotted domain, emit uppercase hexadecimal escapes, and preserve hexadecimal BER AVAs. `ldapmodify -a` defaults omitted `changetype` to Add; without `-a`, omitted `changetype` is parsed as Modify with add/delete/replace/increment blocks. `ldapcompare -v` renders TRUE/FALSE/UNDEFINED, result metadata, referrals, and response controls; all Compare `-E` forms are rejected before connecting because OpenLDAP 2.6.13's handler is unreachable and the option is unregistered. `ldapexop passwd` reuses `ldappasswd` password sources/options, controls, generated-password decoding, and dry-run behavior. Prompt/critical paging with referral chasing is explicitly rejected; arbitrary locale-dependent ordering, GSSAPI, channel binding/security layers, repeated `-tt`, interactive SASL, complete referral rebind behavior, and the full historical option set remain unclaimed |
 | Load balancer tooling | partial | `ldap-go lloadd` parses standalone OpenLDAP-style configuration, validates the runnable subset and rejects unsupported settings with `-test-config`, serves multiple LDAP, LDAPS, StartTLS, escaped-authority/three-slash LDAPI, and PROXY-v2 `pldap`/`pldaps` listeners, exposes listener/log and certificate/key overrides, maps config-file upstream LDAPS/StartTLS, service SASL, keepalive, and TCP user-timeout settings, and is exercised by unit, race, TLS/PROXY topology, pinned-source, and live OpenLDAP 2.6.13 tests. A PROXY command strictly parses TCP4/TCP6 addresses; PROXY and LOCAL consume up to 520 bytes of opaque options, LOCAL ignores family, and valid PROXY TLVs are exposed best-effort without rejecting malformed option encoding. PROXY v1 and non-TCP families for the PROXY command, the historical daemon option/signal/logging surface, embedded slapd-module mode, and runtime config/monitor administration remain unsupported |
 
 ## Implemented subset evidence
@@ -193,6 +196,12 @@ readable and are lazily rewritten on successful replace/delete operations.
 Memory and bbolt tests cover equivalent aliases/OIDs and fail-closed ambiguous
 legacy/v2 records; `cn=config` keeps its established legacy identity because
 its ordered configuration RDNs are not content-schema DNs.
+Search attribute projection resolves requested AttributeDescriptions through
+the schema registry. The tested OpenLDAP 2.6.13 behavior covers bare
+attributes, exact `;lang-en` selections, trailing `;lang-` option ranges,
+attribute-type subtypes, `*`, and `typesOnly`; stored optioned values remain
+unchanged. This evidence does not claim every custom attribute-option family or
+every interaction with proxy and overlay response rewriting.
 StartTLS and implicit LDAPS use a shared pluggable secure-transport interface;
 the standard TLS adapter requires TLS 1.2 or newer, publishes the StartTLS OID,
 and resets an authenticated connection to anonymous after a successful upgrade.
@@ -207,6 +216,17 @@ context only after the configuration transaction commits. New LDAPS and
 StartTLS handshakes receive the rotated certificate while established
 connections retain their original state; invalid material and unsupported
 directives roll back both storage and runtime publication.
+`olcTLSCACertificatePath` splits at OpenLDAP's semicolon separator and reads
+only OpenSSL-style `hash.N` files through descriptor-consistent, root-confined
+paths. It de-duplicates DER certificates and bounds the directory count, file
+count, per-file and total bytes, and certificate count. Traditional RFC 1423
+encrypted PEM keys obtain their password from an absolute, non-symlink,
+permission-restricted file named by `LDAP_GO_TLS_KEY_PASSWORD_FILE`; temporary
+secret buffers are cleared after parsing. `olcTLSECName` maps a single X25519,
+P-256, P-384, or P-521 selector and common aliases. Encrypted PKCS#8,
+multi-group selectors and groups unavailable to Go TLS remain explicit
+limitations, and preloading hash files is not OpenSSL provider-style lazy
+lookup.
 Verified standard TLS and TLCP client certificate chains expose their
 normalized Subject DN to SASL EXTERNAL. Root DSE publishes EXTERNAL only on a
 connection with such an identity. Empty authorization identities bind as the
@@ -293,9 +313,13 @@ control is registered only for update protocol operations, so transactional
 Password Modify is rejected with `unavailableCriticalExtension` before the
 transaction branch in `passwd.c` is reached. ldap-go implements the RFC 5805
 Password Modify combination instead of copying that unreachable behavior. Like
-OpenLDAP 2.6.13, pre-read and post-read controls remain rejected in a
-transaction. Each queued update captures its effective proxied identity; the
-proxy control is unavailable on Start and End Transaction themselves.
+OpenLDAP 2.6.13, a transaction update carrying pre-read or post-read is rejected
+with `unwillingToPerform` and no response controls, after which the transaction
+can still be aborted. Each queued update captures its effective proxied
+identity. A Start Transaction carrying critical ProxyAuthz is rejected with
+`unavailableCriticalExtension`; proxy controls are unavailable on Start and End
+Transaction themselves. These are compatibility-tested rejection semantics,
+not missing control parsing or silently ignored controls.
 
 RFC 6171 Don't Use Copy is advertised in Root DSE and accepted on Search and
 Compare only. The control requires an absent value; duplicate or valued

@@ -99,8 +99,10 @@ func TestLDAPCompareResultsBinaryErrorsAndDryRun(t *testing.T) {
 		args := append([]string{"ldapcompare", "-n"}, option...)
 		args = append(args, aliceDN, "uid:alice")
 		stdout, stderr, exitCode = runLDAPClientCommand(args, "")
-		if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "not implemented") {
-			t.Fatalf("unsupported ldapcompare %q exit=%d stdout=%q stderr=%q", option, exitCode, stdout, stderr)
+		if exitCode != 1 || stdout != "" ||
+			!strings.Contains(stderr, "unrecognized option -E") ||
+			!strings.Contains(stderr, "usage: ldapcompare") {
+			t.Fatalf("historical ldapcompare %q exit=%d stdout=%q stderr=%q", option, exitCode, stdout, stderr)
 		}
 	}
 	stdout, stderr, exitCode = runLDAPClientCommand(

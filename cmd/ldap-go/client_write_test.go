@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/go-ldap/ldif"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 func TestLDAPAddAndModifyExecuteLDIFInOrder(t *testing.T) {
@@ -105,6 +107,135 @@ func TestLDAPAddAndModifyExecuteLDIFInOrder(t *testing.T) {
 	if got := entry.GetAttributeValues("description"); len(got) != 1 || got[0] != "replaced after binary value" {
 		t.Fatalf("ldapmodify description = %#v", got)
 	}
+}
+
+func TestLDAPModifyAddMode(t *testing.T) {
+	uri := startLDAPClientToolServer(t, nil)
+	dn := "uid=modify-add," + clientToolPeopleDN
+	input := strings.Join([]string{
+		"dn: " + dn,
+		"objectClass: inetOrgPerson",
+		"uid: modify-add",
+		"cn: Modify Add",
+		"sn: Add",
+		"",
+		"dn: " + dn,
+		"changetype: modify",
+		"replace: cn",
+		"cn: Modified After Add",
+		"-",
+		"",
+	}, "\n")
+	args := append(ldapWriteAuthArgs("ldapmodify", uri), "-a")
+	stdout, stderr, exitCode := runLDAPClientCommand(args, input)
+	if exitCode != 0 || stderr != "" ||
+		stdout != "ldapmodify: applied 2 record(s), 0 failed\n" {
+		t.Fatalf("ldapmodify -a exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	entry := requireLDAPWriteEntry(t, uri, dn)
+	if got := entry.GetAttributeValue("cn"); got != "Modified After Add" {
+		t.Fatalf("ldapmodify -a cn = %q", got)
+	}
+}
+
+func TestLDAPModifyDefaultsToModifyChangeRecord(t *testing.T) {
+	uri := startLDAPClientToolServer(t, nil)
+	dn := "uid=default-modify," + clientToolPeopleDN
+	addEntriesWithLDAPAdd(t, uri, posixPersonContentLDIF(dn, "default-modify", 10))
+	input := strings.Join([]string{
+		"dn: " + dn,
+		"replace: cn",
+		"cn: Default Modify",
+		"-",
+		"add: description",
+		"description: remove me",
+		"description: keep me",
+		"-",
+		"delete: description",
+		"description: remove me",
+		"-",
+		"increment: uidNumber",
+		"uidNumber: 2",
+		"",
+	}, "\n")
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		ldapWriteAuthArgs("ldapmodify", uri),
+		input,
+	)
+	if exitCode != 0 || stderr != "" ||
+		stdout != "ldapmodify: applied 1 record(s), 0 failed\n" {
+		t.Fatalf("default modify exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	entry := requireLDAPWriteEntry(t, uri, dn)
+	if got := entry.GetAttributeValue("cn"); got != "Default Modify" {
+		t.Fatalf("default modify cn = %q", got)
+	}
+	if got := entry.GetAttributeValues("description"); len(got) != 1 || got[0] != "keep me" {
+		t.Fatalf("default modify description = %#v", got)
+	}
+	if got := entry.GetAttributeValue("uidNumber"); got != "12" {
+		t.Fatalf("default modify uidNumber = %q", got)
+	}
+}
+
+func TestLDAPModifyDefaultModifyWireAndOpenLDAPParser(t *testing.T) {
+	const dn = "uid=wire,dc=example,dc=com"
+	input := "dn: " + dn + "\nreplace: cn\ncn: Wire Default\n-\n" +
+		"increment: uidNumber\nuidNumber: 1\n"
+	requests := make(chan ldapwire.ModifyRequest, 1)
+	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		request, ok := message.Request.(ldapwire.ModifyRequest)
+		if !ok {
+			return nil, nil
+		}
+		requests <- request
+		return [][]byte{ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		)}, nil
+	})
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		[]string{"ldapmodify", "-H", fixture.uri, "-x"},
+		input,
+	)
+	if exitCode != 0 || stderr != "" || !strings.Contains(stdout, "applied 1 record") {
+		t.Fatalf("wire default modify exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	request := <-requests
+	if request.DN != dn || len(request.Changes) != 2 ||
+		request.Changes[0].Operation != ldapwire.ModificationReplace ||
+		request.Changes[1].Operation != ldapwire.ModificationIncrement {
+		t.Fatalf("default Modify request = %#v", request)
+	}
+
+	binary := openLDAPModifyBinary(t)
+	command := exec.Command(binary, "-n")
+	command.Stdin = strings.NewReader(input)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("OpenLDAP default modify parser error=%v output=%q", err, output)
+	}
+}
+
+func openLDAPModifyBinary(t *testing.T) string {
+	t.Helper()
+	candidates := []string{
+		filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", "ldapmodify"),
+		filepath.Join(os.Getenv("OPENLDAP_SOURCE"), "clients", "tools", "ldapmodify"),
+		"/opt/homebrew/opt/openldap/bin/ldapmodify",
+	}
+	if path, err := exec.LookPath("ldapmodify"); err == nil {
+		candidates = append(candidates, path)
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); candidate != "" && err == nil &&
+			!info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	t.Skip("OpenLDAP 2.6.13 ldapmodify is unavailable")
+	return ""
 }
 
 func TestLDAPModifyContinueFailureFileAndInvalidRecordSafety(t *testing.T) {
@@ -600,8 +731,8 @@ func TestLDAPWriteRejectsConflictingAndUnsupportedOptions(t *testing.T) {
 		message string
 	}{
 		{name: "modify named control", args: []string{"ldapmodify", "-n", "-E", "noop"}, stdin: validLDIF, message: "invalid LDAP control OID"},
-		{name: "modify add mode", args: []string{"ldapmodify", "-n", "-a"}, stdin: validLDIF, message: "option -a is not supported"},
-		{name: "modify content", args: []string{"ldapmodify", "-n"}, stdin: validLDIF, message: "content records require ldapadd"},
+		{name: "modify content", args: []string{"ldapmodify", "-n"}, stdin: validLDIF, message: "unsupported modify change"},
+		{name: "modify false add mode", args: []string{"ldapmodify", "-n", "-a=false"}, stdin: validLDIF, message: "-a=false is not supported"},
 		{name: "add arguments", args: []string{"ldapadd", "-n", "extra"}, stdin: validLDIF, message: "unexpected arguments"},
 		{name: "delete input conflict", args: []string{"ldapdelete", "-n", "-f", "input", "dc=example,dc=com"}, message: "mutually exclusive"},
 		{name: "delete named control", args: []string{"ldapdelete", "-n", "-E", "noop", "dc=example,dc=com"}, message: "invalid LDAP control OID"},
