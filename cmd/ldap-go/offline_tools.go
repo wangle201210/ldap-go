@@ -265,19 +265,65 @@ func runSlapModify(
 	inputPath := flags.String("l", "-", "LDIF change file, or - for stdin")
 	dryRun := flags.Bool("u", false, "validate and roll back all changes")
 	quick := flags.Bool("q", false, "skip value syntax checks")
-	skipSchema := flags.Bool("s", false, "disable schema checking")
+	skipSchema := false
+	flags.BoolFunc("s", "disable schema checking", func(value string) error {
+		if value != "true" {
+			return errors.New("slapmodify option -s=false is not supported")
+		}
+		skipSchema = true
+		return nil
+	})
 	serverID := flags.Int("S", 0, "server ID for generated entryCSN values")
 	resumeLine := flags.Int("j", 0, "skip records beginning before this physical line")
 	updateContextCSN := flags.Bool("w", false, "update contextCSN from committed entryCSN values")
 	flags.Bool("v", false, "write a completion summary")
-	registerOfflineConfigFlags(flags)
+	flags.String("f", "", "OpenLDAP slapd.conf path")
+	flags.String("F", "", "OpenLDAP config directory")
+	flags.String("d", "", "OpenLDAP debug level")
+	var skipValueValidation bool
+	var valueCheckExplicit, valueCheckEnabled bool
+	flags.Func("o", "set slapmodify tool option", func(raw string) error {
+		name, value, found := strings.Cut(raw, "=")
+		if !found || strings.TrimSpace(name) == "" {
+			return fmt.Errorf(
+				"invalid slapmodify option %q; expected name=yes|no",
+				raw,
+			)
+		}
+		enabled := false
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "yes":
+			enabled = true
+		case "no":
+		default:
+			return fmt.Errorf(
+				"invalid slapmodify option %q; value must be yes or no",
+				raw,
+			)
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "schema-check":
+			skipSchema = !enabled
+		case "value-check":
+			valueCheckExplicit = true
+			valueCheckEnabled = enabled
+			skipValueValidation = !enabled
+		default:
+			return fmt.Errorf("unsupported slapmodify option %q", name)
+		}
+		return nil
+	})
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if err := rejectOfflineConfigFlags("slapmodify", flags); err != nil {
+	if err := rejectUnsupportedFlags("slapmodify", flags, []unsupportedFlag{
+		{name: "f", reason: "ldap-go loads cn=config from -db and cannot consume slapd.conf"},
+		{name: "F", reason: "ldap-go loads cn=config from -db and cannot consume an OpenLDAP config directory"},
+		{name: "d", reason: "the embedded offline runtime has no OpenLDAP debug subsystem"},
+	}); err != nil {
 		return err
 	}
 	for _, option := range []struct {
@@ -288,7 +334,6 @@ func runSlapModify(
 		{name: "g", enabled: *disableSubordinateGlue},
 		{name: "u", enabled: *dryRun},
 		{name: "q", enabled: *quick},
-		{name: "s", enabled: *skipSchema},
 		{name: "w", enabled: *updateContextCSN},
 	} {
 		if flagWasSet(flags, option.name) && !option.enabled {
@@ -300,6 +345,17 @@ func runSlapModify(
 	}
 	if *resumeLine < 0 {
 		return errors.New("slapmodify option -j requires a non-negative line number")
+	}
+	if *quick {
+		if valueCheckExplicit && valueCheckEnabled {
+			if _, err := fmt.Fprintln(
+				stderr,
+				"slapmodify: value-check incompatible with quick mode; disabled.",
+			); err != nil {
+				return err
+			}
+		}
+		skipValueValidation = true
 	}
 	selected, err := resolveOfflineDatabaseSelection(
 		"slapmodify", flags, *databasePath, *database, *suffix,
@@ -327,7 +383,7 @@ func runSlapModify(
 		context.Background(), store, reader, server.OfflineModifyOptions{
 			Database: selected, IncludeSubordinates: !*disableSubordinateGlue,
 			Continue: *continueOnError, DryRun: *dryRun,
-			SkipSchema: *skipSchema, SkipValueValidation: *quick,
+			SkipSchema: skipSchema, SkipValueValidation: skipValueValidation,
 			ServerID: uint16(*serverID), ResumeLine: *resumeLine,
 			UpdateContextCSN: *updateContextCSN,
 		},

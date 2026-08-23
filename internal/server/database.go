@@ -96,12 +96,35 @@ type runtimeDatabase struct {
 }
 
 type databaseSearchSizeLimit struct {
-	selector databaseSearchLimitSelector
-	subject  directory.DN
-	soft     int
-	hard     int
-	softSet  bool
-	hardSet  bool
+	selector        databaseSearchLimitSelector
+	subject         directory.DN
+	soft            int
+	hard            int
+	softSet         bool
+	hardSet         bool
+	timeSoft        int
+	timeHard        int
+	timeSoftSet     bool
+	timeHardSet     bool
+	unchecked       int
+	uncheckedSet    bool
+	pageSize        int
+	pageSizeSet     bool
+	pageNoEstimate  bool
+	pageEstimateSet bool
+	pageTotal       int
+	pageTotalSet    bool
+	databaseDefault bool
+}
+
+type databaseSearchExecutionLimits struct {
+	size           int
+	time           int
+	unchecked      int
+	pageSize       int
+	pageNoEstimate bool
+	pageTotal      int
+	root           bool
 }
 
 type databaseSearchLimitSelector uint8
@@ -316,6 +339,26 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 		)
 		if err != nil {
 			return err
+		}
+		defaultTimeLimit, present, err := loadDatabaseDefaultTimeLimit(entry)
+		if err != nil {
+			return err
+		}
+		if present {
+			database.searchSizeLimits = append(
+				database.searchSizeLimits,
+				defaultTimeLimit,
+			)
+		}
+		defaultSizeLimit, present, err := loadDatabaseDefaultSizeLimit(entry)
+		if err != nil {
+			return err
+		}
+		if present {
+			database.searchSizeLimits = append(
+				database.searchSizeLimits,
+				defaultSizeLimit,
+			)
 		}
 		database.disabled, _, err = singleBoolean(entry, "olcDisabled")
 		if err != nil {
@@ -1382,9 +1425,11 @@ func loadDatabaseSearchSizeLimitsWithNormalizer(
 			return nil, fmt.Errorf("%s olcLimits subject: %w", entry.DN, err)
 		}
 		if !supported {
-			// Group, regex, and dn.this rules are parsed by OpenLDAP using
-			// request state that is not available to this size-only path.
-			continue
+			return nil, fmt.Errorf(
+				"%s olcLimits selector %q is not supported",
+				entry.DN,
+				arguments[0],
+			)
 		}
 		for _, argument := range arguments[1:] {
 			name, rawValue, found := strings.Cut(argument, "=")
@@ -1411,12 +1456,47 @@ func loadDatabaseSearchSizeLimitsWithNormalizer(
 					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
 				}
 				limit.hard, limit.hardSet = parsed, true
+			case "time":
+				parsed, err := parseDatabaseSearchTimeLimit(rawValue, false)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.timeSoft, limit.timeSoftSet = parsed, true
+				limit.timeHard, limit.timeHardSet = 0, true
+			case "time.soft":
+				parsed, err := parseDatabaseSearchTimeLimit(rawValue, false)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.timeSoft, limit.timeSoftSet = parsed, true
+			case "time.hard":
+				parsed, err := parseDatabaseSearchTimeLimit(rawValue, true)
+				if err != nil {
+					return nil, fmt.Errorf("%s olcLimits %s: %w", entry.DN, name, err)
+				}
+				limit.timeHard, limit.timeHardSet = parsed, true
+			case "size.unchecked", "size.pr", "size.prtotal":
+				if err := applyDatabaseAuxiliarySizeLimit(
+					&limit,
+					name,
+					rawValue,
+				); err != nil {
+					return nil, fmt.Errorf(
+						"%s olcLimits %s: %w",
+						entry.DN,
+						name,
+						err,
+					)
+				}
 			default:
-				// Time, unchecked, and paged-results settings are outside the
-				// search-size contract implemented here.
+				return nil, fmt.Errorf(
+					"%s olcLimits has unknown field %q",
+					entry.DN,
+					name,
+				)
 			}
 		}
-		if limit.softSet || limit.hardSet {
+		if databaseSearchLimitHasValues(limit) {
 			limits = append(limits, limit)
 		}
 	}
@@ -1495,6 +1575,270 @@ func parseDatabaseSearchSizeLimit(value string, hard bool) (int, error) {
 	return parsed, nil
 }
 
+func parseDatabaseSearchTimeLimit(value string, hard bool) (int, error) {
+	switch strings.ToLower(value) {
+	case "none", "unlimited":
+		return -1, nil
+	case "soft":
+		if hard {
+			return 0, nil
+		}
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < -1 {
+		return 0, fmt.Errorf("invalid time limit %q", value)
+	}
+	return parsed, nil
+}
+
+func loadDatabaseDefaultTimeLimit(
+	entry directory.Entry,
+) (databaseSearchSizeLimit, bool, error) {
+	values := entry.Values("olcTimeLimit")
+	if len(values) == 0 {
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	if len(values) != 1 {
+		return databaseSearchSizeLimit{}, false, fmt.Errorf(
+			"%s olcTimeLimit must be single-valued",
+			entry.DN,
+		)
+	}
+	arguments, err := tokenizeOpenLDAPConfig(string(values[0]))
+	if err != nil || len(arguments) == 0 {
+		return databaseSearchSizeLimit{}, false, fmt.Errorf(
+			"%s olcTimeLimit is invalid",
+			entry.DN,
+		)
+	}
+	limit := databaseSearchSizeLimit{
+		selector:        databaseSearchLimitAny,
+		databaseDefault: true,
+	}
+	if len(arguments) == 1 && !strings.Contains(arguments[0], "=") {
+		parsed, err := parseDatabaseSearchTimeLimit(arguments[0], false)
+		if err != nil {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcTimeLimit: %w",
+				entry.DN,
+				err,
+			)
+		}
+		limit.timeSoft, limit.timeSoftSet = parsed, true
+		limit.timeHard, limit.timeHardSet = 0, true
+		return limit, true, nil
+	}
+	for _, argument := range arguments {
+		name, rawValue, found := strings.Cut(argument, "=")
+		if !found {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcTimeLimit has invalid value %q",
+				entry.DN,
+				argument,
+			)
+		}
+		switch strings.ToLower(name) {
+		case "time":
+			parsed, err := parseDatabaseSearchTimeLimit(rawValue, false)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcTimeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.timeSoft, limit.timeSoftSet = parsed, true
+			limit.timeHard, limit.timeHardSet = 0, true
+		case "time.soft":
+			parsed, err := parseDatabaseSearchTimeLimit(rawValue, false)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcTimeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.timeSoft, limit.timeSoftSet = parsed, true
+		case "time.hard":
+			parsed, err := parseDatabaseSearchTimeLimit(rawValue, true)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcTimeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.timeHard, limit.timeHardSet = parsed, true
+		default:
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcTimeLimit has unknown field %q",
+				entry.DN,
+				name,
+			)
+		}
+	}
+	return limit, true, nil
+}
+
+func loadDatabaseDefaultSizeLimit(
+	entry directory.Entry,
+) (databaseSearchSizeLimit, bool, error) {
+	values := entry.Values("olcSizeLimit")
+	if len(values) == 0 {
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	if len(values) != 1 {
+		return databaseSearchSizeLimit{}, false, fmt.Errorf(
+			"%s olcSizeLimit must be single-valued",
+			entry.DN,
+		)
+	}
+	arguments, err := tokenizeOpenLDAPConfig(string(values[0]))
+	if err != nil || len(arguments) == 0 {
+		return databaseSearchSizeLimit{}, false, fmt.Errorf(
+			"%s olcSizeLimit is invalid",
+			entry.DN,
+		)
+	}
+	limit := databaseSearchSizeLimit{
+		selector:        databaseSearchLimitAny,
+		databaseDefault: true,
+	}
+	if len(arguments) == 1 && !strings.Contains(arguments[0], "=") {
+		parsed, err := parseDatabaseSearchSizeLimit(arguments[0], false)
+		if err != nil {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcSizeLimit: %w",
+				entry.DN,
+				err,
+			)
+		}
+		limit.soft, limit.softSet = parsed, true
+		limit.hard, limit.hardSet = 0, true
+		return limit, true, nil
+	}
+	for _, argument := range arguments {
+		name, rawValue, found := strings.Cut(argument, "=")
+		if !found {
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcSizeLimit has invalid value %q",
+				entry.DN,
+				argument,
+			)
+		}
+		switch strings.ToLower(name) {
+		case "size":
+			parsed, err := parseDatabaseSearchSizeLimit(rawValue, false)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcSizeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.soft, limit.softSet = parsed, true
+			limit.hard, limit.hardSet = 0, true
+		case "size.soft":
+			parsed, err := parseDatabaseSearchSizeLimit(rawValue, false)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcSizeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.soft, limit.softSet = parsed, true
+		case "size.hard":
+			parsed, err := parseDatabaseSearchSizeLimit(rawValue, true)
+			if err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcSizeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+			limit.hard, limit.hardSet = parsed, true
+		case "size.unchecked", "size.pr", "size.prtotal":
+			if err := applyDatabaseAuxiliarySizeLimit(&limit, name, rawValue); err != nil {
+				return databaseSearchSizeLimit{}, false, fmt.Errorf(
+					"%s olcSizeLimit: %w",
+					entry.DN,
+					err,
+				)
+			}
+		default:
+			return databaseSearchSizeLimit{}, false, fmt.Errorf(
+				"%s olcSizeLimit has unknown field %q",
+				entry.DN,
+				name,
+			)
+		}
+	}
+	return limit, true, nil
+}
+
+func applyDatabaseAuxiliarySizeLimit(
+	limit *databaseSearchSizeLimit,
+	name, value string,
+) error {
+	lowerName := strings.ToLower(name)
+	lowerValue := strings.ToLower(value)
+	switch lowerName {
+	case "size.unchecked":
+		switch lowerValue {
+		case "disabled":
+			limit.unchecked, limit.uncheckedSet = 0, true
+			return nil
+		case "none", "unlimited":
+			limit.unchecked, limit.uncheckedSet = -1, true
+			return nil
+		}
+	case "size.pr":
+		if lowerValue == "noestimate" {
+			limit.pageNoEstimate, limit.pageEstimateSet = true, true
+			return nil
+		}
+		if lowerValue == "none" || lowerValue == "unlimited" {
+			limit.pageSize, limit.pageSizeSet = -1, true
+			return nil
+		}
+	case "size.prtotal":
+		switch lowerValue {
+		case "disabled":
+			limit.pageTotal, limit.pageTotalSet = -2, true
+			return nil
+		case "hard":
+			limit.pageTotal, limit.pageTotalSet = 0, true
+			return nil
+		case "none", "unlimited":
+			limit.pageTotal, limit.pageTotalSet = -1, true
+			return nil
+		}
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < -1 {
+		return fmt.Errorf("invalid %s limit %q", name, value)
+	}
+	switch lowerName {
+	case "size.unchecked":
+		limit.unchecked, limit.uncheckedSet = parsed, true
+	case "size.pr":
+		limit.pageSize, limit.pageSizeSet = parsed, true
+	case "size.prtotal":
+		limit.pageTotal, limit.pageTotalSet = parsed, true
+	default:
+		return fmt.Errorf("unknown auxiliary size limit %q", name)
+	}
+	return nil
+}
+
+func databaseSearchLimitHasValues(limit databaseSearchSizeLimit) bool {
+	return limit.softSet || limit.hardSet ||
+		limit.timeSoftSet || limit.timeHardSet ||
+		limit.uncheckedSet || limit.pageSizeSet ||
+		limit.pageEstimateSet || limit.pageTotalSet
+}
+
 func effectiveDatabaseSearchLimit(
 	runtime *runtimeState,
 	database runtimeDatabase,
@@ -1502,7 +1846,38 @@ func effectiveDatabaseSearchLimit(
 	serverLimit,
 	requestLimit int,
 ) int {
-	limit := effectiveSearchLimit(serverLimit, requestLimit)
+	return effectiveDatabaseSearchExecutionLimits(
+		runtime,
+		database,
+		boundDN,
+		serverLimit,
+		requestLimit,
+		0,
+	).size
+}
+
+func effectiveDatabaseSearchTimeLimit(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	boundDN string,
+	requestLimit int,
+) int {
+	return effectiveDatabaseSearchExecutionLimits(
+		runtime,
+		database,
+		boundDN,
+		defaultSearchLimit,
+		0,
+		requestLimit,
+	).time
+}
+
+func effectiveDatabaseSearchExecutionLimits(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	boundDN string,
+	serverLimit, requestSize, requestTime int,
+) databaseSearchExecutionLimits {
 	if database.dnNormalizer == nil &&
 		runtime != nil &&
 		runtime.schema != nil &&
@@ -1510,36 +1885,249 @@ func effectiveDatabaseSearchLimit(
 		database.dnNormalizer = runtime.schema
 	}
 	subject, err := parseRuntimeDN(boundDN, database.dnNormalizer)
-	if err != nil || databaseRootMatches(runtime, database, subject) {
-		return limit
+	root := err == nil && databaseRootMatches(runtime, database, subject)
+	if err != nil || root {
+		size := effectiveSearchLimit(serverLimit, requestSize)
+		return databaseSearchExecutionLimits{
+			size:      size,
+			time:      requestTime,
+			unchecked: -1,
+			pageSize:  -1,
+			pageTotal: size,
+			root:      root,
+		}
 	}
-	for _, configured := range database.searchSizeLimits {
-		if !databaseSearchLimitMatches(database, configured, subject) {
+
+	selected := databaseSearchSizeLimit{
+		soft:         serverLimit,
+		softSet:      true,
+		hard:         0,
+		hardSet:      true,
+		unchecked:    -1,
+		uncheckedSet: true,
+		pageSize:     0,
+		pageSizeSet:  true,
+		pageTotal:    0,
+		pageTotalSet: true,
+		timeSoft:     0,
+		timeSoftSet:  true,
+		timeHard:     0,
+		timeHardSet:  true,
+	}
+	for index := len(database.searchSizeLimits) - 1; index >= 0; index-- {
+		defaults := database.searchSizeLimits[index]
+		if !defaults.databaseDefault {
 			continue
 		}
-		if requestLimit <= 0 {
-			if configured.softSet && configured.soft > 0 && configured.soft < limit {
-				return configured.soft
-			}
-			return limit
+		mergeDatabaseSearchLimit(&selected, defaults)
+	}
+	for _, rule := range database.searchSizeLimits {
+		if rule.databaseDefault ||
+			!databaseSearchLimitMatches(database, rule, subject) {
+			continue
 		}
-		hard := serverLimit
-		if configured.hardSet {
-			hard = configured.hard
-			if hard == 0 && configured.softSet {
-				hard = configured.soft
-			}
-		} else if configured.softSet {
-			// OpenLDAP's default hard limit is "soft", so an exact rule
-			// that only replaces size.soft also bounds explicit requests.
-			hard = configured.soft
-		}
-		if hard > 0 && hard < limit {
-			return hard
+		mergeDatabaseSearchLimit(&selected, rule)
+		break
+	}
+	normalizeDatabaseSearchLimitHardValues(&selected)
+	if selected.pageTotal > 0 &&
+		selected.pageSize > selected.pageTotal {
+		selected.pageSize = selected.pageTotal
+	}
+	return databaseSearchExecutionLimits{
+		size: effectiveConfiguredSizeLimit(
+			selected.soft,
+			selected.hard,
+			requestSize,
+			serverLimit,
+		),
+		time:           effectiveConfiguredTimeLimit(selected.timeSoft, selected.timeHard, requestTime),
+		unchecked:      selected.unchecked,
+		pageSize:       selected.pageSize,
+		pageNoEstimate: selected.pageNoEstimate,
+		pageTotal:      effectivePagedTotalLimit(selected, requestSize, serverLimit),
+	}
+}
+
+func normalizeDatabaseSearchLimitHardValues(limit *databaseSearchSizeLimit) {
+	if limit.hard > 0 && (limit.hard < limit.soft || limit.soft == -1) {
+		limit.hard = limit.soft
+	}
+	if limit.timeHard > 0 &&
+		(limit.timeHard < limit.timeSoft || limit.timeSoft == -1) {
+		limit.timeHard = limit.timeSoft
+	}
+}
+
+func mergeDatabaseSearchLimit(
+	destination *databaseSearchSizeLimit,
+	source databaseSearchSizeLimit,
+) {
+	if source.softSet {
+		destination.soft, destination.softSet = source.soft, true
+	}
+	if source.hardSet {
+		destination.hard, destination.hardSet = source.hard, true
+	}
+	if source.timeSoftSet {
+		destination.timeSoft, destination.timeSoftSet = source.timeSoft, true
+	}
+	if source.timeHardSet {
+		destination.timeHard, destination.timeHardSet = source.timeHard, true
+	}
+	if source.uncheckedSet {
+		destination.unchecked, destination.uncheckedSet = source.unchecked, true
+	}
+	if source.pageSizeSet {
+		destination.pageSize, destination.pageSizeSet = source.pageSize, true
+	}
+	if source.pageEstimateSet {
+		destination.pageNoEstimate = source.pageNoEstimate
+		destination.pageEstimateSet = true
+	}
+	if source.pageTotalSet {
+		destination.pageTotal, destination.pageTotalSet = source.pageTotal, true
+	}
+}
+
+func effectiveConfiguredSizeLimit(
+	soft, hard, requested, serverLimit int,
+) int {
+	limit := effectiveSearchLimit(serverLimit, requested)
+	if requested <= 0 {
+		if soft > 0 && soft < limit {
+			return soft
 		}
 		return limit
 	}
+	if hard == 0 {
+		hard = soft
+	}
+	if hard > 0 && hard < limit {
+		return hard
+	}
 	return limit
+}
+
+func effectiveConfiguredTimeLimit(soft, hard, requested int) int {
+	if requested <= 0 {
+		if soft < 0 {
+			return 0
+		}
+		return soft
+	}
+	if hard == 0 {
+		hard = soft
+	}
+	if hard > 0 && requested > hard {
+		return hard
+	}
+	return requested
+}
+
+func effectivePagedTotalLimit(
+	configured databaseSearchSizeLimit,
+	requested, serverLimit int,
+) int {
+	serverCap := effectiveSearchLimit(serverLimit, requested)
+	total := configured.pageTotal
+	if total == -2 {
+		return -2
+	}
+	if total == 0 {
+		total = configured.hard
+		if total == 0 {
+			total = configured.soft
+		}
+	}
+	if total < 0 {
+		return serverCap
+	}
+	if total > serverCap {
+		return serverCap
+	}
+	return total
+}
+
+func applyDatabaseSearchLimits(
+	state *connectionState,
+	message ldapwire.Message,
+	serverSizeLimit int,
+) ldapwire.Message {
+	request, ok := message.Request.(ldapwire.SearchRequest)
+	if !ok || state == nil || state.runtime == nil {
+		return message
+	}
+	base, err := normalizeSearchRequestBase(state.runtime, request.BaseDN)
+	if err != nil {
+		return message
+	}
+	database := databaseForDN(state.runtime, base)
+	if database == nil {
+		return message
+	}
+	limits := effectiveDatabaseSearchExecutionLimits(
+		state.runtime,
+		*database,
+		state.boundDN,
+		serverSizeLimit,
+		request.SizeLimit,
+		request.TimeLimit,
+	)
+	request.SizeLimit = limits.size
+	for _, control := range message.Controls {
+		if control.OID != pagedResultsControlOID || !control.HasValue {
+			continue
+		}
+		if _, _, decodeErr := ldapwire.DecodePagedResultsValue(control.Value); decodeErr == nil &&
+			limits.pageTotal >= 0 {
+			request.SizeLimit = limits.pageTotal
+		}
+		break
+	}
+	request.TimeLimit = limits.time
+	message.Request = request
+	return message
+}
+
+func searchRequestDatabase(
+	runtime *runtimeState,
+	request ldapwire.SearchRequest,
+) *runtimeDatabase {
+	if runtime == nil {
+		return nil
+	}
+	base, err := normalizeSearchRequestBase(runtime, request.BaseDN)
+	if err != nil {
+		return nil
+	}
+	return databaseForDN(runtime, base)
+}
+
+func databaseSearchCandidatesAreDelegated(
+	runtime *runtimeState,
+	database runtimeDatabase,
+) bool {
+	for followed := 0; ; followed++ {
+		if database.ldapBackend != nil ||
+			database.metaBackend != nil ||
+			database.dnssrvBackend != nil ||
+			database.sockBackend != nil ||
+			database.passwdBackend != nil {
+			return true
+		}
+		if runtime == nil || database.relay == nil {
+			return false
+		}
+		if followed >= len(runtime.databases) {
+			return true
+		}
+		target := database.relay.targetDatabaseIndex
+		if target < 0 || target >= len(runtime.databases) {
+			return true
+		}
+		database = runtime.databases[target]
+	}
 }
 
 func databaseSearchLimitMatches(
@@ -2305,15 +2893,63 @@ func subordinateSetting(
 
 func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 	var frontendRestrictions databaseRestrictions
+	var frontendLimits []databaseSearchSizeLimit
 	for _, database := range databases {
 		if databaseType(database.name) == "frontend" {
 			frontendRestrictions = effectiveDatabaseRestrictions(database)
+			for _, limit := range database.searchSizeLimits {
+				if limit.databaseDefault {
+					frontendLimits = append(frontendLimits, limit)
+				}
+			}
 			break
 		}
 	}
 	for index := range databases {
 		databases[index].restrictions |= frontendRestrictions
 		databases[index].readOnly = databaseIsReadOnly(databases[index])
+		if databaseType(databases[index].name) == "frontend" {
+			continue
+		}
+		localLimitCount := len(databases[index].searchSizeLimits)
+		for _, limit := range frontendLimits {
+			inherited := limit
+			for _, local := range databases[index].searchSizeLimits[:localLimitCount] {
+				if !local.databaseDefault {
+					continue
+				}
+				if local.softSet {
+					inherited.softSet = false
+				}
+				if local.hardSet {
+					inherited.hardSet = false
+				}
+				if local.uncheckedSet {
+					inherited.uncheckedSet = false
+				}
+				if local.pageSizeSet {
+					inherited.pageSizeSet = false
+				}
+				if local.pageTotalSet {
+					inherited.pageTotalSet = false
+				}
+				if local.pageEstimateSet {
+					inherited.pageEstimateSet = false
+				}
+				if local.timeSoftSet {
+					inherited.timeSoftSet = false
+				}
+				if local.timeHardSet {
+					inherited.timeHardSet = false
+				}
+			}
+			if databaseSearchLimitHasValues(inherited) {
+				databases[index].searchSizeLimits = append(
+					databases[index].searchSizeLimits,
+					inherited,
+				)
+			}
+		}
 	}
 }
 

@@ -179,7 +179,21 @@ func (server *Server) handleSASLBind(
 			message,
 			request,
 		)
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
+		if saslSCRAMIsPlus(mechanism) {
+			if !saslSCRAMPlusAvailable(state.connection) {
+				clearSASLSession(state)
+				return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+					message.ID,
+					ldapwire.ResultError(
+						ldapwire.ResultAuthMethodNotSupported,
+						"SCRAM-PLUS requires verified standard TLS channel binding",
+					),
+					nil,
+				))
+			}
+		}
 		if session == nil {
 			session = &serverSASLSession{
 				mechanism: mechanism,
@@ -409,6 +423,7 @@ func writeSASLChallenge(
 
 func clearSASLSession(state *connectionState) {
 	if state.saslSession != nil {
+		clearSASLSCRAMSession(state.saslSession)
 		state.saslSession.gssapiSession.clear()
 	}
 	state.saslSession = nil
@@ -496,7 +511,8 @@ func saslMechanismPolicyFailure(
 			noActive:     true,
 			noAnonymous:  true,
 		}
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		security = saslMechanismSecurity{
 			noPlain:     true,
 			noActive:    true,
@@ -593,6 +609,16 @@ func supportedSASLMechanisms(state *connectionState) []string {
 		"SCRAM-SHA-256",
 		"SCRAM-SHA-1",
 	} {
+		if saslSCRAMPlusAvailable(state.connection) {
+			plus := mechanism + "-PLUS"
+			if saslMechanismPolicyFailure(
+				properties,
+				plus,
+				state.externalSSF,
+			) == nil {
+				mechanisms = append(mechanisms, plus)
+			}
+		}
 		if saslMechanismPolicyFailure(
 			properties,
 			mechanism,

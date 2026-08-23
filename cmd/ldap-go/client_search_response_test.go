@@ -250,17 +250,6 @@ func TestLDAPSearchMalformedKnownControlRemainsRaw(t *testing.T) {
 	}
 }
 
-func TestLDAPSearchFullURLIsRejectedLikeOpenLDAP(t *testing.T) {
-	uri := "ldap://127.0.0.1:1/dc=example,dc=com?cn,sn?base?(uid=alice)"
-	_, stderr, exitCode := runLDAPClientCommand(
-		[]string{"ldapsearch", "-H", uri, "-x", "-LLL"},
-		"",
-	)
-	if exitCode == 0 || !strings.Contains(stderr, "LDAP URI DN paths are not supported") {
-		t.Fatalf("full LDAP URL exit=%d stderr=%q", exitCode, stderr)
-	}
-}
-
 func TestLDAPSearchObservedStartTLS(t *testing.T) {
 	serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
 	uri := startLDAPClientToolServer(t, serverTLS)
@@ -314,13 +303,6 @@ func TestOpenLDAPReferenceLDAPSearchResponseControls(t *testing.T) {
 		arguments = append(arguments, level...)
 		arguments = append(arguments, "(objectClass=*)", "cn")
 		assertLDAPSearchMatchesOpenLDAP(t, referenceTool, arguments)
-	}
-
-	fullURL := "ldap://127.0.0.1:1/dc=example,dc=com?cn,sn?base?(uid=alice)"
-	command := exec.Command(referenceTool, "-H", fullURL, "-x", "-LLL")
-	referenceOutput, err := command.CombinedOutput()
-	if err == nil || !bytes.Contains(referenceOutput, []byte("Could not parse LDAP URI(s)=")) {
-		t.Fatalf("OpenLDAP accepted a complete LDAP URL: err=%v output=%q", err, referenceOutput)
 	}
 
 	source := os.Getenv("OPENLDAP_SOURCE")

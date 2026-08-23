@@ -349,7 +349,7 @@ func (server *Server) ensureAutoCAAuthorities(
 		}
 		configuration.authority = cloneAutoCACertificatePair(pair)
 	}
-	return nil
+	return server.ensureAutoCALocalTLS(writer, runtime)
 }
 
 func autoCAStoredAuthority(
@@ -578,6 +578,17 @@ func (server *Server) issueAutoCAEntry(
 	configuration autoCARuntimeConfiguration,
 	entry directory.Entry,
 ) error {
+	if configuration.localDN != nil {
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return err
+		}
+		if runtimeDNEqual(runtime, entryDN, *configuration.localDN) {
+			// The listener key is held in storage metadata and is never exposed
+			// through the LDAP Search-triggered certificate issuance path.
+			return nil
+		}
+	}
 	if runtime.schema.HasAttributeDescription(entry, "userPrivateKey;binary") {
 		return nil
 	}

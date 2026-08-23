@@ -72,6 +72,7 @@ type autoCAUserCertificateConfig struct {
 type autoCAServerCertificateConfig struct {
 	DN           string
 	IPHostNumber string
+	DNSNames     []string
 	KeyBits      int
 	Days         int
 	Now          time.Time
@@ -307,6 +308,10 @@ func generateAutoCAServerCertificateWithProvider(
 	if err != nil {
 		return autoCACertificatePair{}, err
 	}
+	dnsNames, err := autoCAOptionalDNSNames(config.DNSNames)
+	if err != nil {
+		return autoCACertificatePair{}, err
+	}
 	notBefore, notAfter, err := autoCAValidity(config.Now, config.Days)
 	if err != nil {
 		return autoCACertificatePair{}, err
@@ -343,6 +348,7 @@ func generateAutoCAServerCertificateWithProvider(
 		SubjectKeyId:          subjectKeyID,
 		AuthorityKeyId:        bytes.Clone(issuer.SubjectKeyId),
 		IPAddresses:           ipAddresses,
+		DNSNames:              dnsNames,
 	}
 	certificateDER, err := x509.CreateCertificate(
 		config.Random,
@@ -580,6 +586,44 @@ func autoCAOptionalRFC822Names(raw string) ([]string, error) {
 		return nil, err
 	}
 	return []string{mail}, nil
+}
+
+func autoCAOptionalDNSNames(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	names := make([]string, 0, len(values))
+	for _, raw := range values {
+		name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		if !autoCAValidDNSName(name) {
+			return nil, fmt.Errorf("AutoCA DNS name %q is invalid", raw)
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func autoCAValidDNSName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') &&
+				(character < '0' || character > '9') && character != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func autoCAOptionalIPAddresses(raw string) ([]net.IP, error) {

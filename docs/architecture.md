@@ -118,9 +118,9 @@ upstream loss completes affected operations with OpenLDAP's `other` result and
 the maintainer rebuilds the configured pool. Connection establishment and
 service Bind reads are context-cancellable, and service Bind honors its
 configured timeout. Client listeners support stateful StartTLS, implicit TLS,
-and trusted PROXY v2 TCP listeners. `pldap` parses the header before LDAP;
+and trusted PROXY v1/v2 stream listeners. `pldap` parses the header before LDAP;
 `pldaps` parses it before wrapping the connection in TLS. The metadata wrapper
-exposes asserted logical TCP4/TCP6 addresses to connection state while retaining
+exposes asserted logical TCP4/TCP6 or UNIX addresses to connection state while retaining
 the physical transport endpoints and best-effort copied TLVs for monitoring
 and access decisions. A PROXY command validates its TCP4/TCP6 address block;
 PROXY and LOCAL then consume up to 520 bytes as opaque options. LOCAL ignores
@@ -128,11 +128,13 @@ its family. Valid PROXY TLVs are exposed as bounded metadata, but malformed
 option encoding is accepted with no TLV metadata because OpenLDAP does not make
 TLV parsing part of connection admission. Malformed addresses, truncated, or
 timed-out headers are closed before
-admission, and ordinary LDAP/LDAPS does not auto-detect PROXY. PROXY v1,
-UDP/UNIX address families for the PROXY command, GSSAPI, exact SASL
+admission, and ordinary LDAP/LDAPS does not auto-detect PROXY. V1 `UNKNOWN`
+retains physical endpoints; v2 UNIX stream is supported, while DGRAM/UDP,
+GSSAPI, exact SASL
 post-Bind identity restoration and security layers, embedded slapd-module
 configuration/monitoring, and dynamic topology are outside the current runtime
-contract.
+contract. Trusted listeners reject wildcard bind addresses; every transport
+peer reaching their explicit address is inside the trust boundary.
 
 ### Directory service agent
 
@@ -727,11 +729,15 @@ and verifies it with an ACL-visible raw or `{CLEARTEXT}` password.
 DIGEST-MD5 uses a bounded directive parser, the same anonymous `auth` ACL
 lookup, either cleartext or a legacy precomputed secret, and returns the
 mutual-authentication `rspauth`; it currently advertises only `qop=auth`.
-SCRAM-SHA-1/256/512 use the same mapping and a connection-scoped conversation
+SCRAM-SHA-1/256/512 and their `-PLUS` variants use the same mapping and a
+connection-scoped conversation
 that blocks interleaved operations until Bind succeeds or fails. They derive
 ephemeral verifiers from ACL-visible cleartext passwords or parse Cyrus
 `authPassword` salt, StoredKey, and ServerKey records without exposing those
-values to the client. LDAP URL mappings perform an internal anonymous
+values to the client. PLUS is published only when the standard TLS connection
+provides RFC 5929 `tls-server-end-point` data, requires the matching GS2
+channel binding, and is unavailable on TLCP. LDAP URL mappings perform an
+internal anonymous
 auth-check search and require exactly one result, including `auth` access to
 the search base, candidate entry, and filter attributes.
 

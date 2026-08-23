@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
+	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -188,6 +188,39 @@ fi
 LDAP_GO_OPENLDAP_GSSAPI_TESTS=$gssapi_reference
 export LDAP_GO_OPENLDAP_GSSAPI_TESTS
 
+scram_plugin_viewer=
+if command -v pluginviewer >/dev/null 2>&1; then
+	scram_plugin_viewer=$(command -v pluginviewer)
+elif command -v saslpluginviewer >/dev/null 2>&1; then
+	scram_plugin_viewer=$(command -v saslpluginviewer)
+else
+	for candidate in \
+		/opt/homebrew/opt/cyrus-sasl/sbin/pluginviewer \
+		/usr/local/opt/cyrus-sasl/sbin/pluginviewer
+	do
+		if [ -x "$candidate" ]; then
+			scram_plugin_viewer=$candidate
+			break
+		fi
+	done
+fi
+scram_channel_binding_reference=0
+if [ -n "$scram_plugin_viewer" ]; then
+	scram_plugin_output=$($scram_plugin_viewer -c 2>&1 || true)
+	case "$scram_plugin_output" in *'SASL mechanism: SCRAM-SHA-1'*) scram_sha1=1 ;; *) scram_sha1=0 ;; esac
+	case "$scram_plugin_output" in *'SASL mechanism: SCRAM-SHA-256'*) scram_sha256=1 ;; *) scram_sha256=0 ;; esac
+	case "$scram_plugin_output" in *'SASL mechanism: SCRAM-SHA-512'*) scram_sha512=1 ;; *) scram_sha512=0 ;; esac
+	case "$scram_plugin_output" in *'CHANNEL_BINDING'*) scram_binding=1 ;; *) scram_binding=0 ;; esac
+	if [ "$scram_sha1$scram_sha256$scram_sha512$scram_binding" = "1111" ]; then
+		scram_channel_binding_reference=1
+	fi
+fi
+if [ "$strict" = "1" ] && [ "$scram_channel_binding_reference" != "1" ]; then
+	die "strict reference environment lacks Cyrus SCRAM SHA-1/256/512 channel binding"
+fi
+LDAP_GO_TEST_OPENLDAP_SCRAM_PLUS=$scram_channel_binding_reference
+export LDAP_GO_TEST_OPENLDAP_SCRAM_PLUS
+
 find_sqlite_odbc_driver() {
 	if [ -n "${LDAP_GO_SQLITE_ODBC_DRIVER:-}" ]; then
 		if [ ! -f "$LDAP_GO_SQLITE_ODBC_DRIVER" ]; then
@@ -272,6 +305,7 @@ for skipped in $skips; do
 			# explicit unsupported-platform path in separate tests.
 			;;
 		TestOpenLDAPClientSASLSCRAMSHA256Bind|\
+		TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding|\
 		TestLDAPGoSyncreplConsumesOpenLDAPProviderWithSCRAMSHA256|\
 		TestOpenLDAPReferenceLDAPBackend|\
 		TestOpenLDAPReferenceMeta*|\
@@ -365,6 +399,10 @@ fi
 if [ "$gssapi_reference" = "1" ]; then
 	mandatory_tests="$mandatory_tests
 TestOpenLDAPReferenceGSSAPIDifferential"
+fi
+if [ "$scram_channel_binding_reference" = "1" ]; then
+	mandatory_tests="$mandatory_tests
+TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding"
 fi
 
 missing_tests=

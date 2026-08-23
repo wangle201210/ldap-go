@@ -140,6 +140,11 @@ func New(config Config) (*Server, error) {
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	monitor := newMonitorState()
+	config.Logger = slog.New(&monitorLogHandler{
+		next:    config.Logger.Handler(),
+		monitor: monitor,
+	})
 	baseSchema := config.Schema
 	if baseSchema == nil {
 		var err error
@@ -203,7 +208,7 @@ func New(config Config) (*Server, error) {
 		syncChanges:          newSyncChangeHub(),
 		ddsWake:              make(chan struct{}, 1),
 		accesslogWake:        make(chan struct{}, 1),
-		monitor:              newMonitorState(),
+		monitor:              monitor,
 		gssapiKeytab:         gssapiKeytab,
 	}
 	started := false
@@ -280,6 +285,12 @@ func New(config Config) (*Server, error) {
 		return nil, fmt.Errorf("initialize SQL backend: %w", err)
 	}
 	server.retireSQLBackends(previousRuntime, runtime)
+	for _, database := range runtime.databases {
+		if isMonitorDatabase(database) {
+			server.monitor.enableLogRouting()
+			break
+		}
+	}
 	if err := server.seedCSNClock(runtime); err != nil {
 		return nil, fmt.Errorf("initialize CSN clock: %w", err)
 	}
@@ -852,6 +863,26 @@ func (server *Server) dispatch(
 		}()
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
+	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
+		database := searchRequestDatabase(state.runtime, request)
+		if database != nil {
+			if databaseSearchCandidatesAreDelegated(state.runtime, *database) {
+				if failure := server.delegatedSearchPreflight(
+					state,
+					*database,
+					request,
+					message.Controls,
+				); failure != nil {
+					return false, writeResultForMessage(connection, message, *failure)
+				}
+			}
+			message = applyDatabaseSearchLimits(
+				state,
+				message,
+				server.config.MaxSearchEntries,
+			)
+		}
+	}
 	overlayConnection, handled, err := server.trySockOverlayOperation(
 		ctx,
 		connection,
@@ -986,6 +1017,97 @@ func (server *Server) dispatch(
 	default:
 		return false, errors.New("unknown request type")
 	}
+}
+
+func (server *Server) delegatedSearchPreflight(
+	state *connectionState,
+	database runtimeDatabase,
+	request ldapwire.SearchRequest,
+	controls []ldapwire.Control,
+) *ldapwire.Result {
+	parsed, privateSearch, failure := prevalidateSearchRequestControls(
+		state.runtime,
+		controls,
+	)
+	if failure != nil || privateSearch {
+		return failure
+	}
+	return server.delegatedSearchLimitFailure(
+		state,
+		database,
+		request,
+		parsed.paging,
+	)
+}
+
+func (server *Server) delegatedSearchLimitFailure(
+	state *connectionState,
+	database runtimeDatabase,
+	request ldapwire.SearchRequest,
+	paging *pagedResultsRequest,
+) *ldapwire.Result {
+	limits := effectiveDatabaseSearchExecutionLimits(
+		state.runtime,
+		database,
+		state.boundDN,
+		server.config.MaxSearchEntries,
+		request.SizeLimit,
+		request.TimeLimit,
+	)
+	if limits.unchecked == 0 {
+		result := ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, "")
+		return &result
+	}
+	if limits.unchecked > 0 {
+		server.config.Logger.Warn(
+			"rejecting delegated search with unverifiable candidate limit",
+			"database", database.name,
+			"base_dn", request.BaseDN,
+			"size_unchecked", limits.unchecked,
+		)
+		result := ldapwire.ResultError(
+			ldapwire.ResultAdminLimitExceeded,
+			"candidate estimate unavailable for delegated backend",
+		)
+		return &result
+	}
+	if paging != nil {
+		switch {
+		case limits.pageTotal == -2:
+			result := ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				"pagedResults control not allowed",
+			)
+			return &result
+		case limits.pageSize > 0 && paging.size > limits.pageSize:
+			result := ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				"illegal pagedResults page size",
+			)
+			return &result
+		}
+	}
+	return nil
+}
+
+func prevalidateSearchRequestControls(
+	runtime *runtimeState,
+	controls []ldapwire.Control,
+) (requestControls, bool, *ldapwire.Result) {
+	privateSearch, _ := parsePcachePrivateDBControl(controls)
+	if privateSearch {
+		return requestControls{}, true, nil
+	}
+	disallows := disallowsRuntimeConfiguration{}
+	if runtime != nil {
+		disallows = runtime.disallows
+	}
+	parsed, failure := parseRequestControlsWithDisallows(
+		controls,
+		searchRequestControlSupport(runtime),
+		disallows,
+	)
+	return parsed, false, failure
 }
 
 func (server *Server) handleBind(

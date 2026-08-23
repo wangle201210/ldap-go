@@ -302,6 +302,9 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
 	}
+	if err := server.configureAutoCALocalTLS(reader, runtime, true); err != nil {
+		return nil, fmt.Errorf("load AutoCA local TLS configuration: %w", err)
+	}
 	if err := server.preparePcachePersistence(reader, runtime); err != nil {
 		return nil, err
 	}
@@ -640,6 +643,12 @@ func (server *Server) validateRuntimeConfiguration(
 		return nil, operationFailed(
 			ldapwire.ResultConstraintViolation,
 			"invalid autoca state: "+err.Error(),
+		)
+	}
+	if err := server.configureAutoCALocalTLS(writer, runtime, false); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid autoca local TLS state: "+err.Error(),
 		)
 	}
 	if err := server.ensureAccesslogContainers(writer, runtime); err != nil {

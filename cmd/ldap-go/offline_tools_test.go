@@ -128,6 +128,144 @@ func TestOfflineToolRejectsOpenLDAPConfigBeforeOpeningDatabase(t *testing.T) {
 	}
 }
 
+func TestSlapModifyValidationOptionsCLI(t *testing.T) {
+	t.Run("option errors precede database access", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "missing", "directory.db")
+		for _, test := range []struct {
+			args []string
+			want string
+		}{
+			{args: []string{"-o", "schema-check=maybe"}, want: "value must be yes or no"},
+			{args: []string{"-o", "value-check"}, want: "expected name=yes|no"},
+			{args: []string{"-o", "unknown=yes"}, want: "unsupported slapmodify option"},
+			{args: []string{"-s=false"}, want: "-s=false is not supported"},
+		} {
+			args := append([]string{"slapmodify", "-db", databasePath}, test.args...)
+			_, stderr, exitCode := runOfflineToolCommand(args, "")
+			if exitCode != 1 || !strings.Contains(stderr, test.want) {
+				t.Fatalf("args=%v exit=%d stderr=%q", test.args, exitCode, stderr)
+			}
+			if _, err := os.Stat(databasePath); !os.IsNotExist(err) {
+				t.Fatalf("args=%v created database: %v", test.args, err)
+			}
+		}
+	})
+
+	rdnMismatch := "dn: " + offlineCommandAliceDN + "\nchangetype: modify\n" +
+		"replace: uid\nuid: detached-from-rdn\n"
+	t.Run("schema option follows command-line order", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "schema-enabled.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		_, stderr, exitCode := runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-u",
+				"-s", "-o", "schema-check=yes",
+			},
+			rdnMismatch,
+		)
+		if exitCode != 1 || !strings.Contains(stderr, "RDN value is missing") {
+			t.Fatalf("schema-check=yes exit=%d stderr=%q", exitCode, stderr)
+		}
+
+		databasePath = filepath.Join(t.TempDir(), "schema-disabled.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		stdout, stderr, exitCode := runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-u", "-v",
+				"-o", "schema-check=yes", "-s",
+			},
+			rdnMismatch,
+		)
+		if exitCode != 0 || stderr != "" ||
+			!strings.Contains(stdout, "validated 1 change record") {
+			t.Fatalf("-s last exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+		if got := offlineCommandAttribute(t, databasePath, offlineCommandAliceDN, "uid"); got != "alice" {
+			t.Fatalf("dry-run stored uid %q", got)
+		}
+
+		databasePath = filepath.Join(t.TempDir(), "schema-option-disabled.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		stdout, stderr, exitCode = runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-u", "-v",
+				"-o", "schema-check=no",
+			},
+			rdnMismatch,
+		)
+		if exitCode != 0 || stderr != "" ||
+			!strings.Contains(stdout, "validated 1 change record") {
+			t.Fatalf(
+				"schema-check=no exit=%d stdout=%q stderr=%q",
+				exitCode,
+				stdout,
+				stderr,
+			)
+		}
+	})
+
+	invalidValue := "dn: " + offlineCommandAliceDN + "\nchangetype: modify\n" +
+		"add: objectClass\nobjectClass: posixAccount\n-\n" +
+		"add: uidNumber\nuidNumber: not-an-integer\n-\n" +
+		"add: gidNumber\ngidNumber: 1000\n-\n" +
+		"add: homeDirectory\nhomeDirectory: /home/alice\n"
+	t.Run("value option and quick conflict execute", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "value-enabled.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		_, stderr, exitCode := runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-u",
+				"-o", "value-check=no", "-o", "value-check=yes",
+			},
+			invalidValue,
+		)
+		if exitCode != 1 || !strings.Contains(stderr, "integer") {
+			t.Fatalf("value-check=yes exit=%d stderr=%q", exitCode, stderr)
+		}
+
+		databasePath = filepath.Join(t.TempDir(), "value-disabled.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		stdout, stderr, exitCode := runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-u", "-v",
+				"-o", "value-check=no",
+			},
+			invalidValue,
+		)
+		if exitCode != 0 || stderr != "" ||
+			!strings.Contains(stdout, "validated 1 change record") {
+			t.Fatalf("value-check=no exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+
+		databasePath = filepath.Join(t.TempDir(), "quick.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		stdout, stderr, exitCode = runOfflineToolCommand(
+			[]string{
+				"slapmodify", "-db", databasePath, "-n", "1", "-q", "-u", "-v",
+				"-o", "value-check=yes",
+			},
+			invalidValue,
+		)
+		if exitCode != 0 ||
+			!strings.Contains(stderr, "value-check incompatible with quick mode; disabled.") ||
+			!strings.Contains(stdout, "validated 1 change record") {
+			t.Fatalf("quick exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+
+	t.Run("continue rejects configuration database", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "config.db")
+		seedSlapOfflineCommandDatabase(t, databasePath)
+		_, stderr, exitCode := runOfflineToolCommand(
+			[]string{"slapmodify", "-db", databasePath, "-n", "0", "-c"},
+			"dn: cn=config\nchangetype: modify\nreplace: cn\ncn: config\n",
+		)
+		if exitCode != 1 || !strings.Contains(stderr, "does not support cn=config") {
+			t.Fatalf("config exit=%d stderr=%q", exitCode, stderr)
+		}
+	})
+}
+
 func TestOpenLDAPReferenceOfflineToolCLI(t *testing.T) {
 	if os.Getenv("LDAP_GO_OPENLDAP_REFERENCE_TESTS") != "1" {
 		t.Skip("set LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 to run OpenLDAP offline-tool differential tests")
@@ -271,6 +409,52 @@ delete: sn
 `
 	if err := os.WriteFile(invalidPath, []byte(invalid), 0o600); err != nil {
 		t.Fatalf("write invalid LDIF: %v", err)
+	}
+	// OpenLDAP 2.6.13 documents these generic options for slapmodify, but
+	// parse_slapopt only dispatches them for SLAPADD. Keep the executable
+	// difference pinned while ldap-go implements the documented behavior.
+	schemaOptionOutput, schemaOptionErr := exec.Command(
+		slapmodify, "-f", configPath, "-u",
+		"-o", "schema-check=no", "-l", invalidPath,
+	).CombinedOutput()
+	if schemaOptionErr == nil ||
+		!bytes.Contains(schemaOptionOutput, []byte("schema-check meaningless for tool")) {
+		t.Fatalf(
+			"OpenLDAP slapmodify schema-check dispatch: err=%v output=%q",
+			schemaOptionErr,
+			schemaOptionOutput,
+		)
+	}
+	invalidValuePath := filepath.Join(directory, "invalid-value.ldif")
+	invalidValue := `dn: uid=alice,ou=people,dc=example,dc=com
+changetype: modify
+add: objectClass
+objectClass: posixAccount
+-
+add: uidNumber
+uidNumber: not-an-integer
+-
+add: gidNumber
+gidNumber: 1000
+-
+add: homeDirectory
+homeDirectory: /home/alice
+`
+	if err := os.WriteFile(invalidValuePath, []byte(invalidValue), 0o600); err != nil {
+		t.Fatalf("write invalid-value LDIF: %v", err)
+	}
+	valueOptionOutput, valueOptionErr := exec.Command(
+		slapmodify, "-f", configPath, "-u", "-q",
+		"-o", "value-check=yes", "-l", invalidValuePath,
+	).CombinedOutput()
+	if valueOptionErr == nil ||
+		!bytes.Contains(valueOptionOutput, []byte("value-check meaningless for tool")) ||
+		bytes.Contains(valueOptionOutput, []byte("incompatible with quick mode")) {
+		t.Fatalf(
+			"OpenLDAP slapmodify value-check dispatch: err=%v output=%q",
+			valueOptionErr,
+			valueOptionOutput,
+		)
 	}
 	if output, err := exec.Command(
 		slapmodify, "-f", configPath, "-s", "-l", invalidPath,

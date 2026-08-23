@@ -41,6 +41,9 @@ type pagedSearchState struct {
 	cursor      pagedSearchCursor
 	sorted      *pagedSortedSearch
 	count       int
+	totalLimit  int
+	estimate    int
+	noEstimate  bool
 	sortLease   *serverSideSortLease
 }
 
@@ -51,6 +54,9 @@ type pagedSearchContext struct {
 	cursor      pagedSearchCursor
 	sorted      *pagedSortedSearch
 	count       int
+	totalLimit  int
+	estimate    int
+	noEstimate  bool
 	abandoned   bool
 	sortLease   *serverSideSortLease
 }
@@ -60,10 +66,24 @@ func preparePagedSearch(
 	request ldapwire.SearchRequest,
 	controls []ldapwire.Control,
 	paging *pagedResultsRequest,
-	totalLimit int,
+	limits databaseSearchExecutionLimits,
 ) (*pagedSearchContext, *ldapwire.Result) {
 	if paging == nil {
 		return nil, nil
+	}
+	if limits.pageTotal == -2 {
+		clearPagedSearch(state)
+		return nil, pagingResult(
+			ldapwire.ResultAdminLimitExceeded,
+			"pagedResults control not allowed",
+		)
+	}
+	if limits.pageSize > 0 && paging.size > limits.pageSize {
+		clearPagedSearch(state)
+		return nil, pagingResult(
+			ldapwire.ResultAdminLimitExceeded,
+			"illegal pagedResults page size",
+		)
 	}
 
 	fingerprint := pagedSearchFingerprint(
@@ -73,13 +93,15 @@ func preparePagedSearch(
 	)
 	if len(paging.cookie) == 0 {
 		clearPagedSearch(state)
-		if paging.size == 0 || paging.size >= totalLimit {
+		if paging.size == 0 {
 			return nil, nil
 		}
 		return &pagedSearchContext{
 			size:        paging.size,
 			fingerprint: fingerprint,
 			runtime:     state.runtime,
+			totalLimit:  limits.pageTotal,
+			noEstimate:  limits.pageNoEstimate,
 		}, nil
 	}
 
@@ -101,6 +123,13 @@ func preparePagedSearch(
 			"paged results cookie is invalid or old",
 		)
 	}
+	if current.count >= current.totalLimit {
+		clearPagedSearch(state)
+		return nil, pagingResult(
+			ldapwire.ResultSizeLimitExceeded,
+			"",
+		)
+	}
 
 	context := &pagedSearchContext{
 		size:        paging.size,
@@ -109,6 +138,9 @@ func preparePagedSearch(
 		cursor:      current.cursor,
 		sorted:      clonePagedSortedSearch(current.sorted),
 		count:       current.count,
+		totalLimit:  current.totalLimit,
+		estimate:    current.estimate,
+		noEstimate:  current.noEstimate,
 		sortLease:   current.sortLease,
 	}
 	if paging.size == 0 {
@@ -153,6 +185,9 @@ func completePagedSearch(
 			cursor:      cursor,
 			sorted:      clonePagedSortedSearch(paging.sorted),
 			count:       paging.count + entryCount,
+			totalLimit:  paging.totalLimit,
+			estimate:    paging.estimate,
+			noEstimate:  paging.noEstimate,
 			sortLease:   paging.sortLease,
 		}
 	} else {

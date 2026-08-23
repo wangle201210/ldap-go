@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_REBUILD, and LDAP_GO_OPENLDAP_GSSAPI_AUTO"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, HAPROXY_SOURCE, HAPROXY_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_REBUILD, and LDAP_GO_OPENLDAP_GSSAPI_AUTO"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -16,6 +16,8 @@ cd "$root"
 
 verified_revision=d172686d3d270bc961b78f3ff00d7019c8dfb094
 verified_tag=OPENLDAP_REL_ENG_2_6_13
+verified_haproxy_revision=23cc52d34b89fa1f2ec2c4b3ac1526bae84aff93
+verified_haproxy_document_sha256=d8d5a58d4cde4d4993246a4bc6462854f51c7131ab2b2b58be94406f4f060a3b
 rebuild=${LDAP_GO_OPENLDAP_REBUILD:-0}
 case "$rebuild" in
 	0|1) ;;
@@ -122,6 +124,57 @@ if [ "${OPENLDAP_ALLOW_UNVERIFIED_REFERENCE:-0}" != "1" ]; then
 		die "generated reference environment is not verified OpenLDAP 2.6.13 evidence"
 	fi
 fi
+
+sha256_file() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{print $1}'
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 "$1" | awk '{print $NF}'
+	else
+		die "sha256sum, shasum, or openssl is required to verify the HAProxy source contract"
+	fi
+}
+
+if [ -z "${HAPROXY_SOURCE:-}" ]; then
+	haproxy_cache=${HAPROXY_SOURCE_CACHE:-${TMPDIR:-/tmp}/ldap-go-haproxy-proxy-contract}
+	haproxy_document=$haproxy_cache/doc/proxy-protocol.txt
+	if [ ! -f "$haproxy_document" ]; then
+		if ! command -v curl >/dev/null 2>&1; then
+			die "curl is required to fetch the pinned HAProxy PROXY protocol specification"
+		fi
+		cache_parent=$(dirname -- "$haproxy_cache")
+		mkdir -p "$cache_parent" || die "cannot create HAProxy cache parent: $cache_parent"
+		cache_parent=$(CDPATH= cd -- "$cache_parent" && pwd)
+		cache_name=$(basename -- "$haproxy_cache")
+		staging=$(mktemp -d "$cache_parent/.${cache_name}.XXXXXX") ||
+			die "cannot create HAProxy cache staging directory"
+		trap 'rm -rf -- "$staging"' EXIT HUP INT TERM
+		mkdir -p "$staging/doc"
+		curl -fsSL \
+			"https://raw.githubusercontent.com/haproxy/haproxy/$verified_haproxy_revision/doc/proxy-protocol.txt" \
+			-o "$staging/doc/proxy-protocol.txt" ||
+			die "failed to fetch the pinned HAProxy PROXY protocol specification"
+		if [ -e "$haproxy_cache" ]; then
+			die "HAProxy source cache exists but lacks doc/proxy-protocol.txt: $haproxy_cache"
+		fi
+		mv "$staging" "$haproxy_cache" ||
+			die "cannot publish the HAProxy source cache: $haproxy_cache"
+		trap - EXIT HUP INT TERM
+	fi
+	HAPROXY_SOURCE=$haproxy_cache
+fi
+haproxy_document=${HAPROXY_SOURCE%/}/doc/proxy-protocol.txt
+if [ ! -r "$haproxy_document" ]; then
+	die "HAPROXY_SOURCE has no readable doc/proxy-protocol.txt: $HAPROXY_SOURCE"
+fi
+haproxy_digest=$(sha256_file "$haproxy_document")
+if [ "$haproxy_digest" != "$verified_haproxy_document_sha256" ]; then
+	die "HAProxy PROXY protocol specification digest is $haproxy_digest, expected $verified_haproxy_document_sha256"
+fi
+HAPROXY_COMMIT=$verified_haproxy_revision
+export HAPROXY_SOURCE HAPROXY_COMMIT
 
 LDAP_GO_OPENLDAP_STRICT=1
 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1

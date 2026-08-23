@@ -140,29 +140,33 @@ func TestSASLDigestMD5ChallengeHonorsSSFAndNegotiatesAuthConf(t *testing.T) {
 	}
 	directives, err := parseSASLDigestMD5Directives(session.challenge)
 	if err != nil || directives["qop"] != "auth-int,auth-conf" ||
-		directives["cipher"] != "rc4-40,rc4-56,rc4" ||
-		session.allowAuth || !session.allowIntegrity || len(session.ciphers) != 3 {
+		directives["cipher"] != "rc4-40,rc4-56,rc4,des,3des" ||
+		session.allowAuth || !session.allowIntegrity || len(session.ciphers) != 5 {
 		t.Fatalf("minssf DIGEST-MD5 challenge = %#v, %v", directives, err)
 	}
 
-	response := []byte(
-		`username="alice",realm="example.com",nonce="` + session.nonce +
-			`",cnonce="client",nc=00000001,qop=auth-conf,` +
-			`cipher=rc4,digest-uri="ldap/ldap.example.test",` +
-			`response=00000000000000000000000000000000`,
-	)
-	parsed, err := parseSASLDigestMD5Response(response, session)
-	if err != nil || parsed.qop != saslDigestMD5ConfidentialityQOP ||
-		parsed.cipher != saslDigestMD5RC4Cipher {
-		t.Fatalf("auth-conf response = %#v, %v", parsed, err)
+	for _, cipher := range []string{
+		saslDigestMD5RC4Cipher,
+		saslDigestMD5DESCipher,
+		saslDigestMD53DESCipher,
+	} {
+		response := []byte(
+			`username="alice",realm="example.com",nonce="` + session.nonce +
+				`",cnonce="client",nc=00000001,qop=auth-conf,` +
+				`cipher=` + cipher + `,digest-uri="ldap/ldap.example.test",` +
+				`response=00000000000000000000000000000000`,
+		)
+		parsed, parseErr := parseSASLDigestMD5Response(response, session)
+		if parseErr != nil || parsed.qop != saslDigestMD5ConfidentialityQOP ||
+			parsed.cipher != cipher {
+			t.Fatalf("auth-conf %s response = %#v, %v", cipher, parsed, parseErr)
+		}
 	}
 
 	for _, test := range []struct {
 		name, cipher, want string
 	}{
 		{name: "missing", want: "no cipher"},
-		{name: "DES", cipher: "des", want: "DES"},
-		{name: "3DES", cipher: "3des", want: "DES"},
 		{name: "unknown", cipher: "aes", want: "not offered"},
 	} {
 		test := test
@@ -589,38 +593,58 @@ func TestOpenLDAPClientSASLDigestMD5Bind(t *testing.T) {
 	address, stop := startServer(t, store, Config{})
 	defer stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	command := exec.CommandContext(
-		ctx,
-		ldapWhoAmI,
-		"-Y",
-		"DIGEST-MD5",
-		"-U",
-		"alice",
-		"-R",
-		"example.com",
-		"-w",
-		"secret",
-		"-O",
-		"maxssf=0",
-		"-H",
-		"ldap://"+address,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		lower := strings.ToLower(string(output))
-		if strings.Contains(lower, "no worthy mechs") ||
-			strings.Contains(lower, "mechanism not supported") {
-			t.Skip("OpenLDAP Cyrus SASL installation has no DIGEST-MD5 plugin")
-		}
-		t.Fatalf("ldapwhoami DIGEST-MD5: %v\n%s", err, output)
+	tests := []struct {
+		name       string
+		properties string
+	}{
+		{name: "auth", properties: "maxssf=0"},
+		{name: "des", properties: "minssf=55,maxssf=55"},
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 ||
-		lines[len(lines)-1] !=
-			"dn:uid=alice,ou=people,dc=example,dc=com" {
-		t.Fatalf("ldapwhoami DIGEST-MD5 output = %q", output)
+	if os.Getenv("LDAP_GO_CYRUS_3DES_TESTS") == "1" {
+		tests = append(tests, struct {
+			name       string
+			properties string
+		}{name: "3des", properties: "minssf=112,maxssf=112"})
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(
+				ctx,
+				ldapWhoAmI,
+				"-Y",
+				"DIGEST-MD5",
+				"-U",
+				"alice",
+				"-R",
+				"example.com",
+				"-w",
+				"secret",
+				"-O",
+				test.properties,
+				"-H",
+				"ldap://"+address,
+			)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				lower := strings.ToLower(string(output))
+				if strings.Contains(lower, "no worthy mechs") ||
+					strings.Contains(lower, "mechanism not supported") ||
+					strings.Contains(lower, "no good privacy") ||
+					strings.Contains(lower, "can't find an acceptable layer") {
+					t.Skipf("OpenLDAP Cyrus SASL %s is unavailable: %s", test.name, output)
+				}
+				t.Fatalf("ldapwhoami DIGEST-MD5 %s: %v\n%s", test.name, err, output)
+			}
+			lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+			if len(lines) == 0 ||
+				lines[len(lines)-1] !=
+					"dn:uid=alice,ou=people,dc=example,dc=com" {
+				t.Fatalf("ldapwhoami DIGEST-MD5 %s output = %q", test.name, output)
+			}
+		})
 	}
 }
 

@@ -477,6 +477,41 @@ func TestLDAPClientSASLSCRAMProjectServer(t *testing.T) {
 	}
 }
 
+func TestLDAPClientSASLSCRAMPlusProjectServer(t *testing.T) {
+	for _, mechanism := range []string{
+		"SCRAM-SHA-1-PLUS",
+		"SCRAM-SHA-256-PLUS",
+		"SCRAM-SHA-512-PLUS",
+	} {
+		mechanism := mechanism
+		t.Run(mechanism, func(t *testing.T) {
+			t.Parallel()
+
+			serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
+			uri := startLDAPClientToolSASLServer(t, serverTLS)
+			caPath := filepath.Join(t.TempDir(), "scram-plus-ca.pem")
+			if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
+				t.Fatalf("write SCRAM-PLUS CA: %v", err)
+			}
+			stdout, stderr, exitCode := runLDAPClientCommand([]string{
+				"ldapwhoami", "-H", uri, "-ZZ", "-tls-ca", caPath,
+				"-Y", mechanism, "-U", "alice", "-X", "u:alice",
+				"-w", "sasl-client-secret",
+			}, "")
+			if exitCode != 0 || stdout != "dn:uid=alice,"+clientToolPeopleDN+"\n" ||
+				stderr != "" {
+				t.Fatalf(
+					"%s TLS project server exit=%d stdout=%q stderr=%q",
+					mechanism,
+					exitCode,
+					stdout,
+					stderr,
+				)
+			}
+		})
+	}
+}
+
 func TestLDAPClientSASLSCRAMRejectsInvalidServerSignature(t *testing.T) {
 	t.Parallel()
 
@@ -734,7 +769,7 @@ func TestLDAPClientSASLValidation(t *testing.T) {
 		{name: "cram authzid", args: []string{"-Y", "CRAM-MD5", "-U", "alice", "-X", "u:alice", "-w", "hidden"}, message: "does not support -X"},
 		{name: "cram whitespace", args: []string{"-Y", "CRAM-MD5", "-U", "alice smith", "-w", "hidden"}, message: "must not contain whitespace"},
 		{name: "scram realm", args: []string{"-Y", "SCRAM-SHA-256", "-U", "alice", "-R", "example", "-w", "hidden"}, message: "only supported with SASL DIGEST-MD5"},
-		{name: "scram plus", args: []string{"-Y", "SCRAM-SHA-256-PLUS", "-U", "alice", "-w", "hidden"}, message: "SCRAM-PLUS mechanisms are not supported"},
+		{name: "scram plus", args: []string{"-Y", "SCRAM-SHA-256-PLUS", "-U", "alice", "-w", "hidden"}, message: "SCRAM-PLUS requires verified TLS"},
 		{name: "security layer", args: []string{"-Y", "SCRAM-SHA-256", "-U", "alice", "-w", "hidden", "-O", "auth-int"}, message: "-O is only supported with SASL DIGEST-MD5"},
 		{name: "external password", args: []string{"-Y", "EXTERNAL", "-w", "hidden"}, message: "does not use"},
 		{name: "external certificate", args: []string{"-Y", "EXTERNAL"}, message: "requires -tls-cert and -tls-key"},
@@ -762,7 +797,9 @@ func TestLDAPCompareSASLDigestMD5SecurityLayers(t *testing.T) {
 	}{
 		{name: "auth-int", properties: "minssf=1,maxssf=1"},
 		{name: "rc4-40", properties: "minssf=40,maxssf=40"},
+		{name: "des", properties: "minssf=55,maxssf=55"},
 		{name: "rc4-56", properties: "minssf=56,maxssf=56"},
+		{name: "3des", properties: "minssf=112,maxssf=112"},
 		{name: "rc4", properties: "minssf=128,maxssf=128"},
 	} {
 		test := test
@@ -851,6 +888,9 @@ func startLDAPClientToolSASLServer(t *testing.T, tlsConfig *tls.Config) string {
 					`{3}^uid=([^,]+),cn=example\.com,cn=scram-sha-1,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
 					`{4}^uid=([^,]+),cn=example\.com,cn=scram-sha-256,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
 					`{5}^uid=([^,]+),cn=example\.com,cn=scram-sha-512,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
+					`{6}^uid=([^,]+),cn=example\.com,cn=scram-sha-1-plus,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
+					`{7}^uid=([^,]+),cn=example\.com,cn=scram-sha-256-plus,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
+					`{8}^uid=([^,]+),cn=example\.com,cn=scram-sha-512-plus,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
 				)},
 			},
 		}, false)

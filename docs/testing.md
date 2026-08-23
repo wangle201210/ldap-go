@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,622 top-level tests against
+The latest pinned local strict run passed 1,710 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -481,10 +481,12 @@ compared with OpenLDAP for bare/exact/range descriptions, subtypes, `*`, and
 `typesOnly`. Locale-dependent ordering outside the fixture remains unclaimed.
 `TestLDAPClientSASL*` drives raw-wire
 and project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
-SCRAM-SHA-1/256/512, and mutual-TLS EXTERNAL. It validates server proofs,
-malformed challenges, secret-free diagnostics, StartTLS ordering, and option
-conflicts. This is auth-only coverage; GSSAPI, channel binding, and SASL
-security layers remain outside the client subset.
+SCRAM-SHA-1/256/512 with all three `-PLUS` variants, and mutual-TLS EXTERNAL.
+It validates GS2/authzid, server proofs, RFC 5929 certificate hash selection,
+malformed challenges, binding mismatch, downgrade/replay rejection,
+secret-free diagnostics, StartTLS ordering, and option conflicts. This is
+auth-only coverage; GSSAPI and SASL security layers remain outside the client
+subset.
 
 Global server TLS configuration has separate transaction and live-handshake
 coverage. `TestGlobalTLSConfiguration*` validates supported inline/file
@@ -673,8 +675,16 @@ same cases run under the race detector.
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. The other server-side cases invoke
 `ldapwhoami -Y CRAM-MD5`, `ldapwhoami -Y DIGEST-MD5`, and
-`ldapwhoami -Y SCRAM-SHA-256`. Each case skips when its local Cyrus SASL
-plugin is unavailable.
+`ldapwhoami -Y SCRAM-SHA-256`. Gated channel-binding cases run SHA-1/256/512
+over verified StartTLS with `sasl_cbinding=tls-endpoint`; Cyrus 2.1.28 exposes
+these as base SCRAM mechanism names carrying a `p=tls-server-end-point` GS2
+header. Each case explicitly skips when its local Cyrus SASL plugin or
+channel-binding feature is unavailable.
+
+The full strict wrapper also caches and SHA-256 verifies the pinned HAProxy
+PROXY protocol specification used by the v1 and v2 UNIX source contracts.
+`HAPROXY_SOURCE` can select a pre-populated snapshot; otherwise
+`HAPROXY_SOURCE_CACHE` defaults to a temporary managed cache.
 
 The transaction cases run OpenLDAP `ldapmodify -E txn=commit/abort` against
 ldap-go, then send the same duplicate-Add raw BER sequence to the reference

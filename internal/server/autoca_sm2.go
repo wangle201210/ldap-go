@@ -174,6 +174,10 @@ func generateAutoCASM2ServerCertificate(
 	if err != nil {
 		return autoCACertificatePair{}, err
 	}
+	dnsNames, err := autoCAOptionalDNSNames(config.DNSNames)
+	if err != nil {
+		return autoCACertificatePair{}, err
+	}
 	notBefore, notAfter, err := autoCAValidity(config.Now, config.Days)
 	if err != nil {
 		return autoCACertificatePair{}, err
@@ -211,6 +215,7 @@ func generateAutoCASM2ServerCertificate(
 		SubjectKeyId:          subjectKeyID,
 		AuthorityKeyId:        bytes.Clone(issuer.SubjectKeyId),
 		IPAddresses:           ipAddresses,
+		DNSNames:              dnsNames,
 	}
 	certificateDER, err := smx509.CreateCertificate(
 		config.Random,

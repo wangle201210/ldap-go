@@ -10,6 +10,7 @@ type serverSASLSession struct {
 	mechanism             string
 	runtime               *runtimeState
 	scramConversation     *scram.ServerConversation
+	scramSecrets          *saslSCRAMSecrets
 	cramMD5Challenge      []byte
 	digestMD5Session      *serverSASLDigestMD5Session
 	gssapiSession         *serverGSSAPISession

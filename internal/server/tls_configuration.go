@@ -74,9 +74,6 @@ func (server *Server) loadGlobalTLSConfiguration(
 	entry, err := reader.Get(configurationSuffix)
 	switch {
 	case errors.Is(err, storage.ErrEntryNotFound):
-		if server.config.ImplicitTLS && !server.hasExplicitSecureTransport() {
-			return nil, errors.New("implicit TLS requires TLS configuration")
-		}
 		return nil, nil
 	case err != nil:
 		return nil, fmt.Errorf("load global TLS configuration: %w", err)
@@ -89,9 +86,6 @@ func (server *Server) loadGlobalTLSConfiguration(
 		)
 	}
 	if !configured {
-		if server.config.ImplicitTLS && !server.hasExplicitSecureTransport() {
-			return nil, errors.New("implicit TLS requires TLS configuration")
-		}
 		return nil, nil
 	}
 
@@ -99,36 +93,57 @@ func (server *Server) loadGlobalTLSConfiguration(
 	if err != nil {
 		return nil, err
 	}
-	if err := validateGlobalTLSRandFile(attributes.randFile); err != nil {
-		return nil, fmt.Errorf("%s olcTLSRandFile: %w", entry.DN, err)
-	}
-	if err := loadGlobalTLSDHParameters(attributes.dhParamFile); err != nil {
-		return nil, fmt.Errorf("%s olcTLSDHParamFile: %w", entry.DN, err)
-	}
-	crlPolicy, err := parseGlobalTLSCRLCheck(attributes.crlCheck)
-	if err != nil {
-		return nil, fmt.Errorf("%s olcTLSCRLCheck: %w", entry.DN, err)
-	}
-	crls, err := loadGlobalTLSCRLs(attributes.crlFile)
-	if err != nil {
-		return nil, fmt.Errorf("%s olcTLSCRLFile: %w", entry.DN, err)
-	}
 	if !globalTLSServerMaterialPresent(attributes) {
-		if server.config.ImplicitTLS && !server.hasExplicitSecureTransport() {
-			return nil, errors.New("implicit TLS requires TLS certificate and key configuration")
+		if err := validateGlobalTLSAttributesWithoutServerMaterial(entry.DN, attributes); err != nil {
+			return nil, err
 		}
 		return nil, nil
 	}
-	configuration, err := server.buildGlobalTLSConfig(
-		entry.DN,
-		attributes,
-		crlPolicy,
-		crls,
-	)
+	configuration, err := server.buildGlobalTLSConfigFromAttributes(entry.DN, attributes)
 	if err != nil {
 		return nil, err
 	}
 	return standardTLSTransport{config: configuration}, nil
+}
+
+func validateGlobalTLSAttributesWithoutServerMaterial(
+	entryDN string,
+	attributes globalTLSAttributes,
+) error {
+	_, _, err := loadGlobalTLSAttributeDependencies(entryDN, attributes)
+	return err
+}
+
+func loadGlobalTLSAttributeDependencies(
+	entryDN string,
+	attributes globalTLSAttributes,
+) (string, []*x509.RevocationList, error) {
+	if err := validateGlobalTLSRandFile(attributes.randFile); err != nil {
+		return "", nil, fmt.Errorf("%s olcTLSRandFile: %w", entryDN, err)
+	}
+	if err := loadGlobalTLSDHParameters(attributes.dhParamFile); err != nil {
+		return "", nil, fmt.Errorf("%s olcTLSDHParamFile: %w", entryDN, err)
+	}
+	crlPolicy, err := parseGlobalTLSCRLCheck(attributes.crlCheck)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s olcTLSCRLCheck: %w", entryDN, err)
+	}
+	crls, err := loadGlobalTLSCRLs(attributes.crlFile)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s olcTLSCRLFile: %w", entryDN, err)
+	}
+	return crlPolicy, crls, nil
+}
+
+func (server *Server) buildGlobalTLSConfigFromAttributes(
+	entryDN string,
+	attributes globalTLSAttributes,
+) (*tls.Config, error) {
+	crlPolicy, crls, err := loadGlobalTLSAttributeDependencies(entryDN, attributes)
+	if err != nil {
+		return nil, err
+	}
+	return server.buildGlobalTLSConfig(entryDN, attributes, crlPolicy, crls)
 }
 
 func (server *Server) hasExplicitSecureTransport() bool {

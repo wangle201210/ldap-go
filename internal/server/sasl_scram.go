@@ -1,13 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -20,11 +23,58 @@ const (
 	maxSASLSCRAMIterations     = 10_000_000
 	saslSCRAMSaltSize          = 16
 	maxSASLSCRAMSecretSize     = 4096
+	saslSCRAMTLSEndpointPrefix = "tls-server-end-point:"
 )
 
 var errSASLSCRAMCredentialsUnavailable = errors.New(
 	"SCRAM credentials are unavailable",
 )
+
+type saslSCRAMSecrets struct {
+	mu          sync.Mutex
+	binding     []byte
+	storedKey   []byte
+	serverKey   []byte
+	initialized bool
+}
+
+func (secrets *saslSCRAMSecrets) setCredentials(
+	credentials scram.StoredCredentials,
+) {
+	secrets.mu.Lock()
+	defer secrets.mu.Unlock()
+	if secrets.initialized {
+		clear(secrets.storedKey)
+		clear(secrets.serverKey)
+	}
+	secrets.storedKey = credentials.StoredKey
+	secrets.serverKey = credentials.ServerKey
+	secrets.initialized = true
+}
+
+func (secrets *saslSCRAMSecrets) clear() {
+	if secrets == nil {
+		return
+	}
+	secrets.mu.Lock()
+	defer secrets.mu.Unlock()
+	clear(secrets.binding)
+	clear(secrets.storedKey)
+	clear(secrets.serverKey)
+	secrets.binding = nil
+	secrets.storedKey = nil
+	secrets.serverKey = nil
+	secrets.initialized = false
+}
+
+func clearSASLSCRAMSession(session *serverSASLSession) {
+	if session == nil {
+		return
+	}
+	session.scramSecrets.clear()
+	session.scramSecrets = nil
+	session.scramConversation = nil
+}
 
 func (server *Server) handleSASLSCRAMStep(
 	ctx context.Context,
@@ -37,6 +87,7 @@ func (server *Server) handleSASLSCRAMStep(
 	if session.scramConversation == nil {
 		if err := server.initializeSASLSCRAMConversation(
 			ctx,
+			state.connection,
 			session,
 		); err != nil {
 			clearSASLSession(state)
@@ -119,12 +170,14 @@ func (server *Server) handleSASLSCRAMStep(
 
 func (server *Server) initializeSASLSCRAMConversation(
 	ctx context.Context,
+	connection net.Conn,
 	session *serverSASLSession,
 ) error {
 	generator, ok := saslSCRAMHashGenerator(session.mechanism)
 	if !ok {
 		return errSASLSCRAMCredentialsUnavailable
 	}
+	secrets := &saslSCRAMSecrets{}
 	scramServer, err := generator.NewServer(func(
 		username string,
 	) (scram.StoredCredentials, error) {
@@ -139,13 +192,32 @@ func (server *Server) initializeSASLSCRAMConversation(
 		session.credentialLookupErr = lookupErr
 		if lookupErr == nil {
 			session.authenticationDN = authenticationDN
+			secrets.setCredentials(credentials)
 		}
 		return credentials, lookupErr
 	})
 	if err != nil {
 		return err
 	}
-	session.scramConversation = scramServer.NewConversation()
+	binding, bindingAvailable := saslSCRAMTLSChannelBinding(connection)
+	if saslSCRAMIsPlus(session.mechanism) {
+		if !bindingAvailable {
+			return errors.New("SCRAM-PLUS requires verified standard TLS channel binding")
+		}
+		secrets.binding = binding.Data
+		session.scramConversation =
+			scramServer.NewConversationWithChannelBindingRequired(binding)
+	} else if bindingAvailable {
+		secrets.binding = binding.Data
+		session.scramConversation =
+			scramServer.NewConversationWithChannelBinding(binding)
+	} else {
+		session.scramConversation = scramServer.NewConversation()
+	}
+	session.scramSecrets = secrets
+	runtime.AddCleanup(session, func(value *saslSCRAMSecrets) {
+		value.clear()
+	}, secrets)
 	return nil
 }
 
@@ -228,7 +300,7 @@ func (server *Server) lookupSASLSCRAMCredentials(
 	for _, stored := range entry.Values("authPassword") {
 		credentials, ok := parseCyrusSASLSCRAMSecret(
 			stored,
-			mechanism,
+			saslSCRAMBaseMechanism(mechanism),
 			generator().Size(),
 		)
 		if !ok {
@@ -332,7 +404,7 @@ func decodeSASLBase64(value string) ([]byte, bool) {
 func saslSCRAMHashGenerator(
 	mechanism string,
 ) (scram.HashGeneratorFcn, bool) {
-	switch mechanism {
+	switch saslSCRAMBaseMechanism(mechanism) {
 	case "SCRAM-SHA-1":
 		return scram.SHA1, true
 	case "SCRAM-SHA-256":
@@ -342,4 +414,37 @@ func saslSCRAMHashGenerator(
 	default:
 		return nil, false
 	}
+}
+
+func saslSCRAMBaseMechanism(mechanism string) string {
+	return strings.TrimSuffix(mechanism, "-PLUS")
+}
+
+func saslSCRAMIsPlus(mechanism string) bool {
+	return strings.HasSuffix(mechanism, "-PLUS")
+}
+
+func saslSCRAMTLSChannelBinding(
+	connection net.Conn,
+) (scram.ChannelBinding, bool) {
+	applicationData := connectionTLSChannelBinding(connection)
+	if len(applicationData) == 0 {
+		return scram.ChannelBinding{}, false
+	}
+	defer clear(applicationData)
+	prefix := []byte(saslSCRAMTLSEndpointPrefix)
+	if !bytes.HasPrefix(applicationData, prefix) ||
+		len(applicationData) == len(prefix) {
+		return scram.ChannelBinding{}, false
+	}
+	return scram.ChannelBinding{
+		Type: scram.ChannelBindingTLSServerEndpoint,
+		Data: bytes.Clone(applicationData[len(prefix):]),
+	}, true
+}
+
+func saslSCRAMPlusAvailable(connection net.Conn) bool {
+	binding, ok := saslSCRAMTLSChannelBinding(connection)
+	clear(binding.Data)
+	return ok
 }

@@ -164,6 +164,16 @@ func TestListenLloaddURL(t *testing.T) {
 		t.Fatalf("PROXY listener description = %q", description)
 	}
 	_ = listener.Close()
+	for _, raw := range []string{
+		"pldap://:389/",
+		"pldap://0.0.0.0:389/",
+		"pldaps://[::]:636/",
+	} {
+		if listener, _, err := listenLloaddURL(raw, nil); err == nil {
+			_ = listener.Close()
+			t.Fatalf("listenLloaddURL(%q) accepted a wildcard trusted listener", raw)
+		}
+	}
 	if listener, _, err := listenLloaddURL("http://127.0.0.1:0/", nil); err == nil {
 		_ = listener.Close()
 		t.Fatal("listenLloaddURL(http) succeeded")

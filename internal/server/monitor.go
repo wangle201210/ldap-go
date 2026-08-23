@@ -49,6 +49,7 @@ type monitorState struct {
 	totalConnections uint64
 	debugLevels      []string
 	logLevels        []string
+	logRouteState    atomic.Uint64
 
 	operations [len(monitorOperationNames)]monitorOperationCounter
 	bytes      atomic.Uint64
@@ -115,10 +116,24 @@ func (monitor *monitorState) loggingSnapshot() ([]string, []string) {
 }
 
 func (monitor *monitorState) setLogging(debugLevels, logLevels []string) {
+	mask := compileMonitorLogMask(logLevels)
 	monitor.mu.Lock()
 	monitor.debugLevels = append([]string(nil), debugLevels...)
 	monitor.logLevels = append([]string(nil), logLevels...)
+	monitor.logRouteState.Store(monitorLogRouteActive | uint64(uint32(mask)))
 	monitor.mu.Unlock()
+}
+
+func (monitor *monitorState) enableLogRouting() {
+	monitor.mu.Lock()
+	mask := compileMonitorLogMask(monitor.logLevels)
+	monitor.logRouteState.Store(monitorLogRouteActive | uint64(uint32(mask)))
+	monitor.mu.Unlock()
+}
+
+func (monitor *monitorState) logRoute() (monitorLogCategory, bool) {
+	state := monitor.logRouteState.Load()
+	return monitorLogCategory(uint32(state)), state&monitorLogRouteActive != 0
 }
 
 func (monitor *monitorState) registerConnection(

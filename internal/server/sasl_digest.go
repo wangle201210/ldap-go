@@ -499,11 +499,6 @@ func parseSASLDigestMD5Response(
 		}
 		response.cipher = strings.ToLower(cipherName)
 		if _, ok := session.ciphers[response.cipher]; !ok {
-			if response.cipher == "des" || response.cipher == "3des" {
-				return saslDigestMD5Response{}, errors.New(
-					"DIGEST-MD5 DES confidentiality ciphers are not supported",
-				)
-			}
 			return saslDigestMD5Response{}, errors.New(
 				"DIGEST-MD5 auth-conf cipher was not offered",
 			)

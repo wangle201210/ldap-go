@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/cipher"
+	"crypto/des" //nolint:gosec // RFC 2831 mandates DES and two-key 3DES for DIGEST-MD5.
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rc4" //nolint:gosec // RFC 2831 requires RC4 for DIGEST-MD5 auth-conf interoperability.
@@ -33,22 +35,37 @@ const (
 	saslDigestMD5RC440Cipher = "rc4-40"
 	saslDigestMD5RC456Cipher = "rc4-56"
 	saslDigestMD5RC4Cipher   = "rc4"
+	saslDigestMD5DESCipher   = "des"
+	saslDigestMD53DESCipher  = "3des"
 	saslDigestMD5RC440SSF    = 40
 	saslDigestMD5RC456SSF    = 56
 	saslDigestMD5RC4SSF      = 128
+	saslDigestMD5DESSF       = 55
+	saslDigestMD53DESSF      = 112
+)
+
+type saslDigestMD5CipherMode uint8
+
+const (
+	saslDigestMD5CipherModeRC4 saslDigestMD5CipherMode = iota
+	saslDigestMD5CipherModeDES
+	saslDigestMD5CipherMode3DES
 )
 
 type saslDigestMD5Cipher struct {
 	name      string
 	ssf       uint32
 	keyPrefix int
+	mode      saslDigestMD5CipherMode
 }
 
 func orderedSASLDigestMD5Ciphers() []saslDigestMD5Cipher {
 	return []saslDigestMD5Cipher{
-		{name: saslDigestMD5RC440Cipher, ssf: saslDigestMD5RC440SSF, keyPrefix: 5},
-		{name: saslDigestMD5RC456Cipher, ssf: saslDigestMD5RC456SSF, keyPrefix: 7},
-		{name: saslDigestMD5RC4Cipher, ssf: saslDigestMD5RC4SSF, keyPrefix: md5.Size},
+		{name: saslDigestMD5RC440Cipher, ssf: saslDigestMD5RC440SSF, keyPrefix: 5, mode: saslDigestMD5CipherModeRC4},
+		{name: saslDigestMD5RC456Cipher, ssf: saslDigestMD5RC456SSF, keyPrefix: 7, mode: saslDigestMD5CipherModeRC4},
+		{name: saslDigestMD5RC4Cipher, ssf: saslDigestMD5RC4SSF, keyPrefix: md5.Size, mode: saslDigestMD5CipherModeRC4},
+		{name: saslDigestMD5DESCipher, ssf: saslDigestMD5DESSF, keyPrefix: md5.Size, mode: saslDigestMD5CipherModeDES},
+		{name: saslDigestMD53DESCipher, ssf: saslDigestMD53DESSF, keyPrefix: md5.Size, mode: saslDigestMD5CipherMode3DES},
 	}
 }
 
@@ -345,12 +362,17 @@ func saslDigestMD5MAC(key []byte, sequence uint32, message []byte) []byte {
 type saslDigestMD5PrivacyConnection struct {
 	net.Conn
 
-	sendKey    [md5.Size]byte
-	receiveKey [md5.Size]byte
-	sendCipher *rc4.Cipher
-	recvCipher *rc4.Cipher
-	maxSend    uint32
-	maxReceive uint32
+	sendKey         [md5.Size]byte
+	receiveKey      [md5.Size]byte
+	sendCipher      *rc4.Cipher
+	recvCipher      *rc4.Cipher
+	sendBlockKey    [des.BlockSize * 3]byte
+	receiveBlockKey [des.BlockSize * 3]byte
+	blockKeySize    int
+	sendIV          [des.BlockSize]byte
+	receiveIV       [des.BlockSize]byte
+	maxSend         uint32
+	maxReceive      uint32
 
 	writeMu     sync.Mutex
 	readMu      sync.Mutex
@@ -408,10 +430,18 @@ func newSASLDigestMD5PrivacyConnection(
 	if localMaxBuffer == 0 {
 		localMaxBuffer = saslDigestMD5DefaultMaxBuffer
 	}
-	// Cyrus reserves 25 bytes for every privacy layer, including stream ciphers.
-	const cyrusPrivacyOverhead = 25
-	if peerMaxBuffer <= cyrusPrivacyOverhead ||
-		localMaxBuffer <= saslDigestMD5IntegrityOverhead ||
+	// Preserve the existing RC4 chunk size. Cyrus reserves another four bytes
+	// for block ciphers so the maximum CBC padding cannot exceed maxbuf.
+	privacyOverhead := uint32(25)
+	if cipher.mode != saslDigestMD5CipherModeRC4 {
+		privacyOverhead = 29
+	}
+	invalidReceiveBuffer := localMaxBuffer <= saslDigestMD5IntegrityOverhead
+	if cipher.mode != saslDigestMD5CipherModeRC4 {
+		invalidReceiveBuffer = localMaxBuffer < 4+2*des.BlockSize+2+4
+	}
+	if peerMaxBuffer <= privacyOverhead ||
+		invalidReceiveBuffer ||
 		peerMaxBuffer > maxSASLDigestMD5BufferSize ||
 		localMaxBuffer > maxSASLDigestMD5BufferSize {
 		return nil, errors.New("DIGEST-MD5 security maxbuf is invalid")
@@ -425,27 +455,102 @@ func newSASLDigestMD5PrivacyConnection(
 		clear(sendSeal[:])
 		return nil, err
 	}
-	sendCipher, err := rc4.NewCipher(sendSeal[:]) //nolint:gosec // Required by RFC 2831.
-	clear(sendSeal[:])
-	if err != nil {
-		clear(receiveSeal[:])
-		return nil, err
-	}
-	receiveCipher, err := rc4.NewCipher(receiveSeal[:]) //nolint:gosec // Required by RFC 2831.
-	clear(receiveSeal[:])
-	if err != nil {
-		return nil, err
-	}
 	layer := &saslDigestMD5PrivacyConnection{
 		Conn:       connection,
-		sendCipher: sendCipher,
-		recvCipher: receiveCipher,
-		maxSend:    peerMaxBuffer - cyrusPrivacyOverhead,
+		maxSend:    peerMaxBuffer - privacyOverhead,
 		maxReceive: localMaxBuffer - 4,
+	}
+	switch cipher.mode {
+	case saslDigestMD5CipherModeRC4:
+		layer.sendCipher, err = rc4.NewCipher(sendSeal[:]) //nolint:gosec // Required by RFC 2831.
+		if err == nil {
+			layer.recvCipher, err = rc4.NewCipher(receiveSeal[:]) //nolint:gosec // Required by RFC 2831.
+		}
+	case saslDigestMD5CipherModeDES, saslDigestMD5CipherMode3DES:
+		layer.blockKeySize = saslDigestMD5BlockKey(
+			layer.sendBlockKey[:],
+			layer.sendIV[:],
+			sendSeal[:],
+			cipher.mode == saslDigestMD5CipherMode3DES,
+		)
+		_ = saslDigestMD5BlockKey(
+			layer.receiveBlockKey[:],
+			layer.receiveIV[:],
+			receiveSeal[:],
+			cipher.mode == saslDigestMD5CipherMode3DES,
+		)
+	default:
+		err = errors.New("DIGEST-MD5 confidentiality cipher is not supported")
+	}
+	clear(sendSeal[:])
+	clear(receiveSeal[:])
+	if err != nil {
+		clear(layer.sendBlockKey[:])
+		clear(layer.receiveBlockKey[:])
+		clear(layer.sendIV[:])
+		clear(layer.receiveIV[:])
+		return nil, err
 	}
 	layer.sendKey = saslDigestMD5SigningKey(sessionKey, sendSigningMagic)
 	layer.receiveKey = saslDigestMD5SigningKey(sessionKey, receiveSigningMagic)
 	return layer, nil
+}
+
+func saslDigestMD5BlockKey(
+	destination,
+	iv,
+	sealingKey []byte,
+	triple bool,
+) int {
+	first := saslDigestMD5SlideDESKey(sealingKey[:7])
+	copy(destination, first[:])
+	clear(first[:])
+	copy(iv, sealingKey[8:])
+	if !triple {
+		return des.BlockSize
+	}
+	second := saslDigestMD5SlideDESKey(sealingKey[7:14])
+	copy(destination[des.BlockSize:], second[:])
+	copy(destination[2*des.BlockSize:], destination[:des.BlockSize])
+	clear(second[:])
+	return des.BlockSize * 3
+}
+
+func saslDigestMD5SlideDESKey(value []byte) [des.BlockSize]byte {
+	return [des.BlockSize]byte{
+		value[0],
+		value[0]<<7 | value[1]>>1,
+		value[1]<<6 | value[2]>>2,
+		value[2]<<5 | value[3]>>3,
+		value[3]<<4 | value[4]>>4,
+		value[4]<<3 | value[5]>>5,
+		value[5]<<2 | value[6]>>6,
+		value[6] << 1,
+	}
+}
+
+func saslDigestMD5CBC(
+	key []byte,
+	iv *[des.BlockSize]byte,
+	value []byte,
+	encrypt bool,
+) {
+	var block cipher.Block
+	if len(key) == des.BlockSize {
+		block, _ = des.NewCipher(key) //nolint:gosec // Required by RFC 2831.
+	} else {
+		block, _ = des.NewTripleDESCipher(key) //nolint:gosec // RFC 2831 specifies EDE2 as K1,K2,K1.
+	}
+	if encrypt {
+		cipher.NewCBCEncrypter(block, iv[:]).CryptBlocks(value, value)
+		copy(iv[:], value[len(value)-des.BlockSize:])
+		return
+	}
+	var nextIV [des.BlockSize]byte
+	copy(nextIV[:], value[len(value)-des.BlockSize:])
+	cipher.NewCBCDecrypter(block, iv[:]).CryptBlocks(value, value)
+	copy(iv[:], nextIV[:])
+	clear(nextIV[:])
 }
 
 func (connection *saslDigestMD5PrivacyConnection) Write(value []byte) (int, error) {
@@ -479,16 +584,35 @@ func (connection *saslDigestMD5PrivacyConnection) encodeFrame(
 	message []byte,
 	sequence uint32,
 ) []byte {
-	encryptedLength := len(message) + saslDigestMD5MACSize
+	paddingLength := 0
+	if connection.blockKeySize != 0 {
+		paddingLength = des.BlockSize - (len(message)+saslDigestMD5MACSize)%des.BlockSize
+	}
+	encryptedLength := len(message) + paddingLength + saslDigestMD5MACSize
 	payloadLength := encryptedLength + 2 + 4
 	frame := make([]byte, 4+payloadLength)
 	binary.BigEndian.PutUint32(frame[:4], uint32(payloadLength))
 	plaintext := make([]byte, encryptedLength)
 	copy(plaintext, message)
+	if paddingLength != 0 {
+		for index := len(message); index < len(message)+paddingLength; index++ {
+			plaintext[index] = byte(paddingLength)
+		}
+	}
 	mac := saslDigestMD5MAC(connection.sendKey[:], sequence, message)
-	copy(plaintext[len(message):], mac)
+	copy(plaintext[len(message)+paddingLength:], mac)
 	clear(mac)
-	connection.sendCipher.XORKeyStream(frame[4:4+encryptedLength], plaintext)
+	copy(frame[4:4+encryptedLength], plaintext)
+	if connection.blockKeySize != 0 {
+		saslDigestMD5CBC(
+			connection.sendBlockKey[:connection.blockKeySize],
+			&connection.sendIV,
+			frame[4:4+encryptedLength],
+			true,
+		)
+	} else {
+		connection.sendCipher.XORKeyStream(frame[4:4+encryptedLength], plaintext)
+	}
 	clear(plaintext)
 	offset := 4 + encryptedLength
 	binary.BigEndian.PutUint16(frame[offset:offset+2], saslDigestMD5MessageType)
@@ -533,6 +657,11 @@ func (connection *saslDigestMD5PrivacyConnection) Close() error {
 			connection.recvCipher.Reset()
 			connection.recvCipher = nil
 		}
+		clear(connection.sendBlockKey[:])
+		clear(connection.receiveBlockKey[:])
+		connection.blockKeySize = 0
+		clear(connection.sendIV[:])
+		clear(connection.receiveIV[:])
 		clear(connection.readPending)
 		connection.readPending = nil
 		connection.readMu.Unlock()
@@ -570,12 +699,41 @@ func (connection *saslDigestMD5PrivacyConnection) readFrame() ([]byte, error) {
 		return nil, fmt.Errorf("%w: received %d, expected %d", errSASLDigestMD5Sequence, sequence, connection.receiveSeq)
 	}
 	encryptedLength := typeOffset
+	if connection.blockKeySize != 0 &&
+		(encryptedLength < 2*des.BlockSize || encryptedLength%des.BlockSize != 0) {
+		clear(payload)
+		return nil, fmt.Errorf(
+			"%w: encrypted payload length %d",
+			errSASLDigestMD5SecurityFrame,
+			encryptedLength,
+		)
+	}
 	plaintext := make([]byte, encryptedLength)
-	connection.recvCipher.XORKeyStream(plaintext, payload[:encryptedLength])
+	copy(plaintext, payload[:encryptedLength])
+	if connection.blockKeySize != 0 {
+		saslDigestMD5CBC(
+			connection.receiveBlockKey[:connection.blockKeySize],
+			&connection.receiveIV,
+			plaintext,
+			false,
+		)
+	} else {
+		connection.recvCipher.XORKeyStream(plaintext, payload[:encryptedLength])
+	}
 	clear(payload)
 	messageLength := len(plaintext) - saslDigestMD5MACSize
+	validPadding := true
+	if connection.blockKeySize != 0 {
+		paddingLength, valid := saslDigestMD5CBCPaddingLength(plaintext)
+		validPadding = valid
+		if valid {
+			messageLength -= paddingLength
+		}
+	}
 	expected := saslDigestMD5MAC(connection.receiveKey[:], sequence, plaintext[:messageLength])
-	valid := subtle.ConstantTimeCompare(expected, plaintext[messageLength:]) == 1
+	receivedMAC := plaintext[len(plaintext)-saslDigestMD5MACSize:]
+	validMAC := subtle.ConstantTimeCompare(expected, receivedMAC) == 1
+	valid := validPadding && validMAC
 	clear(expected)
 	if !valid {
 		clear(plaintext)
@@ -585,4 +743,25 @@ func (connection *saslDigestMD5PrivacyConnection) readFrame() ([]byte, error) {
 	clear(plaintext)
 	connection.receiveSeq++
 	return message, nil
+}
+
+func saslDigestMD5CBCPaddingLength(plaintext []byte) (int, bool) {
+	paddingBytes := len(plaintext) - saslDigestMD5MACSize
+	if paddingBytes < 1 {
+		return 0, false
+	}
+	paddingLength := int(plaintext[len(plaintext)-saslDigestMD5MACSize-1])
+	valid := subtle.ConstantTimeLessOrEq(1, paddingLength) &
+		subtle.ConstantTimeLessOrEq(paddingLength, des.BlockSize) &
+		subtle.ConstantTimeLessOrEq(paddingLength, paddingBytes)
+	checked := min(des.BlockSize, paddingBytes)
+	for offset := 1; offset <= checked; offset++ {
+		required := subtle.ConstantTimeLessOrEq(offset, paddingLength)
+		equal := subtle.ConstantTimeByteEq(
+			plaintext[len(plaintext)-saslDigestMD5MACSize-offset],
+			byte(paddingLength),
+		)
+		valid &= subtle.ConstantTimeSelect(required, equal, 1)
+	}
+	return paddingLength, valid == 1
 }

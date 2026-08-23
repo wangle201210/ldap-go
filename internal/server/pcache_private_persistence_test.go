@@ -488,6 +488,614 @@ func TestPcachePersistenceRollbackAndRetiredGeneration(t *testing.T) {
 	}
 }
 
+func TestPcachePersistenceSlowStoreKeepsReadsAvailableAndSerializesMutations(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/slow-store",
+		fingerprint: "slow-store",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	firstDone := make(chan bool, 1)
+	go func() {
+		firstDone <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"first",
+			"uid=first,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	<-blocked.started
+
+	readDone := make(chan bool, 1)
+	go func() {
+		_, baseFound, _ := state.lookup("base", state.clock(), false)
+		_, candidateFound, _ := state.lookup("first", state.clock(), false)
+		readDone <- baseFound && !candidateFound
+	}()
+	select {
+	case valid := <-readDone:
+		if !valid {
+			t.Fatal("read observed an uncommitted persistence candidate")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("slow persistence blocked a cache read")
+	}
+
+	secondDone := make(chan bool, 1)
+	go func() {
+		secondDone <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"second",
+			"uid=second,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("concurrent mutation bypassed persistence serialization")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(blocked.release)
+	if !<-firstDone || !<-secondDone {
+		t.Fatal("serialized persistence mutation failed")
+	}
+
+	state.mu.Lock()
+	generation := state.generation
+	queryCount := len(state.queries)
+	state.mu.Unlock()
+	if generation != 3 || queryCount != 3 {
+		t.Fatalf("committed state = generation %d, %d queries", generation, queryCount)
+	}
+	snapshot := readPcacheTestSnapshot(t, store, state.persistence.metadataKey)
+	if snapshot.Generation != generation || len(snapshot.Queries) != queryCount {
+		t.Fatalf(
+			"persisted state = generation %d, %d queries",
+			snapshot.Generation,
+			len(snapshot.Queries),
+		)
+	}
+}
+
+func TestPcachePersistenceFailureRollsBackBeforeNextMutation(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/serialized-rollback",
+		fingerprint: "serialized-rollback",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+
+	injected := errors.New("injected first mutation failure")
+	blocked := newPcacheBlockingMetadataStore(store, injected)
+	state.persistence.store = blocked
+	firstDone := make(chan bool, 1)
+	go func() {
+		firstDone <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"rejected",
+			"uid=rejected,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	<-blocked.started
+	secondDone := make(chan bool, 1)
+	go func() {
+		secondDone <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"accepted",
+			"uid=accepted,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	close(blocked.release)
+	if <-firstDone {
+		t.Fatal("failed persistence mutation reported success")
+	}
+	if !<-secondDone {
+		t.Fatal("mutation following a rollback failed")
+	}
+
+	state.mu.Lock()
+	_, rejected := state.queries["rejected"]
+	_, accepted := state.queries["accepted"]
+	generation := state.generation
+	state.mu.Unlock()
+	if rejected || !accepted || generation != 2 {
+		t.Fatalf(
+			"rollback state = rejected %t, accepted %t, generation %d",
+			rejected,
+			accepted,
+			generation,
+		)
+	}
+	snapshot := readPcacheTestSnapshot(t, store, state.persistence.metadataKey)
+	if snapshot.Generation != 2 || len(snapshot.Queries) != 2 {
+		t.Fatalf("persisted rollback state = %#v", snapshot)
+	}
+}
+
+func TestPcachePersistenceCancellationRollsBackAndReleasesSerializer(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/cancel",
+		fingerprint: "cancel",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+	before := readPcacheTestMetadata(t, store, state.persistence.metadataKey)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		done <- commitPcachePrivateTestQueryWithContext(
+			ctx,
+			state,
+			"canceled",
+			"uid=canceled,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	<-blocked.started
+	cancel()
+	if <-done {
+		t.Fatal("canceled persistence mutation reported success")
+	}
+
+	state.mu.Lock()
+	_, retained := state.queries["canceled"]
+	generation := state.generation
+	state.mu.Unlock()
+	if retained || generation != 1 {
+		t.Fatalf("canceled mutation state = retained %t, generation %d", retained, generation)
+	}
+	if after := readPcacheTestMetadata(t, store, state.persistence.metadataKey); !bytes.Equal(after, before) {
+		t.Fatal("canceled mutation changed persisted metadata")
+	}
+
+	state.persistence.store = store
+	if !commitPcachePrivateTestQueryWithContext(
+		context.Background(),
+		state,
+		"after-cancel",
+		"uid=after-cancel,"+ldapBackendTestPeopleDN,
+	) {
+		t.Fatal("cancellation did not release the persistence serializer")
+	}
+}
+
+func TestPcachePersistenceCancellationWhileWaitingForSerializer(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/cancel-wait",
+		fingerprint: "cancel-wait",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	firstDone := make(chan bool, 1)
+	go func() {
+		firstDone <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"first",
+			"uid=first,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	<-blocked.started
+
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	secondDone := make(chan bool, 1)
+	go func() {
+		secondDone <- commitPcachePrivateTestQueryWithContext(
+			waitCtx,
+			state,
+			"canceled-waiter",
+			"uid=canceled-waiter,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	cancelWait()
+	select {
+	case accepted := <-secondDone:
+		if accepted {
+			t.Fatal("canceled serializer waiter reported success")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("canceled mutation remained blocked on the serializer")
+	}
+	close(blocked.release)
+	if !<-firstDone {
+		t.Fatal("active persistence mutation failed")
+	}
+	state.mu.Lock()
+	_, retained := state.queries["canceled-waiter"]
+	state.mu.Unlock()
+	if retained {
+		t.Fatal("canceled serializer waiter changed memory")
+	}
+}
+
+func TestPcachePersistenceGenerationCASRejectsStaleCandidate(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/generation-cas",
+		fingerprint: "generation-cas",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	done := make(chan bool, 1)
+	go func() {
+		done <- commitPcachePrivateTestQueryWithContext(
+			context.Background(),
+			state,
+			"stale",
+			"uid=stale,"+ldapBackendTestPeopleDN,
+		)
+	}()
+	<-blocked.started
+
+	newer := readPcacheTestSnapshot(t, store, state.persistence.metadataKey)
+	newer.Generation += 100
+	newerEncoded, err := json.Marshal(newer)
+	if err != nil {
+		t.Fatalf("encode newer generation: %v", err)
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.SetMetadata(state.persistence.metadataKey, newerEncoded)
+	}); err != nil {
+		t.Fatalf("publish newer generation: %v", err)
+	}
+	close(blocked.release)
+	if <-done {
+		t.Fatal("stale generation CAS reported success")
+	}
+	if !state.persistence.retired.Load() {
+		t.Fatal("stale generation did not retire the persistence serializer")
+	}
+
+	state.mu.Lock()
+	_, stale := state.queries["stale"]
+	generation := state.generation
+	state.mu.Unlock()
+	if stale || generation != 1 {
+		t.Fatalf("stale candidate state = retained %t, generation %d", stale, generation)
+	}
+	if current := readPcacheTestMetadata(t, store, state.persistence.metadataKey); !bytes.Equal(current, newerEncoded) {
+		t.Fatal("stale candidate overwrote the newer persisted generation")
+	}
+}
+
+func TestPcachePersistenceDisableAndReenableRetiresBlockedWriter(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	server := &Server{config: Config{Store: store}}
+	const (
+		configDN            = "cn=pcache-disable-race"
+		enabledFingerprint  = "enabled-fingerprint"
+		disabledFingerprint = "disabled-fingerprint"
+	)
+	metadataKey := pcachePersistenceMetadataKey(configDN)
+
+	oldRuntime, oldDatabase, oldState := newPcachePrivateTestRuntime(t)
+	configurePcachePersistenceTestRuntime(
+		oldRuntime,
+		&oldDatabase,
+		oldState,
+		store,
+		configDN,
+		metadataKey,
+		enabledFingerprint,
+		true,
+	)
+	ensurePcacheTestRuntime(t, server, store, oldRuntime)
+	oldEpoch := oldState.persistence.epoch
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	oldState.persistence.store = blocked
+	oldDone := make(chan bool, 1)
+	go func() {
+		oldDone <- oldState.mutate(
+			context.Background(),
+			func(candidate *pcacheState) (bool, bool) {
+				candidate.generation++
+				candidate.sequence++
+				candidate.queries["stale-query"] = pcacheCachedQuery{
+					response: pcacheSearchResponse{
+						result: ldapwire.Result{Code: ldapwire.ResultSuccess},
+					},
+					replay: ldapwire.Message{Request: ldapwire.SearchRequest{
+						BaseDN: ldapBackendTestSuffix,
+						Scope:  directory.ScopeWholeSubtree,
+						Filter: directory.Filter{
+							Kind:      directory.FilterPresent,
+							Attribute: "objectClass",
+						},
+					}},
+					purgeAt:    time.Now().Add(time.Hour),
+					lastUsed:   candidate.sequence,
+					generation: candidate.generation,
+				}
+				candidate.binds["stale-bind"] = pcacheCachedBind{
+					passwordHash: []byte("stale-password-hash"),
+					purgeAt:      time.Now().Add(time.Hour),
+					lastUsed:     candidate.sequence,
+					generation:   candidate.generation,
+				}
+				candidate.entries++
+				return true, true
+			},
+		)
+	}()
+	<-blocked.started
+
+	disabledRuntime, disabledDatabase, disabledState := newPcachePrivateTestRuntime(t)
+	configurePcachePersistenceTestRuntime(
+		disabledRuntime,
+		&disabledDatabase,
+		disabledState,
+		store,
+		configDN,
+		metadataKey,
+		disabledFingerprint,
+		false,
+	)
+	ensurePcacheTestRuntime(t, server, store, disabledRuntime)
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		if _, err := reader.Metadata(metadataKey); !errors.Is(err, storage.ErrMetadataNotFound) {
+			return fmt.Errorf("disabled snapshot lookup = %v", err)
+		}
+		guardRaw, err := reader.Metadata(pcachePersistenceGuardKey(metadataKey))
+		if err != nil {
+			return err
+		}
+		guard, err := decodePcachePersistenceGuard(guardRaw)
+		if err != nil {
+			return err
+		}
+		if !guard.Retired || guard.Epoch == oldEpoch {
+			return fmt.Errorf("disabled persistence guard = %#v", guard)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reenabledRuntime, reenabledDatabase, reenabledState := newPcachePrivateTestRuntime(t)
+	configurePcachePersistenceTestRuntime(
+		reenabledRuntime,
+		&reenabledDatabase,
+		reenabledState,
+		store,
+		configDN,
+		metadataKey,
+		enabledFingerprint,
+		true,
+	)
+	ensurePcacheTestRuntime(t, server, store, reenabledRuntime)
+	newEpoch := reenabledState.persistence.epoch
+	if newEpoch == oldEpoch {
+		t.Fatal("re-enabled persistence reused the retired epoch")
+	}
+
+	close(blocked.release)
+	if <-oldDone {
+		t.Fatal("blocked writer revived a retired persistence incarnation")
+	}
+	if !oldState.persistence.retired.Load() {
+		t.Fatal("stale persistence serializer was not retired")
+	}
+	snapshot := readPcacheTestSnapshot(t, store, metadataKey)
+	if snapshot.PersistenceEpoch != newEpoch || snapshot.Generation != 0 ||
+		len(snapshot.Queries) != 0 || len(snapshot.Binds) != 0 {
+		t.Fatalf("re-enabled persistence snapshot = %#v", snapshot)
+	}
+
+	restartedRuntime, restartedDatabase, restartedState := newPcachePrivateTestRuntime(t)
+	restartedDatabase.pcache.configDNKey = configDN
+	restartedDatabase.pcache.fingerprint = enabledFingerprint
+	restartedDatabase.pcache.persist = true
+	restartedRuntime.databases[0] = restartedDatabase
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		return server.preparePcachePersistence(reader, restartedRuntime)
+	}); err != nil {
+		t.Fatalf("restart persistence: %v", err)
+	}
+	restartedState.mu.Lock()
+	restartedQueries := len(restartedState.queries)
+	restartedBinds := len(restartedState.binds)
+	restartedEpoch := restartedState.persistence.epoch
+	restartedState.mu.Unlock()
+	if restartedQueries != 0 || restartedBinds != 0 || restartedEpoch != newEpoch {
+		t.Fatalf(
+			"restarted state = %d queries, %d binds, epoch %q",
+			restartedQueries,
+			restartedBinds,
+			restartedEpoch,
+		)
+	}
+}
+
+func TestPcachePersistenceDetachedMutationDoesNotHoldStateLock(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/detached-cow",
+		fingerprint: "detached-cow",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "base", ldapBackendTestUserDN)
+
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan bool, 1)
+	go func() {
+		mutationDone <- state.mutate(
+			context.Background(),
+			func(candidate *pcacheState) (bool, bool) {
+				close(mutationStarted)
+				<-releaseMutation
+				candidate.generation++
+				return true, true
+			},
+		)
+	}()
+	<-mutationStarted
+
+	readDone := make(chan bool, 1)
+	go func() {
+		_, found, _ := state.lookup("base", state.clock(), false)
+		readDone <- found
+	}()
+	select {
+	case found := <-readDone:
+		if !found {
+			t.Fatal("detached mutation changed the committed read view")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("detached mutation callback held pcacheState.mu")
+	}
+	close(releaseMutation)
+	if !<-mutationDone {
+		t.Fatal("detached persistence mutation failed")
+	}
+}
+
+func TestPcachePersistentValidationInvalidationDoesNotBlockRead(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	_, _, state := newPcachePrivateTestRuntime(t)
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/async-invalidation",
+		fingerprint: "async-invalidation",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "invalid", ldapBackendTestUserDN)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		if _, found, refresh := state.lookupValidatedContext(
+			context.Background(),
+			"invalid",
+			state.clock(),
+			false,
+			func(pcacheSearchResponse) bool { return false },
+		); found || refresh != nil {
+			t.Errorf("invalid persistent query remained visible: found=%t", found)
+		}
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("persistent validation invalidation blocked its read")
+	}
+	<-blocked.started
+	state.mu.Lock()
+	_, retainedBeforeCommit := state.queries["invalid"]
+	state.mu.Unlock()
+	if !retainedBeforeCommit {
+		t.Fatal("uncommitted validation invalidation became visible")
+	}
+	close(blocked.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state.mu.Lock()
+		_, retained := state.queries["invalid"]
+		pending := len(state.invalidationPending)
+		state.mu.Unlock()
+		if !retained && pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("persistent validation invalidation did not commit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	snapshot := readPcacheTestSnapshot(t, store, state.persistence.metadataKey)
+	if snapshot.Generation != 2 || len(snapshot.Queries) != 0 {
+		t.Fatalf("persisted invalidation state = %#v", snapshot)
+	}
+}
+
+func TestPcachePrivatePersistentReadHidesExpiredQueriesWithoutStorage(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1_700_000_000, 0)
+	store := storage.NewMemory()
+	defer func() { _ = store.Close() }()
+	runtime, database, state := newPcachePrivateTestRuntime(t)
+	state.clock = func() time.Time { return now }
+	state.epoch = now
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: "pcache/private-expired",
+		fingerprint: "private-expired",
+		enabled:     true,
+	}
+	commitPcachePrivateTestQuery(t, state, "expired", ldapBackendTestUserDN)
+	now = now.Add(2 * time.Hour)
+
+	blocked := newPcacheBlockingMetadataStore(store, nil)
+	state.persistence.store = blocked
+	entries, ok := state.privateEntries(runtime, database, true)
+	if !ok || len(entries) != 0 {
+		t.Fatalf("expired private entries = %#v, available %t", entries, ok)
+	}
+	select {
+	case <-blocked.started:
+		t.Fatal("private read attempted persistent cleanup")
+	default:
+	}
+}
+
 func TestPcacheRefreshMaintainsPersistentQueryIdentifier(t *testing.T) {
 	t.Parallel()
 
@@ -685,6 +1293,42 @@ func newPcachePrivateTestRuntime(
 	return runtime, database, state
 }
 
+func configurePcachePersistenceTestRuntime(
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	state *pcacheState,
+	store storage.Store,
+	configDN string,
+	metadataKey string,
+	fingerprint string,
+	enabled bool,
+) {
+	database.pcache.configDNKey = configDN
+	database.pcache.fingerprint = fingerprint
+	database.pcache.persist = enabled
+	state.persistence = &pcachePersistence{
+		store:       store,
+		metadataKey: metadataKey,
+		fingerprint: fingerprint,
+		enabled:     enabled,
+	}
+	runtime.databases[0] = *database
+}
+
+func ensurePcacheTestRuntime(
+	t *testing.T,
+	server *Server,
+	store storage.Store,
+	runtime *runtimeState,
+) {
+	t.Helper()
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return server.ensurePcachePersistence(writer, runtime)
+	}); err != nil {
+		t.Fatalf("ensure pcache persistence: %v", err)
+	}
+}
+
 func commitPcachePrivateTestQuery(
 	t *testing.T,
 	state *pcacheState,
@@ -709,6 +1353,20 @@ func commitPcachePrivateTestQueryIfAccepted(
 	key string,
 	dns ...string,
 ) bool {
+	return commitPcachePrivateTestQueryWithContext(
+		context.Background(),
+		state,
+		key,
+		dns...,
+	)
+}
+
+func commitPcachePrivateTestQueryWithContext(
+	ctx context.Context,
+	state *pcacheState,
+	key string,
+	dns ...string,
+) bool {
 	items := make([]pcacheSearchItem, 0, len(dns))
 	for _, dn := range dns {
 		entry := directory.Entry{
@@ -726,7 +1384,8 @@ func commitPcachePrivateTestQueryIfAccepted(
 		Filter:     directory.Filter{Kind: directory.FilterPresent, Attribute: "objectClass"},
 		Attributes: []string{"uid"},
 	}
-	return state.commit(
+	return state.commitContext(
+		ctx,
 		key,
 		pcacheSearchResponse{
 			items:  items,
@@ -787,6 +1446,52 @@ type pcacheFailingMetadataStore struct {
 	err error
 }
 
+type pcacheBlockingMetadataStore struct {
+	storage.Store
+	started chan struct{}
+	release chan struct{}
+	fail    error
+
+	mu    sync.Mutex
+	calls int
+}
+
+func newPcacheBlockingMetadataStore(
+	store storage.Store,
+	fail error,
+) *pcacheBlockingMetadataStore {
+	return &pcacheBlockingMetadataStore{
+		Store:   store,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		fail:    fail,
+	}
+}
+
+func (store *pcacheBlockingMetadataStore) Update(
+	ctx context.Context,
+	update func(storage.Writer) error,
+) error {
+	store.mu.Lock()
+	store.calls++
+	call := store.calls
+	if call == 1 {
+		close(store.started)
+	}
+	store.mu.Unlock()
+	if call == 1 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-store.release:
+		}
+		if store.fail != nil {
+			return store.fail
+		}
+	}
+	return store.Store.Update(ctx, update)
+}
+
 func (store pcacheFailingMetadataStore) Update(
 	ctx context.Context,
 	update func(storage.Writer) error,
@@ -820,4 +1525,18 @@ func readPcacheTestMetadata(
 		t.Fatalf("read metadata %q: %v", key, err)
 	}
 	return value
+}
+
+func readPcacheTestSnapshot(
+	t *testing.T,
+	store storage.Store,
+	key string,
+) pcachePersistedSnapshot {
+	t.Helper()
+	raw := readPcacheTestMetadata(t, store, key)
+	var snapshot pcachePersistedSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatalf("decode persisted pcache snapshot: %v", err)
+	}
+	return snapshot
 }

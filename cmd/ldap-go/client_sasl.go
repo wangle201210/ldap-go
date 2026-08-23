@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/cipher"
+	"crypto/des" //nolint:gosec // RFC 2831 mandates DES and two-key 3DES for DIGEST-MD5.
 	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // DIGEST-MD5 is required for OpenLDAP CLI interoperability.
 	"crypto/rand"
@@ -35,14 +37,15 @@ import (
 )
 
 const (
-	ldapClientSASLMaxChallengeSize  = 64 << 10
-	ldapClientCRAMMaxChallengeSize  = 1024
-	ldapClientSCRAMMinIterations    = 4096
-	ldapClientSCRAMMaxIterations    = 10_000_000
-	ldapClientSCRAMMaxSaltSize      = 1024
-	ldapClientDigestMD5MaxBuffer    = 65536
-	ldapClientDigestMD5MaxRFCBuffer = 0xFFFFFF
-	ldapClientDigestMD5Overhead     = 4 + 10 + 2 + 4
+	ldapClientSASLMaxChallengeSize   = 64 << 10
+	ldapClientCRAMMaxChallengeSize   = 1024
+	ldapClientSCRAMMinIterations     = 4096
+	ldapClientSCRAMMaxIterations     = 10_000_000
+	ldapClientSCRAMMaxSaltSize       = 1024
+	ldapClientSCRAMTLSEndpointPrefix = "tls-server-end-point:"
+	ldapClientDigestMD5MaxBuffer     = 65536
+	ldapClientDigestMD5MaxRFCBuffer  = 0xFFFFFF
+	ldapClientDigestMD5Overhead      = 4 + 10 + 2 + 4
 )
 
 type ldapClientSASLResult struct {
@@ -66,19 +69,32 @@ const (
 	ldapClientDigestMD5RC440Cipher = "rc4-40"
 	ldapClientDigestMD5RC456Cipher = "rc4-56"
 	ldapClientDigestMD5RC4Cipher   = "rc4"
+	ldapClientDigestMD5DESCipher   = "des"
+	ldapClientDigestMD53DESCipher  = "3des"
+)
+
+type ldapClientDigestMD5CipherMode uint8
+
+const (
+	ldapClientDigestMD5CipherModeRC4 ldapClientDigestMD5CipherMode = iota
+	ldapClientDigestMD5CipherModeDES
+	ldapClientDigestMD5CipherMode3DES
 )
 
 type ldapClientDigestMD5Cipher struct {
 	name      string
 	ssf       uint32
 	keyPrefix int
+	mode      ldapClientDigestMD5CipherMode
 }
 
 func ldapClientDigestMD5Ciphers() []ldapClientDigestMD5Cipher {
 	return []ldapClientDigestMD5Cipher{
-		{name: ldapClientDigestMD5RC440Cipher, ssf: 40, keyPrefix: 5},
-		{name: ldapClientDigestMD5RC456Cipher, ssf: 56, keyPrefix: 7},
-		{name: ldapClientDigestMD5RC4Cipher, ssf: 128, keyPrefix: md5.Size},
+		{name: ldapClientDigestMD5RC440Cipher, ssf: 40, keyPrefix: 5, mode: ldapClientDigestMD5CipherModeRC4},
+		{name: ldapClientDigestMD5RC456Cipher, ssf: 56, keyPrefix: 7, mode: ldapClientDigestMD5CipherModeRC4},
+		{name: ldapClientDigestMD5RC4Cipher, ssf: 128, keyPrefix: md5.Size, mode: ldapClientDigestMD5CipherModeRC4},
+		{name: ldapClientDigestMD5DESCipher, ssf: 55, keyPrefix: md5.Size, mode: ldapClientDigestMD5CipherModeDES},
+		{name: ldapClientDigestMD53DESCipher, ssf: 112, keyPrefix: md5.Size, mode: ldapClientDigestMD5CipherMode3DES},
 	}
 }
 
@@ -155,6 +171,47 @@ func (connection *ldapClientSASLSwitchConnection) gssapiChannelBinding() ([]byte
 		return nil, errors.New("TLS server certificate is unavailable for GSSAPI channel binding")
 	}
 	return saslkrb5.TLSServerEndpoint(state.PeerCertificates[0])
+}
+
+func (connection *ldapClientSASLSwitchConnection) scramChannelBinding() (
+	scram.ChannelBinding,
+	error,
+) {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	secured, ok := connection.connection.(interface {
+		ConnectionState() tls.ConnectionState
+	})
+	if !ok {
+		return scram.ChannelBinding{}, errors.New(
+			"SCRAM-PLUS requires TLS with a verified server certificate",
+		)
+	}
+	state := secured.ConnectionState()
+	if !state.HandshakeComplete || len(state.PeerCertificates) == 0 ||
+		len(state.VerifiedChains) == 0 {
+		return scram.ChannelBinding{}, errors.New(
+			"SCRAM-PLUS requires TLS with a verified server certificate",
+		)
+	}
+	applicationData, err := saslkrb5.TLSServerEndpoint(state.PeerCertificates[0])
+	if err != nil {
+		return scram.ChannelBinding{}, fmt.Errorf(
+			"compute SCRAM tls-server-end-point channel binding: %w",
+			err,
+		)
+	}
+	defer clear(applicationData)
+	prefix := []byte(ldapClientSCRAMTLSEndpointPrefix)
+	if !bytes.HasPrefix(applicationData, prefix) || len(applicationData) == len(prefix) {
+		return scram.ChannelBinding{}, errors.New(
+			"TLS server certificate produced an invalid SCRAM channel binding",
+		)
+	}
+	return scram.ChannelBinding{
+		Type: scram.ChannelBindingTLSServerEndpoint,
+		Data: bytes.Clone(applicationData[len(prefix):]),
+	}, nil
 }
 
 func (connection *ldapClientSASLSwitchConnection) installDigestMD5Security(
@@ -241,12 +298,17 @@ func (connection *ldapClientSASLSwitchConnection) installGSSAPISecurity(
 type ldapClientDigestMD5PrivacyConnection struct {
 	net.Conn
 
-	sendKey    [md5.Size]byte
-	receiveKey [md5.Size]byte
-	sendCipher *rc4.Cipher
-	recvCipher *rc4.Cipher
-	maxSend    uint32
-	maxReceive uint32
+	sendKey         [md5.Size]byte
+	receiveKey      [md5.Size]byte
+	sendCipher      *rc4.Cipher
+	recvCipher      *rc4.Cipher
+	sendBlockKey    [des.BlockSize * 3]byte
+	receiveBlockKey [des.BlockSize * 3]byte
+	blockKeySize    int
+	sendIV          [des.BlockSize]byte
+	receiveIV       [des.BlockSize]byte
+	maxSend         uint32
+	maxReceive      uint32
 
 	writeMu     sync.Mutex
 	readMu      sync.Mutex
@@ -280,9 +342,16 @@ func newLDAPClientDigestMD5PrivacyConnection(
 	if localMaxBuffer == 0 {
 		localMaxBuffer = ldapClientDigestMD5MaxBuffer
 	}
-	const cyrusPrivacyOverhead = 25
-	if peerMaxBuffer <= cyrusPrivacyOverhead ||
-		localMaxBuffer <= ldapClientDigestMD5Overhead ||
+	privacyOverhead := uint32(25)
+	if cipher.mode != ldapClientDigestMD5CipherModeRC4 {
+		privacyOverhead = 29
+	}
+	invalidReceiveBuffer := localMaxBuffer <= ldapClientDigestMD5Overhead
+	if cipher.mode != ldapClientDigestMD5CipherModeRC4 {
+		invalidReceiveBuffer = localMaxBuffer < 4+2*des.BlockSize+2+4
+	}
+	if peerMaxBuffer <= privacyOverhead ||
+		invalidReceiveBuffer ||
 		peerMaxBuffer > ldapClientDigestMD5MaxRFCBuffer ||
 		localMaxBuffer > ldapClientDigestMD5MaxRFCBuffer {
 		return nil, errors.New("DIGEST-MD5 security maxbuf is invalid")
@@ -304,23 +373,41 @@ func newLDAPClientDigestMD5PrivacyConnection(
 		clear(sendSeal[:])
 		return nil, err
 	}
-	sendCipher, err := rc4.NewCipher(sendSeal[:]) //nolint:gosec // Required by RFC 2831.
-	clear(sendSeal[:])
-	if err != nil {
-		clear(receiveSeal[:])
-		return nil, err
-	}
-	receiveCipher, err := rc4.NewCipher(receiveSeal[:]) //nolint:gosec // Required by RFC 2831.
-	clear(receiveSeal[:])
-	if err != nil {
-		return nil, err
-	}
 	layer := &ldapClientDigestMD5PrivacyConnection{
 		Conn:       connection,
-		sendCipher: sendCipher,
-		recvCipher: receiveCipher,
-		maxSend:    peerMaxBuffer - cyrusPrivacyOverhead,
+		maxSend:    peerMaxBuffer - privacyOverhead,
 		maxReceive: localMaxBuffer - 4,
+	}
+	switch cipher.mode {
+	case ldapClientDigestMD5CipherModeRC4:
+		layer.sendCipher, err = rc4.NewCipher(sendSeal[:]) //nolint:gosec // Required by RFC 2831.
+		if err == nil {
+			layer.recvCipher, err = rc4.NewCipher(receiveSeal[:]) //nolint:gosec // Required by RFC 2831.
+		}
+	case ldapClientDigestMD5CipherModeDES, ldapClientDigestMD5CipherMode3DES:
+		layer.blockKeySize = ldapClientDigestMD5BlockKey(
+			layer.sendBlockKey[:],
+			layer.sendIV[:],
+			sendSeal[:],
+			cipher.mode == ldapClientDigestMD5CipherMode3DES,
+		)
+		_ = ldapClientDigestMD5BlockKey(
+			layer.receiveBlockKey[:],
+			layer.receiveIV[:],
+			receiveSeal[:],
+			cipher.mode == ldapClientDigestMD5CipherMode3DES,
+		)
+	default:
+		err = errors.New("DIGEST-MD5 confidentiality cipher is not supported")
+	}
+	clear(sendSeal[:])
+	clear(receiveSeal[:])
+	if err != nil {
+		clear(layer.sendBlockKey[:])
+		clear(layer.receiveBlockKey[:])
+		clear(layer.sendIV[:])
+		clear(layer.receiveIV[:])
+		return nil, err
 	}
 	layer.sendKey = ldapClientDigestMD5SigningKey(
 		sessionKey,
@@ -331,6 +418,63 @@ func newLDAPClientDigestMD5PrivacyConnection(
 		ldapClientDigestMD5SigningServerClient,
 	)
 	return layer, nil
+}
+
+func ldapClientDigestMD5BlockKey(
+	destination,
+	iv,
+	sealingKey []byte,
+	triple bool,
+) int {
+	first := ldapClientDigestMD5SlideDESKey(sealingKey[:7])
+	copy(destination, first[:])
+	clear(first[:])
+	copy(iv, sealingKey[8:])
+	if !triple {
+		return des.BlockSize
+	}
+	second := ldapClientDigestMD5SlideDESKey(sealingKey[7:14])
+	copy(destination[des.BlockSize:], second[:])
+	copy(destination[2*des.BlockSize:], destination[:des.BlockSize])
+	clear(second[:])
+	return des.BlockSize * 3
+}
+
+func ldapClientDigestMD5SlideDESKey(value []byte) [des.BlockSize]byte {
+	return [des.BlockSize]byte{
+		value[0],
+		value[0]<<7 | value[1]>>1,
+		value[1]<<6 | value[2]>>2,
+		value[2]<<5 | value[3]>>3,
+		value[3]<<4 | value[4]>>4,
+		value[4]<<3 | value[5]>>5,
+		value[5]<<2 | value[6]>>6,
+		value[6] << 1,
+	}
+}
+
+func ldapClientDigestMD5CBC(
+	key []byte,
+	iv *[des.BlockSize]byte,
+	value []byte,
+	encrypt bool,
+) {
+	var block cipher.Block
+	if len(key) == des.BlockSize {
+		block, _ = des.NewCipher(key) //nolint:gosec // Required by RFC 2831.
+	} else {
+		block, _ = des.NewTripleDESCipher(key) //nolint:gosec // RFC 2831 specifies EDE2 as K1,K2,K1.
+	}
+	if encrypt {
+		cipher.NewCBCEncrypter(block, iv[:]).CryptBlocks(value, value)
+		copy(iv[:], value[len(value)-des.BlockSize:])
+		return
+	}
+	var nextIV [des.BlockSize]byte
+	copy(nextIV[:], value[len(value)-des.BlockSize:])
+	cipher.NewCBCDecrypter(block, iv[:]).CryptBlocks(value, value)
+	copy(iv[:], nextIV[:])
+	clear(nextIV[:])
 }
 
 func ldapClientDigestMD5CipherByName(name string) (ldapClientDigestMD5Cipher, bool) {
@@ -389,16 +533,35 @@ func (connection *ldapClientDigestMD5PrivacyConnection) encodeDigestMD5Frame(
 	message []byte,
 	sequence uint32,
 ) []byte {
-	encryptedLength := len(message) + ldapClientDigestMD5MACSize
+	paddingLength := 0
+	if connection.blockKeySize != 0 {
+		paddingLength = des.BlockSize - (len(message)+ldapClientDigestMD5MACSize)%des.BlockSize
+	}
+	encryptedLength := len(message) + paddingLength + ldapClientDigestMD5MACSize
 	payloadLength := encryptedLength + 6
 	frame := make([]byte, 4+payloadLength)
 	binary.BigEndian.PutUint32(frame[:4], uint32(payloadLength))
 	plaintext := make([]byte, encryptedLength)
 	copy(plaintext, message)
+	if paddingLength != 0 {
+		for index := len(message); index < len(message)+paddingLength; index++ {
+			plaintext[index] = byte(paddingLength)
+		}
+	}
 	mac := ldapClientDigestMD5MAC(connection.sendKey[:], sequence, message)
-	copy(plaintext[len(message):], mac)
+	copy(plaintext[len(message)+paddingLength:], mac)
 	clear(mac)
-	connection.sendCipher.XORKeyStream(frame[4:4+encryptedLength], plaintext)
+	copy(frame[4:4+encryptedLength], plaintext)
+	if connection.blockKeySize != 0 {
+		ldapClientDigestMD5CBC(
+			connection.sendBlockKey[:connection.blockKeySize],
+			&connection.sendIV,
+			frame[4:4+encryptedLength],
+			true,
+		)
+	} else {
+		connection.sendCipher.XORKeyStream(frame[4:4+encryptedLength], plaintext)
+	}
 	clear(plaintext)
 	offset := 4 + encryptedLength
 	binary.BigEndian.PutUint16(frame[offset:offset+2], ldapClientDigestMD5MessageType)
@@ -443,6 +606,11 @@ func (connection *ldapClientDigestMD5PrivacyConnection) Close() error {
 			connection.recvCipher.Reset()
 			connection.recvCipher = nil
 		}
+		clear(connection.sendBlockKey[:])
+		clear(connection.receiveBlockKey[:])
+		connection.blockKeySize = 0
+		clear(connection.sendIV[:])
+		clear(connection.receiveIV[:])
 		clear(connection.readPending)
 		connection.readPending = nil
 		connection.readMu.Unlock()
@@ -479,12 +647,42 @@ func (connection *ldapClientDigestMD5PrivacyConnection) readDigestMD5Frame() ([]
 		clear(payload)
 		return nil, fmt.Errorf("%w: received %d, expected %d", errLDAPClientDigestMD5Sequence, sequence, connection.receiveSeq)
 	}
+	encryptedLength := typeOffset
+	if connection.blockKeySize != 0 &&
+		(encryptedLength < 2*des.BlockSize || encryptedLength%des.BlockSize != 0) {
+		clear(payload)
+		return nil, fmt.Errorf(
+			"%w: encrypted payload length %d",
+			errLDAPClientDigestMD5Frame,
+			encryptedLength,
+		)
+	}
 	plaintext := make([]byte, typeOffset)
-	connection.recvCipher.XORKeyStream(plaintext, payload[:typeOffset])
+	copy(plaintext, payload[:typeOffset])
+	if connection.blockKeySize != 0 {
+		ldapClientDigestMD5CBC(
+			connection.receiveBlockKey[:connection.blockKeySize],
+			&connection.receiveIV,
+			plaintext,
+			false,
+		)
+	} else {
+		connection.recvCipher.XORKeyStream(plaintext, payload[:typeOffset])
+	}
 	clear(payload)
 	messageLength := len(plaintext) - ldapClientDigestMD5MACSize
+	validPadding := true
+	if connection.blockKeySize != 0 {
+		paddingLength, valid := ldapClientDigestMD5CBCPaddingLength(plaintext)
+		validPadding = valid
+		if valid {
+			messageLength -= paddingLength
+		}
+	}
 	expected := ldapClientDigestMD5MAC(connection.receiveKey[:], sequence, plaintext[:messageLength])
-	valid := subtle.ConstantTimeCompare(expected, plaintext[messageLength:]) == 1
+	receivedMAC := plaintext[len(plaintext)-ldapClientDigestMD5MACSize:]
+	validMAC := subtle.ConstantTimeCompare(expected, receivedMAC) == 1
+	valid := validPadding && validMAC
 	clear(expected)
 	if !valid {
 		clear(plaintext)
@@ -494,6 +692,27 @@ func (connection *ldapClientDigestMD5PrivacyConnection) readDigestMD5Frame() ([]
 	clear(plaintext)
 	connection.receiveSeq++
 	return message, nil
+}
+
+func ldapClientDigestMD5CBCPaddingLength(plaintext []byte) (int, bool) {
+	paddingBytes := len(plaintext) - ldapClientDigestMD5MACSize
+	if paddingBytes < 1 {
+		return 0, false
+	}
+	paddingLength := int(plaintext[len(plaintext)-ldapClientDigestMD5MACSize-1])
+	valid := subtle.ConstantTimeLessOrEq(1, paddingLength) &
+		subtle.ConstantTimeLessOrEq(paddingLength, des.BlockSize) &
+		subtle.ConstantTimeLessOrEq(paddingLength, paddingBytes)
+	checked := min(des.BlockSize, paddingBytes)
+	for offset := 1; offset <= checked; offset++ {
+		required := subtle.ConstantTimeLessOrEq(offset, paddingLength)
+		equal := subtle.ConstantTimeByteEq(
+			plaintext[len(plaintext)-ldapClientDigestMD5MACSize-offset],
+			byte(paddingLength),
+		)
+		valid &= subtle.ConstantTimeSelect(required, equal, 1)
+	}
+	return paddingLength, valid == 1
 }
 
 type ldapClientDigestMD5IntegrityConnection struct {
@@ -826,7 +1045,8 @@ func (options *ldapClientOptions) validateSASL(
 		if passwordSources == 0 {
 			return errors.New("SASL CRAM-MD5 requires one of -w, -W, or -y")
 		}
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		if options.saslAuthentication == "" {
 			return fmt.Errorf(
 				"SASL %s requires a non-empty -U authentication identity",
@@ -841,6 +1061,15 @@ func (options *ldapClientOptions) validateSASL(
 				"SASL %s requires one of -w, -W, or -y",
 				options.saslMechanism,
 			)
+		}
+		if ldapClientSCRAMIsPlus(options.saslMechanism) {
+			parsed, err := url.Parse(options.uri)
+			if err != nil || (!strings.EqualFold(parsed.Scheme, "ldaps") &&
+				!options.tryStartTLS && !options.requireStartTLS) {
+				return errors.New(
+					"SCRAM-PLUS requires verified TLS; use ldaps:// or StartTLS",
+				)
+			}
 		}
 	case "EXTERNAL":
 		if flagWasSet(flags, "U") {
@@ -873,12 +1102,8 @@ func (options *ldapClientOptions) validateSASL(
 		}
 		options.gssapiChannelBinding = channelBinding
 	default:
-		if strings.HasPrefix(options.saslMechanism, "SCRAM-") &&
-			strings.HasSuffix(options.saslMechanism, "-PLUS") {
-			return errors.New("SCRAM-PLUS mechanisms are not supported by the auth-only client")
-		}
 		return fmt.Errorf(
-			"unsupported SASL mechanism %q; supported mechanisms are PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, SCRAM-SHA-1, SCRAM-SHA-256, SCRAM-SHA-512, and EXTERNAL",
+			"unsupported SASL mechanism %q; supported mechanisms are PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, SCRAM-SHA-1, SCRAM-SHA-256, SCRAM-SHA-512, their SCRAM-PLUS variants, and EXTERNAL",
 			options.saslMechanism,
 		)
 	}
@@ -1062,7 +1287,8 @@ func (options *ldapClientOptions) bindSASL(
 		return options.bindSASLDigestMD5(connection, host, password, messageID)
 	case "CRAM-MD5":
 		return options.bindSASLCRAMMD5(connection, password, messageID)
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		return options.bindSASLSCRAM(connection, password, messageID)
 	case "EXTERNAL":
 		return options.bindSASLExternal(connection, messageID)
@@ -1240,7 +1466,21 @@ func (options *ldapClientOptions) bindSASLSCRAM(
 		return fmt.Errorf("SASL %s credentials are not valid SASLprep values", options.saslMechanism)
 	}
 	client.WithMinIterations(ldapClientSCRAMMinIterations)
-	conversation := client.NewConversation()
+	var conversation *scram.ClientConversation
+	if ldapClientSCRAMIsPlus(options.saslMechanism) {
+		switchable, ok := connection.(*ldapClientSASLSwitchConnection)
+		if !ok {
+			return errors.New("SCRAM-PLUS requires a switchable TLS connection")
+		}
+		binding, err := switchable.scramChannelBinding()
+		if err != nil {
+			return err
+		}
+		defer clear(binding.Data)
+		conversation = client.NewConversationWithChannelBinding(binding)
+	} else {
+		conversation = client.NewConversation()
+	}
 	clientFirst, err := conversation.Step("")
 	if err != nil {
 		return fmt.Errorf("initialize SASL %s conversation", options.saslMechanism)
@@ -1330,7 +1570,7 @@ func (options *ldapClientOptions) bindSASLSCRAM(
 }
 
 func ldapClientSCRAMGenerator(mechanism string) (scram.HashGeneratorFcn, bool) {
-	switch mechanism {
+	switch strings.TrimSuffix(mechanism, "-PLUS") {
 	case "SCRAM-SHA-1":
 		return scram.SHA1, true
 	case "SCRAM-SHA-256":
@@ -1342,9 +1582,15 @@ func ldapClientSCRAMGenerator(mechanism string) (scram.HashGeneratorFcn, bool) {
 	}
 }
 
+func ldapClientSCRAMIsPlus(mechanism string) bool {
+	return strings.HasSuffix(mechanism, "-PLUS")
+}
+
 func ldapClientSCRAMClientNonce(clientFirst string) (string, error) {
 	fields := strings.Split(clientFirst, ",")
-	if len(fields) != 4 || fields[0] != "n" ||
+	validGS2Flag := fields[0] == "n" || fields[0] == "y" ||
+		fields[0] == "p=tls-server-end-point"
+	if len(fields) != 4 || !validGS2Flag ||
 		(fields[1] != "" && !strings.HasPrefix(fields[1], "a=")) ||
 		!strings.HasPrefix(fields[2], "n=") || !strings.HasPrefix(fields[3], "r=") {
 		return "", errors.New("SCRAM client-first message is malformed")
@@ -1795,22 +2041,13 @@ func (options *ldapClientOptions) digestMD5Response(
 	if canInstallSecurity && properties.maxBufferSize != 0 &&
 		ldapClientDigestMD5ListContains(offeredQOP, "auth-conf") {
 		offeredCiphers := directives["cipher"]
-		for index := len(ldapClientDigestMD5Ciphers()) - 1; index >= 0; index-- {
-			cipher := ldapClientDigestMD5Ciphers()[index]
+		for _, cipher := range ldapClientDigestMD5Ciphers() {
 			if cipher.ssf >= properties.minimumSSF && cipher.ssf <= properties.maximumSSF &&
-				ldapClientDigestMD5ListContains(offeredCiphers, cipher.name) {
+				ldapClientDigestMD5ListContains(offeredCiphers, cipher.name) &&
+				(qop == "" || cipher.ssf > selectedCipher.ssf) {
 				selectedCipher = cipher
 				qop = "auth-conf"
-				break
 			}
-		}
-		if qop == "" &&
-			(ldapClientDigestMD5ListContains(offeredCiphers, "des") ||
-				ldapClientDigestMD5ListContains(offeredCiphers, "3des")) &&
-			properties.minimumSSF > 1 {
-			return nil, nil, nil, errors.New(
-				"DIGEST-MD5 server only offers unsupported DES confidentiality ciphers",
-			)
 		}
 	}
 	if qop == "" && canInstallSecurity && properties.maxBufferSize != 0 &&

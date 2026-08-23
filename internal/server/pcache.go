@@ -84,15 +84,17 @@ type pcacheBindRuntimeConfiguration struct {
 }
 
 type pcacheState struct {
-	mu          sync.Mutex
-	epoch       time.Time
-	clock       func() time.Time
-	queries     map[string]pcacheCachedQuery
-	binds       map[string]pcacheCachedBind
-	entries     int
-	sequence    uint64
-	generation  uint64
-	persistence *pcachePersistence
+	mu                  sync.Mutex
+	epoch               time.Time
+	clock               func() time.Time
+	queries             map[string]pcacheCachedQuery
+	binds               map[string]pcacheCachedBind
+	entries             int
+	sequence            uint64
+	generation          uint64
+	persistence         *pcachePersistence
+	purgePending        bool
+	invalidationPending map[string]struct{}
 }
 
 type pcacheCachedBind struct {
@@ -884,7 +886,8 @@ func (server *Server) tryPcacheBind(
 		message,
 	)
 	if attempt.hasResult && attempt.result.Code == ldapwire.ResultSuccess {
-		database.pcache.state.rememberBind(
+		database.pcache.state.rememberBindContext(
+			ctx,
 			key,
 			request.Authentication.Simple,
 			database.pcache.state.clock(),
@@ -968,14 +971,21 @@ func (server *Server) tryPcacheSearch(
 	forwarded.Controls = pcacheWithoutPagingControls(forwarded.Controls)
 
 	now := database.pcache.state.clock()
-	lookup := database.pcache.state.lookup
+	lookup := func(
+		key string,
+		now time.Time,
+		offline bool,
+	) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
+		return database.pcache.state.lookupContext(ctx, key, now, offline)
+	}
 	if database.pcache.validate {
 		lookup = func(
 			key string,
 			now time.Time,
 			offline bool,
 		) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
-			return database.pcache.state.lookupValidated(
+			return database.pcache.state.lookupValidatedContext(
+				ctx,
 				key,
 				now,
 				offline,
@@ -1048,7 +1058,8 @@ func (server *Server) tryPcacheSearch(
 			ttl = match.template.negativeTTL
 		}
 		if ttl > 0 {
-			database.pcache.state.commit(
+			database.pcache.state.commitContext(
+				ctx,
 				match.key,
 				response,
 				forwarded,
@@ -1110,7 +1121,7 @@ func (server *Server) refreshPcacheSearch(
 		response,
 		database.pcache.validate,
 	) {
-		if database.pcache.state.invalidateRefresh(refresh) {
+		if database.pcache.state.invalidateRefreshContext(ctx, refresh) {
 			// OpenLDAP returns provider entries even when validation makes the
 			// query non-cacheable. The synchronous TTR path does the same for
 			// this request while atomically discarding the stale cached query.
@@ -1118,7 +1129,7 @@ func (server *Server) refreshPcacheSearch(
 		}
 		return pcacheSearchResponse{}, false
 	}
-	if !database.pcache.state.completeRefresh(refresh, response, now) {
+	if !database.pcache.state.completeRefreshContext(ctx, refresh, response, now) {
 		return pcacheSearchResponse{}, false
 	}
 	return response, true
@@ -1966,7 +1977,16 @@ func (state *pcacheState) lookup(
 	now time.Time,
 	offline bool,
 ) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
-	return state.lookupValidated(key, now, offline, nil)
+	return state.lookupContext(context.Background(), key, now, offline)
+}
+
+func (state *pcacheState) lookupContext(
+	ctx context.Context,
+	key string,
+	now time.Time,
+	offline bool,
+) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
+	return state.lookupValidatedContext(ctx, key, now, offline, nil)
 }
 
 func (state *pcacheState) lookupValidated(
@@ -1975,28 +1995,51 @@ func (state *pcacheState) lookupValidated(
 	offline bool,
 	validate func(pcacheSearchResponse) bool,
 ) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
+	return state.lookupValidatedContext(
+		context.Background(),
+		key,
+		now,
+		offline,
+		validate,
+	)
+}
+
+func (state *pcacheState) lookupValidatedContext(
+	ctx context.Context,
+	key string,
+	now time.Time,
+	offline bool,
+	validate func(pcacheSearchResponse) bool,
+) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	var backup pcacheStateBackup
-	if !offline {
-		backup = state.backupLocked()
-		if state.purgeExpired(now) {
-			if !state.finishMutationLocked(backup) {
-				return pcacheSearchResponse{}, false, nil
-			}
-		} else {
-			clearPcacheBackup(backup)
-		}
+	persistent := state.persistence != nil && state.persistence.enabled &&
+		state.persistence.store != nil
+	if !offline && !persistent {
+		state.purgeExpired(now)
 	}
 	query, found := state.queries[key]
 	if !found {
 		return pcacheSearchResponse{}, false, nil
 	}
+	if !offline && !now.Before(query.purgeAt) {
+		if persistent {
+			state.schedulePcachePurgeLocked(ctx, now)
+		}
+		return pcacheSearchResponse{}, false, nil
+	}
 	if validate != nil && !validate(query.response) {
-		backup := state.backupLocked()
-		state.removeQueryLocked(key, query)
-		state.generation++
-		state.finishMutationLocked(backup)
+		if persistent {
+			state.schedulePcacheInvalidationLocked(
+				ctx,
+				key,
+				query.generation,
+				state.generation,
+			)
+		} else {
+			state.removeQueryLocked(key, query)
+			state.generation++
+		}
 		return pcacheSearchResponse{}, false, nil
 	}
 	state.sequence++
@@ -2030,7 +2073,75 @@ func (state *pcacheState) lookupValidated(
 	return clonePcacheSearchResponse(query.response), true, refresh
 }
 
+func (state *pcacheState) schedulePcachePurgeLocked(
+	ctx context.Context,
+	now time.Time,
+) {
+	if state.purgePending {
+		return
+	}
+	state.purgePending = true
+	go func() {
+		state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+			return candidate.purgeExpired(now), true
+		})
+		state.mu.Lock()
+		state.purgePending = false
+		state.mu.Unlock()
+	}()
+}
+
+func (state *pcacheState) schedulePcacheInvalidationLocked(
+	ctx context.Context,
+	key string,
+	queryGeneration uint64,
+	stateGeneration uint64,
+) {
+	if state.invalidationPending == nil {
+		state.invalidationPending = make(map[string]struct{})
+	}
+	if _, pending := state.invalidationPending[key]; pending {
+		return
+	}
+	state.invalidationPending[key] = struct{}{}
+	go func() {
+		state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+			query, found := candidate.queries[key]
+			if !found || query.generation != queryGeneration ||
+				candidate.generation != stateGeneration {
+				return false, true
+			}
+			candidate.removeQueryLocked(key, query)
+			candidate.generation++
+			return true, true
+		})
+		state.mu.Lock()
+		delete(state.invalidationPending, key)
+		state.mu.Unlock()
+	}()
+}
+
 func (state *pcacheState) rememberBind(
+	key string,
+	password []byte,
+	now time.Time,
+	ttl time.Duration,
+	maxEntries,
+	maxQueries int,
+) bool {
+	return state.rememberBindContext(
+		context.Background(),
+		key,
+		password,
+		now,
+		ttl,
+		maxEntries,
+		maxQueries,
+	)
+}
+
+func (state *pcacheState) rememberBindContext(
+	ctx context.Context,
 	key string,
 	password []byte,
 	now time.Time,
@@ -2050,44 +2161,40 @@ func (state *pcacheState) rememberBind(
 	if err != nil {
 		return false
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	state.purgeExpired(now)
-	if existing, found := state.binds[key]; found {
-		clear(existing.passwordHash)
-		state.sequence++
-		state.generation++
-		state.binds[key] = pcacheCachedBind{
-			passwordHash: passwordHash,
+	defer clear(passwordHash)
+	return state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		candidate.purgeExpired(now)
+		if existing, found := candidate.binds[key]; found {
+			clear(existing.passwordHash)
+			candidate.sequence++
+			candidate.generation++
+			candidate.binds[key] = pcacheCachedBind{
+				passwordHash: bytes.Clone(passwordHash),
+				purgeAt:      now.Add(ttl),
+				lastUsed:     candidate.sequence,
+				generation:   candidate.generation,
+			}
+			return true, true
+		}
+		if len(candidate.queries)+len(candidate.binds) >= maxQueries {
+			return false, false
+		}
+		for candidate.entries > maxEntries {
+			if !candidate.evictLeastRecentlyUsed() {
+				return false, false
+			}
+		}
+		candidate.sequence++
+		candidate.generation++
+		candidate.binds[key] = pcacheCachedBind{
+			passwordHash: bytes.Clone(passwordHash),
 			purgeAt:      now.Add(ttl),
-			lastUsed:     state.sequence,
-			generation:   state.generation,
+			lastUsed:     candidate.sequence,
+			generation:   candidate.generation,
 		}
-		return state.finishMutationLocked(backup)
-	}
-	if len(state.queries)+len(state.binds) >= maxQueries {
-		clear(passwordHash)
-		state.restoreBackupLocked(backup)
-		return false
-	}
-	for state.entries > maxEntries {
-		if !state.evictLeastRecentlyUsed() {
-			clear(passwordHash)
-			state.restoreBackupLocked(backup)
-			return false
-		}
-	}
-	state.sequence++
-	state.generation++
-	state.binds[key] = pcacheCachedBind{
-		passwordHash: passwordHash,
-		purgeAt:      now.Add(ttl),
-		lastUsed:     state.sequence,
-		generation:   state.generation,
-	}
-	state.entries++
-	return state.finishMutationLocked(backup)
+		candidate.entries++
+		return true, true
+	})
 }
 
 func (state *pcacheState) lookupBind(
@@ -2100,11 +2207,13 @@ func (state *pcacheState) lookupBind(
 		return false
 	}
 	state.mu.Lock()
-	if !offline {
+	persistent := state.persistence != nil && state.persistence.enabled &&
+		state.persistence.store != nil
+	if !offline && !persistent {
 		state.purgeExpired(now)
 	}
 	cached, found := state.binds[key]
-	if !found {
+	if !found || (!offline && !now.Before(cached.purgeAt)) {
 		state.mu.Unlock()
 		return false
 	}
@@ -2135,19 +2244,21 @@ func (state *pcacheState) clearBinds() {
 	if state == nil {
 		return
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	for key, bind := range state.binds {
-		clear(bind.passwordHash)
-		delete(state.binds, key)
-		state.entries--
-	}
-	if state.entries < 0 {
-		state.entries = 0
-	}
-	state.generation++
-	state.finishMutationLocked(backup)
+	state.mutate(context.Background(), func(candidate *pcacheState) (bool, bool) {
+		if len(candidate.binds) == 0 {
+			return false, true
+		}
+		for key, bind := range candidate.binds {
+			clear(bind.passwordHash)
+			delete(candidate.binds, key)
+			candidate.entries--
+		}
+		if candidate.entries < 0 {
+			candidate.entries = 0
+		}
+		candidate.generation++
+		return true, true
+	})
 }
 
 func (state *pcacheState) commit(
@@ -2161,6 +2272,33 @@ func (state *pcacheState) commit(
 	maxQueries int,
 	offline bool,
 ) bool {
+	return state.commitContext(
+		context.Background(),
+		key,
+		response,
+		replay,
+		remote,
+		now,
+		policy,
+		maxEntries,
+		maxQueries,
+		offline,
+	)
+}
+
+func (state *pcacheState) commitContext(
+	ctx context.Context,
+	key string,
+	response pcacheSearchResponse,
+	replay ldapwire.Message,
+	remote pcacheRemoteContext,
+	now time.Time,
+	policy pcacheRefreshPolicy,
+	maxEntries int,
+	maxQueries int,
+	offline bool,
+) bool {
+	defer clear(remote.bindCredentials)
 	entries := response.entryCount()
 	ttl := policy.positiveTTL
 	if entries == 0 {
@@ -2169,49 +2307,45 @@ func (state *pcacheState) commit(
 	if ttl <= 0 {
 		return false
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	if !offline {
-		state.purgeExpired(now)
-	}
-	if _, duplicate := state.queries[key]; duplicate {
-		state.restoreBackupLocked(backup)
-		return false
-	}
-	if maxQueries <= 0 || len(state.queries)+len(state.binds) >= maxQueries {
-		state.restoreBackupLocked(backup)
-		return false
-	}
-	for index := 0; index < entries; index++ {
-		for state.entries > maxEntries {
-			if !state.evictLeastRecentlyUsed() {
-				state.restoreBackupLocked(backup)
-				return false
-			}
+	return state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		if !offline {
+			candidate.purgeExpired(now)
 		}
-		state.entries++
-	}
-	state.sequence++
-	state.generation++
-	query := pcacheCachedQuery{
-		identifier: newPcacheQueryIdentifier(entries),
-		attrset:    policy.attrset,
-		response:   clonePcacheSearchResponse(response),
-		replay:     clonePcacheMessage(replay),
-		remote:     clonePcacheRemoteContext(remote),
-		policy:     policy,
-		purgeAt:    state.expirationTime(now, ttl, policy.consistencyPeriod),
-		entries:    entries,
-		lastUsed:   state.sequence,
-		generation: state.generation,
-		referenced: true,
-	}
-	if policy.ttr > 0 {
-		query.refreshAt = now.Add(policy.ttr)
-	}
-	state.queries[key] = query
-	return state.finishMutationLocked(backup)
+		if _, duplicate := candidate.queries[key]; duplicate {
+			return false, false
+		}
+		if maxQueries <= 0 || len(candidate.queries)+len(candidate.binds) >= maxQueries {
+			return false, false
+		}
+		for index := 0; index < entries; index++ {
+			for candidate.entries > maxEntries {
+				if !candidate.evictLeastRecentlyUsed() {
+					return false, false
+				}
+			}
+			candidate.entries++
+		}
+		candidate.sequence++
+		candidate.generation++
+		query := pcacheCachedQuery{
+			identifier: newPcacheQueryIdentifier(entries),
+			attrset:    policy.attrset,
+			response:   clonePcacheSearchResponse(response),
+			replay:     clonePcacheMessage(replay),
+			remote:     clonePcacheRemoteContext(remote),
+			policy:     policy,
+			purgeAt:    candidate.expirationTime(now, ttl, policy.consistencyPeriod),
+			entries:    entries,
+			lastUsed:   candidate.sequence,
+			generation: candidate.generation,
+			referenced: true,
+		}
+		if policy.ttr > 0 {
+			query.refreshAt = now.Add(policy.ttr)
+		}
+		candidate.queries[key] = query
+		return true, true
+	})
 }
 
 func (state *pcacheState) completeRefresh(
@@ -2219,62 +2353,74 @@ func (state *pcacheState) completeRefresh(
 	response pcacheSearchResponse,
 	now time.Time,
 ) bool {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	query, found := state.queries[refresh.key]
-	if !found || query.generation != refresh.generation || !query.refreshing {
-		clearPcacheBackup(backup)
-		return false
-	}
+	return state.completeRefreshContext(context.Background(), refresh, response, now)
+}
+
+func (state *pcacheState) completeRefreshContext(
+	ctx context.Context,
+	refresh pcacheRefreshLease,
+	response pcacheSearchResponse,
+	now time.Time,
+) bool {
 	entries := response.entryCount()
 	ttl := refresh.policy.positiveTTL
 	if entries == 0 {
 		ttl = refresh.policy.negativeTTL
 	}
-	state.entries -= query.entries
-	if ttl <= 0 {
-		clear(query.remote.bindCredentials)
-		delete(state.queries, refresh.key)
-		state.generation++
-		return state.finishMutationLocked(backup)
-	}
-	state.entries += entries
-	query.response = clonePcacheSearchResponse(response)
-	query.entries = entries
-	if entries == 0 {
-		query.identifier = ""
-	} else if query.identifier == "" {
-		query.identifier = newPcacheQueryIdentifier(entries)
-	}
-	query.purgeAt = state.expirationTime(
-		now,
-		ttl,
-		refresh.policy.consistencyPeriod,
-	)
-	query.refreshing = false
-	if refresh.policy.ttr > 0 {
-		query.refreshAt = now.Add(refresh.policy.ttr)
-	} else {
-		query.refreshAt = time.Time{}
-	}
-	state.queries[refresh.key] = query
-	state.generation++
-	return state.finishMutationLocked(backup)
+	return state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		query, found := candidate.queries[refresh.key]
+		if !found || query.generation != refresh.generation || !query.refreshing {
+			return false, false
+		}
+		candidate.entries -= query.entries
+		if ttl <= 0 {
+			clear(query.remote.bindCredentials)
+			delete(candidate.queries, refresh.key)
+			candidate.generation++
+			return true, true
+		}
+		candidate.entries += entries
+		query.response = clonePcacheSearchResponse(response)
+		query.entries = entries
+		if entries == 0 {
+			query.identifier = ""
+		} else if query.identifier == "" {
+			query.identifier = newPcacheQueryIdentifier(entries)
+		}
+		query.purgeAt = candidate.expirationTime(
+			now,
+			ttl,
+			refresh.policy.consistencyPeriod,
+		)
+		query.refreshing = false
+		if refresh.policy.ttr > 0 {
+			query.refreshAt = now.Add(refresh.policy.ttr)
+		} else {
+			query.refreshAt = time.Time{}
+		}
+		candidate.queries[refresh.key] = query
+		candidate.generation++
+		return true, true
+	})
 }
 
 func (state *pcacheState) invalidateRefresh(refresh pcacheRefreshLease) bool {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	query, found := state.queries[refresh.key]
-	if !found || query.generation != refresh.generation || !query.refreshing {
-		clearPcacheBackup(backup)
-		return false
-	}
-	state.removeQueryLocked(refresh.key, query)
-	state.generation++
-	return state.finishMutationLocked(backup)
+	return state.invalidateRefreshContext(context.Background(), refresh)
+}
+
+func (state *pcacheState) invalidateRefreshContext(
+	ctx context.Context,
+	refresh pcacheRefreshLease,
+) bool {
+	return state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		query, found := candidate.queries[refresh.key]
+		if !found || query.generation != refresh.generation || !query.refreshing {
+			return false, false
+		}
+		candidate.removeQueryLocked(refresh.key, query)
+		candidate.generation++
+		return true, true
+	})
 }
 
 func (state *pcacheState) abortRefresh(refresh pcacheRefreshLease, now time.Time) {

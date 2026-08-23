@@ -189,6 +189,350 @@ func TestLDAPModifyJumpPastAllRecordsIsSuccessfulNoOp(t *testing.T) {
 	}
 }
 
+func TestLDAPModifyVerboseDryRunMatchesOpenLDAP213(t *testing.T) {
+	ldapmodify := openLDAPModify213Binary(t)
+	input := "dn: uid=verbose,dc=example,dc=com\n" +
+		"changetype: add\n" +
+		"objectClass: inetOrgPerson\n" +
+		"uid: verbose\n" +
+		"cn: Verbose User\n" +
+		"sn: User\n" +
+		"description:: w78=\n\n" +
+		"dn: uid=verbose,dc=example,dc=com\n" +
+		"changetype: modify\n" +
+		"replace: cn\n" +
+		"cn: Renamed User\n" +
+		"-\n" +
+		"delete: description\n" +
+		"-\n\n" +
+		"dn: uid=gone,dc=example,dc=com\n" +
+		"changetype: delete\n\n" +
+		"dn: uid=rename,dc=example,dc=com\n" +
+		"changetype: modrdn\n" +
+		"newrdn: uid=renamed\n" +
+		"deleteoldrdn: 1\n" +
+		"newsuperior: ou=people,dc=example,dc=com\n\n"
+
+	command := exec.Command(ldapmodify, "-n", "-v")
+	command.Stdin = strings.NewReader(input)
+	var referenceStdout, referenceStderr bytes.Buffer
+	command.Stdout = &referenceStdout
+	command.Stderr = &referenceStderr
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"OpenLDAP 2.6.13 ldapmodify -n -v: %v stdout=%q stderr=%q",
+			err,
+			referenceStdout.String(),
+			referenceStderr.String(),
+		)
+	}
+
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		[]string{"ldapmodify", "-n", "-v"},
+		input,
+	)
+	if exitCode != 0 || stderr != referenceStderr.String() ||
+		stdout != referenceStdout.String() {
+		t.Fatalf(
+			"verbose dry-run differs: exit=%d stdout=%q stderr=%q; OpenLDAP stdout=%q stderr=%q",
+			exitCode,
+			stdout,
+			stderr,
+			referenceStdout.String(),
+			referenceStderr.String(),
+		)
+	}
+}
+
+func TestLDAPAddVerboseCompletionAndFailure(t *testing.T) {
+	input := "dn: uid=verbose-add,dc=example,dc=com\n" +
+		"objectClass: inetOrgPerson\n" +
+		"uid: verbose-add\n" +
+		"cn: Verbose Add\n" +
+		"sn: Add\n\n"
+	for _, test := range []struct {
+		name       string
+		resultCode ldapwire.ResultCode
+		wantExit   int
+		completion string
+	}{
+		{name: "success", resultCode: ldapwire.ResultSuccess, wantExit: 0, completion: "modify complete\n"},
+		{name: "failure", resultCode: ldapwire.ResultEntryAlreadyExists, wantExit: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+				if _, ok := message.Request.(ldapwire.AddRequest); !ok {
+					return nil, nil
+				}
+				return [][]byte{ldapwire.EncodeResultResponse(
+					message.ID,
+					ldapwire.ApplicationAddResponse,
+					ldapwire.Result{Code: test.resultCode},
+					nil,
+				)}, nil
+			})
+			stdout, stderr, exitCode := runLDAPClientCommand([]string{
+				"ldapadd", "-H", fixture.uri, "-x", "-v",
+			}, input)
+			if exitCode != test.wantExit ||
+				!strings.Contains(stdout, "adding new entry \"uid=verbose-add,dc=example,dc=com\"\n") ||
+				strings.Contains(stdout, "ldapadd: applied") ||
+				strings.Contains(stdout, "modify complete\n") != (test.completion != "") {
+				t.Fatalf(
+					"verbose ldapadd exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout,
+					stderr,
+				)
+			}
+		})
+	}
+}
+
+func TestLDAPModifyVerboseNetworkMatchesOpenLDAP213(t *testing.T) {
+	ldapmodify := openLDAPModify213Binary(t)
+	input := "dn: uid=verbose-network,dc=example,dc=com\n" +
+		"changetype: add\n" +
+		"objectClass: inetOrgPerson\n" +
+		"uid: verbose-network\n" +
+		"cn: Verbose Network\n" +
+		"sn: Network\n\n"
+
+	referenceRequests := make(chan ldapwire.Message, 1)
+	referenceFixture := startLDAPClientWireFixture(t, ldapModifyAddCaptureHandler(referenceRequests))
+	command := exec.Command(
+		ldapmodify,
+		"-H", referenceFixture.uri,
+		"-x",
+		"-v",
+		"-MM",
+	)
+	command.Stdin = strings.NewReader(input)
+	var referenceStdout, referenceStderr bytes.Buffer
+	command.Stdout = &referenceStdout
+	command.Stderr = &referenceStderr
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"OpenLDAP 2.6.13 verbose network modify: %v stdout=%q stderr=%q",
+			err,
+			referenceStdout.String(),
+			referenceStderr.String(),
+		)
+	}
+	referenceMessage := awaitLDAPClientWireMessage(t, referenceRequests)
+
+	implementationRequests := make(chan ldapwire.Message, 1)
+	implementationFixture := startLDAPClientWireFixture(t, ldapModifyAddCaptureHandler(implementationRequests))
+	stdout, stderr, exitCode := runLDAPClientCommand([]string{
+		"ldapmodify",
+		"-H", implementationFixture.uri,
+		"-x",
+		"-v",
+		"-MM",
+	}, input)
+	wantReferenceStderr := "ldap_initialize( " + referenceFixture.uri + "/??base )\n"
+	wantImplementationStderr := "ldap_initialize( " + implementationFixture.uri + "/??base )\n"
+	if exitCode != 0 || stdout != referenceStdout.String() ||
+		referenceStderr.String() != wantReferenceStderr ||
+		stderr != wantImplementationStderr {
+		t.Fatalf(
+			"verbose network differs: exit=%d stdout=%q stderr=%q want-stderr=%q; OpenLDAP stdout=%q stderr=%q want-stderr=%q",
+			exitCode,
+			stdout,
+			stderr,
+			wantImplementationStderr,
+			referenceStdout.String(),
+			referenceStderr.String(),
+			wantReferenceStderr,
+		)
+	}
+	implementationMessage := awaitLDAPClientWireMessage(t, implementationRequests)
+	for name, message := range map[string]ldapwire.Message{
+		"OpenLDAP": referenceMessage,
+		"ldap-go":  implementationMessage,
+	} {
+		assertLDAPWireControl(
+			t,
+			message.Controls,
+			ldapManageDsaITOID,
+			true,
+			false,
+			nil,
+		)
+		if len(message.Controls) != 1 {
+			t.Fatalf("%s controls = %#v", name, message.Controls)
+		}
+	}
+}
+
+func TestLDAPModifyManageDsaITMatchesOpenLDAP213(t *testing.T) {
+	ldapmodify := openLDAPModify213Binary(t)
+	input := "dn: uid=managed,dc=example,dc=com\nchangetype: delete\n\n"
+	for _, test := range []struct {
+		name     string
+		options  []string
+		critical bool
+	}{
+		{name: "noncritical", options: []string{"-M"}},
+		{name: "critical", options: []string{"-MM"}, critical: true},
+		{name: "repeated is critical", options: []string{"-M", "-M"}, critical: true},
+		{name: "combined is critical", options: []string{"-M", "-MM"}, critical: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			referenceRequests := make(chan ldapwire.Message, 1)
+			referenceFixture := startLDAPClientWireFixture(t, ldapModifyDeleteCaptureHandler(referenceRequests))
+			referenceArgs := []string{"-H", referenceFixture.uri, "-x"}
+			referenceArgs = append(referenceArgs, test.options...)
+			command := exec.Command(ldapmodify, referenceArgs...)
+			command.Stdin = strings.NewReader(input)
+			var referenceStdout, referenceStderr bytes.Buffer
+			command.Stdout = &referenceStdout
+			command.Stderr = &referenceStderr
+			if err := command.Run(); err != nil {
+				t.Fatalf(
+					"OpenLDAP 2.6.13 ldapmodify %v: %v stdout=%q stderr=%q",
+					test.options,
+					err,
+					referenceStdout.String(),
+					referenceStderr.String(),
+				)
+			}
+			referenceMessage := awaitLDAPClientWireMessage(t, referenceRequests)
+
+			implementationRequests := make(chan ldapwire.Message, 1)
+			implementationFixture := startLDAPClientWireFixture(t, ldapModifyDeleteCaptureHandler(implementationRequests))
+			implementationArgs := []string{"ldapmodify", "-H", implementationFixture.uri, "-x"}
+			implementationArgs = append(implementationArgs, test.options...)
+			stdout, stderr, exitCode := runLDAPClientCommand(implementationArgs, input)
+			if exitCode != 0 || stderr != "" || !strings.Contains(stdout, "applied 1 record") {
+				t.Fatalf(
+					"ldap-go ldapmodify %v exit=%d stdout=%q stderr=%q",
+					test.options,
+					exitCode,
+					stdout,
+					stderr,
+				)
+			}
+			implementationMessage := awaitLDAPClientWireMessage(t, implementationRequests)
+
+			for name, message := range map[string]ldapwire.Message{
+				"OpenLDAP": referenceMessage,
+				"ldap-go":  implementationMessage,
+			} {
+				if len(message.Controls) != 1 {
+					t.Fatalf("%s controls = %#v", name, message.Controls)
+				}
+				assertLDAPWireControl(
+					t,
+					message.Controls,
+					ldapManageDsaITOID,
+					test.critical,
+					false,
+					nil,
+				)
+			}
+		})
+	}
+}
+
+func TestLDAPModifyHistoricalOptionValidationPrecedesIO(t *testing.T) {
+	validInput := "dn: uid=managed,dc=example,dc=com\nchangetype: delete\n\n"
+	for _, test := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{
+			name:    "verbose false before connection and input",
+			args:    []string{"ldapmodify", "-v=false", "-H", "https://invalid", "-f", "/missing"},
+			message: "-v=false is not supported",
+		},
+		{
+			name:    "manage false before connection and input",
+			args:    []string{"ldapmodify", "-M=false", "-H", "https://invalid", "-f", "/missing"},
+			message: "-M=false is not supported",
+		},
+		{
+			name:    "critical manage false before connection and input",
+			args:    []string{"ldapmodify", "-MM=false", "-H", "https://invalid", "-f", "/missing"},
+			message: "-MM=false is not supported",
+		},
+		{
+			name: "duplicate manage control before connection",
+			args: []string{
+				"ldapmodify", "-M", "-e", ldapManageDsaITOID,
+				"-H", "ldap://127.0.0.1:1", "-x",
+			},
+			message: "was provided more than once",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, exitCode := runLDAPClientCommand(test.args, validInput)
+			if exitCode != 1 || stdout != "" || !strings.Contains(stderr, test.message) {
+				t.Fatalf(
+					"validation exit=%d stdout=%q stderr=%q",
+					exitCode,
+					stdout,
+					stderr,
+				)
+			}
+			for _, unexpected := range []string{"connect to", "read LDIF", "must use an ldap://"} {
+				if strings.Contains(stderr, unexpected) {
+					t.Fatalf("validation reached I/O/configuration: %q", stderr)
+				}
+			}
+		})
+	}
+}
+
+func ldapModifyDeleteCaptureHandler(
+	requests chan<- ldapwire.Message,
+) ldapClientWireHandler {
+	return func(message ldapwire.Message) ([][]byte, error) {
+		if _, ok := message.Request.(ldapwire.DeleteRequest); !ok {
+			return nil, nil
+		}
+		requests <- message
+		return [][]byte{ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		)}, nil
+	}
+}
+
+func ldapModifyAddCaptureHandler(
+	requests chan<- ldapwire.Message,
+) ldapClientWireHandler {
+	return func(message ldapwire.Message) ([][]byte, error) {
+		if _, ok := message.Request.(ldapwire.AddRequest); !ok {
+			return nil, nil
+		}
+		requests <- message
+		return [][]byte{ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		)}, nil
+	}
+}
+
+func openLDAPModify213Binary(t *testing.T) string {
+	t.Helper()
+	ldapmodify := openLDAPModifyBinary(t)
+	output, err := exec.Command(ldapmodify, "-VV").CombinedOutput()
+	if err != nil {
+		t.Skipf("cannot identify OpenLDAP ldapmodify: %v: %s", err, output)
+	}
+	if !bytes.Contains(output, []byte("OpenLDAP: ldapmodify 2.6.13")) ||
+		!bytes.Contains(output, []byte("OpenLDAP 20613")) {
+		t.Skipf("requires OpenLDAP ldapmodify 2.6.13, got: %s", output)
+	}
+	return ldapmodify
+}
+
 func TestOpenLDAPReferenceLDAPModifyJumpAndFileURL(t *testing.T) {
 	if os.Getenv("LDAP_GO_OPENLDAP_REFERENCE_TESTS") != "1" {
 		t.Skip("set LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 to run the OpenLDAP ldapmodify differential")

@@ -369,16 +369,19 @@ func (state *pcacheState) privateEntries(
 ) (map[string]directory.Entry, bool) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	if state.purgeExpired(state.clock()) {
-		if !state.finishMutationLocked(backup) {
-			return nil, false
-		}
-	} else {
-		clearPcacheBackup(backup)
+	now := state.clock()
+	persistent := state.persistence != nil && state.persistence.enabled &&
+		state.persistence.store != nil
+	if !persistent {
+		state.purgeExpired(now)
 	}
 	entries := make(map[string]directory.Entry, state.entries+1)
+	visibleQueries := 0
 	for _, query := range state.queries {
+		if persistent && !now.Before(query.purgeAt) {
+			continue
+		}
+		visibleQueries++
 		for _, item := range query.response.items {
 			if item.entry == nil {
 				continue
@@ -398,7 +401,7 @@ func (state *pcacheState) privateEntries(
 			entries[dn.Key()] = entry
 		}
 	}
-	if len(database.suffixes) != 0 && len(state.queries) != 0 {
+	if len(database.suffixes) != 0 && visibleQueries != 0 {
 		suffix := database.suffixes[0]
 		entry := entries[suffix.Key()]
 		if entry.DN == "" {
@@ -407,6 +410,9 @@ func (state *pcacheState) privateEntries(
 		}
 		if persistQueries {
 			for _, query := range state.queries {
+				if persistent && !now.Before(query.purgeAt) {
+					continue
+				}
 				if value := pcacheQueryURL(query); value != "" {
 					appendPcachePrivateValue(&entry, pcacheQueryURLAttribute, []byte(value))
 				}
@@ -609,7 +615,8 @@ func (server *Server) handlePcacheQueryDelete(
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	result = database.pcache.state.deleteQueryRequest(
+	result = database.pcache.state.deleteQueryRequestContext(
+		ctx,
 		state.runtime,
 		*database,
 		decoded,
@@ -622,64 +629,78 @@ func (state *pcacheState) deleteQueryRequest(
 	database runtimeDatabase,
 	request pcacheQueryDeleteRequest,
 ) ldapwire.Result {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	backup := state.backupLocked()
-	keys := make(map[string]struct{})
-	switch request.tag {
-	case pcacheQueryDeleteBaseTag:
-		if request.identifier == "" {
-			clearPcacheBackup(backup)
-			return ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"deletion of all queries not implemented",
-			)
-		}
-		for key, query := range state.queries {
-			if query.identifier == request.identifier {
-				keys[key] = struct{}{}
+	return state.deleteQueryRequestContext(
+		context.Background(),
+		runtime,
+		database,
+		request,
+	)
+}
+
+func (state *pcacheState) deleteQueryRequestContext(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	request pcacheQueryDeleteRequest,
+) ldapwire.Result {
+	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
+	accepted := state.mutate(ctx, func(candidate *pcacheState) (bool, bool) {
+		keys := make(map[string]struct{})
+		switch request.tag {
+		case pcacheQueryDeleteBaseTag:
+			if request.identifier == "" {
+				result = ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"deletion of all queries not implemented",
+				)
+				return false, true
 			}
-		}
-	case pcacheQueryDeleteDNTag:
-		dn, err := runtime.schema.NormalizeDN(string(request.dn))
-		if err != nil || !databaseContainsDN(database, dn) {
-			clearPcacheBackup(backup)
-			return ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
-		}
-		foundEntry := false
-		for key, query := range state.queries {
-			for _, item := range query.response.items {
-				if item.entry == nil {
-					continue
+			for key, query := range candidate.queries {
+				if query.identifier == request.identifier {
+					keys[key] = struct{}{}
 				}
-				entryDN, err := runtime.schema.NormalizeDN(item.entry.DN)
-				if err == nil && entryDN.Equal(dn) {
-					foundEntry = true
-					if request.identifier == "" || query.identifier == request.identifier {
-						keys[key] = struct{}{}
+			}
+		case pcacheQueryDeleteDNTag:
+			dn, err := runtime.schema.NormalizeDN(string(request.dn))
+			if err != nil || !databaseContainsDN(database, dn) {
+				result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+				return false, true
+			}
+			foundEntry := false
+			for key, query := range candidate.queries {
+				for _, item := range query.response.items {
+					if item.entry == nil {
+						continue
 					}
-					break
+					entryDN, err := runtime.schema.NormalizeDN(item.entry.DN)
+					if err == nil && entryDN.Equal(dn) {
+						foundEntry = true
+						if request.identifier == "" || query.identifier == request.identifier {
+							keys[key] = struct{}{}
+						}
+						break
+					}
 				}
 			}
+			if !foundEntry {
+				result = ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+				return false, true
+			}
 		}
-		if !foundEntry {
-			clearPcacheBackup(backup)
-			return ldapwire.ResultError(ldapwire.ResultNoSuchObject, "")
+		for key := range keys {
+			query := candidate.queries[key]
+			candidate.removeQueryLocked(key, query)
 		}
-	}
-	for key := range keys {
-		query := state.queries[key]
-		state.removeQueryLocked(key, query)
-	}
-	if len(keys) != 0 {
-		state.generation++
-		if !state.finishMutationLocked(backup) {
-			return ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
+		if len(keys) == 0 {
+			return false, true
 		}
-	} else {
-		clearPcacheBackup(backup)
+		candidate.generation++
+		return true, true
+	})
+	if !accepted {
+		return ldapwire.ResultError(ldapwire.ResultOther, "pcache persistence failed")
 	}
-	return ldapwire.Result{Code: ldapwire.ResultSuccess}
+	return result
 }
 
 func pcacheEncodeQueryDeleteRequest(

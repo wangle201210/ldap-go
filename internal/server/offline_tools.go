@@ -362,6 +362,33 @@ func ApplyOfflineChanges(
 	if err != nil {
 		return report, err
 	}
+	if options.Continue {
+		err = store.View(ctx, func(reader storage.Reader) error {
+			runtime, err := buildOfflineRuntimeWithServer(instance, reader)
+			if err != nil {
+				return err
+			}
+			indexes, err := selectOfflineDatabases(
+				runtime,
+				options.Database,
+				options.IncludeSubordinates,
+			)
+			if err != nil {
+				return err
+			}
+			for _, index := range indexes {
+				if isConfigDatabase(runtime.databases[index]) {
+					return errors.New(
+						"slapmodify -c does not support cn=config because partial configuration changes cannot be published safely",
+					)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return report, err
+		}
+	}
 	if options.DryRun {
 		var dryRunErr error
 		applyErr := store.Update(ctx, func(writer storage.Writer) error {
@@ -661,7 +688,7 @@ func applyOfflineChangeTransaction(
 	if err := instance.applyOfflineChange(
 		ctx, writer, runtime, allowed, change, options, result,
 	); err != nil {
-		return err
+		return offlineModifyDiagnosticError(err)
 	}
 	touchesConfig, err := offlineChangeTouchesConfig(runtime, change)
 	if err != nil {
@@ -674,6 +701,14 @@ func applyOfflineChangeTransaction(
 		}
 	}
 	return refreshRuntimeNamingContexts(writer, runtime)
+}
+
+func offlineModifyDiagnosticError(err error) error {
+	var failure *operationFailure
+	if !errors.As(err, &failure) || failure.result.DiagnosticMessage == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, failure.result.DiagnosticMessage)
 }
 
 func offlineChangeTouchesConfig(
@@ -755,9 +790,6 @@ func (server *Server) applyOfflineChange(
 	case offlineChangeAdd:
 		entry := change.entry.Clone()
 		entry.DN = dn.String()
-		if err := validateOfflineAddParent(tx, database, dn); err != nil {
-			return err
-		}
 		if database.lastMod {
 			if err := server.applyCreateOperationalAttributesContext(
 				ctx, &entry, actor, true, options.ServerID, runtime.schema,
@@ -766,6 +798,9 @@ func (server *Server) applyOfflineChange(
 			}
 		}
 		if err := server.prepareOfflineEntry(runtime, tx, dn, &entry, options); err != nil {
+			return err
+		}
+		if err := validateOfflineAddParent(tx, database, dn); err != nil {
 			return err
 		}
 		if err := tx.Put(entry, false); err != nil {
@@ -777,6 +812,14 @@ func (server *Server) applyOfflineChange(
 			return fmt.Errorf("modify %q: %w", change.dn, err)
 		}
 		for _, modification := range change.modifications {
+			if !options.SkipValueValidation {
+				if err := validateOfflineAttributeValueSyntax(
+					runtime.schema,
+					modification.Attribute,
+				); err != nil {
+					return err
+				}
+			}
 			if err := applyModification(&entry, modification); err != nil {
 				return fmt.Errorf("modify %q: %w", change.dn, err)
 			}
@@ -995,7 +1038,7 @@ func (server *Server) prepareOfflineEntry(
 	options OfflineModifyOptions,
 ) error {
 	if options.SkipSchema || isConfigurationDN(dn) {
-		if result := validateNewEntry(*entry, dn); result != nil {
+		if result := validateNewEntryAttributes(*entry); result != nil {
 			return &operationFailure{result: *result}
 		}
 	} else if result := validateNewEntryWithSchema(
@@ -1003,7 +1046,21 @@ func (server *Server) prepareOfflineEntry(
 	); result != nil {
 		return &operationFailure{result: *result}
 	}
-	if options.SkipSchema || isConfigurationDN(dn) {
+	if isConfigurationDN(dn) {
+		return nil
+	}
+	if options.SkipSchema {
+		if options.SkipValueValidation {
+			return nil
+		}
+		for _, attribute := range entry.Attributes {
+			if err := validateOfflineAttributeValueSyntax(
+				runtime.schema,
+				attribute,
+			); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if err := runtime.schema.ValidateEntryWithOptions(*entry, schema.EntryValidationOptions{
@@ -1021,9 +1078,27 @@ func (server *Server) prepareOfflineEntry(
 	if err := server.applySchemaOperationalAttributes(runtime, entry); err != nil {
 		return err
 	}
-	return runtime.schema.ValidateEntryWithOptions(*entry, schema.EntryValidationOptions{
+	if err := runtime.schema.ValidateEntryWithOptions(*entry, schema.EntryValidationOptions{
 		SkipValueSyntax: options.SkipValueValidation,
-	})
+	}); err != nil {
+		return operationFailureFromSchema(err)
+	}
+	return nil
+}
+
+func validateOfflineAttributeValueSyntax(
+	registry *schema.Registry,
+	attribute directory.Attribute,
+) error {
+	if registry == nil || !registry.HasAttributeType(attribute.Description) {
+		return nil
+	}
+	for _, value := range attribute.Values {
+		if err := registry.ValidateAttributeValue(attribute.Description, value); err != nil {
+			return operationFailed(ldapwire.ResultInvalidAttributeSyntax, err.Error())
+		}
+	}
+	return nil
 }
 
 // ReindexOffline rebuilds configured indexes for one database and its glued

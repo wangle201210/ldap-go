@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -201,7 +202,7 @@ func prepareLloaddAcceptedConnection(
 		return nil, err
 	}
 	if scheme == "pldap" || scheme == "pldaps" {
-		connection, err = readLloaddProxyProtocolV2(connection, lloaddProxyProtocolTimeout)
+		connection, err = readLloaddProxyProtocol(connection, lloaddProxyProtocolTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -330,6 +331,16 @@ func parseLloaddListenerURL(raw string) (string, string, string, error) {
 	scheme := strings.ToLower(parsed.Scheme)
 	switch scheme {
 	case "ldap", "ldaps", "pldap", "pldaps":
+		if scheme == "pldap" || scheme == "pldaps" {
+			host := parsed.Hostname()
+			ip := net.ParseIP(host)
+			if host == "" || ip != nil && ip.IsUnspecified() {
+				return "", "", "", fmt.Errorf(
+					"trusted PROXY listener %q requires an explicit non-wildcard address",
+					raw,
+				)
+			}
+		}
 		address := parsed.Host
 		defaultPort := "389"
 		if scheme == "ldaps" || scheme == "pldaps" {
@@ -356,6 +367,9 @@ func lloaddListenerKey(raw string) (string, error) {
 
 const (
 	lloaddProxyProtocolTimeout        = 5 * time.Second
+	lloaddProxyProtocolV1MaxHeader    = 107
+	lloaddProxyProtocolUnixPathBytes  = 108
+	lloaddProxyProtocolUnixAddrBytes  = 2 * lloaddProxyProtocolUnixPathBytes
 	lloaddProxyProtocolMaxOptionBytes = 520
 	lloaddProxyProtocolMaxTLVs        = 128
 	lloaddProxyProtocolParsers        = 128
@@ -421,7 +435,7 @@ func (listener *proxyProtocolListener) acceptLoop() {
 
 func (listener *proxyProtocolListener) prepare(connection net.Conn) {
 	defer func() { <-listener.parsers }()
-	prepared, err := readLloaddProxyProtocolV2(connection, listener.timeout)
+	prepared, err := readLloaddProxyProtocol(connection, listener.timeout)
 	if err != nil {
 		_ = connection.Close()
 		return
@@ -446,7 +460,7 @@ func (listener *proxyProtocolListener) Addr() net.Addr {
 	return listener.source.Addr()
 }
 
-func readLloaddProxyProtocolV2(
+func readLloaddProxyProtocol(
 	connection net.Conn,
 	timeout time.Duration,
 ) (net.Conn, error) {
@@ -456,15 +470,69 @@ func readLloaddProxyProtocolV2(
 	if err := connection.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, fmt.Errorf("set PROXY protocol header deadline: %w", err)
 	}
-	header := make([]byte, 16)
-	if _, err := io.ReadFull(connection, header); err != nil {
+	var first [1]byte
+	if _, err := io.ReadFull(connection, first[:]); err != nil {
 		return nil, fmt.Errorf("read PROXY protocol header: %w", err)
 	}
+	metadata := lloadd.ConnectionMetadata{
+		ProxyProtocol:               true,
+		SourceAddress:               connection.RemoteAddr(),
+		DestinationAddress:          connection.LocalAddr(),
+		TransportSourceAddress:      connection.RemoteAddr(),
+		TransportDestinationAddress: connection.LocalAddr(),
+	}
+	switch first[0] {
+	case 'P':
+		source, destination, unknown, err := readLloaddProxyProtocolV1(connection, first[0])
+		if err != nil {
+			return nil, err
+		}
+		metadata.ProxyProtocolLocal = unknown
+		if !unknown {
+			metadata.SourceAddress = source
+			metadata.DestinationAddress = destination
+		}
+	case lloaddProxyProtocolV2Signature[0]:
+		command, familyProtocol, body, tlvs, err := readLloaddProxyProtocolV2(connection, first[0])
+		if err != nil {
+			return nil, err
+		}
+		metadata.ProxyProtocolLocal = command == 0
+		metadata.TLVs = tlvs
+		if command == 1 {
+			metadata.SourceAddress, metadata.DestinationAddress, err =
+				proxyProtocolAddresses(familyProtocol, body)
+			if err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, errors.New("invalid PROXY protocol signature")
+	}
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear PROXY protocol header deadline: %w", err)
+	}
+	prepared, err := lloadd.WithConnectionMetadata(connection, metadata)
+	if err != nil {
+		return nil, fmt.Errorf("attach PROXY protocol metadata: %w", err)
+	}
+	return prepared, nil
+}
+
+func readLloaddProxyProtocolV2(
+	connection net.Conn,
+	first byte,
+) (byte, byte, []byte, []lloadd.ProxyProtocolTLV, error) {
+	header := make([]byte, 16)
+	header[0] = first
+	if _, err := io.ReadFull(connection, header[1:]); err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("read PROXY protocol v2 header: %w", err)
+	}
 	if !bytes.Equal(header[:12], lloaddProxyProtocolV2Signature) {
-		return nil, errors.New("invalid PROXY protocol v2 signature")
+		return 0, 0, nil, nil, errors.New("invalid PROXY protocol v2 signature")
 	}
 	if header[12]>>4 != 2 {
-		return nil, fmt.Errorf("unsupported PROXY protocol version %d", header[12]>>4)
+		return 0, 0, nil, nil, fmt.Errorf("unsupported PROXY protocol version %d", header[12]>>4)
 	}
 	command := header[12] & 0x0f
 	familyProtocol := header[13]
@@ -480,28 +548,35 @@ func readLloaddProxyProtocolV2(
 			addressLength = 12
 		case 0x21:
 			addressLength = 36
+		case 0x31:
+			addressLength = lloaddProxyProtocolUnixAddrBytes
+		case 0x12, 0x22, 0x32:
+			return 0, 0, nil, nil, fmt.Errorf(
+				"PROXY protocol DGRAM transport 0x%02x is not supported by a stream listener",
+				familyProtocol,
+			)
 		default:
-			return nil, fmt.Errorf("unsupported PROXY protocol family/transport 0x%02x", familyProtocol)
+			return 0, 0, nil, nil, fmt.Errorf("unsupported PROXY protocol family/transport 0x%02x", familyProtocol)
 		}
 	default:
-		return nil, fmt.Errorf("unsupported PROXY protocol command %d", command)
+		return 0, 0, nil, nil, fmt.Errorf("unsupported PROXY protocol command %d", command)
 	}
 	if length < addressLength {
-		return nil, fmt.Errorf(
+		return 0, 0, nil, nil, fmt.Errorf(
 			"PROXY protocol address length %d is smaller than %d",
 			length,
 			addressLength,
 		)
 	}
 	if length-addressLength > lloaddProxyProtocolMaxOptionBytes {
-		return nil, fmt.Errorf(
+		return 0, 0, nil, nil, fmt.Errorf(
 			"PROXY protocol options exceed %d bytes",
 			lloaddProxyProtocolMaxOptionBytes,
 		)
 	}
 	body := make([]byte, length)
 	if _, err := io.ReadFull(connection, body); err != nil {
-		return nil, fmt.Errorf("read PROXY protocol payload: %w", err)
+		return 0, 0, nil, nil, fmt.Errorf("read PROXY protocol payload: %w", err)
 	}
 	var tlvs []lloadd.ProxyProtocolTLV
 	if command == 1 {
@@ -512,47 +587,224 @@ func readLloaddProxyProtocolV2(
 			tlvs = parsedTLVs
 		}
 	}
-	if err := connection.SetReadDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("clear PROXY protocol header deadline: %w", err)
-	}
-
-	metadata := lloadd.ConnectionMetadata{
-		ProxyProtocol:               true,
-		ProxyProtocolLocal:          command == 0,
-		SourceAddress:               connection.RemoteAddr(),
-		DestinationAddress:          connection.LocalAddr(),
-		TransportSourceAddress:      connection.RemoteAddr(),
-		TransportDestinationAddress: connection.LocalAddr(),
-		TLVs:                        tlvs,
-	}
-	if command == 1 {
-		metadata.SourceAddress, metadata.DestinationAddress =
-			proxyProtocolTCPAddresses(familyProtocol, body[:addressLength])
-	}
-	prepared, err := lloadd.WithConnectionMetadata(connection, metadata)
-	if err != nil {
-		return nil, fmt.Errorf("attach PROXY protocol metadata: %w", err)
-	}
-	return prepared, nil
+	return command, familyProtocol, body[:addressLength], tlvs, nil
 }
 
-func proxyProtocolTCPAddresses(familyProtocol byte, encoded []byte) (net.Addr, net.Addr) {
-	if familyProtocol == 0x11 {
+func readLloaddProxyProtocolV1(
+	connection net.Conn,
+	first byte,
+) (net.Addr, net.Addr, bool, error) {
+	header := make([]byte, 1, lloaddProxyProtocolV1MaxHeader)
+	header[0] = first
+	for len(header) < lloaddProxyProtocolV1MaxHeader {
+		var next [1]byte
+		if _, err := io.ReadFull(connection, next[:]); err != nil {
+			return nil, nil, false, fmt.Errorf("read PROXY protocol v1 header: %w", err)
+		}
+		header = append(header, next[0])
+		if next[0] != '\n' {
+			continue
+		}
+		if len(header) < 2 || header[len(header)-2] != '\r' {
+			return nil, nil, false, errors.New("PROXY protocol v1 header must end with CRLF")
+		}
+		return parseLloaddProxyProtocolV1(header[:len(header)-2])
+	}
+	return nil, nil, false, fmt.Errorf(
+		"PROXY protocol v1 header exceeds %d bytes",
+		lloaddProxyProtocolV1MaxHeader,
+	)
+}
+
+func parseLloaddProxyProtocolV1(
+	line []byte,
+) (net.Addr, net.Addr, bool, error) {
+	for _, character := range line {
+		if character < 0x20 || character > 0x7e {
+			return nil, nil, false, errors.New("PROXY protocol v1 header is not printable ASCII")
+		}
+	}
+	fields := strings.Split(string(line), " ")
+	if len(fields) < 2 || fields[0] != "PROXY" {
+		return nil, nil, false, errors.New("invalid PROXY protocol v1 signature")
+	}
+	if fields[1] == "UNKNOWN" {
+		return nil, nil, true, nil
+	}
+	if fields[1] != "TCP4" && fields[1] != "TCP6" {
+		return nil, nil, false, fmt.Errorf("unsupported PROXY protocol v1 family %q", fields[1])
+	}
+	if len(fields) != 6 {
+		return nil, nil, false, fmt.Errorf(
+			"PROXY %s requires exactly four address fields",
+			fields[1],
+		)
+	}
+	sourceIP, err := parseLloaddProxyProtocolV1IP(fields[1], fields[2])
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("invalid PROXY protocol source address: %w", err)
+	}
+	destinationIP, err := parseLloaddProxyProtocolV1IP(fields[1], fields[3])
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("invalid PROXY protocol destination address: %w", err)
+	}
+	sourcePort, err := parseLloaddProxyProtocolV1Decimal(fields[4], 65535)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("invalid PROXY protocol source port: %w", err)
+	}
+	destinationPort, err := parseLloaddProxyProtocolV1Decimal(fields[5], 65535)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("invalid PROXY protocol destination port: %w", err)
+	}
+	return &net.TCPAddr{IP: sourceIP, Port: sourcePort},
+		&net.TCPAddr{IP: destinationIP, Port: destinationPort}, false, nil
+}
+
+func parseLloaddProxyProtocolV1IP(family, encoded string) (net.IP, error) {
+	if family == "TCP4" {
+		parts := strings.Split(encoded, ".")
+		if len(parts) != net.IPv4len {
+			return nil, errors.New("TCP4 address must contain four decimal octets")
+		}
+		address := make(net.IP, net.IPv4len)
+		for index, part := range parts {
+			value, err := parseLloaddProxyProtocolV1Decimal(part, 255)
+			if err != nil {
+				return nil, fmt.Errorf("octet %d: %w", index+1, err)
+			}
+			address[index] = byte(value)
+		}
+		return address, nil
+	}
+	if strings.ContainsAny(encoded, ".%") {
+		return nil, errors.New("TCP6 address must not use an IPv4 suffix or zone")
+	}
+	for _, character := range encoded {
+		if character != ':' && !isLloaddProxyProtocolHex(character) {
+			return nil, errors.New("TCP6 address contains a non-hexadecimal character")
+		}
+	}
+	address, err := netip.ParseAddr(encoded)
+	if err != nil || !address.Is6() {
+		return nil, errors.New("TCP6 address is not a valid IPv6 address")
+	}
+	return net.IP(address.AsSlice()), nil
+}
+
+func parseLloaddProxyProtocolV1Decimal(encoded string, maximum int) (int, error) {
+	if encoded == "" {
+		return 0, errors.New("decimal value is empty")
+	}
+	if len(encoded) > 1 && encoded[0] == '0' {
+		return 0, errors.New("decimal value has a leading zero")
+	}
+	value := 0
+	for _, character := range encoded {
+		if character < '0' || character > '9' {
+			return 0, errors.New("decimal value contains a non-digit")
+		}
+		digit := int(character - '0')
+		if value > (maximum-digit)/10 {
+			return 0, fmt.Errorf("decimal value exceeds %d", maximum)
+		}
+		value = value*10 + digit
+	}
+	return value, nil
+}
+
+func isLloaddProxyProtocolHex(character rune) bool {
+	return character >= '0' && character <= '9' ||
+		character >= 'a' && character <= 'f' ||
+		character >= 'A' && character <= 'F'
+}
+
+func proxyProtocolAddresses(familyProtocol byte, encoded []byte) (net.Addr, net.Addr, error) {
+	expectedLength := 0
+	switch familyProtocol {
+	case 0x11:
+		expectedLength = 12
+	case 0x21:
+		expectedLength = 36
+	case 0x31:
+		expectedLength = lloaddProxyProtocolUnixAddrBytes
+	default:
+		return nil, nil, fmt.Errorf("unsupported PROXY protocol address family 0x%02x", familyProtocol)
+	}
+	if len(encoded) != expectedLength {
+		return nil, nil, fmt.Errorf(
+			"PROXY protocol address block has %d bytes, want %d for 0x%02x",
+			len(encoded),
+			expectedLength,
+			familyProtocol,
+		)
+	}
+
+	switch familyProtocol {
+	case 0x11:
 		return &net.TCPAddr{
 				IP:   append(net.IP(nil), encoded[:4]...),
 				Port: int(binary.BigEndian.Uint16(encoded[8:10])),
 			}, &net.TCPAddr{
 				IP:   append(net.IP(nil), encoded[4:8]...),
 				Port: int(binary.BigEndian.Uint16(encoded[10:12])),
-			}
-	}
-	return &net.TCPAddr{
-			IP:   append(net.IP(nil), encoded[:16]...),
-			Port: int(binary.BigEndian.Uint16(encoded[32:34])),
-		}, &net.TCPAddr{
-			IP:   append(net.IP(nil), encoded[16:32]...),
-			Port: int(binary.BigEndian.Uint16(encoded[34:36])),
+			}, nil
+	case 0x31:
+		source, err := parseLloaddProxyProtocolUnixPath(encoded[:lloaddProxyProtocolUnixPathBytes])
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid PROXY protocol UNIX source path: %w", err)
 		}
+		destination, err := parseLloaddProxyProtocolUnixPath(encoded[lloaddProxyProtocolUnixPathBytes:])
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid PROXY protocol UNIX destination path: %w", err)
+		}
+		return &net.UnixAddr{Name: source, Net: "unix"},
+			&net.UnixAddr{Name: destination, Net: "unix"}, nil
+	default:
+		return &net.TCPAddr{
+				IP:   append(net.IP(nil), encoded[:16]...),
+				Port: int(binary.BigEndian.Uint16(encoded[32:34])),
+			}, &net.TCPAddr{
+				IP:   append(net.IP(nil), encoded[16:32]...),
+				Port: int(binary.BigEndian.Uint16(encoded[34:36])),
+			}, nil
+	}
+}
+
+func parseLloaddProxyProtocolUnixPath(encoded []byte) (string, error) {
+	if len(encoded) != lloaddProxyProtocolUnixPathBytes {
+		return "", fmt.Errorf("path field has %d bytes, want %d", len(encoded), lloaddProxyProtocolUnixPathBytes)
+	}
+	if encoded[0] == 0 {
+		end := 1
+		for end < len(encoded) && encoded[end] != 0 {
+			end++
+		}
+		if end == 1 {
+			return "", errors.New("abstract path is empty")
+		}
+		for _, padding := range encoded[end:] {
+			if padding != 0 {
+				return "", errors.New("abstract path contains data after padding")
+			}
+		}
+		return "@" + string(encoded[1:end]), nil
+	}
+	terminator := bytes.IndexByte(encoded, 0)
+	if terminator < 0 {
+		terminator = len(encoded)
+	}
+	for _, character := range encoded[:terminator] {
+		if character < 0x20 || character == 0x7f {
+			return "", fmt.Errorf("path contains control byte 0x%02x", character)
+		}
+	}
+	paddingStart := min(terminator+1, len(encoded))
+	for _, padding := range encoded[paddingStart:] {
+		if padding != 0 {
+			return "", errors.New("path contains data after its NUL terminator")
+		}
+	}
+	return string(encoded[:terminator]), nil
 }
 
 func parseLloaddProxyProtocolTLVs(encoded []byte) ([]lloadd.ProxyProtocolTLV, error) {

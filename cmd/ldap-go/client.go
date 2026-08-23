@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
@@ -1069,9 +1070,6 @@ func runLDAPSearch(
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if err := client.validate(flags); err != nil {
-		return err
-	}
 	if *sizeLimit < 0 {
 		return errors.New("-z must be non-negative")
 	}
@@ -1115,14 +1113,42 @@ func runLDAPSearch(
 	if err != nil {
 		return err
 	}
-	if *baseDN != "" {
-		if _, err := ldap.ParseDN(*baseDN); err != nil {
+	directURL, err := parseLDAPSearchDirectURL(client.uri)
+	if err != nil {
+		return err
+	}
+	if directURL.direct {
+		client.uri = directURL.dialURI
+	}
+	if err := client.validate(flags); err != nil {
+		return err
+	}
+
+	resolvedBaseDN := *baseDN
+	if directURL.direct && !flagWasSet(flags, "b") {
+		resolvedBaseDN = directURL.baseDN
+	}
+	if resolvedBaseDN != "" {
+		if _, err := ldap.ParseDN(resolvedBaseDN); err != nil {
 			return fmt.Errorf("parse search base DN: %w", err)
 		}
 	}
+	if directURL.direct && !flagWasSet(flags, "s") {
+		scope = directURL.scope
+	}
 	filter := "(objectClass=*)"
 	attributes := []string(nil)
-	if flags.NArg() > 0 {
+	if directURL.direct {
+		filter = directURL.filter
+		attributes = append(attributes, directURL.attributes...)
+		positionalFilter, positionalAttributes := splitLDAPSearchArguments(flags.Args())
+		if positionalFilter != "" {
+			filter = positionalFilter
+		}
+		if positionalAttributes != nil {
+			attributes = positionalAttributes
+		}
+	} else if flags.NArg() > 0 {
 		filter = flags.Arg(0)
 		attributes = flags.Args()[1:]
 	}
@@ -1207,7 +1233,7 @@ func runLDAPSearch(
 		includeUFN:    *includeUFN,
 	}
 	if err := output.start(ldapSearchOutputMetadata{
-		baseDN:        *baseDN,
+		baseDN:        resolvedBaseDN,
 		scope:         scope,
 		filterPattern: filter,
 		attributes:    attributes,
@@ -1233,7 +1259,7 @@ func runLDAPSearch(
 			continue
 		}
 		request := ldap.NewSearchRequest(
-			*baseDN,
+			resolvedBaseDN,
 			scope,
 			derefAliases,
 			*sizeLimit,
@@ -1299,6 +1325,179 @@ func normalizeLDAPSearchArgs(args []string) ([]string, int, int) {
 func normalizeLDAPSearchLDIFArgs(args []string) ([]string, int) {
 	normalized, level, _ := normalizeLDAPSearchArgs(args)
 	return normalized, level
+}
+
+type ldapSearchDirectURL struct {
+	direct     bool
+	dialURI    string
+	baseDN     string
+	attributes []string
+	scope      int
+	filter     string
+}
+
+func parseLDAPSearchDirectURL(rawURI string) (ldapSearchDirectURL, error) {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return ldapSearchDirectURL{}, fmt.Errorf("parse LDAP search URL: %w", err)
+	}
+	if parsed.Opaque != "" {
+		return ldapSearchDirectURL{}, errors.New("LDAP search URL must use // authority syntax")
+	}
+	if strings.Contains(rawURI, "#") {
+		return ldapSearchDirectURL{}, errors.New("LDAP search URL fragments are not permitted by RFC 4516")
+	}
+
+	escapedPath := parsed.EscapedPath()
+	direct := (escapedPath != "" && escapedPath != "/") || parsed.RawQuery != "" || parsed.ForceQuery
+	if !direct {
+		return ldapSearchDirectURL{}, nil
+	}
+	if escapedPath == "" || escapedPath[0] != '/' {
+		return ldapSearchDirectURL{}, errors.New("LDAP search URL query requires a / before the DN")
+	}
+	rawDN := escapedPath[1:]
+	if strings.Contains(rawDN, "/") {
+		return ldapSearchDirectURL{}, errors.New("LDAP search URL DN must percent-encode reserved / characters")
+	}
+	baseDN, err := decodeLDAPSearchURLComponent(rawDN, "DN")
+	if err != nil {
+		return ldapSearchDirectURL{}, err
+	}
+	if baseDN != "" {
+		if _, err := ldap.ParseDN(baseDN); err != nil {
+			return ldapSearchDirectURL{}, fmt.Errorf("parse LDAP search URL DN: %w", err)
+		}
+	}
+
+	components := []string(nil)
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		components = strings.Split(parsed.RawQuery, "?")
+		if len(components) > 4 {
+			return ldapSearchDirectURL{}, errors.New("LDAP search URL has more than four query components")
+		}
+	}
+
+	attributes := []string(nil)
+	if len(components) > 0 && components[0] != "" {
+		for _, rawAttribute := range strings.Split(components[0], ",") {
+			attribute, err := decodeLDAPSearchURLComponent(rawAttribute, "attribute")
+			if err != nil {
+				return ldapSearchDirectURL{}, err
+			}
+			if !validLDIFAttributeDescription(attribute) {
+				return ldapSearchDirectURL{}, fmt.Errorf(
+					"invalid LDAP search URL attribute description %q",
+					attribute,
+				)
+			}
+			attributes = append(attributes, attribute)
+		}
+	}
+
+	scope := ldap.ScopeBaseObject
+	if len(components) > 1 && components[1] != "" {
+		scopeName, err := decodeLDAPSearchURLComponent(components[1], "scope")
+		if err != nil {
+			return ldapSearchDirectURL{}, err
+		}
+		switch strings.ToLower(scopeName) {
+		case "base":
+			scope = ldap.ScopeBaseObject
+		case "one":
+			scope = ldap.ScopeSingleLevel
+		case "sub":
+			scope = ldap.ScopeWholeSubtree
+		default:
+			return ldapSearchDirectURL{}, fmt.Errorf(
+				"invalid LDAP search URL scope %q; RFC 4516 permits base, one, or sub",
+				scopeName,
+			)
+		}
+	}
+
+	filter := "(objectClass=*)"
+	if len(components) > 2 && components[2] != "" {
+		filter, err = decodeLDAPSearchURLComponent(components[2], "filter")
+		if err != nil {
+			return ldapSearchDirectURL{}, err
+		}
+		if _, err := ldap.CompileFilter(filter); err != nil {
+			return ldapSearchDirectURL{}, fmt.Errorf("invalid LDAP search URL filter: %w", err)
+		}
+	}
+
+	if len(components) > 3 {
+		if components[3] == "" {
+			return ldapSearchDirectURL{}, errors.New("LDAP search URL contains an empty extensions component")
+		}
+		for _, rawExtension := range strings.Split(components[3], ",") {
+			extension, err := decodeLDAPSearchURLComponent(rawExtension, "extension")
+			if err != nil {
+				return ldapSearchDirectURL{}, err
+			}
+			critical := strings.HasPrefix(extension, "!")
+			if critical {
+				extension = extension[1:]
+			}
+			extensionType, _, _ := strings.Cut(extension, "=")
+			if !validLDAPKeyString(extensionType) && !validNumericOID(extensionType) {
+				return ldapSearchDirectURL{}, fmt.Errorf(
+					"invalid LDAP search URL extension type %q",
+					extensionType,
+				)
+			}
+			if critical {
+				return ldapSearchDirectURL{}, fmt.Errorf(
+					"unsupported critical LDAP search URL extension %q",
+					extensionType,
+				)
+			}
+		}
+	}
+
+	dialURL := *parsed
+	dialURL.Path = ""
+	dialURL.RawPath = ""
+	dialURL.RawQuery = ""
+	dialURL.ForceQuery = false
+	dialURL.Fragment = ""
+	dialURL.RawFragment = ""
+	return ldapSearchDirectURL{
+		direct:     true,
+		dialURI:    dialURL.String(),
+		baseDN:     baseDN,
+		attributes: attributes,
+		scope:      scope,
+		filter:     filter,
+	}, nil
+}
+
+func decodeLDAPSearchURLComponent(raw, name string) (string, error) {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("decode LDAP search URL %s: %w", name, err)
+	}
+	if !utf8.ValidString(decoded) {
+		return "", fmt.Errorf("LDAP search URL %s is not valid UTF-8", name)
+	}
+	if strings.ContainsAny(decoded, "\x00\r\n") {
+		return "", fmt.Errorf("LDAP search URL %s contains a prohibited control character", name)
+	}
+	return decoded, nil
+}
+
+func splitLDAPSearchArguments(arguments []string) (string, []string) {
+	if len(arguments) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(arguments[0], "(") || strings.Contains(arguments[0], "=") {
+		if len(arguments) == 1 {
+			return arguments[0], nil
+		}
+		return arguments[0], arguments[1:]
+	}
+	return "", arguments
 }
 
 func runLDAPWhoAmI(

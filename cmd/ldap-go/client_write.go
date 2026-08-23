@@ -148,6 +148,10 @@ func runLDAPModify(
 	flags.SetOutput(stderr)
 	var client ldapClientOptions
 	client.register(flags)
+	client.unsupportedFlags = withoutLDAPClientUnsupportedFlag(client.unsupportedFlags, "M")
+	client.unsupportedFlags = withoutLDAPClientUnsupportedFlag(client.unsupportedFlags, "v")
+	flags.Lookup("M").Usage = "enable ManageDsaIT control"
+	flags.Lookup("v").Usage = "write verbose operation diagnostics"
 	defer client.clear()
 
 	inputPath := flags.String("f", "", "read LDIF from a file instead of stdin")
@@ -160,6 +164,7 @@ func runLDAPModify(
 	if command == "ldapmodify" {
 		flags.BoolVar(&addMode, "a", false, "treat content records as Add requests")
 	}
+	criticalManageDsaIT := flags.Bool("MM", false, "critical ManageDsaIT control")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -167,6 +172,30 @@ func runLDAPModify(
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
+	if err != nil {
+		return err
+	}
+	verbose, err := ldapBooleanFlagValue(flags, "v")
+	if err != nil {
+		return err
+	}
+	if flagWasSet(flags, "M") && !manageDsaIT {
+		return errors.New("-M=false is not supported")
+	}
+	if flagWasSet(flags, "MM") && !*criticalManageDsaIT {
+		return errors.New("-MM=false is not supported")
+	}
+	if flagWasSet(flags, "v") && !verbose {
+		return errors.New("-v=false is not supported")
+	}
+	manageDsaITCount := 0
+	for _, argument := range args {
+		if argument == "-M" {
+			manageDsaITCount++
+		}
+	}
+	manageDsaITCritical := *criticalManageDsaIT || manageDsaITCount > 1
 	if err := client.validateWrite(flags); err != nil {
 		return err
 	}
@@ -178,7 +207,14 @@ func runLDAPModify(
 		return fmt.Errorf("%s -E: %w", command, err)
 	}
 	defer clearLDAPControls(extensionControls)
-	controls, err := mergeLDAPControls(client.generalControls, extensionControls)
+	controlGroups := [][]ldap.Control{client.generalControls, extensionControls}
+	if manageDsaIT || *criticalManageDsaIT {
+		controlGroups = append(controlGroups, []ldap.Control{&ldapRawControl{
+			oid:      ldapManageDsaITOID,
+			critical: manageDsaITCritical,
+		}})
+	}
+	controls, err := mergeLDAPControls(controlGroups...)
 	if err != nil {
 		return fmt.Errorf("%s controls: %w", command, err)
 	}
@@ -210,6 +246,15 @@ func runLDAPModify(
 
 	var connection *ldap.Conn
 	if !client.dryRun {
+		if verbose {
+			if _, err := fmt.Fprintf(
+				stderr,
+				"ldap_initialize( %s/??base )\n",
+				strings.TrimSuffix(client.uri, "/"),
+			); err != nil {
+				return err
+			}
+		}
 		connection, err = client.connectAndBind(flags, stdin, stderr)
 		if err != nil {
 			return err
@@ -253,6 +298,12 @@ func runLDAPModify(
 			continue
 		}
 		operation.setControls(controls)
+		if verbose {
+			if err := writeLDAPModifyVerboseOperation(stdout, operation, client.dryRun); err != nil {
+				operation.clearRecordControls()
+				return err
+			}
+		}
 		if !client.dryRun {
 			if executeErr := client.executeWriteWithReferrals(connection, operation); executeErr != nil {
 				parseErr = fmt.Errorf(
@@ -264,9 +315,27 @@ func runLDAPModify(
 			}
 		}
 		if parseErr == nil {
+			if verbose && !client.dryRun {
+				if err := writeLDAPModifyVerboseCompletion(stdout, operation); err != nil {
+					operation.clearRecordControls()
+					return err
+				}
+			}
+			if verbose {
+				if _, err := fmt.Fprintln(stdout); err != nil {
+					operation.clearRecordControls()
+					return err
+				}
+			}
 			succeeded++
 			operation.clearRecordControls()
 			continue
+		}
+		if verbose {
+			if _, err := fmt.Fprintln(stdout); err != nil {
+				operation.clearRecordControls()
+				return errors.Join(parseErr, err)
+			}
 		}
 
 		failed++
@@ -286,19 +355,21 @@ func runLDAPModify(
 		}
 	}
 
-	action := "applied"
-	if client.dryRun {
-		action = "validated"
-	}
-	if _, err := fmt.Fprintf(
-		stdout,
-		"%s: %s %d record(s), %d failed\n",
-		command,
-		action,
-		succeeded,
-		failed,
-	); err != nil {
-		return errors.Join(firstFailure, err)
+	if !verbose {
+		action := "applied"
+		if client.dryRun {
+			action = "validated"
+		}
+		if _, err := fmt.Fprintf(
+			stdout,
+			"%s: %s %d record(s), %d failed\n",
+			command,
+			action,
+			succeeded,
+			failed,
+		); err != nil {
+			return errors.Join(firstFailure, err)
+		}
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d record(s) failed: %w", failed, firstFailure)
@@ -310,6 +381,131 @@ func runLDAPModify(
 		return errors.New("LDIF input contains no operations")
 	}
 	return nil
+}
+
+func writeLDAPModifyVerboseOperation(
+	writer io.Writer,
+	operation *ldapWriteOperation,
+	dryRun bool,
+) error {
+	if operation == nil {
+		return errors.New("cannot render a nil LDAP write operation")
+	}
+	prefix := ""
+	if dryRun {
+		prefix = "!"
+	}
+	switch operation.kind {
+	case ldapWriteAdd:
+		for _, attribute := range operation.add.Attributes {
+			if err := writeLDAPModifyVerboseAttribute(
+				writer,
+				"add",
+				attribute.Type,
+				attribute.Vals,
+			); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(writer, "%sadding new entry %q\n", prefix, operation.add.DN)
+		return err
+	case ldapWriteModify:
+		for _, change := range operation.modify.Changes {
+			name := "unknown"
+			switch change.Operation {
+			case ldap.AddAttribute:
+				name = "add"
+			case ldap.DeleteAttribute:
+				name = "delete"
+			case ldap.ReplaceAttribute:
+				name = "replace"
+			case ldap.IncrementAttribute:
+				name = "increment"
+			}
+			if err := writeLDAPModifyVerboseAttribute(
+				writer,
+				name,
+				change.Modification.Type,
+				change.Modification.Vals,
+			); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(writer, "%smodifying entry %q\n", prefix, operation.modify.DN)
+		return err
+	case ldapWriteDelete:
+		_, err := fmt.Fprintf(writer, "%sdeleting entry %q\n", prefix, operation.delete.DN)
+		return err
+	case ldapWriteModifyDN:
+		if _, err := fmt.Fprintf(
+			writer,
+			"%smodifying rdn of entry %q\n",
+			prefix,
+			operation.modifyDN.DN,
+		); err != nil {
+			return err
+		}
+		keep := ""
+		if operation.modifyDN.DeleteOldRDN {
+			keep = "do not "
+		}
+		_, err := fmt.Fprintf(
+			writer,
+			"\tnew RDN: %q (%skeep existing values)\n",
+			operation.modifyDN.NewRDN,
+			keep,
+		)
+		return err
+	default:
+		return errors.New("cannot render an unknown LDAP write operation")
+	}
+}
+
+func writeLDAPModifyVerboseAttribute(
+	writer io.Writer,
+	operation, attribute string,
+	values []string,
+) error {
+	if _, err := fmt.Fprintf(writer, "%s %s:\n", operation, attribute); err != nil {
+		return err
+	}
+	for _, value := range values {
+		ascii := true
+		for index := 0; index < len(value); index++ {
+			if value[index] > 0x7f {
+				ascii = false
+				break
+			}
+		}
+		if !ascii {
+			if _, err := fmt.Fprintf(writer, "\tNOT ASCII (%d bytes)\n", len(value)); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(writer, "\t%s\n", value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeLDAPModifyVerboseCompletion(
+	writer io.Writer,
+	operation *ldapWriteOperation,
+) error {
+	completion := "modify complete"
+	switch operation.kind {
+	case ldapWriteAdd, ldapWriteModify:
+	case ldapWriteDelete:
+		completion = "delete complete"
+	case ldapWriteModifyDN:
+		completion = "rename complete"
+	default:
+		return errors.New("cannot complete an unknown LDAP write operation")
+	}
+	_, err := fmt.Fprintln(writer, completion)
+	return err
 }
 
 func runLDAPDelete(
@@ -677,7 +873,46 @@ func parseLDAPWriteRecord(
 	if err != nil {
 		return attachControls(nil, err)
 	}
+	if operation.kind == ldapWriteAdd {
+		orderLDAPAddRequestAttributes(operation.add, logicalLines)
+	}
 	return attachControls(operation, validateLDAPWriteOperation(operation))
+}
+
+func orderLDAPAddRequestAttributes(request *ldap.AddRequest, lines []string) {
+	if request == nil || len(request.Attributes) < 2 {
+		return
+	}
+	ordered := make([]ldap.Attribute, 0, len(request.Attributes))
+	used := make([]bool, len(request.Attributes))
+	for index := 1; index < len(lines); index++ {
+		if lines[index] == "-" {
+			continue
+		}
+		name, _, _, err := parseLDAPWriteLine(lines[index])
+		if err != nil || strings.EqualFold(name, "changetype") {
+			continue
+		}
+		for attributeIndex := range request.Attributes {
+			if used[attributeIndex] ||
+				!strings.EqualFold(request.Attributes[attributeIndex].Type, name) {
+				continue
+			}
+			ordered = append(ordered, request.Attributes[attributeIndex])
+			used[attributeIndex] = true
+			break
+		}
+	}
+	remaining := make([]ldap.Attribute, 0, len(request.Attributes)-len(ordered))
+	for index, attribute := range request.Attributes {
+		if !used[index] {
+			remaining = append(remaining, attribute)
+		}
+	}
+	sort.SliceStable(remaining, func(first, second int) bool {
+		return strings.ToLower(remaining[first].Type) < strings.ToLower(remaining[second].Type)
+	})
+	request.Attributes = append(ordered, remaining...)
 }
 
 func parseLDAPWriteRecordControl(value []byte, externalBytesRemaining int) (*ldapRawControl, int, error) {

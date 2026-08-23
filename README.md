@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,622 top-level tests against the pinned commit.
+The latest strict run passed 1,710 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -128,7 +128,10 @@ cache when a candidate configuration rolls back, and never stores the
 cleartext credential. `olcPcacheValidate` rechecks provider responses and TTR
 refreshes; `olcPcachePosition=head|tail` is accepted for the current exclusive
 back-ldap callback path. `olcPcachePersist` stores query/bind snapshots and
-restores valid unexpired state after restart. Database roots can inspect the
+restores valid unexpired state after restart. Durable cache mutations encode
+and write immutable candidates without holding the cache read lock; generation
+CAS and fingerprint checks prevent stale publication, and cancellation/failure
+roll back both memory and metadata. Database roots can inspect the
 private cache through OpenLDAP's critical privateDB control, including
 `pcacheQueryID`, persisted query URLs, Compare membership, and selected-query
 removal through the queryDelete exop. Unsupported private-database writes fail
@@ -222,17 +225,21 @@ Credentials exop and fails explicitly when the backend does not provide it;
 SASL VC continuation remains unsupported.
 
 Trusted TCP listeners using `pldap://` or `pldaps://` require a PROXY protocol
-v2 header before LDAP framing; `pldaps://` consumes that header before the TLS
-handshake. A PROXY command accepts TCP4 or TCP6 addresses and retains logical
-and transport endpoints. PROXY and LOCAL both consume up to 520 bytes after
+v1 or v2 header before LDAP framing; `pldaps://` consumes that header before
+the TLS handshake. They require an explicit non-wildcard listen address because
+every peer on that port is trusted to assert logical endpoints. V1 accepts
+bounded `TCP4`, `TCP6`, and `UNKNOWN` records.
+V2 accepts TCP4, TCP6, and UNIX stream addresses and retains logical and
+transport endpoints, including full-width and Linux abstract UNIX names.
+PROXY and LOCAL both consume up to 520 bytes after
 the address block as opaque options; LOCAL also ignores the advertised family.
 Valid PROXY TLVs are copied as best-effort metadata (up to 128 records), while
 malformed options remain accepted without TLV metadata, matching OpenLDAP's
 framing behavior. At most 128 header parsers run concurrently. Malformed
 addresses, truncated/timed-out headers, and unsupported commands close only
-that connection. PROXY v1,
-UDP/UNIX families for the PROXY command, and PROXY headers on ordinary
-`ldap://`/`ldaps://` listeners are not supported.
+that connection. DGRAM/UDP transports and PROXY headers on ordinary
+`ldap://`/`ldaps://` listeners are not supported. UNIX stream dispatch is a
+documented extension over the pinned OpenLDAP 2.6.13 lloadd build.
 
 ```sh
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
@@ -575,7 +582,9 @@ selects from multiple offered realms, validates an explicitly configured
 realm, sends `authzid`, derives `digest-uri` from the provider host, and
 strictly verifies the server `rspauth`; it still negotiates only `qop=auth`.
 Server-side SASL supports EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, and
-SCRAM-SHA-1/256/512. PLAIN verifies the mapped LDAP entry's existing
+SCRAM-SHA-1/256/512 with all three `-PLUS` variants. PLUS uses verified
+standard TLS `tls-server-end-point` channel binding and is not offered on TLCP.
+PLAIN verifies the mapped LDAP entry's existing
 `userPassword` values. CRAM-MD5 performs the Cyrus-compatible server-first
 challenge exchange with an ACL-visible cleartext password. DIGEST-MD5
 supports the `qop=auth` exchange, mutual `rspauth`, and imported
@@ -632,6 +641,9 @@ statistics, time, listener, database, overlay, TLS, SASL, thread, and waiter
 entries are generated from runtime state. Search, Compare, ACLs, paging,
 limits, matched-DN behavior, monitor Log changes, database read-only changes,
 and operation restrictions are covered by an OpenLDAP 2.6.13 differential.
+`monitorLogLevel` names or numeric masks atomically update structured event
+routing; mapped events carry `openldap_category` while the downstream
+`slog.Handler` still controls final severity filtering.
 On SIGINT or SIGTERM, the daemon stops accepting connections, completes
 already accepted ordinary operations, abandons persistent Sync searches, and
 only force-cancels remaining work after `-shutdown-timeout`. The database and
@@ -642,7 +654,7 @@ critical, absent, empty, string, Base64, and file-backed values on applicable
 operations. `-C` enables anonymous referral chasing with DN/scope rewriting,
 control preservation, loop detection, and the OpenLDAP default five-hop limit.
 They also implement `-Y` SASL for PLAIN, CRAM-MD5, DIGEST-MD5,
-SCRAM-SHA-1/256/512, GSSAPI, and EXTERNAL, with `-U`, `-X`, and `-R`,
+SCRAM-SHA-1/256/512 and their `-PLUS` variants, GSSAPI, and EXTERNAL, with `-U`, `-X`, and `-R`,
 strict server proof validation, and client certificates for EXTERNAL over
 LDAPS or StartTLS.
 `ldapsearch` supports bounded `-f` batch filters with `%s`, `-F` file-URL
@@ -683,7 +695,10 @@ root-search expansion observed in the 2.6.13 binary.
 `replace`, and `increment` blocks with an optional final separator. It supports
 OpenLDAP-style `-j` physical-line resume, bounded absolute `file://` values,
 record-level controls, and `-S` failure LDIF that preserves those controls for
-safe replay.
+safe replay. `-v` emits operation-level diagnostics and `-M/-MM` send real
+noncritical/critical ManageDsaIT controls. `ldapsearch -H` accepts explicit
+RFC 4516 DN/attribute/scope/filter/extension components; a bare trailing `/`
+retains ordinary OpenLDAP CLI defaults.
 `ldapcompare` carries generic `-e` controls and noncritical `-M` or critical
 `-MM` ManageDsaIT through its raw Compare path, including referral chasing;
 `-v` renders TRUE, FALSE, UNDEFINED, LDAP result details, referrals, and
@@ -692,7 +707,7 @@ does not register the option, so all `ldapcompare -E` forms are compatibly
 rejected before connecting rather than sent as a control. `ldapexop passwd`
 uses the same old/new password, prompt/file, control, dry-run, target identity,
 and generated-password response behavior as `ldappasswd`.
-Interactive SASL callbacks, SCRAM-PLUS, every native GSS credential provider,
+Interactive SASL callbacks, every native GSS credential provider,
 and the complete historical ldap-tools option set remain outside this subset.
 
 ```sh
@@ -863,7 +878,7 @@ searches run as the anonymous authentication identity and require `auth`
 access to the search base, candidate entries, and filter attributes. PLAIN
 authorization identities use self and database-root authorization plus
 OpenLDAP `olcAuthzPolicy`, `authzTo`, and `authzFrom` rules.
-SCRAM-SHA-1/256/512 use the same identity mapping and ACL rules.
+SCRAM-SHA-1/256/512 and their `-PLUS` variants use the same identity mapping and ACL rules.
 They accept raw or `{CLEARTEXT}` `userPassword` values, or Cyrus SCRAM
 verifiers in the OpenLDAP `authPassword` form
 `SCRAM-SHA-*$iterations:salt$StoredKey:ServerKey`. One-way `userPassword`
@@ -879,10 +894,11 @@ nonce/realm challenge, verifies both historical Latin-1 and UTF-8 digest
 forms, and returns the required `rspauth`. It accepts raw or `{CLEARTEXT}`
 `userPassword`, or the legacy 16-byte `cmusaslsecretDIGEST-MD5` value.
 `qop=auth-int` installs RFC 2831 integrity framing; `qop=auth-conf` supports
-the Cyrus-compatible `rc4`, `rc4-56`, and `rc4-40` privacy ciphers. Both
+the Cyrus-compatible `rc4`, `rc4-56`, `rc4-40`, `des`, and two-key `3des`
+privacy ciphers. Both
 paths enforce frame/MAC/sequence limits, negotiated SSF, host-bound
 `digest-uri`, Latin-1 conversion, concurrent I/O, and close-time key cleanup.
-DES and 3DES privacy ciphers remain explicitly unsupported.
+CBC modes additionally validate padding and chain IVs across frames.
 
 For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
 `credentials` value is used as the Kerberos password. Without that field,
@@ -941,7 +957,10 @@ using the built-in registry plus supported schema imported from `cn=config`.
 The `slapadd` alias follows the tested OpenLDAP subset: structural checks are on
 by default, `-o value-check=yes` enables full value-syntax checks, and `-s` or
 `-o schema-check=no` disables schema checks while still requiring
-`objectClass`. Even with the default `value-check=no`, AttributeDescription,
+`objectClass`. `slapmodify` applies the same independent schema/value toggles
+to Add, Modify, ModifyDN/RDN, dry-run, and continue modes; `-s/-q` follow
+OpenLDAP argument precedence and quick mode warns before disabling value checks.
+Even with the default `value-check=no`, AttributeDescription,
 configured attribute options, `;binary` transfer requirements, and the tested
 DN, Name And Optional UID, UUID, arbitrary-precision INTEGER, generalized-time,
 authzMatch, CSN, OpenLDAP ACI, and UTF-8 equality normalizers are checked.
@@ -1066,7 +1085,12 @@ As with OpenLDAP AutoCA, issuance is triggered only by requesting exactly
 `userCertificate;binary` followed by `userPrivateKey;binary`. The generated
 CA and leaf key pairs are stored in the directory as PKCS#8 material and remain
 subject to normal read ACLs. An unmodified OpenLDAP server does not understand
-`olcAutoCAProfile`.
+`olcAutoCAProfile`. When RSA `olcAutoCAlocalDN` is configured and no explicit
+server certificate/key exists, ldap-go atomically generates or reuses that
+identity and installs it for StartTLS/LDAPS. The listener private key is stored
+only in internal metadata and is never returned by LDAP Search; explicit TLS
+or TLCP material takes precedence. SM2 localDN auto-install is rejected because
+Go standard TLS cannot carry the TLCP dual-certificate profile.
 
 Generate a salted national-cryptography password value for `userPassword` or
 `olcRootPW` without passing the cleartext password as a command argument:

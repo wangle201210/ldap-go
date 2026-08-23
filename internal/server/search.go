@@ -15,6 +15,32 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
+func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
+	support := supportsAssertion |
+		supportsPagedResults |
+		supportsManageDsaIT |
+		supportsSubentries |
+		supportsDontUseCopy |
+		supportsAccountUsability |
+		supportsNoOp
+	if runtime == nil {
+		return support
+	}
+	if runtimeSupportsDeref(runtime.databases) {
+		support |= supportsDeref
+	}
+	if runtimeSupportsServerSideSort(runtime.databases) {
+		support |= supportsServerSideSort | supportsVirtualListView
+	}
+	if runtimeSupportsSyncProvider(runtime.databases) {
+		support |= supportsSync
+	}
+	if runtimeSupportsValueSort(runtime.databases) {
+		support |= supportsValueSort
+	}
+	return support
+}
+
 func (server *Server) handleSearch(
 	ctx context.Context,
 	connection net.Conn,
@@ -35,25 +61,7 @@ func (server *Server) handleSearch(
 		releaseServerSideSortLease(state, sortLease)
 	}()
 
-	controlSupport := supportsAssertion |
-		supportsPagedResults |
-		supportsManageDsaIT |
-		supportsSubentries |
-		supportsDontUseCopy |
-		supportsAccountUsability |
-		supportsNoOp
-	if runtimeSupportsDeref(state.runtime.databases) {
-		controlSupport |= supportsDeref
-	}
-	if runtimeSupportsServerSideSort(state.runtime.databases) {
-		controlSupport |= supportsServerSideSort | supportsVirtualListView
-	}
-	if runtimeSupportsSyncProvider(state.runtime.databases) {
-		controlSupport |= supportsSync
-	}
-	if runtimeSupportsValueSort(state.runtime.databases) {
-		controlSupport |= supportsValueSort
-	}
+	controlSupport := searchRequestControlSupport(state.runtime)
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
 		controlSupport,
@@ -116,7 +124,13 @@ func (server *Server) handleSearch(
 	); handled {
 		return err
 	}
-	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
+	limits := databaseSearchExecutionLimits{
+		size:      effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit),
+		time:      request.TimeLimit,
+		unchecked: -1,
+		pageSize:  -1,
+		pageTotal: effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit),
+	}
 	limitBase := base
 	if limitBase.Depth() == 0 &&
 		request.Scope != directory.ScopeBase &&
@@ -127,12 +141,23 @@ func (server *Server) handleSearch(
 		state.runtime.databases,
 		limitBase,
 	); databaseIndex >= 0 {
-		limit = effectiveDatabaseSearchLimit(
+		limits = effectiveDatabaseSearchExecutionLimits(
 			state.runtime,
 			state.runtime.databases[databaseIndex],
 			state.boundDN,
 			server.config.MaxSearchEntries,
 			request.SizeLimit,
+			request.TimeLimit,
+		)
+	}
+	request.TimeLimit = limits.time
+	limit := limits.size
+	if limits.unchecked == 0 {
+		clearPagedSearch(state)
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, ""),
 		)
 	}
 	paging, pagingFailure := preparePagedSearch(
@@ -140,7 +165,7 @@ func (server *Server) handleSearch(
 		request,
 		message.Controls,
 		controls.paging,
-		limit,
+		limits,
 	)
 	if pagingFailure != nil {
 		return server.writeSearchDone(
@@ -155,6 +180,9 @@ func (server *Server) handleSearch(
 			message.ID,
 			ldapwire.Result{Code: ldapwire.ResultSuccess},
 		)
+	}
+	if paging != nil {
+		limit = paging.totalLimit
 	}
 	sorting, sortFailure := prepareServerSideSort(
 		state.runtime.schema,
@@ -1239,6 +1267,43 @@ func (server *Server) handleSearch(
 					continue
 				}
 			}
+			routeLimits := effectiveDatabaseSearchExecutionLimits(
+				state.runtime,
+				*database,
+				state.boundDN,
+				server.config.MaxSearchEntries,
+				request.SizeLimit,
+				request.TimeLimit,
+			)
+			if routeLimits.unchecked == 0 {
+				candidates = nil
+				result = ldapwire.ResultError(
+					ldapwire.ResultAdminLimitExceeded,
+					"",
+				)
+				return errStopSearch
+			}
+			if routeLimits.unchecked >= 0 {
+				_, countErr := countLocalSearchCandidates(
+					tx,
+					request.Filter,
+					scopeBase,
+					route.scope,
+					translucentRoute,
+					routeLimits.unchecked,
+				)
+				if errors.Is(countErr, errSearchCandidateLimit) {
+					candidates = nil
+					result = ldapwire.ResultError(
+						ldapwire.ResultAdminLimitExceeded,
+						"",
+					)
+					return errStopSearch
+				}
+				if countErr != nil {
+					return countErr
+				}
+			}
 
 			visitEntry := func(entry directory.Entry) error {
 				if translucentRoute != nil {
@@ -1495,8 +1560,7 @@ func (server *Server) handleSearch(
 					)
 				}
 				if !sorting.active() && len(candidates) >= entryLimit {
-					if paging != nil &&
-						paging.count+len(candidates) < limit {
+					if paging != nil && entryLimit == paging.size {
 						hasMore = true
 					} else {
 						result.Code = ldapwire.ResultSizeLimitExceeded
@@ -2963,4 +3027,50 @@ func (server *Server) writeSearchResultResponse(
 	)
 }
 
-var errStopSearch = errors.New("stop search")
+var (
+	errStopSearch           = errors.New("stop search")
+	errSearchCandidateLimit = errors.New("search candidate limit exceeded")
+)
+
+func countLocalSearchCandidates(
+	reader storage.Reader,
+	filter directory.Filter,
+	base directory.DN,
+	scope directory.Scope,
+	translucent *translucentSearchRouteResult,
+	limit int,
+) (int, error) {
+	count := 0
+	visit := func(entry directory.Entry) error {
+		candidate, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return err
+		}
+		candidate, err = storage.NormalizeReaderDN(reader, candidate)
+		if err != nil {
+			return err
+		}
+		if !directory.InScope(base, candidate, scope) {
+			return nil
+		}
+		count++
+		if limit >= 0 && count > limit {
+			return errSearchCandidateLimit
+		}
+		return nil
+	}
+	if translucent != nil {
+		for _, entry := range translucent.entries {
+			if err := visit(entry); err != nil {
+				return count, err
+			}
+		}
+		return count, nil
+	}
+	planned, _, err := storage.ForEachFilterCandidate(reader, filter, visit)
+	if err != nil || planned {
+		return count, err
+	}
+	err = reader.ForEach(visit)
+	return count, err
+}

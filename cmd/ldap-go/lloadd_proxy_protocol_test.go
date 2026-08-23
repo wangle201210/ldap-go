@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,196 @@ import (
 	ldap "github.com/go-ldap/ldap/v3"
 	lloaddruntime "github.com/wangle201210/ldap-go/internal/lloadd"
 )
+
+const haproxyProxyProtocolCommit = "23cc52d34b89fa1f2ec2c4b3ac1526bae84aff93"
+
+func TestLloaddProxyProtocolV1AddressesAndMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		header      string
+		wantSource  string
+		wantTarget  string
+		wantUnknown bool
+	}{
+		{
+			name:       "TCP4",
+			header:     "PROXY TCP4 192.0.2.10 198.51.100.20 42310 389\r\n",
+			wantSource: "192.0.2.10:42310",
+			wantTarget: "198.51.100.20:389",
+		},
+		{
+			name:       "zero ports",
+			header:     "PROXY TCP4 0.0.0.0 255.255.255.255 0 0\r\n",
+			wantSource: "0.0.0.0:0",
+			wantTarget: "255.255.255.255:0",
+		},
+		{
+			name:       "TCP6",
+			header:     "PROXY TCP6 2001:db8::10 2001:db8::20 42311 636\r\n",
+			wantSource: "[2001:db8::10]:42311",
+			wantTarget: "[2001:db8::20]:636",
+		},
+		{
+			name: "maximum TCP6 fields",
+			header: "PROXY TCP6 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff " +
+				"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65535 65535\r\n",
+			wantSource: "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535",
+			wantTarget: "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535",
+		},
+		{
+			name:        "UNKNOWN",
+			header:      "PROXY UNKNOWN\r\n",
+			wantUnknown: true,
+		},
+		{
+			name:        "UNKNOWN ignores fields",
+			header:      "PROXY UNKNOWN ignored address fields\r\n",
+			wantUnknown: true,
+		},
+		{
+			name:        "maximum UNKNOWN line",
+			header:      "PROXY UNKNOWN " + strings.Repeat("A", 91) + "\r\n",
+			wantUnknown: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			listener := newProxyProtocolListener(source, time.Second)
+			defer listener.Close()
+			accepted := make(chan proxyProtocolAcceptResult, 1)
+			go acceptProxyProtocolTestConnection(listener, accepted)
+
+			client, err := net.DialTimeout("tcp", source.Addr().String(), time.Second)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			physicalSource := client.LocalAddr().String()
+			physicalTarget := client.RemoteAddr().String()
+			if _, err := client.Write([]byte(test.header + "ldap-payload")); err != nil {
+				t.Fatalf("write PROXY v1 header: %v", err)
+			}
+
+			server := awaitProxyProtocolAccept(t, accepted)
+			defer server.Close()
+			wantSource, wantTarget := test.wantSource, test.wantTarget
+			if test.wantUnknown {
+				wantSource, wantTarget = physicalSource, physicalTarget
+			}
+			if server.RemoteAddr().String() != wantSource || server.LocalAddr().String() != wantTarget {
+				t.Fatalf(
+					"logical addresses = %s -> %s, want %s -> %s",
+					server.RemoteAddr(), server.LocalAddr(), wantSource, wantTarget,
+				)
+			}
+			metadata, ok := lloaddruntime.MetadataFromConnection(server)
+			if !ok || !metadata.ProxyProtocol || metadata.ProxyProtocolLocal != test.wantUnknown {
+				t.Fatalf("connection metadata = %#v, present=%t", metadata, ok)
+			}
+			if metadata.TransportSourceAddress.String() != physicalSource ||
+				metadata.TransportDestinationAddress.String() != physicalTarget {
+				t.Fatalf(
+					"transport addresses = %s -> %s, want %s -> %s",
+					metadata.TransportSourceAddress,
+					metadata.TransportDestinationAddress,
+					physicalSource,
+					physicalTarget,
+				)
+			}
+			if len(metadata.TLVs) != 0 {
+				t.Fatalf("PROXY v1 exposed TLVs: %#v", metadata.TLVs)
+			}
+			payload := make([]byte, len("ldap-payload"))
+			if _, err := io.ReadFull(server, payload); err != nil || string(payload) != "ldap-payload" {
+				t.Fatalf("LDAP payload = %q, %v", payload, err)
+			}
+		})
+	}
+}
+
+func TestLloaddProxyProtocolV1RejectsMalformedAndRecovers(t *testing.T) {
+	source, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listener := newProxyProtocolListener(source, 100*time.Millisecond)
+	defer listener.Close()
+	accepted := make(chan proxyProtocolAcceptResult, 1)
+	go acceptProxyProtocolTestConnection(listener, accepted)
+
+	malformed := []struct {
+		name   string
+		header []byte
+	}{
+		{name: "bad signature", header: []byte("proxy TCP4 192.0.2.1 198.51.100.1 40000 389\r\n")},
+		{name: "unsupported family", header: []byte("PROXY UDP4 192.0.2.1 198.51.100.1 40000 389\r\n")},
+		{name: "missing field", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 40000\r\n")},
+		{name: "extra field", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 40000 389 extra\r\n")},
+		{name: "double space", header: []byte("PROXY TCP4 192.0.2.1  198.51.100.1 40000 389\r\n")},
+		{name: "tab separator", header: []byte("PROXY\tTCP4 192.0.2.1 198.51.100.1 40000 389\r\n")},
+		{name: "non ASCII", header: append([]byte("PROXY TCP4 192.0.2."), append([]byte{0x80}, []byte(" 198.51.100.1 40000 389\r\n")...)...)},
+		{name: "UNKNOWN non ASCII", header: append([]byte("PROXY UNKNOWN "), []byte{0x80, '\r', '\n'}...)},
+		{name: "IPv4 too few octets", header: []byte("PROXY TCP4 192.0.2 198.51.100.1 40000 389\r\n")},
+		{name: "IPv4 leading zero", header: []byte("PROXY TCP4 192.0.02.1 198.51.100.1 40000 389\r\n")},
+		{name: "IPv4 overflow", header: []byte("PROXY TCP4 192.0.2.256 198.51.100.1 40000 389\r\n")},
+		{name: "TCP4 gets IPv6", header: []byte("PROXY TCP4 2001:db8::1 198.51.100.1 40000 389\r\n")},
+		{name: "IPv6 invalid compression", header: []byte("PROXY TCP6 2001::db8::1 2001:db8::2 40000 389\r\n")},
+		{name: "IPv6 zone", header: []byte("PROXY TCP6 fe80::1%lo0 2001:db8::2 40000 389\r\n")},
+		{name: "IPv6 mixed suffix", header: []byte("PROXY TCP6 ::ffff:192.0.2.1 2001:db8::2 40000 389\r\n")},
+		{name: "TCP6 gets IPv4", header: []byte("PROXY TCP6 192.0.2.1 2001:db8::2 40000 389\r\n")},
+		{name: "source port leading zero", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 04000 389\r\n")},
+		{name: "source port signed", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 +40000 389\r\n")},
+		{name: "destination port overflow", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 40000 65536\r\n")},
+		{name: "destination port integer overflow", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 40000 999999999999999999999999999999999999999999999999999999\r\n")},
+		{name: "destination port non decimal", header: []byte("PROXY TCP4 192.0.2.1 198.51.100.1 40000 0x185\r\n")},
+		{name: "LF terminator", header: []byte("PROXY UNKNOWN\n")},
+		{name: "embedded CR", header: []byte("PROXY UNKNOWN\rX\r\n")},
+		{name: "overlong", header: []byte("PROXY UNKNOWN " + strings.Repeat("A", lloaddProxyProtocolV1MaxHeader) + "\r\n")},
+	}
+	for _, test := range malformed {
+		t.Run(test.name, func(t *testing.T) {
+			connection, err := net.DialTimeout("tcp", source.Addr().String(), time.Second)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			if _, err := connection.Write(test.header); err != nil {
+				_ = connection.Close()
+				t.Fatalf("write malformed v1 header: %v", err)
+			}
+			if tcp, ok := connection.(*net.TCPConn); ok {
+				_ = tcp.CloseWrite()
+			}
+			expectProxyProtocolConnectionClosed(t, connection)
+		})
+	}
+
+	timedOut, err := net.DialTimeout("tcp", source.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial timeout case: %v", err)
+	}
+	if _, err := timedOut.Write([]byte("PROXY TCP4 192.0.2.1")); err != nil {
+		t.Fatalf("write partial v1 header: %v", err)
+	}
+	expectProxyProtocolConnectionClosed(t, timedOut)
+
+	valid, err := net.DialTimeout("tcp", source.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial recovery case: %v", err)
+	}
+	defer valid.Close()
+	if _, err := valid.Write([]byte("PROXY TCP4 192.0.2.30 198.51.100.30 43000 389\r\n")); err != nil {
+		t.Fatalf("write recovery header: %v", err)
+	}
+	server := awaitProxyProtocolAccept(t, accepted)
+	defer server.Close()
+	if server.RemoteAddr().String() != "192.0.2.30:43000" {
+		t.Fatalf("recovered source address = %s", server.RemoteAddr())
+	}
+}
 
 func TestLloaddProxyProtocolV2AddressesAndMetadata(t *testing.T) {
 	tests := []struct {
@@ -64,6 +255,15 @@ func TestLloaddProxyProtocolV2AddressesAndMetadata(t *testing.T) {
 				0x20,
 				0x21,
 				bytes.Repeat([]byte{0xff}, lloaddProxyProtocolMaxOptionBytes),
+			),
+			wantLocal: true,
+		},
+		{
+			name: "LOCAL ignores UNIX DGRAM family and malformed opaque address",
+			packet: lloaddProxyProtocolPacket(
+				0x20,
+				0x32,
+				bytes.Repeat([]byte{0x01}, lloaddProxyProtocolUnixAddrBytes),
 			),
 			wantLocal: true,
 		},
@@ -138,6 +338,119 @@ func TestLloaddProxyProtocolV2AddressesAndMetadata(t *testing.T) {
 	}
 }
 
+func TestLloaddProxyProtocolV2UnixStreamAddressesAndTLVs(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		destination string
+	}{
+		{
+			name:        "filesystem paths",
+			source:      "/run/haproxy/client.sock",
+			destination: "/run/ldap-go/lloadd.sock",
+		},
+		{
+			name:        "maximum path lengths",
+			source:      "/" + strings.Repeat("s", lloaddProxyProtocolUnixPathBytes-2),
+			destination: "/" + strings.Repeat("d", lloaddProxyProtocolUnixPathBytes-2),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			listener := newProxyProtocolListener(source, time.Second)
+			defer listener.Close()
+			accepted := make(chan proxyProtocolAcceptResult, 1)
+			go acceptProxyProtocolTestConnection(listener, accepted)
+
+			client, err := net.DialTimeout("tcp", source.Addr().String(), time.Second)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			physicalSource := client.LocalAddr().String()
+			physicalDestination := client.RemoteAddr().String()
+			tlv := lloaddProxyProtocolTLV(0x05, []byte("unix-connection"))
+			packet := lloaddProxyProtocolUnixPacket(t, test.source, test.destination, tlv)
+			if _, err := client.Write(append(packet, []byte("ldap-payload")...)); err != nil {
+				t.Fatalf("write PROXY UNIX stream packet: %v", err)
+			}
+
+			server := awaitProxyProtocolAccept(t, accepted)
+			defer server.Close()
+			if server.RemoteAddr().Network() != "unix" || server.RemoteAddr().String() != test.source ||
+				server.LocalAddr().Network() != "unix" || server.LocalAddr().String() != test.destination {
+				t.Fatalf("logical UNIX addresses = %s -> %s", server.RemoteAddr(), server.LocalAddr())
+			}
+			metadata, ok := lloaddruntime.MetadataFromConnection(server)
+			if !ok || !metadata.ProxyProtocol || metadata.ProxyProtocolLocal {
+				t.Fatalf("connection metadata = %#v, present=%t", metadata, ok)
+			}
+			if metadata.TransportSourceAddress.Network() != "tcp" ||
+				metadata.TransportSourceAddress.String() != physicalSource ||
+				metadata.TransportDestinationAddress.Network() != "tcp" ||
+				metadata.TransportDestinationAddress.String() != physicalDestination {
+				t.Fatalf("transport metadata = %#v", metadata)
+			}
+			if len(metadata.TLVs) != 1 || metadata.TLVs[0].Type != 0x05 ||
+				string(metadata.TLVs[0].Value) != "unix-connection" {
+				t.Fatalf("UNIX stream TLVs = %#v", metadata.TLVs)
+			}
+			snapshotSource, ok := metadata.SourceAddress.(*net.UnixAddr)
+			if !ok {
+				t.Fatalf("UNIX stream source metadata has type %T", metadata.SourceAddress)
+			}
+			snapshotSource.Name = "/mutated"
+			metadata.TLVs[0].Value[0] = 'X'
+			again, _ := lloaddruntime.MetadataFromConnection(server)
+			if again.SourceAddress.String() != test.source ||
+				string(again.TLVs[0].Value) != "unix-connection" {
+				t.Fatalf("UNIX stream metadata was mutated through snapshot: %#v", again)
+			}
+			payload := make([]byte, len("ldap-payload"))
+			if _, err := io.ReadFull(server, payload); err != nil || string(payload) != "ldap-payload" {
+				t.Fatalf("LDAP payload = %q, %v", payload, err)
+			}
+		})
+	}
+}
+
+func TestLloaddProxyProtocolV2UnixFullAndAbstractPaths(t *testing.T) {
+	full := bytes.Repeat([]byte{'x'}, lloaddProxyProtocolUnixPathBytes)
+	if got, err := parseLloaddProxyProtocolUnixPath(full); err != nil || got != string(full) {
+		t.Fatalf("full UNIX path = %q, %v", got, err)
+	}
+	abstract := make([]byte, lloaddProxyProtocolUnixPathBytes)
+	copy(abstract[1:], "ldap-go-abstract")
+	if got, err := parseLloaddProxyProtocolUnixPath(abstract); err != nil || got != "@ldap-go-abstract" {
+		t.Fatalf("abstract UNIX path = %q, %v", got, err)
+	}
+	abstract[len("ldap-go-abstract")+2] = 'x'
+	if _, err := parseLloaddProxyProtocolUnixPath(abstract); err == nil {
+		t.Fatal("abstract UNIX path accepted data after zero padding")
+	}
+}
+
+func TestLloaddProxyProtocolV2UnixPathRejectsEveryControlByte(t *testing.T) {
+	controls := make([]byte, 0, 0x20)
+	for value := byte(1); value < 0x20; value++ {
+		controls = append(controls, value)
+	}
+	controls = append(controls, 0x7f)
+	for _, control := range controls {
+		t.Run(fmt.Sprintf("0x%02x", control), func(t *testing.T) {
+			encoded := lloaddProxyProtocolUnixPath(t, "/run/source.sock")
+			encoded[4] = control
+			if _, err := parseLloaddProxyProtocolUnixPath(encoded); err == nil {
+				t.Fatalf("accepted UNIX path containing control byte 0x%02x", control)
+			}
+		})
+	}
+}
+
 func TestLloaddProxyProtocolV2RejectsMalformedAndRecovers(t *testing.T) {
 	source, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -152,6 +465,15 @@ func TestLloaddProxyProtocolV2RejectsMalformedAndRecovers(t *testing.T) {
 	badSignature := append([]byte(nil), validSignature...)
 	badSignature[0] = 0
 	oversizedOptions := make([]byte, lloaddProxyProtocolMaxOptionBytes+1)
+	validUnixAddress := lloaddProxyProtocolUnixAddress(t, "/run/source.sock", "/run/destination.sock")
+	validUnixPath := lloaddProxyProtocolUnixPath(t, "/run/source.sock")
+	unixSourceControl := append([]byte(nil), validUnixPath...)
+	unixSourceControl[4] = '\n'
+	unixSourceDEL := append([]byte(nil), validUnixPath...)
+	unixSourceDEL[4] = 0x7f
+	unixSourceAfterNUL := append([]byte(nil), validUnixPath...)
+	unixSourceAfterNUL[len("/run/source.sock")+1] = 'x'
+	unixEmptySource := append(make([]byte, lloaddProxyProtocolUnixPathBytes), validUnixPath...)
 	malformed := []struct {
 		name   string
 		packet []byte
@@ -162,6 +484,14 @@ func TestLloaddProxyProtocolV2RejectsMalformedAndRecovers(t *testing.T) {
 		{name: "unknown command", packet: lloaddProxyProtocolPacket(0x22, 0x00, nil)},
 		{name: "PROXY unspecified family", packet: lloaddProxyProtocolPacket(0x21, 0x00, nil)},
 		{name: "TCP4 short address", packet: lloaddProxyProtocolPacket(0x21, 0x11, make([]byte, 11))},
+		{name: "TCP4 DGRAM", packet: lloaddProxyProtocolPacket(0x21, 0x12, make([]byte, 12))},
+		{name: "TCP6 DGRAM", packet: lloaddProxyProtocolPacket(0x21, 0x22, make([]byte, 36))},
+		{name: "UNIX DGRAM", packet: lloaddProxyProtocolPacket(0x21, 0x32, validUnixAddress)},
+		{name: "UNIX short address", packet: lloaddProxyProtocolPacket(0x21, 0x31, validUnixAddress[:len(validUnixAddress)-1])},
+		{name: "UNIX source control byte", packet: lloaddProxyProtocolPacket(0x21, 0x31, append(unixSourceControl, validUnixPath...))},
+		{name: "UNIX source DEL byte", packet: lloaddProxyProtocolPacket(0x21, 0x31, append(unixSourceDEL, validUnixPath...))},
+		{name: "UNIX source data after NUL", packet: lloaddProxyProtocolPacket(0x21, 0x31, append(unixSourceAfterNUL, validUnixPath...))},
+		{name: "UNIX empty source", packet: lloaddProxyProtocolPacket(0x21, 0x31, unixEmptySource)},
 		{
 			name:   "LOCAL oversized opaque options",
 			packet: lloaddProxyProtocolPacket(0x20, 0x11, oversizedOptions),
@@ -290,6 +620,8 @@ func TestOpenLDAPLloaddProxyProtocolOpaqueOptionsSourceContract(t *testing.T) {
 		t.Fatalf("OpenLDAP source commit = %q, want %q", got, openLDAPClientToolsCommit)
 	}
 	assertOpenLDAPClientSourceAnchors(t, source, "servers/slapd/proxyp.c", []string{
+		"static const uint8_t proxyp_sig[12]",
+		"memcmp( pph.sig, proxyp_sig, 12 )",
 		"case 0x01: /* PROXY command */",
 		"pph_len -= addr_len;",
 		"case 0x00: /* LOCAL command */",
@@ -297,6 +629,96 @@ func TestOpenLDAPLloaddProxyProtocolOpaqueOptionsSourceContract(t *testing.T) {
 		"/* Clear out any options left in proxy packet */",
 		"tcp_read( SLAP_FD2SOCK (sfd), &proxyp_options, pph_len )",
 	})
+}
+
+func TestOpenLDAPLloaddProxyProtocolUnixLayoutSourceContract(t *testing.T) {
+	source := os.Getenv("OPENLDAP_SOURCE")
+	if source == "" {
+		t.Skip("OPENLDAP_SOURCE is not set")
+	}
+	if got := os.Getenv("OPENLDAP_COMMIT"); got != openLDAPClientToolsCommit {
+		t.Fatalf("OpenLDAP source commit = %q, want %q", got, openLDAPClientToolsCommit)
+	}
+	path := filepath.Join(source, "servers", "slapd", "proxyp.c")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read OpenLDAP PROXY protocol source: %v", err)
+	}
+	for _, anchor := range []string{
+		"struct {\t/* for AF_UNIX sockets, len = 216 */",
+		"uint8_t src_addr[108];",
+		"uint8_t dst_addr[108];",
+		"case 0x11: /* TCPv4 */",
+		"case 0x21: /* TCPv6 */",
+		"unsupported protocol %x",
+	} {
+		if !bytes.Contains(data, []byte(anchor)) {
+			t.Errorf("OpenLDAP PROXY protocol source lacks %q", anchor)
+		}
+	}
+	if bytes.Contains(data, []byte("case 0x31:")) {
+		t.Fatal("pinned OpenLDAP source unexpectedly dispatches PROXY v2 UNIX stream")
+	}
+}
+
+func TestHAProxyProtocolV2UnixStreamSourceContract(t *testing.T) {
+	source := os.Getenv("HAPROXY_SOURCE")
+	if source == "" {
+		t.Skip("HAPROXY_SOURCE is not set")
+	}
+	if got := os.Getenv("HAPROXY_COMMIT"); got != haproxyProxyProtocolCommit {
+		t.Fatalf("HAProxy source commit = %q, want %q", got, haproxyProxyProtocolCommit)
+	}
+	data, err := os.ReadFile(filepath.Join(source, "doc", "proxy-protocol.txt"))
+	if err != nil {
+		t.Fatalf("read HAProxy PROXY protocol specification: %v", err)
+	}
+	for _, anchor := range []string{
+		"0x3 : AF_UNIX",
+		"The addresses are exactly 108 bytes each.",
+		"0x1 : STREAM",
+		"TCP or UNIX_STREAM",
+		"0x2 : DGRAM",
+		"UDP or UNIX_DGRAM",
+		"struct {        /* for AF_UNIX sockets, len = 216 */",
+		"uint8_t src_addr[108];",
+		"uint8_t dst_addr[108];",
+		"bytes are part of the header beyond the address information",
+		"Type-Length-Value (TLV",
+		"vectors) in the following format",
+	} {
+		if !bytes.Contains(data, []byte(anchor)) {
+			t.Errorf("HAProxy PROXY protocol specification lacks %q", anchor)
+		}
+	}
+}
+
+func TestHAProxyProtocolV1FramingSourceContract(t *testing.T) {
+	source := os.Getenv("HAPROXY_SOURCE")
+	if source == "" {
+		t.Skip("HAPROXY_SOURCE is not set")
+	}
+	if got := os.Getenv("HAPROXY_COMMIT"); got != haproxyProxyProtocolCommit {
+		t.Fatalf("HAProxy source commit = %q, want %q", got, haproxyProxyProtocolCommit)
+	}
+	data, err := os.ReadFile(filepath.Join(source, "doc", "proxy-protocol.txt"))
+	if err != nil {
+		t.Fatalf("read HAProxy PROXY protocol specification: %v", err)
+	}
+	for _, anchor := range []string{
+		"2.1. Human-readable header format (Version 1)",
+		"only \"TCP4\"",
+		"and \"TCP6\"",
+		"receiver must ignore anything",
+		"Heading zeroes are not permitted",
+		"the CRLF sequence",
+		"first 107 characters",
+		"not tolerate a single CR or LF character",
+	} {
+		if !bytes.Contains(data, []byte(anchor)) {
+			t.Errorf("HAProxy PROXY protocol specification lacks %q", anchor)
+		}
+	}
 }
 
 func TestLloaddPLDAPSReadsProxyHeaderBeforeTLS(t *testing.T) {
@@ -356,6 +778,122 @@ func TestLloaddPLDAPSReadsProxyHeaderBeforeTLS(t *testing.T) {
 		server.LocalAddr().String() != "198.51.100.40:636" ||
 		metadata.TransportSourceAddress.String() == metadata.SourceAddress.String() {
 		t.Fatalf("PLDAPS metadata = %#v, logical=%s -> %s", metadata, server.RemoteAddr(), server.LocalAddr())
+	}
+}
+
+func TestLloaddPLDAPSReadsProxyV1HeaderBeforeTLS(t *testing.T) {
+	files := newLloaddTLSFiles(t)
+	serverTLS, err := loadLloaddClientTLS(files.certificate, files.key)
+	if err != nil {
+		t.Fatalf("load listener TLS: %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen PLDAPS: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan proxyProtocolAcceptResult, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			connection, acceptErr = prepareLloaddAcceptedConnection(
+				"pldaps://127.0.0.1:0/",
+				lloaddruntime.RuntimeConfig{ClientTLS: serverTLS, IOTimeout: time.Second},
+				connection,
+			)
+		}
+		accepted <- proxyProtocolAcceptResult{connection: connection, err: acceptErr}
+	}()
+
+	raw, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial PLDAPS: %v", err)
+	}
+	if _, err := raw.Write([]byte("PROXY TCP6 2001:db8::40 ")); err != nil {
+		_ = raw.Close()
+		t.Fatalf("write fragmented PROXY v1 prefix: %v", err)
+	}
+	if _, err := raw.Write([]byte("2001:db8::41 44000 636\r\n")); err != nil {
+		_ = raw.Close()
+		t.Fatalf("write fragmented PROXY v1 suffix: %v", err)
+	}
+	secured := tls.Client(raw, lloaddTLSClientConfig(t, files.ca))
+	if err := secured.Handshake(); err != nil {
+		_ = secured.Close()
+		t.Fatalf("TLS after PROXY v1 header: %v", err)
+	}
+	defer secured.Close()
+	server := awaitProxyProtocolAccept(t, accepted)
+	defer server.Close()
+	metadata, ok := lloaddruntime.MetadataFromConnection(server)
+	if !ok || server.RemoteAddr().String() != "[2001:db8::40]:44000" ||
+		server.LocalAddr().String() != "[2001:db8::41]:636" ||
+		metadata.TransportSourceAddress.String() == metadata.SourceAddress.String() {
+		t.Fatalf("PLDAPS v1 metadata = %#v, logical=%s -> %s", metadata, server.RemoteAddr(), server.LocalAddr())
+	}
+}
+
+func TestLloaddPLDAPSReadsProxyUnixStreamBeforeTLS(t *testing.T) {
+	files := newLloaddTLSFiles(t)
+	serverTLS, err := loadLloaddClientTLS(files.certificate, files.key)
+	if err != nil {
+		t.Fatalf("load listener TLS: %v", err)
+	}
+	listener, _, err := listenLloaddURL("pldaps://127.0.0.1:0/", serverTLS)
+	if err != nil {
+		t.Fatalf("listen PLDAPS: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan proxyProtocolAcceptResult, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			secured, ok := connection.(*tls.Conn)
+			if !ok {
+				acceptErr = fmt.Errorf("accepted PLDAPS connection has type %T", connection)
+			} else {
+				acceptErr = secured.Handshake()
+			}
+		}
+		accepted <- proxyProtocolAcceptResult{connection: connection, err: acceptErr}
+	}()
+
+	raw, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial PLDAPS: %v", err)
+	}
+	physicalSource := raw.LocalAddr().String()
+	physicalDestination := raw.RemoteAddr().String()
+	packet := lloaddProxyProtocolUnixPacket(
+		t,
+		"/run/haproxy/client.sock",
+		"/run/ldap-go/ldaps.sock",
+		lloaddProxyProtocolTLV(0x01, []byte("ldap")),
+	)
+	if _, err := raw.Write(packet); err != nil {
+		_ = raw.Close()
+		t.Fatalf("write PROXY UNIX stream header: %v", err)
+	}
+	secured := tls.Client(raw, lloaddTLSClientConfig(t, files.ca))
+	if err := secured.Handshake(); err != nil {
+		_ = secured.Close()
+		t.Fatalf("TLS after PROXY UNIX stream header: %v", err)
+	}
+	defer secured.Close()
+
+	server := awaitProxyProtocolAccept(t, accepted)
+	defer server.Close()
+	metadata, ok := lloaddruntime.MetadataFromConnection(server)
+	if !ok || server.RemoteAddr().Network() != "unix" ||
+		server.RemoteAddr().String() != "/run/haproxy/client.sock" ||
+		server.LocalAddr().Network() != "unix" ||
+		server.LocalAddr().String() != "/run/ldap-go/ldaps.sock" {
+		t.Fatalf("PLDAPS UNIX stream metadata = %#v, logical=%s -> %s", metadata, server.RemoteAddr(), server.LocalAddr())
+	}
+	if metadata.TransportSourceAddress.String() != physicalSource ||
+		metadata.TransportDestinationAddress.String() != physicalDestination ||
+		len(metadata.TLVs) != 1 || string(metadata.TLVs[0].Value) != "ldap" {
+		t.Fatalf("PLDAPS UNIX stream transport metadata = %#v", metadata)
 	}
 }
 
@@ -510,15 +1048,20 @@ func TestOrdinaryLloaddListenersRejectProxyProtocolHeader(t *testing.T) {
 				_ = proxy.Close()
 				<-done
 			}()
-			connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
-			if err != nil {
-				t.Fatalf("dial %s: %v", test.scheme, err)
+			for _, header := range [][]byte{
+				[]byte("PROXY UNKNOWN\r\n"),
+				lloaddProxyProtocolPacket(0x20, 0x00, nil),
+			} {
+				connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+				if err != nil {
+					t.Fatalf("dial %s: %v", test.scheme, err)
+				}
+				if _, err := connection.Write(header); err != nil {
+					_ = connection.Close()
+					t.Fatalf("write PROXY header: %v", err)
+				}
+				expectProxyProtocolConnectionClosed(t, connection)
 			}
-			if _, err := connection.Write(lloaddProxyProtocolPacket(0x20, 0x00, nil)); err != nil {
-				_ = connection.Close()
-				t.Fatalf("write PROXY header: %v", err)
-			}
-			expectProxyProtocolConnectionClosed(t, connection)
 		})
 	}
 }
@@ -605,6 +1148,30 @@ func lloaddProxyProtocolTCP6Packet(
 	binary.BigEndian.PutUint16(address[32:34], uint16(sourcePort))
 	binary.BigEndian.PutUint16(address[34:36], uint16(destinationPort))
 	return lloaddProxyProtocolPacket(0x21, 0x21, append(address, tlvs...))
+}
+
+func lloaddProxyProtocolUnixPacket(t *testing.T, source, destination string, tlvs []byte) []byte {
+	t.Helper()
+	address := lloaddProxyProtocolUnixAddress(t, source, destination)
+	return lloaddProxyProtocolPacket(0x21, 0x31, append(address, tlvs...))
+}
+
+func lloaddProxyProtocolUnixAddress(t *testing.T, source, destination string) []byte {
+	t.Helper()
+	address := make([]byte, lloaddProxyProtocolUnixAddrBytes)
+	copy(address[:lloaddProxyProtocolUnixPathBytes], lloaddProxyProtocolUnixPath(t, source))
+	copy(address[lloaddProxyProtocolUnixPathBytes:], lloaddProxyProtocolUnixPath(t, destination))
+	return address
+}
+
+func lloaddProxyProtocolUnixPath(t *testing.T, path string) []byte {
+	t.Helper()
+	if len(path) == 0 || len(path) >= lloaddProxyProtocolUnixPathBytes {
+		t.Fatalf("invalid PROXY protocol UNIX test path length %d", len(path))
+	}
+	encoded := make([]byte, lloaddProxyProtocolUnixPathBytes)
+	copy(encoded, path)
+	return encoded
 }
 
 func lloaddProxyProtocolTLV(tlvType byte, value []byte) []byte {
