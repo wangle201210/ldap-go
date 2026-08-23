@@ -3,8 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -490,6 +492,7 @@ type databaseEqualityIndexRegistry interface {
 	EffectiveAttributeType(string) (schema.AttributeType, bool, error)
 	NormalizeEqualityValue(string, []byte) ([]byte, error)
 	NormalizeEqualityAssertion(string, []byte) ([]byte, error)
+	CompareOrdering(string, string, []byte, []byte) (int, error)
 	AttributeValues(directory.Entry, string) [][]byte
 	ObjectClass(string) (schema.ObjectClass, bool)
 }
@@ -571,6 +574,273 @@ func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexValues(
 	return result, nil
 }
 
+func (normalizer *databaseEqualityIndexNormalizer) ResolveSubstringIndexAttribute(
+	description string,
+) (canonical string, initial, any, final bool, err error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !found {
+		return "", false, false, false, err
+	}
+	canonical = strings.ToLower(attribute.OID)
+	for _, configured := range normalizer.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.SubstringInitial, configured.SubstringAny, configured.SubstringFinal, nil
+		}
+	}
+	return canonical, false, false, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) NormalizeSubstringIndexAssertion(
+	description string,
+	value directory.Substring,
+) (directory.Substring, error) {
+	normalize := func(raw []byte) ([]byte, error) {
+		return normalizer.registry.NormalizeEqualityValue(description, raw)
+	}
+	var result directory.Substring
+	var err error
+	if value.Initial != nil {
+		result.Initial, err = normalize(value.Initial)
+		if err != nil {
+			return directory.Substring{}, err
+		}
+	}
+	result.Any = make([][]byte, 0, len(value.Any))
+	for _, raw := range value.Any {
+		normalized, normalizeErr := normalize(raw)
+		if normalizeErr != nil {
+			return directory.Substring{}, normalizeErr
+		}
+		result.Any = append(result.Any, normalized)
+	}
+	if value.Final != nil {
+		result.Final, err = normalize(value.Final)
+		if err != nil {
+			return directory.Substring{}, err
+		}
+	}
+	return result, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) SubstringIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	return normalizer.normalizeIndexValues(entry, canonicalAttribute, false)
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ResolveOrderingIndexAttribute(
+	description string,
+) (canonical string, ordering bool, err error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !found {
+		return "", false, err
+	}
+	canonical = strings.ToLower(attribute.OID)
+	for _, configured := range normalizer.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.Ordering, nil
+		}
+	}
+	return canonical, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) NormalizeOrderingIndexAssertion(
+	description string,
+	value []byte,
+) ([]byte, error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !found {
+		if err == nil {
+			err = fmt.Errorf("undefined attribute type %q", description)
+		}
+		return nil, err
+	}
+	return normalizer.normalizeOrderingIndexValue(attribute, value)
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) OrderingIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	attribute, found, err := normalizer.registry.EffectiveAttributeType(canonicalAttribute)
+	if err != nil || !found {
+		if err == nil {
+			err = fmt.Errorf("undefined attribute type %q", canonicalAttribute)
+		}
+		return nil, err
+	}
+	values := normalizer.registry.AttributeValues(entry, canonicalAttribute)
+	result := make([][]byte, 0, len(values))
+	for _, value := range values {
+		normalized, err := normalizer.normalizeOrderingIndexValue(attribute, value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) normalizeIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+	expandObjectClass bool,
+) ([][]byte, error) {
+	values := normalizer.registry.AttributeValues(entry, canonicalAttribute)
+	if expandObjectClass && canonicalAttribute == "2.5.4.0" {
+		values = normalizer.expandObjectClassIndexValues(values)
+	}
+	result := make([][]byte, 0, len(values))
+	for _, value := range values {
+		normalized, err := normalizer.registry.NormalizeEqualityValue(canonicalAttribute, value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) normalizeOrderingIndexValue(
+	attribute schema.AttributeType,
+	value []byte,
+) ([]byte, error) {
+	if _, err := normalizer.registry.CompareOrdering(attribute.OID, "", value, value); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizer.registry.NormalizeEqualityValue(attribute.OID, value)
+	if err != nil {
+		return nil, err
+	}
+	switch canonicalIndexMatchingRule(attribute.Ordering) {
+	case "integerorderingmatch":
+		return sortableLDAPInteger(normalized)
+	case "generalizedtimeorderingmatch":
+		if len(normalized) == 0 || normalized[len(normalized)-1] != 'Z' {
+			return nil, errors.New("invalid normalized generalized time")
+		}
+		// The schema comparator orders normalized generalizedTime values after
+		// removing the terminal Z. Keeping it would place fractional seconds
+		// before the corresponding whole second in the byte-sorted index.
+		return bytes.Clone(normalized[:len(normalized)-1]), nil
+	default:
+		return normalized, nil
+	}
+}
+
+func sortableLDAPInteger(value []byte) ([]byte, error) {
+	integer := new(big.Int)
+	if _, ok := integer.SetString(strings.TrimSpace(string(value)), 10); !ok {
+		return nil, errors.New("invalid LDAP integer")
+	}
+	if integer.Sign() == 0 {
+		return []byte{1}, nil
+	}
+	digits := []byte(new(big.Int).Abs(integer).String())
+	if uint64(len(digits)) > uint64(^uint32(0)) {
+		return nil, errors.New("LDAP integer is too large to index")
+	}
+	result := make([]byte, 5, 5+len(digits))
+	if integer.Sign() > 0 {
+		result[0] = 2
+		binary.BigEndian.PutUint32(result[1:], uint32(len(digits)))
+		return append(result, digits...), nil
+	}
+	result[0] = 0
+	binary.BigEndian.PutUint32(result[1:], ^uint32(len(digits)))
+	for _, digit := range digits {
+		result = append(result, ^digit)
+	}
+	return result, nil
+}
+
+func canonicalIndexMatchingRule(rule string) string {
+	rule = strings.ToLower(strings.TrimSpace(rule))
+	switch rule {
+	case "2.5.13.2":
+		return "caseignorematch"
+	case "2.5.13.3":
+		return "caseignoreorderingmatch"
+	case "2.5.13.4":
+		return "caseignoresubstringsmatch"
+	case "2.5.13.5":
+		return "caseexactmatch"
+	case "2.5.13.6":
+		return "caseexactorderingmatch"
+	case "2.5.13.7":
+		return "caseexactsubstringsmatch"
+	case "2.5.13.8":
+		return "numericstringmatch"
+	case "2.5.13.9":
+		return "numericstringorderingmatch"
+	case "2.5.13.10":
+		return "numericstringsubstringsmatch"
+	case "2.5.13.14":
+		return "integermatch"
+	case "2.5.13.15":
+		return "integerorderingmatch"
+	case "2.5.13.17":
+		return "octetstringmatch"
+	case "2.5.13.18":
+		return "octetstringorderingmatch"
+	case "2.5.13.20":
+		return "telephonenumbermatch"
+	case "2.5.13.21":
+		return "telephonenumbersubstringsmatch"
+	case "2.5.13.27":
+		return "generalizedtimematch"
+	case "2.5.13.28":
+		return "generalizedtimeorderingmatch"
+	case "1.3.6.1.4.1.1466.109.114.1":
+		return "caseexactia5match"
+	case "1.3.6.1.4.1.1466.109.114.2":
+		return "caseignoreia5match"
+	case "1.3.6.1.1.16.2":
+		return "uuidmatch"
+	case "1.3.6.1.1.16.3":
+		return "uuidorderingmatch"
+	case "1.3.6.1.4.1.4203.666.11.2.2":
+		return "csnmatch"
+	case "1.3.6.1.4.1.4203.666.11.2.3":
+		return "csnorderingmatch"
+	default:
+		return rule
+	}
+}
+
+func substringIndexRulesEquivalent(equality, substring string) bool {
+	equality = canonicalIndexMatchingRule(equality)
+	substring = canonicalIndexMatchingRule(substring)
+	pairs := map[string]string{
+		"caseignoresubstringsmatch":      "caseignorematch",
+		"caseexactsubstringsmatch":       "caseexactmatch",
+		"caseignoreia5substringsmatch":   "caseignoreia5match",
+		"caseexactia5substringsmatch":    "caseexactia5match",
+		"numericstringsubstringsmatch":   "numericstringmatch",
+		"telephonenumbersubstringsmatch": "telephonenumbermatch",
+	}
+	return pairs[substring] == equality
+}
+
+func orderingIndexRulesEquivalent(equality, ordering string) bool {
+	equality = canonicalIndexMatchingRule(equality)
+	ordering = canonicalIndexMatchingRule(ordering)
+	pairs := map[string]string{
+		"caseignoreorderingmatch":      "caseignorematch",
+		"caseignoreia5orderingmatch":   "caseignoreia5match",
+		"caseexactorderingmatch":       "caseexactmatch",
+		"caseexactia5orderingmatch":    "caseexactia5match",
+		"numericstringorderingmatch":   "numericstringmatch",
+		"octetstringorderingmatch":     "octetstringmatch",
+		"integerorderingmatch":         "integermatch",
+		"uuidorderingmatch":            "uuidmatch",
+		"generalizedtimeorderingmatch": "generalizedtimematch",
+		"csnorderingmatch":             "csnmatch",
+	}
+	return pairs[ordering] == equality
+}
+
 func (normalizer *databaseEqualityIndexNormalizer) expandObjectClassIndexValues(
 	values [][]byte,
 ) [][]byte {
@@ -640,7 +910,7 @@ func loadDatabaseEqualityIndexes(
 				entry.DN,
 			)
 		}
-		var equality, presence bool
+		var equality, presence, substringInitial, substringAny, substringFinal, ordering bool
 		for _, argument := range arguments[1:] {
 			for _, indexType := range strings.Split(argument, ",") {
 				switch strings.ToLower(strings.TrimSpace(indexType)) {
@@ -648,10 +918,28 @@ func loadDatabaseEqualityIndexes(
 					equality = true
 				case "pres":
 					presence = true
+				case "sub":
+					substringInitial = true
+					substringAny = true
+					substringFinal = true
+				case "subinitial":
+					substringInitial = true
+				case "subany":
+					substringAny = true
+				case "subfinal":
+					substringFinal = true
+				case "ordering":
+					ordering = true
 				case "":
-				case "sub", "approx", "ordering", "subinitial", "subany", "subfinal", "nolang":
+				case "approx":
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-						"%s olcDbIndex type %q is unsupported in the equality-index phase",
+						"%s olcDbIndex type %q requires an explicit approximate matching rule; the active schema exposes none",
+						entry.DN,
+						indexType,
+					)
+				case "nolang":
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex type %q is unsupported",
 						entry.DN,
 						indexType,
 					)
@@ -664,9 +952,9 @@ func loadDatabaseEqualityIndexes(
 				}
 			}
 		}
-		if !equality && !presence {
+		if !equality && !presence && !substringInitial && !substringAny && !substringFinal && !ordering {
 			return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-				"%s olcDbIndex does not configure eq or pres",
+				"%s olcDbIndex does not configure a supported index type",
 				entry.DN,
 			)
 		}
@@ -701,12 +989,59 @@ func loadDatabaseEqualityIndexes(
 					description,
 				)
 			}
+			hasSubstring := substringInitial || substringAny || substringFinal
+			if hasSubstring {
+				if attribute.Substring == "" {
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex attribute %q has no substring matching rule",
+						entry.DN,
+						description,
+					)
+				}
+				if !substringIndexRulesEquivalent(attribute.Equality, attribute.Substring) {
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex attribute %q substring rule %q cannot be indexed without changing matching semantics",
+						entry.DN,
+						description,
+						attribute.Substring,
+					)
+				}
+			}
+			if ordering {
+				if attribute.Ordering == "" {
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex attribute %q has no ordering matching rule",
+						entry.DN,
+						description,
+					)
+				}
+				if !orderingIndexRulesEquivalent(attribute.Equality, attribute.Ordering) {
+					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
+						"%s olcDbIndex attribute %q ordering rule %q has no proven sortable normalization",
+						entry.DN,
+						description,
+						attribute.Ordering,
+					)
+				}
+			}
 			key := strings.ToLower(attribute.OID)
 			configured := byAttribute[key]
 			configured.Attribute = key
-			configured.EqualityRule = strings.ToLower(attribute.Equality)
+			if attribute.Equality != "" {
+				configured.EqualityRule = canonicalIndexMatchingRule(attribute.Equality)
+			}
+			if hasSubstring {
+				configured.SubstringRule = canonicalIndexMatchingRule(attribute.Substring)
+			}
+			if ordering {
+				configured.OrderingRule = canonicalIndexMatchingRule(attribute.Ordering)
+			}
 			configured.Equality = configured.Equality || equality
 			configured.Presence = configured.Presence || presence
+			configured.SubstringInitial = configured.SubstringInitial || substringInitial
+			configured.SubstringAny = configured.SubstringAny || substringAny
+			configured.SubstringFinal = configured.SubstringFinal || substringFinal
+			configured.Ordering = configured.Ordering || ordering
 			byAttribute[key] = configured
 		}
 	}

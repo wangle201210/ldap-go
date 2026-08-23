@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
@@ -36,8 +37,8 @@ func (tx *boltTx) equalityIndexConfig(
 func (tx *boltTx) equalityIndexPostings(
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 ) ([]string, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return nil, err
@@ -48,8 +49,8 @@ func (tx *boltTx) equalityIndexPostings(
 	prefix := equalityIndexPostingPrefix(
 		partition,
 		attribute,
+		kind,
 		value,
-		presence,
 	)
 	var result []string
 	cursor := tx.equalityIndexes.Cursor()
@@ -62,6 +63,54 @@ func (tx *boltTx) equalityIndexPostings(
 		}
 		result = append(result, string(key[len(prefix):]))
 	}
+	return result, nil
+}
+
+func (tx *boltTx) equalityIndexOrderingPostings(
+	partition,
+	attribute string,
+	assertion []byte,
+	greaterOrEqual bool,
+) ([]string, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if tx.equalityIndexes == nil {
+		return nil, nil
+	}
+	prefix := equalityIndexAttributeKindPrefix(partition, attribute, equalityIndexOrdering)
+	start := prefix
+	if greaterOrEqual {
+		start = equalityIndexPostingPrefix(partition, attribute, equalityIndexOrdering, assertion)
+	}
+	keys := make(map[string]struct{})
+	cursor := tx.equalityIndexes.Cursor()
+	for key, _ := cursor.Seek(start); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+		if err := tx.ctx.Err(); err != nil {
+			return nil, err
+		}
+		_, _, kind, value, entryKey, err := decodeEqualityIndexPostingKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if kind != equalityIndexOrdering {
+			return nil, errors.New("ordering index range contains another posting kind")
+		}
+		comparison := bytes.Compare(value, assertion)
+		if greaterOrEqual {
+			if comparison < 0 {
+				continue
+			}
+		} else if comparison > 0 {
+			break
+		}
+		keys[entryKey] = struct{}{}
+	}
+	result := make([]string, 0, len(keys))
+	for key := range keys {
+		result = append(result, key)
+	}
+	sort.Strings(result)
 	return result, nil
 }
 
@@ -316,25 +365,12 @@ func (tx *boltTx) addEqualityIndexEntry(
 	}
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
-		if len(values) == 0 {
-			continue
-		}
-		if definition.Presence {
+		for _, term := range equalityIndexTermsForAttribute(definition, values) {
 			if err := tx.equalityIndexes.Put(
-				equalityIndexPostingKey(partition, attribute, nil, true, entryKey),
+				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryKey),
 				[]byte{1},
 			); err != nil {
 				return err
-			}
-		}
-		if definition.Equality {
-			for _, value := range values {
-				if err := tx.equalityIndexes.Put(
-					equalityIndexPostingKey(partition, attribute, value, false, entryKey),
-					[]byte{1},
-				); err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -354,23 +390,11 @@ func (tx *boltTx) removeEqualityIndexEntry(
 	}
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
-		if len(values) == 0 {
-			continue
-		}
-		if definition.Presence {
+		for _, term := range equalityIndexTermsForAttribute(definition, values) {
 			if err := tx.equalityIndexes.Delete(
-				equalityIndexPostingKey(partition, attribute, nil, true, entryKey),
+				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryKey),
 			); err != nil {
 				return err
-			}
-		}
-		if definition.Equality {
-			for _, value := range values {
-				if err := tx.equalityIndexes.Delete(
-					equalityIndexPostingKey(partition, attribute, value, false, entryKey),
-				); err != nil {
-					return err
-				}
 			}
 		}
 	}

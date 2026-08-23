@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
@@ -60,8 +62,8 @@ func (tx *memoryTx) equalityIndexConfig(
 func (tx *memoryTx) equalityIndexPostings(
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 ) ([]string, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return nil, err
@@ -69,10 +71,48 @@ func (tx *memoryTx) equalityIndexPostings(
 	term := string(equalityIndexPostingPrefix(
 		partition,
 		attribute,
+		kind,
 		value,
-		presence,
 	))
 	keys := tx.equalityPostings[partition][term]
+	result := make([]string, 0, len(keys))
+	for key := range keys {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func (tx *memoryTx) equalityIndexOrderingPostings(
+	partition,
+	attribute string,
+	assertion []byte,
+	greaterOrEqual bool,
+) ([]string, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return nil, err
+	}
+	prefix := equalityIndexAttributeKindPrefix(partition, attribute, equalityIndexOrdering)
+	keys := make(map[string]struct{})
+	for term, postings := range tx.equalityPostings[partition] {
+		if !strings.HasPrefix(term, string(prefix)) {
+			continue
+		}
+		value, position, err := readOrderPreservingValue([]byte(term), len(prefix))
+		if err != nil || position != len(term) {
+			if err == nil {
+				err = errors.New("ordering index term has trailing data")
+			}
+			return nil, err
+		}
+		comparison := bytes.Compare(value, assertion)
+		if greaterOrEqual && comparison < 0 || !greaterOrEqual && comparison > 0 {
+			continue
+		}
+		for key := range postings {
+			keys[key] = struct{}{}
+		}
+	}
 	result := make([]string, 0, len(keys))
 	for key := range keys {
 		result = append(result, key)
@@ -294,16 +334,8 @@ func (tx *memoryTx) addEqualityIndexEntry(
 	postings := tx.equalityPostings[partition]
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
-		if len(values) == 0 {
-			continue
-		}
-		if definition.Presence {
-			addMemoryEqualityPosting(postings, partition, attribute, nil, true, entryKey)
-		}
-		if definition.Equality {
-			for _, value := range values {
-				addMemoryEqualityPosting(postings, partition, attribute, value, false, entryKey)
-			}
+		for _, term := range equalityIndexTermsForAttribute(definition, values) {
+			addMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entryKey)
 		}
 	}
 	return nil
@@ -323,16 +355,8 @@ func (tx *memoryTx) removeEqualityIndexEntry(
 	postings := tx.equalityPostings[partition]
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
-		if len(values) == 0 {
-			continue
-		}
-		if definition.Presence {
-			deleteMemoryEqualityPosting(postings, partition, attribute, nil, true, entryKey)
-		}
-		if definition.Equality {
-			for _, value := range values {
-				deleteMemoryEqualityPosting(postings, partition, attribute, value, false, entryKey)
-			}
+		for _, term := range equalityIndexTermsForAttribute(definition, values) {
+			deleteMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entryKey)
 		}
 	}
 	return nil
@@ -347,11 +371,11 @@ func addMemoryEqualityPosting(
 	postings map[string]map[string]struct{},
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 	entryKey string,
 ) {
-	term := string(equalityIndexPostingPrefix(partition, attribute, value, presence))
+	term := string(equalityIndexPostingPrefix(partition, attribute, kind, value))
 	if postings[term] == nil {
 		postings[term] = make(map[string]struct{})
 	}
@@ -362,11 +386,11 @@ func deleteMemoryEqualityPosting(
 	postings map[string]map[string]struct{},
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 	entryKey string,
 ) {
-	term := string(equalityIndexPostingPrefix(partition, attribute, value, presence))
+	term := string(equalityIndexPostingPrefix(partition, attribute, kind, value))
 	delete(postings[term], entryKey)
 	if len(postings[term]) == 0 {
 		delete(postings, term)

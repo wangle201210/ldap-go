@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1717,8 +1718,8 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		args    []string
 		message string
 	}{
-		{name: "slapadd continue", args: []string{"slapadd", "-c"}, message: "option -c is not supported"},
-		{name: "slapadd quick", args: []string{"slapadd", "-q"}, message: "option -q is not supported"},
+		{name: "slapadd false continue", args: []string{"slapadd", "-c=false"}, message: "-c=false is not supported"},
+		{name: "slapadd false quick", args: []string{"slapadd", "-q=false"}, message: "-q=false is not supported"},
 		{name: "slapcat continue", args: []string{"slapcat", "-c"}, message: "option -c is not supported"},
 		{name: "slapindex suffix", args: []string{"slapindex", "-b", "dc=example,dc=com"}, message: "option -b is not supported"},
 		{name: "slapindex number", args: []string{"slapindex", "-n", "1"}, message: "option -n is not supported"},
@@ -1757,6 +1758,418 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 				t.Fatalf("run(%v) exposed the password: stdout=%q stderr=%q", test.args, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestSlapaddContinueRetainsSuccessfulRecords(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "continue.db")
+	seedOpenLDAPAliasDatabase(t, databasePath)
+	input := `dn: uid=alice,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice
+sn: Example
+
+dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=invalid,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: invalid
+cn: Invalid
+sn: Entry
+undefinedAttribute: rejected
+
+`
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-replace", "-c"},
+		input,
+	)
+	if exitCode != 1 || !strings.Contains(stdout, "imported 3 entries") {
+		t.Fatalf("slapadd -c exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, fragment := range []string{
+		"slapadd: line 15:",
+		`dn="uid=invalid,ou=people,dc=example,dc=com"`,
+		"undefined attribute type",
+		"completed with 1 record errors; 3 entries retained",
+	} {
+		if !strings.Contains(stderr, fragment) {
+			t.Errorf("stderr %q does not contain %q", stderr, fragment)
+		}
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", databasePath, "-n", "1"},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stderr, "exported 3 entries") {
+		t.Fatalf("slapcat after -c exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, dn := range []string{
+		"dc=example,dc=com",
+		"ou=people,dc=example,dc=com",
+		"uid=alice,ou=people,dc=example,dc=com",
+	} {
+		if !strings.Contains(stdout, "dn: "+dn+"\n") {
+			t.Errorf("slapcat output omitted %q:\n%s", dn, stdout)
+		}
+	}
+	if strings.Contains(stdout, "dn: uid=invalid,") {
+		t.Fatalf("slapadd -c retained invalid entry:\n%s", stdout)
+	}
+}
+
+func TestSlapaddContinueDryRunUsesDisposableDatabase(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "continue-dry-run.db")
+	seedOpenLDAPAliasDatabase(t, databasePath)
+	before, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database before dry run: %v", err)
+	}
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-c", "-u"},
+		`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=invalid,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: invalid
+cn: Invalid
+sn: Entry
+undefinedAttribute: rejected
+
+`,
+	)
+	if exitCode != 1 || !strings.Contains(stdout, "validated 1 entries") ||
+		!strings.Contains(stderr, "1 record errors") {
+		t.Fatalf("slapadd -c -u exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	after, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database after dry run: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("slapadd -c -u modified the destination database")
+	}
+}
+
+func TestSlapaddQuickModeOnlySkipsValueChecks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("schema remains enabled", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "quick-schema.db")
+		seedOpenLDAPAliasDatabase(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{"slapadd", "-db", databasePath, "-n", "1", "-replace", "-q"},
+			`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+cn: rejected
+
+`,
+		)
+		if exitCode != 1 || !strings.Contains(stderr, "not allowed") {
+			t.Fatalf("slapadd -q exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+
+	t.Run("value checks are disabled", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "quick-value.db")
+		seedOpenLDAPAliasDatabase(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{
+				"slapadd", "-db", databasePath, "-n", "1", "-replace", "-q",
+				"-o", "value-check=yes",
+			},
+			`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=quick,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: quick
+cn: Quick Value
+sn: Value
+uidNumber: not-an-integer
+gidNumber: 1000
+homeDirectory: /home/quick
+
+`,
+		)
+		if exitCode != 0 || !strings.Contains(stdout, "imported 2 entries") ||
+			!strings.Contains(stderr, "value-check incompatible with quick mode; disabled.") {
+			t.Fatalf("slapadd -q exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+
+	t.Run("schema disable is independent", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "quick-no-schema.db")
+		seedOpenLDAPAliasDatabase(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{
+				"slapadd", "-db", databasePath, "-n", "1", "-replace", "-q", "-s",
+			},
+			`dn: dc=example,dc=com
+objectClass: domain
+dc: example
+cn: retained
+
+`,
+		)
+		if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") {
+			t.Fatalf("slapadd -q -s exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+
+	t.Run("objectClass remains required", func(t *testing.T) {
+		databasePath := filepath.Join(t.TempDir(), "quick-object-class.db")
+		seedOpenLDAPAliasDatabase(t, databasePath)
+		stdout, stderr, exitCode := runCLIForTest(
+			t,
+			[]string{
+				"slapadd", "-db", databasePath, "-n", "1", "-replace", "-q", "-s",
+			},
+			`dn: dc=example,dc=com
+dc: example
+quickAttribute: rejected
+
+`,
+		)
+		if exitCode != 1 || !strings.Contains(stderr, "objectClass") {
+			t.Fatalf("slapadd -q -s exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+		}
+	})
+}
+
+func TestSlapaddContinueRejectsConfigurationDatabase(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "config-continue.db")
+	seedOpenLDAPAliasDatabase(t, databasePath)
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "0", "-replace", "-c"},
+		`dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+`,
+	)
+	if exitCode != 1 || stdout != "" || !strings.Contains(
+		stderr,
+		"does not support cn=config imports",
+	) {
+		t.Fatalf("config slapadd -c exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", databasePath, "-n", "0"},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "olcDatabase: {1}mdb") {
+		t.Fatalf("config changed after rejected -c exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
+func TestOpenLDAPReferenceSlapaddContinueAndQuickExitBehavior(t *testing.T) {
+	if os.Getenv("LDAP_GO_OPENLDAP_REFERENCE_TESTS") == "" {
+		t.Skip("set LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 to run the OpenLDAP slapadd reference test")
+	}
+	if got := os.Getenv("OPENLDAP_REFERENCE_VERIFIED"); got != "1" {
+		t.Fatalf("OPENLDAP_REFERENCE_VERIFIED = %q, want 1", got)
+	}
+	slapadd := os.Getenv("OPENLDAP_SLAPADD")
+	if slapadd == "" {
+		t.Skip("OPENLDAP_SLAPADD is not configured")
+	}
+	schemaDir := os.Getenv("OPENLDAP_SCHEMA_DIR")
+	if schemaDir == "" {
+		t.Skip("OPENLDAP_SCHEMA_DIR is not configured")
+	}
+
+	root := t.TempDir()
+	referenceDB := filepath.Join(root, "reference-db")
+	if err := os.Mkdir(referenceDB, 0o700); err != nil {
+		t.Fatalf("create reference database: %v", err)
+	}
+	configPath := filepath.Join(root, "slapd.conf")
+	config := "include " + filepath.Join(schemaDir, "core.schema") + "\n" +
+		"include " + filepath.Join(schemaDir, "cosine.schema") + "\n\n" +
+		"database mdb\nmaxsize 1073741824\n" +
+		"suffix \"dc=example,dc=com\"\n" +
+		"rootdn \"cn=admin,dc=example,dc=com\"\n" +
+		"directory " + referenceDB + "\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatalf("write reference config: %v", err)
+	}
+	input := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: ou=one,dc=example,dc=com
+objectClass: organizationalUnit
+ou: one
+
+dn: ou=one,dc=example,dc=com
+objectClass: organizationalUnit
+ou: one
+
+dn: ou=two,dc=example,dc=com
+objectClass: organizationalUnit
+ou: two
+
+`
+	inputPath := filepath.Join(root, "continue.ldif")
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write reference LDIF: %v", err)
+	}
+	reference := exec.Command(slapadd, "-f", configPath, "-c", "-l", inputPath)
+	referenceOutput, referenceErr := reference.CombinedOutput()
+	if referenceErr == nil || reference.ProcessState.ExitCode() != 1 {
+		t.Fatalf("OpenLDAP slapadd -c error=%v output=%q", referenceErr, referenceOutput)
+	}
+	slapcat := filepath.Join(filepath.Dir(slapadd), "slapcat")
+	referenceData, err := exec.Command(slapcat, "-f", configPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("OpenLDAP slapcat: %v\n%s", err, referenceData)
+	}
+	for _, dn := range []string{
+		"dc=example,dc=com",
+		"ou=one,dc=example,dc=com",
+		"ou=two,dc=example,dc=com",
+	} {
+		if !strings.Contains(string(referenceData), "dn: "+dn+"\n") {
+			t.Fatalf("OpenLDAP -c omitted %q:\n%s", dn, referenceData)
+		}
+	}
+
+	quick := exec.Command(
+		slapadd,
+		"-f", configPath,
+		"-q",
+		"-o", "value-check=yes",
+		"-u",
+		"-l", inputPath,
+	)
+	quickOutput, quickErr := quick.CombinedOutput()
+	if quickErr != nil || !strings.Contains(
+		string(quickOutput),
+		"value-check incompatible with quick mode; disabled.",
+	) {
+		t.Fatalf("OpenLDAP slapadd quick error=%v output=%q", quickErr, quickOutput)
+	}
+	invalidSchema := `dn: cn=quick,dc=example,dc=com
+objectClass: organizationalUnit
+ou: quick
+cn: rejected
+
+`
+	invalidSchemaPath := filepath.Join(root, "quick-invalid-schema.ldif")
+	if err := os.WriteFile(invalidSchemaPath, []byte(invalidSchema), 0o600); err != nil {
+		t.Fatalf("write quick schema LDIF: %v", err)
+	}
+	referenceQuickSchema := exec.Command(
+		slapadd,
+		"-f", configPath,
+		"-q",
+		"-u",
+		"-l", invalidSchemaPath,
+	)
+	referenceQuickSchemaOutput, referenceQuickSchemaErr :=
+		referenceQuickSchema.CombinedOutput()
+	if referenceQuickSchemaErr == nil || !strings.Contains(
+		string(referenceQuickSchemaOutput),
+		"not allowed",
+	) {
+		t.Fatalf(
+			"OpenLDAP slapadd -q schema error=%v output=%q",
+			referenceQuickSchemaErr,
+			referenceQuickSchemaOutput,
+		)
+	}
+	referenceQuickNoSchema := exec.Command(
+		slapadd,
+		"-f", configPath,
+		"-q",
+		"-s",
+		"-u",
+		"-l", invalidSchemaPath,
+	)
+	referenceQuickNoSchemaOutput, referenceQuickNoSchemaErr :=
+		referenceQuickNoSchema.CombinedOutput()
+	if referenceQuickNoSchemaErr != nil {
+		t.Fatalf(
+			"OpenLDAP slapadd -q -s error=%v output=%q",
+			referenceQuickNoSchemaErr,
+			referenceQuickNoSchemaOutput,
+		)
+	}
+
+	databasePath := filepath.Join(root, "ldap-go.db")
+	configLDIF := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+
+`
+	_, _, exitCode := runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-replace"},
+		configLDIF,
+	)
+	if exitCode != 0 {
+		t.Fatal("seed ldap-go differential database failed")
+	}
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-c"},
+		input,
+	)
+	if exitCode != 1 || !strings.Contains(stdout, "imported 3 entries") ||
+		!strings.Contains(stderr, "1 record errors") {
+		t.Fatalf("ldap-go slapadd -c exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-q", "-u"},
+		invalidSchema,
+	)
+	if exitCode != 1 || !strings.Contains(stderr, "not allowed") {
+		t.Fatalf("ldap-go slapadd -q exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-q", "-s", "-u"},
+		invalidSchema,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "validated 1 entries") {
+		t.Fatalf("ldap-go slapadd -q -s exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
 }
 

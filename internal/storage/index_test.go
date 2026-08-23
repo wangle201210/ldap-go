@@ -92,6 +92,77 @@ func (schema indexTestSchema) EqualityIndexValues(
 	return result, nil
 }
 
+func (schema indexTestSchema) ResolveSubstringIndexAttribute(
+	description string,
+) (string, bool, bool, bool, error) {
+	canonical, ok := indexTestAttribute(description)
+	if !ok {
+		return "", false, false, false, nil
+	}
+	for _, configured := range schema.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.SubstringInitial, configured.SubstringAny, configured.SubstringFinal, nil
+		}
+	}
+	return canonical, false, false, false, nil
+}
+
+func (schema indexTestSchema) NormalizeSubstringIndexAssertion(
+	_ string,
+	value directory.Substring,
+) (directory.Substring, error) {
+	result := directory.Substring{}
+	if value.Initial != nil {
+		result.Initial = indexTestNormalize(value.Initial)
+	}
+	for _, part := range value.Any {
+		result.Any = append(result.Any, indexTestNormalize(part))
+	}
+	if value.Final != nil {
+		result.Final = indexTestNormalize(value.Final)
+	}
+	return result, nil
+}
+
+func (schema indexTestSchema) SubstringIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	return schema.EqualityIndexValues(entry, canonicalAttribute)
+}
+
+func (schema indexTestSchema) ResolveOrderingIndexAttribute(
+	description string,
+) (string, bool, error) {
+	canonical, ok := indexTestAttribute(description)
+	if !ok {
+		return "", false, nil
+	}
+	for _, configured := range schema.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.Ordering, nil
+		}
+	}
+	return canonical, false, nil
+}
+
+func (schema indexTestSchema) NormalizeOrderingIndexAssertion(
+	_ string,
+	value []byte,
+) ([]byte, error) {
+	if string(value) == schema.failOn {
+		return nil, errors.New("injected index normalization failure")
+	}
+	return indexTestNormalize(value), nil
+}
+
+func (schema indexTestSchema) OrderingIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	return schema.EqualityIndexValues(entry, canonicalAttribute)
+}
+
 func indexTestAttribute(value string) (string, bool) {
 	value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
 	switch value {
@@ -107,7 +178,7 @@ func indexTestAttribute(value string) (string, bool) {
 }
 
 func indexTestNormalize(value []byte) []byte {
-	return []byte(strings.ToLower(strings.TrimSpace(string(value))))
+	return []byte(strings.ToLower(strings.Join(strings.Fields(string(value)), " ")))
 }
 
 func indexTestConfig(attributes ...EqualityIndexAttribute) EqualityIndexConfig {
@@ -120,6 +191,21 @@ func indexTestCNConfig() EqualityIndexConfig {
 		EqualityRule: "caseignorematch",
 		Equality:     true,
 		Presence:     true,
+	})
+}
+
+func indexTestCNPhase2Config() EqualityIndexConfig {
+	return indexTestConfig(EqualityIndexAttribute{
+		Attribute:        "2.5.4.3",
+		EqualityRule:     "caseignorematch",
+		SubstringRule:    "caseignoresubstringsmatch",
+		OrderingRule:     "caseignoreorderingmatch",
+		Equality:         true,
+		Presence:         true,
+		SubstringInitial: true,
+		SubstringAny:     true,
+		SubstringFinal:   true,
+		Ordering:         true,
 	})
 }
 
@@ -284,7 +370,7 @@ func TestEqualityIndexLegacyFirstBuildAndBoltReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := indexTestSchema{config: indexTestCNConfig()}
+	schema := indexTestSchema{config: indexTestCNPhase2Config()}
 	if err := store.Update(context.Background(), func(writer Writer) error {
 		if err := writer.PutIn(
 			"db",
@@ -314,6 +400,124 @@ func TestEqualityIndexLegacyFirstBuildAndBoltReopen(t *testing.T) {
 	assertIndexDNs(t, store, schema, directory.Filter{
 		Kind: directory.FilterEquality, Attribute: "commonName", Assertion: []byte("new"),
 	}, true, []string{"cn=New,dc=example"})
+	assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+		Kind:      directory.FilterSubstrings,
+		Attribute: "cn",
+		Substring: directory.Substring{Any: [][]byte{[]byte("ega")}},
+	}, true)
+}
+
+func TestSubstringAndOrderingIndexMemoryAndBoltNeverMissCandidates(t *testing.T) {
+	for _, backend := range []string{"memory", "bolt"} {
+		t.Run(backend, func(t *testing.T) {
+			store := openIndexTestStore(t, backend)
+			defer store.Close()
+			schema := indexTestSchema{config: indexTestCNPhase2Config()}
+			var longBuilder strings.Builder
+			for index := 0; index < substringIndexMaxNGrams+100; index++ {
+				longBuilder.WriteString(strconv.FormatInt(int64(index), 36))
+				longBuilder.WriteByte('|')
+			}
+			longBuilder.WriteString("late-target")
+			longValue := longBuilder.String()
+			entries := []directory.Entry{
+				indexTestEntry("cn=Alpha Bravo,dc=example", " Alpha   Bravo ", "a1"),
+				indexTestEntry("cn=Alphabet Soup,dc=example", "Alphabet Soup", "a2"),
+				indexTestEntry("cn=Middle Target,dc=example", "Middle Target", "m1"),
+				indexTestEntry("cn=Zulu,dc=example", "Zulu", "z1"),
+				indexTestEntry("cn=Long,dc=example", longValue, "long"),
+			}
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				indexed := WriterInPartitionWithNormalizer(writer, "db", schema)
+				for _, entry := range entries {
+					if err := indexed.Put(entry, false); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			filters := []directory.Filter{
+				{Kind: directory.FilterSubstrings, Attribute: "commonName", Substring: directory.Substring{Initial: []byte("ALP")}},
+				{Kind: directory.FilterSubstrings, Attribute: "2.5.4.3", Substring: directory.Substring{Any: [][]byte{[]byte("ha"), []byte("bet")}}},
+				{Kind: directory.FilterSubstrings, Attribute: "cn", Substring: directory.Substring{Final: []byte("BRAVO")}},
+				{Kind: directory.FilterSubstrings, Attribute: "cn", Substring: directory.Substring{Initial: []byte("alpha"), Any: [][]byte{[]byte("ha b")}, Final: []byte("avo")}},
+				{Kind: directory.FilterSubstrings, Attribute: "cn", Substring: directory.Substring{Any: [][]byte{[]byte("late-target")}}},
+				{Kind: directory.FilterGreaterOrEqual, Attribute: "cn", Assertion: []byte("middle")},
+				{Kind: directory.FilterLessOrEqual, Attribute: "cn", Assertion: []byte("middle target")},
+			}
+			for _, filter := range filters {
+				assertIndexPlanMatchesScan(t, store, schema, filter, true)
+			}
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterSubstrings,
+				Attribute: "cn",
+				Substring: directory.Substring{Any: [][]byte{[]byte("x")}},
+			}, false)
+
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				indexed := WriterInPartitionWithNormalizer(writer, "db", schema)
+				if err := indexed.Put(indexTestEntry("cn=Zulu,dc=example", "Beta Updated", "z1"), true); err != nil {
+					return err
+				}
+				oldDN, _ := directory.ParseDN("cn=Middle Target,dc=example")
+				if err := indexed.Delete(oldDN); err != nil {
+					return err
+				}
+				return indexed.Put(indexTestEntry("cn=Renamed,dc=example", "Renamed Target", "m1"), false)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterSubstrings,
+				Attribute: "cn",
+				Substring: directory.Substring{Any: [][]byte{[]byte("updated")}},
+			}, true)
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterGreaterOrEqual,
+				Attribute: "cn",
+				Assertion: []byte("renamed"),
+			}, true)
+
+			injected := indexTestSchema{config: indexTestCNPhase2Config(), failOn: "explode"}
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				return WriterInPartitionWithNormalizer(writer, "db", injected).Put(
+					indexTestEntry("cn=Alpha Bravo,dc=example", "explode", "a1"),
+					true,
+				)
+			}); err == nil {
+				t.Fatal("phase-2 index normalization failure committed")
+			}
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterSubstrings,
+				Attribute: "cn",
+				Substring: directory.Substring{Initial: []byte("alpha")},
+			}, true)
+
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				return writer.PutIn("db", indexTestEntry("cn=Raw Phase2,dc=example", "Raw Phase2", "raw"), false)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterSubstrings,
+				Attribute: "cn",
+				Substring: directory.Substring{Any: [][]byte{[]byte("phase")}},
+			}, false)
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				return RebuildEqualityIndexes(writer, "db", schema)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+				Kind:      directory.FilterSubstrings,
+				Attribute: "cn",
+				Substring: directory.Substring{Any: [][]byte{[]byte("phase")}},
+			}, true)
+		})
+	}
 }
 
 func TestEqualityIndexBoltMaintenance(t *testing.T) {
@@ -322,7 +526,7 @@ func TestEqualityIndexBoltMaintenance(t *testing.T) {
 	databasePath := filepath.Join(directoryPath, "directory.db")
 	backupPath := filepath.Join(directoryPath, "backup.db")
 	restoredPath := filepath.Join(directoryPath, "restored.db")
-	schema := indexTestSchema{config: indexTestCNConfig()}
+	schema := indexTestSchema{config: indexTestCNPhase2Config()}
 	store, err := OpenBolt(databasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +544,7 @@ func TestEqualityIndexBoltMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check indexed Bolt: %v", err)
 	}
-	if report.EqualityIndexConfigs != 1 || report.EqualityIndexPostings != 2 {
+	if report.EqualityIndexConfigs != 1 || report.EqualityIndexPostings <= 2 {
 		t.Fatalf("index report = %#v", report)
 	}
 	if _, err := BackupBolt(ctx, databasePath, backupPath, false); err != nil {
@@ -366,6 +570,11 @@ func TestEqualityIndexBoltMaintenance(t *testing.T) {
 	assertIndexDNs(t, store, schema, directory.Filter{
 		Kind: directory.FilterEquality, Attribute: "cn", Assertion: []byte("alice"),
 	}, true, []string{"cn=Alice,dc=example"})
+	assertIndexPlanMatchesScan(t, store, schema, directory.Filter{
+		Kind:      directory.FilterSubstrings,
+		Attribute: "cn",
+		Substring: directory.Substring{Final: []byte("ice")},
+	}, true)
 }
 
 func assertIndexPlanMatchesScan(

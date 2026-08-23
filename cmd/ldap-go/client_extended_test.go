@@ -95,11 +95,7 @@ func TestLDAPCompareResultsBinaryErrorsAndDryRun(t *testing.T) {
 		t.Fatalf("dry-run ldapcompare exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
 
-	for _, option := range [][]string{
-		{"-E", "dontUseCopy"},
-		{"-M"},
-		{"-MM"},
-	} {
+	for _, option := range [][]string{{"-E", "dontUseCopy"}} {
 		args := append([]string{"ldapcompare", "-n"}, option...)
 		args = append(args, aliceDN, "uid:alice")
 		stdout, stderr, exitCode = runLDAPClientCommand(args, "")
@@ -111,8 +107,17 @@ func TestLDAPCompareResultsBinaryErrorsAndDryRun(t *testing.T) {
 		[]string{"ldapcompare", "-n", "-e", "1.2.3", aliceDN, "uid:alice"},
 		"",
 	)
-	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "Compare API") {
+	if exitCode != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("ldapcompare controls exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, option := range []string{"-M", "-MM"} {
+		stdout, stderr, exitCode = runLDAPClientCommand(
+			[]string{"ldapcompare", "-n", option, aliceDN, "uid:alice"},
+			"",
+		)
+		if exitCode != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("ldapcompare %s exit=%d stdout=%q stderr=%q", option, exitCode, stdout, stderr)
+		}
 	}
 }
 
@@ -128,6 +133,7 @@ func TestLDAPCompareStartTLS(t *testing.T) {
 			"ldapcompare", "-H", uri, "-x", "-ZZ",
 			"-tls-ca", caPath, "-tls-server-name", "localhost",
 			"-D", clientToolRootDN, "-w", clientToolRootPassword,
+			"-M",
 			"uid=alice," + clientToolPeopleDN, "uid:alice",
 		},
 		"",
@@ -554,6 +560,103 @@ func TestLDAPPasswdRejectsConflictsControlsAndUnsafeSecrets(t *testing.T) {
 	}
 }
 
+func TestLDAPExopPasswdUsesPasswordModifyOptionsAndResponse(t *testing.T) {
+	uri := startLDAPClientToolServer(t, nil)
+	targetDN := addLDAPClientToolUser(t, uri, "exop-password", "old-exop-password")
+	generatedDN := addLDAPClientToolUser(t, uri, "exop-generated", "")
+
+	stdout, stderr, exitCode := runLDAPClientCommand([]string{
+		"ldapexop", "-H", uri, "-x",
+		"-D", clientToolRootDN, "-w", clientToolRootPassword,
+		"-a", "old-exop-password", "-s", "new-exop-password",
+		"passwd", targetDN,
+	}, "")
+	if exitCode != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("ldapexop passwd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	assertLDAPClientToolBind(t, uri, targetDN, "new-exop-password")
+
+	stdout, stderr, exitCode = runLDAPClientCommand([]string{
+		"ldapexop", "-H", uri, "-x",
+		"-D", clientToolRootDN, "-w", clientToolRootPassword,
+		"passwd", generatedDN,
+	}, "")
+	if exitCode != 0 || stderr != "" || !strings.HasPrefix(stdout, "New password: ") ||
+		!strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("generated ldapexop passwd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	generated := strings.TrimSuffix(strings.TrimPrefix(stdout, "New password: "), "\n")
+	if generated == "" {
+		t.Fatal("ldapexop generated password is empty")
+	}
+	assertLDAPClientToolBind(t, uri, generatedDN, generated)
+
+	stdout, stderr, exitCode = runLDAPClientCommand([]string{
+		"ldapexop", "-n", "-s", "validated", "passwd", targetDN,
+	}, "")
+	if exitCode != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("dry-run ldapexop passwd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runLDAPClientCommand([]string{
+		"ldapexop", "-n", "-s", "not-applicable", "whoami",
+	}, "")
+	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "require the passwd operation") ||
+		strings.Contains(stderr, "not-applicable") {
+		t.Fatalf("misplaced passwd options exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
+func TestLDAPExopPasswdRequestControlsAndGeneratedResponse(t *testing.T) {
+	const generatedPassword = "exop-generated-password"
+	requests := make(chan ldapwire.Message, 1)
+	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		request, ok := message.Request.(ldapwire.ExtendedRequest)
+		if !ok {
+			return nil, nil
+		}
+		requests <- message
+		if request.Name != ldapPasswordModifyOID || !request.HasValue {
+			return nil, fmt.Errorf("password modify request = %#v", request)
+		}
+		decoded, err := ldapwire.DecodePasswordModifyRequestValue(request.Value, true)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(decoded.UserIdentity)
+		defer clear(decoded.OldPassword)
+		defer clear(decoded.NewPassword)
+		if !decoded.HasUserIdentity || string(decoded.UserIdentity) != "u:alice" ||
+			!decoded.HasOldPassword || string(decoded.OldPassword) != "old-password" ||
+			decoded.HasNewPassword {
+			return nil, fmt.Errorf("decoded password modify request = %#v", decoded)
+		}
+		return [][]byte{ldapwire.EncodeExtendedResponse(
+			message.ID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			ldapPasswordModifyOID,
+			ldapwire.EncodePasswordModifyResponseValue([]byte(generatedPassword)),
+			nil,
+		)}, nil
+	})
+	stdout, stderr, exitCode := runLDAPClientCommand([]string{
+		"ldapexop", "-H", fixture.uri, "-x",
+		"-e", "!1.2.3=:password-control", "-a", "old-password",
+		"passwd", "u:alice",
+	}, "")
+	if exitCode != 0 || stdout != "New password: "+generatedPassword+"\n" || stderr != "" {
+		t.Fatalf("wire ldapexop passwd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	message := awaitLDAPClientWireMessage(t, requests)
+	assertLDAPWireControl(
+		t,
+		message.Controls,
+		"1.2.3",
+		true,
+		true,
+		[]byte("password-control"),
+	)
+}
+
 func TestLDAPExopWhoAmIGenericCancelAndErrors(t *testing.T) {
 	uri := startLDAPClientToolServer(t, nil)
 	common := []string{
@@ -605,7 +708,6 @@ func TestLDAPExopWhoAmIGenericCancelAndErrors(t *testing.T) {
 		{name: "cancel text", args: []string{"cancel", "abc"}, message: "invalid cancel"},
 		{name: "refresh TTL", args: []string{"refresh", clientToolBaseDN, "0"}, message: "invalid refresh TTL"},
 		{name: "unknown alias", args: []string{"unknown"}, message: "invalid LDAP extended operation OID"},
-		{name: "passwd alias", args: []string{"passwd"}, message: "use ldappasswd"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			args := append([]string{"ldapexop", "-n"}, test.args...)

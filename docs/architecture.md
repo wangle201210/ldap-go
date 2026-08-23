@@ -113,11 +113,22 @@ The proxy owns listener-accepted clients and background backend maintainers;
 upstream loss completes affected operations with OpenLDAP's `other` result and
 the maintainer rebuilds the configured pool. Connection establishment and
 service Bind reads are context-cancellable, and service Bind honors its
-configured timeout. Client-facing StartTLS is rejected locally until its
-stateful implementation exists. Client-facing TLS/PROXY v2,
-service-account SASL, exact SASL post-Bind identity restoration and security
-layers, embedded slapd-module configuration/monitoring, and dynamic topology
-are outside the current runtime contract.
+configured timeout. Client listeners support stateful StartTLS, implicit TLS,
+and trusted PROXY v2 TCP listeners. `pldap` parses the header before LDAP;
+`pldaps` parses it before wrapping the connection in TLS. The metadata wrapper
+exposes asserted logical TCP4/TCP6 addresses to connection state while retaining
+the physical transport endpoints and best-effort copied TLVs for monitoring
+and access decisions. A PROXY command validates its TCP4/TCP6 address block;
+PROXY and LOCAL then consume up to 520 bytes as opaque options. LOCAL ignores
+its family. Valid PROXY TLVs are exposed as bounded metadata, but malformed
+option encoding is accepted with no TLV metadata because OpenLDAP does not make
+TLV parsing part of connection admission. Malformed addresses, truncated, or
+timed-out headers are closed before
+admission, and ordinary LDAP/LDAPS does not auto-detect PROXY. PROXY v1,
+UDP/UNIX address families for the PROXY command, GSSAPI, exact SASL
+post-Bind identity restoration and security layers, embedded slapd-module
+configuration/monitoring, and dynamic topology are outside the current runtime
+contract.
 
 ### Directory service agent
 
@@ -170,11 +181,31 @@ candidate-selection and indexing architecture must support:
 - snapshot reads and ordered change records for replication;
 - offline backup, restore, consistency checking, and atomic database rebuild.
 
-The current bbolt implementation provides DN-keyed transactional entry storage
-but no independent attribute indexes; Search walks the selected partition and
-applies scope and filter evaluation in the server. Index-backed candidate
-selection is therefore a production scalability requirement, not a current
-compatibility claim.
+Memory and bbolt use a storage-owned posting layout derived from each selected
+database's `olcDbIndex` values. Equality and presence postings store normalized
+values or presence keys. Substring postings use at most eight bytes for
+initial/final anchors and bounded 3-grams for `subany`; entries that exceed the
+gram budget also enter an overflow posting so a query returns a superset rather
+than losing a match. Ordering postings use bytewise sortable normalized values,
+with a sign/length/digit encoding for arbitrary-precision LDAP INTEGER.
+GeneralizedTime keys remove the terminal `Z` after equality normalization so
+their byte order matches the schema comparator for whole and fractional
+seconds.
+Only matching-rule pairs whose equality normalization is proven equivalent to
+the requested substring or ordering semantics are admitted. Approximate,
+language-suppression, default, and unproven rules reject at configuration time.
+
+Candidate planning handles equality, presence, substring, `>=`, and `<=`.
+`AND` can intersect whichever children are planned; `OR` is planned only when
+every child is complete. Short or otherwise unconstrained substring filters and
+invalidated configurations fall back to the normal partition scan. Scope,
+complete filter evaluation, overlays, ACLs, sorting, paging, and VLV always run
+after candidate selection. Posting and entry changes share the write
+transaction for Add/replace/Delete/ModifyDN. Raw storage writes invalidate the
+configuration fingerprint, while startup/config changes and offline maintenance
+rebuild or validate the postings. These indexes are an internal bbolt format,
+not imported OpenLDAP MDB index pages, and their performance at production
+scale remains unqualified.
 
 OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
@@ -267,8 +298,46 @@ terminal RESULT. Search entries are parsed before LDAP emission, then pass
 local entry and attribute/value read ACLs and requested-attribute projection.
 This bounded fail-closed design intentionally does not reproduce OpenLDAP's
 known early-EOF-as-success bug. RESULT diagnostics preserve the bytes following
-the field colon as OpenLDAP does. Socket overlay callbacks are a separate
-middleware architecture and are not implemented by the database runtime.
+the field colon as OpenLDAP does.
+
+The RFC 5805 queue layer detects a sock target before retaining an update and
+returns `unwillingToPerform` without opening the external socket. End
+Transaction also pre-scans the complete queued operation list before storage,
+password preflight, or external calls as a fail-closed guard for previously
+assembled state. Critical chaining controls, and critical password-policy on
+Bind, return `unavailableCriticalExtension` before dialing; unsupported
+noncritical controls are ignored according to LDAP control semantics.
+
+Socket overlay callbacks remain a separate middleware architecture. The shared
+protocol package implements only its reliable transport primitives: a
+`CONTINUE` response must be the sole record, and one-way `ENTRY` and `RESULT`
+notifications omit database suffixes. The back-sock format cannot carry
+referrals or response controls in an overlay RESULT. No `cn=config` socket
+overlay loader, operation wrapper, or response-callback chain is currently
+wired into the server.
+
+A SQL naming-context database uses one `database/sql` connection (and, when
+configured, one SQL transaction) as the LDAP read view. Before loading mapped
+entries, the Search context supplies the requested attributes and parsed LDAP
+filter. The candidate planner emits parameterized presence SQL for mapped
+attributes and equality SQL for object-class mappings. Mapped-attribute
+equality falls back to all entry IDs: configuration metadata does not prove SQL
+column types or comparison semantics, `UPPER()` does not reproduce LDAP
+case-ignore normalization, and SQLite TEXT/BLOB equality can reject identical
+bytes. A usable child can reduce `AND`; every `OR` child must be safe or the
+planner scans all entry IDs. The normal LDAP filter remains authoritative.
+
+Mapped attribute loading includes explicit request selections, filter
+attributes, and configured `olcSqlFetchAttrs`; `olcSqlFetchAllAttrs` disables
+pruning. An attribute-less request means all user attributes, while `*`, `+`,
+and `1.1` retain their LDAP selection meanings. Extensible filters without an
+attribute force all mappings because their dependencies cannot be proven.
+`olcSqlBaseObject: TRUE` creates a synthetic suffix entry from the naming RDN,
+reports subordinates from rows whose parent is `baseObject`, and suppresses an
+equivalent mapped duplicate. File-mode base objects, native `olcSqlLayer`,
+scope-template directives, subtree shortcuts, and `olcSqlCheckSchema` reject
+instead of silently changing semantics. This remains a partial back-sql model,
+not a portable SQL schema or complete plugin ABI.
 
 ### Overlays
 
@@ -725,13 +794,18 @@ must:
 - validate schema while supporting an explicit bootstrap order for custom
   schema;
 - reconstruct backend-native storage rather than trusting source database files;
-- reject partial imports atomically and report the record and line;
+- reject partial imports atomically by default and report the record and line;
 - produce an export whose normalized LDAP content is equivalent to the input.
 
-Native `ldap-go import` and the `slapadd` alias share one atomic storage
-transaction but use different validation policies. Native import enables
-structural and value-syntax validation. `slapadd` enables structural checks by
-default while leaving full value checks off unless requested. Both use the
+Native `ldap-go import`, the direct `ImportLDIF` API, and `slapadd` without
+`-c` share the atomic import path but use different validation policies. Native
+import enables structural and value-syntax validation. `slapadd` enables
+structural checks by default while leaving full value checks off unless
+requested. `slapadd -q` disables value checks only. Schema checking remains
+enabled unless independently disabled with `-s` or `schema-check=no`, and the
+ordinary `objectClass` requirement remains active in either case. Quick mode
+still uses the LDIF parser, DN/database routing, hierarchy checks, and storage
+transaction. Both normal modes use the
 built-in registry plus supported `olcObjectIdentifier`, `olcAttributeTypes`,
 `olcObjectClasses`, `olcDitContentRules`, and `olcLdapSyntaxes` definitions
 imported through `cn=config`. Ordered `X-SUBST` syntax declarations inherit a
@@ -787,19 +861,25 @@ selection fails when no primary content database exists rather than writing to
 an unconfigured fallback partition. API dry-run executes all validation against
 the staged transaction and then deliberately rolls it back.
 
-This atomic design intentionally differs from OpenLDAP `slapadd`, which can
-leave earlier records committed and supports `-c` continuation. It also means
-the LDIF parse, pending-entry set, schema/hierarchy checks, and final writes live
-inside one write transaction; memory use and write-lock duration grow with a
-large import. Offline tool behavior currently covers `config`/`mdb` and
+The content-only `slapadd -c` path is the explicit non-atomic exception. It
+parses records independently, sorts valid records by DN depth, attempts one
+atomic batch per depth, and retries a failed batch record by record. Independent
+successes remain committed, every recoverable failure retains its input line
+and DN, and the CLI exits nonzero if any record failed. `cn=config -c` is
+rejected because partially visible schema and database definitions cannot be
+published safely. `-c -u` runs against a disposable copy so the real database
+is unchanged. The default atomic path still keeps the LDIF parse, pending-entry
+set, schema/hierarchy checks, and final writes in one write transaction; memory
+use and write-lock duration grow with a large import. Offline tool behavior
+currently covers `config`/`mdb` and
 `ldif`/`wt`, plus `null` accept-then-discard; proxy and virtual backends reject
 offline operations without the corresponding OpenLDAP callbacks. All supported
 content is represented in bbolt rather than native backend files. Arbitrary
 custom syntax/matching-rule modules, exact OpenLDAP dry-run diagnostics, and
 broader nested glue/backend combinations are not implemented.
-MDB indexes are never imported, and the current bbolt backend has no
-independent attribute indexes, so local Search scans its selected partition.
-These are explicit non-drop-in
+MDB indexes are never imported. The destination rebuilds its own configured
+equality, presence, substring, and ordering postings, while unsupported or
+invalidated plans scan the selected partition. These are explicit non-drop-in
 boundaries.
 
 ## Dependency policy

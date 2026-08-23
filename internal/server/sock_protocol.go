@@ -144,6 +144,24 @@ type SockUnbindRequest struct{}
 
 func (SockUnbindRequest) sockOperation() {}
 
+// SockOverlayEntryNotification is the one-way ENTRY callback emitted by
+// OpenLDAP's socket overlay for a Search result entry. It is not a database
+// operation and therefore carries no database suffix fields.
+type SockOverlayEntryNotification struct {
+	Entry directory.Entry
+}
+
+func (SockOverlayEntryNotification) sockOperation() {}
+
+// SockOverlayResultNotification is the one-way RESULT callback emitted by
+// OpenLDAP's socket overlay for a final LDAP result. Referrals and response
+// controls are not representable by the OpenLDAP back-sock wire format.
+type SockOverlayResultNotification struct {
+	Result ldapwire.Result
+}
+
+func (SockOverlayResultNotification) sockOperation() {}
+
 // SockResponse contains zero or more Search entries followed by the mandatory
 // RESULT record. The parser intentionally requires RESULT even though the
 // OpenLDAP 2.6.13 implementation accidentally accepts an early EOF as success.
@@ -151,6 +169,14 @@ type SockResponse struct {
 	Entries    []directory.Entry
 	References [][]string
 	Result     ldapwire.Result
+}
+
+// SockOverlayOperationResponse is the reliable operation-intercept subset of
+// OpenLDAP's socket overlay. Continue means that the external service returned
+// a sole CONTINUE record and the local backend should run.
+type SockOverlayOperationResponse struct {
+	Continue bool
+	Response SockResponse
 }
 
 // SockResponseRecord is one non-final Search response record. OpenLDAP emits
@@ -222,6 +248,42 @@ func ParseSockResponse(reader io.Reader, limits SockProtocolLimits) (SockRespons
 	return response, nil
 }
 
+// ParseSockOverlayOperationResponse accepts either a normal back-sock response
+// or one strict CONTINUE record. Database mode must use ParseSockResponse,
+// which rejects CONTINUE because a sock database has no local backend.
+func ParseSockOverlayOperationResponse(
+	reader io.Reader,
+	limits SockProtocolLimits,
+) (SockOverlayOperationResponse, error) {
+	var response SockOverlayOperationResponse
+	result, continued, err := streamSockResponse(
+		reader,
+		limits,
+		func(record SockResponseRecord) error {
+			if record.Entry != nil {
+				response.Response.Entries = append(
+					response.Response.Entries,
+					record.Entry.Clone(),
+				)
+			}
+			if record.Referrals != nil {
+				response.Response.References = append(
+					response.Response.References,
+					append([]string(nil), record.Referrals...),
+				)
+			}
+			return nil
+		},
+		true,
+	)
+	if err != nil {
+		return SockOverlayOperationResponse{}, err
+	}
+	response.Continue = continued
+	response.Response.Result = result
+	return response, nil
+}
+
 // StreamSockResponse parses and emits each Search entry or referral before
 // reading the next record. RESULT remains mandatory and is returned only after
 // EOF confirms that no trailing data followed it.
@@ -230,20 +292,31 @@ func StreamSockResponse(
 	limits SockProtocolLimits,
 	emit func(SockResponseRecord) error,
 ) (ldapwire.Result, error) {
+	result, _, err := streamSockResponse(reader, limits, emit, false)
+	return result, err
+}
+
+func streamSockResponse(
+	reader io.Reader,
+	limits SockProtocolLimits,
+	emit func(SockResponseRecord) error,
+	allowContinue bool,
+) (ldapwire.Result, bool, error) {
 	if reader == nil {
-		return ldapwire.Result{}, sockProtocolError("response reader is nil")
+		return ldapwire.Result{}, false, sockProtocolError("response reader is nil")
 	}
 	limits = limits.withDefaults()
 	if err := limits.validate(); err != nil {
-		return ldapwire.Result{}, err
+		return ldapwire.Result{}, false, err
 	}
 	if emit == nil {
 		emit = func(SockResponseRecord) error { return nil }
 	}
 	decoder := sockResponseDecoder{
-		reader: bufio.NewReaderSize(reader, sockResponseReaderBufferSize(limits)),
-		limits: limits,
-		emit:   emit,
+		reader:        bufio.NewReaderSize(reader, sockResponseReaderBufferSize(limits)),
+		limits:        limits,
+		emit:          emit,
+		allowContinue: allowContinue,
 	}
 	return decoder.decode()
 }
@@ -274,9 +347,11 @@ func (encoder *sockRequestEncoder) encode(request SockRequest) error {
 	if err := encoder.connection(request.Connection); err != nil {
 		return err
 	}
-	for _, suffix := range request.Suffixes {
-		if err := encoder.textLine("suffix", suffix, true); err != nil {
-			return err
+	if sockOperationIncludesSuffixes(request.Operation) {
+		for _, suffix := range request.Suffixes {
+			if err := encoder.textLine("suffix", suffix, true); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -306,6 +381,10 @@ func sockCommand(operation SockOperation) (string, error) {
 		return "SEARCH", nil
 	case SockUnbindRequest, *SockUnbindRequest:
 		return "UNBIND", nil
+	case SockOverlayEntryNotification, *SockOverlayEntryNotification:
+		return "ENTRY", nil
+	case SockOverlayResultNotification, *SockOverlayResultNotification:
+		return "RESULT", nil
 	default:
 		return "", sockProtocolError("unsupported request operation %T", operation)
 	}
@@ -403,21 +482,45 @@ func (encoder *sockRequestEncoder) operation(operation SockOperation) error {
 			return sockProtocolError("UNBIND request is nil")
 		}
 		return nil
+	case SockOverlayEntryNotification:
+		return encoder.overlayEntry(request)
+	case *SockOverlayEntryNotification:
+		if request == nil {
+			return sockProtocolError("ENTRY notification is nil")
+		}
+		return encoder.overlayEntry(*request)
+	case SockOverlayResultNotification:
+		return encoder.overlayResult(request)
+	case *SockOverlayResultNotification:
+		if request == nil {
+			return sockProtocolError("RESULT notification is nil")
+		}
+		return encoder.overlayResult(*request)
 	default:
 		return sockProtocolError("unsupported request operation %T", operation)
 	}
 }
 
 func (encoder *sockRequestEncoder) add(request SockAddRequest) error {
-	if request.Entry.DN == "" {
-		return sockProtocolError("ADD entry DN is empty")
+	return encoder.entry(request.Entry, "ADD")
+}
+
+func (encoder *sockRequestEncoder) overlayEntry(
+	request SockOverlayEntryNotification,
+) error {
+	return encoder.entry(request.Entry, "ENTRY")
+}
+
+func (encoder *sockRequestEncoder) entry(entry directory.Entry, command string) error {
+	if entry.DN == "" {
+		return sockProtocolError("%s entry DN is empty", command)
 	}
-	if err := encoder.ldifValue("dn", []byte(request.Entry.DN), true); err != nil {
+	if err := encoder.ldifValue("dn", []byte(entry.DN), true); err != nil {
 		return err
 	}
-	for _, attribute := range request.Entry.Attributes {
+	for _, attribute := range entry.Attributes {
 		if err := validateAttributeDescription(attribute.Description); err != nil {
-			return fmt.Errorf("ADD attribute: %w", err)
+			return fmt.Errorf("%s attribute: %w", command, err)
 		}
 		for _, value := range attribute.Values {
 			if err := encoder.ldifValue(attribute.Description, value, true); err != nil {
@@ -426,6 +529,41 @@ func (encoder *sockRequestEncoder) add(request SockAddRequest) error {
 		}
 	}
 	return nil
+}
+
+func (encoder *sockRequestEncoder) overlayResult(
+	request SockOverlayResultNotification,
+) error {
+	if request.Result.Code < 0 {
+		return sockProtocolError("RESULT code must not be negative")
+	}
+	if len(request.Result.Referrals) != 0 {
+		return sockProtocolError("RESULT referrals cannot be represented")
+	}
+	if err := encoder.textLine("code", strconv.Itoa(int(request.Result.Code)), false); err != nil {
+		return err
+	}
+	if request.Result.MatchedDN != "" {
+		if err := encoder.textLine("matched", request.Result.MatchedDN, true); err != nil {
+			return err
+		}
+	}
+	if request.Result.DiagnosticMessage != "" {
+		if err := encoder.textLine("info", request.Result.DiagnosticMessage, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sockOperationIncludesSuffixes(operation SockOperation) bool {
+	switch operation.(type) {
+	case SockOverlayEntryNotification, *SockOverlayEntryNotification,
+		SockOverlayResultNotification, *SockOverlayResultNotification:
+		return false
+	default:
+		return true
+	}
 }
 
 func (encoder *sockRequestEncoder) bind(request SockBindRequest) error {
@@ -800,16 +938,18 @@ type sockResponseBlock struct {
 }
 
 type sockResponseDecoder struct {
-	reader       *bufio.Reader
-	limits       SockProtocolLimits
-	emit         func(SockResponseRecord) error
-	responseSize int64
-	lineNumber   int
-	records      int
-	block        sockResponseBlock
-	result       ldapwire.Result
-	resultSeen   bool
-	inputSeen    bool
+	reader        *bufio.Reader
+	limits        SockProtocolLimits
+	emit          func(SockResponseRecord) error
+	responseSize  int64
+	lineNumber    int
+	records       int
+	block         sockResponseBlock
+	result        ldapwire.Result
+	resultSeen    bool
+	continueSeen  bool
+	allowContinue bool
+	inputSeen     bool
 }
 
 func sockResponseReaderBufferSize(limits SockProtocolLimits) int {
@@ -824,18 +964,25 @@ func sockResponseReaderBufferSize(limits SockProtocolLimits) int {
 	return size
 }
 
-func (decoder *sockResponseDecoder) decode() (ldapwire.Result, error) {
+func (decoder *sockResponseDecoder) decode() (ldapwire.Result, bool, error) {
 	for {
 		raw, eof, err := decoder.readPhysicalLine()
 		if err != nil {
-			return ldapwire.Result{}, err
+			return ldapwire.Result{}, false, err
 		}
 		if eof {
 			break
 		}
 		decoder.inputSeen = true
-		if decoder.resultSeen {
-			return ldapwire.Result{}, sockProtocolError("response has trailing data after RESULT")
+		if decoder.resultSeen || decoder.continueSeen {
+			finalRecord := "RESULT"
+			if decoder.continueSeen {
+				finalRecord = "CONTINUE"
+			}
+			return ldapwire.Result{}, false, sockProtocolError(
+				"response has trailing data after %s",
+				finalRecord,
+			)
 		}
 		if len(raw) != 0 &&
 			(raw[0] == '#' || hasASCIIPrefixFold(raw, []byte("DEBUG:"))) {
@@ -846,7 +993,7 @@ func (decoder *sockResponseDecoder) decode() (ldapwire.Result, error) {
 				continue
 			}
 			if err := decoder.finishBlock(); err != nil {
-				return ldapwire.Result{}, err
+				return ldapwire.Result{}, false, err
 			}
 			decoder.block = sockResponseBlock{}
 			continue
@@ -855,14 +1002,14 @@ func (decoder *sockResponseDecoder) decode() (ldapwire.Result, error) {
 		decoder.block.started = true
 		decoder.block.bytes += len(raw) + 1
 		if decoder.block.bytes > decoder.limits.MaxEntryBytes {
-			return ldapwire.Result{}, sockLimitError(
+			return ldapwire.Result{}, false, sockLimitError(
 				"response record exceeds %d bytes",
 				decoder.limits.MaxEntryBytes,
 			)
 		}
 		if raw[0] == ' ' {
 			if len(decoder.block.lines) == 0 {
-				return ldapwire.Result{}, sockProtocolError(
+				return ldapwire.Result{}, false, sockProtocolError(
 					"response line %d is an orphan LDIF continuation",
 					decoder.lineNumber,
 				)
@@ -878,17 +1025,24 @@ func (decoder *sockResponseDecoder) decode() (ldapwire.Result, error) {
 	}
 
 	if !decoder.inputSeen {
-		return ldapwire.Result{}, sockProtocolError("response is empty")
+		return ldapwire.Result{}, false, sockProtocolError("response is empty")
 	}
 	if decoder.block.started {
-		return ldapwire.Result{}, sockProtocolError(
+		return ldapwire.Result{}, false, sockProtocolError(
 			"response is truncated before the terminating blank line",
 		)
 	}
-	if !decoder.resultSeen {
-		return ldapwire.Result{}, sockProtocolError("response has no RESULT record")
+	if !decoder.resultSeen && !decoder.continueSeen {
+		if !decoder.allowContinue {
+			return ldapwire.Result{}, false, sockProtocolError(
+				"response has no RESULT record",
+			)
+		}
+		return ldapwire.Result{}, false, sockProtocolError(
+			"response has no RESULT or CONTINUE record",
+		)
 	}
-	return decoder.result, nil
+	return decoder.result, decoder.continueSeen, nil
 }
 
 func (decoder *sockResponseDecoder) readPhysicalLine() ([]byte, bool, error) {
@@ -953,6 +1107,17 @@ func (decoder *sockResponseDecoder) finishBlock() error {
 		return sockProtocolError("response record has no content")
 	}
 	header := decoder.block.lines[0]
+	if bytes.EqualFold(header, []byte("CONTINUE")) {
+		if !decoder.allowContinue {
+			return sockProtocolError("CONTINUE is only valid for a socket overlay")
+		}
+		if decoder.block.folded || len(decoder.block.lines) != 1 ||
+			decoder.records != 0 || decoder.resultSeen || decoder.continueSeen {
+			return sockProtocolError("CONTINUE must be the sole response record")
+		}
+		decoder.continueSeen = true
+		return nil
+	}
 	if bytes.EqualFold(header, []byte("RESULT")) {
 		if decoder.block.folded {
 			return sockProtocolError("RESULT fields must not use LDIF continuation lines")

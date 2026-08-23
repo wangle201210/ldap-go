@@ -63,6 +63,22 @@ func ImportLDIF(
 	reader io.Reader,
 	options ImportOptions,
 ) (ImportResult, error) {
+	return importLDIF(
+		ctx,
+		store,
+		reader,
+		options,
+		&importCSNGenerator{},
+	)
+}
+
+func importLDIF(
+	ctx context.Context,
+	store storage.Store,
+	reader io.Reader,
+	options ImportOptions,
+	csns *importCSNGenerator,
+) (ImportResult, error) {
 	if reader == nil {
 		return ImportResult{}, errors.New("LDIF reader is required")
 	}
@@ -329,6 +345,7 @@ func ImportLDIF(
 				tx,
 				operationalEntries,
 				options.CSNServerID,
+				csns,
 			); err != nil {
 				return err
 			}
@@ -437,8 +454,8 @@ func applyImportedOperationalAttributes(
 	tx storage.Writer,
 	entries []importedContentEntry,
 	serverID uint16,
+	csns *importCSNGenerator,
 ) error {
-	var csns importCSNGenerator
 	for _, imported := range entries {
 		if !imported.toolTarget.lastMod {
 			continue

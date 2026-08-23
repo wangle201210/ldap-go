@@ -336,6 +336,10 @@ func (server *Server) handleTransactionSpecification(
 			message,
 		)
 	}
+	if result == nil && database.sockBackend != nil {
+		value := sockBackendTransactionResult()
+		result = &value
+	}
 	if result == nil &&
 		(database.partition == configurationStoragePartition ||
 			databaseUsesNullBackend(state.transaction.runtime, *database) ||
@@ -1200,6 +1204,12 @@ func (server *Server) commitLDAPTransaction(
 	state *connectionState,
 	transaction *ldapTransaction,
 ) (ldapwire.Result, ldapwire.TransactionEndResponseValue) {
+	if failure := sockBackendTransactionCommitFailure(transaction); failure != nil {
+		return failure.result, ldapwire.TransactionEndResponseValue{
+			FailedMessageID:    failure.messageID,
+			HasFailedMessageID: true,
+		}
+	}
 	transactionContext, releaseSeqmods, err := acquireLDAPTransactionSeqmods(
 		ctx,
 		transaction.runtime,
@@ -1330,6 +1340,34 @@ func (server *Server) commitLDAPTransaction(
 	state.bindCredentialDN = committedBindCredentialDN
 	state.bindCredentials = bytes.Clone(committedBindCredentials)
 	return ldapwire.Result{Code: ldapwire.ResultSuccess}, endResponse
+}
+
+// sockBackendTransactionCommitFailure is a final fail-closed guard for queued
+// state assembled by older code or tests. It scans the entire queue before a
+// storage transaction, password preflight, or external call can begin.
+func sockBackendTransactionCommitFailure(
+	transaction *ldapTransaction,
+) *transactionCommitFailure {
+	if transaction == nil || transaction.runtime == nil {
+		return nil
+	}
+	state := &connectionState{runtime: transaction.runtime}
+	for _, operation := range transaction.operations {
+		state.boundDN = operation.boundDN
+		target, _, _, ok := chainOperationTarget(state, operation.message.Request)
+		if !ok {
+			continue
+		}
+		database := databaseForDN(transaction.runtime, target)
+		if database == nil || database.sockBackend == nil {
+			continue
+		}
+		return &transactionCommitFailure{
+			messageID: operation.message.ID,
+			result:    sockBackendTransactionResult(),
+		}
+	}
+	return nil
 }
 
 func (server *Server) executeTransactionOperation(

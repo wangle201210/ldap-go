@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,405 top-level tests against
+The latest pinned local strict run passed 1,445 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC. Its only allowed skip was the Linux-only TCP user-timeout test on
 macOS; mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache,
@@ -339,6 +339,24 @@ go test -race ./internal/server \
   -count=1
 ```
 
+The local index suite runs the same candidate-versus-scan assertions against
+Memory and bbolt for equality, presence, substring initial/any/final, ordering,
+mixed boolean filters, long-value overflow, replace/delete/rename, rollback,
+raw-write invalidation, reopen, backup/restore, check, and compact. Server tests
+also validate `olcDbIndex` aliases/OIDs, matching-rule admission, LDAP INTEGER
+ordering, generalizedTime whole/fractional-second ordering against the schema
+comparator, initial build, and configuration reload. These tests prove that an
+accepted index does not omit a matching candidate; they do not qualify index
+selectivity or throughput at production scale. Run them with:
+
+```sh
+go test -race ./internal/storage \
+  -run '^(TestEqualityIndex|TestSubstringAndOrderingIndex)' -count=1
+go test -race ./internal/server \
+  -run '^(TestSortableLDAPInteger|TestLoadDatabaseEqualityIndexes|TestEnsureSearchEqualityIndexes)' \
+  -count=1
+```
+
 The back-sock differential starts one Unix socket fixture and drives the same
 Bind, Search, Add, Modify, Compare, ModifyDN, Delete, Password Modify, and
 Unbind session through the pinned OpenLDAP 2.6.13 slapd and ldap-go. It compares
@@ -351,6 +369,14 @@ requests and anonymous Password Modify are rejected before any socket request,
 while a first-component Compare assertion and OpenLDAP's empty Modify are
 delegated. It compares response tags, result codes, matched DNs, diagnostics,
 network behavior, and whether the fixture was contacted.
+Always-on Unix-socket tests additionally prove that a sock-targeted RFC 5805
+update returns `unwillingToPerform` while queueing and does not dial the socket,
+and that the commit guard reports the first affected message ID before any
+external or storage work. Critical chaining and critical Bind password-policy
+controls reject before dialing; the noncritical chaining ignore path is checked
+separately. The socket-overlay work is protocol-only: tests cover a
+sole `CONTINUE` response and one-way `ENTRY`/`RESULT` encoding, not imported
+overlay configuration or an operation callback chain.
 
 The back-sql differential starts a pinned OpenLDAP 2.6.13 `slapd` linked to
 unixODBC and a ldap-go server over two identically seeded SQLite databases. It
@@ -365,6 +391,19 @@ Server-generated `entryCSN` is deliberately excluded. The strict Docker image
 installs unixODBC and the SQLite ODBC driver; no Oracle database or client is
 required. The fixture does not prove behavior on PostgreSQL, MySQL, Oracle, or
 DB2 drivers.
+Separate pure-Go SQLite tests record generated SQL and verify parameterized
+object-class equality and mapped presence candidates, partial `AND`,
+all-or-fallback `OR`, assertion injection resistance, and safe full-ID fallback
+for mapped equality. The fallback cases cover case-ignore whitespace/list
+normalization and SQLite TEXT values compared with byte-identical BLOB
+parameters. They also force an unrequested mapping query to
+fail to prove requested/filter attribute pruning, retain binary values,
+exercise `olcSqlFetchAttrs` and
+synthesize and de-duplicate `olcSqlBaseObject: TRUE`, and reject file base
+objects, native layers, custom scope templates, subtree shortcuts, and
+schema-check directives. `olcSqlFetchAllAttrs` is present in the implementation
+but does not yet have a focused assertion in this planner test. These new
+planner/directive cases are not all part of the live OpenLDAP ODBC differential.
 
 The `lloadd` evidence group first pins source hashes and behavioral anchors for
 message-ID forwarding, tier fallback, Bind pinning, and restriction actions.
@@ -389,7 +428,17 @@ against the built OpenLDAP 2.6.13 `lloadd` and the Go proxy. Cancel is verified
 locally against RFC 3909 because the pinned OpenLDAP lloadd forwards an
 unmodified inner ID; that known defect is not the compatibility oracle. These
 tests establish the named auth-only subset, not GSSAPI, SASL security layers,
-PROXY v2, dynamic configuration, monitor, or complete daemon compatibility.
+dynamic configuration, monitor, or complete daemon compatibility. Local
+listener topologies cover PROXY v2 TCP4/TCP6 logical addresses and copied TLVs,
+logical versus transport metadata, malformed/truncated/timeout recovery,
+bounded option bytes/TLV metadata count, `pldaps` header-before-TLS ordering,
+Bind/authz/TLS snapshots, and rejection on ordinary LDAP/LDAPS. LOCAL cases
+verify that family is ignored; both commands consume payloads through 520 bytes
+as opaque options. PROXY still validates its family/address block, while valid
+TLVs are extracted best-effort and malformed option encoding is accepted. The
+implementation also caps concurrent header parsers, but the
+focused suite does not yet saturate that cap. There is no claim for PROXY v1,
+UDP/UNIX families for the PROXY command, or complete OpenLDAP lloadd behavior.
 
 The built-in client-tool suite uses raw LDAP wire fixtures to verify generic
 control criticality and absent/empty/string/Base64/file values across Search,
@@ -397,9 +446,19 @@ writes, Who Am I?, and Extended operations. Multi-server fixtures cover
 opt-in referral chasing, anonymous rebind, DN/scope rewriting, control
 preservation, loops, and the five-hop limit. A pinned source contract anchors
 the corresponding `clients/tools`, libldap request/error, and default-hop
-behavior; `ldapcompare` rejects generic controls explicitly because its current
-go-ldap API cannot attach them. `TestLDAPClientSASL*` drives raw-wire and
-project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
+behavior. The raw Compare fixture verifies generic `-e`, noncritical `-M`,
+critical `-MM`, duplicate rejection, unavailable-critical result propagation,
+referral control preservation, and SASL PLAIN. `ldapexop passwd` tests cover
+target/current identities, old/new/generated passwords, password sources,
+controls, response decoding, and dry-run validation. Client-side Search tests
+cover stable ASCII case-insensitive multi-value/missing-value sorting, empty
+`-S` UFN-component sorting, per-page rather than global paged sorting, trailing
+`dc` domain folding, uppercase hexadecimal escapes, preserved hexadecimal BER
+AVAs, escaped multi-AVA formatting, end-to-end `-S/-u` LDIF, and unsafe
+sort-attribute rejection. A pinned OpenLDAP 2.6.13 client differential compares
+the covered page order and UFN output; locale-dependent ordering outside that
+fixture remains unclaimed. `TestLDAPClientSASL*` drives raw-wire
+and project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
 SCRAM-SHA-1/256/512, and mutual-TLS EXTERNAL. It validates server proofs,
 malformed challenges, secret-free diagnostics, StartTLS ordering, and option
 conflicts. This is auth-only coverage; GSSAPI, channel binding, and SASL
@@ -563,6 +622,19 @@ invalid-backup isolation, cancellation, malformed logical records, and missing
 bucket detection. CLI tests exercise `backup`, `restore`, `check`, `rebuild`,
 and the `reindex` alias. These commands are intentionally offline because a
 separate process cannot safely bypass bbolt's database lock.
+
+The `slapadd` continuation tests import parent/child records out of order,
+isolate one invalid record, retain successful records, verify line/DN
+diagnostics and nonzero partial-failure exit status, and confirm `-c -u` leaves
+the destination byte-for-byte unchanged. Configuration-database continuation
+is rejected. Quick-mode tests prove that `-q` disables value checks while
+schema checks remain independently controlled by `-s` / `schema-check=no` and
+the normal `objectClass` requirement remains active. They also verify the
+warning that explicit `value-check=yes` is disabled and that the parser,
+routing, hierarchy, and storage paths still run. A gated pinned OpenLDAP 2.6.13
+test compares `-c` partial retention and the `-q` schema/value-check warning and
+exit behavior. The direct `ImportLDIF` API remains covered by atomic rollback
+tests.
 
 Shutdown tests gate a storage update while canceling `Serve`, then verify that
 the accepted write receives a successful response and is durable before the

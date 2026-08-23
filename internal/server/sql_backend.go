@@ -58,7 +58,11 @@ type sqlBackendRuntimeConfiguration struct {
 	failIfNoMapping   bool
 	allowOrphans      bool
 	baseObject        string
+	baseObjectSuffix  string
+	baseObjectEntry   *directory.Entry
 	layers            []string
+	fetchAllAttrs     bool
+	fetchAttrs        []string
 	aliasingKeyword   string
 	aliasingQuote     string
 	autocommit        bool
@@ -98,7 +102,10 @@ type sqlBackendSettings struct {
 	failIfNoMapping   bool
 	allowOrphans      bool
 	baseObject        string
+	baseObjectSuffix  string
 	layers            []string
+	fetchAllAttrs     bool
+	fetchAttrs        []string
 	aliasingKeyword   string
 	aliasingQuote     string
 	autocommit        bool
@@ -146,6 +153,9 @@ type sqlBackendSearchRequirementsContextKey struct{}
 
 type sqlBackendSearchRequirements struct {
 	hasSubordinates bool
+	attributes      []string
+	filter          directory.Filter
+	hasFilter       bool
 }
 
 func withSQLBackendSearchRequirements(
@@ -155,6 +165,11 @@ func withSQLBackendSearchRequirements(
 ) context.Context {
 	requirements := sqlBackendSearchRequirements{
 		hasSubordinates: sqlBackendSearchRequestsHasSubordinates(attributes, filters),
+		attributes:      append([]string(nil), attributes...),
+	}
+	if len(filters) > 0 {
+		requirements.filter = filters[0]
+		requirements.hasFilter = true
 	}
 	return context.WithValue(ctx, sqlBackendSearchRequirementsContextKey{}, requirements)
 }
@@ -292,6 +307,7 @@ func loadSQLBackendRuntimeConfiguration(
 		{"olcSqlFailIfNoMapping", &configuration.failIfNoMapping},
 		{"olcSqlAllowOrphans", &configuration.allowOrphans},
 		{"olcSqlAutocommit", &configuration.autocommit},
+		{"olcSqlFetchAllAttrs", &configuration.fetchAllAttrs},
 	}
 	configuration.upperNeedsCast, _, err = singleBoolean(entry, "olcSqlUpperNeedsCast")
 	if err != nil {
@@ -313,21 +329,90 @@ func loadSQLBackendRuntimeConfiguration(
 	}
 	configuration.prepareHasChildrenQuery()
 	for _, raw := range entry.Values("olcSqlLayer") {
-		configuration.layers = append(configuration.layers, string(raw))
+		value := strings.TrimSpace(string(raw))
+		if value == "" {
+			return nil, fmt.Errorf("%s olcSqlLayer must not be empty", entry.DN)
+		}
+		configuration.layers = append(configuration.layers, value)
 	}
 	if configuration.baseObject != "" {
-		return nil, fmt.Errorf(
-			"%s olcSqlBaseObject is not supported by the SQL backend",
-			entry.DN,
-		)
+		if !strings.EqualFold(strings.TrimSpace(configuration.baseObject), "TRUE") {
+			return nil, fmt.Errorf(
+				"%s olcSqlBaseObject file mode is not supported; use TRUE or remove the directive",
+				entry.DN,
+			)
+		}
+		suffixes := entry.Values("olcSuffix")
+		if len(suffixes) == 0 {
+			return nil, fmt.Errorf("%s olcSqlBaseObject requires olcSuffix", entry.DN)
+		}
+		configuration.baseObject = "TRUE"
+		configuration.baseObjectSuffix = string(suffixes[0])
 	}
 	if len(configuration.layers) != 0 {
 		return nil, fmt.Errorf(
-			"%s olcSqlLayer is not supported by the SQL backend",
+			"%s olcSqlLayer requires the OpenLDAP native back-sql plugin ABI, which is not supported",
 			entry.DN,
 		)
 	}
+	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlFetchAttrs"); valueErr != nil {
+		return nil, valueErr
+	} else if present {
+		configuration.fetchAttrs, err = parseSQLFetchAttributes(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcSqlFetchAttrs: %w", entry.DN, err)
+		}
+	}
+	unsupportedStrings := []string{
+		"olcSqlConcatPattern",
+		"olcSqlSubtreeCond",
+		"olcSqlChildrenCond",
+		"olcSqlStrcastFunc",
+	}
+	for _, attribute := range unsupportedStrings {
+		if _, present, valueErr := singleOptionalSQLString(entry, attribute); valueErr != nil {
+			return nil, valueErr
+		} else if present {
+			return nil, fmt.Errorf(
+				"%s %s SQL-template semantics are not supported",
+				entry.DN,
+				attribute,
+			)
+		}
+	}
+	for _, attribute := range []string{"olcSqlUseSubtreeShortcut", "olcSqlCheckSchema"} {
+		_, present, valueErr := singleBoolean(entry, attribute)
+		if valueErr != nil {
+			return nil, valueErr
+		}
+		if present {
+			return nil, fmt.Errorf(
+				"%s %s is not supported by the SQL backend",
+				entry.DN,
+				attribute,
+			)
+		}
+	}
 	return configuration, nil
+}
+
+func parseSQLFetchAttributes(value string) ([]string, error) {
+	parts := strings.Split(value, ",")
+	attributes := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		attribute := strings.TrimSpace(part)
+		if attribute == "" {
+			return nil, errors.New("attribute list contains an empty item")
+		}
+		key := strings.ToLower(attribute)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		attributes = append(attributes, attribute)
+	}
+	return attributes, nil
 }
 
 func requiredSQLString(entry directory.Entry, attribute string) (string, error) {
@@ -476,7 +561,10 @@ func (configuration *sqlBackendRuntimeConfiguration) settings() sqlBackendSettin
 		failIfNoMapping:   configuration.failIfNoMapping,
 		allowOrphans:      configuration.allowOrphans,
 		baseObject:        configuration.baseObject,
+		baseObjectSuffix:  configuration.baseObjectSuffix,
 		layers:            append([]string(nil), configuration.layers...),
+		fetchAllAttrs:     configuration.fetchAllAttrs,
+		fetchAttrs:        append([]string(nil), configuration.fetchAttrs...),
 		aliasingKeyword:   configuration.aliasingKeyword,
 		aliasingQuote:     configuration.aliasingQuote,
 		autocommit:        configuration.autocommit,
@@ -648,6 +736,10 @@ func (configuration *sqlBackendRuntimeConfiguration) database(
 	configuration.prepareDefaultIDQuery()
 	configuration.prepareHasChildrenQuery()
 	if err := configuration.loadMappings(ctx, database); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	if err := configuration.prepareBaseObject(); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -1018,6 +1110,14 @@ func (reader *sqlBackendReader) Get(
 	if queryer == nil {
 		queryer = database
 	}
+	if entry, found, baseErr := reader.configuration.baseObjectForDN(dn); baseErr != nil {
+		return directory.Entry{}, baseErr
+	} else if found {
+		if required, specified := reader.searchRequiresHasSubordinates(); specified && required {
+			return reader.withHasSubordinates(queryer, entry)
+		}
+		return entry, nil
+	}
 	id, err := reader.entryIDWithQueryer(queryer, dn)
 	if err != nil {
 		return directory.Entry{}, err
@@ -1047,32 +1147,54 @@ func (reader *sqlBackendReader) ForEach(
 	if queryer == nil {
 		queryer = database
 	}
-	rows, err := queryer.QueryContext(
-		reader.ctx,
-		"SELECT id,keyval,oc_map_id,dn FROM ldap_entries ORDER BY id",
-	)
+	ids, planned, err := reader.sqlBackendFilterCandidates(queryer)
 	if err != nil {
-		return fmt.Errorf("SQL-backend entry scan: %w", err)
+		return err
 	}
-	var ids []sqlEntryID
-	for rows.Next() {
-		var id sqlEntryID
-		if err := rows.Scan(&id.id, &id.keyValue, &id.objectClassID, &id.dn); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("SQL-backend entry ID: %w", err)
+	if !planned {
+		ids, err = reader.scanSQLBackendEntryIDs(queryer)
+		if err != nil {
+			return err
 		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("SQL-backend entry scan: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("SQL-backend entry scan close: %w", err)
 	}
 	includeHasSubordinates, _ := reader.searchRequiresHasSubordinates()
+	baseDN := directory.DN{}
+	hasBaseObject := false
+	if baseEntry := reader.configuration.baseObjectClone(); baseEntry != nil {
+		baseDN, err = directory.ParseDN(baseEntry.DN)
+		if err == nil {
+			baseDN, err = reader.NormalizeDNIdentity(baseDN)
+		}
+		if err != nil {
+			return fmt.Errorf("SQL-backend baseObject DN: %w", err)
+		}
+		hasBaseObject = true
+		entry := *baseEntry
+		if includeHasSubordinates {
+			entry, err = reader.withHasSubordinates(queryer, entry)
+			if err != nil {
+				return err
+			}
+		}
+		if err := visit(entry); err != nil {
+			return &sqlBackendVisitorError{err: err}
+		}
+	}
 	for _, id := range ids {
-		entry, err := reader.loadEntry(queryer, id)
+		if hasBaseObject {
+			candidate, parseErr := directory.ParseDN(id.dn)
+			if parseErr != nil {
+				return fmt.Errorf("SQL-backend entry %d DN: %w", id.id, parseErr)
+			}
+			candidate, parseErr = reader.NormalizeDNIdentity(candidate)
+			if parseErr != nil {
+				return fmt.Errorf("SQL-backend entry %d DN: %w", id.id, parseErr)
+			}
+			if candidate.Equal(baseDN) {
+				continue
+			}
+		}
+		entry, err := reader.loadEntryForRead(queryer, id)
 		if err != nil {
 			return err
 		}
@@ -1112,6 +1234,28 @@ func (reader *sqlBackendReader) ForEachPartition(
 func (reader *sqlBackendReader) loadEntry(
 	queryer sqlBackendQueryer,
 	id sqlEntryID,
+) (directory.Entry, error) {
+	return reader.loadEntryWithSelection(queryer, id, nil)
+}
+
+func (reader *sqlBackendReader) loadEntryForRead(
+	queryer sqlBackendQueryer,
+	id sqlEntryID,
+) (directory.Entry, error) {
+	selection, specified, err := reader.sqlBackendAttributeSelection()
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if !specified {
+		selection = nil
+	}
+	return reader.loadEntryWithSelection(queryer, id, selection)
+}
+
+func (reader *sqlBackendReader) loadEntryWithSelection(
+	queryer sqlBackendQueryer,
+	id sqlEntryID,
+	selection *sqlBackendAttributeSelection,
 ) (directory.Entry, error) {
 	objectClass := reader.configuration.objectClasses[id.objectClassID]
 	if objectClass == nil {
@@ -1163,6 +1307,12 @@ func (reader *sqlBackendReader) loadEntry(
 	for _, name := range attributeNames {
 		mappings := objectClass.attributes[name]
 		for _, mapping := range mappings {
+			if selection != nil && !selection.includes(
+				reader.configuration.registry,
+				mapping.name,
+			) {
+				continue
+			}
 			values, err := reader.readAttributeValues(queryer, id.keyValue, mapping)
 			if err != nil {
 				return directory.Entry{}, fmt.Errorf(
@@ -1245,6 +1395,21 @@ func (reader *sqlBackendReader) hasChildrenWithQueryer(
 	}
 	if len(parameter) > 255 {
 		return false, fmt.Errorf("SQL-backend DN exceeds 255 bytes")
+	}
+	if reader.configuration.baseObjectMatches(normalized) {
+		var childCount int64
+		if err := queryer.QueryRowContext(
+			reader.ctx,
+			"SELECT COUNT(*) FROM ldap_entries WHERE parent=?",
+			"baseObject",
+		).Scan(&childCount); err != nil {
+			return false, fmt.Errorf(
+				"SQL-backend baseObject subordinate count for %s: %w",
+				normalized.String(),
+				err,
+			)
+		}
+		return childCount > 0, nil
 	}
 	query := reader.configuration.hasChildrenQuery
 	if query == "" {

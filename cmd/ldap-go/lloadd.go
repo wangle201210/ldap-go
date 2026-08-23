@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/lloadd"
 )
@@ -139,7 +142,7 @@ func validateLloaddListeners(urls []string, clientTLS *tls.Config) error {
 		if err != nil {
 			return err
 		}
-		if scheme == "ldaps" && clientTLS == nil {
+		if (scheme == "ldaps" || scheme == "pldaps") && clientTLS == nil {
 			return fmt.Errorf(
 				"lloadd listener %q requires -tls-cert and -tls-key",
 				rawURL,
@@ -157,7 +160,9 @@ func listenLloaddURL(
 	if err != nil {
 		return nil, "", err
 	}
-	if scheme == "ldaps" && clientTLS == nil {
+	secure := scheme == "ldaps" || scheme == "pldaps"
+	proxied := scheme == "pldap" || scheme == "pldaps"
+	if secure && clientTLS == nil {
 		return nil, "", fmt.Errorf(
 			"lloadd listener %q requires -tls-cert and -tls-key",
 			raw,
@@ -170,7 +175,10 @@ func listenLloaddURL(
 	if network == "unix" {
 		return listener, "ldapi://" + address, nil
 	}
-	if scheme == "ldaps" {
+	if proxied {
+		listener = newProxyProtocolListener(listener, lloaddProxyProtocolTimeout)
+	}
+	if secure {
 		listener = tls.NewListener(listener, clientTLS.Clone())
 	}
 	return listener, scheme + "://" + listener.Addr().String(), nil
@@ -193,10 +201,10 @@ func parseLloaddListenerURL(raw string) (string, string, string, error) {
 	}
 	scheme := strings.ToLower(parsed.Scheme)
 	switch scheme {
-	case "ldap", "ldaps":
+	case "ldap", "ldaps", "pldap", "pldaps":
 		address := parsed.Host
 		defaultPort := "389"
-		if scheme == "ldaps" {
+		if scheme == "ldaps" || scheme == "pldaps" {
 			defaultPort = "636"
 		}
 		if address == "" {
@@ -205,11 +213,237 @@ func parseLloaddListenerURL(raw string) (string, string, string, error) {
 			address = net.JoinHostPort(parsed.Hostname(), defaultPort)
 		}
 		return scheme, "tcp", address, nil
-	case "pldap", "pldaps":
-		return "", "", "", fmt.Errorf("lloadd listener scheme %q is not implemented", parsed.Scheme)
 	default:
 		return "", "", "", fmt.Errorf("unsupported lloadd listener scheme %q", parsed.Scheme)
 	}
+}
+
+const (
+	lloaddProxyProtocolTimeout        = 5 * time.Second
+	lloaddProxyProtocolMaxOptionBytes = 520
+	lloaddProxyProtocolMaxTLVs        = 128
+	lloaddProxyProtocolParsers        = 128
+)
+
+var lloaddProxyProtocolV2Signature = []byte{
+	0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a,
+}
+
+type proxyProtocolListener struct {
+	source  net.Listener
+	timeout time.Duration
+
+	startOnce sync.Once
+	closeOnce sync.Once
+	done      chan struct{}
+	accepted  chan combinedAccept
+	parsers   chan struct{}
+}
+
+func newProxyProtocolListener(
+	source net.Listener,
+	timeout time.Duration,
+) *proxyProtocolListener {
+	return &proxyProtocolListener{
+		source:   source,
+		timeout:  timeout,
+		done:     make(chan struct{}),
+		accepted: make(chan combinedAccept),
+		parsers:  make(chan struct{}, lloaddProxyProtocolParsers),
+	}
+}
+
+func (listener *proxyProtocolListener) Accept() (net.Conn, error) {
+	listener.startOnce.Do(func() { go listener.acceptLoop() })
+	select {
+	case accepted := <-listener.accepted:
+		return accepted.connection, accepted.err
+	case <-listener.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (listener *proxyProtocolListener) acceptLoop() {
+	for {
+		connection, err := listener.source.Accept()
+		if err != nil {
+			select {
+			case listener.accepted <- combinedAccept{err: err}:
+			case <-listener.done:
+			}
+			return
+		}
+		select {
+		case listener.parsers <- struct{}{}:
+		case <-listener.done:
+			_ = connection.Close()
+			return
+		}
+		go listener.prepare(connection)
+	}
+}
+
+func (listener *proxyProtocolListener) prepare(connection net.Conn) {
+	defer func() { <-listener.parsers }()
+	prepared, err := readLloaddProxyProtocolV2(connection, listener.timeout)
+	if err != nil {
+		_ = connection.Close()
+		return
+	}
+	select {
+	case listener.accepted <- combinedAccept{connection: prepared}:
+	case <-listener.done:
+		_ = prepared.Close()
+	}
+}
+
+func (listener *proxyProtocolListener) Close() error {
+	var err error
+	listener.closeOnce.Do(func() {
+		close(listener.done)
+		err = listener.source.Close()
+	})
+	return err
+}
+
+func (listener *proxyProtocolListener) Addr() net.Addr {
+	return listener.source.Addr()
+}
+
+func readLloaddProxyProtocolV2(
+	connection net.Conn,
+	timeout time.Duration,
+) (net.Conn, error) {
+	if timeout <= 0 {
+		return nil, errors.New("PROXY protocol header timeout must be positive")
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, fmt.Errorf("set PROXY protocol header deadline: %w", err)
+	}
+	header := make([]byte, 16)
+	if _, err := io.ReadFull(connection, header); err != nil {
+		return nil, fmt.Errorf("read PROXY protocol header: %w", err)
+	}
+	if !bytes.Equal(header[:12], lloaddProxyProtocolV2Signature) {
+		return nil, errors.New("invalid PROXY protocol v2 signature")
+	}
+	if header[12]>>4 != 2 {
+		return nil, fmt.Errorf("unsupported PROXY protocol version %d", header[12]>>4)
+	}
+	command := header[12] & 0x0f
+	familyProtocol := header[13]
+	length := int(binary.BigEndian.Uint16(header[14:16]))
+
+	addressLength := 0
+	switch command {
+	case 0:
+		// OpenLDAP ignores LOCAL's family and consumes its payload as opaque options.
+	case 1:
+		switch familyProtocol {
+		case 0x11:
+			addressLength = 12
+		case 0x21:
+			addressLength = 36
+		default:
+			return nil, fmt.Errorf("unsupported PROXY protocol family/transport 0x%02x", familyProtocol)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported PROXY protocol command %d", command)
+	}
+	if length < addressLength {
+		return nil, fmt.Errorf(
+			"PROXY protocol address length %d is smaller than %d",
+			length,
+			addressLength,
+		)
+	}
+	if length-addressLength > lloaddProxyProtocolMaxOptionBytes {
+		return nil, fmt.Errorf(
+			"PROXY protocol options exceed %d bytes",
+			lloaddProxyProtocolMaxOptionBytes,
+		)
+	}
+	body := make([]byte, length)
+	if _, err := io.ReadFull(connection, body); err != nil {
+		return nil, fmt.Errorf("read PROXY protocol payload: %w", err)
+	}
+	var tlvs []lloadd.ProxyProtocolTLV
+	if command == 1 {
+		// OpenLDAP treats bytes after the address block as opaque options. Keep
+		// TLV metadata as a best-effort extension without making it part of
+		// connection acceptance.
+		if parsedTLVs, err := parseLloaddProxyProtocolTLVs(body[addressLength:]); err == nil {
+			tlvs = parsedTLVs
+		}
+	}
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear PROXY protocol header deadline: %w", err)
+	}
+
+	metadata := lloadd.ConnectionMetadata{
+		ProxyProtocol:               true,
+		ProxyProtocolLocal:          command == 0,
+		SourceAddress:               connection.RemoteAddr(),
+		DestinationAddress:          connection.LocalAddr(),
+		TransportSourceAddress:      connection.RemoteAddr(),
+		TransportDestinationAddress: connection.LocalAddr(),
+		TLVs:                        tlvs,
+	}
+	if command == 1 {
+		metadata.SourceAddress, metadata.DestinationAddress =
+			proxyProtocolTCPAddresses(familyProtocol, body[:addressLength])
+	}
+	prepared, err := lloadd.WithConnectionMetadata(connection, metadata)
+	if err != nil {
+		return nil, fmt.Errorf("attach PROXY protocol metadata: %w", err)
+	}
+	return prepared, nil
+}
+
+func proxyProtocolTCPAddresses(familyProtocol byte, encoded []byte) (net.Addr, net.Addr) {
+	if familyProtocol == 0x11 {
+		return &net.TCPAddr{
+				IP:   append(net.IP(nil), encoded[:4]...),
+				Port: int(binary.BigEndian.Uint16(encoded[8:10])),
+			}, &net.TCPAddr{
+				IP:   append(net.IP(nil), encoded[4:8]...),
+				Port: int(binary.BigEndian.Uint16(encoded[10:12])),
+			}
+	}
+	return &net.TCPAddr{
+			IP:   append(net.IP(nil), encoded[:16]...),
+			Port: int(binary.BigEndian.Uint16(encoded[32:34])),
+		}, &net.TCPAddr{
+			IP:   append(net.IP(nil), encoded[16:32]...),
+			Port: int(binary.BigEndian.Uint16(encoded[34:36])),
+		}
+}
+
+func parseLloaddProxyProtocolTLVs(encoded []byte) ([]lloadd.ProxyProtocolTLV, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	tlvs := make([]lloadd.ProxyProtocolTLV, 0, min(len(encoded)/3, lloaddProxyProtocolMaxTLVs))
+	for len(encoded) != 0 {
+		if len(tlvs) == lloaddProxyProtocolMaxTLVs {
+			return nil, fmt.Errorf("PROXY protocol has more than %d TLVs", lloaddProxyProtocolMaxTLVs)
+		}
+		if len(encoded) < 3 {
+			return nil, errors.New("truncated PROXY protocol TLV header")
+		}
+		tlvType := encoded[0]
+		length := int(binary.BigEndian.Uint16(encoded[1:3]))
+		encoded = encoded[3:]
+		if length > len(encoded) {
+			return nil, errors.New("truncated PROXY protocol TLV value")
+		}
+		tlvs = append(tlvs, lloadd.ProxyProtocolTLV{
+			Type:  tlvType,
+			Value: append([]byte(nil), encoded[:length]...),
+		})
+		encoded = encoded[length:]
+	}
+	return tlvs, nil
 }
 
 type combinedAccept struct {

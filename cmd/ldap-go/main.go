@@ -912,7 +912,9 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
 	var openLDAPLDIFPath, suffix string
-	var dryRun, skipSchemaValidation, updateContextCSN, disableSubordinateGlue bool
+	var continueOnError, dryRun, quickMode, skipSchemaValidation bool
+	var updateContextCSN, disableSubordinateGlue bool
+	var valueCheckExplicit, valueCheckEnabled bool
 	skipValueValidation := command == "slapadd"
 	databaseNumber := -1
 	csnServerID := 0
@@ -923,9 +925,9 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		flags.BoolVar(&dryRun, "u", false, "validate without modifying the database")
 		flags.IntVar(&csnServerID, "S", 0, "server ID for generated entryCSN values")
 		flags.BoolVar(&updateContextCSN, "w", false, "update the suffix contextCSN")
-		registerUnsupportedBool(flags, "c", "continue after import errors")
+		flags.BoolVar(&continueOnError, "c", false, "continue after import errors")
 		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
-		registerUnsupportedBool(flags, "q", "skip consistency checks")
+		flags.BoolVar(&quickMode, "q", false, "skip value checks")
 		flags.BoolVar(&skipSchemaValidation, "s", false, "disable schema checking")
 		flags.Func("o", "set slapadd tool option", func(raw string) error {
 			name, value, found := strings.Cut(raw, "=")
@@ -944,6 +946,8 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 			case "schema-check":
 				skipSchemaValidation = !enabled
 			case "value-check":
+				valueCheckExplicit = true
+				valueCheckEnabled = enabled
 				skipValueValidation = !enabled
 			default:
 				return fmt.Errorf("unsupported slapadd option %q", name)
@@ -958,12 +962,6 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	if command == "slapadd" {
-		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
-			{name: "c", reason: "imports are atomic and stop on the first error"},
-			{name: "q", reason: "imports always retain consistency checks"},
-		}); err != nil {
-			return err
-		}
 		if flagWasSet(flags, "l") && flagWasSet(flags, "ldif") {
 			return errors.New("slapadd options -l and -ldif are mutually exclusive")
 		}
@@ -973,8 +971,25 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		if flagWasSet(flags, "u") && !dryRun {
 			return errors.New("slapadd option -u=false is not supported")
 		}
+		if flagWasSet(flags, "c") && !continueOnError {
+			return errors.New("slapadd option -c=false is not supported")
+		}
+		if flagWasSet(flags, "q") && !quickMode {
+			return errors.New("slapadd option -q=false is not supported")
+		}
 		if csnServerID < 0 || csnServerID > 0x0fff {
 			return fmt.Errorf("slapadd server ID must be between 0 and %d", 0x0fff)
+		}
+		if quickMode {
+			if valueCheckExplicit && valueCheckEnabled {
+				if _, err := fmt.Fprintln(
+					stderr,
+					"slapadd: value-check incompatible with quick mode; disabled.",
+				); err != nil {
+					return err
+				}
+			}
+			skipValueValidation = true
 		}
 	}
 	selectedDatabase, err := resolveOfflineDatabaseSelection(
@@ -1041,14 +1056,50 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 			return err
 		}
 	}
-	result, err := migration.ImportLDIF(
-		context.Background(),
-		store,
-		reader,
-		importOptions,
-	)
-	if err != nil {
-		return err
+	var result migration.ImportResult
+	continuedFailures := 0
+	if continueOnError {
+		continueOptions := importOptions
+		// The dry-run destination is already an isolated copy. Committing each
+		// successful record there is necessary for child dependency checks.
+		continueOptions.DryRun = false
+		continued, err := migration.ImportLDIFContinue(
+			context.Background(),
+			store,
+			reader,
+			continueOptions,
+		)
+		if err != nil {
+			return err
+		}
+		result = continued.ImportResult
+		continuedFailures = len(continued.Failures)
+		for _, failure := range continued.Failures {
+			identity := ""
+			if failure.DN != "" {
+				identity = fmt.Sprintf(" dn=%q", failure.DN)
+			}
+			if _, err := fmt.Fprintf(
+				stderr,
+				"slapadd: line %d:%s %v\n",
+				failure.Line,
+				identity,
+				failure.Err,
+			); err != nil {
+				return err
+			}
+		}
+	} else {
+		var err error
+		result, err = migration.ImportLDIF(
+			context.Background(),
+			store,
+			reader,
+			importOptions,
+		)
+		if err != nil {
+			return err
+		}
 	}
 	action := "imported"
 	if dryRun {
@@ -1061,7 +1112,17 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		result.Entries,
 		strings.Join(result.NamingContexts, ", "),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if continuedFailures > 0 {
+		return fmt.Errorf(
+			"slapadd completed with %d record errors; %d entries retained",
+			continuedFailures,
+			result.Entries,
+		)
+	}
+	return nil
 }
 
 func prepareDryRunDatabase(databasePath string) (string, func(), error) {

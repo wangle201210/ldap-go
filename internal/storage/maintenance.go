@@ -415,7 +415,7 @@ func checkBoltEqualityIndexes(
 		if value == nil {
 			return fmt.Errorf("equality index bucket contains nested bucket %q", key)
 		}
-		partition, attribute, _, presence, entryKey, err := decodeEqualityIndexPostingKey(key)
+		partition, attribute, kind, _, entryKey, err := decodeEqualityIndexPostingKey(key)
 		if err != nil {
 			return fmt.Errorf("equality index posting %q: %w", key, err)
 		}
@@ -424,7 +424,7 @@ func checkBoltEqualityIndexes(
 			return fmt.Errorf("equality index posting %q has no partition config", key)
 		}
 		definition, ok := equalityIndexAttributeDefinition(config, attribute)
-		if !ok || presence && !definition.Presence || !presence && !definition.Equality {
+		if !ok || !equalityIndexPostingKindConfigured(definition, kind) {
 			return fmt.Errorf("equality index posting %q is not enabled by its config", key)
 		}
 		entryPartition, _ := splitPartitionedEntryKey(entryKey)
@@ -441,9 +441,7 @@ func checkBoltEqualityIndexes(
 		return err
 	}
 
-	schema, ok := normalizer.(interface {
-		EqualityIndexValues(directory.Entry, string) ([][]byte, error)
-	})
+	schema, ok := normalizer.(EqualityIndexSchema)
 	if !ok {
 		return nil
 	}
@@ -459,30 +457,19 @@ func checkBoltEqualityIndexes(
 		if err != nil {
 			return err
 		}
+		terms, err := equalityIndexEntryTerms(schema, config, entry)
+		if err != nil {
+			return fmt.Errorf("verify index entry %q: %w", entry.DN, err)
+		}
 		for _, definition := range config.Attributes {
-			values, err := schema.EqualityIndexValues(entry, definition.Attribute)
-			if err != nil {
-				return fmt.Errorf("verify equality index entry %q: %w", entry.DN, err)
-			}
-			if definition.Presence && len(values) > 0 {
+			for _, term := range equalityIndexTermsForAttribute(definition, terms[definition.Attribute]) {
 				expected[string(equalityIndexPostingKey(
 					partition,
 					definition.Attribute,
-					nil,
-					true,
+					term.kind,
+					term.value,
 					string(key),
 				))] = struct{}{}
-			}
-			if definition.Equality {
-				for _, normalized := range values {
-					expected[string(equalityIndexPostingKey(
-						partition,
-						definition.Attribute,
-						normalized,
-						false,
-						string(key),
-					))] = struct{}{}
-				}
 			}
 		}
 		return nil

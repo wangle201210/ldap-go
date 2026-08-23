@@ -89,6 +89,13 @@ listen ldaps://127.0.0.1:636/
 			want: "requires -tls-cert and -tls-key",
 		},
 		{
+			name: "client PLDAPS",
+			contents: `
+listen pldaps://127.0.0.1:636/
+`,
+			want: "requires -tls-cert and -tls-key",
+		},
+		{
 			name: "unsupported service SASL mechanism",
 			contents: `
 listen ldap://127.0.0.1:0/
@@ -149,14 +156,17 @@ func TestListenLloaddURL(t *testing.T) {
 		_ = listener.Close()
 		t.Fatal("listenLloaddURL(ldaps without TLS) succeeded")
 	}
-	for _, raw := range []string{
-		"pldap://127.0.0.1:0/",
-		"http://127.0.0.1:0/",
-	} {
-		if listener, _, err := listenLloaddURL(raw, nil); err == nil {
-			_ = listener.Close()
-			t.Fatalf("listenLloaddURL(%q) succeeded", raw)
-		}
+	listener, description, err = listenLloaddURL("pldap://127.0.0.1:0/", nil)
+	if err != nil {
+		t.Fatalf("listenLloaddURL(pldap): %v", err)
+	}
+	if !strings.HasPrefix(description, "pldap://127.0.0.1:") {
+		t.Fatalf("PROXY listener description = %q", description)
+	}
+	_ = listener.Close()
+	if listener, _, err := listenLloaddURL("http://127.0.0.1:0/", nil); err == nil {
+		_ = listener.Close()
+		t.Fatal("listenLloaddURL(http) succeeded")
 	}
 }
 

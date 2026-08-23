@@ -168,6 +168,8 @@ type clientConnection struct {
 	proxy *Proxy
 	conn  net.Conn
 
+	metadata ConnectionMetadata
+
 	writeMu  sync.Mutex
 	mu       sync.Mutex
 	closed   bool
@@ -759,15 +761,35 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 			proxy.shutdown()
 			return fmt.Errorf("accept lloadd client: %w", err)
 		}
+		metadata, hasMetadata := MetadataFromConnection(connection)
+		if !hasMetadata {
+			metadata = ConnectionMetadata{
+				SourceAddress:               connection.RemoteAddr(),
+				DestinationAddress:          connection.LocalAddr(),
+				TransportSourceAddress:      connection.RemoteAddr(),
+				TransportDestinationAddress: connection.LocalAddr(),
+			}
+		}
 		client := &clientConnection{
 			proxy:           proxy,
 			conn:            connection,
+			metadata:        metadata,
 			ops:             make(map[int64]*proxyOperation),
 			done:            make(chan struct{}),
 			readWake:        make(chan struct{}),
 			protocolVersion: 3,
 		}
-		_, client.tlsActive = connection.(*tls.Conn)
+		client.tlsActive = connectionUsesTLS(connection)
+		if hasMetadata {
+			proxy.config.Logger.Debug(
+				"accepted proxied lloadd client",
+				"source", addressString(metadata.SourceAddress),
+				"destination", addressString(metadata.DestinationAddress),
+				"transport_source", addressString(metadata.TransportSourceAddress),
+				"transport_destination", addressString(metadata.TransportDestinationAddress),
+				"local", metadata.ProxyProtocolLocal,
+			)
+		}
 		proxy.mu.Lock()
 		if proxy.closed {
 			proxy.mu.Unlock()
@@ -782,6 +804,36 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 			client.serve(proxy.ctx)
 		}()
 	}
+}
+
+func connectionUsesTLS(connection net.Conn) bool {
+	const maximumWrappers = 16
+	for depth := 0; depth < maximumWrappers && connection != nil; depth++ {
+		if _, ok := connection.(*tls.Conn); ok {
+			return true
+		}
+		var next net.Conn
+		switch wrapped := connection.(type) {
+		case interface{ NetConn() net.Conn }:
+			next = wrapped.NetConn()
+		case interface{ Unwrap() net.Conn }:
+			next = wrapped.Unwrap()
+		default:
+			return false
+		}
+		if next == nil || next == connection {
+			return false
+		}
+		connection = next
+	}
+	return false
+}
+
+func addressString(address net.Addr) string {
+	if address == nil {
+		return ""
+	}
+	return address.String()
 }
 
 func (proxy *Proxy) Close() error {

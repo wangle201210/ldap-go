@@ -16,15 +16,46 @@ import (
 
 const equalityIndexFormatVersion = 1
 
+const (
+	substringIndexNGramSize = 3
+	substringIndexAnchorMax = 8
+	substringIndexMaxNGrams = 256
+)
+
+func equalityIndexPostingKindConfigured(definition EqualityIndexAttribute, kind byte) bool {
+	switch kind {
+	case equalityIndexPresence:
+		return definition.Presence
+	case equalityIndexValue:
+		return definition.Equality
+	case equalityIndexSubstringInitial:
+		return definition.SubstringInitial
+	case equalityIndexSubstringAny, equalityIndexSubstringOverflow:
+		return definition.SubstringAny
+	case equalityIndexSubstringFinal:
+		return definition.SubstringFinal
+	case equalityIndexOrdering:
+		return definition.Ordering
+	default:
+		return false
+	}
+}
+
 // EqualityIndexAttribute identifies one equality index by canonical attribute
 // OID and effective equality matching rule. The matching rule is part of the
 // persisted configuration fingerprint so schema changes cannot reuse stale
 // postings.
 type EqualityIndexAttribute struct {
-	Attribute    string `json:"attribute"`
-	EqualityRule string `json:"equalityRule"`
-	Equality     bool   `json:"equality"`
-	Presence     bool   `json:"presence"`
+	Attribute        string `json:"attribute"`
+	EqualityRule     string `json:"equalityRule,omitempty"`
+	SubstringRule    string `json:"substringRule,omitempty"`
+	OrderingRule     string `json:"orderingRule,omitempty"`
+	Equality         bool   `json:"equality,omitempty"`
+	Presence         bool   `json:"presence,omitempty"`
+	SubstringInitial bool   `json:"substringInitial,omitempty"`
+	SubstringAny     bool   `json:"substringAny,omitempty"`
+	SubstringFinal   bool   `json:"substringFinal,omitempty"`
+	Ordering         bool   `json:"ordering,omitempty"`
 }
 
 // EqualityIndexConfig is the storage-neutral representation of olcDbIndex eq
@@ -41,6 +72,12 @@ type EqualityIndexSchema interface {
 	ResolveEqualityIndexAttribute(description string) (canonical string, equality, presence bool, err error)
 	NormalizeEqualityIndexAssertion(description string, value []byte) ([]byte, error)
 	EqualityIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
+	ResolveSubstringIndexAttribute(description string) (canonical string, initial, any, final bool, err error)
+	NormalizeSubstringIndexAssertion(description string, value directory.Substring) (directory.Substring, error)
+	SubstringIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
+	ResolveOrderingIndexAttribute(description string) (canonical string, ordering bool, err error)
+	NormalizeOrderingIndexAssertion(description string, value []byte) ([]byte, error)
+	OrderingIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
 }
 
 type equalityIndexStorageReader interface {
@@ -48,9 +85,10 @@ type equalityIndexStorageReader interface {
 	equalityIndexPostings(
 		partition,
 		attribute string,
+		kind byte,
 		value []byte,
-		presence bool,
 	) ([]string, error)
+	equalityIndexOrderingPostings(partition, attribute string, assertion []byte, greaterOrEqual bool) ([]string, error)
 	equalityIndexEntries(keys []string) ([]directory.Entry, error)
 }
 
@@ -255,8 +293,8 @@ func planEqualityIndexFilter(
 		keys, err := reader.equalityIndexPostings(
 			partition,
 			attribute,
+			equalityIndexValue,
 			normalized,
-			false,
 		)
 		return stringSet(keys), true, err
 	case directory.FilterPresent:
@@ -267,8 +305,78 @@ func planEqualityIndexFilter(
 		keys, err := reader.equalityIndexPostings(
 			partition,
 			attribute,
+			equalityIndexPresence,
 			nil,
-			true,
+		)
+		return stringSet(keys), true, err
+	case directory.FilterSubstrings:
+		attribute, initial, any, final, err := schema.ResolveSubstringIndexAttribute(
+			filter.Attribute,
+		)
+		if err != nil || !initial && !any && !final {
+			return nil, false, err
+		}
+		normalized, err := schema.NormalizeSubstringIndexAssertion(
+			filter.Attribute,
+			filter.Substring,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		constraints := substringIndexFilterConstraints(normalized, initial, any, final)
+		if len(constraints) == 0 {
+			return nil, false, nil
+		}
+		var result map[string]struct{}
+		for _, constraint := range constraints {
+			keys, err := reader.equalityIndexPostings(
+				partition,
+				attribute,
+				constraint.kind,
+				constraint.value,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			candidate := stringSet(keys)
+			if constraint.includeOverflow {
+				overflow, err := reader.equalityIndexPostings(
+					partition,
+					attribute,
+					equalityIndexSubstringOverflow,
+					nil,
+				)
+				if err != nil {
+					return nil, false, err
+				}
+				for key := range stringSet(overflow) {
+					candidate[key] = struct{}{}
+				}
+			}
+			if result == nil {
+				result = candidate
+				continue
+			}
+			intersectStringSets(result, candidate)
+		}
+		return result, true, nil
+	case directory.FilterGreaterOrEqual, directory.FilterLessOrEqual:
+		attribute, ordering, err := schema.ResolveOrderingIndexAttribute(filter.Attribute)
+		if err != nil || !ordering {
+			return nil, false, err
+		}
+		normalized, err := schema.NormalizeOrderingIndexAssertion(
+			filter.Attribute,
+			filter.Assertion,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		keys, err := reader.equalityIndexOrderingPostings(
+			partition,
+			attribute,
+			normalized,
+			filter.Kind == directory.FilterGreaterOrEqual,
 		)
 		return stringSet(keys), true, err
 	case directory.FilterAnd:
@@ -324,6 +432,84 @@ func planEqualityIndexFilter(
 	}
 }
 
+func intersectStringSets(left, right map[string]struct{}) {
+	for key := range left {
+		if _, ok := right[key]; !ok {
+			delete(left, key)
+		}
+	}
+}
+
+type substringIndexConstraint struct {
+	kind            byte
+	value           []byte
+	includeOverflow bool
+}
+
+func substringIndexFilterConstraints(
+	value directory.Substring,
+	initial,
+	any,
+	final bool,
+) []substringIndexConstraint {
+	var constraints []substringIndexConstraint
+	if initial && value.Initial != nil && len(value.Initial) > 0 {
+		length := min(len(value.Initial), substringIndexAnchorMax)
+		constraints = append(constraints, substringIndexConstraint{
+			kind:  equalityIndexSubstringInitial,
+			value: bytes.Clone(value.Initial[:length]),
+		})
+	}
+	if any {
+		for _, part := range value.Any {
+			if len(part) < substringIndexNGramSize {
+				continue
+			}
+			for _, gram := range boundedQueryNGrams(part) {
+				constraints = append(constraints, substringIndexConstraint{
+					kind:            equalityIndexSubstringAny,
+					value:           gram,
+					includeOverflow: true,
+				})
+			}
+		}
+	}
+	if final && value.Final != nil && len(value.Final) > 0 {
+		length := min(len(value.Final), substringIndexAnchorMax)
+		constraints = append(constraints, substringIndexConstraint{
+			kind:  equalityIndexSubstringFinal,
+			value: bytes.Clone(value.Final[len(value.Final)-length:]),
+		})
+	}
+	return constraints
+}
+
+// A bounded sample is sufficient here: every selected gram is a necessary
+// condition, while final filter evaluation removes false positives.
+func boundedQueryNGrams(value []byte) [][]byte {
+	count := len(value) - substringIndexNGramSize + 1
+	if count <= 0 {
+		return nil
+	}
+	const maxQueryGrams = 8
+	selected := min(count, maxQueryGrams)
+	result := make([][]byte, 0, selected)
+	seen := make(map[string]struct{}, selected)
+	for index := 0; index < selected; index++ {
+		position := 0
+		if selected > 1 {
+			position = index * (count - 1) / (selected - 1)
+		}
+		gram := bytes.Clone(value[position : position+substringIndexNGramSize])
+		if _, duplicate := seen[string(gram)]; duplicate {
+			continue
+		}
+		seen[string(gram)] = struct{}{}
+		result = append(result, gram)
+	}
+	return result
+}
+
 func normalizeEqualityIndexConfig(
 	config EqualityIndexConfig,
 ) (EqualityIndexConfig, error) {
@@ -340,22 +526,42 @@ func normalizeEqualityIndexConfig(
 	for _, attribute := range config.Attributes {
 		attribute.Attribute = strings.ToLower(strings.TrimSpace(attribute.Attribute))
 		attribute.EqualityRule = strings.ToLower(strings.TrimSpace(attribute.EqualityRule))
+		attribute.SubstringRule = strings.ToLower(strings.TrimSpace(attribute.SubstringRule))
+		attribute.OrderingRule = strings.ToLower(strings.TrimSpace(attribute.OrderingRule))
+		hasSubstring := attribute.SubstringInitial || attribute.SubstringAny || attribute.SubstringFinal
 		if attribute.Attribute == "" ||
 			(attribute.Equality && attribute.EqualityRule == "") ||
-			(!attribute.Equality && !attribute.Presence) {
+			(hasSubstring && attribute.SubstringRule == "") ||
+			(attribute.Ordering && attribute.OrderingRule == "") ||
+			(!attribute.Equality && !attribute.Presence && !hasSubstring && !attribute.Ordering) {
 			return EqualityIndexConfig{}, errors.New(
-				"equality index attribute, mode, and equality rule are required",
+				"index attribute, enabled mode, and matching rules are required",
 			)
 		}
 		if existing, ok := byAttribute[attribute.Attribute]; ok {
-			if existing.EqualityRule != attribute.EqualityRule {
+			if rulesConflict(existing.EqualityRule, attribute.EqualityRule) ||
+				rulesConflict(existing.SubstringRule, attribute.SubstringRule) ||
+				rulesConflict(existing.OrderingRule, attribute.OrderingRule) {
 				return EqualityIndexConfig{}, fmt.Errorf(
-					"attribute %q has conflicting equality index rules",
+					"attribute %q has conflicting index rules",
 					attribute.Attribute,
 				)
 			}
+			if attribute.EqualityRule == "" {
+				attribute.EqualityRule = existing.EqualityRule
+			}
+			if attribute.SubstringRule == "" {
+				attribute.SubstringRule = existing.SubstringRule
+			}
+			if attribute.OrderingRule == "" {
+				attribute.OrderingRule = existing.OrderingRule
+			}
 			attribute.Equality = attribute.Equality || existing.Equality
 			attribute.Presence = attribute.Presence || existing.Presence
+			attribute.SubstringInitial = attribute.SubstringInitial || existing.SubstringInitial
+			attribute.SubstringAny = attribute.SubstringAny || existing.SubstringAny
+			attribute.SubstringFinal = attribute.SubstringFinal || existing.SubstringFinal
+			attribute.Ordering = attribute.Ordering || existing.Ordering
 		}
 		byAttribute[attribute.Attribute] = attribute
 	}
@@ -367,6 +573,10 @@ func normalizeEqualityIndexConfig(
 		return config.Attributes[left].Attribute < config.Attributes[right].Attribute
 	})
 	return config, nil
+}
+
+func rulesConflict(left, right string) bool {
+	return left != "" && right != "" && left != right
 }
 
 func equalityIndexConfigsEqual(left, right EqualityIndexConfig) bool {
@@ -410,36 +620,134 @@ func equalityIndexAttributeDefinition(
 	return config.Attributes[index], true
 }
 
+type equalityIndexAttributeTerms struct {
+	present   bool
+	equality  [][]byte
+	substring [][]byte
+	ordering  [][]byte
+}
+
 func equalityIndexEntryTerms(
 	schema EqualityIndexSchema,
 	config EqualityIndexConfig,
 	entry directory.Entry,
-) (map[string][][]byte, error) {
-	terms := make(map[string][][]byte, len(config.Attributes))
+) (map[string]equalityIndexAttributeTerms, error) {
+	terms := make(map[string]equalityIndexAttributeTerms, len(config.Attributes))
 	for _, attribute := range config.Attributes {
-		values, err := schema.EqualityIndexValues(entry, attribute.Attribute)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"normalize entry %q equality index %s: %w",
-				entry.DN,
-				attribute.Attribute,
-				err,
-			)
-		}
-		seen := make(map[string]struct{}, len(values))
-		for _, value := range values {
-			key := string(value)
-			if _, duplicate := seen[key]; duplicate {
-				continue
+		var result equalityIndexAttributeTerms
+		if attribute.Equality || attribute.Presence {
+			values, err := schema.EqualityIndexValues(entry, attribute.Attribute)
+			if err != nil {
+				return nil, fmt.Errorf("normalize entry %q equality index %s: %w", entry.DN, attribute.Attribute, err)
 			}
-			seen[key] = struct{}{}
-			terms[attribute.Attribute] = append(
-				terms[attribute.Attribute],
-				bytes.Clone(value),
-			)
+			result.present = len(values) > 0
+			result.equality = uniqueIndexValues(values)
 		}
+		if attribute.SubstringInitial || attribute.SubstringAny || attribute.SubstringFinal {
+			values, err := schema.SubstringIndexValues(entry, attribute.Attribute)
+			if err != nil {
+				return nil, fmt.Errorf("normalize entry %q substring index %s: %w", entry.DN, attribute.Attribute, err)
+			}
+			result.present = result.present || len(values) > 0
+			result.substring = uniqueIndexValues(values)
+		}
+		if attribute.Ordering {
+			values, err := schema.OrderingIndexValues(entry, attribute.Attribute)
+			if err != nil {
+				return nil, fmt.Errorf("normalize entry %q ordering index %s: %w", entry.DN, attribute.Attribute, err)
+			}
+			result.present = result.present || len(values) > 0
+			result.ordering = uniqueIndexValues(values)
+		}
+		terms[attribute.Attribute] = result
 	}
 	return terms, nil
+}
+
+func uniqueIndexValues(values [][]byte) [][]byte {
+	result := make([][]byte, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[string(value)]; duplicate {
+			continue
+		}
+		seen[string(value)] = struct{}{}
+		result = append(result, bytes.Clone(value))
+	}
+	return result
+}
+
+type equalityIndexTerm struct {
+	kind  byte
+	value []byte
+}
+
+func equalityIndexTermsForAttribute(
+	definition EqualityIndexAttribute,
+	values equalityIndexAttributeTerms,
+) []equalityIndexTerm {
+	var result []equalityIndexTerm
+	if definition.Presence && values.present {
+		result = append(result, equalityIndexTerm{kind: equalityIndexPresence})
+	}
+	if definition.Equality {
+		for _, value := range values.equality {
+			result = append(result, equalityIndexTerm{kind: equalityIndexValue, value: value})
+		}
+	}
+	if definition.SubstringInitial || definition.SubstringAny || definition.SubstringFinal {
+		seen := make(map[string]struct{})
+		for _, value := range values.substring {
+			for _, term := range substringIndexValueTerms(value, definition) {
+				key := string(append([]byte{term.kind}, term.value...))
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				result = append(result, term)
+			}
+		}
+	}
+	if definition.Ordering {
+		for _, value := range values.ordering {
+			result = append(result, equalityIndexTerm{kind: equalityIndexOrdering, value: value})
+		}
+	}
+	return result
+}
+
+func substringIndexValueTerms(
+	value []byte,
+	definition EqualityIndexAttribute,
+) []equalityIndexTerm {
+	var result []equalityIndexTerm
+	if definition.SubstringInitial {
+		for length := 1; length <= min(len(value), substringIndexAnchorMax); length++ {
+			result = append(result, equalityIndexTerm{kind: equalityIndexSubstringInitial, value: bytes.Clone(value[:length])})
+		}
+	}
+	if definition.SubstringFinal {
+		for length := 1; length <= min(len(value), substringIndexAnchorMax); length++ {
+			result = append(result, equalityIndexTerm{kind: equalityIndexSubstringFinal, value: bytes.Clone(value[len(value)-length:])})
+		}
+	}
+	if !definition.SubstringAny || len(value) < substringIndexNGramSize {
+		return result
+	}
+	seen := make(map[string]struct{})
+	for position := 0; position+substringIndexNGramSize <= len(value); position++ {
+		gram := value[position : position+substringIndexNGramSize]
+		if _, duplicate := seen[string(gram)]; duplicate {
+			continue
+		}
+		if len(seen) >= substringIndexMaxNGrams {
+			result = append(result, equalityIndexTerm{kind: equalityIndexSubstringOverflow})
+			return result
+		}
+		seen[string(gram)] = struct{}{}
+		result = append(result, equalityIndexTerm{kind: equalityIndexSubstringAny, value: bytes.Clone(gram)})
+	}
+	return result
 }
 
 func stringSet(values []string) map[string]struct{} {
@@ -451,77 +759,120 @@ func stringSet(values []string) map[string]struct{} {
 }
 
 const (
-	equalityIndexPresence byte = 0
-	equalityIndexValue    byte = 1
+	equalityIndexPresence          byte = 0
+	equalityIndexValue             byte = 1
+	equalityIndexSubstringInitial  byte = 2
+	equalityIndexSubstringAny      byte = 3
+	equalityIndexSubstringFinal    byte = 4
+	equalityIndexSubstringOverflow byte = 5
+	equalityIndexOrdering          byte = 6
 )
 
 func equalityIndexPostingPrefix(
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 ) []byte {
+	result := equalityIndexAttributeKindPrefix(partition, attribute, kind)
+	switch kind {
+	case equalityIndexPresence, equalityIndexSubstringOverflow:
+		return result
+	case equalityIndexOrdering:
+		return appendOrderPreservingValue(result, value)
+	default:
+		return appendLengthPrefixed(result, value)
+	}
+}
+
+func equalityIndexAttributeKindPrefix(partition, attribute string, kind byte) []byte {
 	result := []byte{equalityIndexFormatVersion}
 	result = appendLengthPrefixed(result, []byte(partition))
 	result = appendLengthPrefixed(result, []byte(attribute))
-	if presence {
-		result = append(result, equalityIndexPresence)
-		return result
-	}
-	result = append(result, equalityIndexValue)
-	return appendLengthPrefixed(result, value)
+	return append(result, kind)
 }
 
 func equalityIndexPostingKey(
 	partition,
 	attribute string,
+	kind byte,
 	value []byte,
-	presence bool,
 	entryKey string,
 ) []byte {
 	return append(
-		equalityIndexPostingPrefix(partition, attribute, value, presence),
+		equalityIndexPostingPrefix(partition, attribute, kind, value),
 		[]byte(entryKey)...,
 	)
 }
 
 func decodeEqualityIndexPostingKey(
 	key []byte,
-) (partition, attribute string, value []byte, presence bool, entryKey string, err error) {
+) (partition, attribute string, kind byte, value []byte, entryKey string, err error) {
 	if len(key) == 0 || key[0] != equalityIndexFormatVersion {
-		return "", "", nil, false, "", errors.New("invalid equality index key version")
+		return "", "", 0, nil, "", errors.New("invalid equality index key version")
 	}
 	position := 1
 	partitionBytes, next, err := readLengthPrefixed(key, position)
 	if err != nil {
-		return "", "", nil, false, "", err
+		return "", "", 0, nil, "", err
 	}
 	position = next
 	attributeBytes, next, err := readLengthPrefixed(key, position)
 	if err != nil {
-		return "", "", nil, false, "", err
+		return "", "", 0, nil, "", err
 	}
 	position = next
 	if position >= len(key) {
-		return "", "", nil, false, "", errors.New("truncated equality index key")
+		return "", "", 0, nil, "", errors.New("truncated equality index key")
 	}
-	kind := key[position]
+	kind = key[position]
 	position++
 	switch kind {
-	case equalityIndexPresence:
-		presence = true
-	case equalityIndexValue:
+	case equalityIndexPresence, equalityIndexSubstringOverflow:
+	case equalityIndexValue, equalityIndexSubstringInitial,
+		equalityIndexSubstringAny, equalityIndexSubstringFinal:
 		value, position, err = readLengthPrefixed(key, position)
 		if err != nil {
-			return "", "", nil, false, "", err
+			return "", "", 0, nil, "", err
+		}
+	case equalityIndexOrdering:
+		value, position, err = readOrderPreservingValue(key, position)
+		if err != nil {
+			return "", "", 0, nil, "", err
 		}
 	default:
-		return "", "", nil, false, "", fmt.Errorf("invalid equality index key kind %d", kind)
+		return "", "", 0, nil, "", fmt.Errorf("invalid equality index key kind %d", kind)
 	}
 	if position >= len(key) {
-		return "", "", nil, false, "", errors.New("equality index key has no entry key")
+		return "", "", 0, nil, "", errors.New("equality index key has no entry key")
 	}
-	return string(partitionBytes), string(attributeBytes), bytes.Clone(value), presence, string(key[position:]), nil
+	return string(partitionBytes), string(attributeBytes), kind, bytes.Clone(value), string(key[position:]), nil
+}
+
+func appendOrderPreservingValue(destination, value []byte) []byte {
+	for _, octet := range value {
+		destination = append(destination, 1, octet)
+	}
+	return append(destination, 0)
+}
+
+func readOrderPreservingValue(value []byte, position int) ([]byte, int, error) {
+	var result []byte
+	for position < len(value) {
+		switch value[position] {
+		case 0:
+			return result, position + 1, nil
+		case 1:
+			if position+1 >= len(value) {
+				return nil, position, errors.New("truncated ordering index value")
+			}
+			result = append(result, value[position+1])
+			position += 2
+		default:
+			return nil, position, errors.New("invalid ordering index value escape")
+		}
+	}
+	return nil, position, errors.New("unterminated ordering index value")
 }
 
 func appendLengthPrefixed(destination, value []byte) []byte {

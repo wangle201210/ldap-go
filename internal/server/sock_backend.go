@@ -18,7 +18,7 @@ import (
 const (
 	sockBackendOpenDiagnostic        = "could not open socket"
 	sockBackendFailureDiagnostic     = "external socket service failed"
-	sockBackendTransactionDiagnostic = "sock backend does not support transactions"
+	sockBackendTransactionDiagnostic = "sock backend cannot atomically participate in transactions"
 	sockSimpleAuthenticationMethod   = 0x80
 )
 
@@ -109,14 +109,13 @@ func (server *Server) trySockBackendOperation(
 		return false, nil
 	}
 	if hasLDAPControl(message.Controls, transactionSpecificationControlOID) {
-		return true, writeResultForMessage(
-			connection,
-			message,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				sockBackendTransactionDiagnostic,
-			),
-		)
+		// RFC 5805 controls belong to the transaction queue layer. Yield before
+		// opening a socket so malformed controls retain their RFC result codes
+		// and valid controls are rejected as non-atomic during queueing.
+		return false, nil
+	}
+	if failure := sockBackendGlobalControlFailure(message.Controls, false); failure != nil {
+		return true, writeResultForMessage(connection, message, *failure)
 	}
 	controls, failure := parseRequestControlsWithDisallows(
 		message.Controls,
@@ -324,6 +323,13 @@ func (server *Server) trySockBackendBind(
 	if database == nil || database.sockBackend == nil {
 		return false, nil
 	}
+	if failure := sockBackendGlobalControlFailure(message.Controls, true); failure != nil {
+		return true, ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			*failure,
+			nil,
+		))
+	}
 	allowed, err := server.sockBackendAccessAllowed(
 		ctx,
 		state,
@@ -381,6 +387,41 @@ func (server *Server) trySockBackendBind(
 		response.Result,
 		nil,
 	))
+}
+
+func sockBackendGlobalControlFailure(
+	controls []ldapwire.Control,
+	bind bool,
+) *ldapwire.Result {
+	for _, control := range controls {
+		if !control.Critical {
+			continue
+		}
+		switch control.OID {
+		case chainingBehaviorControlOID:
+			result := ldapwire.ResultError(
+				ldapwire.ResultUnavailableCriticalExtension,
+				"chaining behavior control is not supported by sock backend",
+			)
+			return &result
+		case passwordPolicyControlOID:
+			if bind {
+				result := ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"password policy control is not supported by sock backend Bind",
+				)
+				return &result
+			}
+		}
+	}
+	return nil
+}
+
+func sockBackendTransactionResult() ldapwire.Result {
+	return ldapwire.ResultError(
+		ldapwire.ResultUnwillingToPerform,
+		sockBackendTransactionDiagnostic,
+	)
 }
 
 func (server *Server) notifySockBackends(

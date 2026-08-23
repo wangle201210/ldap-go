@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -651,6 +652,8 @@ func runLDAPSearch(
 	valueURLPrefix := flags.String("F", "", "URL prefix for temporary value files")
 	valuesToFiles := flags.Bool("t", false, "write non-printable values to temporary files")
 	temporaryDirectory := flags.String("T", "", "directory for temporary value files")
+	sortAttribute := flags.String("S", "", "sort results by attribute; empty sorts by DN")
+	includeUFN := flags.Bool("u", false, "include User Friendly entry names")
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "search extension; [!]pr=<size>[/prompt|noprompt] is supported")
 
@@ -658,14 +661,10 @@ func runLDAPSearch(
 		{name: "c", reason: "continuous operation mode is not implemented"},
 		{name: "L", reason: "only -LLL is implemented"},
 		{name: "LL", reason: "only -LLL is implemented"},
-		{name: "S", reason: "client-side sorting is not implemented"},
-		{name: "u", reason: "user-friendly DN output is not implemented"},
 	}
 	flags.Bool("c", false, "unsupported: continuous operation mode")
 	flags.Bool("L", false, "unsupported: use -LLL")
 	flags.Bool("LL", false, "unsupported: use -LLL")
-	flags.String("S", "", "unsupported: client-side sort attribute")
-	flags.Bool("u", false, "unsupported: user-friendly DN output")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -699,6 +698,13 @@ func runLDAPSearch(
 	}
 	if flagWasSet(flags, "T") && *temporaryDirectory == "" {
 		return errors.New("-T requires a non-empty directory path")
+	}
+	if flagWasSet(flags, "u") && !*includeUFN {
+		return errors.New("-u=false is not supported")
+	}
+	if flagWasSet(flags, "S") && *sortAttribute != "" &&
+		!validLDIFAttributeDescription(*sortAttribute) {
+		return fmt.Errorf("invalid -S attribute %q", *sortAttribute)
 	}
 
 	scope, err := parseLDAPSearchScope(*scopeName)
@@ -787,10 +793,13 @@ func runLDAPSearch(
 	}
 
 	output := &ldapSearchLDIFOutput{
-		writer:     stdout,
-		typesOnly:  *typesOnly,
-		minimal:    *minimalLDIF,
-		valueFiles: valueFiles,
+		writer:        stdout,
+		typesOnly:     *typesOnly,
+		minimal:       *minimalLDIF,
+		valueFiles:    valueFiles,
+		sort:          flagWasSet(flags, "S"),
+		sortAttribute: *sortAttribute,
+		includeUFN:    *includeUFN,
 	}
 	var promptReader *bufio.Reader
 	if paging.prompt {
@@ -1083,7 +1092,7 @@ func runLDAPSearchQuery(
 	stdout, stderr io.Writer,
 	output *ldapSearchLDIFOutput,
 ) error {
-	if paging.size == 0 || (!paging.critical && !paging.prompt) {
+	if paging.size == 0 || (!paging.critical && !paging.prompt && !output.sort) {
 		result, searchErr := client.searchWithReferrals(connection, request, paging.size)
 		var outputErr error
 		if result != nil {
@@ -1229,14 +1238,24 @@ func readLDAPSearchPagingPrompt(reader *bufio.Reader) (uint32, bool, error) {
 }
 
 type ldapSearchLDIFOutput struct {
-	writer     io.Writer
-	typesOnly  bool
-	minimal    bool
-	started    bool
-	valueFiles *ldapSearchValueFiles
+	writer        io.Writer
+	typesOnly     bool
+	minimal       bool
+	started       bool
+	valueFiles    *ldapSearchValueFiles
+	sort          bool
+	sortAttribute string
+	includeUFN    bool
 }
 
 func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
+	if output.sort {
+		var err error
+		entries, err = sortLDAPSearchEntries(entries, output.sortAttribute)
+		if err != nil {
+			return err
+		}
+	}
 	if !output.started {
 		if !output.minimal {
 			if err := writeFoldedLDIFLine(output.writer, []byte("version: 1")); err != nil {
@@ -1254,6 +1273,15 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 		}
 		if err := writeLDIFAttribute(output.writer, "dn", []byte(entry.DN)); err != nil {
 			return err
+		}
+		if output.includeUFN {
+			ufn, _, err := ldapSearchUserFriendlyDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf("format user-friendly DN %q: %w", entry.DN, err)
+			}
+			if err := writeLDIFAttribute(output.writer, "ufn", []byte(ufn)); err != nil {
+				return err
+			}
 		}
 		for _, attribute := range entry.Attributes {
 			if attribute == nil {
@@ -1300,6 +1328,197 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 		}
 	}
 	return nil
+}
+
+func sortLDAPSearchEntries(
+	entries []*ldap.Entry,
+	attribute string,
+) ([]*ldap.Entry, error) {
+	type sortableEntry struct {
+		entry  *ldap.Entry
+		values []string
+	}
+	sorted := make([]sortableEntry, len(entries))
+	for index, entry := range entries {
+		if entry == nil {
+			return nil, errors.New("search returned a nil LDAP entry")
+		}
+		values := entry.GetEqualFoldAttributeValues(attribute)
+		if attribute == "" {
+			var err error
+			_, values, err = ldapSearchUserFriendlyDN(entry.DN)
+			if err != nil {
+				return nil, fmt.Errorf("sort DN %q: %w", entry.DN, err)
+			}
+		}
+		sorted[index] = sortableEntry{entry: entry, values: values}
+	}
+	sort.SliceStable(sorted, func(left, right int) bool {
+		return compareLDAPSearchSortValues(
+			sorted[left].values,
+			sorted[right].values,
+		) < 0
+	})
+	result := make([]*ldap.Entry, len(sorted))
+	for index := range sorted {
+		result[index] = sorted[index].entry
+	}
+	return result, nil
+}
+
+func compareLDAPSearchSortValues(left, right []string) int {
+	switch {
+	case len(left) == 0 && len(right) == 0:
+		return 0
+	case len(left) == 0:
+		return -1
+	case len(right) == 0:
+		return 1
+	}
+	limit := min(len(left), len(right))
+	for index := 0; index < limit; index++ {
+		comparison := compareLDAPSearchSortString(left[index], right[index])
+		if comparison != 0 {
+			return comparison
+		}
+	}
+	return len(left) - len(right)
+}
+
+func compareLDAPSearchSortString(left, right string) int {
+	limit := min(len(left), len(right))
+	for index := 0; index < limit; index++ {
+		leftByte := left[index]
+		rightByte := right[index]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		if leftByte < rightByte {
+			return -1
+		}
+		if leftByte > rightByte {
+			return 1
+		}
+	}
+	return len(left) - len(right)
+}
+
+func ldapSearchUserFriendlyDN(rawDN string) (string, []string, error) {
+	dn, err := ldap.ParseDN(rawDN)
+	if err != nil {
+		return "", nil, err
+	}
+	rawRDNs := splitLDAPSearchDNComponents(rawDN, ",;")
+	components := make([]string, len(dn.RDNs))
+	binaryRDNs := make([]bool, len(dn.RDNs))
+	for rdnIndex, rdn := range dn.RDNs {
+		var rawAVAs []string
+		if rdnIndex < len(rawRDNs) {
+			rawAVAs = splitLDAPSearchDNComponents(rawRDNs[rdnIndex], "+")
+		}
+		values := make([]string, len(rdn.Attributes))
+		for attributeIndex, attribute := range rdn.Attributes {
+			if attributeIndex < len(rawAVAs) {
+				if rawValue, ok := rawLDAPSearchAVAValue(rawAVAs[attributeIndex]); ok &&
+					strings.HasPrefix(rawValue, "#") {
+					values[attributeIndex] = "#" + strings.ToUpper(rawValue[1:])
+					binaryRDNs[rdnIndex] = true
+					continue
+				}
+			}
+			values[attributeIndex] = escapeLDAPSearchUFNValue(attribute.Value)
+		}
+		components[rdnIndex] = strings.Join(values, " + ")
+	}
+
+	domainStart := len(dn.RDNs)
+	for index := len(dn.RDNs) - 1; index >= 0; index-- {
+		rdn := dn.RDNs[index]
+		if len(rdn.Attributes) != 1 || !strings.EqualFold(rdn.Attributes[0].Type, "dc") {
+			break
+		}
+		domainStart = index
+	}
+	if domainStart == len(dn.RDNs) {
+		return strings.Join(components, ", "), components, nil
+	}
+	domain := make([]string, len(dn.RDNs)-domainStart)
+	for index := domainStart; index < len(dn.RDNs); index++ {
+		if binaryRDNs[index] ||
+			!ldapSearchUFNDomainValueIsPrintable(dn.RDNs[index].Attributes[0].Value) {
+			return "", components, nil
+		}
+		domain[index-domainStart] = dn.RDNs[index].Attributes[0].Value
+	}
+	ufnComponents := append([]string(nil), components[:domainStart]...)
+	ufnComponents = append(ufnComponents, strings.Join(domain, "."))
+	return strings.Join(ufnComponents, ", "), components, nil
+}
+
+func splitLDAPSearchDNComponents(value, separators string) []string {
+	components := make([]string, 0, 4)
+	start := 0
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\\' {
+			index++
+			continue
+		}
+		if strings.IndexByte(separators, value[index]) >= 0 {
+			components = append(components, value[start:index])
+			start = index + 1
+		}
+	}
+	return append(components, value[start:])
+}
+
+func rawLDAPSearchAVAValue(ava string) (string, bool) {
+	for index := 0; index < len(ava); index++ {
+		if ava[index] == '\\' {
+			index++
+			continue
+		}
+		if ava[index] == '=' {
+			return ava[index+1:], true
+		}
+	}
+	return "", false
+}
+
+func escapeLDAPSearchUFNValue(value string) string {
+	const hexadecimal = "0123456789ABCDEF"
+	var escaped strings.Builder
+	escaped.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		hexEscape := character == 0 || character >= 0x80 || character == '=' ||
+			strings.ContainsRune("\\,;+\"<>", rune(character)) ||
+			(index == 0 && (character == ' ' || character == '#')) ||
+			(index == len(value)-1 && character == ' ')
+		if !hexEscape {
+			escaped.WriteByte(character)
+			continue
+		}
+		escaped.WriteByte('\\')
+		escaped.WriteByte(hexadecimal[character>>4])
+		escaped.WriteByte(hexadecimal[character&0x0f])
+	}
+	return escaped.String()
+}
+
+func ldapSearchUFNDomainValueIsPrintable(value string) bool {
+	if value == "" || value[0] <= ' ' || value[0] >= 0x7f || value[0] == ':' || value[0] == '<' ||
+		value[len(value)-1] <= ' ' || value[len(value)-1] >= 0x7f {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < ' ' || value[index] >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func writeLDAPSearchLDIF(

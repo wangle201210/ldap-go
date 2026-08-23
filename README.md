@@ -125,8 +125,32 @@ same tested Add/Modify schema checks, matching-rule assertion validation for
 Compare, ModifyDN validation, manage-only Relax updates, shadow-aware Don't Use
 Copy handling, and empty-Modify behavior as OpenLDAP 2.6.13. The
 implementation passes pinned operation and frontend-validation differentials.
-Socket overlay mode, transactions, and overlay response callbacks remain
-outside this milestone.
+RFC 5805 updates targeting a sock database fail with `unwillingToPerform` while
+the operation is queued, before a Unix socket is opened; a commit-time queue
+scan is an additional fail-closed guard. Critical chaining controls and a
+critical password-policy control on Bind are likewise rejected before external
+I/O, while unsupported noncritical controls are ignored. The protocol package
+can parse a strict, sole `CONTINUE` overlay response and encode one-way `ENTRY`
+and `RESULT` notifications. Socket-overlay configuration, operation wrapping,
+callback dispatch, referrals/response controls in `RESULT`, and complete
+overlay parity remain outside this milestone.
+
+The partial `back-sql` runtime now reduces Search candidates with parameterized
+object-class equality and mapped-attribute presence queries.
+It can use a supported child of `AND`; every child of `OR` must be plannable or
+the read falls back to a full entry-ID scan. Mapped-attribute equality filters,
+including `octetStringMatch` and the case-ignore rules, deliberately scan all
+entry IDs because mapping metadata does not prove SQL column types or
+cross-driver comparison semantics; even equal SQLite TEXT and BLOB values can
+compare unequal. Final LDAP evaluation remains authoritative. Requested
+attributes, filter attributes, and `olcSqlFetchAttrs`
+restrict mapped attribute reads unless `olcSqlFetchAllAttrs` is enabled; binary
+values are unchanged. The
+`olcSqlBaseObject: TRUE` subset synthesizes the configured suffix entry and
+de-duplicates an equivalent mapped row. File-backed base objects, native
+`olcSqlLayer`, custom scope SQL templates, subtree shortcuts, and
+`olcSqlCheckSchema` are rejected explicitly. Final LDAP scope, filter, overlay,
+and ACL evaluation still runs after SQL candidate selection.
 
 The separate `ldap-go lloadd` command implements the verified core of
 OpenLDAP's LDAP-aware load balancer. It forwards bounded BER frames while
@@ -149,12 +173,25 @@ parser and runtime pass package/race tests, pinned-source contracts, and the
 existing live OpenLDAP 2.6.13 differential subset. Service Bind still requires
 ProxyAuthz, and client SASL EXTERNAL is rejected rather than forwarded with an
 identity the proxy cannot safely restore. GSSAPI, SASL security layers and
-channel binding, client PROXY v2, dynamic topology, embedded
+channel binding, dynamic topology, embedded
 `cn=config`/`cn=monitor`, and complete lloadd daemon parity remain unsupported.
 The `read_pause` feature applies capacity backpressure before reading more
 client requests. The `vc` feature maps Simple Bind to OpenLDAP's Verify
 Credentials exop and fails explicitly when the backend does not provide it;
 SASL VC continuation remains unsupported.
+
+Trusted TCP listeners using `pldap://` or `pldaps://` require a PROXY protocol
+v2 header before LDAP framing; `pldaps://` consumes that header before the TLS
+handshake. A PROXY command accepts TCP4 or TCP6 addresses and retains logical
+and transport endpoints. PROXY and LOCAL both consume up to 520 bytes after
+the address block as opaque options; LOCAL also ignores the advertised family.
+Valid PROXY TLVs are copied as best-effort metadata (up to 128 records), while
+malformed options remain accepted without TLV metadata, matching OpenLDAP's
+framing behavior. At most 128 header parsers run concurrently. Malformed
+addresses, truncated/timed-out headers, and unsupported commands close only
+that connection. PROXY v1,
+UDP/UNIX families for the PROXY command, and PROXY headers on ordinary
+`ldap://`/`ldaps://` listeners are not supported.
 
 ```sh
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
@@ -551,6 +588,21 @@ proof validation, and client certificates for EXTERNAL over LDAPS or StartTLS.
 prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
 paging. Critical/prompt paging with referral chasing is explicitly rejected
 because each referral requires an independent cookie stream.
+It also supports client-side `-S <attribute>` sorting, `-S ''` sorting by
+user-friendly DN components, and `-u` output of an LDIF `ufn` line. Sorting is
+stable for equal keys, compares all returned values with the covered
+OpenLDAP/C-locale ASCII case-folding behavior, and places entries without the
+sort attribute first. A paged search sorts each page before emitting it rather
+than globally reordering entries across pages. UFN output omits attribute types,
+joins multi-valued RDNs with ` + `, folds a trailing run of `dc` RDNs into a
+dotted domain, emits escaped bytes as uppercase hexadecimal such as `\2C`, and
+preserves hexadecimal BER AVAs. Focused tests and a pinned OpenLDAP 2.6.13
+fixture cover these forms; arbitrary locale-dependent ordering is not claimed.
+`ldapcompare` carries generic `-e` controls and noncritical `-M` or critical
+`-MM` ManageDsaIT through its raw Compare path, including referral chasing;
+its separate historical `-E` surface remains unsupported. `ldapexop passwd`
+uses the same old/new password, prompt/file, control, dry-run, target identity,
+and generated-password response behavior as `ldappasswd`.
 GSSAPI, SCRAM-PLUS/channel binding, SASL security layers, interactive SASL
 callbacks, and the complete historical ldap-tools option set remain outside
 this subset.
@@ -809,12 +861,22 @@ supports `-w`, and validates the configuration hierarchy, supported schema,
 and the runnable server configuration before the same transaction commits, so
 an invalid supported setting rolls back the whole import.
 
-All ldap-go imports remain atomic and stop at the first error. This differs
-from OpenLDAP's partial-write and `-c` behavior; `-c` and `-q` remain
-unsupported, and `-u` uses a temporary database copy rather than reproducing
-every upstream backend-callback detail. The import API itself also forces a
-transaction rollback after successful dry-run validation, so direct callers
-cannot accidentally commit staged entries. Offline tool behavior is
+Native `ldap-go import`, direct `ImportLDIF` callers, and `slapadd` without
+`-c` remain atomic and stop at the first error. The content-database
+`slapadd -c` path is intentionally non-atomic: it orders records by DN depth,
+imports a depth batch when possible, retries a failed batch record by record,
+retains independent successes, reports line/DN failures, and exits nonzero if
+any record failed. It rejects `cn=config` continuation because partially
+published schema and database definitions are unsafe. `-c -u` performs the
+same continuation against a disposable database copy. `slapadd -q` disables
+value checking only. Schema checking remains enabled unless independently
+disabled with `-s` or `-o schema-check=no`, and the normal `objectClass`
+requirement remains in force. Quick mode does not bypass LDIF parsing,
+DN/database routing, hierarchy, or storage consistency checks; an explicit
+`value-check=yes` is warned about and disabled.
+The import API itself also forces a transaction rollback after successful
+dry-run validation, so direct callers cannot accidentally commit staged
+entries. Offline tool behavior is
 modeled for `config`, `mdb`, `ldif`, and `wt`, plus `null`
 accept-then-discard; proxy and virtual backends reject unsupported tool
 operations. This is semantic LDIF compatibility backed by bbolt, not direct
@@ -822,14 +884,25 @@ access to OpenLDAP backend files. Custom schema/matching-rule modules are not
 executed. Import parsing,
 pending-entry validation, and commit
 currently occupy one write transaction and retain the pending content set, so
-memory use and lock duration grow with a large LDIF. Memory and bbolt maintain
-configured `olcDbIndex` equality/presence indexes and use them to reduce
-equality/presence AND/OR Search candidates before the full scope, filter,
-overlay, and ACL pipeline. Unsupported modes and invalidated indexes safely
-fall back to scans; substring, approximate, and ordering indexes remain
-unimplemented. Migration size, lock time, and the remaining scan paths must be
-qualified before production use. These limits are part of why ldap-go is not
-yet a complete OpenLDAP drop-in replacement.
+memory use and lock duration grow with a large atomic LDIF. Memory and bbolt
+maintain configured `olcDbIndex` `eq`, `pres`, `sub`, `subinitial`, `subany`,
+`subfinal`, and `ordering` postings. Substring initial/final anchors are bounded
+and `subany` uses bounded 3-grams; an overflow posting keeps long values in the
+candidate superset so the index cannot cause false negatives. A substring
+request with no usable configured constraint, such as only a short `subany`
+fragment, falls back to a scan. Ordering indexes serve `>=`/`<=` ranges, use an
+order-preserving encoding for LDAP INTEGER, and encode generalizedTime values
+in the same byte order used by the schema comparator, including whole-second
+versus fractional-second values. `AND` may use any indexed child, whereas `OR`
+requires every child to be indexed. Every candidate still passes the full
+scope, filter, overlay, and ACL pipeline. Indexes are transactionally
+maintained across writes and renames, rebuilt for legacy/config changes, and
+checked through backup/restore/compact; raw writes invalidate them and fall
+back to scans. `approx`, `nolang`, `default`, attributes without the requested
+matching rule, and rules without a proven equivalent normalization are rejected.
+Migration size, lock time, and remaining scan paths must still be qualified
+before production use. These limits are part of why ldap-go is not yet a
+complete OpenLDAP drop-in replacement.
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit
