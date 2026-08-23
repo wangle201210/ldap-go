@@ -562,15 +562,22 @@ func (server *Server) applySyncConsumerEntry(
 	}
 
 	runtime := server.runtime.Load()
+	database := runtimeDatabaseForPartition(runtime, config.partition)
 	entry, err := syncConsumerDirectoryEntry(runtime, config, source, state)
 	if err != nil {
 		return err
+	}
+	if database != nil && database.dnNormalizer != nil {
+		targetDN, err := parseRuntimeDN(entry.DN, database.dnNormalizer)
+		if err != nil {
+			return err
+		}
+		entry.DN = targetDN.String()
 	}
 	incomingCSN, hasIncomingCSN, err := syncConsumerEntryCSN(entry)
 	if err != nil {
 		return err
 	}
-	database := runtimeDatabaseForPartition(runtime, config.partition)
 	if database != nil && database.multiProvider && !hasIncomingCSN {
 		return fmt.Errorf(
 			"replicated entry %s has no single-valued entryCSN",
@@ -580,6 +587,7 @@ func (server *Server) applySyncConsumerEntry(
 
 	var changes []syncChange
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		content := syncConsumerWriter(writer, database, config)
 		cookieAdvances, err := syncConsumerCookieAdvances(
 			writer,
 			config,
@@ -617,18 +625,18 @@ func (server *Server) applySyncConsumerEntry(
 			}
 		}
 		existing, found, findErr := syncConsumerEntryByUUID(
-			writer,
+			content,
 			config.partition,
 			state.EntryUUID.String(),
 		)
 		if findErr != nil {
 			return findErr
 		}
-		nextDN, parseErr := directory.ParseDN(entry.DN)
+		nextDN, parseErr := syncConsumerParseDN(content, entry.DN)
 		if parseErr != nil {
 			return parseErr
 		}
-		target, targetErr := writer.GetIn(config.partition, nextDN)
+		target, targetErr := content.Get(nextDN)
 		targetFound := targetErr == nil
 		if targetErr != nil && !errors.Is(targetErr, storage.ErrEntryNotFound) {
 			return targetErr
@@ -679,20 +687,17 @@ func (server *Server) applySyncConsumerEntry(
 			before = &cloned
 		}
 		if found {
-			existingDN, parseErr := directory.ParseDN(existing.DN)
+			existingDN, parseErr := syncConsumerParseDN(content, existing.DN)
 			if parseErr != nil {
 				return parseErr
 			}
 			if !existingDN.Equal(nextDN) {
-				if deleteErr := writer.DeleteIn(
-					config.partition,
-					existingDN,
-				); deleteErr != nil {
+				if deleteErr := content.Delete(existingDN); deleteErr != nil {
 					return deleteErr
 				}
 			}
 		}
-		if err := writer.PutIn(config.partition, entry, true); err != nil {
+		if err := content.Put(entry, true); err != nil {
 			return err
 		}
 		if hasIncomingCSN {
@@ -954,7 +959,7 @@ func mapSyncConsumerDN(
 	config syncConsumerConfig,
 	rawDN string,
 ) (directory.DN, error) {
-	remote, err := directory.ParseDN(rawDN)
+	remote, err := parseRuntimeDN(rawDN, config.normalizer)
 	if err != nil {
 		return directory.DN{}, err
 	}
@@ -978,7 +983,7 @@ func mapSyncConsumerAttributeDN(
 	config syncConsumerConfig,
 	value []byte,
 ) ([]byte, error) {
-	remote, err := directory.ParseDN(string(value))
+	remote, err := parseRuntimeDN(string(value), config.normalizer)
 	if err != nil {
 		return nil, err
 	}
@@ -1007,6 +1012,7 @@ func (server *Server) deleteSyncConsumerUUIDs(
 	database := runtimeDatabaseForPartition(runtime, config.partition)
 	var changes []syncChange
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		content := syncConsumerWriter(writer, database, config)
 		cookieAdvances, err := syncConsumerCookieAdvances(
 			writer,
 			config,
@@ -1032,8 +1038,7 @@ func (server *Server) deleteSyncConsumerUUIDs(
 			entry directory.Entry
 		}
 		var deletions []deletion
-		if err := writer.ForEachIn(
-			config.partition,
+		if err := content.ForEach(
 			func(entry directory.Entry) error {
 				values := entry.Values("entryUUID")
 				if len(values) != 1 {
@@ -1042,7 +1047,7 @@ func (server *Server) deleteSyncConsumerUUIDs(
 				if _, found := wanted[strings.ToLower(string(values[0]))]; !found {
 					return nil
 				}
-				dn, err := directory.ParseDN(entry.DN)
+				dn, err := syncConsumerParseDN(content, entry.DN)
 				if err != nil {
 					return err
 				}
@@ -1066,7 +1071,7 @@ func (server *Server) deleteSyncConsumerUUIDs(
 			return err
 		}
 		for _, item := range deletions {
-			if err := writer.DeleteIn(config.partition, item.dn); err != nil {
+			if err := content.Delete(item.dn); err != nil {
 				return err
 			}
 		}
@@ -1139,6 +1144,7 @@ func (server *Server) finishSyncConsumerRefresh(
 	database := runtimeDatabaseForPartition(runtime, config.partition)
 	var changes []syncChange
 	err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		content := syncConsumerWriter(writer, database, config)
 		cookieAdvances, err := syncConsumerCookieAdvances(
 			writer,
 			config,
@@ -1163,14 +1169,20 @@ func (server *Server) finishSyncConsumerRefresh(
 		}
 		var deletions []deletion
 		if !refreshDeletes {
-			if err := writer.ForEachIn(
-				config.partition,
+			localBase, err := storage.NormalizeReaderDN(
+				content,
+				config.localBase,
+			)
+			if err != nil {
+				return err
+			}
+			if err := content.ForEach(
 				func(entry directory.Entry) error {
-					dn, err := directory.ParseDN(entry.DN)
+					dn, err := syncConsumerParseDN(content, entry.DN)
 					if err != nil {
 						return err
 					}
-					if !directory.InScope(config.localBase, dn, config.scope) {
+					if !directory.InScope(localBase, dn, config.scope) {
 						return nil
 					}
 					matches, err := config.filter.MatchWith(
@@ -1211,10 +1223,7 @@ func (server *Server) finishSyncConsumerRefresh(
 				return deletions[i].dn.Depth() > deletions[j].dn.Depth()
 			})
 			for _, item := range deletions {
-				if err := writer.DeleteIn(
-					config.partition,
-					item.dn,
-				); err != nil {
+				if err := content.Delete(item.dn); err != nil {
 					return err
 				}
 			}
@@ -1331,14 +1340,49 @@ func updateSyncConsumerCookie(
 	if len(cookie) == 0 {
 		return nil
 	}
+	parsed := parseOpenLDAPSyncCookie(cookie)
+	merged := make(syncCSNState)
+	var deletion *openLDAPCSN
+	rawCurrent, err := writer.Metadata(syncConsumerCookieMetadataKey(config))
+	switch {
+	case err == nil:
+		current := parseOpenLDAPSyncCookie(rawCurrent)
+		for serverID, csn := range current.csns {
+			merged[serverID] = csn
+		}
+		if current.hasDeletion {
+			value := current.deletionCSN
+			deletion = &value
+		}
+	case errors.Is(err, storage.ErrMetadataNotFound):
+	default:
+		return err
+	}
+	for serverID, candidate := range parsed.csns {
+		known, exists := merged[serverID]
+		if !exists || compareOpenLDAPCSN(candidate, known) > 0 {
+			merged[serverID] = candidate
+		}
+	}
+	if parsed.hasDeletion &&
+		(deletion == nil || compareOpenLDAPCSN(parsed.deletionCSN, *deletion) > 0) {
+		value := parsed.deletionCSN
+		deletion = &value
+	}
+	storedCookie := composeOpenLDAPSyncCookie(config.rid, merged)
+	if deletion != nil {
+		storedCookie = append(
+			storedCookie,
+			[]byte(",delcsn="+deletion.raw)...,
+		)
+	}
 	if err := writer.SetMetadata(
 		syncConsumerCookieMetadataKey(config),
-		cookie,
+		storedCookie,
 	); err != nil {
 		return err
 	}
-	parsed := parseOpenLDAPSyncCookie(cookie)
-	for _, csn := range parsed.csns {
+	for _, csn := range merged {
 		if err := advanceSyncContextCSN(writer, config.partition, csn); err != nil {
 			return err
 		}
@@ -1367,7 +1411,7 @@ func syncConsumerEntryByUUID(
 		result directory.Entry
 		found  bool
 	)
-	err := reader.ForEachIn(partition, func(entry directory.Entry) error {
+	err := reader.ForEach(func(entry directory.Entry) error {
 		values := entry.Values("entryUUID")
 		if len(values) != 1 ||
 			!strings.EqualFold(string(values[0]), identifier) {
@@ -1385,6 +1429,50 @@ func syncConsumerEntryByUUID(
 		return nil
 	})
 	return result, found, err
+}
+
+func syncConsumerWriter(
+	writer storage.Writer,
+	database *runtimeDatabase,
+	config syncConsumerConfig,
+) storage.Writer {
+	if database != nil {
+		return writerForDatabase(writer, *database)
+	}
+	if config.normalizer != nil {
+		return storage.WriterInPartitionWithNormalizer(
+			writer,
+			config.partition,
+			config.normalizer,
+		)
+	}
+	return storage.WriterInPartition(writer, config.partition)
+}
+
+func syncConsumerReader(
+	reader storage.Reader,
+	database *runtimeDatabase,
+	config syncConsumerConfig,
+) storage.Reader {
+	if database != nil {
+		return readerForDatabase(reader, *database)
+	}
+	if config.normalizer != nil {
+		return storage.ReaderInPartitionWithNormalizer(
+			reader,
+			config.partition,
+			config.normalizer,
+		)
+	}
+	return storage.ReaderInPartition(reader, config.partition)
+}
+
+func syncConsumerParseDN(reader storage.Reader, raw string) (directory.DN, error) {
+	dn, err := directory.ParseDN(raw)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return storage.NormalizeReaderDN(reader, dn)
 }
 
 func syncConsumerRequestedAttributes(config syncConsumerConfig) []string {

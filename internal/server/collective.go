@@ -109,6 +109,10 @@ func buildCollectiveAttributePlan(
 		if err != nil {
 			return fmt.Errorf("parse collective attribute subentry DN %q: %w", entry.DN, err)
 		}
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return fmt.Errorf("normalize collective attribute subentry DN %q: %w", entry.DN, err)
+		}
 		administrativePoint, ok := dn.Parent()
 		if !ok {
 			return nil
@@ -141,20 +145,48 @@ func buildCollectiveAttributePlan(
 	}); err != nil {
 		return nil, fmt.Errorf("scan collective attribute subentries: %w", err)
 	}
-	sort.Slice(plan.sources, func(left, right int) bool {
-		return plan.sources[left].dn.Key() < plan.sources[right].dn.Key()
+	type orderedSource struct {
+		source collectiveAttributeSource
+		key    string
+	}
+	ordered := make([]orderedSource, len(plan.sources))
+	for index, source := range plan.sources {
+		key, err := storage.ReaderDNOrderKey(reader, source.dn)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"order collective attribute subentry DN %q: %w",
+				source.dn.String(),
+				err,
+			)
+		}
+		ordered[index] = orderedSource{source: source, key: key}
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		return ordered[left].key < ordered[right].key
 	})
+	for index := range ordered {
+		plan.sources[index] = ordered[index].source
+	}
 	return plan, nil
 }
 
 func (plan *collectiveAttributePlan) apply(entry directory.Entry) (directory.Entry, error) {
 	if plan == nil || plan.registry == nil ||
+		len(plan.sources) == 0 ||
 		plan.registry.EntryHasObjectClass(entry, "subentry") {
 		return entry, nil
 	}
 	entryDN, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.Entry{}, fmt.Errorf("parse collective attribute target DN %q: %w", entry.DN, err)
+	}
+	entryDN, err = plan.registry.NormalizeDN(entryDN.String())
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf(
+			"normalize collective attribute target DN %q: %w",
+			entry.DN,
+			err,
+		)
 	}
 
 	result := directory.Entry{DN: entry.DN}

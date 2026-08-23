@@ -99,6 +99,287 @@ func TestSQLBackendLDAPWriteOperations(t *testing.T) {
 	assertWritableSQLCount(t, database, "ldap_entries WHERE dn = ?", 0, renamedDN)
 }
 
+func TestSQLBackendAddPreservesMixedCaseDN(t *testing.T) {
+	database, client := startWritableSQLBackend(t)
+	request := writableSQLPersonAddRequest("MixedCase", "Mixed Case", "User")
+	if err := client.Add(request); err != nil {
+		t.Fatalf("SQL Add mixed-case DN: %v", err)
+	}
+	personID := writableSQLPersonID(t, database, "MixedCase")
+	assertWritableSQLEntry(t, database, request.DN, personID)
+}
+
+func TestSQLBackendInsertedEntryIDUsesConfiguredQuery(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "inserted-entry.db"))
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec(`CREATE TABLE directory_rows (
+		row_id INTEGER PRIMARY KEY,
+		lookup_dn TEXT NOT NULL UNIQUE,
+		object_key INTEGER NOT NULL,
+		mapping_id INTEGER NOT NULL,
+		display_dn TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create custom directory table: %v", err)
+	}
+
+	const storedDN = "uid=MixedCase,dc=example,dc=com"
+	rows := []struct {
+		id       int64
+		lookupDN string
+	}{
+		{id: 17, lookupDN: storedDN},
+		{id: 18, lookupDN: reverseUpperASCII(storedDN)},
+	}
+	for _, row := range rows {
+		if _, err := database.Exec(
+			"INSERT INTO directory_rows "+
+				"(row_id,lookup_dn,object_key,mapping_id,display_dn) "+
+				"VALUES ($1,$2,$3,$4,$5)",
+			row.id,
+			row.lookupDN,
+			int64(42),
+			int64(3),
+			storedDN,
+		); err != nil {
+			t.Fatalf("insert custom directory row %d: %v", row.id, err)
+		}
+	}
+
+	for _, test := range []struct {
+		name          string
+		hasReversedDN bool
+		wantID        int64
+	}{
+		{name: "stored DN", wantID: 17},
+		{name: "reversed DN", hasReversedDN: true, wantID: 18},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transaction, err := database.BeginTx(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("BeginTx(): %v", err)
+			}
+			defer transaction.Rollback()
+			writer := &sqlBackendWriter{
+				tx: transaction,
+				reader: &sqlBackendReader{
+					ctx: context.Background(),
+					configuration: &sqlBackendRuntimeConfiguration{
+						idQuery: "SELECT row_id,object_key,mapping_id,display_dn " +
+							"FROM directory_rows WHERE lookup_dn=$1",
+						hasReversedDN: test.hasReversedDN,
+					},
+				},
+			}
+			id, err := writer.insertedEntryID(storedDN)
+			if err != nil {
+				t.Fatalf("insertedEntryID(): %v", err)
+			}
+			if id.id != test.wantID || id.keyValue != 42 ||
+				id.objectClassID != 3 || id.dn != storedDN {
+				t.Fatalf("inserted entry ID = %#v, want id %d/key 42/mapping 3/dn %q", id, test.wantID, storedDN)
+			}
+		})
+	}
+}
+
+func TestSQLBackendAddUsesConfiguredIDQueryWithNumberedPlaceholders(t *testing.T) {
+	databaseName := filepath.Join(t.TempDir(), "custom-entry-table.db")
+	seedWritableSQLBackendDatabase(t, databaseName)
+	database, err := sql.Open("sqlite", databaseName)
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	statements := []string{
+		`CREATE TABLE directory_rows (
+			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			stored_dn TEXT NOT NULL UNIQUE,
+			mapping_id INTEGER NOT NULL,
+			parent_row INTEGER NOT NULL,
+			object_key INTEGER NOT NULL,
+			UNIQUE (mapping_id, object_key)
+		)`,
+		`INSERT INTO directory_rows (
+			row_id, stored_dn, mapping_id, parent_row, object_key
+		) SELECT id, dn, oc_map_id, parent, keyval FROM ldap_entries`,
+	}
+	for index, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("custom entry fixture statement %d: %v\n%s", index, err, statement)
+		}
+	}
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSQLBackendConfiguration(t, store, databaseName)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={1}sql,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcSqlIdQuery", stringValues(
+			"SELECT row_id,object_key,mapping_id,stored_dn "+
+				"FROM directory_rows WHERE stored_dn=$1",
+		))
+		entry.ReplaceValues("olcSqlInsEntryStmt", stringValues(
+			"INSERT INTO directory_rows "+
+				"(stored_dn,mapping_id,parent_row,object_key) VALUES ($1,$2,$3,$4)",
+		))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("configure custom SQL entry queries: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{SQLDriver: "sqlite"})
+	t.Cleanup(stop)
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("Bind(): %v", err)
+	}
+
+	request := ldap.NewAddRequest("uid=MixedCase,dc=example,dc=com", nil)
+	request.Attribute("objectClass", []string{"inetOrgPerson", "extensibleObject"})
+	request.Attribute("uid", []string{"MixedCase"})
+	request.Attribute("cn", []string{"Mixed Case"})
+	request.Attribute("sn", []string{"User"})
+	if err := client.Add(request); err != nil {
+		t.Fatalf("SQL Add with custom ID query: %v", err)
+	}
+	personID := writableSQLPersonID(t, database, "MixedCase")
+	var rowID, mappingID, parentID, keyValue int64
+	if err := database.QueryRow(
+		"SELECT row_id,mapping_id,parent_row,object_key "+
+			"FROM directory_rows WHERE stored_dn=$1",
+		request.DN,
+	).Scan(&rowID, &mappingID, &parentID, &keyValue); err != nil {
+		t.Fatalf("select custom directory row: %v", err)
+	}
+	if mappingID != 1 || parentID != 1 || keyValue != personID {
+		t.Fatalf(
+			"custom directory row = mapping %d, parent %d, key %d; want 1, 1, %d",
+			mappingID,
+			parentID,
+			keyValue,
+			personID,
+		)
+	}
+	var auxiliaryObjectClass string
+	if err := database.QueryRow(
+		"SELECT oc_name FROM ldap_entry_objclasses WHERE entry_id=$1",
+		rowID,
+	).Scan(&auxiliaryObjectClass); err != nil {
+		t.Fatalf("select custom entry auxiliary objectClass: %v", err)
+	}
+	if auxiliaryObjectClass != "extensibleObject" {
+		t.Fatalf(
+			"custom entry auxiliary objectClass = %q, want extensibleObject",
+			auxiliaryObjectClass,
+		)
+	}
+}
+
+func TestSQLBackendAutocommitDeletePreflightsObjectProcedure(t *testing.T) {
+	databaseName := filepath.Join(t.TempDir(), "delete-preflight.db")
+	seedWritableSQLBackendDatabase(t, databaseName)
+	database, err := sql.Open("sqlite", databaseName)
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedSQLBackendConfiguration(t, store, databaseName)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={1}sql,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcSqlAutocommit", stringValues("TRUE"))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("enable SQL autocommit: %v", err)
+	}
+	address, stop := startServer(t, store, Config{SQLDriver: "sqlite"})
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("Bind(): %v", err)
+	}
+
+	request := writableSQLPersonAddRequest("preflight", "Delete Preflight", "User", "must remain")
+	if err := client.Add(request); err != nil {
+		t.Fatalf("Add(): %v", err)
+	}
+	personID := writableSQLPersonID(t, database, "preflight")
+	clearWritableSQLProcedureEvents(t, database)
+	client.Close()
+	stop()
+	if _, err := database.Exec("UPDATE ldap_oc_mappings SET delete_proc=NULL WHERE id=1"); err != nil {
+		t.Fatalf("remove object delete procedure: %v", err)
+	}
+	// Reload the mapping metadata after changing the fixture.
+	address, stop = startServer(t, store, Config{SQLDriver: "sqlite"})
+	defer stop()
+	client, err = ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(restart): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("Bind(restart): %v", err)
+	}
+
+	assertLDAPResultCode(
+		t,
+		client.Del(ldap.NewDelRequest(request.DN, nil)),
+		ldap.LDAPResultUnwillingToPerform,
+	)
+	assertWritableSQLPerson(t, database, personID, "preflight", "Delete Preflight", "User")
+	assertWritableSQLDescriptions(t, database, personID, "must remain")
+	assertWritableSQLProcedureEvents(t, database)
+}
+
+func TestSQLBackendModifyDNTouchesOnlyRDNValues(t *testing.T) {
+	database, client := startWritableSQLBackend(t)
+	request := ldap.NewAddRequest("description=old,dc=example,dc=com", nil)
+	request.Attribute("objectClass", []string{"inetOrgPerson"})
+	request.Attribute("uid", []string{"multi-rdn"})
+	request.Attribute("cn", []string{"Multi RDN"})
+	request.Attribute("sn", []string{"User"})
+	request.Attribute("description", []string{"old", "keep"})
+	if err := client.Add(request); err != nil {
+		t.Fatalf("SQL Add multi-value RDN fixture: %v", err)
+	}
+	personID := writableSQLPersonID(t, database, "multi-rdn")
+	clearWritableSQLProcedureEvents(t, database)
+
+	rename := ldap.NewModifyDNRequest(request.DN, "description=new", true, "")
+	if err := client.ModifyDN(rename); err != nil {
+		t.Fatalf("SQL ModifyDN multi-value RDN: %v", err)
+	}
+	assertWritableSQLDescriptions(t, database, personID, "keep", "new")
+	assertWritableSQLProcedureEvents(t, database, "delete:old", "add:new")
+}
+
 func TestSQLBackendIncrementFailsWhenMappingFailureIsRequired(t *testing.T) {
 	databaseName := filepath.Join(t.TempDir(), "increment.db")
 	seedWritableSQLBackendDatabase(t, databaseName)
@@ -303,6 +584,195 @@ func TestSQLBackendLDAPNoOpRollsBack(t *testing.T) {
 	assertWritableSQLCount(t, database, "persons", 0)
 	assertWritableSQLCount(t, database, "person_descriptions", 0)
 	assertWritableSQLCount(t, database, "ldap_entries WHERE dn = ?", 0, request.DN)
+}
+
+func TestSQLBackendModifyDNNoOpRollsBack(t *testing.T) {
+	database, client := startWritableSQLBackend(t)
+
+	request := writableSQLPersonAddRequest(
+		"noop-rename",
+		"No-Op Rename",
+		"User",
+		"must remain unchanged",
+	)
+	if err := client.Add(request); err != nil {
+		t.Fatalf("Add(): %v", err)
+	}
+	personID := writableSQLPersonID(t, database, "noop-rename")
+	clearWritableSQLProcedureEvents(t, database)
+
+	rename := ldap.NewModifyDNRequest(request.DN, "uid=noop-renamed", true, "")
+	rename.Controls = []ldap.Control{
+		ldap.NewControlString(noOpControlOID, true, ""),
+	}
+	assertLDAPResultCode(
+		t,
+		client.ModifyDN(rename),
+		uint16(ldapwire.ResultNoOperation),
+	)
+
+	assertWritableSQLPerson(
+		t,
+		database,
+		personID,
+		"noop-rename",
+		"No-Op Rename",
+		"User",
+	)
+	assertWritableSQLDescriptions(t, database, personID, "must remain unchanged")
+	assertWritableSQLEntry(t, database, request.DN, personID)
+	assertWritableSQLCount(
+		t,
+		database,
+		"ldap_entries WHERE dn = ?",
+		0,
+		"uid=noop-renamed,dc=example,dc=com",
+	)
+	assertWritableSQLProcedureEvents(t, database)
+}
+
+func TestSQLBackendRenamePreservesAttributeWithoutEqualityRule(t *testing.T) {
+	registry := testSQLBuiltinRegistry(t)
+	writer := &sqlBackendWriter{
+		reader: &sqlBackendReader{
+			configuration: &sqlBackendRuntimeConfiguration{registry: registry},
+		},
+	}
+
+	value := []byte{0x00, 0xff, 0x10}
+	difference, err := writer.sqlValueDifference(
+		"jpegPhoto",
+		[][]byte{value},
+		[][]byte{append([]byte(nil), value...)},
+	)
+	if err != nil {
+		t.Fatalf("sqlValueDifference(): %v", err)
+	}
+	if len(difference) != 0 {
+		t.Fatalf("unchanged jpegPhoto difference = %x", difference)
+	}
+
+	difference, err = writer.sqlValueDifference(
+		"jpegPhoto",
+		[][]byte{value},
+		[][]byte{{0x00, 0xff, 0x11}},
+	)
+	if err != nil {
+		t.Fatalf("sqlValueDifference(changed): %v", err)
+	}
+	if !reflect.DeepEqual(difference, [][]byte{value}) {
+		t.Fatalf("changed jpegPhoto difference = %x, want %x", difference, value)
+	}
+}
+
+func TestSQLBackendModifyDNRDNProcedureFailureSemantics(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		failIfNoMapping bool
+		wantCode        uint16
+	}{
+		{
+			name:     "default continues to naming validation",
+			wantCode: ldap.LDAPResultNamingViolation,
+		},
+		{
+			name:            "fail if no mapping returns SQL error",
+			failIfNoMapping: true,
+			wantCode:        ldap.LDAPResultOther,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			databaseName := filepath.Join(t.TempDir(), "rename-failure.db")
+			seedWritableSQLBackendDatabase(t, databaseName)
+			database, err := sql.Open("sqlite", databaseName)
+			if err != nil {
+				t.Fatalf("open writable SQLite fixture: %v", err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			const (
+				personID = int64(20)
+				sourceDN = "uid=rename-source,dc=example,dc=com"
+			)
+			if _, err := database.Exec(
+				"INSERT INTO persons (id,uid,cn,sn) VALUES (?,?,?,?)",
+				personID,
+				"rename-source",
+				"Rename",
+				"User",
+			); err != nil {
+				t.Fatalf("insert rename source person: %v", err)
+			}
+			if _, err := database.Exec(
+				"INSERT INTO ldap_entries (id,dn,oc_map_id,parent,keyval) VALUES (?,?,?,?,?)",
+				int64(2),
+				sourceDN,
+				int64(1),
+				int64(1),
+				personID,
+			); err != nil {
+				t.Fatalf("insert rename source entry: %v", err)
+			}
+
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedSQLBackendConfiguration(t, store, databaseName)
+			if test.failIfNoMapping {
+				if err := store.Update(context.Background(), func(writer storage.Writer) error {
+					dn, err := directory.ParseDN("olcDatabase={1}sql,cn=config")
+					if err != nil {
+						return err
+					}
+					entry, err := writer.Get(dn)
+					if err != nil {
+						return err
+					}
+					entry.ReplaceValues("olcSqlFailIfNoMapping", stringValues("TRUE"))
+					return writer.Put(entry, true)
+				}); err != nil {
+					t.Fatalf("enable olcSqlFailIfNoMapping: %v", err)
+				}
+			}
+
+			address, stop := startServer(t, store, Config{SQLDriver: "sqlite"})
+			t.Cleanup(stop)
+			client, err := ldap.DialURL("ldap://" + address)
+			if err != nil {
+				t.Fatalf("DialURL(): %v", err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+				t.Fatalf("Bind(): %v", err)
+			}
+
+			if _, err := database.Exec(`CREATE TRIGGER reject_renamed_uid
+				BEFORE UPDATE OF uid ON persons
+				WHEN NEW.uid = 'rename-target'
+				BEGIN
+					SELECT RAISE(ABORT, 'forced RDN add failure');
+				END`); err != nil {
+				t.Fatalf("create RDN failure trigger: %v", err)
+			}
+
+			rename := ldap.NewModifyDNRequest(sourceDN, "uid=rename-target", true, "")
+			assertLDAPResultCode(t, client.ModifyDN(rename), test.wantCode)
+			assertWritableSQLPerson(
+				t,
+				database,
+				personID,
+				"rename-source",
+				"Rename",
+				"User",
+			)
+			assertWritableSQLEntry(t, database, sourceDN, personID)
+			assertWritableSQLCount(
+				t,
+				database,
+				"ldap_entries WHERE dn = ?",
+				0,
+				"uid=rename-target,dc=example,dc=com",
+			)
+		})
+	}
 }
 
 func TestSQLBackendLDAPAutocommitPreservesNoOpWrites(t *testing.T) {

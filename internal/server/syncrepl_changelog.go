@@ -179,12 +179,12 @@ func (server *Server) runSyncConsumerChangelogSnapshot(
 		if err != nil {
 			return fmt.Errorf("map changelog snapshot entry %s: %w", source.DN, err)
 		}
-		dn, err := directory.ParseDN(entry.DN)
+		dn, err := parseRuntimeDN(entry.DN, config.normalizer)
 		if err != nil {
 			return err
 		}
 		if err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
-			return writer.PutIn(config.partition, entry, true)
+			return syncConsumerWriter(writer, nil, config).Put(entry, true)
 		}); err != nil {
 			return fmt.Errorf("store changelog snapshot entry %s: %w", entry.DN, err)
 		}
@@ -285,13 +285,22 @@ func (server *Server) finishSyncConsumerChangelogSnapshot(
 ) error {
 	runtime := server.runtime.Load()
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		content := syncConsumerWriter(
+			writer,
+			runtimeDatabaseForPartition(runtime, config.partition),
+			config,
+		)
 		var stale []directory.DN
-		if err := writer.ForEachIn(config.partition, func(entry directory.Entry) error {
-			dn, err := directory.ParseDN(entry.DN)
+		localBase, err := storage.NormalizeReaderDN(content, config.localBase)
+		if err != nil {
+			return err
+		}
+		if err := content.ForEach(func(entry directory.Entry) error {
+			dn, err := syncConsumerParseDN(content, entry.DN)
 			if err != nil {
 				return err
 			}
-			if !directory.InScope(config.localBase, dn, config.scope) {
+			if !directory.InScope(localBase, dn, config.scope) {
 				return nil
 			}
 			if _, found := seen[dn.Key()]; found {
@@ -310,7 +319,7 @@ func (server *Server) finishSyncConsumerChangelogSnapshot(
 			return stale[i].Depth() > stale[j].Depth()
 		})
 		for _, dn := range stale {
-			if err := writer.DeleteIn(config.partition, dn); err != nil {
+			if err := content.Delete(dn); err != nil {
 				return err
 			}
 		}
@@ -491,7 +500,7 @@ func parseSyncConsumerChangelogOperation(
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, 0, err
 	}
-	remoteDN, err := directory.ParseDN(string(rawDN))
+	remoteDN, err := parseRuntimeDN(string(rawDN), config.normalizer)
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, 0, err
 	}
@@ -555,12 +564,16 @@ func parseSyncConsumerChangelogOperation(
 		return syncConsumerAccesslogOperation{}, 0, err
 	}
 	if rawSuperior != nil {
-		superior, err = directory.ParseDN(string(rawSuperior))
+		superior, err = parseRuntimeDN(string(rawSuperior), config.normalizer)
 		if err != nil {
 			return syncConsumerAccesslogOperation{}, 0, err
 		}
 	}
 	newRemoteDN, err := directory.ComposeDN(string(rawRDN), superior)
+	if err != nil {
+		return syncConsumerAccesslogOperation{}, 0, err
+	}
+	newRemoteDN, err = parseRuntimeDN(newRemoteDN.String(), config.normalizer)
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, 0, err
 	}
@@ -807,7 +820,7 @@ func readSyncConsumerChangelogState(
 	case !errors.Is(err, storage.ErrMetadataNotFound):
 		return 0, false, err
 	}
-	entry, err := reader.GetIn(config.partition, config.localBase)
+	entry, err := syncConsumerReader(reader, nil, config).Get(config.localBase)
 	if errors.Is(err, storage.ErrEntryNotFound) {
 		return 0, false, nil
 	}
@@ -840,7 +853,8 @@ func updateSyncConsumerChangelogState(
 	if err := writer.SetMetadata(syncConsumerChangelogMetadataKey(config), raw); err != nil {
 		return err
 	}
-	entry, err := writer.GetIn(config.partition, config.localBase)
+	content := syncConsumerWriter(writer, nil, config)
+	entry, err := content.Get(config.localBase)
 	if errors.Is(err, storage.ErrEntryNotFound) {
 		return nil
 	}
@@ -848,7 +862,7 @@ func updateSyncConsumerChangelogState(
 		return err
 	}
 	entry.ReplaceValues("lastChangeNumber", [][]byte{bytes.Clone(raw)})
-	return writer.PutIn(config.partition, entry, true)
+	return content.Put(entry, true)
 }
 
 func (server *Server) resetSyncConsumerChangelogState(
@@ -860,7 +874,8 @@ func (server *Server) resetSyncConsumerChangelogState(
 			!errors.Is(err, storage.ErrMetadataNotFound) {
 			return err
 		}
-		entry, err := writer.GetIn(config.partition, config.localBase)
+		content := syncConsumerWriter(writer, nil, config)
+		entry, err := content.Get(config.localBase)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -871,7 +886,7 @@ func (server *Server) resetSyncConsumerChangelogState(
 			!errors.Is(err, directory.ErrNoSuchAttribute) {
 			return err
 		}
-		return writer.PutIn(config.partition, entry, true)
+		return content.Put(entry, true)
 	})
 }
 

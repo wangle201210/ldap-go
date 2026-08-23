@@ -37,7 +37,10 @@ func (cache *metaDNRouteCache) lookup(
 	if cache == nil || configuration == nil || configuration.dnCacheTTL == 0 {
 		return ""
 	}
-	key := metaDNRouteCacheKey(configuration.configDNKey, dn)
+	key, ok := metaDNRouteCacheKey(configuration, dn)
+	if !ok {
+		return ""
+	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	entry, found := cache.entries[key]
@@ -65,22 +68,40 @@ func (cache *metaDNRouteCache) store(
 	if configuration.dnCacheTTL > 0 {
 		entry.updated = cache.clock()
 	}
-	cache.mu.Lock()
-	cache.entries[metaDNRouteCacheKey(configuration.configDNKey, dn)] = entry
-	cache.mu.Unlock()
-}
-
-func (cache *metaDNRouteCache) remove(databaseKey string, dn directory.DN) {
-	if cache == nil {
+	key, ok := metaDNRouteCacheKey(configuration, dn)
+	if !ok {
 		return
 	}
 	cache.mu.Lock()
-	delete(cache.entries, metaDNRouteCacheKey(databaseKey, dn))
+	cache.entries[key] = entry
 	cache.mu.Unlock()
 }
 
-func metaDNRouteCacheKey(databaseKey string, dn directory.DN) string {
-	return databaseKey + "\x00" + dn.Key()
+func (cache *metaDNRouteCache) remove(
+	configuration *metaBackendRuntimeConfiguration,
+	dn directory.DN,
+) {
+	if cache == nil || configuration == nil {
+		return
+	}
+	key, ok := metaDNRouteCacheKey(configuration, dn)
+	if !ok {
+		return
+	}
+	cache.mu.Lock()
+	delete(cache.entries, key)
+	cache.mu.Unlock()
+}
+
+func metaDNRouteCacheKey(
+	configuration *metaBackendRuntimeConfiguration,
+	dn directory.DN,
+) (string, bool) {
+	normalized, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return "", false
+	}
+	return configuration.configDNKey + "\x00" + normalized.Key(), true
 }
 
 func (server *Server) cacheMetaSearchEntries(
@@ -124,10 +145,14 @@ func (server *Server) updateMetaRouteAfterOperation(
 	case ldapwire.AddRequest:
 		server.metaRoutes.store(database.metaBackend, targetDN, target.configDNKey)
 	case ldapwire.DeleteRequest:
-		server.metaRoutes.remove(database.configDNKey, targetDN)
+		server.metaRoutes.remove(database.metaBackend, targetDN)
 	case ldapwire.ModifyDNRequest:
-		server.metaRoutes.remove(database.configDNKey, targetDN)
-		if destination, ok := metaModifyDNDestination(targetDN, value); ok {
+		server.metaRoutes.remove(database.metaBackend, targetDN)
+		if destination, ok := metaModifyDNDestinationWithNormalizer(
+			targetDN,
+			value,
+			database.metaBackend.dnNormalizer,
+		); ok {
 			server.metaRoutes.store(database.metaBackend, destination, target.configDNKey)
 		}
 	}
@@ -137,13 +162,24 @@ func metaModifyDNDestination(
 	source directory.DN,
 	request ldapwire.ModifyDNRequest,
 ) (directory.DN, bool) {
+	return metaModifyDNDestinationWithNormalizer(source, request, nil)
+}
+
+func metaModifyDNDestinationWithNormalizer(
+	source directory.DN,
+	request ldapwire.ModifyDNRequest,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DN, bool) {
+	source, err := parseRuntimeDN(source.String(), normalizer)
+	if err != nil {
+		return directory.DN{}, false
+	}
 	parent, ok := source.Parent()
 	if !ok {
 		return directory.DN{}, false
 	}
 	if request.HasNewSuperior {
-		var err error
-		parent, err = directory.ParseDN(request.NewSuperior)
+		parent, err = parseRuntimeDN(request.NewSuperior, normalizer)
 		if err != nil {
 			return directory.DN{}, false
 		}
@@ -152,6 +188,6 @@ func metaModifyDNDestination(
 	if parent.Depth() > 0 {
 		raw += "," + parent.String()
 	}
-	destination, err := directory.ParseDN(raw)
+	destination, err := parseRuntimeDN(raw, normalizer)
 	return destination, err == nil
 }

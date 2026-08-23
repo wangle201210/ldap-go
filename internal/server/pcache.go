@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 )
 
 const (
@@ -32,6 +35,7 @@ type pcacheRuntimeConfiguration struct {
 	persist           bool // Accepted and fingerprinted; query state is intentionally not restored.
 	attributeSets     []pcacheAttributeSet
 	templates         []pcacheTemplate
+	binds             []pcacheBindRuntimeConfiguration
 	fingerprint       string
 	state             *pcacheState
 }
@@ -50,14 +54,30 @@ type pcacheTemplate struct {
 	ttr         time.Duration
 }
 
+type pcacheBindRuntimeConfiguration struct {
+	filter  directory.Filter
+	attrset int
+	ttl     time.Duration
+	scope   directory.Scope
+	baseDN  string
+}
+
 type pcacheState struct {
 	mu         sync.Mutex
 	epoch      time.Time
 	clock      func() time.Time
 	queries    map[string]pcacheCachedQuery
+	binds      map[string]pcacheCachedBind
 	entries    int
 	sequence   uint64
 	generation uint64
+}
+
+type pcacheCachedBind struct {
+	passwordHash []byte
+	purgeAt      time.Time
+	lastUsed     uint64
+	generation   uint64
 }
 
 type pcacheCachedQuery struct {
@@ -142,7 +162,6 @@ func loadPcacheRuntimeConfiguration(
 	for _, name := range []string{
 		"olcPcachePosition",
 		"olcPcacheValidate", "olcProxyCheckCacheability",
-		"olcPcacheBind",
 	} {
 		if len(overlay.Values(name)) != 0 {
 			return configuration, fmt.Errorf(
@@ -363,6 +382,14 @@ func loadPcacheRuntimeConfiguration(
 		}
 		configuration.templates = append(configuration.templates, template)
 	}
+	configuration.binds, err = loadPcacheBindRuntimeConfigurations(
+		overlay,
+		configuration.templates,
+		configuration.attributeSets,
+	)
+	if err != nil {
+		return configuration, err
+	}
 	configuration.fingerprint = pcacheConfigurationFingerprint(configuration)
 	configuration.state = newPcacheState()
 	return configuration, nil
@@ -494,8 +521,158 @@ func pcacheTemplateFilterSupported(filter directory.Filter) bool {
 		directory.FilterLessOrEqual,
 		directory.FilterPresent:
 		return filter.Attribute != ""
+	case directory.FilterExtensible:
+		return filter.Attribute != "" || filter.MatchingRule != ""
 	default:
 		return false
+	}
+}
+
+func loadPcacheBindRuntimeConfigurations(
+	overlay directory.Entry,
+	templates []pcacheTemplate,
+	attributeSets []pcacheAttributeSet,
+) ([]pcacheBindRuntimeConfiguration, error) {
+	values := overlay.Values("olcPcacheBind")
+	configured := make(map[string]struct{}, len(values))
+	result := make([]pcacheBindRuntimeConfiguration, 0, len(values))
+	for _, raw := range values {
+		value, err := pcacheStripOrderedPrefix(string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("%s olcPcacheBind: %w", overlay.DN, err)
+		}
+		arguments, err := tokenizeOpenLDAPConfig(value)
+		if err != nil || len(arguments) != 5 {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind requires filter, attrset, TTR, scope, and base DN",
+				overlay.DN,
+			)
+		}
+		filter, err := ldapwire.CompileFilter(arguments[0])
+		if err != nil || !pcacheBindFilterSupported(filter) ||
+			!pcacheBindFilterHasPlaceholder(filter) {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind filter %q is outside the supported safe subset",
+				overlay.DN,
+				arguments[0],
+			)
+		}
+		attrset, err := strconv.Atoi(arguments[1])
+		if err != nil || attrset < 0 || attrset >= len(attributeSets) {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind attrset %q is out of range",
+				overlay.DN,
+				arguments[1],
+			)
+		}
+		if !pcacheBindTemplateExists(filter, attrset, templates) {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind filter %q has no matching pcache template for attrset %d",
+				overlay.DN,
+				arguments[0],
+				attrset,
+			)
+		}
+		ttl, err := parseOpenLDAPTimeInterval(arguments[2])
+		if err != nil || ttl <= 0 {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind TTR must be a positive time interval",
+				overlay.DN,
+			)
+		}
+		scope, err := pcacheBindScope(arguments[3])
+		if err != nil {
+			return nil, fmt.Errorf("%s olcPcacheBind: %w", overlay.DN, err)
+		}
+		base, err := directory.ParseDN(arguments[4])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"%s olcPcacheBind base DN %q is invalid",
+				overlay.DN,
+				arguments[4],
+			)
+		}
+		configuration := pcacheBindRuntimeConfiguration{
+			filter:  filter,
+			attrset: attrset,
+			ttl:     ttl,
+			scope:   scope,
+			baseDN:  base.String(),
+		}
+		key := strings.Join([]string{
+			pcacheFilterKey(filter),
+			strconv.Itoa(attrset),
+			strconv.Itoa(int(scope)),
+			base.Key(),
+		}, "\x00")
+		if _, duplicate := configured[key]; duplicate {
+			return nil, fmt.Errorf("%s configures duplicate olcPcacheBind values", overlay.DN)
+		}
+		configured[key] = struct{}{}
+		result = append(result, configuration)
+	}
+	return result, nil
+}
+
+func pcacheBindFilterSupported(filter directory.Filter) bool {
+	switch filter.Kind {
+	case directory.FilterAnd:
+		if len(filter.Children) == 0 {
+			return false
+		}
+		empty := false
+		for _, child := range filter.Children {
+			if !pcacheBindFilterSupported(child) {
+				return false
+			}
+			empty = empty || pcacheBindFilterHasPlaceholder(child)
+		}
+		return empty
+	case directory.FilterEquality:
+		return filter.Attribute != ""
+	default:
+		return false
+	}
+}
+
+func pcacheBindFilterHasPlaceholder(filter directory.Filter) bool {
+	if filter.Kind == directory.FilterEquality {
+		return len(filter.Assertion) == 0
+	}
+	for _, child := range filter.Children {
+		if pcacheBindFilterHasPlaceholder(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func pcacheBindTemplateExists(
+	filter directory.Filter,
+	attrset int,
+	templates []pcacheTemplate,
+) bool {
+	key := pcacheFilterKey(filter)
+	for _, template := range templates {
+		if template.attrset == attrset && pcacheFilterKey(template.filter) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func pcacheBindScope(value string) (directory.Scope, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "base":
+		return directory.ScopeBase, nil
+	case "one", "onelevel", "singlelevel":
+		return directory.ScopeSingleLevel, nil
+	case "sub", "subtree":
+		return directory.ScopeWholeSubtree, nil
+	case "children", "subord", "subordinate":
+		return directory.ScopeChildren, nil
+	default:
+		return 0, fmt.Errorf("unknown Bind scope %q", value)
 	}
 }
 
@@ -526,6 +703,17 @@ func pcacheConfigurationFingerprint(configuration pcacheRuntimeConfiguration) st
 			template.ttr,
 		)
 	}
+	for _, bind := range configuration.binds {
+		fmt.Fprintf(
+			&value,
+			"bind:%s:%d:%d:%d:%s;",
+			pcacheFilterKey(bind.filter),
+			bind.attrset,
+			bind.ttl,
+			bind.scope,
+			bind.baseDN,
+		)
+	}
 	return value.String()
 }
 
@@ -541,6 +729,7 @@ func newPcacheStateWithClock(clock func() time.Time) *pcacheState {
 		epoch:   clock(),
 		clock:   clock,
 		queries: make(map[string]pcacheCachedQuery),
+		binds:   make(map[string]pcacheCachedBind),
 	}
 }
 
@@ -565,11 +754,122 @@ func reusePcacheStates(previous, next *runtimeState) {
 	}
 }
 
+func clearPcacheBindStates(runtime *runtimeState) {
+	if runtime == nil {
+		return
+	}
+	for index := range runtime.databases {
+		configuration := runtime.databases[index].pcache
+		if configuration != nil && configuration.state != nil {
+			configuration.state.clearBinds()
+		}
+	}
+}
+
 func configurationKey(configuration *pcacheRuntimeConfiguration) string {
 	if configuration == nil {
 		return ""
 	}
 	return configuration.configDNKey
+}
+
+func (server *Server) tryPcacheBind(
+	ctx context.Context,
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.BindRequest,
+	requestDN directory.DN,
+) (bool, error) {
+	if state == nil || state.runtime == nil || request.Version != 3 ||
+		request.Authentication.IsSASL || len(request.Authentication.Simple) == 0 ||
+		len(message.Controls) != 0 {
+		return false, nil
+	}
+	database := databaseForDN(state.runtime, requestDN)
+	if database == nil || database.ldapBackend == nil || database.pcache == nil ||
+		database.pcache.disabled || len(database.pcache.binds) == 0 {
+		return false, nil
+	}
+	if _, localRoot := databaseAuthenticationRoot(
+		state.runtime,
+		*database,
+		requestDN,
+	); localRoot {
+		return false, nil
+	}
+	bind, key, matched := matchPcacheBindRequest(
+		state.runtime,
+		*database.pcache,
+		requestDN,
+	)
+	if !matched {
+		return false, nil
+	}
+	now := database.pcache.state.clock()
+	if database.pcache.state.lookupBind(
+		key,
+		request.Authentication.Simple,
+		now,
+		database.pcache.offline,
+	) {
+		pcacheEstablishBindIdentity(state, requestDN, request.Authentication.Simple)
+		return true, ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		))
+	}
+
+	attempt := server.executeLDAPBackendBind(
+		ctx,
+		state,
+		database.ldapBackend,
+		message,
+	)
+	if attempt.hasResult && attempt.result.Code == ldapwire.ResultSuccess {
+		database.pcache.state.rememberBind(
+			key,
+			request.Authentication.Simple,
+			database.pcache.state.clock(),
+			bind.ttl,
+			database.pcache.maxEntries,
+			database.pcache.maxQueries,
+		)
+		pcacheEstablishBindIdentity(state, requestDN, request.Authentication.Simple)
+	}
+	return true, server.writeLDAPBackendAttempt(connection, message, attempt)
+}
+
+func matchPcacheBindRequest(
+	runtime *runtimeState,
+	configuration pcacheRuntimeConfiguration,
+	requestDN directory.DN,
+) (pcacheBindRuntimeConfiguration, string, bool) {
+	if runtime == nil || runtime.schema == nil || configuration.state == nil {
+		return pcacheBindRuntimeConfiguration{}, "", false
+	}
+	for _, bind := range configuration.binds {
+		base, err := runtime.schema.NormalizeDN(bind.baseDN)
+		if err != nil || !directory.InScope(base, requestDN, bind.scope) {
+			continue
+		}
+		return bind, requestDN.Key(), true
+	}
+	return pcacheBindRuntimeConfiguration{}, "", false
+}
+
+func pcacheEstablishBindIdentity(
+	state *connectionState,
+	dn directory.DN,
+	password []byte,
+) {
+	canonical := dn.String()
+	state.boundDN = canonical
+	state.authMechanism = "SIMPLE"
+	state.bindCredentialDN = canonical
+	clear(state.bindCredentials)
+	state.bindCredentials = append(state.bindCredentials[:0], password...)
 }
 
 func (server *Server) tryPcacheSearch(
@@ -722,23 +1022,30 @@ func (server *Server) matchPcacheRequest(
 	configuration pcacheRuntimeConfiguration,
 	request ldapwire.SearchRequest,
 ) (pcacheRequestMatch, bool) {
-	base, err := directory.ParseDN(request.BaseDN)
+	if runtime == nil || runtime.schema == nil {
+		return pcacheRequestMatch{}, false
+	}
+	base, err := runtime.schema.NormalizeDN(request.BaseDN)
 	if err != nil {
 		return pcacheRequestMatch{}, false
 	}
 	for _, template := range configuration.templates {
-		if !pcacheFilterMatchesTemplate(template.filter, request.Filter) {
+		if !pcacheFilterMatchesTemplate(runtime.schema, template.filter, request.Filter) {
 			continue
 		}
 		set := configuration.attributeSets[template.attrset]
 		if !pcacheAttributeSetAnswers(runtime, set, request.Attributes) {
 			continue
 		}
+		filterKey, ok := pcacheSchemaFilterKey(runtime.schema, request.Filter)
+		if !ok {
+			continue
+		}
 		return pcacheRequestMatch{
 			key: strings.Join([]string{
 				base.Key(),
 				strconv.Itoa(int(request.Scope)),
-				pcacheFilterKey(request.Filter),
+				filterKey,
 				strconv.Itoa(set.index),
 			}, "\x00"),
 			template: template,
@@ -786,49 +1093,504 @@ func pcacheAttributeSetAnswers(
 	return true
 }
 
-func pcacheFilterMatchesTemplate(template, request directory.Filter) bool {
-	if template.Kind != request.Kind ||
-		!strings.EqualFold(template.Attribute, request.Attribute) ||
-		!strings.EqualFold(template.MatchingRule, request.MatchingRule) ||
-		template.DNAttributes != request.DNAttributes ||
-		len(template.Children) != len(request.Children) {
+func pcacheFilterMatchesTemplate(
+	registry *schema.Registry,
+	template,
+	request directory.Filter,
+) bool {
+	if registry == nil {
 		return false
 	}
-	for index := range template.Children {
-		if !pcacheFilterMatchesTemplate(template.Children[index], request.Children[index]) {
+	if template.Kind == directory.FilterAnd || template.Kind == directory.FilterOr {
+		return template.Kind == request.Kind &&
+			pcacheUnorderedChildrenMatch(registry, template.Children, request.Children)
+	}
+	if template.Kind == directory.FilterEquality &&
+		len(template.Assertion) == 0 && request.Kind == directory.FilterSubstrings {
+		return pcacheAttributesEqual(registry, template.Attribute, request.Attribute) &&
+			pcacheSubstringValid(registry, request.Attribute, request.Substring)
+	}
+	if template.Kind == directory.FilterSubstrings {
+		if !pcacheAttributesEqual(registry, template.Attribute, request.Attribute) {
+			return false
+		}
+		switch request.Kind {
+		case directory.FilterEquality:
+			matches, err := registry.MatchSubstring(
+				request.Attribute,
+				request.Assertion,
+				template.Substring,
+			)
+			return err == nil && matches
+		case directory.FilterSubstrings:
+			return pcacheSubstringContains(
+				registry,
+				request.Attribute,
+				template.Substring,
+				request.Substring,
+			)
+		default:
 			return false
 		}
 	}
+	if template.Kind != request.Kind {
+		return false
+	}
+	if template.Kind != directory.FilterExtensible &&
+		!pcacheAttributesEqual(registry, template.Attribute, request.Attribute) {
+		return false
+	}
 	switch template.Kind {
-	case directory.FilterEquality,
-		directory.FilterGreaterOrEqual,
-		directory.FilterLessOrEqual:
-		return len(template.Assertion) == 0 || bytes.EqualFold(template.Assertion, request.Assertion)
-	case directory.FilterSubstrings:
-		return pcacheSubstringPrototypeMatches(template.Substring, request.Substring)
-	default:
+	case directory.FilterEquality:
+		return pcacheEqualityTemplateMatches(
+			registry,
+			request.Attribute,
+			template.Assertion,
+			request.Assertion,
+		)
+	case directory.FilterGreaterOrEqual, directory.FilterLessOrEqual:
+		if len(template.Assertion) == 0 {
+			_, err := registry.CompareOrdering(
+				request.Attribute,
+				"",
+				request.Assertion,
+				request.Assertion,
+			)
+			return err == nil
+		}
+		comparison, err := registry.CompareOrdering(
+			request.Attribute,
+			"",
+			request.Assertion,
+			template.Assertion,
+		)
+		return err == nil && comparison == 0
+	case directory.FilterPresent:
 		return true
+	case directory.FilterExtensible:
+		return pcacheExtensibleTemplateMatches(registry, template, request)
+	default:
+		return false
 	}
 }
 
-func pcacheSubstringPrototypeMatches(template, request directory.Substring) bool {
-	if (template.Initial == nil) != (request.Initial == nil) ||
-		(template.Final == nil) != (request.Final == nil) ||
-		len(template.Any) != len(request.Any) {
+func pcacheUnorderedChildrenMatch(
+	registry *schema.Registry,
+	template,
+	request []directory.Filter,
+) bool {
+	if len(template) != len(request) {
 		return false
 	}
-	if len(template.Initial) != 0 && !bytes.EqualFold(template.Initial, request.Initial) {
+	matched := make([]int, len(request))
+	for index := range matched {
+		matched[index] = -1
+	}
+	var assign func(int, []bool) bool
+	assign = func(templateIndex int, seen []bool) bool {
+		for requestIndex := range request {
+			if seen[requestIndex] || !pcacheFilterMatchesTemplate(
+				registry,
+				template[templateIndex],
+				request[requestIndex],
+			) {
+				continue
+			}
+			seen[requestIndex] = true
+			if matched[requestIndex] < 0 || assign(matched[requestIndex], seen) {
+				matched[requestIndex] = templateIndex
+				return true
+			}
+		}
 		return false
 	}
-	if len(template.Final) != 0 && !bytes.EqualFold(template.Final, request.Final) {
-		return false
-	}
-	for index := range template.Any {
-		if len(template.Any[index]) != 0 &&
-			!bytes.EqualFold(template.Any[index], request.Any[index]) {
+	for templateIndex := range template {
+		if !assign(templateIndex, make([]bool, len(request))) {
 			return false
 		}
 	}
+	return true
+}
+
+func pcacheAttributesEqual(registry *schema.Registry, left, right string) bool {
+	leftKey, leftOK := pcacheAttributeKey(registry, left)
+	rightKey, rightOK := pcacheAttributeKey(registry, right)
+	return leftOK && rightOK && leftKey == rightKey
+}
+
+func pcacheAttributeKey(registry *schema.Registry, description string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(description), ";")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", false
+	}
+	attribute, found := registry.AttributeType(parts[0])
+	if !found {
+		return "", false
+	}
+	options := make([]string, 0, len(parts)-1)
+	seen := make(map[string]struct{}, len(parts)-1)
+	for _, raw := range parts[1:] {
+		option := strings.ToLower(strings.TrimSpace(raw))
+		if option == "" {
+			return "", false
+		}
+		if _, duplicate := seen[option]; duplicate {
+			continue
+		}
+		seen[option] = struct{}{}
+		options = append(options, option)
+	}
+	sort.Strings(options)
+	return strings.ToLower(attribute.OID) + ";" + strings.Join(options, ";"), true
+}
+
+func pcacheEqualityTemplateMatches(
+	registry *schema.Registry,
+	attribute string,
+	template,
+	request []byte,
+) bool {
+	if _, err := registry.NormalizeEqualityAssertion(attribute, request); err != nil {
+		return false
+	}
+	if len(template) == 0 {
+		return true
+	}
+	if _, err := registry.NormalizeEqualityAssertion(attribute, template); err != nil {
+		return false
+	}
+	comparison, err := registry.Compare(attribute, "", request, template)
+	return err == nil && comparison == 0
+}
+
+func pcacheSubstringValid(
+	registry *schema.Registry,
+	attribute string,
+	value directory.Substring,
+) bool {
+	_, ok := pcacheNormalizeSubstring(registry, attribute, value)
+	return ok
+}
+
+// pcacheSubstringContains follows OpenLDAP's stored-vs-incoming direction:
+// every value selected by incoming must also be selected by stored.
+func pcacheSubstringContains(
+	registry *schema.Registry,
+	attribute string,
+	stored,
+	incoming directory.Substring,
+) bool {
+	stored, storedOK := pcacheNormalizeSubstring(registry, attribute, stored)
+	incoming, incomingOK := pcacheNormalizeSubstring(registry, attribute, incoming)
+	if !storedOK || !incomingOK ||
+		(incoming.Initial == nil && stored.Initial != nil) ||
+		(incoming.Final == nil && stored.Final != nil) {
+		return false
+	}
+	initial, ok := pcacheTrimPrefix(incoming.Initial, stored.Initial)
+	if !ok {
+		return false
+	}
+	final, ok := pcacheTrimSuffix(incoming.Final, stored.Final)
+	if !ok {
+		return false
+	}
+	if len(stored.Any) == 0 {
+		return true
+	}
+	remaining := make([][]byte, 0, len(incoming.Any)+2)
+	if incoming.Initial != nil {
+		remaining = append(remaining, initial)
+	}
+	remaining = append(remaining, incoming.Any...)
+	if incoming.Final != nil {
+		remaining = append(remaining, final)
+	}
+	position := 0
+	for _, part := range stored.Any {
+		found := false
+		for index := position; index < len(remaining); index++ {
+			offset := bytes.Index(remaining[index], part)
+			if offset < 0 {
+				continue
+			}
+			remaining[index] = append(
+				remaining[index][:offset:offset],
+				remaining[index][offset+len(part):]...,
+			)
+			position = index
+			found = true
+			break
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func pcacheTrimPrefix(value, prefix []byte) ([]byte, bool) {
+	if prefix == nil {
+		return bytes.Clone(value), true
+	}
+	if value == nil || !bytes.HasPrefix(value, prefix) {
+		return nil, false
+	}
+	return bytes.Clone(value[len(prefix):]), true
+}
+
+func pcacheTrimSuffix(value, suffix []byte) ([]byte, bool) {
+	if suffix == nil {
+		return bytes.Clone(value), true
+	}
+	if value == nil || !bytes.HasSuffix(value, suffix) {
+		return nil, false
+	}
+	return bytes.Clone(value[:len(value)-len(suffix)]), true
+}
+
+func pcacheNormalizeSubstring(
+	registry *schema.Registry,
+	attribute string,
+	value directory.Substring,
+) (directory.Substring, bool) {
+	if value.Initial == nil && len(value.Any) == 0 && value.Final == nil {
+		return directory.Substring{}, false
+	}
+	effective, found, err := registry.EffectiveAttributeType(attribute)
+	if err != nil || !found || effective.Substring == "" {
+		return directory.Substring{}, false
+	}
+	normalize, ok := pcacheSubstringNormalizer(effective.Substring)
+	if !ok {
+		return directory.Substring{}, false
+	}
+	normalized := directory.Substring{
+		Initial: pcacheNormalizeOptionalSubstringPart(value.Initial, normalize),
+		Any:     make([][]byte, len(value.Any)),
+		Final:   pcacheNormalizeOptionalSubstringPart(value.Final, normalize),
+	}
+	for index := range value.Any {
+		normalized.Any[index] = normalize(value.Any[index])
+	}
+	return normalized, true
+}
+
+func pcacheNormalizeOptionalSubstringPart(
+	value []byte,
+	normalize func([]byte) []byte,
+) []byte {
+	if value == nil {
+		return nil
+	}
+	return normalize(value)
+}
+
+func pcacheSubstringNormalizer(rule string) (func([]byte) []byte, bool) {
+	switch strings.ToLower(strings.TrimSpace(rule)) {
+	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch",
+		"caseignorelistsubstringsmatch", "2.5.13.4", "1.3.6.1.4.1.1466.109.114.3",
+		"2.5.13.12":
+		return func(value []byte) []byte {
+			return bytes.ToLower([]byte(strings.Join(strings.Fields(string(value)), " ")))
+		}, true
+	case "caseexactsubstringsmatch", "caseexactia5substringsmatch",
+		"2.5.13.7", "1.3.6.1.4.1.1466.109.114.4":
+		return func(value []byte) []byte {
+			return []byte(strings.Join(strings.Fields(string(value)), " "))
+		}, true
+	case "telephonenumbersubstringsmatch", "2.5.13.21":
+		return func(value []byte) []byte {
+			normalized := make([]byte, 0, len(value))
+			for _, character := range bytes.ToLower(value) {
+				if character != ' ' && character != '-' {
+					normalized = append(normalized, character)
+				}
+			}
+			return normalized
+		}, true
+	case "numericstringsubstringsmatch", "2.5.13.10":
+		return func(value []byte) []byte {
+			normalized := make([]byte, 0, len(value))
+			for _, character := range value {
+				if character != ' ' {
+					normalized = append(normalized, character)
+				}
+			}
+			return normalized
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func pcacheExtensibleTemplateMatches(
+	registry *schema.Registry,
+	template,
+	request directory.Filter,
+) bool {
+	if template.DNAttributes != request.DNAttributes ||
+		(template.Attribute == "") != (request.Attribute == "") {
+		return false
+	}
+	attribute := request.Attribute
+	if attribute != "" &&
+		!pcacheAttributesEqual(registry, template.Attribute, request.Attribute) {
+		return false
+	}
+	templateRule, templateOK := pcacheExtensibleRule(registry, template)
+	requestRule, requestOK := pcacheExtensibleRule(registry, request)
+	if !templateOK || !requestOK || templateRule != requestRule {
+		return false
+	}
+	anchor := attribute
+	if anchor == "" {
+		anchor = "objectClass"
+	}
+	if len(template.Assertion) == 0 {
+		_, err := registry.Compare(
+			anchor,
+			requestRule,
+			request.Assertion,
+			request.Assertion,
+		)
+		return err == nil
+	}
+	comparison, err := registry.Compare(
+		anchor,
+		requestRule,
+		request.Assertion,
+		template.Assertion,
+	)
+	return err == nil && comparison == 0
+}
+
+func pcacheExtensibleRule(
+	registry *schema.Registry,
+	filter directory.Filter,
+) (string, bool) {
+	rule := filter.MatchingRule
+	anchor := filter.Attribute
+	if rule == "" {
+		if anchor == "" {
+			return "", false
+		}
+		effective, found, err := registry.EffectiveAttributeType(anchor)
+		if err != nil || !found || effective.Equality == "" {
+			return "", false
+		}
+		rule = effective.Equality
+	}
+	if anchor == "" {
+		anchor = "objectClass"
+	}
+	canonical, err := registry.OrderingRule(anchor, rule)
+	return canonical, err == nil
+}
+
+func pcacheSchemaFilterKey(
+	registry *schema.Registry,
+	filter directory.Filter,
+) (string, bool) {
+	var value strings.Builder
+	if !pcacheAppendSchemaFilterKey(&value, registry, filter) {
+		return "", false
+	}
+	return value.String(), true
+}
+
+func pcacheAppendSchemaFilterKey(
+	value *strings.Builder,
+	registry *schema.Registry,
+	filter directory.Filter,
+) bool {
+	attribute := ""
+	if filter.Attribute != "" {
+		var ok bool
+		attribute, ok = pcacheAttributeKey(registry, filter.Attribute)
+		if !ok {
+			return false
+		}
+	}
+	rule := ""
+	if filter.Kind == directory.FilterExtensible {
+		var ok bool
+		rule, ok = pcacheExtensibleRule(registry, filter)
+		if !ok {
+			return false
+		}
+	}
+	assertion := filter.Assertion
+	substring := filter.Substring
+	var err error
+	switch filter.Kind {
+	case directory.FilterEquality:
+		assertion, err = registry.NormalizeEqualityAssertion(filter.Attribute, assertion)
+		if err != nil {
+			return false
+		}
+	case directory.FilterSubstrings:
+		var ok bool
+		substring, ok = pcacheNormalizeSubstring(registry, filter.Attribute, substring)
+		if !ok {
+			return false
+		}
+	case directory.FilterGreaterOrEqual, directory.FilterLessOrEqual:
+		if _, err := registry.CompareOrdering(
+			filter.Attribute,
+			"",
+			filter.Assertion,
+			filter.Assertion,
+		); err != nil {
+			return false
+		}
+	case directory.FilterPresent:
+	case directory.FilterAnd, directory.FilterOr:
+	case directory.FilterExtensible:
+		anchor := filter.Attribute
+		if anchor == "" {
+			anchor = "objectClass"
+		}
+		if _, err := registry.Compare(anchor, rule, assertion, assertion); err != nil {
+			return false
+		}
+	default:
+		return false
+	}
+	fmt.Fprintf(
+		value,
+		"%d[%s|%s|%t|%s|",
+		filter.Kind,
+		attribute,
+		rule,
+		filter.DNAttributes,
+		hex.EncodeToString(assertion),
+	)
+	if substring.Initial != nil {
+		value.WriteString("i" + hex.EncodeToString(substring.Initial))
+	}
+	for _, part := range substring.Any {
+		value.WriteString("a" + hex.EncodeToString(part))
+	}
+	if substring.Final != nil {
+		value.WriteString("f" + hex.EncodeToString(substring.Final))
+	}
+	value.WriteByte('|')
+	children := make([]string, len(filter.Children))
+	for index := range filter.Children {
+		var child strings.Builder
+		if !pcacheAppendSchemaFilterKey(&child, registry, filter.Children[index]) {
+			return false
+		}
+		children[index] = child.String()
+	}
+	if filter.Kind == directory.FilterAnd || filter.Kind == directory.FilterOr {
+		sort.Strings(children)
+	}
+	for _, child := range children {
+		value.WriteString(child)
+	}
+	value.WriteByte(']')
 	return true
 }
 
@@ -1027,6 +1789,121 @@ func (state *pcacheState) lookup(
 	return clonePcacheSearchResponse(query.response), true, refresh
 }
 
+func (state *pcacheState) rememberBind(
+	key string,
+	password []byte,
+	now time.Time,
+	ttl time.Duration,
+	maxEntries,
+	maxQueries int,
+) bool {
+	if key == "" || len(password) == 0 || ttl <= 0 ||
+		maxEntries <= 0 || maxQueries <= 0 {
+		return false
+	}
+	passwordHash, err := auth.HashPasswordSMPBKDF2(
+		password,
+		auth.DefaultSMPBKDF2Iterations,
+		nil,
+	)
+	if err != nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.purgeExpired(now)
+	if existing, found := state.binds[key]; found {
+		clear(existing.passwordHash)
+		state.sequence++
+		state.generation++
+		state.binds[key] = pcacheCachedBind{
+			passwordHash: passwordHash,
+			purgeAt:      now.Add(ttl),
+			lastUsed:     state.sequence,
+			generation:   state.generation,
+		}
+		return true
+	}
+	if len(state.queries)+len(state.binds) >= maxQueries {
+		clear(passwordHash)
+		return false
+	}
+	for state.entries > maxEntries {
+		if !state.evictLeastRecentlyUsed() {
+			clear(passwordHash)
+			return false
+		}
+	}
+	state.sequence++
+	state.generation++
+	state.binds[key] = pcacheCachedBind{
+		passwordHash: passwordHash,
+		purgeAt:      now.Add(ttl),
+		lastUsed:     state.sequence,
+		generation:   state.generation,
+	}
+	state.entries++
+	return true
+}
+
+func (state *pcacheState) lookupBind(
+	key string,
+	password []byte,
+	now time.Time,
+	offline bool,
+) bool {
+	if key == "" || len(password) == 0 {
+		return false
+	}
+	state.mu.Lock()
+	if !offline {
+		state.purgeExpired(now)
+	}
+	cached, found := state.binds[key]
+	if !found {
+		state.mu.Unlock()
+		return false
+	}
+	passwordHash := bytes.Clone(cached.passwordHash)
+	generation := cached.generation
+	state.mu.Unlock()
+
+	matches := auth.VerifyPassword(passwordHash, password)
+	clear(passwordHash)
+	if !matches {
+		return false
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	cached, found = state.binds[key]
+	if !found || cached.generation != generation ||
+		(!offline && !now.Before(cached.purgeAt)) {
+		return false
+	}
+	state.sequence++
+	cached.lastUsed = state.sequence
+	state.binds[key] = cached
+	return true
+}
+
+func (state *pcacheState) clearBinds() {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for key, bind := range state.binds {
+		clear(bind.passwordHash)
+		delete(state.binds, key)
+		state.entries--
+	}
+	if state.entries < 0 {
+		state.entries = 0
+	}
+	state.generation++
+}
+
 func (state *pcacheState) commit(
 	key string,
 	response pcacheSearchResponse,
@@ -1054,7 +1931,7 @@ func (state *pcacheState) commit(
 	if _, duplicate := state.queries[key]; duplicate {
 		return false
 	}
-	if maxQueries <= 0 || len(state.queries) >= maxQueries {
+	if maxQueries <= 0 || len(state.queries)+len(state.binds) >= maxQueries {
 		return false
 	}
 	for index := 0; index < entries; index++ {
@@ -1171,6 +2048,24 @@ func (state *pcacheState) evictLeastRecentlyUsed() bool {
 			found = true
 		}
 	}
+	var (
+		bindKey       string
+		bindCandidate pcacheCachedBind
+		bindFound     bool
+	)
+	for key, bind := range state.binds {
+		if !bindFound || bind.lastUsed < bindCandidate.lastUsed {
+			bindKey = key
+			bindCandidate = bind
+			bindFound = true
+		}
+	}
+	if bindFound && (!found || bindCandidate.lastUsed < candidate.lastUsed) {
+		state.entries--
+		clear(bindCandidate.passwordHash)
+		delete(state.binds, bindKey)
+		return true
+	}
 	if !found {
 		return false
 	}
@@ -1188,6 +2083,14 @@ func (state *pcacheState) purgeExpired(now time.Time) {
 		state.entries -= query.entries
 		clear(query.remote.bindCredentials)
 		delete(state.queries, key)
+	}
+	for key, bind := range state.binds {
+		if now.Before(bind.purgeAt) {
+			continue
+		}
+		state.entries--
+		clear(bind.passwordHash)
+		delete(state.binds, key)
 	}
 }
 

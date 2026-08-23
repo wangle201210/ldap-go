@@ -241,11 +241,13 @@ func (server *Server) lookupSASLDigestMD5Credentials(
 		return saslDigestMD5Credentials{},
 			errSASLDigestMD5CredentialsUnavailable
 	}
-	if database.rootDN != nil &&
-		database.rootDN.Equal(authenticationDN) &&
-		database.rootPasswordSet {
+	if rootPassword, ok := databaseAuthenticationRoot(
+		runtime,
+		*database,
+		authenticationDN,
+	); ok {
 		password, ok := auth.ExtractCleartextPassword(
-			database.rootPassword,
+			rootPassword,
 		)
 		if !ok {
 			return saslDigestMD5Credentials{},

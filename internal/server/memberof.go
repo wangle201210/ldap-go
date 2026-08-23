@@ -339,6 +339,7 @@ func prepareMemberOfModify(
 				continue
 			}
 			values, err := filterMemberOfDanglingValues(
+				runtime.schema,
 				reader,
 				dn,
 				change.Attribute.Values,
@@ -383,9 +384,16 @@ func memberOfAddCheck(
 	entry *directory.Entry,
 	configuration memberOfRuntimeConfiguration,
 ) error {
-	base := database.suffixes[0]
+	base, err := runtime.schema.NormalizeDN(database.suffixes[0].String())
+	if err != nil {
+		return err
+	}
+	dn, err = runtime.schema.NormalizeDN(dn.String())
+	if err != nil {
+		return err
+	}
 	return reader.ForEach(func(candidate directory.Entry) error {
-		candidateDN, err := directory.ParseDN(candidate.DN)
+		candidateDN, err := runtime.schema.NormalizeDN(candidate.DN)
 		if err != nil {
 			return err
 		}
@@ -426,6 +434,7 @@ func filterMemberOfDanglingEntry(
 			continue
 		}
 		values, err := filterMemberOfDanglingValues(
+			registry,
 			reader,
 			self,
 			attribute.Values,
@@ -445,14 +454,19 @@ func filterMemberOfDanglingEntry(
 }
 
 func filterMemberOfDanglingValues(
+	registry *schema.Registry,
 	reader storage.Reader,
 	self directory.DN,
 	values [][]byte,
 	configuration memberOfRuntimeConfiguration,
 ) ([][]byte, error) {
+	self, err := registry.NormalizeDN(self.String())
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([][]byte, 0, len(values))
 	for _, value := range values {
-		target, err := directory.ParseDN(string(value))
+		target, err := registry.NormalizeDN(string(value))
 		if err != nil {
 			filtered = append(filtered, bytes.Clone(value))
 			continue
@@ -485,7 +499,7 @@ func applyMemberOfAdd(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) error {
-	groupDN, err := directory.ParseDN(entry.DN)
+	groupDN, err := runtime.schema.NormalizeDN(entry.DN)
 	if err != nil {
 		return err
 	}
@@ -525,7 +539,7 @@ func applyMemberOfModify(
 	before,
 	after directory.Entry,
 ) error {
-	groupDN, err := directory.ParseDN(after.DN)
+	groupDN, err := runtime.schema.NormalizeDN(after.DN)
 	if err != nil {
 		return err
 	}
@@ -576,7 +590,7 @@ func applyMemberOfDelete(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) error {
-	entryDN, err := directory.ParseDN(entry.DN)
+	entryDN, err := runtime.schema.NormalizeDN(entry.DN)
 	if err != nil {
 		return err
 	}
@@ -634,6 +648,15 @@ func applyMemberOfModifyDN(
 	newDN directory.DN,
 	after directory.Entry,
 ) error {
+	var err error
+	oldDN, err = runtime.schema.NormalizeDN(oldDN.String())
+	if err != nil {
+		return err
+	}
+	newDN, err = runtime.schema.NormalizeDN(newDN.String())
+	if err != nil {
+		return err
+	}
 	for _, configuration := range database.memberOf {
 		if runtime.schema.EntryHasObjectClass(after, configuration.groupObjectClass) {
 			for _, memberDN := range memberOfDNValues(
@@ -710,7 +733,7 @@ func memberOfDNValues(
 	values := registry.AttributeValues(entry, description)
 	result := make([]directory.DN, 0, len(values))
 	for _, value := range values {
-		dn, err := directory.ParseDN(string(value))
+		dn, err := registry.NormalizeDN(string(value))
 		if err == nil {
 			result = append(result, dn)
 		}
@@ -724,6 +747,11 @@ func entryHasDNReference(
 	description string,
 	target directory.DN,
 ) bool {
+	var err error
+	target, err = registry.NormalizeDN(target.String())
+	if err != nil {
+		return false
+	}
 	for _, candidate := range memberOfDNValues(registry, entry, description) {
 		if candidate.Equal(target) {
 			return true
@@ -748,6 +776,20 @@ func mutateDNReference(
 	oldDN,
 	newDN *directory.DN,
 ) bool {
+	if oldDN != nil {
+		normalized, err := registry.NormalizeDN(oldDN.String())
+		if err != nil {
+			return false
+		}
+		oldDN = &normalized
+	}
+	if newDN != nil {
+		normalized, err := registry.NormalizeDN(newDN.String())
+		if err != nil {
+			return false
+		}
+		newDN = &normalized
+	}
 	if oldDN != nil && newDN != nil && oldDN.Equal(*newDN) {
 		return false
 	}
@@ -761,7 +803,7 @@ func mutateDNReference(
 		}
 		values := attribute.Values[:0]
 		for _, value := range attribute.Values {
-			parsed, err := directory.ParseDN(string(value))
+			parsed, err := registry.NormalizeDN(string(value))
 			if err == nil && newDN != nil && parsed.Equal(*newDN) {
 				hasNew = true
 			}
@@ -778,7 +820,28 @@ func mutateDNReference(
 	}
 	entry.Attributes = attributes
 	if newDN != nil && !hasNew {
-		_ = entry.AddValues(description, [][]byte{[]byte(newDN.String())})
+		value := []byte(newDN.String())
+		added := false
+		for index := range entry.Attributes {
+			if !strings.EqualFold(
+				strings.TrimSpace(entry.Attributes[index].Description),
+				strings.TrimSpace(description),
+			) {
+				continue
+			}
+			entry.Attributes[index].Values = append(
+				entry.Attributes[index].Values,
+				value,
+			)
+			added = true
+			break
+		}
+		if !added {
+			entry.Attributes = append(entry.Attributes, directory.Attribute{
+				Description: description,
+				Values:      [][]byte{bytes.Clone(value)},
+			})
+		}
 		changed = true
 	}
 	return changed
@@ -794,6 +857,10 @@ func updateMemberOfDNReference(
 	oldDN,
 	newDN *directory.DN,
 ) error {
+	targetDN, err := runtime.schema.NormalizeDN(targetDN.String())
+	if err != nil {
+		return err
+	}
 	entry, err := writer.Get(targetDN)
 	if errors.Is(err, storage.ErrEntryNotFound) {
 		return nil

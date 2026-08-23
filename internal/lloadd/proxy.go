@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -23,6 +26,7 @@ const (
 	defaultUpstreamMessageSize = int64((1 << 24) - 1)
 	defaultBackendRetry        = 5 * time.Second
 	serviceBindMessageID       = int64(1)
+	upstreamStartTLSOID        = "1.3.6.1.4.1.1466.20037"
 )
 
 var ErrProxyClosed = errors.New("lloadd proxy is closed")
@@ -41,10 +45,14 @@ type RuntimeConfig struct {
 	IOTimeout              time.Duration
 	ProxyAuthz             bool
 	PrivilegedIdentity     string
+	UpstreamKeepAliveSet   bool
+	UpstreamKeepAlive      net.KeepAliveConfig
+	UpstreamTCPUserTimeout time.Duration
 	RestrictExtended       map[string]RuntimeRestriction
 	RestrictControls       map[string]RuntimeRestriction
 	Bind                   RuntimeBindConfig
 	Tiers                  []RuntimeTierConfig
+	ClientTLS              *tls.Config
 	BackendTLS             *tls.Config
 	Logger                 *slog.Logger
 	DialContext            DialContextFunc
@@ -62,10 +70,15 @@ const (
 )
 
 type RuntimeBindConfig struct {
-	Method      string
-	DN          string
-	Credentials []byte
-	Timeout     time.Duration
+	Method             string
+	DN                 string
+	Credentials        []byte
+	SASLMechanism      string
+	AuthenticationID   string
+	AuthorizationID    string
+	Realm              string
+	SecurityProperties string
+	Timeout            time.Duration
 }
 
 type RuntimeTierConfig struct {
@@ -82,6 +95,7 @@ type RuntimeBackendConfig struct {
 	ConnectionMaxPending int
 	Weight               int
 	StartTLS             bool
+	StartTLSCritical     bool
 }
 
 type Proxy struct {
@@ -164,6 +178,9 @@ type clientConnection struct {
 	writeInflight    int
 	writeCompletedAt time.Time
 	bindGeneration   uint64
+	protocolVersion  int
+	tlsActive        bool
+	tlsUpgrading     bool
 }
 
 type proxyOperation struct {
@@ -246,6 +263,9 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	if config.Bind.Timeout < 0 {
 		return nil, errors.New("upstream bind timeout cannot be negative")
 	}
+	if err := validateRuntimeSocketOptions(config); err != nil {
+		return nil, err
+	}
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -256,7 +276,20 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	if config.BackendTLS != nil {
 		config.BackendTLS = config.BackendTLS.Clone()
 	}
+	if config.ClientTLS != nil {
+		clientTLS, err := cloneClientTLSConfig(config.ClientTLS)
+		if err != nil {
+			return nil, err
+		}
+		config.ClientTLS = clientTLS
+	}
 	config.Bind.Credentials = append([]byte(nil), config.Bind.Credentials...)
+	normalizedBind, bindErr := normalizeRuntimeServiceBind(config.Bind)
+	if bindErr != nil {
+		clear(config.Bind.Credentials)
+		return nil, bindErr
+	}
+	config.Bind = normalizedBind
 	config.RestrictExtended = cloneRuntimeRestrictions(config.RestrictExtended)
 	config.RestrictControls = cloneRuntimeRestrictions(config.RestrictControls)
 	for oid, restriction := range config.RestrictExtended {
@@ -269,13 +302,7 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 			return nil, fmt.Errorf("control restriction %s is invalid", oid)
 		}
 	}
-	if config.Bind.Method != "" && !strings.EqualFold(config.Bind.Method, "simple") {
-		return nil, fmt.Errorf("unsupported upstream bind method %q", config.Bind.Method)
-	}
-	if config.Bind.DN != "" && len(config.Bind.Credentials) == 0 {
-		return nil, errors.New("upstream simple bind credentials are required")
-	}
-	if config.Bind.DN != "" && !config.ProxyAuthz {
+	if config.Bind.Method != "" && !config.ProxyAuthz {
 		return nil, errors.New("upstream service bind requires ProxyAuthz")
 	}
 
@@ -303,11 +330,21 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 			if err != nil {
 				return nil, fmt.Errorf("tier %d backend %d: %w", tierIndex, backendIndex, err)
 			}
-			if runtimeLDAPURLScheme(normalized.URI) == "ldaps" && config.BackendTLS == nil {
+			if (runtimeLDAPURLScheme(normalized.URI) == "ldaps" || normalized.StartTLS) &&
+				config.BackendTLS == nil {
 				return nil, fmt.Errorf(
-					"tier %d backend %d: ldaps requires a backend TLS configuration",
+					"tier %d backend %d: TLS requires a backend TLS configuration",
 					tierIndex,
 					backendIndex,
+				)
+			}
+			if runtimeLDAPURLScheme(normalized.URI) != "ldapi" &&
+				config.UpstreamTCPUserTimeout > 0 && runtime.GOOS != "linux" {
+				return nil, fmt.Errorf(
+					"tier %d backend %d: TCP_USER_TIMEOUT is not supported on %s",
+					tierIndex,
+					backendIndex,
+					runtime.GOOS,
 				)
 			}
 			backendID := fmt.Sprintf("%s-backend-%d", schedulerTier.ID, backendIndex)
@@ -358,6 +395,39 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+func cloneClientTLSConfig(config *tls.Config) (*tls.Config, error) {
+	cloned := config.Clone()
+	if len(cloned.Certificates) == 0 && cloned.GetCertificate == nil &&
+		cloned.GetConfigForClient == nil {
+		return nil, errors.New("client TLS configuration requires a server certificate")
+	}
+	for index, certificate := range cloned.Certificates {
+		if len(certificate.Certificate) == 0 || certificate.PrivateKey == nil {
+			return nil, fmt.Errorf("client TLS certificate %d is incomplete", index)
+		}
+	}
+	if !supportedTLSVersion(cloned.MinVersion) {
+		return nil, fmt.Errorf("client TLS minimum version 0x%04x is invalid", cloned.MinVersion)
+	}
+	if !supportedTLSVersion(cloned.MaxVersion) {
+		return nil, fmt.Errorf("client TLS maximum version 0x%04x is invalid", cloned.MaxVersion)
+	}
+	if cloned.MinVersion != 0 && cloned.MaxVersion != 0 &&
+		cloned.MinVersion > cloned.MaxVersion {
+		return nil, errors.New("client TLS minimum version exceeds maximum version")
+	}
+	return cloned, nil
+}
+
+func supportedTLSVersion(version uint16) bool {
+	switch version {
+	case 0, tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13:
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneRuntimeRestrictions(
@@ -427,8 +497,8 @@ func normalizeRuntimeBackendConfig(config RuntimeBackendConfig) (RuntimeBackendC
 	if config.StartTLS && scheme != "ldap" {
 		return config, errors.New("StartTLS requires an ldap URI")
 	}
-	if config.StartTLS {
-		return config, errors.New("backend StartTLS is not implemented")
+	if config.StartTLSCritical && !config.StartTLS {
+		return config, errors.New("critical StartTLS requires StartTLS to be enabled")
 	}
 	return config, nil
 }
@@ -490,11 +560,13 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 			return fmt.Errorf("accept lloadd client: %w", err)
 		}
 		client := &clientConnection{
-			proxy: proxy,
-			conn:  connection,
-			ops:   make(map[int64]*proxyOperation),
-			done:  make(chan struct{}),
+			proxy:           proxy,
+			conn:            connection,
+			ops:             make(map[int64]*proxyOperation),
+			done:            make(chan struct{}),
+			protocolVersion: 3,
 		}
+		_, client.tlsActive = connection.(*tls.Conn)
 		proxy.mu.Lock()
 		if proxy.closed {
 			proxy.mu.Unlock()
@@ -518,9 +590,14 @@ func (proxy *Proxy) Close() error {
 		return nil
 	}
 	proxy.closed = true
+	clearCredentials := !proxy.started
 	listener := proxy.listener
 	cancel := proxy.cancel
 	proxy.mu.Unlock()
+	if clearCredentials {
+		clear(proxy.config.Bind.Credentials)
+		proxy.config.Bind.Credentials = nil
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -554,6 +631,8 @@ func (proxy *Proxy) shutdown() {
 	}
 	proxy.connections.Wait()
 	proxy.backends.Wait()
+	clear(proxy.config.Bind.Credentials)
+	proxy.config.Bind.Credentials = nil
 }
 
 func (backend *runtimeBackend) maintain(ctx context.Context) {
@@ -663,14 +742,13 @@ func (backend *runtimeBackend) connect(
 	connectionID string,
 	bind bool,
 ) (*upstreamConnection, error) {
-	connection, err := backend.dial(ctx)
+	connection, nextID, err := backend.dialForConnect(ctx)
 	if err != nil {
 		return nil, err
 	}
 	stopCancellation := interruptConnectionOnContext(ctx, connection)
 	defer stopCancellation()
-	nextID := serviceBindMessageID
-	if !bind && backend.proxy.config.Bind.DN != "" {
+	if !bind && backend.proxy.config.Bind.Method != "" {
 		if timeout := backend.proxy.config.Bind.Timeout; timeout > 0 {
 			if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
 				_ = connection.Close()
@@ -678,46 +756,58 @@ func (backend *runtimeBackend) connect(
 			}
 			defer connection.SetDeadline(time.Time{})
 		}
-		bindRequest, encodeErr := ldapwire.EncodeRequestMessage(ldapwire.Message{
-			ID: serviceBindMessageID,
-			Request: ldapwire.BindRequest{
-				Version: 3,
-				Name:    backend.proxy.config.Bind.DN,
-				Authentication: ldapwire.Authentication{
-					Simple: append([]byte(nil), backend.proxy.config.Bind.Credentials...),
+		switch backend.proxy.config.Bind.Method {
+		case "simple":
+			bindCredentials := append([]byte(nil), backend.proxy.config.Bind.Credentials...)
+			bindRequest, encodeErr := ldapwire.EncodeRequestMessage(ldapwire.Message{
+				ID: nextID,
+				Request: ldapwire.BindRequest{
+					Version: 3,
+					Name:    backend.proxy.config.Bind.DN,
+					Authentication: ldapwire.Authentication{
+						Simple: bindCredentials,
+					},
 				},
-			},
-		})
-		if encodeErr != nil {
-			_ = connection.Close()
-			return nil, fmt.Errorf("encode service Bind: %w", encodeErr)
-		}
-		if err := writeConnection(connection, bindRequest, backend.proxy.config.IOTimeout); err != nil {
-			_ = connection.Close()
-			return nil, fmt.Errorf("write service Bind: %w", err)
-		}
-		response, readErr := backend.proxy.codec.Read(
-			connection,
-			backend.proxy.config.UpstreamMaxMessageSize,
-		)
-		if readErr != nil {
-			_ = connection.Close()
-			return nil, fmt.Errorf("read service Bind: %w", readErr)
-		}
-		if response.MessageID != serviceBindMessageID {
-			_ = connection.Close()
-			return nil, fmt.Errorf(
-				"service Bind response message ID %d does not match request %d",
-				response.MessageID,
-				serviceBindMessageID,
+			})
+			clear(bindCredentials)
+			if encodeErr != nil {
+				_ = connection.Close()
+				return nil, fmt.Errorf("encode service Bind: %w", encodeErr)
+			}
+			if err := writeConnection(connection, bindRequest, backend.proxy.config.IOTimeout); err != nil {
+				clear(bindRequest)
+				_ = connection.Close()
+				return nil, fmt.Errorf("write service Bind: %w", err)
+			}
+			clear(bindRequest)
+			response, readErr := backend.proxy.codec.Read(
+				connection,
+				backend.proxy.config.UpstreamMaxMessageSize,
 			)
+			if readErr != nil {
+				_ = connection.Close()
+				return nil, fmt.Errorf("read service Bind: %w", readErr)
+			}
+			if response.MessageID != nextID {
+				_ = connection.Close()
+				return nil, fmt.Errorf(
+					"service Bind response message ID %d does not match request %d",
+					response.MessageID,
+					nextID,
+				)
+			}
+			if response.ProtocolTag != ldapwire.ApplicationBindResponse ||
+				!response.HasResultCode || response.ResultCode != ldapwire.ResultSuccess {
+				_ = connection.Close()
+				return nil, fmt.Errorf("service Bind failed with LDAP result %d", response.ResultCode)
+			}
+			nextID++
+		case "sasl":
+			if err := backend.bindServiceSASL(connection, &nextID); err != nil {
+				_ = connection.Close()
+				return nil, err
+			}
 		}
-		if response.ProtocolTag != ldapwire.ApplicationBindResponse ||
-			!response.HasResultCode || response.ResultCode != ldapwire.ResultSuccess {
-			_ = connection.Close()
-			return nil, fmt.Errorf("service Bind failed with LDAP result %d", response.ResultCode)
-		}
-		nextID = serviceBindMessageID + 1
 	}
 	return &upstreamConnection{
 		backend: backend,
@@ -732,13 +822,18 @@ func (backend *runtimeBackend) connect(
 }
 
 func (backend *runtimeBackend) dial(ctx context.Context) (net.Conn, error) {
+	connection, _, err := backend.dialForConnect(ctx)
+	return connection, err
+}
+
+func (backend *runtimeBackend) dialForConnect(ctx context.Context) (net.Conn, int64, error) {
 	scheme := runtimeLDAPURLScheme(backend.config.URI)
 	var parsed *url.URL
 	var err error
 	if scheme != "ldapi" {
 		parsed, err = url.Parse(backend.config.URI)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	var network, address string
@@ -757,7 +852,7 @@ func (backend *runtimeBackend) dial(ctx context.Context) (net.Conn, error) {
 		network = "unix"
 		address, err = ParseLDAPIAddress(backend.config.URI)
 		if err != nil {
-			return nil, fmt.Errorf("decode ldapi path: %w", err)
+			return nil, 0, fmt.Errorf("decode ldapi path: %w", err)
 		}
 		if address == "" {
 			address = filepath.FromSlash("/var/run/slapd/ldapi")
@@ -765,36 +860,325 @@ func (backend *runtimeBackend) dial(ctx context.Context) (net.Conn, error) {
 	}
 	connection, err := backend.proxy.config.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if connection == nil {
-		return nil, errors.New("backend dial returned a nil connection")
+		return nil, 0, errors.New("backend dial returned a nil connection")
 	}
+	if scheme != "ldapi" {
+		if err := backend.configureTCPSocket(connection); err != nil {
+			_ = connection.Close()
+			return nil, 0, fmt.Errorf("configure backend TCP socket: %w", err)
+		}
+	}
+	nextID := serviceBindMessageID
+	stopCancellation := interruptConnectionOnContext(ctx, connection)
+	defer stopCancellation()
 	if scheme == "ldaps" {
-		if backend.proxy.config.BackendTLS == nil {
+		secured, err := backend.secureConnection(ctx, connection, parsed.Hostname(), "LDAPS")
+		if err != nil {
 			_ = connection.Close()
-			return nil, errors.New("ldaps backend requires a TLS configuration")
+			return nil, 0, err
 		}
-		tlsConfig := backend.proxy.config.BackendTLS.Clone()
-		if tlsConfig.ServerName == "" {
-			tlsConfig.ServerName = parsed.Hostname()
-		}
-		secured := tls.Client(connection, tlsConfig)
-		if deadline, ok := ctx.Deadline(); ok {
-			_ = secured.SetDeadline(deadline)
-		}
-		if err := secured.HandshakeContext(ctx); err != nil {
-			_ = connection.Close()
-			return nil, fmt.Errorf("LDAPS handshake: %w", err)
-		}
-		_ = secured.SetDeadline(time.Time{})
 		connection = secured
 	}
 	if backend.config.StartTLS {
-		_ = connection.Close()
-		return nil, errors.New("backend StartTLS is not implemented")
+		secured, accepted, err := backend.startTLS(ctx, connection, parsed.Hostname(), nextID)
+		if err != nil {
+			_ = connection.Close()
+			return nil, 0, err
+		}
+		nextID++
+		if accepted {
+			connection = secured
+		}
 	}
-	return connection, nil
+	return connection, nextID, nil
+}
+
+func validateRuntimeSocketOptions(config RuntimeConfig) error {
+	if config.UpstreamKeepAliveSet {
+		keepalive := config.UpstreamKeepAlive
+		if !keepalive.Enable {
+			return errors.New("upstream keepalive configuration must enable keepalive")
+		}
+		if keepalive.Idle < -1 || keepalive.Interval < -1 || keepalive.Count < -1 {
+			return errors.New("upstream keepalive values must be positive, zero, or -1")
+		}
+	}
+	timeout := config.UpstreamTCPUserTimeout
+	if timeout < 0 {
+		return errors.New("upstream TCP user timeout cannot be negative")
+	}
+	if timeout == 0 {
+		return nil
+	}
+	if timeout%time.Millisecond != 0 || timeout < time.Millisecond {
+		return errors.New("upstream TCP user timeout must be a positive whole number of milliseconds")
+	}
+	if timeout/time.Millisecond > time.Duration(math.MaxInt32) {
+		return errors.New("upstream TCP user timeout exceeds the platform integer limit")
+	}
+	return nil
+}
+
+func (backend *runtimeBackend) configureTCPSocket(connection net.Conn) error {
+	config := backend.proxy.config
+	if !config.UpstreamKeepAliveSet && config.UpstreamTCPUserTimeout == 0 {
+		return nil
+	}
+	tcpConnection, err := unwrapTCPConnection(connection)
+	if err != nil {
+		return err
+	}
+	if config.UpstreamKeepAliveSet {
+		if err := tcpConnection.SetKeepAliveConfig(config.UpstreamKeepAlive); err != nil {
+			return fmt.Errorf("set keepalive: %w", err)
+		}
+	}
+	if config.UpstreamTCPUserTimeout > 0 {
+		if err := setTCPUserTimeout(tcpConnection, config.UpstreamTCPUserTimeout); err != nil {
+			return fmt.Errorf("set TCP_USER_TIMEOUT: %w", err)
+		}
+	}
+	return nil
+}
+
+func unwrapTCPConnection(connection net.Conn) (*net.TCPConn, error) {
+	const maximumWrappers = 16
+	for depth := 0; depth < maximumWrappers; depth++ {
+		if connection == nil {
+			return nil, errors.New("connection wrapper returned a nil connection")
+		}
+		if tcpConnection, ok := connection.(*net.TCPConn); ok {
+			return tcpConnection, nil
+		}
+		var next net.Conn
+		switch wrapped := connection.(type) {
+		case interface{ NetConn() net.Conn }:
+			next = wrapped.NetConn()
+		case interface{ Unwrap() net.Conn }:
+			next = wrapped.Unwrap()
+		default:
+			return nil, fmt.Errorf("connection type %T does not expose an underlying *net.TCPConn", connection)
+		}
+		if next == connection {
+			return nil, fmt.Errorf("connection type %T unwraps to itself", connection)
+		}
+		connection = next
+	}
+	return nil, errors.New("connection wrapper depth exceeds 16")
+}
+
+func setTCPUserTimeout(connection *net.TCPConn, timeout time.Duration) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("TCP_USER_TIMEOUT is not supported on %s", runtime.GOOS)
+	}
+	raw, err := connection.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("access socket descriptor: %w", err)
+	}
+	var optionErr error
+	if err := raw.Control(func(fileDescriptor uintptr) {
+		setter, ok := any(syscall.SetsockoptInt).(func(int, int, int, int) error)
+		if !ok {
+			optionErr = errors.New("platform setsockopt ABI is not supported")
+			return
+		}
+		const (
+			ipProtocolTCP        = 6
+			tcpUserTimeoutOption = 18
+		)
+		optionErr = setter(
+			int(fileDescriptor),
+			ipProtocolTCP,
+			tcpUserTimeoutOption,
+			int(timeout/time.Millisecond),
+		)
+	}); err != nil {
+		return err
+	}
+	return optionErr
+}
+
+func (backend *runtimeBackend) startTLS(
+	ctx context.Context,
+	connection net.Conn,
+	serverName string,
+	messageID int64,
+) (net.Conn, bool, error) {
+	request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
+		ID: messageID,
+		Request: ldapwire.ExtendedRequest{
+			Name: upstreamStartTLSOID,
+		},
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("encode StartTLS request: %w", err)
+	}
+	clearDeadline, err := setConnectionNegotiationDeadline(
+		ctx,
+		connection,
+		backend.proxy.config.IOTimeout,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("set StartTLS deadline: %w", err)
+	}
+	defer clearDeadline()
+	if err := ldapwire.Write(connection, request); err != nil {
+		return nil, false, fmt.Errorf("write StartTLS request: %w", err)
+	}
+	response, err := backend.proxy.codec.Read(
+		connection,
+		backend.proxy.config.UpstreamMaxMessageSize,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("read StartTLS response: %w", err)
+	}
+	if response.MessageID != messageID {
+		return nil, false, fmt.Errorf(
+			"StartTLS response message ID %d does not match request %d",
+			response.MessageID,
+			messageID,
+		)
+	}
+	if response.ProtocolTag != ldapwire.ApplicationExtendedResponse || !response.HasResultCode {
+		return nil, false, errors.New("StartTLS response is not a valid ExtendedResponse")
+	}
+	if err := validateStartTLSResponseName(response.Raw); err != nil {
+		return nil, false, err
+	}
+	if response.ResultCode != ldapwire.ResultSuccess {
+		if backend.config.StartTLSCritical {
+			return nil, false, fmt.Errorf(
+				"critical StartTLS failed with LDAP result %d",
+				response.ResultCode,
+			)
+		}
+		return connection, false, nil
+	}
+	secured, err := backend.secureConnection(ctx, connection, serverName, "StartTLS")
+	if err != nil {
+		return nil, false, err
+	}
+	return secured, true, nil
+}
+
+func (backend *runtimeBackend) secureConnection(
+	ctx context.Context,
+	connection net.Conn,
+	serverName string,
+	label string,
+) (net.Conn, error) {
+	if backend.proxy.config.BackendTLS == nil {
+		return nil, fmt.Errorf("%s backend requires a TLS configuration", label)
+	}
+	tlsConfig := backend.proxy.config.BackendTLS.Clone()
+	if tlsConfig.ServerName == "" {
+		tlsConfig.ServerName = serverName
+	}
+	if verifyConnection := tlsConfig.VerifyConnection; verifyConnection != nil {
+		expectedServerName := tlsConfig.ServerName
+		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+			if state.ServerName == "" {
+				state.ServerName = expectedServerName
+			}
+			return verifyConnection(state)
+		}
+	}
+	secured := tls.Client(connection, tlsConfig)
+	clearDeadline, err := setConnectionNegotiationDeadline(
+		ctx,
+		secured,
+		backend.proxy.config.IOTimeout,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("set %s handshake deadline: %w", label, err)
+	}
+	defer clearDeadline()
+	if err := secured.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("%s handshake: %w", label, err)
+	}
+	return secured, nil
+}
+
+func setConnectionNegotiationDeadline(
+	ctx context.Context,
+	connection net.Conn,
+	timeout time.Duration,
+) (func(), error) {
+	deadline, hasDeadline := ctx.Deadline()
+	if timeout > 0 {
+		ioDeadline := time.Now().Add(timeout)
+		if !hasDeadline || ioDeadline.Before(deadline) {
+			deadline = ioDeadline
+			hasDeadline = true
+		}
+	}
+	if !hasDeadline {
+		return func() {}, nil
+	}
+	if err := connection.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	return func() { _ = connection.SetDeadline(time.Time{}) }, nil
+}
+
+func validateStartTLSResponseName(raw []byte) error {
+	frame, err := ParseFrame(raw, defaultUpstreamMessageSize)
+	if err != nil {
+		return fmt.Errorf("parse StartTLS response: %w", err)
+	}
+	protocol, next, err := parseElement(frame.ProtocolOp, 0)
+	if err != nil || next != len(frame.ProtocolOp) ||
+		!elementIs(protocol, berClassApplication, true, TagExtendedResponse) {
+		return errors.New("StartTLS response is not a valid ExtendedResponse")
+	}
+	cursor := protocol.contentStart
+	for index, expectedTag := range []uint64{berTagEnumerated, berTagOctetString, berTagOctetString} {
+		field, fieldEnd, fieldErr := parseElement(frame.ProtocolOp, cursor)
+		if fieldErr != nil || !elementIs(field, berClassUniversal, false, expectedTag) {
+			return fmt.Errorf("StartTLS response has invalid LDAPResult field %d", index)
+		}
+		cursor = fieldEnd
+	}
+	seenReferral := false
+	seenResponseName := false
+	seenResponseValue := false
+	for cursor < protocol.end {
+		field, fieldEnd, fieldErr := parseElement(frame.ProtocolOp, cursor)
+		if fieldErr != nil {
+			return fmt.Errorf("parse StartTLS response field: %w", fieldErr)
+		}
+		switch {
+		case elementIs(field, berClassContext, true, 3):
+			if seenReferral || seenResponseName || seenResponseValue {
+				return errors.New("StartTLS response contains an out-of-order referral")
+			}
+			seenReferral = true
+		case elementIs(field, berClassContext, false, 10):
+			if seenResponseName || seenResponseValue {
+				return errors.New("StartTLS response contains an invalid responseName")
+			}
+			if string(frame.ProtocolOp[field.contentStart:field.end]) != upstreamStartTLSOID {
+				return fmt.Errorf(
+					"StartTLS response OID %q does not match %s",
+					string(frame.ProtocolOp[field.contentStart:field.end]),
+					upstreamStartTLSOID,
+				)
+			}
+			seenResponseName = true
+		case elementIs(field, berClassContext, false, 11):
+			if seenResponseValue {
+				return errors.New("StartTLS response contains duplicate responseValue")
+			}
+			seenResponseValue = true
+		default:
+			return errors.New("StartTLS response contains an unexpected field")
+		}
+		cursor = fieldEnd
+	}
+	return nil
 }
 
 func (backend *runtimeBackend) add(upstream *upstreamConnection) {

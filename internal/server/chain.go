@@ -250,11 +250,55 @@ func chainOperationTarget(
 	default:
 		return directory.DN{}, false, false, false
 	}
-	dn, err := directory.ParseDN(rawDN)
+	dn, err := parseConnectionDN(state, rawDN)
 	if err != nil || dn.Depth() == 0 {
 		return directory.DN{}, false, false, false
 	}
 	return dn, write, search, true
+}
+
+func parseConnectionDN(
+	state *connectionState,
+	value string,
+) (directory.DN, error) {
+	var runtime *runtimeState
+	if state != nil {
+		runtime = state.runtime
+	}
+	return parseRuntimeConnectionDN(runtime, value)
+}
+
+func parseRuntimeConnectionDN(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	legacy, err := directory.ParseDN(value)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if runtime == nil || isConfigurationDN(legacy) {
+		return legacy, nil
+	}
+	if database := databaseForDN(runtime, legacy); database != nil {
+		return parseRuntimeDN(value, database.dnNormalizer)
+	}
+	if runtime.schema != nil {
+		return runtime.schema.NormalizeDN(value)
+	}
+	return legacy, nil
+}
+
+func connectionDNsEqual(
+	state *connectionState,
+	left string,
+	right string,
+) bool {
+	leftDN, err := parseConnectionDN(state, left)
+	if err != nil {
+		return false
+	}
+	rightDN, err := parseConnectionDN(state, right)
+	return err == nil && leftDN.Equal(rightDN)
 }
 
 func effectiveChainConfiguration(
@@ -453,7 +497,7 @@ func (server *Server) chainSearchContinuations(
 	if !ok {
 		return nil, references, nil
 	}
-	base, err := directory.ParseDN(request.BaseDN)
+	base, err := parseConnectionDN(state, request.BaseDN)
 	if err != nil {
 		return nil, references, nil
 	}
@@ -580,7 +624,7 @@ func (server *Server) applyChainIdentity(
 	if !identity.configured {
 		return remote, message, nil
 	}
-	boundDN, err := directory.ParseDN(state.boundDN)
+	boundDN, err := parseConnectionDN(state, state.boundDN)
 	if err != nil {
 		result := ldapwire.ResultError(
 			ldapwire.ResultInappropriateAuthentication,
@@ -740,7 +784,11 @@ func chainPassThroughRemote(
 	remote chainRemoteConfiguration,
 	identity directory.DN,
 ) (chainRemoteConfiguration, bool) {
-	credentialDN, err := directory.ParseDN(state.bindCredentialDN)
+	credentialDN, err := parseConnectionDN(state, state.bindCredentialDN)
+	if err != nil {
+		return chainRemoteConfiguration{}, false
+	}
+	identity, err = parseConnectionDN(state, identity.String())
 	if err != nil || state.authMechanism != "SIMPLE" ||
 		len(state.bindCredentials) == 0 || !credentialDN.Equal(identity) {
 		return chainRemoteConfiguration{}, false

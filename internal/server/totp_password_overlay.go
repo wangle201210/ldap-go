@@ -46,14 +46,24 @@ func loadTOTPPasswordRuntimeConfiguration(
 	if err != nil {
 		return totpPasswordRuntimeConfiguration{}, err
 	}
-	dn, err := directory.ParseDN(entry.DN)
+	configDNKey, err := totpPasswordConfigurationDNKey(entry.DN)
 	if err != nil {
 		return totpPasswordRuntimeConfiguration{}, err
 	}
 	return totpPasswordRuntimeConfiguration{
-		configDNKey: dn.Key(),
+		configDNKey: configDNKey,
 		disabled:    disabled,
 	}, nil
+}
+
+func totpPasswordConfigurationDNKey(rawDN string) (string, error) {
+	// cn=config naming attributes intentionally use the legacy configuration
+	// identity rather than the content database schema.
+	dn, err := parseRuntimeDN(rawDN, nil)
+	if err != nil {
+		return "", err
+	}
+	return dn.Key(), nil
 }
 
 func activeTOTPPasswordConfiguration(
@@ -64,10 +74,8 @@ func activeTOTPPasswordConfiguration(
 		return nil
 	}
 	if databaseType(database.name) != "frontend" {
-		for index := range database.totpPasswords {
-			if !database.totpPasswords[index].disabled {
-				return &database.totpPasswords[index]
-			}
+		if configuration := activeTOTPPasswordOnDatabase(database); configuration != nil {
+			return configuration
 		}
 	}
 	for databaseIndex := range runtime.databases {
@@ -75,10 +83,19 @@ func activeTOTPPasswordConfiguration(
 		if databaseType(candidate.name) != "frontend" {
 			continue
 		}
-		for index := range candidate.totpPasswords {
-			if !candidate.totpPasswords[index].disabled {
-				return &candidate.totpPasswords[index]
-			}
+		if configuration := activeTOTPPasswordOnDatabase(candidate); configuration != nil {
+			return configuration
+		}
+	}
+	return nil
+}
+
+func activeTOTPPasswordOnDatabase(
+	database *runtimeDatabase,
+) *totpPasswordRuntimeConfiguration {
+	for index := range database.totpPasswords {
+		if !database.totpPasswords[index].disabled {
+			return &database.totpPasswords[index]
 		}
 	}
 	return nil

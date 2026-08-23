@@ -16,6 +16,45 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
+func TestSyncConsumerCookieMergesPartialSIDState(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	config := syncConsumerConfig{rid: 7, partition: "sync-cookie-merge"}
+	first := []byte("rid=007,csn=20260823010101.000001Z#000000#001#000000")
+	third := []byte(
+		"rid=007,csn=20260823010102.000001Z#000000#003#000000," +
+			"delcsn=20260823010102.000001Z#000000#003#000000",
+	)
+	olderFirst := []byte("rid=007,csn=20260823010100.000001Z#000000#001#000000")
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		for _, cookie := range [][]byte{first, third, olderFirst} {
+			if err := updateSyncConsumerCookie(writer, config, cookie); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("updateSyncConsumerCookie(): %v", err)
+	}
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		raw, err := reader.Metadata(syncConsumerCookieMetadataKey(config))
+		if err != nil {
+			return err
+		}
+		parsed := parseOpenLDAPSyncCookie(raw)
+		if len(parsed.csns) != 2 ||
+			parsed.csns[1].raw != "20260823010101.000001Z#000000#001#000000" ||
+			parsed.csns[3].raw != "20260823010102.000001Z#000000#003#000000" ||
+			!parsed.hasDeletion ||
+			parsed.deletionCSN.raw != "20260823010102.000001Z#000000#003#000000" {
+			t.Fatalf("merged cookie = %q (%#v)", raw, parsed)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read merged cookie: %v", err)
+	}
+}
+
 func TestSyncConsumerAppliesRenameDeleteAndCookieAtomically(t *testing.T) {
 	t.Parallel()
 

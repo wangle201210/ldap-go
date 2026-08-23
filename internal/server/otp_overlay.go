@@ -83,7 +83,11 @@ func (server *Server) prepareOTPBind(
 	attempt := otpBindAttempt{}
 	err := server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, database)
-		user, err := tx.Get(dn)
+		userDN, err := normalizeOTPDirectoryDN(runtime, tx, dn)
+		if err != nil {
+			return err
+		}
+		user, err := tx.Get(userDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -161,16 +165,12 @@ func (server *Server) matchHOTPBind(
 	if !ok {
 		return nil, false, nil, nil
 	}
-	tokenDN, err := directory.ParseDN(ref)
-	if err != nil {
-		return nil, false, nil, nil
-	}
-	token, err := tx.Get(tokenDN)
-	if errors.Is(err, storage.ErrEntryNotFound) {
-		return nil, false, nil, nil
-	}
+	token, found, err := lookupOTPReferenceEntry(runtime, tx, ref)
 	if err != nil {
 		return nil, false, nil, err
+	}
+	if !found {
+		return nil, false, nil, nil
 	}
 	if !runtime.schema.EntryHasObjectClass(token, "oathHOTPToken") {
 		return nil, false, nil, nil
@@ -183,16 +183,12 @@ func (server *Server) matchHOTPBind(
 	if !ok {
 		return nil, false, nil, nil
 	}
-	paramsDN, err := directory.ParseDN(paramsRef)
-	if err != nil {
-		return nil, false, nil, nil
-	}
-	params, err := tx.Get(paramsDN)
-	if errors.Is(err, storage.ErrEntryNotFound) {
-		return nil, false, nil, nil
-	}
+	params, found, err := lookupOTPReferenceEntry(runtime, tx, paramsRef)
 	if err != nil {
 		return nil, false, nil, err
+	}
+	if !found {
+		return nil, false, nil, nil
 	}
 	if !runtime.schema.EntryHasObjectClass(params, "oathHOTPParams") {
 		return nil, false, nil, nil
@@ -255,16 +251,12 @@ func (server *Server) matchTOTPBind(
 	if !ok {
 		return nil, false, nil, nil
 	}
-	tokenDN, err := directory.ParseDN(ref)
-	if err != nil {
-		return nil, false, nil, nil
-	}
-	token, err := tx.Get(tokenDN)
-	if errors.Is(err, storage.ErrEntryNotFound) {
-		return nil, false, nil, nil
-	}
+	token, found, err := lookupOTPReferenceEntry(runtime, tx, ref)
 	if err != nil {
 		return nil, false, nil, err
+	}
+	if !found {
+		return nil, false, nil, nil
 	}
 	if !runtime.schema.EntryHasObjectClass(token, "oathTOTPToken") {
 		return nil, false, nil, nil
@@ -277,16 +269,12 @@ func (server *Server) matchTOTPBind(
 	if !ok {
 		return nil, false, nil, nil
 	}
-	paramsDN, err := directory.ParseDN(paramsRef)
-	if err != nil {
-		return nil, false, nil, nil
-	}
-	params, err := tx.Get(paramsDN)
-	if errors.Is(err, storage.ErrEntryNotFound) {
-		return nil, false, nil, nil
-	}
+	params, found, err := lookupOTPReferenceEntry(runtime, tx, paramsRef)
 	if err != nil {
 		return nil, false, nil, err
+	}
+	if !found {
+		return nil, false, nil, nil
 	}
 	if !runtime.schema.EntryHasObjectClass(params, "oathTOTPParams") {
 		return nil, false, nil, nil
@@ -370,7 +358,7 @@ func (server *Server) advanceOTPTokenState(
 	for attribute, value := range values {
 		token.ReplaceValues(attribute, [][]byte{[]byte(strconv.FormatInt(value, 10))})
 	}
-	tokenDN, err := directory.ParseDN(token.DN)
+	tokenDN, err := parseOTPReferenceDN(runtime, tx, token.DN)
 	if err != nil {
 		return nil, err
 	}
@@ -395,6 +383,58 @@ func (server *Server) advanceOTPTokenState(
 		&before,
 		&token,
 	)
+}
+
+func parseOTPReferenceDN(
+	runtime *runtimeState,
+	reader storage.Reader,
+	value string,
+) (directory.DN, error) {
+	var normalizer directory.DNAttributeNormalizer
+	if runtime != nil {
+		normalizer = runtime.schema
+	}
+	dn, err := parseRuntimeDN(value, normalizer)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return storage.NormalizeReaderDN(reader, dn)
+}
+
+func lookupOTPReferenceEntry(
+	runtime *runtimeState,
+	reader storage.Reader,
+	value string,
+) (directory.Entry, bool, error) {
+	var normalizer directory.DNAttributeNormalizer
+	if runtime != nil {
+		normalizer = runtime.schema
+	}
+	dn, err := parseRuntimeDN(value, normalizer)
+	if err != nil {
+		return directory.Entry{}, false, nil
+	}
+	dn, err = storage.NormalizeReaderDN(reader, dn)
+	if err != nil {
+		return directory.Entry{}, false, err
+	}
+	entry, err := reader.Get(dn)
+	switch {
+	case err == nil:
+		return entry, true, nil
+	case errors.Is(err, storage.ErrEntryNotFound):
+		return directory.Entry{}, false, nil
+	default:
+		return directory.Entry{}, false, err
+	}
+}
+
+func normalizeOTPDirectoryDN(
+	runtime *runtimeState,
+	reader storage.Reader,
+	dn directory.DN,
+) (directory.DN, error) {
+	return parseOTPReferenceDN(runtime, reader, dn.String())
 }
 
 func otpSingleBytes(entry directory.Entry, attribute string) ([]byte, bool) {

@@ -156,6 +156,11 @@ func validateValueSortSchema(
 	}
 	for index := range configuration.rules {
 		rule := &configuration.rules[index]
+		base, err := registry.NormalizeDN(rule.base.String())
+		if err != nil {
+			return fmt.Errorf("olcValSortAttr unable to normalize DN %q: %w", rule.base.String(), err)
+		}
+		rule.base = base
 		if err := validateConstraintAttributeDescription(rule.attribute); err != nil {
 			return fmt.Errorf("olcValSortAttr: %w", err)
 		}
@@ -228,9 +233,17 @@ func validateValueSortAdd(
 	if err != nil {
 		return err
 	}
+	dn, err = runtime.schema.NormalizeDN(dn.String())
+	if err != nil {
+		return err
+	}
 	for _, rule := range valueSortRulesForDatabase(runtime.databases, database) {
+		base, err := runtime.schema.NormalizeDN(rule.base.String())
+		if err != nil {
+			return err
+		}
 		if rule.ignored || !rule.weighted ||
-			(!rule.base.Equal(dn) && !rule.base.AncestorOf(dn)) {
+			(!base.Equal(dn) && !base.AncestorOf(dn)) {
 			continue
 		}
 		for _, attribute := range entry.Attributes {
@@ -256,9 +269,17 @@ func validateValueSortModify(
 	dn directory.DN,
 	changes []ldapwire.Modification,
 ) error {
+	dn, err := runtime.schema.NormalizeDN(dn.String())
+	if err != nil {
+		return err
+	}
 	for _, rule := range valueSortRulesForDatabase(runtime.databases, database) {
+		base, err := runtime.schema.NormalizeDN(rule.base.String())
+		if err != nil {
+			return err
+		}
 		if rule.ignored || !rule.weighted ||
-			(!rule.base.Equal(dn) && !rule.base.AncestorOf(dn)) {
+			(!base.Equal(dn) && !base.AncestorOf(dn)) {
 			continue
 		}
 		for _, change := range changes {
@@ -421,8 +442,13 @@ func applyValueSort(
 	if err != nil {
 		return
 	}
+	dn, err = registry.NormalizeDN(dn.String())
+	if err != nil {
+		return
+	}
 	for _, rule := range rules {
-		if rule.ignored || (!rule.base.Equal(dn) && !rule.base.AncestorOf(dn)) {
+		base, err := registry.NormalizeDN(rule.base.String())
+		if err != nil || rule.ignored || (!base.Equal(dn) && !base.AncestorOf(dn)) {
 			continue
 		}
 		for index := range entry.Attributes {

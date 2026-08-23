@@ -65,7 +65,7 @@ func loadRetcodeRuntimeConfiguration(
 	entry directory.Entry,
 	database runtimeDatabase,
 ) (retcodeRuntimeConfiguration, error) {
-	emptyDN, err := directory.ParseDN("")
+	emptyDN, err := parseRuntimeDN("", database.dnNormalizer)
 	if err != nil {
 		return retcodeRuntimeConfiguration{}, err
 	}
@@ -78,7 +78,10 @@ func loadRetcodeRuntimeConfiguration(
 		)
 	}
 	if len(parentValues) == 1 {
-		parent, err := directory.ParseDN(string(parentValues[0]))
+		parent, err := parseRuntimeDN(
+			string(parentValues[0]),
+			database.dnNormalizer,
+		)
 		if err != nil {
 			return configuration, fmt.Errorf(
 				"%s olcRetcodeParent: %w",
@@ -128,7 +131,11 @@ func loadRetcodeRuntimeConfiguration(
 				err,
 			)
 		}
-		item, err := parseRetcodeItem(arguments, configuration.parent)
+		item, err := parseRetcodeItem(
+			arguments,
+			configuration.parent,
+			database.dnNormalizer,
+		)
 		if err != nil {
 			return retcodeRuntimeConfiguration{}, fmt.Errorf(
 				"%s olcRetcodeItem: %w",
@@ -175,11 +182,12 @@ func stripRetcodeOrderingPrefix(value string) (string, error) {
 func parseRetcodeItem(
 	arguments []string,
 	parent directory.DN,
+	normalizer directory.DNAttributeNormalizer,
 ) (retcodeItem, error) {
 	if len(arguments) < 2 {
 		return retcodeItem{}, errors.New("item requires an RDN and result code")
 	}
-	rdn, err := directory.ParseDN(arguments[0])
+	rdn, err := parseRuntimeDN(arguments[0], normalizer)
 	if err != nil || rdn.Depth() != 1 {
 		return retcodeItem{}, fmt.Errorf("%q is not an RDN", arguments[0])
 	}
@@ -220,7 +228,7 @@ func parseRetcodeItem(
 				return retcodeItem{}, errors.New("matched already provided")
 			}
 			matchedSet = true
-			matched, err := directory.ParseDN(value)
+			matched, err := parseRuntimeDN(value, normalizer)
 			if err != nil {
 				return retcodeItem{}, fmt.Errorf("invalid matched DN %q: %w", value, err)
 			}
@@ -456,10 +464,9 @@ func (server *Server) tryRetcodeOperation(
 		if !state.transactionPreflight {
 			retcodeSleep(configuration.sleepSeconds)
 		}
-		if configuration.parent.Equal(target) ||
-			configuration.parent.AncestorOf(target) {
+		if databaseDNAtOrBelow(*database, target, configuration.parent) {
 			if request, ok := message.Request.(ldapwire.SearchRequest); ok &&
-				configuration.parent.Equal(target) &&
+				databaseDNEqual(*database, configuration.parent, target) &&
 				request.Scope != directory.ScopeBase {
 				return true, server.writeRetcodeSyntheticSearch(
 					ctx,
@@ -482,7 +489,7 @@ func (server *Server) tryRetcodeOperation(
 			}
 			var selected *retcodeItem
 			for index := range configuration.items {
-				if configuration.items[index].dn.Equal(target) {
+				if databaseDNEqual(*database, configuration.items[index].dn, target) {
 					selected = &configuration.items[index]
 					break
 				}
@@ -625,12 +632,12 @@ func (server *Server) retcodeSuccessfulRootBind(
 	request ldapwire.Request,
 ) bool {
 	bind, ok := request.(ldapwire.BindRequest)
-	return ok && !bind.Authentication.IsSASL && database.rootDN != nil &&
-		database.rootDN.Equal(target) && database.rootPasswordSet &&
+	rootPassword, root := databaseAuthenticationRoot(runtime, database, target)
+	return ok && !bind.Authentication.IsSASL && root &&
 		server.verifyStoredPassword(
 			ctx,
 			runtime,
-			database.rootPassword,
+			rootPassword,
 			bind.Authentication.Simple,
 		)
 }
@@ -652,7 +659,7 @@ func retcodeItemFromDirectoryEntry(
 	if consumed == 0 || consumed != len(codeValues[0]) {
 		return retcodeItem{}, false
 	}
-	dn, err := directory.ParseDN(entry.DN)
+	dn, err := runtime.schema.NormalizeDN(entry.DN)
 	if err != nil {
 		return retcodeItem{}, false
 	}
@@ -665,7 +672,11 @@ func retcodeItemFromDirectoryEntry(
 		item.text = string(values[0])
 	}
 	if values := entry.Values("errMatchedDN"); len(values) > 0 {
-		item.matchedDN = string(values[0])
+		matched, err := runtime.schema.NormalizeDN(string(values[0]))
+		if err != nil {
+			return retcodeItem{}, false
+		}
+		item.matchedDN = matched.String()
 	}
 	for _, value := range entry.Values("ref") {
 		item.referrals = append(item.referrals, string(value))

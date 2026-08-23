@@ -47,6 +47,9 @@ type sqlBackendRuntimeConfiguration struct {
 	attributeQuery    string
 	idQuery           string
 	idQueryConfigured bool
+	dnMatchCondition  string
+	dnMatchConfigured bool
+	hasChildrenQuery  string
 	createNeedsSelect bool
 	upperFunction     string
 	upperNeedsCast    bool
@@ -85,6 +88,8 @@ type sqlBackendSettings struct {
 	attributeQuery    string
 	idQuery           string
 	idQueryConfigured bool
+	dnMatchCondition  string
+	dnMatchConfigured bool
 	createNeedsSelect bool
 	upperFunction     string
 	upperNeedsCast    bool
@@ -135,6 +140,62 @@ type sqlEntryID struct {
 	keyValue      int64
 	objectClassID int64
 	dn            string
+}
+
+type sqlBackendSearchRequirementsContextKey struct{}
+
+type sqlBackendSearchRequirements struct {
+	hasSubordinates bool
+}
+
+func withSQLBackendSearchRequirements(
+	ctx context.Context,
+	attributes []string,
+	filters ...directory.Filter,
+) context.Context {
+	requirements := sqlBackendSearchRequirements{
+		hasSubordinates: sqlBackendSearchRequestsHasSubordinates(attributes, filters),
+	}
+	return context.WithValue(ctx, sqlBackendSearchRequirementsContextKey{}, requirements)
+}
+
+func sqlBackendSearchRequestsHasSubordinates(
+	attributes []string,
+	filters []directory.Filter,
+) bool {
+	for _, attribute := range attributes {
+		if strings.EqualFold(strings.TrimSpace(attribute), "+") ||
+			sqlBackendHasSubordinatesDescription(attribute) {
+			return true
+		}
+	}
+	for _, filter := range filters {
+		if sqlBackendFilterReferencesHasSubordinates(filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func sqlBackendFilterReferencesHasSubordinates(filter directory.Filter) bool {
+	if sqlBackendHasSubordinatesDescription(filter.Attribute) {
+		return true
+	}
+	for _, child := range filter.Children {
+		if sqlBackendFilterReferencesHasSubordinates(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func sqlBackendHasSubordinatesDescription(description string) bool {
+	description = strings.TrimSpace(description)
+	if separator := strings.IndexByte(description, ';'); separator >= 0 {
+		description = description[:separator]
+	}
+	return strings.EqualFold(description, "hasSubordinates") ||
+		strings.EqualFold(description, "2.5.18.9")
 }
 
 type sqlBackendQueryer interface {
@@ -205,6 +266,12 @@ func loadSQLBackendRuntimeConfiguration(
 		configuration.idQuery = value
 		configuration.idQueryConfigured = true
 	}
+	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlDnMatchCond"); valueErr != nil {
+		return nil, valueErr
+	} else if present {
+		configuration.dnMatchCondition = value
+		configuration.dnMatchConfigured = true
+	}
 	for _, option := range stringOptions {
 		value, present, valueErr := singleOptionalSQLString(entry, option.attribute)
 		if valueErr != nil {
@@ -244,6 +311,7 @@ func loadSQLBackendRuntimeConfiguration(
 		}
 		*option.target = value
 	}
+	configuration.prepareHasChildrenQuery()
 	for _, raw := range entry.Values("olcSqlLayer") {
 		configuration.layers = append(configuration.layers, string(raw))
 	}
@@ -384,6 +452,10 @@ func (configuration *sqlBackendRuntimeConfiguration) settings() sqlBackendSettin
 	if !configuration.reversedDNSet {
 		hasReversedDN = false
 	}
+	dnMatchCondition := configuration.dnMatchCondition
+	if !configuration.dnMatchConfigured {
+		dnMatchCondition = ""
+	}
 	return sqlBackendSettings{
 		databaseName:      configuration.databaseName,
 		databaseUser:      configuration.databaseUser,
@@ -394,6 +466,8 @@ func (configuration *sqlBackendRuntimeConfiguration) settings() sqlBackendSettin
 		attributeQuery:    configuration.attributeQuery,
 		idQuery:           idQuery,
 		idQueryConfigured: configuration.idQueryConfigured,
+		dnMatchCondition:  dnMatchCondition,
+		dnMatchConfigured: configuration.dnMatchConfigured,
 		createNeedsSelect: configuration.createNeedsSelect,
 		upperFunction:     configuration.upperFunction,
 		upperNeedsCast:    configuration.upperNeedsCast,
@@ -572,6 +646,7 @@ func (configuration *sqlBackendRuntimeConfiguration) database(
 	}
 	configuration.detectReversedDN(ctx, database)
 	configuration.prepareDefaultIDQuery()
+	configuration.prepareHasChildrenQuery()
 	if err := configuration.loadMappings(ctx, database); err != nil {
 		_ = database.Close()
 		return nil, err
@@ -618,6 +693,25 @@ func (configuration *sqlBackendRuntimeConfiguration) prepareDefaultIDQuery() {
 		configuration.idQuery = prefix + configuration.upperFunction +
 			"(dn)=" + configuration.upperFunction + "(?)"
 	}
+}
+
+func (configuration *sqlBackendRuntimeConfiguration) prepareHasChildrenQuery() {
+	condition := configuration.dnMatchCondition
+	if !configuration.dnMatchConfigured {
+		switch {
+		case configuration.upperFunction == "":
+			condition = "ldap_entries.dn=?"
+		case configuration.upperNeedsCast:
+			condition = configuration.upperFunction + "(ldap_entries.dn)=" +
+				configuration.upperFunction + "(cast (? as varchar(255)))"
+		default:
+			condition = configuration.upperFunction + "(ldap_entries.dn)=" +
+				configuration.upperFunction + "(?)"
+		}
+	}
+	configuration.hasChildrenQuery = "SELECT COUNT(distinct subordinates.id) " +
+		"FROM ldap_entries,ldap_entries " + configuration.aliasingKeyword +
+		"subordinates WHERE subordinates.parent=ldap_entries.id AND " + condition
 }
 
 func quoteODBCValue(value string) string {
@@ -873,6 +967,35 @@ type sqlBackendReader struct {
 	initializationErr error
 }
 
+func (reader *sqlBackendReader) NormalizeDNIdentity(
+	dn directory.DN,
+) (directory.DN, error) {
+	if reader.configuration == nil || reader.configuration.registry == nil {
+		return dn, nil
+	}
+	return reader.configuration.registry.NormalizeDN(dn.String())
+}
+
+func (reader *sqlBackendReader) DNIdentityOrderKey(
+	dn directory.DN,
+) (string, error) {
+	normalized, err := reader.NormalizeDNIdentity(dn)
+	if err != nil {
+		return "", err
+	}
+	return normalized.NormalizedString(), nil
+}
+
+func (reader *sqlBackendReader) normalizedSQLDN(
+	dn directory.DN,
+) (directory.DN, string, error) {
+	normalized, err := reader.NormalizeDNIdentity(dn)
+	if err != nil {
+		return directory.DN{}, "", err
+	}
+	return normalized, normalized.NormalizedString(), nil
+}
+
 func (reader *sqlBackendReader) AccessContext() any {
 	if provider, ok := reader.Reader.(interface{ AccessContext() any }); ok {
 		return provider.AccessContext()
@@ -899,7 +1022,14 @@ func (reader *sqlBackendReader) Get(
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	return reader.loadEntry(queryer, id)
+	entry, err = reader.loadEntry(queryer, id)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if required, specified := reader.searchRequiresHasSubordinates(); specified && required {
+		return reader.withHasSubordinates(queryer, entry)
+	}
+	return entry, nil
 }
 
 func (reader *sqlBackendReader) ForEach(
@@ -940,10 +1070,17 @@ func (reader *sqlBackendReader) ForEach(
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("SQL-backend entry scan close: %w", err)
 	}
+	includeHasSubordinates, _ := reader.searchRequiresHasSubordinates()
 	for _, id := range ids {
 		entry, err := reader.loadEntry(queryer, id)
 		if err != nil {
 			return err
+		}
+		if includeHasSubordinates {
+			entry, err = reader.withHasSubordinates(queryer, entry)
+			if err != nil {
+				return err
+			}
 		}
 		if err := visit(entry); err != nil {
 			return &sqlBackendVisitorError{err: err}
@@ -983,10 +1120,15 @@ func (reader *sqlBackendReader) loadEntry(
 			id.id, id.objectClassID,
 		)
 	}
-	if _, err := directory.ParseDN(id.dn); err != nil {
+	normalizedDN, err := directory.ParseDN(id.dn)
+	if err != nil {
 		return directory.Entry{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
 	}
-	entry := directory.Entry{DN: id.dn}
+	normalizedDN, err = reader.NormalizeDNIdentity(normalizedDN)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
+	}
+	entry := directory.Entry{DN: normalizedDN.String()}
 	appendSQLAttributeValue(&entry, "objectClass", []byte(objectClass.name))
 	auxiliaryRows, err := queryer.QueryContext(
 		reader.ctx,
@@ -1035,20 +1177,88 @@ func (reader *sqlBackendReader) loadEntry(
 	}
 	appendSQLAttributeValue(&entry, "structuralObjectClass", []byte(objectClass.name))
 	appendSQLAttributeValue(&entry, "entryUUID", []byte(sqlEntryUUID(id.objectClassID, id.keyValue)))
-	var childCount int64
-	if err := queryer.QueryRowContext(
-		reader.ctx,
-		"SELECT COUNT(*) FROM ldap_entries WHERE parent=?",
-		id.id,
-	).Scan(&childCount); err != nil {
-		return directory.Entry{}, fmt.Errorf("SQL-backend subordinate count for entry %d: %w", id.id, err)
+	return entry, nil
+}
+
+func (reader *sqlBackendReader) searchRequiresHasSubordinates() (bool, bool) {
+	if reader.ctx == nil {
+		return false, false
 	}
-	if childCount > 0 {
+	requirements, specified := reader.ctx.Value(
+		sqlBackendSearchRequirementsContextKey{},
+	).(sqlBackendSearchRequirements)
+	return requirements.hasSubordinates, specified
+}
+
+func (reader *sqlBackendReader) withHasSubordinates(
+	queryer sqlBackendQueryer,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	if entry.HasAttribute("hasSubordinates") {
+		return entry, nil
+	}
+	dn, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf("SQL-backend entry DN %q: %w", entry.DN, err)
+	}
+	dn, err = reader.NormalizeDNIdentity(dn)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf("SQL-backend entry DN %q: %w", entry.DN, err)
+	}
+	hasChildren, err := reader.hasChildrenWithQueryer(queryer, dn)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if hasChildren {
 		appendSQLAttributeValue(&entry, "hasSubordinates", []byte("TRUE"))
 	} else {
 		appendSQLAttributeValue(&entry, "hasSubordinates", []byte("FALSE"))
 	}
 	return entry, nil
+}
+
+func (reader *sqlBackendReader) sqlBackendHasChildren(
+	dn directory.DN,
+) (hasChildren bool, err error) {
+	defer func() { err = sqlBackendLDAPError(err) }()
+	if reader.initializationErr != nil {
+		return false, reader.initializationErr
+	}
+	database, err := reader.configuration.database(reader.ctx)
+	if err != nil {
+		return false, err
+	}
+	queryer := reader.queryer
+	if queryer == nil {
+		queryer = database
+	}
+	return reader.hasChildrenWithQueryer(queryer, dn)
+}
+
+func (reader *sqlBackendReader) hasChildrenWithQueryer(
+	queryer sqlBackendQueryer,
+	dn directory.DN,
+) (bool, error) {
+	normalized, parameter, err := reader.normalizedSQLDN(dn)
+	if err != nil {
+		return false, fmt.Errorf("normalize SQL-backend DN %q: %w", dn.String(), err)
+	}
+	if len(parameter) > 255 {
+		return false, fmt.Errorf("SQL-backend DN exceeds 255 bytes")
+	}
+	query := reader.configuration.hasChildrenQuery
+	if query == "" {
+		return false, errors.New("SQL-backend subordinate query is not configured")
+	}
+	var childCount int64
+	if err := queryer.QueryRowContext(reader.ctx, query, parameter).Scan(&childCount); err != nil {
+		return false, fmt.Errorf(
+			"SQL-backend subordinate count for %s: %w",
+			normalized.String(),
+			err,
+		)
+	}
+	return childCount > 0, nil
 }
 
 func (reader *sqlBackendReader) readAttributeValues(
@@ -1098,12 +1308,15 @@ func (reader *sqlBackendReader) entryIDWithQueryer(
 	queryer sqlBackendQueryer,
 	dn directory.DN,
 ) (sqlEntryID, error) {
-	parameter := dn.Key()
+	normalized, parameter, err := reader.normalizedSQLDN(dn)
+	if err != nil {
+		return sqlEntryID{}, fmt.Errorf("normalize SQL-backend DN %q: %w", dn.String(), err)
+	}
 	if reader.configuration.hasReversedDN {
 		parameter = reverseUpperASCII(parameter)
 	}
 	var id sqlEntryID
-	err := queryer.QueryRowContext(
+	err = queryer.QueryRowContext(
 		reader.ctx,
 		reader.configuration.idQuery,
 		parameter,
@@ -1114,6 +1327,18 @@ func (reader *sqlBackendReader) entryIDWithQueryer(
 	if err != nil {
 		return sqlEntryID{}, fmt.Errorf("SQL-backend entry ID query: %w", err)
 	}
+	storedDN, err := directory.ParseDN(id.dn)
+	if err != nil {
+		return sqlEntryID{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
+	}
+	storedDN, err = reader.NormalizeDNIdentity(storedDN)
+	if err != nil {
+		return sqlEntryID{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
+	}
+	if !storedDN.Equal(normalized) {
+		return sqlEntryID{}, storage.ErrEntryNotFound
+	}
+	id.dn = storedDN.String()
 	return id, nil
 }
 
@@ -1209,6 +1434,42 @@ func (writer *sqlBackendWriter) Get(dn directory.DN) (directory.Entry, error) {
 
 func (writer *sqlBackendWriter) ForEach(visit func(directory.Entry) error) error {
 	return writer.reader.ForEach(visit)
+}
+
+func (writer *sqlBackendWriter) sqlBackendHasChildren(
+	dn directory.DN,
+) (hasChildren bool, err error) {
+	defer func() { err = sqlBackendLDAPError(err) }()
+	return writer.reader.sqlBackendHasChildren(dn)
+}
+
+func (reader *rwmStorageReader) sqlBackendHasChildren(
+	dn directory.DN,
+) (bool, error) {
+	remote, err := reader.configuration.mapDNToRemote(dn)
+	if err != nil {
+		return false, err
+	}
+	backend, ok := reader.Reader.(interface {
+		sqlBackendHasChildren(directory.DN) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("SQL-backend subordinate query is unavailable")
+	}
+	return backend.sqlBackendHasChildren(remote)
+}
+
+func storageSQLBackendHasChildren(
+	reader storage.Reader,
+	dn directory.DN,
+) (bool, error) {
+	backend, ok := reader.(interface {
+		sqlBackendHasChildren(directory.DN) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("SQL-backend subordinate query is unavailable")
+	}
+	return backend.sqlBackendHasChildren(dn)
 }
 
 func sqlBackendWriteUnsupported() error {

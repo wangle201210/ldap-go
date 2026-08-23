@@ -583,6 +583,34 @@ func newDynlistProjectionCache(
 	}
 }
 
+func normalizeRuntimeReaderDN(
+	reader storage.Reader,
+	database runtimeDatabase,
+	dn directory.DN,
+) (directory.DN, error) {
+	normalized, err := storage.NormalizeReaderDN(reader, dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if database.dnNormalizer == nil {
+		return normalized, nil
+	}
+	// Delegated readers do not necessarily expose the optional identity
+	// capability. The database schema remains authoritative for local DNs.
+	return normalizeRuntimeDatabaseDN(database, normalized)
+}
+
+func (cache *dynlistProjectionCache) normalizeDN(
+	dn directory.DN,
+) (directory.DN, error) {
+	database := databaseForDN(cache.runtime, dn)
+	if database == nil {
+		return parseRuntimeDN(dn.String(), cache.runtime.schema)
+	}
+	reader := readerForDatabase(cache.reader, *database)
+	return normalizeRuntimeReaderDN(reader, *database, dn)
+}
+
 func (cache *dynlistProjectionCache) apply(
 	database runtimeDatabase,
 	entry directory.Entry,
@@ -594,17 +622,23 @@ func (cache *dynlistProjectionCache) apply(
 	if err != nil {
 		return directory.Entry{}, directory.Entry{}, err
 	}
+	reader := readerForDatabase(cache.reader, database)
 	dn, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.Entry{}, directory.Entry{}, err
 	}
-	projected, found := plan.projections[dn.Key()]
+	dn, err = normalizeRuntimeReaderDN(reader, database, dn)
+	if err != nil {
+		return directory.Entry{}, directory.Entry{}, err
+	}
+	key := dn.Key()
+	projected, found := plan.projections[key]
 	if !found {
 		return entry, entry, nil
 	}
 	filterEntry := entry
 	if !database.dynlist.simple {
-		if filtered, found := plan.filterProjections[dn.Key()]; found {
+		if filtered, found := plan.filterProjections[key]; found {
 			filterEntry = filtered.Clone()
 		}
 	}
@@ -628,6 +662,17 @@ func (cache *dynlistProjectionCache) plan(
 		dn, err := directory.ParseDN(entry.DN)
 		if err != nil {
 			return err
+		}
+		dn, err = normalizeRuntimeReaderDN(reader, database, dn)
+		if err != nil {
+			return err
+		}
+		if existing, found := plan.entries[dn.Key()]; found {
+			return fmt.Errorf(
+				"dynlist database contains duplicate DN identity %q and %q",
+				existing.DN,
+				entry.DN,
+			)
 		}
 		plan.entries[dn.Key()] = entry
 		return nil
@@ -737,7 +782,15 @@ func dynlistAttributeSetApplies(
 		if err != nil {
 			return false, err
 		}
-		if !directory.InScope(restriction.base, dn, restriction.scope) {
+		dn, err = parseRuntimeDN(dn.String(), registry)
+		if err != nil {
+			return false, err
+		}
+		base, err := parseRuntimeDN(restriction.base.String(), registry)
+		if err != nil {
+			return false, err
+		}
+		if !directory.InScope(base, dn, restriction.scope) {
 			return false, nil
 		}
 	}
@@ -771,11 +824,12 @@ func (cache *dynlistProjectionCache) expandEntry(
 			len(parsed.attributes) == 0
 		if oldStyleGroup {
 			for _, result := range results {
-				if err := addDynlistValue(
+				if err := addDynlistValueWithNormalizer(
 					cache.runtime.schema,
 					entry,
 					attributeSet.mappings[0].memberAttribute,
 					[]byte(result.DN),
+					cache.runtime.schema,
 				); err != nil {
 					return err
 				}
@@ -802,11 +856,12 @@ func (cache *dynlistProjectionCache) expandEntry(
 						dynlistStructuralObjectClass(cache.runtime.schema, value) {
 						continue
 					}
-					if err := addDynlistValue(
+					if err := addDynlistValueWithNormalizer(
 						cache.runtime.schema,
 						entry,
 						destination,
 						value,
+						cache.runtime.schema,
 					); err != nil {
 						return err
 					}
@@ -857,6 +912,10 @@ func (cache *dynlistProjectionCache) expansionIdentity(
 	if err != nil {
 		return "", false, nil
 	}
+	identity, err = cache.normalizeDN(identity)
+	if err != nil {
+		return "", false, nil
+	}
 	authorizations := cache.runtime.schema.AttributeValues(entry, "dgAuthz")
 	if identity.Depth() != 0 && len(authorizations) > 0 &&
 		!cache.server.isRoot(cache.runtime, cache.subjectDN, entry.DN, "") {
@@ -893,13 +952,21 @@ func (cache *dynlistProjectionCache) searchURL(
 	attributeSet dynlistAttributeSet,
 	subjectDN string,
 ) ([]directory.Entry, error) {
-	routes := databaseSearchRoutes(cache.runtime.databases, parsed.base, parsed.scope)
+	baseDatabase := databaseForDN(cache.runtime, parsed.base)
+	if baseDatabase == nil {
+		return nil, nil
+	}
+	base, err := normalizeRuntimeDatabaseDN(*baseDatabase, parsed.base)
+	if err != nil {
+		return nil, err
+	}
+	routes := databaseSearchRoutes(cache.runtime.databases, base, parsed.scope)
 	if len(routes) == 0 {
 		return nil, nil
 	}
 	primary := &cache.runtime.databases[routes[0].databaseIndex]
 	primaryReader := readerForDatabase(cache.reader, *primary)
-	baseEntry, err := primaryReader.Get(parsed.base)
+	baseEntry, err := primaryReader.Get(base)
 	if err != nil {
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil, nil
@@ -918,17 +985,31 @@ func (cache *dynlistProjectionCache) searchURL(
 		return nil, nil
 	}
 
-	var results []directory.Entry
+	type searchResult struct {
+		entry    directory.Entry
+		identity string
+		order    string
+	}
+	var results []searchResult
+	seen := make(map[string]struct{})
 	collectivePlans := newCollectiveAttributePlanCache(cache.runtime.schema)
 	for _, route := range routes {
 		database := &cache.runtime.databases[route.databaseIndex]
 		reader := readerForDatabase(cache.reader, *database)
-		err := reader.ForEach(func(entry directory.Entry) error {
+		comparisonBase, err := normalizeRuntimeReaderDN(reader, *database, route.base)
+		if err != nil {
+			return nil, err
+		}
+		err = reader.ForEach(func(entry directory.Entry) error {
 			dn, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err
 			}
-			if !directory.InScope(route.base, dn, route.scope) {
+			dn, err = normalizeRuntimeReaderDN(reader, *database, dn)
+			if err != nil {
+				return err
+			}
+			if !directory.InScope(comparisonBase, dn, route.scope) {
 				return nil
 			}
 			entry, err = collectivePlans.apply(database.partition, reader, entry)
@@ -988,7 +1069,19 @@ func (cache *dynlistProjectionCache) searchURL(
 					cache.runtime.schema.AttributeDescriptionSubtype,
 				)
 			}
-			results = append(results, readable)
+			if _, duplicate := seen[dn.Key()]; duplicate {
+				return nil
+			}
+			order, err := storage.ReaderDNOrderKey(reader, dn)
+			if err != nil {
+				return err
+			}
+			seen[dn.Key()] = struct{}{}
+			results = append(results, searchResult{
+				entry:    readable,
+				identity: dn.Key(),
+				order:    order + "\x00" + dn.Key(),
+			})
 			return nil
 		})
 		if err != nil {
@@ -996,14 +1089,16 @@ func (cache *dynlistProjectionCache) searchURL(
 		}
 	}
 	sort.SliceStable(results, func(i, j int) bool {
-		left, leftErr := directory.ParseDN(results[i].DN)
-		right, rightErr := directory.ParseDN(results[j].DN)
-		if leftErr != nil || rightErr != nil {
-			return results[i].DN < results[j].DN
+		if results[i].order == results[j].order {
+			return results[i].identity < results[j].identity
 		}
-		return left.Key() < right.Key()
+		return results[i].order < results[j].order
 	})
-	return results, nil
+	entries := make([]directory.Entry, len(results))
+	for index := range results {
+		entries[index] = results[index].entry
+	}
+	return entries, nil
 }
 
 type dynlistMembershipNode struct {
@@ -1073,6 +1168,10 @@ func (cache *dynlistProjectionCache) applyMembershipModel(
 				}
 				for _, result := range results {
 					memberDN, err := directory.ParseDN(result.DN)
+					if err != nil {
+						continue
+					}
+					memberDN, err = cache.normalizeDN(memberDN)
 					if err == nil {
 						node.direct = appendDynlistDN(node.direct, memberDN)
 					}
@@ -1097,6 +1196,10 @@ func (cache *dynlistProjectionCache) applyMembershipModel(
 				continue
 			}
 			memberDN, err := directory.ParseDN(string(value))
+			if err != nil {
+				continue
+			}
+			memberDN, err = cache.normalizeDN(memberDN)
 			if err == nil {
 				node.direct = appendDynlistDN(node.direct, memberDN)
 			}
@@ -1113,11 +1216,12 @@ func (cache *dynlistProjectionCache) applyMembershipModel(
 			nestedMembers := dynlistNestedMembers(key, nodes, make(map[string]bool))
 			projected := plan.projectedEntry(key, node.entry)
 			for _, member := range nestedMembers {
-				if err := addDynlistValue(
+				if err := addDynlistValueWithNormalizer(
 					cache.runtime.schema,
 					&projected,
 					mapping.outputAttribute(),
 					[]byte(member.String()),
+					cache.runtime.schema,
 				); err != nil {
 					return err
 				}
@@ -1141,6 +1245,10 @@ func (cache *dynlistProjectionCache) applyMembershipModel(
 		if err != nil {
 			return err
 		}
+		groupDN, err = normalizeRuntimeReaderDN(reader, database, groupDN)
+		if err != nil {
+			return err
+		}
 		for _, member := range members {
 			memberKey := member.Key()
 			memberEntry, found := plan.entries[memberKey]
@@ -1148,21 +1256,23 @@ func (cache *dynlistProjectionCache) applyMembershipModel(
 				continue
 			}
 			projected := plan.projectedEntry(memberKey, memberEntry)
-			if err := addDynlistValue(
+			if err := addDynlistValueWithNormalizer(
 				cache.runtime.schema,
 				&projected,
 				mapping.memberOfAttribute,
 				[]byte(groupDN.String()),
+				cache.runtime.schema,
 			); err != nil {
 				return err
 			}
 			plan.projections[memberKey] = projected
 			filterProjected := plan.filterProjectedEntry(memberKey, memberEntry)
-			if err := addDynlistValue(
+			if err := addDynlistValueWithNormalizer(
 				cache.runtime.schema,
 				&filterProjected,
 				mapping.memberOfAttribute,
 				[]byte(groupDN.String()),
+				cache.runtime.schema,
 			); err != nil {
 				return err
 			}
@@ -1320,6 +1430,22 @@ func addDynlistValue(
 	description string,
 	value []byte,
 ) error {
+	return addDynlistValueWithNormalizer(
+		registry,
+		entry,
+		description,
+		value,
+		nil,
+	)
+}
+
+func addDynlistValueWithNormalizer(
+	registry *schema.Registry,
+	entry *directory.Entry,
+	description string,
+	value []byte,
+	dnNormalizer directory.DNAttributeNormalizer,
+) error {
 	attributeType, found, err := registry.EffectiveAttributeType(description)
 	if err != nil {
 		return err
@@ -1341,6 +1467,22 @@ func addDynlistValue(
 			return nil
 		}
 		for _, existing := range entry.Attributes[index].Values {
+			if registry.IsDNReferenceValued(description) && dnNormalizer != nil {
+				existingDN, existingErr := directory.ParseDNWithNormalizer(
+					string(existing),
+					dnNormalizer,
+				)
+				valueDN, valueErr := directory.ParseDNWithNormalizer(
+					string(value),
+					dnNormalizer,
+				)
+				if existingErr == nil && valueErr == nil && existingDN.Equal(valueDN) {
+					return nil
+				}
+				if existingErr == nil && valueErr == nil {
+					continue
+				}
+			}
 			equal := bytes.Equal(existing, value)
 			if comparison, compareErr := registry.Compare(
 				description,
@@ -1410,6 +1552,10 @@ func (cache *dynlistProjectionCache) dynamicListDNCompare(
 			if err != nil {
 				return true, false, nil
 			}
+			assertedDN, err = cache.normalizeDN(assertedDN)
+			if err != nil {
+				return true, false, nil
+			}
 			_, authorized, err := cache.expansionIdentity(database, entry)
 			if err != nil {
 				return true, false, err
@@ -1438,14 +1584,15 @@ func (cache *dynlistProjectionCache) dynamicListDNCompare(
 						parsed.filterErr.Error(),
 					)
 				}
-				if !directory.InScope(parsed.base, assertedDN, parsed.scope) {
-					continue
-				}
 				targetDatabase := databaseForDN(cache.runtime, assertedDN)
 				if targetDatabase == nil {
 					continue
 				}
 				reader := readerForDatabase(cache.reader, *targetDatabase)
+				base, err := normalizeRuntimeReaderDN(reader, *targetDatabase, parsed.base)
+				if err != nil || !directory.InScope(base, assertedDN, parsed.scope) {
+					continue
+				}
 				target, err := reader.Get(assertedDN)
 				if errors.Is(err, storage.ErrEntryNotFound) {
 					continue
@@ -1492,6 +1639,10 @@ func (cache *dynlistProjectionCache) dynamicGroupCompare(
 		if err != nil {
 			return true, false, nil
 		}
+		memberDN, err = cache.normalizeDN(memberDN)
+		if err != nil {
+			return true, false, nil
+		}
 		urls := cache.runtime.schema.AttributeValues(
 			entry,
 			pair.urlAttribute,
@@ -1510,14 +1661,15 @@ func (cache *dynlistProjectionCache) dynamicGroupCompare(
 					parsed.filterErr.Error(),
 				)
 			}
-			if !directory.InScope(parsed.base, memberDN, parsed.scope) {
-				continue
-			}
 			targetDatabase := databaseForDN(cache.runtime, memberDN)
 			if targetDatabase == nil {
 				continue
 			}
 			reader := readerForDatabase(cache.reader, *targetDatabase)
+			base, err := normalizeRuntimeReaderDN(reader, *targetDatabase, parsed.base)
+			if err != nil || !directory.InScope(base, memberDN, parsed.scope) {
+				continue
+			}
 			member, err := reader.Get(memberDN)
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				continue

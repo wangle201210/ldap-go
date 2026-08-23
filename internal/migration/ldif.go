@@ -49,7 +49,6 @@ type importedContentEntry struct {
 
 type pendingContentEntry struct {
 	entry directory.Entry
-	dn    directory.DN
 }
 
 var errImportDryRun = errors.New("rollback validated LDIF import")
@@ -104,6 +103,24 @@ func ImportLDIF(
 				target.name,
 			)
 		}
+		var identitySchema *schema.Registry
+		if targetSelected && !target.config {
+			identitySchema, err = importedSchemaRegistry(tx, options.Schema)
+			if err != nil {
+				return fmt.Errorf("initialize schema-aware DN identity: %w", err)
+			}
+			configuredTargets, err := loadDatabaseTargetsWithNormalizer(
+				tx,
+				identitySchema,
+			)
+			if err != nil {
+				return fmt.Errorf("load OpenLDAP databases for import: %w", err)
+			}
+			target, err = normalizedSelectedDatabaseTarget(target, configuredTargets)
+			if err != nil {
+				return err
+			}
+		}
 		if options.Replace {
 			if !targetSelected {
 				if err := tx.Clear(); err != nil {
@@ -112,7 +129,10 @@ func ImportLDIF(
 			} else {
 				replaceTargets := []databaseTarget{target}
 				if !options.DisableSubordinateGlue {
-					configuredTargets, err := loadDatabaseTargets(tx)
+					configuredTargets, err := loadDatabaseTargetsWithNormalizer(
+						tx,
+						identitySchema,
+					)
 					if err != nil {
 						return fmt.Errorf("load OpenLDAP databases for replacement: %w", err)
 					}
@@ -189,15 +209,29 @@ func ImportLDIF(
 			} else {
 				pendingContent = append(pendingContent, pendingContentEntry{
 					entry: entry,
-					dn:    dn,
 				})
 			}
 			result.Entries++
 		}
 
-		configuredTargets, err := loadDatabaseTargets(tx)
+		if identitySchema == nil {
+			identitySchema, err = importedSchemaRegistry(tx, options.Schema)
+			if err != nil {
+				return fmt.Errorf("initialize schema-aware DN identity: %w", err)
+			}
+		}
+		configuredTargets, err := loadDatabaseTargetsWithNormalizer(
+			tx,
+			identitySchema,
+		)
 		if err != nil {
 			return fmt.Errorf("load imported OpenLDAP databases: %w", err)
+		}
+		if targetSelected && !target.config {
+			target, err = normalizedSelectedDatabaseTarget(target, configuredTargets)
+			if err != nil {
+				return err
+			}
 		}
 		var gluedSubordinates map[string]struct{}
 		if targetSelected && !options.DisableSubordinateGlue {
@@ -211,12 +245,16 @@ func ImportLDIF(
 			}
 		}
 		for _, pending := range pendingContent {
+			identityDN, err := identitySchema.NormalizeDN(pending.entry.DN)
+			if err != nil {
+				return fmt.Errorf("import %q: normalize DN identity: %w", pending.entry.DN, err)
+			}
 			effectiveTarget := target
 			toolTarget := target
 			if !targetSelected {
 				owner, found, err := selectDatabaseTargetForDN(
 					configuredTargets,
-					pending.dn,
+					identityDN,
 				)
 				if err != nil {
 					return fmt.Errorf("import %q: %w", pending.entry.DN, err)
@@ -234,7 +272,7 @@ func ImportLDIF(
 				writeTarget, owned, moreSpecific := selectedDatabaseWriteTarget(
 					target,
 					configuredTargets,
-					pending.dn,
+					identityDN,
 					gluedSubordinates,
 				)
 				if !owned && moreSpecific.name != "" {
@@ -257,12 +295,18 @@ func ImportLDIF(
 					effectiveTarget.name,
 				)
 			}
-			if err := tx.PutIn(effectiveTarget.partition, pending.entry, false); err != nil {
+			if err := storage.PutInWithDN(
+				tx,
+				effectiveTarget.partition,
+				pending.entry,
+				identityDN,
+				false,
+			); err != nil {
 				return fmt.Errorf("import %q: %w", pending.entry.DN, err)
 			}
 			importedContent = append(importedContent, importedContentEntry{
 				partition:  effectiveTarget.partition,
-				dn:         pending.dn,
+				dn:         identityDN,
 				target:     effectiveTarget,
 				toolTarget: toolTarget,
 			})
@@ -343,7 +387,7 @@ func ImportLDIF(
 			}
 		}
 
-		contexts, err := storage.InferNamingContexts(tx)
+		contexts, err := storage.InferNamingContextsWithNormalizer(tx, identitySchema)
 		if err != nil {
 			return err
 		}
@@ -426,7 +470,13 @@ func applyImportedOperationalAttributes(
 		if len(entry.Values("modifyTimestamp")) == 0 {
 			entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 		}
-		if err := tx.PutIn(imported.partition, entry, true); err != nil {
+		if err := storage.PutInWithDN(
+			tx,
+			imported.partition,
+			entry,
+			imported.dn,
+			true,
+		); err != nil {
 			return fmt.Errorf("store operational attributes for %q: %w", entry.DN, err)
 		}
 	}
@@ -542,7 +592,13 @@ func validateImportedContent(
 		); err != nil {
 			return fmt.Errorf("import %q: schema validation: %w", entry.DN, err)
 		}
-		if err := tx.PutIn(imported.partition, entry, true); err != nil {
+		if err := storage.PutInWithDN(
+			tx,
+			imported.partition,
+			entry,
+			imported.dn,
+			true,
+		); err != nil {
 			return fmt.Errorf("store validated entry %q: %w", entry.DN, err)
 		}
 	}
@@ -687,7 +743,23 @@ func updateImportedContextCSN(
 		values[index] = maximum[uint16(sid)]
 	}
 	contextEntry.ReplaceValues("contextCSN", values)
-	if err := tx.PutIn(target.partition, contextEntry, true); err != nil {
+	if target.config {
+		if err := tx.PutIn(target.partition, contextEntry, true); err != nil {
+			return fmt.Errorf("store contextCSN on %q: %w", contextDN.String(), err)
+		}
+		return nil
+	}
+	contextIdentityDN, err := registry.NormalizeDN(contextEntry.DN)
+	if err != nil {
+		return fmt.Errorf("normalize context entry DN %q: %w", contextEntry.DN, err)
+	}
+	if err := storage.PutInWithDN(
+		tx,
+		target.partition,
+		contextEntry,
+		contextIdentityDN,
+		true,
+	); err != nil {
 		return fmt.Errorf("store contextCSN on %q: %w", contextDN.String(), err)
 	}
 	return nil

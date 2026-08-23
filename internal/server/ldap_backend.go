@@ -228,7 +228,7 @@ func ldapBackendDatabaseForMessage(
 			if state.boundDN == "" {
 				return nil
 			}
-			dn, err := directory.ParseDN(state.boundDN)
+			dn, err := parseConnectionDN(state, state.boundDN)
 			if err != nil {
 				return nil
 			}
@@ -256,7 +256,7 @@ func ldapBackendDatabaseForBoundIdentity(state *connectionState) *runtimeDatabas
 	if state.boundDN == "" {
 		return nil
 	}
-	dn, err := directory.ParseDN(state.boundDN)
+	dn, err := parseConnectionDN(state, state.boundDN)
 	if err != nil {
 		return nil
 	}
@@ -392,7 +392,7 @@ func (server *Server) ldapBackendRemote(
 		identityState,
 		database,
 	) {
-		boundDN, err := directory.ParseDN(identityState.boundDN)
+		boundDN, err := parseConnectionDN(identityState, identityState.boundDN)
 		if err == nil {
 			if passthrough, ok := chainPassThroughRemote(identityState, remote, boundDN); ok {
 				return ldapBackendApplyProxiedAuthorization(
@@ -422,11 +422,11 @@ func (server *Server) ldapBackendRemote(
 }
 
 func ldapBackendProxiedAuthorization(state *connectionState) (string, bool) {
-	real, err := directory.ParseDN(state.operationRealDN)
+	real, err := parseConnectionDN(state, state.operationRealDN)
 	if err != nil {
 		return "", false
 	}
-	effective, err := directory.ParseDN(state.boundDN)
+	effective, err := parseConnectionDN(state, state.boundDN)
 	if err != nil || real.Equal(effective) {
 		return "", false
 	}
@@ -460,7 +460,7 @@ func ldapBackendHasReusableSimpleIdentity(
 		len(state.bindCredentials) == 0 {
 		return false
 	}
-	dn, err := directory.ParseDN(state.bindCredentialDN)
+	dn, err := parseConnectionDN(state, state.bindCredentialDN)
 	if err != nil {
 		return false
 	}
@@ -623,7 +623,7 @@ func metaBackendUsesPrivilegedPool(
 		return false
 	}
 	if state.bindCredentialDN != "" &&
-		strings.EqualFold(remote.bind.bindDN, state.bindCredentialDN) &&
+		connectionDNsEqual(state, remote.bind.bindDN, state.bindCredentialDN) &&
 		bytes.Equal(remote.bind.credentials, state.bindCredentials) {
 		return false
 	}
@@ -682,11 +682,11 @@ func updateLDAPBackendSimpleCredentials(
 	if decoded.HasUserIdentity && len(decoded.UserIdentity) > 0 {
 		targetName = string(decoded.UserIdentity)
 	}
-	target, err := directory.ParseDN(targetName)
+	target, err := parseConnectionDN(state, targetName)
 	if err != nil {
 		return
 	}
-	credentialDN, err := directory.ParseDN(state.bindCredentialDN)
+	credentialDN, err := parseConnectionDN(state, state.bindCredentialDN)
 	if err != nil || !target.Equal(credentialDN) {
 		return
 	}

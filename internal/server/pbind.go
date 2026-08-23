@@ -15,11 +15,15 @@ import (
 )
 
 type pbindRuntimeConfiguration struct {
-	providers  []string
-	connection syncConsumerConfig
-	quarantine []syncConsumerRetry
-	health     *pbindQuarantineState
+	providers    []string
+	providerKeys []string
+	connection   syncConsumerConfig
+	quarantine   []syncConsumerRetry
+	health       *pbindQuarantineState
+	identity     *pbindRuntimeIdentity
 }
+
+type pbindRuntimeIdentity struct{}
 
 type pbindQuarantineState struct {
 	mu          sync.Mutex
@@ -38,6 +42,7 @@ func loadPBindRuntimeConfiguration(
 		connection: syncConsumerConfig{
 			securityProperties: defaultSyncConsumerSASLSecurityProperties(),
 		},
+		identity: &pbindRuntimeIdentity{},
 	}
 
 	uri, present, err := singleChainString(entry, "olcDbURI")
@@ -59,7 +64,8 @@ func loadPBindRuntimeConfiguration(
 				parseErr,
 			)
 		}
-		if _, parseErr = chainEndpointKey(parsed); parseErr != nil {
+		providerKey, parseErr := chainEndpointKey(parsed)
+		if parseErr != nil {
 			return pbindRuntimeConfiguration{}, fmt.Errorf(
 				"%s olcDbURI: %w",
 				entry.DN,
@@ -67,6 +73,10 @@ func loadPBindRuntimeConfiguration(
 			)
 		}
 		configuration.providers = append(configuration.providers, provider)
+		configuration.providerKeys = append(
+			configuration.providerKeys,
+			providerKey,
+		)
 	}
 	if len(configuration.providers) == 0 {
 		return pbindRuntimeConfiguration{}, fmt.Errorf(
@@ -193,6 +203,14 @@ func (server *Server) proxySimpleBind(
 	message ldapwire.Message,
 	request ldapwire.BindRequest,
 ) (ldapwire.Result, []ldapwire.Control) {
+	request, failure := preparePBindRequest(
+		server.runtime.Load(),
+		configuration,
+		request,
+	)
+	if failure != nil {
+		return *failure, nil
+	}
 	if !configuration.beginPBindAttempt() {
 		return ldapwire.ResultError(
 			ldapwire.ResultUnavailable,
@@ -226,6 +244,41 @@ func (server *Server) proxySimpleBind(
 		)
 	}
 	return ldapwire.ResultError(ldapwire.ResultUnavailable, diagnostic), nil
+}
+
+func preparePBindRequest(
+	runtime *runtimeState,
+	configuration pbindRuntimeConfiguration,
+	request ldapwire.BindRequest,
+) (ldapwire.BindRequest, *ldapwire.Result) {
+	if runtime == nil {
+		failure := ldapwire.ResultError(
+			ldapwire.ResultUnavailable,
+			"runtime configuration is unavailable",
+		)
+		return ldapwire.BindRequest{}, &failure
+	}
+	target, err := parseRuntimeConnectionDN(runtime, request.Name)
+	if err != nil {
+		failure := ldapwire.ResultError(
+			ldapwire.ResultInvalidDNSyntax,
+			"invalid DN",
+		)
+		return ldapwire.BindRequest{}, &failure
+	}
+	database := databaseForDN(runtime, target)
+	if database == nil || database.pbind == nil ||
+		(configuration.identity != nil &&
+			database.pbind.identity != configuration.identity) {
+		failure := ldapwire.ResultError(
+			ldapwire.ResultUnavailable,
+			"proxy bind target configuration changed",
+		)
+		return ldapwire.BindRequest{}, &failure
+	}
+
+	request.Name = target.String()
+	return request, nil
 }
 
 func (configuration pbindRuntimeConfiguration) beginPBindAttempt() bool {

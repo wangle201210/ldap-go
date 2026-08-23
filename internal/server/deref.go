@@ -309,7 +309,7 @@ func (server *Server) derefResponseControl(
 	if request == nil || len(request.specs) == 0 {
 		return nil, nil
 	}
-	sourceDN, err := directory.ParseDN(entryDN)
+	sourceDN, err := parseRuntimeDN(entryDN, state.runtime.schema)
 	if err != nil {
 		return nil, nil
 	}
@@ -323,6 +323,10 @@ func (server *Server) derefResponseControl(
 	var response *ldapwire.Control
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		databaseReader := readerForDatabase(reader, *sourceDatabase)
+		sourceDN, err = storage.NormalizeReaderDN(databaseReader, sourceDN)
+		if err != nil {
+			return nil
+		}
 		sourceBase, err := databaseReader.Get(sourceDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
@@ -344,7 +348,7 @@ func (server *Server) derefResponseControl(
 			state.runtime,
 			databaseReader,
 			state.boundDN,
-			*sourceDatabase,
+			sourceDatabase,
 			sourceResponse,
 			sourceBase,
 			request.specs,
@@ -370,7 +374,7 @@ func (server *Server) derefEntryResults(
 	runtime *runtimeState,
 	reader storage.Reader,
 	subjectDN string,
-	database runtimeDatabase,
+	database *runtimeDatabase,
 	sourceACL directory.Entry,
 	sourceBase directory.Entry,
 	specs []ldapwire.DerefSpec,
@@ -412,11 +416,15 @@ func (server *Server) derefEntryResults(
 			if err != nil {
 				continue
 			}
+			targetDN, err = storage.NormalizeReaderDN(reader, targetDN)
+			if err != nil {
+				continue
+			}
 			result := ldapwire.DerefResult{
 				DerefAttr:  spec.DerefAttr,
 				DerefValue: string(value),
 			}
-			if derefTargetWithinDatabase(database, targetDN) {
+			if derefTargetUsesDatabase(runtime, database, targetDN) {
 				target, getErr := reader.Get(targetDN)
 				switch {
 				case getErr == nil:
@@ -541,9 +549,17 @@ func equalDerefOptions(left, right []string) bool {
 
 func derefTargetWithinDatabase(database runtimeDatabase, target directory.DN) bool {
 	for _, suffix := range database.suffixes {
-		if suffix.Equal(target) || suffix.AncestorOf(target) {
+		if databaseDNAtOrBelow(database, target, suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+func derefTargetUsesDatabase(
+	runtime *runtimeState,
+	source *runtimeDatabase,
+	target directory.DN,
+) bool {
+	return runtime != nil && source != nil && databaseForDN(runtime, target) == source
 }

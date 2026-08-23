@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -177,12 +178,13 @@ func (server *Server) translucentSearchCandidates(
 			return nil, nil, result, nil, err
 		}
 		references = decodedReferences
-		for _, entry := range entries {
-			dn, err := directory.ParseDN(entry.DN)
-			if err != nil {
-				return nil, nil, result, nil, err
-			}
-			remoteEntries[dn.Key()] = entry.Clone()
+		remoteEntries, err = server.translucentEntryMap(
+			ctx,
+			database,
+			entries,
+		)
+		if err != nil {
+			return nil, nil, result, nil, err
 		}
 	}
 
@@ -198,7 +200,8 @@ func (server *Server) translucentSearchCandidates(
 			return nil, nil, result, nil, err
 		}
 		for _, dn := range localDNs {
-			if _, ok := remoteEntries[dn.Key()]; ok {
+			identityKey := dn.Key()
+			if _, ok := remoteEntries[identityKey]; ok {
 				continue
 			}
 			entry, failure, err := server.translucentRemoteBase(
@@ -220,7 +223,15 @@ func (server *Server) translucentSearchCandidates(
 				return nil, nil, result, failure, nil
 			}
 			if entry != nil {
-				remoteEntries[dn.Key()] = entry.Clone()
+				entryKey, err := server.translucentEntryIdentityKey(
+					ctx,
+					database,
+					entry.DN,
+				)
+				if err != nil {
+					return nil, nil, result, nil, err
+				}
+				remoteEntries[entryKey] = entry.Clone()
 			}
 		}
 	}
@@ -229,8 +240,60 @@ func (server *Server) translucentSearchCandidates(
 	for _, entry := range remoteEntries {
 		entries = append(entries, entry.Clone())
 	}
-	sortTranslucentEntries(entries)
+	if err := server.sortTranslucentEntries(ctx, database, entries); err != nil {
+		return nil, nil, result, nil, err
+	}
 	return entries, references, result, nil, nil
+}
+
+func (server *Server) translucentEntryMap(
+	ctx context.Context,
+	database runtimeDatabase,
+	entries []directory.Entry,
+) (map[string]directory.Entry, error) {
+	result := make(map[string]directory.Entry, len(entries))
+	err := server.viewStorage(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		for _, entry := range entries {
+			dn, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return err
+			}
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return fmt.Errorf(
+					"normalize translucent remote entry DN %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			result[dn.Key()] = entry.Clone()
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (server *Server) translucentEntryIdentityKey(
+	ctx context.Context,
+	database runtimeDatabase,
+	rawDN string,
+) (string, error) {
+	var key string
+	err := server.viewStorage(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		dn, err := directory.ParseDN(rawDN)
+		if err != nil {
+			return fmt.Errorf("parse translucent entry DN %q: %w", rawDN, err)
+		}
+		dn, err = storage.NormalizeReaderDN(tx, dn)
+		if err != nil {
+			return fmt.Errorf("normalize translucent entry DN %q: %w", rawDN, err)
+		}
+		key = dn.Key()
+		return nil
+	})
+	return key, err
 }
 
 func (server *Server) translucentLocalFilterDNs(
@@ -243,12 +306,28 @@ func (server *Server) translucentLocalFilterDNs(
 	var result []directory.DN
 	err := server.viewStorage(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
+		scopeBase, err := storage.NormalizeReaderDN(tx, route.base)
+		if err != nil {
+			return fmt.Errorf(
+				"normalize translucent local filter base %q: %w",
+				route.base.String(),
+				err,
+			)
+		}
 		return tx.ForEach(func(entry directory.Entry) error {
 			dn, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err
 			}
-			if !directory.InScope(route.base, dn, route.scope) {
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return fmt.Errorf(
+					"normalize translucent local entry DN %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			if !directory.InScope(scopeBase, dn, route.scope) {
 				return nil
 			}
 			matches, err := filter.MatchWith(entry, state.runtime.schema)
@@ -264,15 +343,60 @@ func (server *Server) translucentLocalFilterDNs(
 	return result, err
 }
 
-func sortTranslucentEntries(entries []directory.Entry) {
-	for index := 1; index < len(entries); index++ {
-		for current := index; current > 0; current-- {
-			left, leftErr := directory.ParseDN(entries[current-1].DN)
-			right, rightErr := directory.ParseDN(entries[current].DN)
-			if leftErr != nil || rightErr != nil || left.Key() <= right.Key() {
-				break
-			}
-			entries[current-1], entries[current] = entries[current], entries[current-1]
-		}
+func (server *Server) sortTranslucentEntries(
+	ctx context.Context,
+	database runtimeDatabase,
+	entries []directory.Entry,
+) error {
+	type sortableEntry struct {
+		entry    directory.Entry
+		orderKey string
 	}
+
+	sorted := make([]sortableEntry, len(entries))
+	err := server.viewStorage(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		for index, entry := range entries {
+			dn, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf(
+					"parse translucent result entry DN %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return fmt.Errorf(
+					"normalize translucent result entry DN %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			orderKey, err := storage.ReaderDNOrderKey(tx, dn)
+			if err != nil {
+				return fmt.Errorf(
+					"order translucent result entry DN %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			sorted[index] = sortableEntry{entry: entry, orderKey: orderKey}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	sort.SliceStable(sorted, func(left, right int) bool {
+		if sorted[left].orderKey != sorted[right].orderKey {
+			return sorted[left].orderKey < sorted[right].orderKey
+		}
+		return sorted[left].entry.DN < sorted[right].entry.DN
+	})
+	for index := range sorted {
+		entries[index] = sorted[index].entry
+	}
+	return nil
 }

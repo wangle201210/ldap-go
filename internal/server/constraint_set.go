@@ -304,20 +304,20 @@ func (evaluation constraintSetEvaluation) evaluate(
 	case constraintSetLiteral:
 		return newConstraintSet(node.value), nil
 	case constraintSetThis:
-		dn, err := directory.ParseDN(evaluation.target.DN)
+		value, err := evaluation.normalizedDNValue(evaluation.target.DN)
 		if err != nil {
 			return nil, err
 		}
-		return newConstraintSet(dn.Key()), nil
+		return newConstraintSet(value), nil
 	case constraintSetUser:
 		if evaluation.userDN == "" {
 			return constraintValueSet{}, nil
 		}
-		dn, err := directory.ParseDN(evaluation.userDN)
+		value, err := evaluation.normalizedDNValue(evaluation.userDN)
 		if err != nil {
 			return nil, err
 		}
-		return newConstraintSet(dn.Key()), nil
+		return newConstraintSet(value), nil
 	case constraintSetChase:
 		base, err := evaluation.evaluate(node.left)
 		if err != nil {
@@ -329,13 +329,13 @@ func (evaluation constraintSetEvaluation) evaluate(
 		if err != nil {
 			return nil, err
 		}
-		return constraintSetParentsAtLevel(base, node.level), nil
+		return evaluation.parentsAtLevel(base, node.level), nil
 	case constraintSetParents:
 		base, err := evaluation.evaluate(node.left)
 		if err != nil {
 			return nil, err
 		}
-		return allConstraintSetParents(base), nil
+		return evaluation.allParents(base), nil
 	case constraintSetUnion,
 		constraintSetIntersection,
 		constraintSetConcatenation:
@@ -351,6 +351,21 @@ func (evaluation constraintSetEvaluation) evaluate(
 	default:
 		return nil, fmt.Errorf("unknown constraint set node %d", node.kind)
 	}
+}
+
+func (evaluation constraintSetEvaluation) normalizeDN(raw string) (directory.DN, error) {
+	if evaluation.runtime != nil && evaluation.runtime.schema != nil {
+		return evaluation.runtime.schema.NormalizeDN(raw)
+	}
+	return directory.ParseDN(raw)
+}
+
+func (evaluation constraintSetEvaluation) normalizedDNValue(raw string) (string, error) {
+	dn, err := evaluation.normalizeDN(raw)
+	if err != nil {
+		return "", err
+	}
+	return dn.NormalizedString(), nil
 }
 
 func (evaluation constraintSetEvaluation) chase(
@@ -395,14 +410,14 @@ func (evaluation constraintSetEvaluation) gather(
 	if strings.HasPrefix(strings.ToLower(rawDN), "ldap:///") {
 		return evaluation.gatherLDAPURL(rawDN, attribute)
 	}
-	dn, err := directory.ParseDN(rawDN)
+	dn, err := evaluation.normalizeDN(rawDN)
 	if err != nil {
 		return nil, nil
 	}
 	if strings.EqualFold(attribute, "entryDN") {
-		return []string{dn.Key()}, nil
+		return []string{dn.NormalizedString()}, nil
 	}
-	targetDN, err := directory.ParseDN(evaluation.target.DN)
+	targetDN, err := evaluation.normalizeDN(evaluation.target.DN)
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +458,10 @@ func (evaluation constraintSetEvaluation) gatherLDAPURL(
 	rawURL,
 	attribute string,
 ) ([]string, error) {
-	parsed, err := parseConstraintLDAPURL(rawURL)
+	parsed, err := parseConstraintLDAPURLWithNormalizer(
+		rawURL,
+		evaluation.runtime.schema,
+	)
 	if err != nil || parsed.extensions != "" || parsed.base == nil {
 		return nil, nil
 	}
@@ -460,6 +478,10 @@ func (evaluation constraintSetEvaluation) gatherLDAPURL(
 	}
 	requested := append(append([]string(nil), parsed.attributes...), attribute)
 	reader := readerForDatabase(evaluation.reader, *database)
+	base, err := storage.NormalizeReaderDN(reader, *parsed.base)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]string, 0)
 	err = reader.ForEach(func(entry directory.Entry) error {
 		if evaluation.runtime.schema.EntryHasObjectClass(entry, "referral") ||
@@ -475,7 +497,11 @@ func (evaluation constraintSetEvaluation) gatherLDAPURL(
 		if err != nil {
 			return err
 		}
-		if !directory.InScope(*parsed.base, dn, parsed.scope) {
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return err
+		}
+		if !directory.InScope(base, dn, parsed.scope) {
 			return nil
 		}
 		matches, err := filter.MatchWith(entry, evaluation.runtime.schema)
@@ -484,7 +510,7 @@ func (evaluation constraintSetEvaluation) gatherLDAPURL(
 		}
 		for _, description := range requested {
 			if strings.EqualFold(description, "entryDN") {
-				result = append(result, dn.Key())
+				result = append(result, dn.NormalizedString())
 				continue
 			}
 			if _, found := evaluation.runtime.schema.AttributeType(description); !found {
@@ -555,10 +581,13 @@ func joinConstraintSets(
 	return result, nil
 }
 
-func constraintSetParentsAtLevel(base constraintValueSet, level int) constraintValueSet {
+func (evaluation constraintSetEvaluation) parentsAtLevel(
+	base constraintValueSet,
+	level int,
+) constraintValueSet {
 	result := make(constraintValueSet)
 	for rawDN := range base {
-		dn, err := directory.ParseDN(rawDN)
+		dn, err := evaluation.normalizeDN(rawDN)
 		if err != nil {
 			continue
 		}
@@ -569,20 +598,22 @@ func constraintSetParentsAtLevel(base constraintValueSet, level int) constraintV
 			}
 			dn = parent
 		}
-		result[dn.Key()] = struct{}{}
+		result[dn.NormalizedString()] = struct{}{}
 	}
 	return result
 }
 
-func allConstraintSetParents(base constraintValueSet) constraintValueSet {
+func (evaluation constraintSetEvaluation) allParents(
+	base constraintValueSet,
+) constraintValueSet {
 	result := make(constraintValueSet)
 	for rawDN := range base {
-		dn, err := directory.ParseDN(rawDN)
+		dn, err := evaluation.normalizeDN(rawDN)
 		if err != nil {
 			continue
 		}
 		for {
-			result[dn.Key()] = struct{}{}
+			result[dn.NormalizedString()] = struct{}{}
 			parent, ok := dn.Parent()
 			if !ok {
 				break

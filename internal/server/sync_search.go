@@ -237,7 +237,15 @@ func (server *Server) prepareSyncRefresh(
 		syncSearch.refreshDeletes = true
 		syncSearch.deleted = make(map[ldapwire.SyncUUID]openLDAPCSN)
 		for _, change := range replay {
-			if syncSearchBaseChanged(syncSearch, change) {
+			baseChanged, baseErr := syncSearchBaseChanged(
+				state.runtime,
+				syncSearch,
+				change,
+			)
+			if baseErr != nil {
+				return nil, baseErr
+			}
+			if baseChanged {
 				result := ldapwire.ResultError(
 					ldapwire.ResultSyncRefreshRequired,
 					errSyncSearchBaseChanged.Error(),
@@ -809,12 +817,16 @@ func (server *Server) persistSyncSearch(
 				}
 				continue
 			}
+			entryCookie := composeOpenLDAPSyncCookie(
+				syncSearch.cookie.rid,
+				syncCSNState{change.csn.serverID: change.csn},
+			)
 			control := syncStateResponseControl(
 				syncSearch.control.critical,
 				ldapwire.SyncStateValue{
 					State:     syncState,
 					EntryUUID: uuid,
-					Cookie:    cookie,
+					Cookie:    entryCookie,
 					HasCookie: true,
 				},
 			)
@@ -854,16 +866,20 @@ func (server *Server) syncChangeResponse(
 	bool,
 	error,
 ) {
-	if syncSearchBaseChanged(syncSearch, change) {
+	runtime := server.runtime.Load()
+	if runtime == nil {
+		runtime = state.runtime
+	}
+	baseChanged, err := syncSearchBaseChanged(runtime, syncSearch, change)
+	if err != nil {
+		return directory.Entry{}, 0, ldapwire.SyncUUID{}, false, err
+	}
+	if baseChanged {
 		return directory.Entry{},
 			0,
 			ldapwire.SyncUUID{},
 			false,
 			errSyncSearchBaseChanged
-	}
-	runtime := server.runtime.Load()
-	if runtime == nil {
-		runtime = state.runtime
 	}
 	var (
 		beforeEntry directory.Entry
@@ -873,7 +889,7 @@ func (server *Server) syncChangeResponse(
 		afterUUID   ldapwire.SyncUUID
 		afterMatch  bool
 	)
-	err := server.config.Store.View(
+	err = server.config.Store.View(
 		ctx,
 		func(reader storage.Reader) error {
 			var err error
@@ -928,42 +944,57 @@ func (server *Server) syncChangeResponse(
 }
 
 func syncSearchBaseChanged(
+	runtime *runtimeState,
 	syncSearch *syncSearchContext,
 	change syncChange,
-) bool {
+) (bool, error) {
 	if !change.hasBefore {
-		return false
+		return false, nil
 	}
-	beforeDN, err := directory.ParseDN(change.before.DN)
+	beforeDN, err := normalizeSyncSearchDN(runtime, change.before.DN)
 	if err != nil {
-		return false
+		return false, err
 	}
 	var afterDN directory.DN
 	afterAtSameDN := false
 	if change.hasAfter {
-		afterDN, err = directory.ParseDN(change.after.DN)
-		afterAtSameDN = err == nil && beforeDN.Equal(afterDN)
+		afterDN, err = normalizeSyncSearchDN(runtime, change.after.DN)
+		if err != nil {
+			return false, err
+		}
+		afterAtSameDN = beforeDN.Equal(afterDN)
 	}
 	if afterAtSameDN {
-		return false
+		return false, nil
 	}
 	for _, route := range syncSearch.routes {
 		if route.partition != change.partition {
 			continue
 		}
-		routeBefore := route.localDN(beforeDN)
+		routeBefore, err := route.localDN(runtime, beforeDN)
+		if err != nil {
+			return false, err
+		}
+		routeBase, err := normalizeSyncSearchDN(runtime, route.base.String())
+		if err != nil {
+			return false, err
+		}
 		routeAfterAtSameDN := false
 		if change.hasAfter {
-			routeAfterAtSameDN = routeBefore.Equal(route.localDN(afterDN))
+			routeAfter, mapErr := route.localDN(runtime, afterDN)
+			if mapErr != nil {
+				return false, mapErr
+			}
+			routeAfterAtSameDN = routeBefore.Equal(routeAfter)
 		}
 		if routeAfterAtSameDN {
 			continue
 		}
-		if routeBefore.Equal(route.base) || routeBefore.AncestorOf(route.base) {
-			return true
+		if routeBefore.Equal(routeBase) || routeBefore.AncestorOf(routeBase) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (server *Server) syncEventEntry(
@@ -975,30 +1006,24 @@ func (server *Server) syncEventEntry(
 	partition string,
 	entry directory.Entry,
 ) (directory.Entry, ldapwire.SyncUUID, bool, error) {
-	storedDN, err := directory.ParseDN(entry.DN)
+	databaseIndex, err := syncSearchDatabaseIndexForEntry(
+		runtime,
+		syncSearch,
+		partition,
+		entry.DN,
+	)
 	if err != nil {
 		return directory.Entry{}, ldapwire.SyncUUID{}, false, err
 	}
-	databaseIndex := -1
-	for _, route := range syncSearch.routes {
-		if route.partition != partition {
-			continue
-		}
-		localDN := route.localDN(storedDN)
-		if directory.InScope(route.base, localDN, route.scope) {
-			databaseIndex = route.databaseIndex
-			if databaseIndex >= 0 && databaseIndex < len(runtime.databases) &&
-				runtime.databases[databaseIndex].rwm != nil {
-				entry, err = runtime.databases[databaseIndex].rwm.mapEntryToLocal(entry)
-				if err != nil {
-					return directory.Entry{}, ldapwire.SyncUUID{}, false, err
-				}
-			}
-			break
-		}
-	}
 	if databaseIndex < 0 || databaseIndex >= len(runtime.databases) {
 		return directory.Entry{}, ldapwire.SyncUUID{}, false, nil
+	}
+
+	if runtime.databases[databaseIndex].rwm != nil {
+		entry, err = runtime.databases[databaseIndex].rwm.mapEntryToLocal(entry)
+		if err != nil {
+			return directory.Entry{}, ldapwire.SyncUUID{}, false, err
+		}
 	}
 
 	tx := readerForDatabase(reader, runtime.databases[databaseIndex])
@@ -1081,11 +1106,58 @@ func (server *Server) syncEventEntry(
 	return selected, uuid, true, nil
 }
 
-func (route syncSearchRoute) localDN(dn directory.DN) directory.DN {
-	if route.rwm != nil {
-		if local, err := route.rwm.mapDNToLocal(dn); err == nil {
-			return local
+func syncSearchDatabaseIndexForEntry(
+	runtime *runtimeState,
+	syncSearch *syncSearchContext,
+	partition string,
+	entryDN string,
+) (int, error) {
+	storedDN, err := normalizeSyncSearchDN(runtime, entryDN)
+	if err != nil {
+		return -1, err
+	}
+	for _, route := range syncSearch.routes {
+		if route.partition != partition {
+			continue
+		}
+		localDN, err := route.localDN(runtime, storedDN)
+		if err != nil {
+			return -1, err
+		}
+		base, err := normalizeSyncSearchDN(runtime, route.base.String())
+		if err != nil {
+			return -1, err
+		}
+		if directory.InScope(base, localDN, route.scope) {
+			return route.databaseIndex, nil
 		}
 	}
-	return dn
+	return -1, nil
+}
+
+func normalizeSyncSearchDN(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	if runtime != nil && runtime.schema != nil {
+		return runtime.schema.NormalizeDN(value)
+	}
+	return directory.ParseDN(value)
+}
+
+func (route syncSearchRoute) localDN(
+	runtime *runtimeState,
+	dn directory.DN,
+) (directory.DN, error) {
+	dn, err := normalizeSyncSearchDN(runtime, dn.String())
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if route.rwm != nil {
+		dn, err = route.rwm.mapDNToLocal(dn)
+		if err != nil {
+			return directory.DN{}, err
+		}
+	}
+	return normalizeSyncSearchDN(runtime, dn.String())
 }

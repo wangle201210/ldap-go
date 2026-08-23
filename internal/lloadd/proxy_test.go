@@ -277,8 +277,12 @@ func TestNewProxyLDAPSRequiresAndClonesTLSConfig(t *testing.T) {
 	}
 	config.Tiers[0].Backends[0].URI = "ldap://ldap.example.com:389"
 	config.Tiers[0].Backends[0].StartTLS = true
+	if _, err := NewProxy(config); err != nil {
+		t.Fatalf("NewProxy() rejected backend StartTLS: %v", err)
+	}
+	config.BackendTLS = nil
 	if _, err := NewProxy(config); err == nil {
-		t.Fatal("NewProxy() accepted unimplemented backend StartTLS")
+		t.Fatal("NewProxy() accepted backend StartTLS without a TLS configuration")
 	}
 }
 
@@ -448,7 +452,7 @@ func TestProxyRejectRestrictionDoesNotReachUpstream(t *testing.T) {
 	}
 }
 
-func TestProxyRejectsUnsupportedLocalStartTLS(t *testing.T) {
+func TestProxyReturnsUnavailableForUnconfiguredLocalStartTLS(t *testing.T) {
 	var extendedRequests atomic.Int64
 	upstream := startProxyTestUpstream(t, "unused", func(_ net.Conn, frame Frame) bool {
 		if frame.ProtocolTag == TagExtendedRequest {
@@ -489,7 +493,7 @@ func TestProxyRejectsUnsupportedLocalStartTLS(t *testing.T) {
 		t.Fatalf("read StartTLS response: %v", err)
 	}
 	if response.MessageID != messageID || response.ResultCode == nil ||
-		*response.ResultCode != ResultCode(ldapwire.ResultUnwillingToPerform) {
+		*response.ResultCode != ResultCode(ldapwire.ResultUnavailable) {
 		t.Fatalf("StartTLS response = %s", response)
 	}
 	if extendedRequests.Load() != 0 {

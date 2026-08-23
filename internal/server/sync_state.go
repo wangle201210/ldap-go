@@ -615,12 +615,21 @@ func withSyncProviderContextCSNs(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) (directory.Entry, error) {
-	entryDN, err := directory.ParseDN(entry.DN)
+	entryDN, err := normalizeSyncStateDN(database, entry.DN)
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	if len(database.suffixes) == 0 ||
-		!database.suffixes[0].Equal(entryDN) {
+	if len(database.suffixes) == 0 {
+		return entry, nil
+	}
+	suffix, err := normalizeSyncStateDN(
+		database,
+		database.suffixes[0].String(),
+	)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if !suffix.Equal(entryDN) {
 		return entry, nil
 	}
 	if database.syncProvider {
@@ -645,6 +654,36 @@ func withSyncProviderContextCSNs(
 		)
 	}
 	return entry, nil
+}
+
+func normalizeSyncStateDN(
+	database runtimeDatabase,
+	value string,
+) (directory.DN, error) {
+	if database.dnNormalizer != nil &&
+		databaseUsesSchemaAwareContentStorage(database) {
+		return parseRuntimeDN(value, database.dnNormalizer)
+	}
+	return directory.ParseDN(value)
+}
+
+func normalizeSyncStateEntry(
+	database runtimeDatabase,
+	entry *directory.Entry,
+) (*directory.Entry, error) {
+	if entry == nil {
+		return nil, nil
+	}
+	cloned := entry.Clone()
+	dn, err := normalizeSyncStateDN(database, cloned.DN)
+	if err != nil {
+		return nil, err
+	}
+	if database.dnNormalizer != nil &&
+		databaseUsesSchemaAwareContentStorage(database) {
+		cloned.DN = dn.String()
+	}
+	return &cloned, nil
 }
 
 func syncContextCSNs(
@@ -813,7 +852,7 @@ func updateSyncCheckpoint(
 		time.Duration(database.syncCheckpointMinutes) * time.Minute,
 	))
 	if dueOperations || dueTime {
-		tx := storage.WriterInPartition(writer, database.partition)
+		tx := writerForDatabase(writer, database)
 		suffix, getErr := tx.Get(database.suffixes[0])
 		switch {
 		case getErr == nil:
@@ -914,6 +953,15 @@ func (server *Server) recordSyncChangeCSN(
 	provider := effectiveSyncProviderDatabase(runtime, database)
 	if provider == nil {
 		return nil, nil
+	}
+	var err error
+	before, err = normalizeSyncStateEntry(database, before)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sync change before DN: %w", err)
+	}
+	after, err = normalizeSyncStateEntry(database, after)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sync change after DN: %w", err)
 	}
 	if err := updateSyncChangeTombstones(
 		writer,
@@ -1022,6 +1070,8 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	server.prepareMetaTransportLifecycle(previous, runtime)
 	server.configureMetaTransportOwners(metaBackendTransportOwners(runtime))
 	server.syncChanges.configure(runtime)
+	clearPcacheBindStates(previous)
+	clearPcacheBindStates(runtime)
 	server.runtime.Store(runtime)
 	server.retireSQLBackends(previous, runtime)
 	server.syncConsumers.configure(runtime)

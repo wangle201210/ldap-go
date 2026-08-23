@@ -34,15 +34,28 @@ make full
 ```
 
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
-`ldap`, `meta`, `null`, `relay`, `sock`, and `mdb` backends, the required overlays,
+`ldap`, `meta`, `null`, `relay`, `sock`, `sql`, and `mdb` backends, the required overlays,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
 OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, `pw-netscape`,
-`pw-radius`, and `pw-totp` modules against that build. It rejects
-reference-test skips, runs the
+`pw-radius`, and `pw-totp` modules against that build. It rejects unexpected
+reference-test skips while allowing explicit platform-only cases, runs the
 Go race detector, and executes
 the parser fuzz suite. The tagged source is cached outside the repository and an explicit
 checkout is never reset or switched. See [docs/testing.md](docs/testing.md) for
 the `libltdl` dependency, dependency-prefix, and build-cache options.
+When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
+include and library paths. Its live SQLite ODBC differential passes
+Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
+including No-Op, rollback failures, and a complete write lifecycle.
+
+Content DNs use a schema-aware v2 identity derived from each naming
+attribute's equality rule. Attribute aliases and numeric OIDs converge,
+case-exact and case-ignore values remain distinct where required, and
+multi-valued RDN AVAs are validated, ordered, and rendered canonically. Memory
+and bbolt stores lazily upgrade legacy v1 folded keys during writes; ambiguous
+legacy/v2 duplicates fail closed. The OpenLDAP `cn=config` partition retains
+its separate legacy configuration-DN rules. This is a tested migration layer,
+not a claim that arbitrary OpenLDAP backend files are interchangeable.
 
 ## Current runnable milestone
 
@@ -85,6 +98,18 @@ credentials and authorization rules through `acl-bind`/IDAssert, including
 group and local LDAP-URL rules; native outbound SASL assertion carries the
 mapped authorization ID.
 
+The database-local `pcache` overlay supports schema-aware equality,
+substring, unordered AND/OR, and extensible-filter containment, including
+attribute and matching-rule aliases. Canonical query keys prevent equivalent
+DN or filter spellings from creating distinct cache entries. The implemented
+`olcPcacheBind` subset caches password verifiers after a successful remote
+Bind, honors TTL/offline and size limits, reuses query state on compatible
+reloads, clears verifiers on every successful runtime reload, preserves the active
+cache when a candidate configuration rolls back, and never stores the
+cleartext credential. Private cache-database management,
+all advanced controls, and arbitrary overlay-order combinations remain out of
+scope.
+
 An imported `olcDatabase=sock` delegates Bind, Search, Compare, Add, Modify,
 ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
 OpenLDAP's line-oriented back-sock protocol. Each operation gets a fresh
@@ -108,14 +133,19 @@ explicit and disconnect/re-Bind Abandon targets, and implements RFC 3909 Cancel
 by pinning it to the target's physical upstream while rewriting both message
 IDs. Cancel remains accounted while bypassing a full target connection's
 ordinary pending limit. The proxy also supports both OpenLDAP LDAPI URL forms
-and recovers backend connections. Its standalone configuration
-parser and runtime pass pinned-source and live OpenLDAP 2.6.13 differential
-tests. Unsafe unsupported paths fail explicitly: service Bind requires
-ProxyAuthz, while client StartTLS and SASL EXTERNAL are rejected.
-Client-facing LDAPS/StartTLS/PROXY v2, config-driven upstream TLS, full SASL
-identity/security-layer handling, embedded `cn=config`/monitor mode, dynamic
-topology, and the historical daemon surface are not yet implemented; see the
-compatibility matrix for the exact boundary.
+and recovers backend connections. Client listeners support LDAP StartTLS and
+implicit LDAPS with one configured certificate. Upstream connections support
+LDAPS and optional/critical StartTLS with CA, hostname/SAN, client-certificate,
+protocol, cipher, curve, and CRL policy validation. Service authentication can
+use Simple Bind or auth-only PLAIN, CRAM-MD5, DIGEST-MD5, and
+SCRAM-SHA-1/256/512 before ordinary traffic, and upstream TCP keepalive plus
+Linux `TCP_USER_TIMEOUT` are applied before TLS. Its standalone configuration
+parser and runtime pass package/race tests, pinned-source contracts, and the
+existing live OpenLDAP 2.6.13 differential subset. Service Bind still requires
+ProxyAuthz, and client SASL EXTERNAL is rejected rather than forwarded with an
+identity the proxy cannot safely restore. GSSAPI, SASL security layers and
+channel binding, client PROXY v2, dynamic topology, embedded
+`cn=config`/`cn=monitor`, and complete lloadd daemon parity remain unsupported.
 
 ```sh
 go run ./cmd/ldap-go lloadd -f ./lloadd.conf -test-config
@@ -379,6 +409,10 @@ dynamic suffix `contextCSN` Search/Compare/read-control semantics,
 `olcSpNoPresent`, `olcSpReloadHint`, Abandon/Cancel, server-side Sort/VLV
 composition, and OpenLDAP-style syncprov coverage of glued subordinate
 databases. OpenLDAP 2.6.13 `ldapsearch` interoperability also passes.
+Provider base/scope routing, context entries, checkpoints, tombstones, and
+session-log DNs use the same schema-aware identity as ordinary operations;
+Memory and bbolt tests cover case-exact isolation, case-ignore equivalence,
+attribute aliases/OIDs, and multi-AVA DNs.
 OpenLDAP `olcServerID` drives local CSN SIDs, and writable
 `olcMultiProvider`/`olcMirrorMode` databases relay remote changes with
 whole-entry/delete CSN conflict protection and durable UUID tombstones. A
@@ -501,8 +535,12 @@ The built-in LDAP client commands accept generic `-e`/`-E` controls with
 critical, absent, empty, string, Base64, and file-backed values on applicable
 operations. `-C` enables anonymous referral chasing with DN/scope rewriting,
 control preservation, loop detection, and the OpenLDAP default five-hop limit.
-SASL client authentication and the complete historical ldap-tools option set
-remain outside this subset.
+They also implement auth-only `-Y` SASL for PLAIN, CRAM-MD5, DIGEST-MD5,
+SCRAM-SHA-1/256/512, and EXTERNAL, with `-U`, `-X`, and `-R`, strict server
+proof validation, and client certificates for EXTERNAL over LDAPS or StartTLS.
+GSSAPI, SCRAM-PLUS/channel binding, SASL security layers, interactive SASL
+callbacks, and the complete historical ldap-tools option set remain outside
+this subset.
 
 ```sh
 go run ./cmd/ldap-go import \
@@ -585,6 +623,14 @@ makes a verified certificate mandatory. For example, append:
 ```sh
 -tls-client-ca ./client-ca.crt -tls-require-client-cert
 ```
+
+When transport TLS is not supplied explicitly on the command line/API, an
+imported global `cn=config` entry can provide certificate, private-key, CA,
+client-verification, minimum-protocol, and exactly mapped cipher settings via
+the supported `olcTLS*` attributes. A successful online change atomically
+publishes a new context for later StartTLS and LDAPS handshakes; existing
+connections continue on their original context. Invalid or unsupported TLS
+directives roll back instead of weakening the active configuration.
 
 GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
 

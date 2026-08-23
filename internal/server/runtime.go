@@ -20,6 +20,7 @@ type runtimeState struct {
 	revision            uint64
 	schema              *schema.Registry
 	access              *acl.Policy
+	secureTransport     SecureTransport
 	databases           []runtimeDatabase
 	serverID            uint16
 	allows              allowsRuntimeConfiguration
@@ -53,6 +54,13 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if _, err := schema.LoadOpenLDAPConfigReader(reader, registry); err != nil {
 		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
 	}
+	if err := validateOpenLDAPModuleConfiguration(reader); err != nil {
+		return nil, fmt.Errorf("validate OpenLDAP module configuration: %w", err)
+	}
+	secureTransport, err := server.loadGlobalTLSConfiguration(reader)
+	if err != nil {
+		return nil, fmt.Errorf("load global TLS configuration: %w", err)
+	}
 
 	access := server.config.AccessPolicy
 	if access == nil {
@@ -66,11 +74,14 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, fmt.Errorf("validate OpenLDAP ACL configuration: %w", err)
 	}
 
-	databases, err := loadRuntimeDatabasesReader(reader)
+	databases, err := loadRuntimeDatabasesReaderWithNormalizer(reader, registry)
 	if err != nil {
 		return nil, err
 	}
 	for index := range databases {
+		if databaseUsesLocalContentStorage(databases[index]) {
+			databases[index].dnNormalizer = registry
+		}
 		if databases[index].sqlBackend != nil {
 			databases[index].sqlBackend.setRuntime(registry, server.config.SQLDriver, server)
 		}
@@ -236,7 +247,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
-	defaultSearchBase, err := loadDefaultSearchBase(reader)
+	defaultSearchBase, err := loadDefaultSearchBaseWithNormalizer(reader, registry)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +271,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 			databases,
 			server.config.RootDN,
 			server.config.RootPassword,
+			registry,
 		); err != nil {
 			return nil, err
 		}
@@ -267,6 +279,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	runtime := &runtimeState{
 		schema:              registry,
 		access:              access,
+		secureTransport:     secureTransport,
 		databases:           databases,
 		serverID:            serverID,
 		allows:              allows,
@@ -456,7 +469,7 @@ func updateOperationPrecondition(
 	if database := databaseForDN(runtime, target); database != nil && database.shadow {
 		if database.updateDN != nil && boundDN != "" {
 			bound, err := directory.ParseDN(boundDN)
-			if err == nil && database.updateDN.Equal(bound) {
+			if err == nil && databaseDNEqual(*database, *database.updateDN, bound) {
 				return nil
 			}
 		}

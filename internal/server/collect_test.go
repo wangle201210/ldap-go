@@ -50,7 +50,7 @@ func TestCollectRuntimeConfigurationParsing(t *testing.T) {
 	}
 	gotBases := make([]string, len(configuration.rules))
 	for index, rule := range configuration.rules {
-		gotBases[index] = rule.base.Key()
+		gotBases[index] = rule.base.String()
 	}
 	wantBases := []string{
 		"ou=team,ou=people,dc=example,dc=com",
@@ -105,7 +105,10 @@ func TestCollectRuntimeConfigurationParsing(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := entry.Clone()
 			candidate.ReplaceValues(test.attr.Description, test.attr.Values)
-			_, err := loadCollectRuntimeConfiguration(candidate)
+			configuration, err := loadCollectRuntimeConfiguration(candidate)
+			if err == nil {
+				err = validateCollectSchema(registry, &configuration)
+			}
 			result, ok := collectConfigurationResult(err)
 			if !ok || result.Code != test.code {
 				t.Fatalf("configuration error = %v, result %#v", err, result)

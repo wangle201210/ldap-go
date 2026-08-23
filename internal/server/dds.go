@@ -495,7 +495,7 @@ func (server *Server) validateDDSRename(
 
 func databaseHasExactSuffix(database runtimeDatabase, dn directory.DN) bool {
 	for _, suffix := range database.suffixes {
-		if suffix.Equal(dn) {
+		if databaseDNEqual(database, suffix, dn) {
 			return true
 		}
 	}
@@ -577,6 +577,18 @@ func (server *Server) handleDynamicRefresh(
 		return err
 	}
 	defer seqmodRelease()
+	dn, err = normalizeRuntimeDatabaseDN(*database, dn)
+	if err != nil {
+		return server.writeDynamicRefreshResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultInvalidDNSyntax,
+				"invalid DN",
+			),
+			0,
+		)
+	}
 	if len(retcodeConfigurationsForDatabase(state.runtime.databases, *database)) > 0 {
 		retcodeTargetExists, err := server.retcodeStoredEntryExists(ctx, *database, dn)
 		if err != nil {
@@ -979,6 +991,10 @@ func (server *Server) expireDDSDatabase(
 			if err != nil {
 				return err
 			}
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return err
+			}
 			expired = append(expired, expiredEntry{dn: dn, entry: entry})
 			return nil
 		}); err != nil {
@@ -996,7 +1012,12 @@ func (server *Server) expireDDSDatabase(
 				if err != nil {
 					return err
 				}
-				if candidate.dn.AncestorOf(dn) {
+				dn, err = storage.NormalizeReaderDN(tx, dn)
+				if err != nil {
+					return err
+				}
+				if !databaseDNEqual(*database, candidate.dn, dn) &&
+					databaseDNAtOrBelow(*database, dn, candidate.dn) {
 					hasChildren = true
 				}
 				return nil

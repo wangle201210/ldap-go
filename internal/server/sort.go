@@ -47,12 +47,14 @@ type serverSideSortContext struct {
 }
 
 type searchCandidate struct {
-	selected directory.Entry
-	readable directory.Entry
-	route    int
-	dn       string
-	values   []sortValue
-	syncUUID ldapwire.SyncUUID
+	selected    directory.Entry
+	readable    directory.Entry
+	route       int
+	dn          string
+	cursorKey   string
+	identityKey string
+	values      []sortValue
+	syncUUID    ldapwire.SyncUUID
 }
 
 type sortValue struct {
@@ -233,6 +235,26 @@ func sortSearchCandidates(
 			}
 		}
 	}
+	normalizedDNs := make([]string, len(candidates))
+	cursorKeys := make([]string, len(candidates))
+	identityKeys := make([]string, len(candidates))
+	for index := range candidates {
+		dn, cursorKey, identityKey, err := normalizedSortCandidateIdentity(
+			registry,
+			candidates[index],
+		)
+		if err != nil {
+			return err
+		}
+		normalizedDNs[index] = dn
+		cursorKeys[index] = cursorKey
+		identityKeys[index] = identityKey
+	}
+	for index := range candidates {
+		candidates[index].dn = normalizedDNs[index]
+		candidates[index].cursorKey = cursorKeys[index]
+		candidates[index].identityKey = identityKeys[index]
+	}
 	if len(candidates) < 2 {
 		return nil
 	}
@@ -255,6 +277,25 @@ func sortSearchCandidates(
 		return comparison < 0
 	})
 	return compareErr
+}
+
+func normalizedSortCandidateIdentity(
+	registry *schema.Registry,
+	candidate searchCandidate,
+) (string, string, string, error) {
+	dn, err := registry.NormalizeDN(candidate.dn)
+	if err != nil {
+		return "", "", "", err
+	}
+	cursorKey := candidate.cursorKey
+	if cursorKey == "" {
+		legacy, parseErr := directory.ParseDN(candidate.dn)
+		if parseErr != nil {
+			return "", "", "", parseErr
+		}
+		cursorKey = legacy.Key() + "\x00" + dn.Key()
+	}
+	return dn.NormalizedString(), cursorKey, dn.Key(), nil
 }
 
 func leastSortValue(
@@ -337,6 +378,24 @@ func compareSearchCandidates(
 			}
 			return comparison, nil
 		}
+	}
+	if left.route < right.route {
+		return -1, nil
+	}
+	if left.route > right.route {
+		return 1, nil
+	}
+	if left.cursorKey < right.cursorKey {
+		return -1, nil
+	}
+	if left.cursorKey > right.cursorKey {
+		return 1, nil
+	}
+	if left.dn < right.dn {
+		return -1, nil
+	}
+	if left.dn > right.dn {
+		return 1, nil
 	}
 	return 0, nil
 }

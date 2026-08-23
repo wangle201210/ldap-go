@@ -148,9 +148,7 @@ func New(config Config) (*Server, error) {
 		}
 		secureTransport = standardTLSTransport{config: config.TLSConfig.Clone()}
 	}
-	if config.ImplicitTLS && secureTransport == nil {
-		return nil, errors.New("implicit TLS requires a secure transport")
-	}
+	staticSecureTransport := secureTransport != nil
 	config.ListenerURLs = append([]string(nil), config.ListenerURLs...)
 	if secureTransport != nil && config.SecureHandshakeTimeout <= 0 {
 		config.SecureHandshakeTimeout = defaultSecureHandshakeTimeout
@@ -194,12 +192,25 @@ func New(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if server.secureTransport == nil {
+		server.secureTransport = runtimeTLSTransport{server: server}
+	}
+	if server.config.ImplicitTLS &&
+		!staticSecureTransport &&
+		runtime.secureTransport == nil {
+		return nil, errors.New("implicit TLS requires a secure transport")
+	}
+	if server.secureTransport != nil &&
+		server.config.SecureHandshakeTimeout <= 0 {
+		server.config.SecureHandshakeTimeout = defaultSecureHandshakeTimeout
+	}
 	if err := server.validateSQLBackends(context.Background(), runtime); err != nil {
 		return nil, fmt.Errorf("initialize SQL backend: %w", err)
 	}
-	if err := normalizeDefaultSearchBaseConfiguration(
+	if err := normalizeDefaultSearchBaseConfigurationWithNormalizer(
 		context.Background(),
 		config.Store,
+		runtime.schema,
 	); err != nil {
 		return nil, fmt.Errorf("normalize default search base: %w", err)
 	}
@@ -910,7 +921,7 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
-	requestDN, err := directory.ParseDN(request.Name)
+	requestDN, err := parseRuntimeConnectionDN(state.runtime, request.Name)
 	if err != nil {
 		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
@@ -1046,6 +1057,7 @@ func (server *Server) handleBind(
 		request,
 		requestDN,
 	); handled {
+		canonicalizeBindEntryState(state, requestDN)
 		return err
 	}
 	if handled, err := server.tryMetaBackendBind(
@@ -1056,6 +1068,18 @@ func (server *Server) handleBind(
 		request,
 		requestDN,
 	); handled {
+		canonicalizeBindEntryState(state, requestDN)
+		return err
+	}
+	if handled, err := server.tryPcacheBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		canonicalizeBindEntryState(state, requestDN)
 		return err
 	}
 	if handled, err := server.tryLDAPBackendBind(
@@ -1066,6 +1090,7 @@ func (server *Server) handleBind(
 		request,
 		requestDN,
 	); handled {
+		canonicalizeBindEntryState(state, requestDN)
 		return err
 	}
 	if handled, err := server.trySockBackendBind(
@@ -1076,6 +1101,7 @@ func (server *Server) handleBind(
 		request,
 		requestDN,
 	); handled {
+		canonicalizeBindEntryState(state, requestDN)
 		return err
 	}
 	if database := databaseForDN(state.runtime, requestDN); database != nil &&
@@ -1089,9 +1115,9 @@ func (server *Server) handleBind(
 		)
 		if handled {
 			if result.Code == ldapwire.ResultSuccess {
-				state.boundDN = request.Name
+				state.boundDN = requestDN.String()
 				state.authMechanism = "SIMPLE"
-				state.bindCredentialDN = request.Name
+				state.bindCredentialDN = requestDN.String()
 				state.bindCredentials = append([]byte(nil), password...)
 			}
 			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
@@ -1110,9 +1136,9 @@ func (server *Server) handleBind(
 			request,
 		)
 		if result.Code == ldapwire.ResultSuccess {
-			state.boundDN = request.Name
+			state.boundDN = requestDN.String()
 			state.authMechanism = "SIMPLE"
-			state.bindCredentialDN = request.Name
+			state.bindCredentialDN = requestDN.String()
 			state.bindCredentials = append([]byte(nil), password...)
 		}
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
@@ -1145,9 +1171,9 @@ func (server *Server) handleBind(
 				nil,
 			))
 		}
-		state.boundDN = request.Name
+		state.boundDN = requestDN.String()
 		state.authMechanism = "SIMPLE"
-		state.bindCredentialDN = request.Name
+		state.bindCredentialDN = requestDN.String()
 		state.bindCredentials = append([]byte(nil), password...)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
@@ -1185,7 +1211,7 @@ func (server *Server) handleBind(
 	bindResult, err := server.authenticatePasswordBind(
 		ctx,
 		state.runtime,
-		request.Name,
+		requestDN.String(),
 		password,
 		controls.passwordPolicy,
 	)
@@ -1206,12 +1232,12 @@ func (server *Server) handleBind(
 			bindResult.controls,
 		))
 	}
-	state.boundDN = request.Name
+	state.boundDN = requestDN.String()
 	state.authMechanism = "SIMPLE"
-	state.bindCredentialDN = request.Name
+	state.bindCredentialDN = requestDN.String()
 	state.bindCredentials = append([]byte(nil), password...)
 	if bindResult.restricted {
-		state.passwordPolicyRestrictedDN = request.Name
+		state.passwordPolicyRestrictedDN = requestDN.String()
 	}
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
@@ -1232,7 +1258,7 @@ func (server *Server) authenticate(
 	if len(password) == 0 {
 		return false, nil
 	}
-	dn, err := directory.ParseDN(rawDN)
+	dn, err := parseRuntimeConnectionDN(runtime, rawDN)
 	if err != nil {
 		return false, nil
 	}
@@ -1422,6 +1448,20 @@ func clearBindCredentials(state *connectionState) {
 	state.metaBindTargetKey = ""
 }
 
+func canonicalizeBindEntryState(state *connectionState, dn directory.DN) {
+	if state == nil || state.boundDN == "" {
+		return
+	}
+	canonical := dn.String()
+	state.boundDN = canonical
+	if state.bindCredentialDN != "" {
+		state.bindCredentialDN = canonical
+	}
+	if state.passwordPolicyRestrictedDN != "" {
+		state.passwordPolicyRestrictedDN = canonical
+	}
+}
+
 func clearSearchSessions(state *connectionState) {
 	clearPagedSearch(state)
 	clearVirtualListViews(state)
@@ -1478,14 +1518,14 @@ func (server *Server) isRoot(
 	if rawDN == "" {
 		return false
 	}
-	subject, err := directory.ParseDN(rawDN)
+	subject, err := parseRuntimeConnectionDN(runtime, rawDN)
 	if err != nil {
 		return false
 	}
 	if targetDN == "" {
 		return attribute == "children" && isAnyDatabaseRoot(runtime, subject)
 	}
-	target, err := directory.ParseDN(targetDN)
+	target, err := parseRuntimeConnectionDN(runtime, targetDN)
 	if err != nil {
 		return false
 	}

@@ -26,6 +26,23 @@ type Registry struct {
 	attributeOptions []string
 }
 
+type lockedRegistryDNNormalizer struct {
+	registry *Registry
+}
+
+func (normalizer lockedRegistryDNNormalizer) NormalizeDNAttribute(
+	attributeName string,
+	value []byte,
+) (string, []byte, error) {
+	return normalizer.registry.normalizeDNAttributeLocked(attributeName, value)
+}
+
+func (normalizer lockedRegistryDNNormalizer) CanonicalDNAttributeName(
+	attributeName string,
+) (string, error) {
+	return normalizer.registry.canonicalDNAttributeNameLocked(attributeName)
+}
+
 func NewRegistry() *Registry {
 	registry := &Registry{
 		syntaxes:         make(map[string]*LDAPSyntax),
@@ -1124,7 +1141,7 @@ func (registry *Registry) Compare(
 			return 0, nil
 		}
 	}
-	return compareWithRule(rule, left, right)
+	return registry.compareWithRuleLocked(rule, left, right)
 }
 
 // NormalizeEqualityValue returns the normalized value used by an attribute's
@@ -1148,7 +1165,158 @@ func (registry *Registry) NormalizeEqualityValue(
 	if effective.Equality == "" {
 		return bytes.Clone(value), nil
 	}
-	return normalizeWithRule(effective.Equality, value)
+	return registry.normalizeWithRuleLocked(effective.Equality, value)
+}
+
+// NormalizeDNAttribute implements directory.DNAttributeNormalizer. Attribute
+// aliases collapse to the numeric OID and values follow the effective equality
+// matching rule, which is the identity behavior OpenLDAP applies to naming
+// attributes.
+func (registry *Registry) NormalizeDNAttribute(
+	attributeName string,
+	value []byte,
+) (string, []byte, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.normalizeDNAttributeLocked(attributeName, value)
+}
+
+func (registry *Registry) normalizeDNAttributeLocked(
+	attributeName string,
+	value []byte,
+) (string, []byte, error) {
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return "", nil, fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return "", nil, err
+	}
+	if effective.Equality == "" {
+		return "", nil, fmt.Errorf(
+			"attribute %q has no equality matching rule",
+			attributeName,
+		)
+	}
+	normalized, err := registry.normalizeWithRuleLocked(effective.Equality, value)
+	if err != nil {
+		return "", nil, err
+	}
+	return attribute.OID, normalized, nil
+}
+
+// CanonicalDNAttributeName returns the attribute description OpenLDAP uses in
+// the pretty form of a DN. Attribute aliases and options collapse to the
+// primary schema name, matching OpenLDAP's ad_cname rewrite.
+func (registry *Registry) CanonicalDNAttributeName(
+	attributeName string,
+) (string, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.canonicalDNAttributeNameLocked(attributeName)
+}
+
+func (registry *Registry) canonicalDNAttributeNameLocked(
+	attributeName string,
+) (string, error) {
+	baseName := baseAttributeDescription(attributeName)
+	attribute, ok := registry.attributes[schemaKey(baseName)]
+	if !ok {
+		return "", fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	return attribute.Name(), nil
+}
+
+// NormalizeDN parses a DN and assigns its schema-aware v2 identity key.
+func (registry *Registry) NormalizeDN(value string) (directory.DN, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.normalizeDNLocked(value)
+}
+
+func (registry *Registry) normalizeDNLocked(value string) (directory.DN, error) {
+	return directory.ParseDNWithNormalizer(
+		value,
+		lockedRegistryDNNormalizer{registry: registry},
+	)
+}
+
+func (registry *Registry) normalizeWithRuleLocked(
+	rule string,
+	value []byte,
+) ([]byte, error) {
+	switch canonicalMatchingRule(rule) {
+	case "distinguishednamematch":
+		dn, err := registry.normalizeDNLocked(string(value))
+		if err != nil {
+			return nil, errors.New("distinguishedNameMatch received invalid DN")
+		}
+		return []byte(dn.NormalizedString()), nil
+	case "uniquemembermatch":
+		return registry.normalizeUniqueMemberLocked(value)
+	default:
+		return normalizeWithRule(rule, value)
+	}
+}
+
+func (registry *Registry) compareWithRuleLocked(
+	rule string,
+	left, right []byte,
+) (int, error) {
+	switch canonicalMatchingRule(rule) {
+	case "distinguishednamematch":
+		normalizedLeft, leftErr := registry.normalizeWithRuleLocked(rule, left)
+		normalizedRight, rightErr := registry.normalizeWithRuleLocked(rule, right)
+		if leftErr != nil || rightErr != nil {
+			return 0, errors.New("distinguishedNameMatch received invalid DN")
+		}
+		return bytes.Compare(normalizedLeft, normalizedRight), nil
+	case "uniquemembermatch":
+		return registry.compareUniqueMemberLocked(left, right)
+	default:
+		return compareWithRule(rule, left, right)
+	}
+}
+
+func (registry *Registry) compareUniqueMemberLocked(left, right []byte) (int, error) {
+	leftDNValue, leftUID, leftHasUID := splitNameAndOptionalUID(left)
+	rightDNValue, rightUID, rightHasUID := splitNameAndOptionalUID(right)
+	switch {
+	case leftHasUID && rightHasUID:
+		if len(leftUID) != len(rightUID) {
+			return len(leftUID) - len(rightUID), nil
+		}
+		if comparison := bytes.Compare(leftUID, rightUID); comparison != 0 {
+			return comparison, nil
+		}
+	case leftHasUID:
+		return -1, nil
+	case rightHasUID:
+		return 1, nil
+	}
+	leftDN, leftErr := registry.normalizeDNLocked(string(leftDNValue))
+	rightDN, rightErr := registry.normalizeDNLocked(string(rightDNValue))
+	if leftErr != nil || rightErr != nil {
+		return 0, errors.New(
+			"uniqueMemberMatch received invalid name and optional UID",
+		)
+	}
+	return strings.Compare(leftDN.NormalizedString(), rightDN.NormalizedString()), nil
+}
+
+func (registry *Registry) normalizeUniqueMemberLocked(value []byte) ([]byte, error) {
+	dnValue, uid, hasUID := splitNameAndOptionalUID(value)
+	dn, err := registry.normalizeDNLocked(string(dnValue))
+	if err != nil {
+		return nil, errors.New("uniqueMemberMatch received invalid name and optional UID")
+	}
+	normalized := []byte(dn.NormalizedString())
+	if hasUID {
+		normalized = append(normalized, '#')
+		normalized = append(normalized, uid...)
+	}
+	return normalized, nil
 }
 
 // NormalizeEqualityAssertion validates and normalizes an assertion using the
@@ -1185,7 +1353,7 @@ func (registry *Registry) NormalizeEqualityAssertion(
 	if err := registry.validateSyntax(assertionSyntax, assertionLength, value); err != nil {
 		return nil, fmt.Errorf("attribute %q assertion: %w", attributeName, err)
 	}
-	return normalizeWithRule(effective.Equality, value)
+	return registry.normalizeWithRuleLocked(effective.Equality, value)
 }
 
 // ValidateAttributeValue checks a single value against the effective syntax
@@ -1565,7 +1733,7 @@ func (registry *Registry) ValidateEntryWithOptions(
 		}
 		for _, value := range attribute.Values {
 			if options.SkipValueSyntax {
-				if err := validateStoredEqualityNormalization(
+				if err := registry.validateStoredEqualityNormalizationLocked(
 					effective.Equality,
 					value,
 				); err != nil {
@@ -2483,7 +2651,7 @@ func validAttributeOption(value string, allowEquals bool) bool {
 	return true
 }
 
-func validateStoredEqualityNormalization(
+func (registry *Registry) validateStoredEqualityNormalizationLocked(
 	rule string,
 	value []byte,
 ) error {
@@ -2492,13 +2660,10 @@ func validateStoredEqualityNormalization(
 		_, err := aci.Normalize(value)
 		return err
 	case "distinguishednamematch":
-		_, err := directory.ParseDN(string(value))
-		if err != nil {
-			return errors.New("distinguishedNameMatch received invalid DN")
-		}
-		return nil
+		_, err := registry.normalizeWithRuleLocked(rule, value)
+		return err
 	case "uniquemembermatch":
-		_, err := normalizeUniqueMember(value)
+		_, err := registry.normalizeWithRuleLocked(rule, value)
 		return err
 	case "uuidmatch", "uuidorderingmatch":
 		return validateSyntax(SyntaxUUID, 0, value)
@@ -2750,6 +2915,9 @@ func isHexDigit(value byte) bool {
 		value >= 'A' && value <= 'F'
 }
 
+// compareWithRule is the context-free fallback for matching rules whose
+// semantics do not depend on a Registry. Registry.Compare intercepts DN-valued
+// rules before reaching this function.
 func compareWithRule(rule string, left, right []byte) (int, error) {
 	switch canonicalMatchingRule(rule) {
 	case "openldapacimatch":
@@ -2859,6 +3027,9 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 	}
 }
 
+// normalizeWithRule is the context-free fallback for matching rules whose
+// semantics do not depend on a Registry. Registry normalization APIs intercept
+// distinguishedNameMatch and uniqueMemberMatch before reaching this function.
 func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 	switch canonicalMatchingRule(rule) {
 	case "openldapacimatch":

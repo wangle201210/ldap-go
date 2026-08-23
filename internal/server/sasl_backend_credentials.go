@@ -29,6 +29,13 @@ func (server *Server) lookupSASLCredentialEntry(
 	if runtime == nil || len(attributes) == 0 {
 		return directory.Entry{}, errSASLCredentialEntryUnavailable
 	}
+	authenticationDN, err := normalizeSASLBackendCredentialDN(
+		runtime,
+		authenticationDN,
+	)
+	if err != nil {
+		return directory.Entry{}, errSASLCredentialEntryUnavailable
+	}
 	database := databaseForDN(runtime, authenticationDN)
 	if database == nil {
 		return directory.Entry{}, errSASLCredentialEntryUnavailable
@@ -71,12 +78,27 @@ func (server *Server) lookupLocalSASLCredentialEntry(
 	var credentialEntry directory.Entry
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
-		entry, err := tx.Get(authenticationDN)
+		comparisonDN, err := storage.NormalizeReaderDN(tx, authenticationDN)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.Get(comparisonDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		entryDN, err := directory.ParseDN(entry.DN)
+		if err == nil {
+			entryDN, err = storage.NormalizeReaderDN(tx, entryDN)
+		}
+		if err != nil || !comparisonDN.Equal(entryDN) {
+			return fmt.Errorf(
+				"local SASL credential search for %q returned unexpected entry %q",
+				authenticationDN.String(),
+				entry.DN,
+			)
 		}
 		if runtime.schema.EntryHasObjectClass(entry, "subentry") ||
 			runtime.schema.EntryHasObjectClass(entry, "alias") ||
@@ -375,6 +397,17 @@ func saslBackendCredentialEntryFromAttempt(
 	attributes []string,
 	attempt chainAttempt,
 ) (directory.Entry, error) {
+	comparisonDN, err := normalizeSASLBackendCredentialDN(
+		runtime,
+		authenticationDN,
+	)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf(
+			"normalize SASL credential DN %q: %w",
+			authenticationDN.String(),
+			err,
+		)
+	}
 	if attempt.transportErr != nil {
 		return directory.Entry{}, attempt.transportErr
 	}
@@ -404,7 +437,10 @@ func saslBackendCredentialEntryFromAttempt(
 			return directory.Entry{}, err
 		}
 		dn, err := directory.ParseDN(entry.DN)
-		if err != nil || !authenticationDN.Equal(dn) {
+		if err == nil {
+			dn, err = normalizeSASLBackendCredentialDN(runtime, dn)
+		}
+		if err != nil || !comparisonDN.Equal(dn) {
 			return directory.Entry{}, fmt.Errorf(
 				"remote credential search returned unexpected entry %q",
 				entry.DN,
@@ -435,6 +471,26 @@ func saslBackendCredentialEntryFromAttempt(
 	entry := *found
 	found = nil
 	return entry, nil
+}
+
+func normalizeSASLBackendCredentialDN(
+	runtime *runtimeState,
+	dn directory.DN,
+) (directory.DN, error) {
+	if runtime == nil {
+		return dn, nil
+	}
+	var err error
+	if runtime.schema != nil {
+		dn, err = runtime.schema.NormalizeDN(dn.String())
+		if err != nil {
+			return directory.DN{}, err
+		}
+	}
+	if database := databaseForDN(runtime, dn); database != nil {
+		return normalizeRuntimeDatabaseDN(*database, dn)
+	}
+	return dn, nil
 }
 
 func clearSASLCredentialEntry(entry *directory.Entry) {

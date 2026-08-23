@@ -60,6 +60,7 @@ func (server *Server) saslUserDNAs(
 	subjectDN string,
 ) (directory.DN, error) {
 	rewrite, err := runtime.sasl.rewriteUserIdentity(
+		runtime,
 		mechanism,
 		user,
 		realm,
@@ -76,7 +77,7 @@ func (server *Server) saslUserDNAs(
 			subjectDN,
 		)
 	}
-	mapped, err := directory.ParseDN(rewrite.value)
+	mapped, err := normalizeSASLIdentityDN(runtime, rewrite.value)
 	if err != nil {
 		return directory.DN{}, fmt.Errorf(
 			"authz-regexp produced invalid DN %q: %w",
@@ -88,6 +89,7 @@ func (server *Server) saslUserDNAs(
 }
 
 func (configuration saslRuntimeConfiguration) rewriteUserIdentity(
+	runtime *runtimeState,
 	mechanism string,
 	user string,
 	realm string,
@@ -109,7 +111,10 @@ func (configuration saslRuntimeConfiguration) rewriteUserIdentity(
 		"cn="+ldap.EscapeDN(strings.ToLower(mechanism)),
 		"cn=auth",
 	)
-	requestDN, err := directory.ParseDN(strings.Join(components, ","))
+	requestDN, err := normalizeSASLIdentityDN(
+		runtime,
+		strings.Join(components, ","),
+	)
 	if err != nil {
 		return saslIdentityRewrite{}, fmt.Errorf(
 			"construct SASL authentication request DN: %w",
@@ -117,7 +122,7 @@ func (configuration saslRuntimeConfiguration) rewriteUserIdentity(
 		)
 	}
 
-	normalized := requestDN.Key()
+	normalized := requestDN.NormalizedString()
 	for _, rule := range configuration.authzRegexps {
 		submatches := rule.expression.FindStringSubmatchIndex(normalized)
 		if submatches == nil {
@@ -159,7 +164,10 @@ func (server *Server) resolveSASLAuthorizationDN(
 	)
 	switch {
 	case strings.HasPrefix(strings.ToLower(authorizationID), "dn:"):
-		target, err = directory.ParseDN(authorizationID[3:])
+		target, err = normalizeSASLIdentityDN(
+			runtime,
+			authorizationID[3:],
+		)
 	case strings.HasPrefix(strings.ToLower(authorizationID), "u:"):
 		target, err = server.saslUserDN(
 			ctx,
@@ -186,13 +194,48 @@ func (server *Server) resolveSASLAuthorizationDN(
 	return directory.DN{}, errSASLAuthorizationDenied
 }
 
+func normalizeSASLIdentityDN(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	var (
+		dn  directory.DN
+		err error
+	)
+	if runtime != nil && runtime.schema != nil {
+		dn, err = runtime.schema.NormalizeDN(value)
+	} else {
+		dn, err = directory.ParseDN(value)
+	}
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return normalizeSASLAuthorizationDN(runtime, dn)
+}
+
 func saslRootMayAuthorize(
 	runtime *runtimeState,
 	authenticationDN directory.DN,
 	authorizationDN directory.DN,
 ) bool {
 	database := databaseForDN(runtime, authorizationDN)
-	return database != nil &&
-		database.rootDN != nil &&
-		database.rootDN.Equal(authenticationDN)
+	return database != nil && databaseRootMatches(
+		runtime,
+		*database,
+		authenticationDN,
+	)
+}
+
+func runtimeDNEqual(
+	runtime *runtimeState,
+	left directory.DN,
+	right directory.DN,
+) bool {
+	if database := databaseForDN(runtime, left); database != nil {
+		return databaseDNEqual(*database, left, right)
+	}
+	if database := databaseForDN(runtime, right); database != nil {
+		return databaseDNEqual(*database, left, right)
+	}
+	return left.Equal(right)
 }

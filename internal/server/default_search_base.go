@@ -37,6 +37,14 @@ func normalizeDefaultSearchBaseConfiguration(
 	ctx context.Context,
 	store storage.Store,
 ) error {
+	return normalizeDefaultSearchBaseConfigurationWithNormalizer(ctx, store, nil)
+}
+
+func normalizeDefaultSearchBaseConfigurationWithNormalizer(
+	ctx context.Context,
+	store storage.Store,
+	normalizer directory.DNAttributeNormalizer,
+) error {
 	type update struct {
 		partition string
 		entry     directory.Entry
@@ -67,7 +75,7 @@ func normalizeDefaultSearchBaseConfiguration(
 			if raw == "" {
 				return nil
 			}
-			dn, err := directory.ParseDN(raw)
+			dn, err := parseDefaultSearchBaseDN(raw, normalizer)
 			if err != nil {
 				return fmt.Errorf(
 					"parse %s olcDefaultSearchBase: %w",
@@ -105,7 +113,18 @@ func normalizeDefaultSearchBaseConfiguration(
 func loadDefaultSearchBase(
 	reader storage.Reader,
 ) (defaultSearchBaseConfiguration, error) {
-	global, err := loadDefaultSearchBaseFromEntry(reader, configurationSuffix)
+	return loadDefaultSearchBaseWithNormalizer(reader, nil)
+}
+
+func loadDefaultSearchBaseWithNormalizer(
+	reader storage.Reader,
+	normalizer directory.DNAttributeNormalizer,
+) (defaultSearchBaseConfiguration, error) {
+	global, err := loadDefaultSearchBaseFromEntryWithNormalizer(
+		reader,
+		configurationSuffix,
+		normalizer,
+	)
 	if err != nil {
 		return defaultSearchBaseConfiguration{}, err
 	}
@@ -126,7 +145,7 @@ func loadDefaultSearchBase(
 			}
 			return nil
 		}
-		candidate, err := parseDefaultSearchBaseEntry(entry)
+		candidate, err := parseDefaultSearchBaseEntryWithNormalizer(entry, normalizer)
 		if err != nil {
 			return err
 		}
@@ -153,6 +172,14 @@ func loadDefaultSearchBaseFromEntry(
 	reader storage.Reader,
 	dn directory.DN,
 ) (defaultSearchBaseConfiguration, error) {
+	return loadDefaultSearchBaseFromEntryWithNormalizer(reader, dn, nil)
+}
+
+func loadDefaultSearchBaseFromEntryWithNormalizer(
+	reader storage.Reader,
+	dn directory.DN,
+	normalizer directory.DNAttributeNormalizer,
+) (defaultSearchBaseConfiguration, error) {
 	entry, err := reader.Get(dn)
 	switch {
 	case errors.Is(err, storage.ErrEntryNotFound):
@@ -160,11 +187,18 @@ func loadDefaultSearchBaseFromEntry(
 	case err != nil:
 		return defaultSearchBaseConfiguration{}, err
 	}
-	return parseDefaultSearchBaseEntry(entry)
+	return parseDefaultSearchBaseEntryWithNormalizer(entry, normalizer)
 }
 
 func parseDefaultSearchBaseEntry(
 	entry directory.Entry,
+) (defaultSearchBaseConfiguration, error) {
+	return parseDefaultSearchBaseEntryWithNormalizer(entry, nil)
+}
+
+func parseDefaultSearchBaseEntryWithNormalizer(
+	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
 ) (defaultSearchBaseConfiguration, error) {
 	values := entry.Values("olcDefaultSearchBase")
 	if len(values) == 0 {
@@ -180,7 +214,7 @@ func parseDefaultSearchBaseEntry(
 	if raw == "" {
 		return defaultSearchBaseConfiguration{}, nil
 	}
-	parsed, err := directory.ParseDN(raw)
+	parsed, err := parseDefaultSearchBaseDN(raw, normalizer)
 	if err != nil {
 		return defaultSearchBaseConfiguration{}, fmt.Errorf(
 			"parse %s olcDefaultSearchBase: %w",
@@ -189,4 +223,14 @@ func parseDefaultSearchBaseEntry(
 		)
 	}
 	return defaultSearchBaseConfiguration{dn: parsed, configured: true}, nil
+}
+
+func parseDefaultSearchBaseDN(
+	raw string,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DN, error) {
+	if normalizer != nil {
+		return directory.ParseDNWithNormalizer(raw, normalizer)
+	}
+	return directory.ParseDN(raw)
 }

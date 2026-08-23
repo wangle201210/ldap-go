@@ -237,6 +237,80 @@ func TestSubtreeSpecificationEmptyRefinementSets(t *testing.T) {
 	}
 }
 
+func TestSubtreeSpecificationMatchesSchemaAwareDNIdentity(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	for _, definition := range []string{
+		"( 1.3.6.1.4.1.99999.918.1 NAME 'subtreeExactName' EQUALITY caseExactMatch " +
+			"ORDERING caseExactOrderingMatch SUBSTR caseExactSubstringsMatch SYNTAX " +
+			SyntaxDirectoryString + " )",
+		"( 1.3.6.1.4.1.99999.918.2 NAME 'subtreeFoldName' EQUALITY caseIgnoreMatch " +
+			"ORDERING caseIgnoreOrderingMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " +
+			SyntaxDirectoryString + " )",
+	} {
+		if err := registry.ParseAndRegisterAttributeType(definition); err != nil {
+			t.Fatalf("ParseAndRegisterAttributeType(): %v", err)
+		}
+	}
+	administrativePoint := subtreeMustDN(t, "dc=example,dc=com")
+	entry := directory.Entry{Attributes: []directory.Attribute{{
+		Description: "objectClass",
+		Values:      subtreeByteValues("top"),
+	}}}
+
+	for _, test := range []struct {
+		name      string
+		base      string
+		candidate string
+		want      bool
+	}{
+		{
+			name:      "caseExact configured spelling",
+			base:      "subtreeExactName=Tenant",
+			candidate: "uid=alice,subtreeExactName=Tenant,dc=example,dc=com",
+			want:      true,
+		},
+		{
+			name:      "caseExact different case",
+			base:      "subtreeExactName=Tenant",
+			candidate: "uid=alice,subtreeExactName=tenant,dc=example,dc=com",
+		},
+		{
+			name:      "caseIgnore case and space equivalent",
+			base:      "subtreeFoldName=Remote Tenant",
+			candidate: `uid=alice,subtreeFoldName=\20REMOTE\20\20TENANT\20,DC=EXAMPLE,DC=COM`,
+			want:      true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			specification, err := ParseSubtreeSpecification(
+				`{ base "` + test.base + `" }`,
+			)
+			if err != nil {
+				t.Fatalf("ParseSubtreeSpecification(): %v", err)
+			}
+			candidate := subtreeMustDN(t, test.candidate)
+			entry.DN = test.candidate
+			matched, err := registry.SubtreeSpecificationMatches(
+				specification,
+				administrativePoint,
+				candidate,
+				entry,
+			)
+			if err != nil {
+				t.Fatalf("SubtreeSpecificationMatches(): %v", err)
+			}
+			if matched != test.want {
+				t.Fatalf("matches = %t, want %t", matched, test.want)
+			}
+		})
+	}
+}
+
 func subtreeMustDN(t *testing.T, value string) directory.DN {
 	t.Helper()
 	dn, err := directory.ParseDN(value)

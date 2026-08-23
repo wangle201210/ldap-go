@@ -65,8 +65,8 @@ func (server *Server) handleExtended(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"extended operation is not implemented",
+				ldapwire.ResultProtocolError,
+				"unsupported extended operation",
 			),
 			nil,
 		))
@@ -134,7 +134,7 @@ func (server *Server) handleStartTLS(
 			nil,
 		))
 	}
-	if server.secureTransport == nil {
+	if !server.secureTransportAvailable(state.runtime) {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,

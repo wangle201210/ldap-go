@@ -230,7 +230,11 @@ func renderAuditlogRecord(record auditlogPendingRecord, timestamp int64) []byte 
 		record.peerName,
 		record.connectionID,
 	)
-	if record.realDN != "" && !auditlogDNEqual(record.realDN, record.authorizationDN) {
+	if record.realDN != "" && !auditlogDNEqualWithNormalizer(
+		record.realDN,
+		record.authorizationDN,
+		record.registry,
+	) {
 		fmt.Fprintf(&output, "# realdn: %s\n", record.realDN)
 	}
 	fmt.Fprintf(
@@ -512,4 +516,19 @@ func auditlogDNEqual(left, right string) bool {
 		return leftDN.Equal(rightDN)
 	}
 	return strings.EqualFold(left, right)
+}
+
+func auditlogDNEqualWithNormalizer(
+	left, right string,
+	normalizer directory.DNAttributeNormalizer,
+) bool {
+	if normalizer == nil {
+		return auditlogDNEqual(left, right)
+	}
+	leftDN, leftErr := directory.ParseDNWithNormalizer(left, normalizer)
+	rightDN, rightErr := directory.ParseDNWithNormalizer(right, normalizer)
+	if leftErr == nil && rightErr == nil {
+		return leftDN.Equal(rightDN)
+	}
+	return left == right
 }

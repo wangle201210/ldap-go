@@ -3,6 +3,7 @@ package lloadd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -30,16 +31,17 @@ var errOperationFinished = errors.New("lloadd operation already finished")
 
 func (client *clientConnection) serve(ctx context.Context) {
 	defer client.close()
+	transport := client.currentConnection()
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = client.conn.Close()
+			_ = transport.Close()
 		case <-client.done:
 		}
 	}()
 	for {
 		frame, err := client.proxy.codec.Read(
-			client.conn,
+			client.currentConnection(),
 			client.proxy.config.ClientMaxMessageSize,
 		)
 		if err != nil {
@@ -48,13 +50,13 @@ func (client *clientConnection) serve(ctx context.Context) {
 			}
 			return
 		}
-		if !client.handleFrame(frame) {
+		if !client.handleFrame(ctx, frame) {
 			return
 		}
 	}
 }
 
-func (client *clientConnection) handleFrame(frame proxyFrame) bool {
+func (client *clientConnection) handleFrame(ctx context.Context, frame proxyFrame) bool {
 	if frame.MessageID == 0 || !isClientRequestTag(frame.ProtocolTag) {
 		return false
 	}
@@ -75,6 +77,10 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 		client.handleBind(frame)
 		return true
 	}
+	if frame.ProtocolTag == ldapwire.ApplicationExtendedRequest &&
+		frame.ExtendedOID == clientStartTLSOID {
+		return client.handleStartTLS(ctx, frame)
+	}
 	client.mu.Lock()
 	binding := client.binding
 	client.mu.Unlock()
@@ -89,14 +95,6 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 	}
 	if frame.ProtocolTag == ldapwire.ApplicationExtendedRequest {
 		switch frame.ExtendedOID {
-		case clientStartTLSOID:
-			client.sendResult(
-				frame.MessageID,
-				frame.ProtocolTag,
-				ldapwire.ResultUnwillingToPerform,
-				"client StartTLS is not implemented",
-			)
-			return true
 		case clientCancelOID:
 			client.handleCancel(frame)
 			return true
@@ -104,6 +102,123 @@ func (client *clientConnection) handleFrame(frame proxyFrame) bool {
 	}
 	client.route(frame, false)
 	return true
+}
+
+func (client *clientConnection) handleStartTLS(
+	ctx context.Context,
+	frame proxyFrame,
+) bool {
+	client.mu.Lock()
+	switch {
+	case client.protocolVersion != 3:
+		client.mu.Unlock()
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultProtocolError,
+			"StartTLS requires LDAP version 3",
+		)
+		return true
+	case frame.HasExtendedValue:
+		client.mu.Unlock()
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultProtocolError,
+			"StartTLS requestValue must be absent",
+		)
+		return true
+	case client.tlsActive || client.tlsUpgrading:
+		client.mu.Unlock()
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultOperationsError,
+			"TLS is already active",
+		)
+		return true
+	case client.binding || len(client.ops) != 0:
+		client.mu.Unlock()
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultOperationsError,
+			"StartTLS requires no operations in progress",
+		)
+		return true
+	case client.proxy.config.ClientTLS == nil:
+		client.mu.Unlock()
+		client.sendResult(
+			frame.MessageID,
+			frame.ProtocolTag,
+			ldapwire.ResultUnavailable,
+			"client TLS configuration is unavailable",
+		)
+		return true
+	default:
+		client.tlsUpgrading = true
+		client.mu.Unlock()
+	}
+
+	encoded, err := client.proxy.codec.EncodeResult(
+		frame.MessageID,
+		frame.ProtocolTag,
+		ldapwire.ResultSuccess,
+		"",
+	)
+	if err != nil {
+		client.clearTLSUpgrade()
+		return false
+	}
+
+	client.writeMu.Lock()
+	connection := client.currentConnection()
+	if connection == nil {
+		err = net.ErrClosed
+	} else {
+		err = writeConnection(connection, encoded, client.proxy.config.IOTimeout)
+	}
+	var secured *tls.Conn
+	if err == nil {
+		secured = tls.Server(connection, client.proxy.config.ClientTLS.Clone())
+		var clearDeadline func()
+		clearDeadline, err = setConnectionNegotiationDeadline(
+			ctx,
+			secured,
+			client.proxy.config.IOTimeout,
+		)
+		if err == nil {
+			err = secured.HandshakeContext(ctx)
+			clearDeadline()
+		}
+	}
+	if err == nil {
+		client.mu.Lock()
+		if client.closed {
+			err = net.ErrClosed
+		} else {
+			client.conn = secured
+			client.tlsActive = true
+			client.tlsUpgrading = false
+		}
+		client.mu.Unlock()
+	}
+	client.writeMu.Unlock()
+	if err != nil {
+		client.clearTLSUpgrade()
+		if connection != nil {
+			_ = connection.Close()
+		}
+		client.proxy.config.Logger.Debug("client StartTLS handshake failed", "error", err)
+		return false
+	}
+	return true
+}
+
+func (client *clientConnection) clearTLSUpgrade() {
+	client.mu.Lock()
+	client.tlsUpgrading = false
+	client.mu.Unlock()
 }
 
 func isClientRequestTag(tag uint64) bool {
@@ -127,6 +242,7 @@ func isClientRequestTag(tag uint64) bool {
 func (client *clientConnection) handleBind(frame proxyFrame) {
 	client.mu.Lock()
 	client.bindGeneration++
+	client.protocolVersion = frame.BindVersion
 	client.mu.Unlock()
 	if frame.BindVersion != 3 {
 		client.resetForBind(false)
@@ -561,7 +677,7 @@ func (client *clientConnection) sendResult(
 		return
 	}
 	client.writeMu.Lock()
-	err = writeConnection(client.conn, encoded, client.proxy.config.IOTimeout)
+	err = writeConnection(client.currentConnection(), encoded, client.proxy.config.IOTimeout)
 	client.writeMu.Unlock()
 	if err != nil {
 		client.close()
@@ -573,11 +689,18 @@ func (client *clientConnection) write(encoded []byte) error {
 	defer client.writeMu.Unlock()
 	client.mu.Lock()
 	closed := client.closed
+	connection := client.conn
 	client.mu.Unlock()
 	if closed {
 		return net.ErrClosed
 	}
-	return writeConnection(client.conn, encoded, client.proxy.config.IOTimeout)
+	return writeConnection(connection, encoded, client.proxy.config.IOTimeout)
+}
+
+func (client *clientConnection) currentConnection() net.Conn {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.conn
 }
 
 func (client *clientConnection) authorizationIdentity() []byte {
@@ -609,8 +732,11 @@ func (client *clientConnection) close() {
 	if owned == nil {
 		owned = client.bindPin
 	}
+	connection := client.conn
 	client.mu.Unlock()
-	_ = client.conn.Close()
+	if connection != nil {
+		_ = connection.Close()
+	}
 	for _, operation := range operations {
 		client.abandonOperation(operation, nil, true)
 	}

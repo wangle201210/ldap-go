@@ -34,6 +34,20 @@ func (server *Server) searchSASLAuthzLDAPURL(
 	if err != nil {
 		return directory.DN{}, err
 	}
+	baseDatabase := databaseForDN(runtime, search.base)
+	if baseDatabase == nil {
+		return directory.DN{}, errors.New(
+			"SASL authorization search has no database",
+		)
+	}
+	search.base, err = normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		baseDatabase,
+		search.base,
+	)
+	if err != nil {
+		return directory.DN{}, err
+	}
 	routes := databaseSearchRoutes(
 		runtime.databases,
 		search.base,
@@ -155,12 +169,20 @@ func (server *Server) searchSASLAuthorizationRoute(
 	filter directory.Filter,
 ) ([]directory.DN, error) {
 	if saslAuthorizationUsesProxyBackend(&database) {
+		base, err := normalizeSASLAuthorizationDatabaseDN(
+			runtime,
+			&database,
+			route.base,
+		)
+		if err != nil {
+			return nil, err
+		}
 		entries, err := server.searchProxySASLAuthorization(
 			ctx,
 			runtime,
 			database,
 			ldapwire.SearchRequest{
-				BaseDN:       route.base.String(),
+				BaseDN:       base.String(),
 				Scope:        route.scope,
 				DerefAliases: ldapwire.NeverDerefAliases,
 				SizeLimit:    1,
@@ -180,7 +202,15 @@ func (server *Server) searchSASLAuthorizationRoute(
 			if err != nil {
 				return nil, err
 			}
-			if !directory.InScope(route.base, candidate, route.scope) {
+			candidate, err = normalizeSASLAuthorizationDatabaseDN(
+				runtime,
+				&database,
+				candidate,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if !directory.InScope(base, candidate, route.scope) {
 				return nil, fmt.Errorf(
 					"SASL authorization search returned out-of-scope entry %q",
 					entry.DN,
@@ -194,12 +224,20 @@ func (server *Server) searchSASLAuthorizationRoute(
 	var candidates []directory.DN
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
+		base, err := normalizeRuntimeReaderDN(tx, database, route.base)
+		if err != nil {
+			return err
+		}
 		return tx.ForEach(func(entry directory.Entry) error {
 			candidate, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err
 			}
-			if !directory.InScope(route.base, candidate, route.scope) ||
+			candidate, err = normalizeRuntimeReaderDN(tx, database, candidate)
+			if err != nil {
+				return err
+			}
+			if !directory.InScope(base, candidate, route.scope) ||
 				!server.allowed(
 					runtime,
 					tx,

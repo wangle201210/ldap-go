@@ -26,6 +26,18 @@ type CheckReport struct {
 }
 
 func CheckBolt(ctx context.Context, path string) (CheckReport, error) {
+	return CheckBoltWithNormalizer(ctx, path, nil)
+}
+
+// CheckBoltWithNormalizer additionally verifies schema-aware physical keys and
+// detects legacy/v2 duplicates using the supplied matching rules. CheckBolt
+// without a normalizer remains conservative: it validates every key binding,
+// but cannot infer whether legacy values used caseExact or caseIgnore rules.
+func CheckBoltWithNormalizer(
+	ctx context.Context,
+	path string,
+	normalizer directory.DNAttributeNormalizer,
+) (CheckReport, error) {
 	if path == "" {
 		return CheckReport{}, errors.New("database path is required")
 	}
@@ -35,7 +47,7 @@ func CheckBolt(ctx context.Context, path string) (CheckReport, error) {
 	}
 	defer database.Close()
 
-	report, err := checkBoltDatabase(ctx, database)
+	report, err := checkBoltDatabase(ctx, database, normalizer)
 	if err != nil {
 		return CheckReport{}, fmt.Errorf("check database %q: %w", path, err)
 	}
@@ -63,7 +75,7 @@ func BackupBolt(
 	}
 	defer database.Close()
 
-	report, err := checkBoltDatabase(ctx, database)
+	report, err := checkBoltDatabase(ctx, database, nil)
 	if err != nil {
 		return CheckReport{}, fmt.Errorf("check source database: %w", err)
 	}
@@ -143,7 +155,7 @@ func RebuildBolt(ctx context.Context, databasePath string) (CheckReport, error) 
 			_ = source.Close()
 		}
 	}()
-	if _, err := checkBoltDatabase(ctx, source); err != nil {
+	if _, err := checkBoltDatabase(ctx, source, nil); err != nil {
 		return CheckReport{}, fmt.Errorf("check source database: %w", err)
 	}
 
@@ -211,7 +223,11 @@ func openBoltReadOnly(path string) (*bolt.DB, error) {
 	return database, nil
 }
 
-func checkBoltDatabase(ctx context.Context, database *bolt.DB) (CheckReport, error) {
+func checkBoltDatabase(
+	ctx context.Context,
+	database *bolt.DB,
+	normalizer directory.DNAttributeNormalizer,
+) (CheckReport, error) {
 	var report CheckReport
 	partitions := make(map[string]struct{})
 	err := database.View(func(tx *bolt.Tx) error {
@@ -241,22 +257,48 @@ func checkBoltDatabase(ctx context.Context, database *bolt.DB) (CheckReport, err
 				return fmt.Errorf("entries bucket contains nested bucket %q", key)
 			}
 			partition, keyDN := splitPartitionedEntryKey(string(key))
-			entry, err := decodeEntry(value)
+			stored, err := decodeStoredEntry(value)
 			if err != nil {
 				return fmt.Errorf("entry key %q: %w", key, err)
 			}
-			dn, err := directory.ParseDN(entry.DN)
-			if err != nil {
+			entry := stored.Entry
+			if _, err := directory.ParseDN(entry.DN); err != nil {
 				return fmt.Errorf("entry key %q has invalid DN %q: %w", key, entry.DN, err)
 			}
-			if keyDN != dn.Key() {
+			if err := validateStoredEntryIdentity(
+				keyDN,
+				entry,
+				stored.DNIdentity,
+				stored.DNSource,
+			); err != nil {
 				return fmt.Errorf(
-					"entry key %q does not match normalized DN %q",
+					"entry key %q does not match DN %q: %w",
 					key,
-					dn.Key(),
+					entry.DN,
+					err,
 				)
 			}
-			logicalKey := partitionedEntryKey(partition, dn.Key())
+			logicalIdentity := keyDN
+			if normalizer != nil && partition != OpenLDAPConfigPartition {
+				normalized, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
+				if err != nil {
+					return fmt.Errorf(
+						"entry key %q cannot normalize DN %q: %w",
+						key,
+						entry.DN,
+						err,
+					)
+				}
+				logicalIdentity = normalized.Key()
+				if isSchemaAwareDNKey(keyDN) && keyDN != logicalIdentity {
+					return fmt.Errorf(
+						"entry key %q does not match schema-normalized DN %q",
+						key,
+						entry.DN,
+					)
+				}
+			}
+			logicalKey := partitionedEntryKey(partition, logicalIdentity)
 			if previous, exists := logicalEntries[logicalKey]; exists {
 				return fmt.Errorf(
 					"entry keys %q and %q identify the same partition and DN",

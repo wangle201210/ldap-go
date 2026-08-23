@@ -94,6 +94,13 @@ func resolveDatabaseTarget(
 }
 
 func loadDatabaseTargets(reader storage.Reader) ([]databaseTarget, error) {
+	return loadDatabaseTargetsWithNormalizer(reader, nil)
+}
+
+func loadDatabaseTargetsWithNormalizer(
+	reader storage.Reader,
+	normalizer directory.DNAttributeNormalizer,
+) ([]databaseTarget, error) {
 	configSuffix, err := directory.ParseDN("cn=config")
 	if err != nil {
 		return nil, err
@@ -154,7 +161,10 @@ func loadDatabaseTargets(reader storage.Reader) ([]databaseTarget, error) {
 				}
 				target.partition = storage.OpenLDAPDatabasePartition(name, uuid)
 				for _, rawSuffix := range entry.Values("olcSuffix") {
-					suffix, err := directory.ParseDN(string(rawSuffix))
+					suffix, err := parseDatabaseTargetDN(
+						string(rawSuffix),
+						normalizer,
+					)
 					if err != nil || suffix.Depth() == 0 {
 						if err == nil {
 							err = fmt.Errorf("suffix DN must not be empty")
@@ -170,7 +180,10 @@ func loadDatabaseTargets(reader storage.Reader) ([]databaseTarget, error) {
 				return fmt.Errorf("%s olcRootDN must be single-valued", entry.DN)
 			}
 			if len(rootDNValues) == 1 {
-				rootDN, err := directory.ParseDN(string(rootDNValues[0]))
+				rootDN, err := parseDatabaseTargetDN(
+					string(rootDNValues[0]),
+					normalizer,
+				)
 				if err != nil {
 					return fmt.Errorf("%s olcRootDN: %w", entry.DN, err)
 				}
@@ -254,6 +267,16 @@ func loadDatabaseTargets(reader storage.Reader) ([]databaseTarget, error) {
 	return targets, nil
 }
 
+func parseDatabaseTargetDN(
+	value string,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DN, error) {
+	if normalizer != nil {
+		return directory.ParseDNWithNormalizer(value, normalizer)
+	}
+	return directory.ParseDN(value)
+}
+
 func resolveDefaultDatabaseTarget(
 	reader storage.Reader,
 ) (databaseTarget, bool, error) {
@@ -312,6 +335,21 @@ func selectDatabaseTargetForDN(
 		}
 	}
 	return best, true, nil
+}
+
+func normalizedSelectedDatabaseTarget(
+	selected databaseTarget,
+	targets []databaseTarget,
+) (databaseTarget, error) {
+	for _, target := range targets {
+		if target.partition == selected.partition {
+			return target, nil
+		}
+	}
+	return databaseTarget{}, fmt.Errorf(
+		"selected OpenLDAP database %q disappeared while loading schema-aware naming contexts",
+		selected.name,
+	)
 }
 
 func databaseTargetsOwnNamingContexts(targets []databaseTarget) bool {

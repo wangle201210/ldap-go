@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,8 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 	configPath := flags.String("f", "lloadd.conf", "standalone lloadd configuration file")
 	listenURLs := flags.String("h", "", "space-separated LDAP listener URLs overriding the configuration")
 	logLevel := flags.String("log-level", "info", "debug, info, warn, error, or an integer")
+	tlsCertificate := flags.String("tls-cert", "", "PEM certificate for client StartTLS and LDAPS listeners")
+	tlsKey := flags.String("tls-key", "", "PEM private key for client StartTLS and LDAPS listeners")
 	checkConfig := flags.Bool("test-config", false, "validate configuration and exit")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -42,13 +45,15 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	clientTLS, err := loadLloaddClientTLS(*tlsCertificate, *tlsKey)
+	if err != nil {
+		return err
+	}
+	if err := validateLloaddListeners(config.ListenURLs, clientTLS); err != nil {
+		return err
+	}
 	if *checkConfig {
-		for _, rawURL := range config.ListenURLs {
-			if _, _, err := parseLloaddListenerURL(rawURL); err != nil {
-				return err
-			}
-		}
-		proxy, err := lloadd.New(*config)
+		proxy, err := newLloaddProxy(*config, nil, clientTLS)
 		if err != nil {
 			return err
 		}
@@ -61,14 +66,14 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
-	proxy, err := lloadd.New(*config, lloadd.WithLogger(logger))
+	proxy, err := newLloaddProxy(*config, logger, clientTLS)
 	if err != nil {
 		return err
 	}
 	listeners := make([]net.Listener, 0, len(config.ListenURLs))
 	listenerDescriptions := make([]string, 0, len(config.ListenURLs))
 	for _, rawURL := range config.ListenURLs {
-		listener, description, err := listenLloaddURL(rawURL)
+		listener, description, err := listenLloaddURL(rawURL, clientTLS)
 		if err != nil {
 			closeListeners(listeners)
 			return err
@@ -93,10 +98,70 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 	return proxy.Serve(ctx, listener)
 }
 
-func listenLloaddURL(raw string) (net.Listener, string, error) {
-	network, address, err := parseLloaddListenerURL(raw)
+func loadLloaddClientTLS(certificatePath, keyPath string) (*tls.Config, error) {
+	if (certificatePath == "") != (keyPath == "") {
+		return nil, errors.New("-tls-cert and -tls-key must be configured together")
+	}
+	if certificatePath == "" {
+		return nil, nil
+	}
+	certificate, err := tls.LoadX509KeyPair(certificatePath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load lloadd listener TLS certificate: %w", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+func newLloaddProxy(
+	config lloadd.Config,
+	logger *slog.Logger,
+	clientTLS *tls.Config,
+) (*lloadd.Proxy, error) {
+	runtime, err := config.RuntimeConfig()
+	if err != nil {
+		return nil, err
+	}
+	if logger != nil {
+		runtime.Logger = logger
+	}
+	if clientTLS != nil {
+		runtime.ClientTLS = clientTLS.Clone()
+	}
+	return lloadd.NewProxy(runtime)
+}
+
+func validateLloaddListeners(urls []string, clientTLS *tls.Config) error {
+	for _, rawURL := range urls {
+		scheme, _, _, err := parseLloaddListenerURL(rawURL)
+		if err != nil {
+			return err
+		}
+		if scheme == "ldaps" && clientTLS == nil {
+			return fmt.Errorf(
+				"lloadd listener %q requires -tls-cert and -tls-key",
+				rawURL,
+			)
+		}
+	}
+	return nil
+}
+
+func listenLloaddURL(
+	raw string,
+	clientTLS *tls.Config,
+) (net.Listener, string, error) {
+	scheme, network, address, err := parseLloaddListenerURL(raw)
 	if err != nil {
 		return nil, "", err
+	}
+	if scheme == "ldaps" && clientTLS == nil {
+		return nil, "", fmt.Errorf(
+			"lloadd listener %q requires -tls-cert and -tls-key",
+			raw,
+		)
 	}
 	listener, err := net.Listen(network, address)
 	if err != nil {
@@ -105,37 +170,45 @@ func listenLloaddURL(raw string) (net.Listener, string, error) {
 	if network == "unix" {
 		return listener, "ldapi://" + address, nil
 	}
-	return listener, "ldap://" + listener.Addr().String(), nil
+	if scheme == "ldaps" {
+		listener = tls.NewListener(listener, clientTLS.Clone())
+	}
+	return listener, scheme + "://" + listener.Addr().String(), nil
 }
 
-func parseLloaddListenerURL(raw string) (string, string, error) {
+func parseLloaddListenerURL(raw string) (string, string, string, error) {
 	if strings.HasPrefix(strings.ToLower(raw), "ldapi://") {
 		path, err := lloadd.ParseLDAPIAddress(raw)
 		if err != nil {
-			return "", "", fmt.Errorf("decode lloadd listener %q: %w", raw, err)
+			return "", "", "", fmt.Errorf("decode lloadd listener %q: %w", raw, err)
 		}
 		if path == "" || path == "/" {
 			path = "/var/run/ldap-go/lloadd.sock"
 		}
-		return "unix", filepath.Clean(path), nil
+		return "ldapi", "unix", filepath.Clean(path), nil
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", "", fmt.Errorf("parse lloadd listener %q: %w", raw, err)
+		return "", "", "", fmt.Errorf("parse lloadd listener %q: %w", raw, err)
 	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "ldap":
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "ldap", "ldaps":
 		address := parsed.Host
-		if address == "" {
-			address = ":389"
-		} else if _, _, err := net.SplitHostPort(address); err != nil {
-			address = net.JoinHostPort(parsed.Hostname(), "389")
+		defaultPort := "389"
+		if scheme == "ldaps" {
+			defaultPort = "636"
 		}
-		return "tcp", address, nil
-	case "ldaps", "pldap", "pldaps":
-		return "", "", fmt.Errorf("lloadd listener scheme %q is not implemented", parsed.Scheme)
+		if address == "" {
+			address = ":" + defaultPort
+		} else if _, _, err := net.SplitHostPort(address); err != nil {
+			address = net.JoinHostPort(parsed.Hostname(), defaultPort)
+		}
+		return scheme, "tcp", address, nil
+	case "pldap", "pldaps":
+		return "", "", "", fmt.Errorf("lloadd listener scheme %q is not implemented", parsed.Scheme)
 	default:
-		return "", "", fmt.Errorf("unsupported lloadd listener scheme %q", parsed.Scheme)
+		return "", "", "", fmt.Errorf("unsupported lloadd listener scheme %q", parsed.Scheme)
 	}
 }
 

@@ -600,7 +600,7 @@ func metaModifyDNUsesTarget(
 	target metaBackendTargetRuntimeConfiguration,
 	request ldapwire.ModifyDNRequest,
 ) bool {
-	dn, err := directory.ParseDN(request.DN)
+	dn, err := configuration.parseDN(request.DN)
 	if err != nil {
 		return false
 	}
@@ -609,7 +609,7 @@ func metaModifyDNUsesTarget(
 		return false
 	}
 	if request.HasNewSuperior {
-		parent, err = directory.ParseDN(request.NewSuperior)
+		parent, err = configuration.parseDN(request.NewSuperior)
 		if err != nil {
 			return false
 		}
@@ -618,7 +618,7 @@ func metaModifyDNUsesTarget(
 	if parent.Depth() != 0 {
 		destinationName += "," + parent.String()
 	}
-	destination, err := directory.ParseDN(destinationName)
+	destination, err := configuration.parseDN(destinationName)
 	if err != nil {
 		return false
 	}

@@ -407,8 +407,8 @@ func TestLDAPClientPasswordFileLimitAndConflicts(t *testing.T) {
 		args    []string
 		message string
 	}{
-		{name: "SASL default", args: []string{"ldapwhoami"}, message: "requires -x"},
-		{name: "SASL mechanism", args: []string{"ldapwhoami", "-x", "-Y", "PLAIN"}, message: "option -Y is not supported"},
+		{name: "SASL default", args: []string{"ldapwhoami"}, message: "requires -Y"},
+		{name: "SASL mechanism", args: []string{"ldapwhoami", "-x", "-Y", "PLAIN"}, message: "cannot be combined"},
 		{name: "bind without password", args: []string{"ldapwhoami", "-x", "-D", clientToolRootDN}, message: "requires one of -w, -W, or -y"},
 		{name: "password without bind", args: []string{"ldapwhoami", "-x", "-w", "hidden"}, message: "requires a non-empty -D"},
 		{name: "password sources", args: []string{"ldapwhoami", "-x", "-D", clientToolRootDN, "-w", "hidden", "-W"}, message: "mutually exclusive"},

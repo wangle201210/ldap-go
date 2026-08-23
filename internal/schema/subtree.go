@@ -66,6 +66,14 @@ func (registry *Registry) SubtreeSpecificationMatches(
 	if err != nil {
 		return false, fmt.Errorf("compose subtree base: %w", err)
 	}
+	base, err = registry.NormalizeDN(base.String())
+	if err != nil {
+		return false, fmt.Errorf("normalize subtree base: %w", err)
+	}
+	candidateDN, err = registry.NormalizeDN(candidateDN.String())
+	if err != nil {
+		return false, fmt.Errorf("normalize subtree candidate: %w", err)
+	}
 	if !base.Equal(candidateDN) && !base.AncestorOf(candidateDN) {
 		return false, nil
 	}
@@ -79,6 +87,10 @@ func (registry *Registry) SubtreeSpecificationMatches(
 		excludedBase, err := directory.ComposeLocalName(exclusion.LocalName, base)
 		if err != nil {
 			return false, fmt.Errorf("compose subtree exclusion: %w", err)
+		}
+		excludedBase, err = registry.NormalizeDN(excludedBase.String())
+		if err != nil {
+			return false, fmt.Errorf("normalize subtree exclusion: %w", err)
 		}
 		if exclusion.ChopBefore {
 			if excludedBase.Equal(candidateDN) || excludedBase.AncestorOf(candidateDN) {

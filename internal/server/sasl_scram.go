@@ -171,11 +171,13 @@ func (server *Server) lookupSASLSCRAMCredentials(
 		return directory.DN{}, scram.StoredCredentials{},
 			errSASLSCRAMCredentialsUnavailable
 	}
-	if database.rootDN != nil &&
-		database.rootDN.Equal(authenticationDN) &&
-		database.rootPasswordSet {
+	if rootPassword, ok := databaseAuthenticationRoot(
+		runtime,
+		*database,
+		authenticationDN,
+	); ok {
 		password, ok := auth.ExtractCleartextPassword(
-			database.rootPassword,
+			rootPassword,
 		)
 		if !ok {
 			return directory.DN{}, scram.StoredCredentials{},

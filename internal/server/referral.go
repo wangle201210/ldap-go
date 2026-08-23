@@ -52,6 +52,14 @@ func (server *Server) entryOrReferral(
 	target directory.DN,
 	manageDsaIT bool,
 ) (directory.Entry, error) {
+	target, err := storage.NormalizeReaderDN(reader, target)
+	if err != nil {
+		return directory.Entry{}, fmt.Errorf(
+			"normalize referral request DN %q: %w",
+			target.String(),
+			err,
+		)
+	}
 	entry, err := reader.Get(target)
 	if err == nil {
 		if manageDsaIT || !runtime.schema.EntryHasObjectClass(entry, "referral") {
@@ -72,7 +80,12 @@ func (server *Server) entryOrReferral(
 		) {
 			return directory.Entry{}, storage.ErrEntryNotFound
 		}
-		result, err := referralResult(entry, &target, referralScopeDefault)
+		result, err := referralResultWithReader(
+			entry,
+			&target,
+			referralScopeDefault,
+			reader,
+		)
 		if err != nil {
 			return directory.Entry{}, err
 		}
@@ -105,7 +118,12 @@ func (server *Server) entryOrReferral(
 	) {
 		return directory.Entry{}, storage.ErrEntryNotFound
 	}
-	result, err := referralResult(ancestor, &target, referralScopeDefault)
+	result, err := referralResultWithReader(
+		ancestor,
+		&target,
+		referralScopeDefault,
+		reader,
+	)
 	if err != nil {
 		return directory.Entry{}, err
 	}
@@ -116,6 +134,14 @@ func closestExistingAncestor(
 	reader storage.Reader,
 	target directory.DN,
 ) (directory.Entry, bool, error) {
+	target, err := storage.NormalizeReaderDN(reader, target)
+	if err != nil {
+		return directory.Entry{}, false, fmt.Errorf(
+			"normalize referral target DN %q: %w",
+			target.String(),
+			err,
+		)
+	}
 	current, ok := target.Parent()
 	for ok {
 		entry, err := reader.Get(current)
@@ -135,7 +161,66 @@ func referralResult(
 	target *directory.DN,
 	scope referralURLScope,
 ) (ldapwire.Result, error) {
-	referrals, err := rewrittenReferralURLs(entry, target, scope)
+	return referralResultWithParser(
+		entry,
+		target,
+		scope,
+		nil,
+	)
+}
+
+func referralResultWithNormalizer(
+	entry directory.Entry,
+	target *directory.DN,
+	scope referralURLScope,
+	normalizer directory.DNAttributeNormalizer,
+) (ldapwire.Result, error) {
+	return referralResultWithParser(
+		entry,
+		target,
+		scope,
+		referralParserWithNormalizer(normalizer),
+	)
+}
+
+func referralResultWithReader(
+	entry directory.Entry,
+	target *directory.DN,
+	scope referralURLScope,
+	reader storage.Reader,
+) (ldapwire.Result, error) {
+	return referralResultWithParser(
+		entry,
+		target,
+		scope,
+		referralParserWithReader(reader),
+	)
+}
+
+func referralResultWithParser(
+	entry directory.Entry,
+	target *directory.DN,
+	scope referralURLScope,
+	parser referralDNParser,
+) (ldapwire.Result, error) {
+	matchedDN := entry.DN
+	if parser != nil {
+		normalized, err := parseReferralDNWithParser(entry.DN, parser)
+		if err != nil {
+			return ldapwire.Result{}, fmt.Errorf(
+				"parse referral matched DN %q: %w",
+				entry.DN,
+				err,
+			)
+		}
+		matchedDN = normalized.String()
+	}
+	referrals, err := rewrittenReferralURLsWithParser(
+		entry,
+		target,
+		scope,
+		parser,
+	)
 	if err != nil {
 		return ldapwire.Result{}, err
 	}
@@ -147,7 +232,7 @@ func referralResult(
 	}
 	return ldapwire.Result{
 		Code:      ldapwire.ResultReferral,
-		MatchedDN: entry.DN,
+		MatchedDN: matchedDN,
 		Referrals: referrals,
 	}, nil
 }
@@ -157,7 +242,35 @@ func rewrittenReferralURLs(
 	target *directory.DN,
 	scope referralURLScope,
 ) ([]string, error) {
-	base, err := directory.ParseDN(entry.DN)
+	return rewrittenReferralURLsWithParser(
+		entry,
+		target,
+		scope,
+		nil,
+	)
+}
+
+func rewrittenReferralURLsWithNormalizer(
+	entry directory.Entry,
+	target *directory.DN,
+	scope referralURLScope,
+	normalizer directory.DNAttributeNormalizer,
+) ([]string, error) {
+	return rewrittenReferralURLsWithParser(
+		entry,
+		target,
+		scope,
+		referralParserWithNormalizer(normalizer),
+	)
+}
+
+func rewrittenReferralURLsWithParser(
+	entry directory.Entry,
+	target *directory.DN,
+	scope referralURLScope,
+	parser referralDNParser,
+) ([]string, error) {
+	base, err := parseReferralDNWithParser(entry.DN, parser)
 	if err != nil {
 		return nil, fmt.Errorf("parse referral DN %q: %w", entry.DN, err)
 	}
@@ -177,7 +290,13 @@ func rewrittenReferralURLs(
 		if raw == "" {
 			continue
 		}
-		rewritten, ok := rewriteReferralURL(raw, &base, target, scope)
+		rewritten, ok := rewriteReferralURLWithParser(
+			raw,
+			&base,
+			target,
+			scope,
+			parser,
+		)
 		if ok {
 			referrals = append(referrals, rewritten)
 		}
@@ -197,6 +316,38 @@ func rewriteReferralURL(
 	base *directory.DN,
 	target *directory.DN,
 	scope referralURLScope,
+) (string, bool) {
+	return rewriteReferralURLWithParser(
+		raw,
+		base,
+		target,
+		scope,
+		nil,
+	)
+}
+
+func rewriteReferralURLWithNormalizer(
+	raw string,
+	base *directory.DN,
+	target *directory.DN,
+	scope referralURLScope,
+	normalizer directory.DNAttributeNormalizer,
+) (string, bool) {
+	return rewriteReferralURLWithParser(
+		raw,
+		base,
+		target,
+		scope,
+		referralParserWithNormalizer(normalizer),
+	)
+}
+
+func rewriteReferralURLWithParser(
+	raw string,
+	base *directory.DN,
+	target *directory.DN,
+	scope referralURLScope,
+	parser referralDNParser,
 ) (string, bool) {
 	candidate := raw
 	enclosed := strings.HasPrefix(candidate, "<")
@@ -238,6 +389,7 @@ func rewriteReferralURL(
 	parsed.OmitHost = false
 
 	var referralDN *directory.DN
+	var referralDNDisplay string
 	switch {
 	case parsed.Path == "":
 	case !strings.HasPrefix(parsed.Path, "/"):
@@ -245,17 +397,32 @@ func rewriteReferralURL(
 	default:
 		rawDN := strings.TrimPrefix(parsed.Path, "/")
 		if rawDN != "" {
-			dn, err := directory.ParseDN(rawDN)
+			dn, err := parseReferralDNWithParser(rawDN, parser)
 			if err != nil {
 				return "", false
 			}
 			referralDN = &dn
+			referralDNDisplay = rawDN
 		}
 	}
 
-	rewrittenDN, err := rewriteReferralDN(referralDN, base, target)
+	rewrittenDN, err := rewriteReferralDNWithParser(
+		referralDN,
+		base,
+		target,
+		parser,
+	)
 	if err != nil {
 		return "", false
+	}
+	if parser == nil && referralDN != nil {
+		rewrittenDN = preserveReferralDNDisplay(
+			rewrittenDN,
+			referralDNDisplay,
+			referralDN,
+			base,
+			target,
+		)
 	}
 	parsed.Path = "/" + rewrittenDN
 	parsed.RawPath = ""
@@ -275,6 +442,34 @@ func rewriteReferralURL(
 	parsed.RawQuery = strings.Join(components, "?")
 	parsed.ForceQuery = len(components) > 0
 	return parsed.String(), true
+}
+
+func preserveReferralDNDisplay(
+	rewritten string,
+	display string,
+	referralDN *directory.DN,
+	base *directory.DN,
+	target *directory.DN,
+) string {
+	if display == "" || referralDN == nil {
+		return rewritten
+	}
+	if target == nil {
+		return display
+	}
+	if base == nil || base.Equal(*referralDN) ||
+		(!base.Equal(*target) && !base.AncestorOf(*target)) {
+		return rewritten
+	}
+	normalizedSuffix := referralDN.String()
+	if rewritten == normalizedSuffix {
+		return display
+	}
+	suffix := "," + normalizedSuffix
+	if strings.HasSuffix(rewritten, suffix) {
+		return strings.TrimSuffix(rewritten, suffix) + "," + display
+	}
+	return rewritten
 }
 
 func referralURLQuery(parsed *url.URL) ([]string, bool) {
@@ -316,6 +511,47 @@ func rewriteReferralDN(
 	base *directory.DN,
 	target *directory.DN,
 ) (string, error) {
+	return rewriteReferralDNWithParser(
+		referralDN,
+		base,
+		target,
+		nil,
+	)
+}
+
+func rewriteReferralDNWithNormalizer(
+	referralDN *directory.DN,
+	base *directory.DN,
+	target *directory.DN,
+	normalizer directory.DNAttributeNormalizer,
+) (string, error) {
+	return rewriteReferralDNWithParser(
+		referralDN,
+		base,
+		target,
+		referralParserWithNormalizer(normalizer),
+	)
+}
+
+func rewriteReferralDNWithParser(
+	referralDN *directory.DN,
+	base *directory.DN,
+	target *directory.DN,
+	parser referralDNParser,
+) (string, error) {
+	var err error
+	referralDN, err = normalizeReferralDN(referralDN, parser)
+	if err != nil {
+		return "", err
+	}
+	base, err = normalizeReferralDN(base, parser)
+	if err != nil {
+		return "", err
+	}
+	target, err = normalizeReferralDN(target, parser)
+	if err != nil {
+		return "", err
+	}
 	if base == nil {
 		if target == nil {
 			return "", nil
@@ -342,4 +578,51 @@ func rewriteReferralDN(
 		return rewritten.String(), nil
 	}
 	return target.String(), nil
+}
+
+type referralDNParser func(string) (directory.DN, error)
+
+func parseReferralDNWithParser(
+	value string,
+	parser referralDNParser,
+) (directory.DN, error) {
+	if parser == nil {
+		return directory.ParseDN(value)
+	}
+	return parser(value)
+}
+
+func referralParserWithNormalizer(
+	normalizer directory.DNAttributeNormalizer,
+) referralDNParser {
+	if normalizer == nil {
+		return nil
+	}
+	return func(value string) (directory.DN, error) {
+		return directory.ParseDNWithNormalizer(value, normalizer)
+	}
+}
+
+func referralParserWithReader(reader storage.Reader) referralDNParser {
+	return func(value string) (directory.DN, error) {
+		dn, err := directory.ParseDN(value)
+		if err != nil {
+			return directory.DN{}, err
+		}
+		return storage.NormalizeReaderDN(reader, dn)
+	}
+}
+
+func normalizeReferralDN(
+	dn *directory.DN,
+	parser referralDNParser,
+) (*directory.DN, error) {
+	if dn == nil || parser == nil {
+		return dn, nil
+	}
+	normalized, err := parseReferralDNWithParser(dn.String(), parser)
+	if err != nil {
+		return nil, err
+	}
+	return &normalized, nil
 }

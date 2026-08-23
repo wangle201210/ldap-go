@@ -42,6 +42,15 @@ func validateSockBackendFrontend(
 ) (ldapwire.Request, *ldapwire.Result) {
 	switch request := request.(type) {
 	case ldapwire.AddRequest:
+		if _, failure := parseSockFrontendDN(
+			runtime,
+			database,
+			request.Entry.DN,
+			false,
+			"invalid DN",
+		); failure != nil {
+			return request, failure
+		}
 		return request, validateSockAddRequest(
 			runtime.schema,
 			database,
@@ -49,6 +58,15 @@ func validateSockBackendFrontend(
 			controls.relax,
 		)
 	case ldapwire.ModifyRequest:
+		if _, failure := parseSockFrontendDN(
+			runtime,
+			database,
+			request.DN,
+			false,
+			"invalid DN",
+		); failure != nil {
+			return request, failure
+		}
 		return request, validateSockModifyRequest(
 			runtime.schema,
 			database,
@@ -56,7 +74,16 @@ func validateSockBackendFrontend(
 			controls.relax,
 		)
 	case ldapwire.CompareRequest:
-		normalized, failure := validateSockCompareRequest(runtime.schema, request)
+		if _, failure := parseSockFrontendDN(
+			runtime,
+			database,
+			request.DN,
+			false,
+			"invalid DN",
+		); failure != nil {
+			return request, failure
+		}
+		normalized, failure := validateCompareRequest(runtime.schema, request)
 		if failure != nil {
 			return normalized, failure
 		}
@@ -69,15 +96,27 @@ func validateSockBackendFrontend(
 		return normalized, validateSockCompareTarget(runtime.schema, normalized)
 	case ldapwire.ModifyDNRequest:
 		return request, validateSockModifyDNRequest(runtime, database, request)
+	case ldapwire.DeleteRequest:
+		_, failure := parseSockFrontendDN(
+			runtime,
+			database,
+			request.DN,
+			false,
+			"invalid DN",
+		)
+		return request, failure
 	case ldapwire.SearchRequest:
+		target, failure := parseSockFrontendDN(
+			runtime,
+			database,
+			request.BaseDN,
+			true,
+			"invalid DN",
+		)
+		if failure != nil {
+			return request, failure
+		}
 		if controls.dontUseCopy && database.shadow {
-			target, err := directory.ParseDN(request.BaseDN)
-			if err != nil {
-				return request, sockFrontendResult(
-					ldapwire.ResultInvalidDNSyntax,
-					"invalid DN",
-				)
-			}
 			result := shadowSearchResult(database, target, request.Scope)
 			return request, &result
 		}
@@ -85,6 +124,30 @@ func validateSockBackendFrontend(
 	default:
 		return request, nil
 	}
+}
+
+func parseSockFrontendDN(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	value string,
+	allowRootDSE bool,
+	diagnostic string,
+) (directory.DN, *ldapwire.Result) {
+	normalizer := database.dnNormalizer
+	if normalizer == nil &&
+		runtime != nil &&
+		runtime.schema != nil &&
+		!isConfigDatabase(database) {
+		normalizer = runtime.schema
+	}
+	dn, err := parseRuntimeDN(value, normalizer)
+	if err != nil || (!allowRootDSE && dn.Depth() == 0) {
+		return directory.DN{}, sockFrontendResult(
+			ldapwire.ResultInvalidDNSyntax,
+			diagnostic,
+		)
+	}
+	return dn, nil
 }
 
 func validateSockAddRequest(
@@ -372,7 +435,7 @@ func sockAttributeIsManageable(
 	return isManageableOperationalAttribute(registry, description)
 }
 
-func validateSockCompareRequest(
+func validateCompareRequest(
 	registry *schema.Registry,
 	request ldapwire.CompareRequest,
 ) (ldapwire.CompareRequest, *ldapwire.Result) {
@@ -435,19 +498,28 @@ func validateSockModifyDNRequest(
 	database runtimeDatabase,
 	request ldapwire.ModifyDNRequest,
 ) *ldapwire.Result {
-	oldDN, err := directory.ParseDN(request.DN)
-	if err != nil || oldDN.Depth() == 0 {
-		return sockFrontendResult(ldapwire.ResultInvalidDNSyntax, "invalid DN")
+	oldDN, failure := parseSockFrontendDN(
+		runtime,
+		database,
+		request.DN,
+		false,
+		"invalid DN",
+	)
+	if failure != nil {
+		return failure
 	}
 
 	var superior directory.DN
 	if request.HasNewSuperior {
-		superior, err = directory.ParseDN(request.NewSuperior)
-		if err != nil {
-			return sockFrontendResult(
-				ldapwire.ResultInvalidDNSyntax,
-				"invalid newSuperior",
-			)
+		superior, failure = parseSockFrontendDN(
+			runtime,
+			database,
+			request.NewSuperior,
+			true,
+			"invalid newSuperior",
+		)
+		if failure != nil {
+			return failure
 		}
 	} else {
 		var found bool
@@ -459,7 +531,20 @@ func validateSockModifyDNRequest(
 			)
 		}
 	}
-	newDN, err := directory.ComposeDN(request.NewRDN, superior)
+	newRDN, failure := parseSockFrontendDN(
+		runtime,
+		database,
+		request.NewRDN,
+		false,
+		"invalid new RDN",
+	)
+	if failure != nil || newRDN.Depth() != 1 {
+		return sockFrontendResult(
+			ldapwire.ResultInvalidDNSyntax,
+			"invalid new RDN",
+		)
+	}
+	newDN, err := directory.ComposeLocalName(newRDN, superior)
 	if err != nil {
 		return sockFrontendResult(
 			ldapwire.ResultInvalidDNSyntax,
@@ -473,6 +558,12 @@ func validateSockModifyDNRequest(
 		if failure := validateSockNamingRDN(runtime.schema, oldDN); failure != nil {
 			return failure
 		}
+	}
+	if oldDN.Equal(newDN) {
+		return sockFrontendResult(
+			ldapwire.ResultEntryAlreadyExists,
+			"",
+		)
 	}
 	if oldDN.AncestorOf(newDN) {
 		return sockFrontendResult(

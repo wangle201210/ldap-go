@@ -104,7 +104,6 @@ func loadNestGroupRuntimeConfiguration(
 		return nestGroupRuntimeConfiguration{}, err
 	}
 
-	seenBases := make(map[string]struct{})
 	for index, raw := range entry.Values("olcNestGroupBase") {
 		base, parseErr := directory.ParseDN(string(raw))
 		if parseErr != nil {
@@ -115,15 +114,6 @@ func loadNestGroupRuntimeConfiguration(
 				index,
 			)
 		}
-		if _, duplicate := seenBases[base.Key()]; duplicate {
-			return nestGroupRuntimeConfiguration{}, nestGroupConfigurationFailure(
-				ldapwire.ResultAttributeOrValueExists,
-				"%s olcNestGroupBase contains duplicate DN %q",
-				entry.DN,
-				base.String(),
-			)
-		}
-		seenBases[base.Key()] = struct{}{}
 		configuration.bases = append(configuration.bases, base)
 	}
 
@@ -227,6 +217,28 @@ func validateNestGroupSchema(
 ) error {
 	for index := range configurations {
 		configuration := &configurations[index]
+		seenBases := make(map[string]struct{}, len(configuration.bases))
+		for baseIndex := range configuration.bases {
+			base, err := registry.NormalizeDN(configuration.bases[baseIndex].String())
+			if err != nil {
+				return nestGroupConfigurationFailure(
+					ldapwire.ResultInvalidAttributeSyntax,
+					"%s olcNestGroupBase contains invalid DN %q",
+					configuration.id,
+					configuration.bases[baseIndex].String(),
+				)
+			}
+			if _, duplicate := seenBases[base.Key()]; duplicate {
+				return nestGroupConfigurationFailure(
+					ldapwire.ResultAttributeOrValueExists,
+					"%s olcNestGroupBase contains duplicate DN %q",
+					configuration.id,
+					configuration.bases[baseIndex].String(),
+				)
+			}
+			seenBases[base.Key()] = struct{}{}
+			configuration.bases[baseIndex] = base
+		}
 		for _, item := range []struct {
 			label             string
 			configurationName string
@@ -415,7 +427,7 @@ func (cache *nestGroupProjectionCache) plan(
 		if len(plan.entries) >= nestGroupMaxEntries {
 			return &nestGroupResourceLimitError{"entries", nestGroupMaxEntries}
 		}
-		dn, err := directory.ParseDN(entry.DN)
+		dn, err := cache.runtime.schema.NormalizeDN(entry.DN)
 		if err != nil {
 			return err
 		}
@@ -1154,7 +1166,7 @@ func nestGroupParseReference(
 	if index := nestGroupOptionalUIDSeparator(dnValue); index >= 0 {
 		dnValue = dnValue[:index]
 	}
-	dn, err := directory.ParseDN(string(dnValue))
+	dn, err := registry.NormalizeDN(string(dnValue))
 	if err != nil {
 		return nestGroupReference{}, err
 	}

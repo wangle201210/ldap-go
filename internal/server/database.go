@@ -16,6 +16,7 @@ type runtimeDatabase struct {
 	name                  string
 	partition             string
 	suffixes              []directory.DN
+	dnNormalizer          directory.DNAttributeNormalizer
 	ldapBackend           *ldapBackendRuntimeConfiguration
 	metaBackend           *metaBackendRuntimeConfiguration
 	sockBackend           *sockBackendRuntimeConfiguration
@@ -82,12 +83,25 @@ type runtimeDatabase struct {
 }
 
 type databaseSearchSizeLimit struct {
-	subject directory.DN
-	soft    int
-	hard    int
-	softSet bool
-	hardSet bool
+	selector databaseSearchLimitSelector
+	subject  directory.DN
+	soft     int
+	hard     int
+	softSet  bool
+	hardSet  bool
 }
+
+type databaseSearchLimitSelector uint8
+
+const (
+	databaseSearchLimitExact databaseSearchLimitSelector = iota
+	databaseSearchLimitOneLevel
+	databaseSearchLimitSubtree
+	databaseSearchLimitChildren
+	databaseSearchLimitAnonymous
+	databaseSearchLimitUsers
+	databaseSearchLimitAny
+)
 
 type databaseRestrictions uint32
 
@@ -131,10 +145,18 @@ func loadRuntimeDatabases(
 }
 
 func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error) {
-	configSuffix, err := directory.ParseDN("cn=config")
+	return loadRuntimeDatabasesReaderWithNormalizer(reader, nil)
+}
+
+func loadRuntimeDatabasesReaderWithNormalizer(
+	reader storage.Reader,
+	normalizer directory.DNAttributeNormalizer,
+) ([]runtimeDatabase, error) {
+	legacyConfigSuffix, err := directory.ParseDN("cn=config")
 	if err != nil {
 		return nil, err
 	}
+	configSuffix := legacyConfigSuffix
 
 	var databases []runtimeDatabase
 	if err := reader.ForEach(func(entry directory.Entry) error {
@@ -142,11 +164,12 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		if err != nil {
 			return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
 		}
-		if !configSuffix.Equal(entryDN) && !configSuffix.AncestorOf(entryDN) {
+		if !legacyConfigSuffix.Equal(entryDN) &&
+			!legacyConfigSuffix.AncestorOf(entryDN) {
 			return nil
 		}
 		parent, hasParent := entryDN.Parent()
-		if !hasParent || !configSuffix.Equal(parent) {
+		if !hasParent || !legacyConfigSuffix.Equal(parent) {
 			// Overlay-owned backends are not local naming-context databases.
 			return nil
 		}
@@ -157,6 +180,12 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		}
 		if len(databaseValues) != 1 {
 			return fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
+		}
+		if _, err := requireSupportedRuntimeDatabaseType(
+			entry.DN,
+			string(databaseValues[0]),
+		); err != nil {
+			return err
 		}
 		entryUUIDValues := entry.Values("entryUUID")
 		if len(entryUUIDValues) > 1 {
@@ -169,12 +198,21 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 		database := runtimeDatabase{
 			name:          string(databaseValues[0]),
 			partition:     storage.OpenLDAPDatabasePartition(string(databaseValues[0]), entryUUID),
+			dnNormalizer:  normalizer,
 			lastMod:       true,
 			maxDerefDepth: defaultAliasDerefDepth,
 			configDNKey:   entryDN.Key(),
 		}
+		if isConfigDatabase(database) {
+			// cn=config RDNs use configuration attributes such as olcDatabase
+			// that are intentionally outside the content schema registry.
+			database.dnNormalizer = nil
+		}
 		for _, rawSuffix := range entry.Values("olcSuffix") {
-			suffix, err := directory.ParseDN(string(rawSuffix))
+			suffix, err := parseRuntimeDN(
+				string(rawSuffix),
+				database.dnNormalizer,
+			)
 			if err != nil {
 				return fmt.Errorf("%s olcSuffix: %w", entry.DN, err)
 			}
@@ -186,7 +224,7 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 				database.suffixes = []directory.DN{configSuffix}
 				database.partition = configurationStoragePartition
 			case isMonitorDatabase(database):
-				monitor, err := directory.ParseDN("cn=Monitor")
+				monitor, err := parseRuntimeDN("cn=Monitor", normalizer)
 				if err != nil {
 					return err
 				}
@@ -199,7 +237,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			return fmt.Errorf("%s olcRootDN must be single-valued", entry.DN)
 		}
 		if len(rootDNValues) == 1 {
-			rootDN, err := directory.ParseDN(string(rootDNValues[0]))
+			rootDN, err := parseRuntimeDN(
+				string(rootDNValues[0]),
+				database.dnNormalizer,
+			)
 			if err != nil {
 				return fmt.Errorf("%s olcRootDN: %w", entry.DN, err)
 			}
@@ -234,7 +275,10 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			database.restrictions |= restrictWrites
 		}
 		database.readOnly = databaseIsReadOnly(database)
-		database.searchSizeLimits, err = loadDatabaseSearchSizeLimits(entry)
+		database.searchSizeLimits, err = loadDatabaseSearchSizeLimitsWithNormalizer(
+			entry,
+			database.dnNormalizer,
+		)
 		if err != nil {
 			return err
 		}
@@ -316,7 +360,11 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 			database.partition = ""
 		}
 		if isMetaBackendDatabase(database) {
-			configuration, err := loadMetaBackendRuntimeConfiguration(reader, entry)
+			configuration, err := loadMetaBackendRuntimeConfigurationWithNormalizer(
+				reader,
+				entry,
+				normalizer,
+			)
 			if err != nil {
 				return err
 			}
@@ -379,17 +427,29 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 	}
 
 	for _, rawContext := range namingContexts {
-		contextDN, err := directory.ParseDN(rawContext)
+		legacyContextDN, err := directory.ParseDN(rawContext)
 		if err != nil {
 			return nil, fmt.Errorf("parse naming context %q: %w", rawContext, err)
+		}
+		contextDN := legacyContextDN
+		contextNormalizer := normalizer
+		if legacyConfigSuffix.Equal(legacyContextDN) ||
+			legacyConfigSuffix.AncestorOf(legacyContextDN) {
+			contextNormalizer = nil
+		} else {
+			contextDN, err = parseRuntimeDN(rawContext, normalizer)
+			if err != nil {
+				return nil, fmt.Errorf("normalize naming context %q: %w", rawContext, err)
+			}
 		}
 		if databaseHasSuffix(databases, contextDN) {
 			continue
 		}
 		databases = append(databases, runtimeDatabase{
 			name:          "bootstrap",
-			partition:     storage.OpenLDAPBootstrapPartition(contextDN),
+			partition:     storage.OpenLDAPBootstrapPartition(legacyContextDN),
 			suffixes:      []directory.DN{contextDN},
+			dnNormalizer:  contextNormalizer,
 			lastMod:       true,
 			maxDerefDepth: defaultAliasDerefDepth,
 		})
@@ -400,6 +460,13 @@ func loadRuntimeDatabasesReader(reader storage.Reader) ([]runtimeDatabase, error
 
 func loadDatabaseSearchSizeLimits(
 	entry directory.Entry,
+) ([]databaseSearchSizeLimit, error) {
+	return loadDatabaseSearchSizeLimitsWithNormalizer(entry, nil)
+}
+
+func loadDatabaseSearchSizeLimitsWithNormalizer(
+	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
 ) ([]databaseSearchSizeLimit, error) {
 	var limits []databaseSearchSizeLimit
 	for _, raw := range entry.Values("olcLimits") {
@@ -422,29 +489,18 @@ func loadDatabaseSearchSizeLimits(
 			return nil, fmt.Errorf("%s olcLimits requires a pattern and limits", entry.DN)
 		}
 
-		pattern := strings.ToLower(arguments[0])
-		var rawDN string
-		for _, prefix := range []string{
-			"dn.exact=",
-			"dn.base=",
-			"dn.self.exact=",
-			"dn.self.base=",
-		} {
-			if strings.HasPrefix(pattern, prefix) {
-				rawDN = arguments[0][len(prefix):]
-				break
-			}
-		}
-		if rawDN == "" {
-			// Other OpenLDAP limit selectors remain accepted; this runtime
-			// currently applies exact bound-DN size rules only.
-			continue
-		}
-		subject, err := directory.ParseDN(rawDN)
+		limit, supported, err := parseDatabaseSearchLimitSelector(
+			arguments[0],
+			normalizer,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("%s olcLimits subject: %w", entry.DN, err)
 		}
-		limit := databaseSearchSizeLimit{subject: subject}
+		if !supported {
+			// Group, regex, and dn.this rules are parsed by OpenLDAP using
+			// request state that is not available to this size-only path.
+			continue
+		}
 		for _, argument := range arguments[1:] {
 			name, rawValue, found := strings.Cut(argument, "=")
 			if !found {
@@ -482,6 +538,62 @@ func loadDatabaseSearchSizeLimits(
 	return limits, nil
 }
 
+func parseDatabaseSearchLimitSelector(
+	pattern string,
+	normalizer directory.DNAttributeNormalizer,
+) (databaseSearchSizeLimit, bool, error) {
+	trimmed := strings.TrimSpace(pattern)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "*":
+		return databaseSearchSizeLimit{selector: databaseSearchLimitAny}, true, nil
+	case "anonymous", "dn.anonymous":
+		return databaseSearchSizeLimit{selector: databaseSearchLimitAnonymous}, true, nil
+	case "users":
+		return databaseSearchSizeLimit{selector: databaseSearchLimitUsers}, true, nil
+	}
+
+	separator := strings.IndexByte(trimmed, '=')
+	if separator < 0 {
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	modifier := strings.ToLower(strings.TrimSpace(trimmed[:separator]))
+	rawDN := strings.TrimSpace(trimmed[separator+1:])
+	if modifier == "dn.this" || strings.HasPrefix(modifier, "dn.this.") {
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	if modifier == "dn.regex" || modifier == "dn.self.regex" {
+		if rawDN == ".*" {
+			return databaseSearchSizeLimit{selector: databaseSearchLimitAny}, true, nil
+		}
+		return databaseSearchSizeLimit{}, false, nil
+	}
+
+	selector := databaseSearchLimitExact
+	switch modifier {
+	case "dn", "dn.self", "dn.exact", "dn.base", "dn.self.exact", "dn.self.base":
+	case "dn.one", "dn.onelevel", "dn.self.one", "dn.self.onelevel":
+		selector = databaseSearchLimitOneLevel
+	case "dn.sub", "dn.subtree", "dn.self.sub", "dn.self.subtree":
+		selector = databaseSearchLimitSubtree
+	case "dn.children", "dn.self.children":
+		selector = databaseSearchLimitChildren
+	default:
+		return databaseSearchSizeLimit{}, false, nil
+	}
+	if rawDN == "*" {
+		return databaseSearchSizeLimit{selector: databaseSearchLimitAny}, true, nil
+	}
+	subject, err := parseRuntimeDN(rawDN, normalizer)
+	if err != nil {
+		return databaseSearchSizeLimit{}, false, err
+	}
+	return databaseSearchSizeLimit{
+		selector: selector,
+		subject:  subject,
+	}, true, nil
+}
+
 func parseDatabaseSearchSizeLimit(value string, hard bool) (int, error) {
 	switch strings.ToLower(value) {
 	case "none", "unlimited":
@@ -506,12 +618,18 @@ func effectiveDatabaseSearchLimit(
 	requestLimit int,
 ) int {
 	limit := effectiveSearchLimit(serverLimit, requestLimit)
-	subject, err := directory.ParseDN(boundDN)
+	if database.dnNormalizer == nil &&
+		runtime != nil &&
+		runtime.schema != nil &&
+		!isConfigDatabase(database) {
+		database.dnNormalizer = runtime.schema
+	}
+	subject, err := parseRuntimeDN(boundDN, database.dnNormalizer)
 	if err != nil || databaseRootMatches(runtime, database, subject) {
 		return limit
 	}
 	for _, configured := range database.searchSizeLimits {
-		if !configured.subject.Equal(subject) {
+		if !databaseSearchLimitMatches(database, configured, subject) {
 			continue
 		}
 		if requestLimit <= 0 {
@@ -539,6 +657,30 @@ func effectiveDatabaseSearchLimit(
 	return limit
 }
 
+func databaseSearchLimitMatches(
+	database runtimeDatabase,
+	configured databaseSearchSizeLimit,
+	subject directory.DN,
+) bool {
+	switch configured.selector {
+	case databaseSearchLimitAnonymous:
+		return subject.Depth() == 0
+	case databaseSearchLimitUsers:
+		return subject.Depth() > 0
+	case databaseSearchLimitAny:
+		return true
+	case databaseSearchLimitOneLevel:
+		return subject.Depth() == configured.subject.Depth()+1 &&
+			databaseDNStrictlyBelow(database, subject, configured.subject)
+	case databaseSearchLimitSubtree:
+		return databaseDNAtOrBelow(database, subject, configured.subject)
+	case databaseSearchLimitChildren:
+		return databaseDNStrictlyBelow(database, subject, configured.subject)
+	default:
+		return databaseDNEqual(database, configured.subject, subject)
+	}
+}
+
 func loadRuntimeDatabaseOverlays(
 	reader storage.Reader,
 	databases []runtimeDatabase,
@@ -563,7 +705,13 @@ func loadRuntimeDatabaseOverlays(
 		if len(overlayValues) != 1 {
 			return fmt.Errorf("%s olcOverlay must be single-valued", entry.DN)
 		}
-		overlayType := databaseType(string(overlayValues[0]))
+		overlayType, err := requireSupportedRuntimeOverlayType(
+			entry.DN,
+			string(overlayValues[0]),
+		)
+		if err != nil {
+			return err
+		}
 		if seqmodOverlayDNTargetsSeqmod(entryDN) && overlayType != "seqmod" {
 			return seqmodConfigurationFailure(
 				ldapwire.ResultNamingViolation,
@@ -571,37 +719,6 @@ func loadRuntimeDatabaseOverlays(
 				entry.DN,
 			)
 		}
-		if overlayType != "sssvlv" &&
-			overlayType != "syncprov" &&
-			overlayType != "dds" &&
-			overlayType != "ppolicy" &&
-			overlayType != "pbind" &&
-			overlayType != "remoteauth" &&
-			overlayType != "homedir" &&
-			overlayType != "chain" &&
-			overlayType != "translucent" &&
-			overlayType != "pcache" &&
-			overlayType != "otp" &&
-			overlayType != "totp" &&
-			overlayType != "autoca" &&
-			overlayType != "constraint" &&
-			overlayType != "collect" &&
-			overlayType != "seqmod" &&
-			overlayType != "nestgroup" &&
-			overlayType != "deref" &&
-			overlayType != "dynlist" &&
-			overlayType != "dyngroup" &&
-			overlayType != "unique" &&
-			overlayType != "valsort" &&
-			overlayType != "retcode" &&
-			overlayType != "memberof" &&
-			overlayType != "refint" &&
-			overlayType != "rwm" &&
-			overlayType != "accesslog" &&
-			overlayType != "auditlog" {
-			return nil
-		}
-
 		parent, ok := entryDN.Parent()
 		if !ok {
 			return fmt.Errorf(
@@ -1047,6 +1164,7 @@ func loadRuntimeDatabaseOverlays(
 			}
 			configuration, err := loadPasswordPolicyRuntimeConfiguration(
 				entry,
+				database.dnNormalizer,
 			)
 			if err != nil {
 				return err
@@ -1448,7 +1566,16 @@ func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 			continue
 		}
 		for _, suffix := range database.suffixes {
-			if owner, exists := owners[suffix.Key()]; exists {
+			normalized, err := normalizeRuntimeDatabaseDN(database, suffix)
+			if err != nil {
+				return fmt.Errorf(
+					"normalize database %q suffix %q: %w",
+					database.name,
+					suffix.String(),
+					err,
+				)
+			}
+			if owner, exists := owners[normalized.Key()]; exists {
 				return fmt.Errorf(
 					"database suffix %q is configured by both %q and %q",
 					suffix.String(),
@@ -1456,7 +1583,7 @@ func validateDatabaseSuffixes(databases []runtimeDatabase) error {
 					database.name,
 				)
 			}
-			owners[suffix.Key()] = database.name
+			owners[normalized.Key()] = database.name
 		}
 	}
 	return nil
@@ -1487,8 +1614,9 @@ func applyBootstrapRoot(
 	databases []runtimeDatabase,
 	rawDN string,
 	password []byte,
+	normalizer directory.DNAttributeNormalizer,
 ) error {
-	rootDN, err := directory.ParseDN(rawDN)
+	rootDN, err := parseRuntimeDN(rawDN, normalizer)
 	if err != nil {
 		return fmt.Errorf("root DN: %w", err)
 	}
@@ -1510,7 +1638,7 @@ func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
 			continue
 		}
 		for _, suffix := range databases[index].suffixes {
-			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
+			if !databaseDNAtOrBelow(databases[index], dn, suffix) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {
@@ -1542,7 +1670,7 @@ func glueSuperiorDatabaseIndex(
 			continue
 		}
 		for _, suffix := range database.suffixes {
-			if !suffix.AncestorOf(childSuffix) {
+			if !databaseDNStrictlyBelow(*database, childSuffix, suffix) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {
@@ -1593,7 +1721,7 @@ func effectiveSyncProviderDatabaseIndex(
 			continue
 		}
 		for _, suffix := range candidate.suffixes {
-			if !suffix.AncestorOf(targetSuffix) {
+			if !databaseDNStrictlyBelow(*candidate, targetSuffix, suffix) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {
@@ -1640,7 +1768,7 @@ func databaseIndexForRootOverride(
 			continue
 		}
 		for _, suffix := range databases[index].suffixes {
-			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
+			if !databaseDNAtOrBelow(databases[index], dn, suffix) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {
@@ -1691,11 +1819,67 @@ func databaseHasSuffix(databases []runtimeDatabase, suffix directory.DN) bool {
 
 func databaseOwnsSuffix(database runtimeDatabase, dn directory.DN) bool {
 	for _, suffix := range database.suffixes {
-		if suffix.Equal(dn) {
+		if databaseDNEqual(database, suffix, dn) {
 			return true
 		}
 	}
 	return false
+}
+
+func parseRuntimeDN(
+	value string,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DN, error) {
+	if normalizer != nil {
+		return directory.ParseDNWithNormalizer(value, normalizer)
+	}
+	return directory.ParseDN(value)
+}
+
+func normalizeRuntimeDatabaseDN(
+	database runtimeDatabase,
+	dn directory.DN,
+) (directory.DN, error) {
+	return parseRuntimeDN(dn.String(), database.dnNormalizer)
+}
+
+func databaseDNEqual(
+	database runtimeDatabase,
+	left directory.DN,
+	right directory.DN,
+) bool {
+	left, err := normalizeRuntimeDatabaseDN(database, left)
+	if err != nil {
+		return false
+	}
+	right, err = normalizeRuntimeDatabaseDN(database, right)
+	return err == nil && left.Equal(right)
+}
+
+func databaseDNAtOrBelow(
+	database runtimeDatabase,
+	dn directory.DN,
+	base directory.DN,
+) bool {
+	dn, err := normalizeRuntimeDatabaseDN(database, dn)
+	if err != nil {
+		return false
+	}
+	base, err = normalizeRuntimeDatabaseDN(database, base)
+	return err == nil && (base.Equal(dn) || base.AncestorOf(dn))
+}
+
+func databaseDNStrictlyBelow(
+	database runtimeDatabase,
+	dn directory.DN,
+	base directory.DN,
+) bool {
+	dn, err := normalizeRuntimeDatabaseDN(database, dn)
+	if err != nil {
+		return false
+	}
+	base, err = normalizeRuntimeDatabaseDN(database, base)
+	return err == nil && base.AncestorOf(dn)
 }
 
 func configuredDatabasePartition(name string) string {
@@ -1732,6 +1916,29 @@ func isSockBackendDatabase(database runtimeDatabase) bool {
 
 func isSQLBackendDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "sql"
+}
+
+func databaseUsesLocalContentStorage(database runtimeDatabase) bool {
+	return database.partition != "" &&
+		!isConfigDatabase(database) &&
+		!isMonitorDatabase(database) &&
+		!isNullDatabase(database) &&
+		database.relay == nil &&
+		database.ldapBackend == nil &&
+		database.metaBackend == nil &&
+		database.sockBackend == nil &&
+		database.sqlBackend == nil
+}
+
+func databaseUsesSchemaAwareContentStorage(database runtimeDatabase) bool {
+	return database.partition != "" &&
+		!isConfigDatabase(database) &&
+		!isMonitorDatabase(database) &&
+		!isNullDatabase(database) &&
+		database.ldapBackend == nil &&
+		database.metaBackend == nil &&
+		database.sockBackend == nil &&
+		database.sqlBackend == nil
 }
 
 func databaseType(name string) string {

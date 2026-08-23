@@ -156,7 +156,10 @@ func parseConstraintRule(
 		}
 	case "uri":
 		rule.kind = constraintURI
-		parsed, parseErr := parseConstraintLDAPURL(arguments[2])
+		parsed, parseErr := parseConstraintLDAPURLWithNormalizer(
+			arguments[2],
+			database.dnNormalizer,
+		)
 		if parseErr != nil {
 			return constraintRule{}, fmt.Errorf("URI constraint: %w", parseErr)
 		}
@@ -233,7 +236,10 @@ func parseConstraintRestriction(
 	raw string,
 	database runtimeDatabase,
 ) (*constraintRestriction, error) {
-	parsed, err := parseConstraintLDAPURL(raw)
+	parsed, err := parseConstraintLDAPURLWithNormalizer(
+		raw,
+		database.dnNormalizer,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("restrict URI: %w", err)
 	}
@@ -244,14 +250,7 @@ func parseConstraintRestriction(
 		return nil, errors.New("restrict URI must not contain extensions")
 	}
 	if parsed.base != nil {
-		withinSuffix := false
-		for _, suffix := range database.suffixes {
-			if suffix.Equal(*parsed.base) || suffix.AncestorOf(*parsed.base) {
-				withinSuffix = true
-				break
-			}
-		}
-		if !withinSuffix {
+		if !uniqueBaseWithinDatabase(database, *parsed.base) {
 			return nil, fmt.Errorf(
 				"restrict URI DN %q is outside database naming contexts",
 				parsed.base.String(),
@@ -266,6 +265,13 @@ func parseConstraintRestriction(
 }
 
 func parseConstraintLDAPURL(raw string) (parsedConstraintLDAPURL, error) {
+	return parseConstraintLDAPURLWithNormalizer(raw, nil)
+}
+
+func parseConstraintLDAPURLWithNormalizer(
+	raw string,
+	normalizer directory.DNAttributeNormalizer,
+) (parsedConstraintLDAPURL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return parsedConstraintLDAPURL{}, fmt.Errorf("parse LDAP URL: %w", err)
@@ -286,7 +292,7 @@ func parseConstraintLDAPURL(raw string) (parsedConstraintLDAPURL, error) {
 		return parsedConstraintLDAPURL{}, fmt.Errorf("decode LDAP URL base: %w", err)
 	}
 	if baseText != "" {
-		base, parseErr := directory.ParseDN(baseText)
+		base, parseErr := parseRuntimeDN(baseText, normalizer)
 		if parseErr != nil {
 			return parsedConstraintLDAPURL{}, fmt.Errorf(
 				"LDAP URL base: %w",
@@ -823,11 +829,18 @@ func constraintRuleApplies(
 		return true, nil
 	}
 	if rule.restrict.base != nil {
-		dn, err := directory.ParseDN(entry.DN)
+		dn, err := directory.ParseDNWithNormalizer(entry.DN, runtime.schema)
 		if err != nil {
 			return false, err
 		}
-		if !directory.InScope(*rule.restrict.base, dn, rule.restrict.scope) {
+		base, err := directory.ParseDNWithNormalizer(
+			rule.restrict.base.String(),
+			runtime.schema,
+		)
+		if err != nil {
+			return false, err
+		}
+		if !directory.InScope(base, dn, rule.restrict.scope) {
 			return false, nil
 		}
 	}
@@ -906,6 +919,10 @@ func (server *Server) constraintURIMatches(
 		return false, operationFailed(ldapwire.ResultNoSuchObject, "")
 	}
 	targetReader := readerForDatabase(reader, *targetDatabase)
+	base, err := storage.NormalizeReaderDN(targetReader, base)
+	if err != nil {
+		return false, err
+	}
 	equalities := make([]directory.Filter, 0, len(uri.attributes))
 	for _, attribute := range uri.attributes {
 		equalities = append(equalities, directory.Filter{
@@ -923,11 +940,15 @@ func (server *Server) constraintURIMatches(
 	}
 
 	found := false
-	err := targetReader.ForEach(func(entry directory.Entry) error {
+	err = targetReader.ForEach(func(entry directory.Entry) error {
 		if found || runtime.schema.EntryHasObjectClass(entry, "referral") {
 			return nil
 		}
 		dn, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return err
+		}
+		dn, err = storage.NormalizeReaderDN(targetReader, dn)
 		if err != nil {
 			return err
 		}

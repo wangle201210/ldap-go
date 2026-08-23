@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, and OPENLDAP_ENV_FILE"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, OPENLDAP_ENV_FILE, and LDAP_GO_OPENLDAP_REBUILD"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -16,7 +16,40 @@ cd "$root"
 
 verified_revision=d172686d3d270bc961b78f3ff00d7019c8dfb094
 verified_tag=OPENLDAP_REL_ENG_2_6_13
-if [ -z "${OPENLDAP_SOURCE:-}" ]; then
+rebuild=${LDAP_GO_OPENLDAP_REBUILD:-0}
+case "$rebuild" in
+	0|1) ;;
+	*) die "LDAP_GO_OPENLDAP_REBUILD must be 0 or 1, got: $rebuild" ;;
+esac
+
+build_input=${BUILD:-${TMPDIR:-/tmp}/ldap-go-openldap-reference-2.6}
+case "$build_input" in
+	/*) default_env=$build_input/openldap-reference.env ;;
+	*) default_env=$root/$build_input/openldap-reference.env ;;
+esac
+env_file=${OPENLDAP_ENV_FILE:-$default_env}
+OPENLDAP_ENV_FILE=$env_file
+export OPENLDAP_ENV_FILE
+
+requested_source=${OPENLDAP_SOURCE:-}
+reuse_environment=0
+if [ "$rebuild" = "0" ] && [ -r "$env_file" ]; then
+	# shellcheck disable=SC1090
+	. "$env_file"
+	reuse_environment=1
+	if [ -n "$requested_source" ]; then
+		requested_source_dir=$(CDPATH= cd -- "$requested_source" 2>/dev/null && pwd) ||
+			die "OPENLDAP_SOURCE does not exist or is not readable: $requested_source"
+		environment_source_dir=$(CDPATH= cd -- "${OPENLDAP_SOURCE:-}" 2>/dev/null && pwd) ||
+			die "reused environment has an unreadable OPENLDAP_SOURCE: ${OPENLDAP_SOURCE:-unset}"
+		if [ "$requested_source_dir" != "$environment_source_dir" ]; then
+			die "OPENLDAP_ENV_FILE references $environment_source_dir, but OPENLDAP_SOURCE requests $requested_source_dir; set LDAP_GO_OPENLDAP_REBUILD=1"
+		fi
+	fi
+	printf 'Reusing OpenLDAP reference environment: %s\n' "$env_file"
+fi
+
+if [ "$reuse_environment" = "0" ] && [ -z "${OPENLDAP_SOURCE:-}" ]; then
 	if ! command -v git >/dev/null 2>&1; then
 		die "git is required to fetch the pinned OpenLDAP reference source"
 	fi
@@ -57,21 +90,30 @@ if [ -z "${OPENLDAP_SOURCE:-}" ]; then
 	export OPENLDAP_SOURCE
 fi
 
-build_input=${BUILD:-${TMPDIR:-/tmp}/ldap-go-openldap-reference-2.6}
-case "$build_input" in
-	/*) default_env=$build_input/openldap-reference.env ;;
-	*) default_env=$root/$build_input/openldap-reference.env ;;
-esac
-env_file=${OPENLDAP_ENV_FILE:-$default_env}
-OPENLDAP_ENV_FILE=$env_file
-export OPENLDAP_ENV_FILE
-
-"$root/scripts/build-openldap-reference.sh"
+if [ "$reuse_environment" = "0" ]; then
+	printf 'Building OpenLDAP reference once for this environment...\n'
+	"$root/scripts/build-openldap-reference.sh"
+fi
 
 if [ ! -r "$env_file" ]; then
 	die "reference environment was not generated: $env_file"
 fi
+# shellcheck disable=SC1090
 . "$env_file"
+
+for reference_tool in OPENLDAP_SLAPD OPENLDAP_SLAPADD OPENLDAP_LLOADD; do
+	case "$reference_tool" in
+		OPENLDAP_SLAPD) reference_path=${OPENLDAP_SLAPD:-} ;;
+		OPENLDAP_SLAPADD) reference_path=${OPENLDAP_SLAPADD:-} ;;
+		OPENLDAP_LLOADD) reference_path=${OPENLDAP_LLOADD:-} ;;
+	esac
+	if [ -z "$reference_path" ] || [ ! -x "$reference_path" ]; then
+		die "$reference_tool from $env_file is not executable: ${reference_path:-unset}; set LDAP_GO_OPENLDAP_REBUILD=1"
+	fi
+done
+if [ -z "${OPENLDAP_SCHEMA_DIR:-}" ] || [ ! -f "$OPENLDAP_SCHEMA_DIR/core.schema" ]; then
+	die "OPENLDAP_SCHEMA_DIR from $env_file has no core.schema: ${OPENLDAP_SCHEMA_DIR:-unset}"
+fi
 
 if [ "${OPENLDAP_ALLOW_UNVERIFIED_REFERENCE:-0}" != "1" ]; then
 	if [ "${OPENLDAP_REFERENCE_VERIFIED:-0}" != "1" ] ||
@@ -81,7 +123,8 @@ if [ "${OPENLDAP_ALLOW_UNVERIFIED_REFERENCE:-0}" != "1" ]; then
 	fi
 fi
 
+LDAP_GO_OPENLDAP_STRICT=1
 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1
-export LDAP_GO_FAIL_ON_OPTIONAL_SKIP
+export LDAP_GO_OPENLDAP_STRICT LDAP_GO_FAIL_ON_OPTIONAL_SKIP
 
 exec "$root/scripts/test-openldap.sh"

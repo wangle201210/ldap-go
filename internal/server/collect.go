@@ -97,17 +97,6 @@ func loadCollectRuntimeConfiguration(
 				err,
 			)
 		}
-		for _, configured := range configuration.rules {
-			if configured.base.Equal(base) {
-				return collectRuntimeConfiguration{}, collectConfigurationFailure(
-					ldapwire.ResultOther,
-					"%s olcCollectInfo DN already configured: %q",
-					entry.DN,
-					arguments[0],
-				)
-			}
-		}
-
 		attributeValues := strings.Split(arguments[1], ",")
 		attributes := make([]collectAttribute, 0, len(attributeValues))
 		for _, attribute := range attributeValues {
@@ -141,8 +130,8 @@ func loadCollectRuntimeConfiguration(
 	}
 
 	sort.SliceStable(configuration.rules, func(left, right int) bool {
-		return len(configuration.rules[left].normalized) >
-			len(configuration.rules[right].normalized)
+		return configuration.rules[left].base.Depth() >
+			configuration.rules[right].base.Depth()
 	})
 	return configuration, nil
 }
@@ -183,9 +172,30 @@ func validateCollectSchema(
 	if configuration == nil {
 		return nil
 	}
+	seenBases := make(map[string]struct{}, len(configuration.rules))
 	for ruleIndex := range configuration.rules {
-		for attributeIndex := range configuration.rules[ruleIndex].attributes {
-			attribute := &configuration.rules[ruleIndex].attributes[attributeIndex]
+		rule := &configuration.rules[ruleIndex]
+		base, err := registry.NormalizeDN(rule.base.String())
+		if err != nil {
+			return collectConfigurationFailure(
+				ldapwire.ResultOther,
+				"olcCollectInfo unable to normalize DN %q: %v",
+				rule.base.String(),
+				err,
+			)
+		}
+		if _, duplicate := seenBases[base.Key()]; duplicate {
+			return collectConfigurationFailure(
+				ldapwire.ResultOther,
+				"olcCollectInfo DN already configured: %q",
+				rule.base.String(),
+			)
+		}
+		seenBases[base.Key()] = struct{}{}
+		rule.base = base
+		rule.normalized = base.Key()
+		for attributeIndex := range rule.attributes {
+			attribute := &rule.attributes[attributeIndex]
 			description, key, baseKey, err := resolveCollectAttributeDescription(
 				registry,
 				attribute.raw,
@@ -294,6 +304,10 @@ func (cache *collectProjectionCache) apply(
 		return entry, nil
 	}
 	target, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	target, err = cache.runtime.schema.NormalizeDN(target.String())
 	if err != nil {
 		return directory.Entry{}, err
 	}
@@ -452,6 +466,10 @@ func validateCollectModify(
 	configurations := collectConfigurationsForDatabase(runtime.databases, database)
 	if len(configurations) == 0 {
 		return nil
+	}
+	target, err := runtime.schema.NormalizeDN(target.String())
+	if err != nil {
+		return err
 	}
 	for _, change := range changes {
 		_, _, baseKey, err := resolveCollectAttributeDescription(

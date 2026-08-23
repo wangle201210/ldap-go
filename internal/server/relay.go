@@ -53,7 +53,7 @@ func loadRelayRuntimeConfiguration(
 	if len(values) == 0 {
 		return configuration, nil
 	}
-	target, err := directory.ParseDN(string(values[0]))
+	target, err := parseRuntimeDN(string(values[0]), database.dnNormalizer)
 	if err != nil || target.Depth() == 0 {
 		return nil, fmt.Errorf("%s olcRelay has invalid DN %q", entry.DN, values[0])
 	}
@@ -119,7 +119,7 @@ func loadRWMRuntimeConfiguration(
 				entry.DN,
 			)
 		}
-		local, err := directory.ParseDN(localRaw)
+		local, err := parseRuntimeDN(localRaw, database.dnNormalizer)
 		if err != nil || local.Depth() == 0 {
 			return rwmRuntimeConfiguration{}, fmt.Errorf(
 				"%s rwm suffixmassage has invalid local DN %q",
@@ -134,7 +134,7 @@ func loadRWMRuntimeConfiguration(
 				localRaw,
 			)
 		}
-		remote, err := directory.ParseDN(remoteRaw)
+		remote, err := parseRuntimeDN(remoteRaw, database.dnNormalizer)
 		if err != nil || remote.Depth() == 0 {
 			return rwmRuntimeConfiguration{}, fmt.Errorf(
 				"%s rwm suffixmassage has invalid remote DN %q",
@@ -438,7 +438,7 @@ func databaseIndexForRelayTarget(
 			continue
 		}
 		for _, suffix := range databases[index].suffixes {
-			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
+			if !databaseDNAtOrBelow(databases[index], dn, suffix) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {
@@ -452,7 +452,7 @@ func databaseIndexForRelayTarget(
 
 func dnWithinAnySuffix(database runtimeDatabase, dn directory.DN) bool {
 	for _, suffix := range database.suffixes {
-		if suffix.Equal(dn) || suffix.AncestorOf(dn) {
+		if databaseDNAtOrBelow(database, dn, suffix) {
 			return true
 		}
 	}
@@ -464,7 +464,9 @@ func databaseAuthenticationRoot(
 	database runtimeDatabase,
 	dn directory.DN,
 ) ([]byte, bool) {
-	if database.rootDN != nil && database.rootDN.Equal(dn) && database.rootPasswordSet {
+	if database.rootDN != nil &&
+		databaseDNEqual(database, *database.rootDN, dn) &&
+		database.rootPasswordSet {
 		return database.rootPassword, true
 	}
 	if runtime == nil || database.relay == nil {
@@ -474,8 +476,10 @@ func databaseAuthenticationRoot(
 	if targetIndex < 0 || targetIndex >= len(runtime.databases) {
 		return nil, false
 	}
-	remoteDN := dn
-	var err error
+	remoteDN, err := normalizeRuntimeDatabaseDN(database, dn)
+	if err != nil {
+		return nil, false
+	}
 	if database.rwm != nil {
 		remoteDN, err = database.rwm.mapDNToRemote(dn)
 		if err != nil {
@@ -483,7 +487,9 @@ func databaseAuthenticationRoot(
 		}
 	}
 	target := runtime.databases[targetIndex]
-	if target.rootDN == nil || !target.rootDN.Equal(remoteDN) || !target.rootPasswordSet {
+	if target.rootDN == nil ||
+		!databaseDNEqual(target, *target.rootDN, remoteDN) ||
+		!target.rootPasswordSet {
 		return nil, false
 	}
 	return target.rootPassword, true
@@ -494,7 +500,7 @@ func databaseRootMatches(
 	database runtimeDatabase,
 	dn directory.DN,
 ) bool {
-	if database.rootDN != nil && database.rootDN.Equal(dn) {
+	if database.rootDN != nil && databaseDNEqual(database, *database.rootDN, dn) {
 		return true
 	}
 	if runtime == nil || database.relay == nil {
@@ -508,14 +514,14 @@ func databaseRootMatches(
 	if target.rootDN == nil {
 		return false
 	}
-	if target.rootDN.Equal(dn) {
+	if databaseDNEqual(target, *target.rootDN, dn) {
 		return true
 	}
 	if database.rwm == nil {
 		return false
 	}
 	remoteDN, err := database.rwm.mapDNToRemote(dn)
-	return err == nil && target.rootDN.Equal(remoteDN)
+	return err == nil && databaseDNEqual(target, *target.rootDN, remoteDN)
 }
 
 func databaseUsesNullBackend(runtime *runtimeState, database runtimeDatabase) bool {
@@ -560,6 +566,13 @@ func readerForDatabase(
 		return &rwmStorageReader{Reader: backend, configuration: database.rwm}
 	}
 	partitioned := storage.ReaderInPartition(reader, database.partition)
+	if database.dnNormalizer != nil && databaseUsesSchemaAwareContentStorage(database) {
+		partitioned = storage.ReaderInPartitionWithNormalizer(
+			reader,
+			database.partition,
+			database.dnNormalizer,
+		)
+	}
 	if database.rwm == nil {
 		return partitioned
 	}
@@ -604,6 +617,13 @@ func writerForDatabase(
 		}
 	}
 	partitioned := storage.WriterInPartition(writer, database.partition)
+	if database.dnNormalizer != nil && databaseUsesSchemaAwareContentStorage(database) {
+		partitioned = storage.WriterInPartitionWithNormalizer(
+			writer,
+			database.partition,
+			database.dnNormalizer,
+		)
+	}
 	if database.rwm == nil {
 		return partitioned
 	}
@@ -617,6 +637,40 @@ func writerForDatabase(
 type rwmStorageReader struct {
 	storage.Reader
 	configuration *rwmRuntimeConfiguration
+}
+
+func (reader *rwmStorageReader) NormalizeDNIdentity(
+	dn directory.DN,
+) (directory.DN, error) {
+	if _, ok := reader.Reader.(interface {
+		NormalizeDNIdentity(directory.DN) (directory.DN, error)
+	}); !ok {
+		return dn, nil
+	}
+	remote, err := reader.configuration.mapDNToRemote(dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	remote, err = storage.NormalizeReaderDN(reader.Reader, remote)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return reader.configuration.mapDNToLocal(remote)
+}
+
+func (reader *rwmStorageReader) DNIdentityOrderKey(
+	dn directory.DN,
+) (string, error) {
+	if _, ok := reader.Reader.(interface {
+		DNIdentityOrderKey(directory.DN) (string, error)
+	}); !ok {
+		return dn.Key(), nil
+	}
+	remote, err := reader.configuration.mapDNToRemote(dn)
+	if err != nil {
+		return "", err
+	}
+	return storage.ReaderDNOrderKey(reader.Reader, remote)
 }
 
 func (reader *rwmStorageReader) AccessContext() any {
@@ -808,11 +862,22 @@ func (configuration *rwmRuntimeConfiguration) mapDNToRemote(
 	if configuration == nil || configuration.suffix == nil {
 		return dn, nil
 	}
-	if !configuration.suffix.local.Equal(dn) &&
-		!configuration.suffix.local.AncestorOf(dn) {
+	local, err := configuration.normalizeDN(configuration.suffix.local)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	remote, err := configuration.normalizeDN(configuration.suffix.remote)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	comparisonDN, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !local.Equal(comparisonDN) && !local.AncestorOf(comparisonDN) {
 		return dn, nil
 	}
-	return dn.ReplaceAncestor(configuration.suffix.local, configuration.suffix.remote)
+	return comparisonDN.ReplaceAncestor(local, remote)
 }
 
 func (configuration *rwmRuntimeConfiguration) mapDNToLocal(
@@ -821,11 +886,31 @@ func (configuration *rwmRuntimeConfiguration) mapDNToLocal(
 	if configuration == nil || configuration.suffix == nil {
 		return dn, nil
 	}
-	if !configuration.suffix.remote.Equal(dn) &&
-		!configuration.suffix.remote.AncestorOf(dn) {
+	local, err := configuration.normalizeDN(configuration.suffix.local)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	remote, err := configuration.normalizeDN(configuration.suffix.remote)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	comparisonDN, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !remote.Equal(comparisonDN) && !remote.AncestorOf(comparisonDN) {
 		return dn, nil
 	}
-	return dn.ReplaceAncestor(configuration.suffix.remote, configuration.suffix.local)
+	return comparisonDN.ReplaceAncestor(remote, local)
+}
+
+func (configuration *rwmRuntimeConfiguration) normalizeDN(
+	dn directory.DN,
+) (directory.DN, error) {
+	if configuration == nil || configuration.schema == nil {
+		return dn, nil
+	}
+	return directory.ParseDNWithNormalizer(dn.String(), configuration.schema)
 }
 
 func (configuration *rwmRuntimeConfiguration) mapEntryToRemote(

@@ -257,7 +257,13 @@ func TestNestGroupRuntimeConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := entry.Clone()
 			test.change(&candidate)
-			_, err := loadNestGroupRuntimeConfiguration(candidate)
+			configuration, err := loadNestGroupRuntimeConfiguration(candidate)
+			if err == nil {
+				err = validateNestGroupSchema(
+					registry,
+					[]nestGroupRuntimeConfiguration{configuration},
+				)
+			}
 			result, ok := nestGroupConfigurationResult(err)
 			if !ok || result.Code != test.code {
 				t.Fatalf("error = %v, result = %#v", err, result)
@@ -407,7 +413,10 @@ func TestNestGroupRequestGraphExpansion(t *testing.T) {
 			t.Fatalf("graph size = %d/%d", len(plan.entries), len(plan.instances))
 		}
 
-		top, _ := directory.ParseDN("cn=top,ou=groups,dc=example,dc=com")
+		top, err := registry.NormalizeDN("cn=top,ou=groups,dc=example,dc=com")
+		if err != nil {
+			return err
+		}
 		projected, err := cache.project(database, plan.entries[top.Key()].entry)
 		if err != nil {
 			return err
@@ -419,7 +428,10 @@ func TestNestGroupRequestGraphExpansion(t *testing.T) {
 			"uid=bob,ou=people,dc=example,dc=com",
 		)
 
-		cycle, _ := directory.ParseDN("cn=cycle-a,ou=groups,dc=example,dc=com")
+		cycle, err := registry.NormalizeDN("cn=cycle-a,ou=groups,dc=example,dc=com")
+		if err != nil {
+			return err
+		}
 		projected, err = cache.project(database, plan.entries[cycle.Key()].entry)
 		if err != nil {
 			return err
@@ -431,7 +443,10 @@ func TestNestGroupRequestGraphExpansion(t *testing.T) {
 			"uid=bob,ou=people,dc=example,dc=com",
 		)
 
-		alice, _ := directory.ParseDN("uid=alice,ou=people,dc=example,dc=com")
+		alice, err := registry.NormalizeDN("uid=alice,ou=people,dc=example,dc=com")
+		if err != nil {
+			return err
+		}
 		projected, err = cache.project(database, plan.entries[alice.Key()].entry)
 		if err != nil {
 			return err

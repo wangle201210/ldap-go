@@ -35,7 +35,7 @@ func TestMetaDNRouteCacheForeverAndDisabled(t *testing.T) {
 	if got := cache.lookup(forever, dn); got != "target" {
 		t.Fatalf("forever target = %q", got)
 	}
-	cache.remove(forever.configDNKey, dn)
+	cache.remove(forever, dn)
 	if got := cache.lookup(forever, dn); got != "" {
 		t.Fatalf("removed target = %q", got)
 	}

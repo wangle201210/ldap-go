@@ -92,7 +92,7 @@ func (server *Server) handlePasswordModify(
 	if passwordRequest.HasUserIdentity && len(passwordRequest.UserIdentity) > 0 {
 		targetName = string(passwordRequest.UserIdentity)
 	}
-	target, err := directory.ParseDN(targetName)
+	target, err := normalizePasswordModifyDN(state.runtime, targetName, nil)
 	if err != nil {
 		return server.writePasswordModifyResult(
 			connection,
@@ -124,6 +124,55 @@ func (server *Server) handlePasswordModify(
 			nil,
 		)
 	}
+	target, err = normalizePasswordModifyDN(state.runtime, target.String(), database)
+	if err != nil {
+		return server.writePasswordModifyResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, "Invalid DN"),
+			nil,
+		)
+	}
+	bound, err := normalizePasswordModifyDN(state.runtime, state.boundDN, database)
+	if err != nil {
+		return server.internalPasswordModifyError(connection, message.ID, err)
+	}
+	authorizationDN := bound.NormalizedString()
+	accessSubject := server.connectionACLSubject(state)
+	accessSubject.DN = authorizationDN
+	if accessSubject.RealDN != "" {
+		realDN, normalizeErr := normalizePasswordModifyDN(
+			state.runtime,
+			accessSubject.RealDN,
+			nil,
+		)
+		if normalizeErr != nil {
+			return server.internalPasswordModifyError(
+				connection,
+				message.ID,
+				normalizeErr,
+			)
+		}
+		accessSubject.RealDN = realDN.NormalizedString()
+	}
+	ctx = withACLSubject(ctx, accessSubject)
+	originalBoundDN := state.boundDN
+	originalRealDN := state.operationRealDN
+	state.boundDN = authorizationDN
+	state.operationRealDN = accessSubject.RealDN
+	defer func() {
+		state.boundDN = originalBoundDN
+		state.operationRealDN = originalRealDN
+	}()
+	if passwordModifyLegacyIdentityCollision(bound, target) &&
+		!databaseRootMatches(state.runtime, *database, bound) {
+		return server.writePasswordModifyResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultInsufficientAccessRights, ""),
+			nil,
+		)
+	}
 	seqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, target)
 	if err != nil {
 		return err
@@ -149,7 +198,7 @@ func (server *Server) handlePasswordModify(
 			}
 		}
 	}
-	if result := updateOperationPrecondition(state.runtime, state.boundDN, target); result != nil {
+	if result := updateOperationPrecondition(state.runtime, authorizationDN, target); result != nil {
 		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
 	}
 	if result := databaseRestrictionResult(
@@ -207,7 +256,7 @@ func (server *Server) handlePasswordModify(
 	policyOptions.externalMatches, err = server.preverifyPasswordModification(
 		ctx,
 		state.runtime,
-		state.boundDN,
+		authorizationDN,
 		*database,
 		target,
 		changes,
@@ -230,7 +279,7 @@ func (server *Server) handlePasswordModify(
 			if server.entryPasswordMatches(
 				state.runtime,
 				reader,
-				state.boundDN,
+				authorizationDN,
 				entry,
 				passwordRequest.OldPassword,
 				policyOptions.externalMatches,
@@ -254,7 +303,7 @@ func (server *Server) handlePasswordModify(
 	writeRecord := &accesslogWriteRecord{
 		operation:       accesslogModify,
 		session:         state.connectionID,
-		authorizationDN: state.boundDN,
+		authorizationDN: authorizationDN,
 		requestDN:       target,
 	}
 	if isConfigurationDN(target) {
@@ -264,7 +313,7 @@ func (server *Server) handlePasswordModify(
 	nextRuntime, syncChanges, err := server.modifyEntry(
 		ctx,
 		state.runtime,
-		state.boundDN,
+		authorizationDN,
 		target,
 		*database,
 		changes,
@@ -275,7 +324,7 @@ func (server *Server) handlePasswordModify(
 		precondition,
 		server.passwordPolicyModificationProcessor(
 			state.runtime,
-			state.boundDN,
+			authorizationDN,
 			*database,
 			policyOptions,
 		),
@@ -299,6 +348,39 @@ func (server *Server) handlePasswordModify(
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
 		responseValue,
 	)
+}
+
+func normalizePasswordModifyDN(
+	runtime *runtimeState,
+	value string,
+	database *runtimeDatabase,
+) (directory.DN, error) {
+	var normalizer directory.DNAttributeNormalizer
+	if runtime != nil {
+		normalizer = runtime.schema
+	}
+	dn, err := parseRuntimeDN(value, normalizer)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if database == nil && runtime != nil {
+		database = databaseForDN(runtime, dn)
+	}
+	if database == nil {
+		return dn, nil
+	}
+	return normalizeRuntimeDatabaseDN(*database, dn)
+}
+
+func passwordModifyLegacyIdentityCollision(left, right directory.DN) bool {
+	if left.Equal(right) {
+		return false
+	}
+	// Legacy ACL self matching folds case. Fail closed only when that legacy
+	// identity would collapse two DNs that the active schema keeps distinct.
+	legacyLeft, leftErr := directory.ParseDN(left.String())
+	legacyRight, rightErr := directory.ParseDN(right.String())
+	return leftErr == nil && rightErr == nil && legacyLeft.Equal(legacyRight)
 }
 
 func (server *Server) entryPasswordMatches(

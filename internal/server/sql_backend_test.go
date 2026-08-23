@@ -696,6 +696,412 @@ func TestSQLBackendTransactionRejectsMultipleBackends(t *testing.T) {
 	}
 }
 
+func TestResolveAccesslogDatabasesRejectsUnsafeSQLTopology(t *testing.T) {
+	t.Parallel()
+
+	sourceSuffix, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(source): %v", err)
+	}
+	targetSuffix, err := directory.ParseDN("cn=log")
+	if err != nil {
+		t.Fatalf("ParseDN(target): %v", err)
+	}
+	branchBase, err := directory.ParseDN("ou=people,dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(branch): %v", err)
+	}
+	unrelatedBase, err := directory.ParseDN("dc=unrelated,dc=example")
+	if err != nil {
+		t.Fatalf("ParseDN(unrelated): %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		operations  accesslogOperation
+		bases       []accesslogBaseConfiguration
+		sourceSQL   bool
+		targetSQL   bool
+		wantFailure bool
+	}{
+		{
+			name:        "global writes between SQL backends",
+			operations:  accesslogWrites,
+			sourceSQL:   true,
+			targetSQL:   true,
+			wantFailure: true,
+		},
+		{
+			name:       "read logging between SQL backends",
+			operations: accesslogReads,
+			sourceSQL:  true,
+			targetSQL:  true,
+		},
+		{
+			name:      "branch writes inside source suffix",
+			sourceSQL: true,
+			targetSQL: true,
+			bases: []accesslogBaseConfiguration{
+				{operations: accesslogAdd, base: branchBase},
+			},
+			wantFailure: true,
+		},
+		{
+			name:      "branch writes outside source suffix",
+			sourceSQL: true,
+			targetSQL: true,
+			bases: []accesslogBaseConfiguration{
+				{operations: accesslogModify, base: unrelatedBase},
+			},
+		},
+		{
+			name:       "SQL source to local target",
+			operations: accesslogWrites,
+			sourceSQL:  true,
+		},
+		{
+			name:       "local source to SQL target",
+			operations: accesslogWrites,
+			targetSQL:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := &accesslogRuntimeConfiguration{
+				targetSuffix:        targetSuffix,
+				sourceDatabaseIndex: -1,
+				targetDatabaseIndex: -1,
+				operations:          test.operations,
+				bases:               test.bases,
+			}
+			databases := []runtimeDatabase{
+				{
+					name:       "{1}sql",
+					suffixes:   []directory.DN{sourceSuffix},
+					accesslog:  configuration,
+					sqlBackend: optionalSQLBackend(test.sourceSQL),
+				},
+				{
+					name:       "{2}sql",
+					suffixes:   []directory.DN{targetSuffix},
+					sqlBackend: optionalSQLBackend(test.targetSQL),
+				},
+			}
+			err := resolveAccesslogDatabases(databases)
+			if test.wantFailure {
+				if err == nil || !strings.Contains(
+					err.Error(),
+					"independent SQL backends cannot be committed atomically",
+				) {
+					t.Fatalf("resolveAccesslogDatabases() error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveAccesslogDatabases(): %v", err)
+			}
+			if configuration.sourceDatabaseIndex != 0 ||
+				configuration.targetDatabaseIndex != 1 {
+				t.Fatalf(
+					"resolved indexes = source %d target %d, want 0 and 1",
+					configuration.sourceDatabaseIndex,
+					configuration.targetDatabaseIndex,
+				)
+			}
+		})
+	}
+}
+
+func TestSQLBackendAccesslogUnsafeTopologyOnlineRollback(t *testing.T) {
+	sourceDatabaseName := filepath.Join(t.TempDir(), "source.db")
+	targetDatabaseName := filepath.Join(t.TempDir(), "accesslog.db")
+	seedWritableSQLBackendDatabase(t, sourceDatabaseName)
+	seedSQLBackendDatabase(t, targetDatabaseName)
+	enableWritableSQLPasswordMapping(t, sourceDatabaseName)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	seedSQLAccesslogTopologyConfiguration(
+		t,
+		store,
+		sourceDatabaseName,
+		targetDatabaseName,
+	)
+
+	address, stop := startServer(t, store, Config{SQLDriver: "sqlite"})
+	defer stop()
+	configClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(config): %v", err)
+	}
+	defer configClient.Close()
+	if err := configClient.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatalf("Bind(config): %v", err)
+	}
+	dataClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(data): %v", err)
+	}
+	defer dataClient.Close()
+	if err := dataClient.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("Bind(data root): %v", err)
+	}
+
+	const overlayDN = "olcOverlay={0}accesslog,olcDatabase={1}sql,cn=config"
+	overlay := ldap.NewAddRequest(overlayDN, nil)
+	overlay.Attribute(
+		"objectClass",
+		[]string{"olcOverlayConfig", "olcAccessLogConfig"},
+	)
+	overlay.Attribute("olcOverlay", []string{"{0}accesslog"})
+	overlay.Attribute("olcAccessLogDB", []string{"cn=log"})
+	overlay.Attribute("olcAccessLogOps", []string{"writes"})
+	overlay.Attribute("olcAccessLogSuccess", []string{"TRUE"})
+	err = configClient.Add(overlay)
+	assertLDAPResultCode(t, err, ldap.LDAPResultConstraintViolation)
+	if !strings.Contains(
+		err.Error(),
+		"independent SQL backends cannot be committed atomically",
+	) {
+		t.Fatalf("unsafe topology diagnostic = %v", err)
+	}
+	assertStoredEntryMissing(t, store, overlayDN)
+
+	duplicate := writableSQLPersonAddRequest("duplicate", "Duplicate User", "User")
+	if err := dataClient.Add(duplicate); err != nil {
+		t.Fatalf("seed duplicate Add: %v", err)
+	}
+	assertLDAPResultCode(
+		t,
+		dataClient.Add(duplicate),
+		ldap.LDAPResultEntryAlreadyExists,
+	)
+	assertLDAPResultCode(
+		t,
+		dataClient.Del(ldap.NewDelRequest(
+			"uid=missing,dc=example,dc=com",
+			nil,
+		)),
+		ldap.LDAPResultNoSuchObject,
+	)
+
+	noOp := writableSQLPersonAddRequest("noop-after-reject", "No-Op User", "User")
+	noOp.Controls = []ldap.Control{
+		ldap.NewControlString(noOpControlOID, true, ""),
+	}
+	assertLDAPResultCode(
+		t,
+		dataClient.Add(noOp),
+		uint16(ldapwire.ResultNoOperation),
+	)
+
+	restrictedDN := "uid=restricted,dc=example,dc=com"
+	restricted := writableSQLPersonAddRequest("restricted", "Restricted User", "User")
+	restricted.Attribute("userPassword", []string{"restricted-secret"})
+	if err := dataClient.Add(restricted); err != nil {
+		t.Fatalf("seed restricted user: %v", err)
+	}
+	restrictedClient, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(restricted): %v", err)
+	}
+	defer restrictedClient.Close()
+	if err := restrictedClient.Bind(restrictedDN, "restricted-secret"); err != nil {
+		t.Fatalf("Bind(restricted): %v", err)
+	}
+	assertLDAPResultCode(
+		t,
+		restrictedClient.Add(writableSQLPersonAddRequest(
+			"acl-denied",
+			"ACL Denied",
+			"User",
+		)),
+		ldap.LDAPResultInsufficientAccessRights,
+	)
+
+	sourceDatabase, err := sql.Open("sqlite", sourceDatabaseName)
+	if err != nil {
+		t.Fatalf("open source fixture: %v", err)
+	}
+	defer sourceDatabase.Close()
+	assertWritableSQLCount(
+		t,
+		sourceDatabase,
+		"persons WHERE uid = ?",
+		0,
+		"noop-after-reject",
+	)
+}
+
+func TestSQLBackendAccesslogUnsafeTopologyPreventsStart(t *testing.T) {
+	sourceDatabaseName := filepath.Join(t.TempDir(), "source.db")
+	targetDatabaseName := filepath.Join(t.TempDir(), "accesslog.db")
+	seedWritableSQLBackendDatabase(t, sourceDatabaseName)
+	seedSQLBackendDatabase(t, targetDatabaseName)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	seedSQLAccesslogTopologyConfiguration(
+		t,
+		store,
+		sourceDatabaseName,
+		targetDatabaseName,
+	)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.Put(directory.Entry{
+			DN: "olcOverlay={0}accesslog,olcDatabase={1}sql,cn=config",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues(
+					"olcOverlayConfig",
+					"olcAccessLogConfig",
+				)},
+				{Description: "olcOverlay", Values: stringValues("{0}accesslog")},
+				{Description: "olcAccessLogDB", Values: stringValues("cn=log")},
+				{Description: "olcAccessLogOps", Values: stringValues("writes")},
+				{Description: "olcAccessLogSuccess", Values: stringValues("TRUE")},
+			},
+		}, false)
+	}); err != nil {
+		t.Fatalf("seed unsafe accesslog overlay: %v", err)
+	}
+
+	instance, err := New(Config{Store: store, SQLDriver: "sqlite"})
+	if instance != nil {
+		instance.closeSQLBackends()
+	}
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"independent SQL backends cannot be committed atomically",
+	) {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	sourceDatabase, err := sql.Open("sqlite", sourceDatabaseName)
+	if err != nil {
+		t.Fatalf("open source fixture: %v", err)
+	}
+	defer sourceDatabase.Close()
+	assertWritableSQLCount(t, sourceDatabase, "persons", 0)
+	assertWritableSQLCount(t, sourceDatabase, "ldap_entries", 1)
+
+	targetDatabase, err := sql.Open("sqlite", targetDatabaseName)
+	if err != nil {
+		t.Fatalf("open target fixture: %v", err)
+	}
+	defer targetDatabase.Close()
+	assertWritableSQLCount(t, targetDatabase, "ldap_entries", 2)
+}
+
+func assertStoredEntryMissing(t *testing.T, store storage.Store, rawDN string) {
+	t.Helper()
+	dn, err := directory.ParseDN(rawDN)
+	if err != nil {
+		t.Fatalf("ParseDN(%q): %v", rawDN, err)
+	}
+	err = store.View(context.Background(), func(reader storage.Reader) error {
+		_, err := reader.Get(dn)
+		return err
+	})
+	if !errors.Is(err, storage.ErrEntryNotFound) {
+		t.Fatalf("stored entry %s error = %v, want entry not found", rawDN, err)
+	}
+}
+
+func enableWritableSQLPasswordMapping(t *testing.T, databaseName string) {
+	t.Helper()
+	database, err := sql.Open("sqlite", databaseName)
+	if err != nil {
+		t.Fatalf("open writable SQL password fixture: %v", err)
+	}
+	defer database.Close()
+	statements := []string{
+		`ALTER TABLE persons ADD COLUMN user_password BLOB`,
+		`INSERT INTO ldap_attr_mappings (
+			id, oc_map_id, name, sel_expr, from_tbls, join_where,
+			add_proc, delete_proc, param_order, expect_return
+		) VALUES (
+			6, 1, 'userPassword', 'persons.user_password', 'persons', NULL,
+			'UPDATE persons SET user_password=? WHERE id=?',
+			'UPDATE persons SET user_password=NULL WHERE user_password=? AND id=?',
+			3, 0
+		)`,
+	}
+	for index, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("password fixture statement %d: %v", index, err)
+		}
+	}
+}
+
+func seedSQLAccesslogTopologyConfiguration(
+	t *testing.T,
+	store storage.Store,
+	sourceDatabaseName,
+	targetDatabaseName string,
+) {
+	t.Helper()
+	err := store.Update(context.Background(), func(writer storage.Writer) error {
+		sourceDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		if err := writer.Delete(sourceDN); err != nil {
+			return err
+		}
+		entries := []directory.Entry{
+			{
+				DN: "olcDatabase={1}sql,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcSqlConfig")},
+					{Description: "olcDatabase", Values: stringValues("{1}sql")},
+					{Description: "olcSuffix", Values: stringValues("dc=example,dc=com")},
+					{Description: "olcRootDN", Values: stringValues("cn=admin,dc=example,dc=com")},
+					{Description: "olcRootPW", Values: stringValues("admin-secret")},
+					{Description: "olcDbName", Values: stringValues(sourceDatabaseName)},
+					{Description: "olcDbUser", Values: stringValues("unused")},
+					{Description: "olcAccess", Values: stringValues(
+						"{0}to attrs=userPassword by anonymous auth by self write by * none",
+						"{1}to * by users read by * read",
+					)},
+				},
+			},
+			{
+				DN: "olcDatabase={2}sql,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcSqlConfig")},
+					{Description: "olcDatabase", Values: stringValues("{2}sql")},
+					{Description: "olcSuffix", Values: stringValues("cn=log")},
+					{Description: "olcDbName", Values: stringValues(targetDatabaseName)},
+					{Description: "olcDbUser", Values: stringValues("unused")},
+					{Description: "olcAccess", Values: stringValues("{0}to * by * read")},
+				},
+			},
+		}
+		for _, entry := range entries {
+			if err := writer.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return writer.SetNamingContexts([]string{
+			"dc=example,dc=com",
+			"cn=log",
+			"cn=config",
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed SQL accesslog topology: %v", err)
+	}
+}
+
+func optionalSQLBackend(enabled bool) *sqlBackendRuntimeConfiguration {
+	if !enabled {
+		return nil
+	}
+	return &sqlBackendRuntimeConfiguration{}
+}
+
 func openSQLBackendPoolFixture(t *testing.T) *sqlBackendRuntimeConfiguration {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")

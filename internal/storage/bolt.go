@@ -112,22 +112,26 @@ func (tx *boltTx) Get(dn directory.DN) (directory.Entry, error) {
 	}
 	var result directory.Entry
 	found := false
-	foundPartition := ""
 	err := tx.entries.ForEach(func(key, value []byte) error {
-		partition, entryDN := splitPartitionedEntryKey(string(key))
-		if entryDN != dn.Key() {
-			return nil
-		}
-		if found && partition != foundPartition {
-			return ErrEntryAmbiguous
-		}
-		entry, err := decodeEntry(value)
+		_, entryDN := splitPartitionedEntryKey(string(key))
+		entry, err := decodeAndValidateEntry(entryDN, value)
 		if err != nil {
 			return err
 		}
+		directIdentity := entryDN == dn.Key()
+		if !directIdentity && !entryMatchesDisplayDN(entry, dn) {
+			return nil
+		}
+		if entryDN == dn.Key() {
+			if err := validateDirectIdentityLookup(entryDN, dn); err != nil {
+				return err
+			}
+		}
+		if found {
+			return ErrEntryAmbiguous
+		}
 		result = entry
 		found = true
-		foundPartition = partition
 		return nil
 	})
 	if err != nil {
@@ -143,22 +147,66 @@ func (tx *boltTx) GetIn(partition string, dn directory.DN) (directory.Entry, err
 	if err := tx.ctx.Err(); err != nil {
 		return directory.Entry{}, err
 	}
-	value := tx.entries.Get([]byte(partitionedEntryKey(partition, dn.Key())))
+	physicalKey := []byte(partitionedEntryKey(partition, dn.Key()))
+	value := tx.entries.Get(physicalKey)
 	if value == nil && partition == "" {
-		value = tx.entries.Get([]byte(dn.Key()))
+		physicalKey = []byte(dn.Key())
+		value = tx.entries.Get(physicalKey)
 	}
-	if value == nil {
+	var directKey []byte
+	var directEntry directory.Entry
+	if value != nil {
+		entry, err := decodeAndValidateEntry(dn.Key(), value)
+		if err != nil {
+			return directory.Entry{}, err
+		}
+		if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
+			return directory.Entry{}, err
+		}
+		directKey = bytes.Clone(physicalKey)
+		directEntry = entry
+	}
+	match := directEntry
+	matchKey := directKey
+	err := tx.entries.ForEach(func(key, value []byte) error {
+		if bytes.Equal(key, directKey) {
+			return nil
+		}
+		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
+		if entryPartition != partition {
+			return nil
+		}
+		entry, err := decodeAndValidateEntry(entryKey, value)
+		if err != nil {
+			return err
+		}
+		directIdentity := entryKey == dn.Key() && isSchemaAwareDNKey(entryKey)
+		if !directIdentity && !entryMatchesDisplayDN(entry, dn) {
+			return nil
+		}
+		if matchKey != nil {
+			return ErrEntryAmbiguous
+		}
+		match = entry
+		matchKey = bytes.Clone(key)
+		return nil
+	})
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if matchKey == nil {
 		return directory.Entry{}, ErrEntryNotFound
 	}
-	return decodeEntry(value)
+	return match, nil
 }
 
 func (tx *boltTx) ForEach(fn func(directory.Entry) error) error {
-	return tx.entries.ForEach(func(_, value []byte) error {
+	return tx.entries.ForEach(func(key, value []byte) error {
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
-		entry, err := decodeEntry(value)
+		_, entryKey := splitPartitionedEntryKey(string(key))
+		entry, err := decodeAndValidateEntry(entryKey, value)
 		if err != nil {
 			return err
 		}
@@ -174,11 +222,11 @@ func (tx *boltTx) ForEachIn(
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
-		entryPartition, _ := splitPartitionedEntryKey(string(key))
+		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
 		if entryPartition != partition {
 			return nil
 		}
-		entry, err := decodeEntry(value)
+		entry, err := decodeAndValidateEntry(entryKey, value)
 		if err != nil {
 			return err
 		}
@@ -193,12 +241,43 @@ func (tx *boltTx) ForEachPartition(
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
-		partition, _ := splitPartitionedEntryKey(string(key))
-		entry, err := decodeEntry(value)
+		partition, entryKey := splitPartitionedEntryKey(string(key))
+		entry, err := decodeAndValidateEntry(entryKey, value)
 		if err != nil {
 			return err
 		}
 		return fn(partition, entry)
+	})
+}
+
+func (tx *boltTx) validateSchemaAwareDNBindingsIn(
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) error {
+	return tx.entries.ForEach(func(key, value []byte) error {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		entryPartition, physicalKey := splitPartitionedEntryKey(string(key))
+		if entryPartition != partition || !isSchemaAwareDNKey(physicalKey) {
+			return nil
+		}
+		entry, err := decodeAndValidateEntry(physicalKey, value)
+		if err != nil {
+			return fmt.Errorf("entry key %q: %w", key, err)
+		}
+		normalized, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
+		if err != nil {
+			return fmt.Errorf("entry key %q cannot normalize DN %q: %w", key, entry.DN, err)
+		}
+		if normalized.Key() != physicalKey {
+			return fmt.Errorf(
+				"entry key %q does not match schema-normalized DN %q",
+				key,
+				entry.DN,
+			)
+		}
+		return nil
 	})
 }
 
@@ -247,23 +326,77 @@ func (tx *boltTx) PutIn(
 	if err != nil {
 		return err
 	}
-	key := []byte(partitionedEntryKey(partition, dn.Key()))
-	existing := tx.entries.Get(key)
-	if existing == nil && partition == "" {
-		existing = tx.entries.Get([]byte(dn.Key()))
+	identity := dn.Key()
+	if normalized, ok := entry.DNIdentity(); ok {
+		if err := requireTrustedDNIdentityWrite(partition, entry, normalized); err != nil {
+			return err
+		}
+		identity = normalized
 	}
-	if existing != nil && !replace {
+	if err := dn.ValidateIdentityKey(identity); err != nil {
+		return fmt.Errorf("entry %q DN identity: %w", entry.DN, err)
+	}
+	return tx.putInWithDN(partition, entry.WithoutDNIdentity(), dn, identity, replace)
+}
+
+func (tx *boltTx) putInWithDN(
+	partition string,
+	entry directory.Entry,
+	entryDN directory.DN,
+	identity string,
+	replace bool,
+) error {
+	if !tx.tx.Writable() {
+		return errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return err
+	}
+	key := []byte(partitionedEntryKey(partition, identity))
+	existingKeys := make(map[string]struct{})
+	if tx.entries.Get(key) != nil {
+		existingKeys[string(key)] = struct{}{}
+	}
+	if !isSchemaAwareDNKey(identity) && partition == "" && tx.entries.Get([]byte(entryDN.Key())) != nil {
+		existingKeys[entryDN.Key()] = struct{}{}
+	}
+	if err := tx.entries.ForEach(func(candidateKey, value []byte) error {
+		candidatePartition, candidateEntryKey := splitPartitionedEntryKey(string(candidateKey))
+		if candidatePartition != partition {
+			return nil
+		}
+		candidate, err := decodeAndValidateEntry(candidateEntryKey, value)
+		if err != nil {
+			return err
+		}
+		if entryMatchesDisplayDN(candidate, entryDN) {
+			existingKeys[string(candidateKey)] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(existingKeys) > 0 && !replace {
 		return ErrEntryExists
 	}
-	value, err := json.Marshal(entry)
+	storedIdentity := ""
+	if isSchemaAwareDNKey(identity) {
+		storedIdentity = identity
+	}
+	value, err := encodeEntry(entry, storedIdentity, entry.DN)
 	if err != nil {
 		return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 	}
 	if err := tx.entries.Put(key, value); err != nil {
 		return err
 	}
-	if partition == "" {
-		return tx.entries.Delete([]byte(dn.Key()))
+	for existingKey := range existingKeys {
+		if existingKey == string(key) {
+			continue
+		}
+		if err := tx.entries.Delete([]byte(existingKey)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -274,12 +407,22 @@ func (tx *boltTx) Delete(dn directory.DN) error {
 	}
 	found := false
 	foundPartition := ""
-	err := tx.entries.ForEach(func(key, _ []byte) error {
+	err := tx.entries.ForEach(func(key, value []byte) error {
 		partition, entryDN := splitPartitionedEntryKey(string(key))
-		if entryDN != dn.Key() {
+		entry, err := decodeAndValidateEntry(entryDN, value)
+		if err != nil {
+			return err
+		}
+		directIdentity := entryDN == dn.Key()
+		if !directIdentity && !entryMatchesDisplayDN(entry, dn) {
 			return nil
 		}
-		if found && partition != foundPartition {
+		if entryDN == dn.Key() {
+			if err := validateDirectIdentityLookup(entryDN, dn); err != nil {
+				return err
+			}
+		}
+		if found {
 			return ErrEntryAmbiguous
 		}
 		found = true
@@ -300,21 +443,45 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 		return errorsReadOnly()
 	}
 	key := []byte(partitionedEntryKey(partition, dn.Key()))
-	legacyKey := []byte(dn.Key())
-	exists := tx.entries.Get(key) != nil
-	if partition == "" && tx.entries.Get(legacyKey) != nil {
-		exists = true
+	var foundKey []byte
+	if value := tx.entries.Get(key); value != nil {
+		_, err := decodeAndValidateEntry(dn.Key(), value)
+		if err != nil {
+			return err
+		}
+		if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
+			return err
+		}
+		foundKey = bytes.Clone(key)
 	}
-	if !exists {
-		return ErrEntryNotFound
-	}
-	if err := tx.entries.Delete(key); err != nil {
+	err := tx.entries.ForEach(func(candidateKey, value []byte) error {
+		if bytes.Equal(candidateKey, foundKey) {
+			return nil
+		}
+		entryPartition, candidateEntryKey := splitPartitionedEntryKey(string(candidateKey))
+		if entryPartition != partition {
+			return nil
+		}
+		entry, err := decodeAndValidateEntry(candidateEntryKey, value)
+		if err != nil {
+			return err
+		}
+		if !entryMatchesDisplayDN(entry, dn) {
+			return nil
+		}
+		if foundKey != nil {
+			return ErrEntryAmbiguous
+		}
+		foundKey = bytes.Clone(candidateKey)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
-	if partition == "" {
-		return tx.entries.Delete(legacyKey)
+	if foundKey == nil {
+		return ErrEntryNotFound
 	}
-	return nil
+	return tx.entries.Delete(foundKey)
 }
 
 func (tx *boltTx) Clear() error {
@@ -382,12 +549,49 @@ func genericMetadataKey(key string) []byte {
 	return encoded
 }
 
-func decodeEntry(value []byte) (directory.Entry, error) {
-	var entry directory.Entry
-	if err := json.Unmarshal(value, &entry); err != nil {
-		return directory.Entry{}, fmt.Errorf("decode entry: %w", err)
+type storedEntry struct {
+	directory.Entry
+	DNIdentity string `json:"dnIdentity,omitempty"`
+	DNSource   string `json:"dnSource,omitempty"`
+}
+
+func encodeEntry(entry directory.Entry, identity, source string) ([]byte, error) {
+	if identity == "" {
+		source = ""
 	}
-	return entry, nil
+	value, err := json.Marshal(storedEntry{
+		Entry:      entry,
+		DNIdentity: identity,
+		DNSource:   source,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode entry %q: %w", entry.DN, err)
+	}
+	return value, nil
+}
+
+func decodeStoredEntry(value []byte) (storedEntry, error) {
+	var stored storedEntry
+	if err := json.Unmarshal(value, &stored); err != nil {
+		return storedEntry{}, fmt.Errorf("decode entry: %w", err)
+	}
+	return stored, nil
+}
+
+func decodeAndValidateEntry(key string, value []byte) (directory.Entry, error) {
+	stored, err := decodeStoredEntry(value)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if err := validateStoredEntryIdentity(
+		key,
+		stored.Entry,
+		stored.DNIdentity,
+		stored.DNSource,
+	); err != nil {
+		return directory.Entry{}, err
+	}
+	return stored.Entry, nil
 }
 
 func errorsReadOnly() error {

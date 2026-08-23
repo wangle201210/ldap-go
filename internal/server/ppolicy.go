@@ -101,6 +101,7 @@ func defaultPasswordPolicy() passwordPolicy {
 
 func loadPasswordPolicyRuntimeConfiguration(
 	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
 ) (passwordPolicyRuntimeConfiguration, error) {
 	var configuration passwordPolicyRuntimeConfiguration
 	defaultValues := entry.Values("olcPPolicyDefault")
@@ -111,7 +112,7 @@ func loadPasswordPolicyRuntimeConfiguration(
 		)
 	}
 	if len(defaultValues) == 1 {
-		defaultPolicy, err := directory.ParseDN(string(defaultValues[0]))
+		defaultPolicy, err := parseRuntimeDN(string(defaultValues[0]), normalizer)
 		if err != nil {
 			return configuration, fmt.Errorf(
 				"%s olcPPolicyDefault: %w",
@@ -188,7 +189,12 @@ func loadPasswordPolicy(
 	case 0:
 		policyDN = database.ppolicy.defaultPolicy
 	case 1:
-		parsed, err := directory.ParseDN(string(assigned[0]))
+		parsed, err := normalizePasswordPolicyDN(
+			runtime,
+			nil,
+			nil,
+			string(assigned[0]),
+		)
 		if err != nil {
 			return policy, false
 		}
@@ -203,7 +209,17 @@ func loadPasswordPolicy(
 	if policyDatabase == nil {
 		return policy, false
 	}
-	policyEntry, err := readerForDatabase(reader, *policyDatabase).Get(*policyDN)
+	policyReader := readerForDatabase(reader, *policyDatabase)
+	normalizedPolicyDN, err := normalizePasswordPolicyDN(
+		runtime,
+		policyDatabase,
+		policyReader,
+		policyDN.String(),
+	)
+	if err != nil {
+		return policy, false
+	}
+	policyEntry, err := policyReader.Get(normalizedPolicyDN)
 	if err != nil {
 		return policy, false
 	}
@@ -444,12 +460,16 @@ func (server *Server) authenticatePasswordBind(
 	if rawDN == "" || len(password) == 0 {
 		return result, nil
 	}
-	dn, err := directory.ParseDN(rawDN)
+	dn, err := normalizePasswordPolicyDN(runtime, nil, nil, rawDN)
 	if err != nil {
 		return result, nil
 	}
 	database := databaseForDN(runtime, dn)
 	if database == nil {
+		return result, nil
+	}
+	dn, err = normalizePasswordPolicyDN(runtime, database, nil, rawDN)
+	if err != nil {
 		return result, nil
 	}
 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
@@ -779,7 +799,13 @@ func (server *Server) finishPasswordBindStateWrite(
 	if before.Equal(*entry) {
 		return nil
 	}
-	dn, err := directory.ParseDN(entry.DN)
+	tx := writerForDatabase(writer, database)
+	dn, err := normalizePasswordPolicyDN(
+		runtime,
+		&database,
+		tx,
+		entry.DN,
+	)
 	if err != nil {
 		return err
 	}
@@ -794,7 +820,7 @@ func (server *Server) finishPasswordBindStateWrite(
 			runtime.serverID,
 		)
 	}
-	if err := writerForDatabase(writer, database).Put(*entry, true); err != nil {
+	if err := tx.Put(*entry, true); err != nil {
 		return err
 	}
 	change, err := server.recordSyncChange(
@@ -818,8 +844,16 @@ func (server *Server) forwardPasswordPolicyBindState(
 	before directory.Entry,
 	after directory.Entry,
 ) error {
-	changes := passwordPolicyBindStateChanges(before, after)
-	if len(changes) == 0 {
+	request, err := passwordPolicyForwardModifyRequest(
+		runtime,
+		database,
+		before,
+		after,
+	)
+	if err != nil {
+		return err
+	}
+	if len(request.Changes) == 0 {
 		return nil
 	}
 	if len(database.updateRefs) == 0 {
@@ -838,11 +872,8 @@ func (server *Server) forwardPasswordPolicyBindState(
 		runtime:       runtime,
 	}
 	message := ldapwire.Message{
-		ID: 1,
-		Request: ldapwire.ModifyRequest{
-			DN:      after.DN,
-			Changes: changes,
-		},
+		ID:      1,
+		Request: request,
 		Controls: []ldapwire.Control{{
 			OID:      relaxControlOID,
 			Critical: true,
@@ -879,6 +910,42 @@ func (server *Server) forwardPasswordPolicyBindState(
 		)
 	}
 	return nil
+}
+
+func passwordPolicyForwardModifyRequest(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	before directory.Entry,
+	after directory.Entry,
+) (ldapwire.ModifyRequest, error) {
+	target, err := normalizePasswordPolicyDN(
+		runtime,
+		&database,
+		nil,
+		after.DN,
+	)
+	if err != nil {
+		return ldapwire.ModifyRequest{}, fmt.Errorf(
+			"normalize policy update DN %q: %w",
+			after.DN,
+			err,
+		)
+	}
+	beforeDN, err := normalizePasswordPolicyDN(
+		runtime,
+		&database,
+		nil,
+		before.DN,
+	)
+	if err != nil || !beforeDN.Equal(target) {
+		return ldapwire.ModifyRequest{}, errors.New(
+			"password policy state update changed entry identity",
+		)
+	}
+	return ldapwire.ModifyRequest{
+		DN:      target.String(),
+		Changes: passwordPolicyBindStateChanges(before, after),
+	}, nil
 }
 
 func passwordPolicyBindStateChanges(
@@ -1353,7 +1420,13 @@ func (server *Server) preparePasswordPolicyModification(
 		acl.Manage,
 	)
 	if hasPolicy && !prepared.passwordAdministrator {
-		self := passwordPolicySameDN(boundDN, entry.DN)
+		self := passwordPolicySameEntryDN(
+			runtime,
+			database,
+			reader,
+			boundDN,
+			entry.DN,
+		)
 		if !policy.allowUserChange && self {
 			return prepared, passwordPolicyOperationFailed(
 				ldapwire.ResultInsufficientAccessRights,
@@ -1673,9 +1746,62 @@ func passwordPolicyAttributeMatches(
 	)
 }
 
-func passwordPolicySameDN(left, right string) bool {
-	leftDN, leftErr := directory.ParseDN(left)
-	rightDN, rightErr := directory.ParseDN(right)
+func normalizePasswordPolicyDN(
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	reader storage.Reader,
+	value string,
+) (directory.DN, error) {
+	legacy, err := directory.ParseDN(value)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if isConfigurationDN(legacy) {
+		return legacy, nil
+	}
+
+	var normalizer directory.DNAttributeNormalizer
+	if database != nil {
+		normalizer = database.dnNormalizer
+	}
+	if normalizer == nil && runtime != nil {
+		normalizer = runtime.schema
+	}
+	dn, err := parseRuntimeDN(value, normalizer)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if reader != nil {
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+	}
+	return dn, err
+}
+
+func passwordPolicySameEntryDN(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	reader storage.Reader,
+	left string,
+	right string,
+) bool {
+	leftDN, leftErr := normalizePasswordPolicyDN(
+		runtime,
+		&database,
+		reader,
+		left,
+	)
+	rightDN, rightErr := normalizePasswordPolicyDN(
+		runtime,
+		&database,
+		reader,
+		right,
+	)
+	return leftErr == nil && rightErr == nil && leftDN.Equal(rightDN)
+}
+
+func passwordPolicySameDN(runtime *runtimeState, left, right string) bool {
+	leftDN, leftErr := normalizePasswordPolicyDN(runtime, nil, nil, left)
+	rightDN, rightErr := normalizePasswordPolicyDN(runtime, nil, nil, right)
 	return leftErr == nil && rightErr == nil && leftDN.Equal(rightDN)
 }
 
@@ -1961,6 +2087,7 @@ func refreshPasswordPolicyRestriction(state *connectionState) {
 		return
 	}
 	if !passwordPolicySameDN(
+		state.runtime,
 		state.boundDN,
 		state.passwordPolicyRestrictedDN,
 	) {
@@ -2041,7 +2168,12 @@ func (server *Server) passwordPolicySearchEntryControls(
 	if !state.accountUsabilityRequested {
 		return nil
 	}
-	dn, err := directory.ParseDN(selected.DN)
+	dn, err := normalizePasswordPolicyDN(
+		state.runtime,
+		nil,
+		nil,
+		selected.DN,
+	)
 	if err != nil {
 		return nil
 	}
@@ -2053,6 +2185,15 @@ func (server *Server) passwordPolicySearchEntryControls(
 	var control *ldapwire.Control
 	_ = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, *database)
+		dn, err = normalizePasswordPolicyDN(
+			state.runtime,
+			database,
+			tx,
+			selected.DN,
+		)
+		if err != nil {
+			return nil
+		}
 		entry, err := tx.Get(dn)
 		if err != nil {
 			return nil

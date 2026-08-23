@@ -14,6 +14,65 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
+func normalizeSASLAuthorizationDN(
+	runtime *runtimeState,
+	dn directory.DN,
+) (directory.DN, error) {
+	if runtime == nil {
+		return dn, nil
+	}
+	return normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		databaseForDN(runtime, dn),
+		dn,
+	)
+}
+
+func normalizeSASLAuthorizationDatabaseDN(
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	dn directory.DN,
+) (directory.DN, error) {
+	if database != nil && database.dnNormalizer != nil {
+		return normalizeRuntimeDatabaseDN(*database, dn)
+	}
+	if runtime != nil && runtime.schema != nil {
+		return parseRuntimeDN(dn.String(), runtime.schema)
+	}
+	if database != nil {
+		return normalizeRuntimeDatabaseDN(*database, dn)
+	}
+	return dn, nil
+}
+
+func normalizeSASLAuthorizationScope(
+	runtime *runtimeState,
+	base directory.DN,
+	candidate directory.DN,
+) (directory.DN, directory.DN, error) {
+	if runtime == nil {
+		return base, candidate, nil
+	}
+	database := databaseForDN(runtime, base)
+	if database == nil {
+		database = databaseForDN(runtime, candidate)
+	}
+	normalizedBase, err := normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		database,
+		base,
+	)
+	if err != nil {
+		return directory.DN{}, directory.DN{}, err
+	}
+	normalizedCandidate, err := normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		database,
+		candidate,
+	)
+	return normalizedBase, normalizedCandidate, err
+}
+
 func (server *Server) saslAuthorized(
 	ctx context.Context,
 	runtime *runtimeState,
@@ -26,7 +85,7 @@ func (server *Server) saslAuthorized(
 	if authenticationDN.Depth() == 0 {
 		return false, nil
 	}
-	if authenticationDN.Equal(authorizationDN) ||
+	if runtimeDNEqual(runtime, authenticationDN, authorizationDN) ||
 		saslRootMayAuthorize(runtime, authenticationDN, authorizationDN) {
 		return true, nil
 	}
@@ -222,13 +281,24 @@ func (server *Server) authorizationRuleMatches(
 					err,
 				)
 			}
-			return expression.MatchString(assertedDN.Key()), nil
+			normalized, err := normalizeSASLAuthorizationDN(runtime, assertedDN)
+			if err != nil {
+				return false, err
+			}
+			// OpenLDAP applies authorization regexes to the normalized textual
+			// DN, not ldap-go's opaque dn:v2 identity key.
+			return expression.MatchString(normalized.NormalizedString()), nil
 		}
 		base, err := directory.ParseDN(pattern)
 		if err != nil {
 			return false, err
 		}
-		return directory.InScope(base, assertedDN, style.scope), nil
+		base, candidate, err := normalizeSASLAuthorizationScope(
+			runtime,
+			base,
+			assertedDN,
+		)
+		return err == nil && directory.InScope(base, candidate, style.scope), err
 	}
 
 	if rule == "*" {
@@ -274,7 +344,12 @@ func (server *Server) authorizationRuleMatches(
 		if err != nil {
 			return false, err
 		}
-		return mapped.Equal(assertedDN), nil
+		mapped, candidate, err := normalizeSASLAuthorizationScope(
+			runtime,
+			mapped,
+			assertedDN,
+		)
+		return err == nil && mapped.Equal(candidate), err
 	}
 
 	if strings.HasPrefix(lower, "group") {
@@ -300,7 +375,12 @@ func (server *Server) authorizationRuleMatches(
 	if err != nil {
 		return false, err
 	}
-	return exact.Equal(assertedDN), nil
+	exact, candidate, err := normalizeSASLAuthorizationScope(
+		runtime,
+		exact,
+		assertedDN,
+	)
+	return err == nil && exact.Equal(candidate), err
 }
 
 func (server *Server) authorizationGroupRuleMatches(
@@ -334,6 +414,18 @@ func (server *Server) authorizationGroupRuleMatches(
 	if database == nil {
 		return false, nil
 	}
+	groupDN, err = normalizeSASLAuthorizationDatabaseDN(runtime, database, groupDN)
+	if err != nil {
+		return false, err
+	}
+	comparisonAssertedDN, err := normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		database,
+		assertedDN,
+	)
+	if err != nil {
+		return false, err
+	}
 	if saslAuthorizationUsesProxyBackend(database) {
 		entries, err := server.searchProxySASLAuthorization(
 			ctx,
@@ -356,7 +448,7 @@ func (server *Server) authorizationGroupRuleMatches(
 						{
 							Kind:      directory.FilterEquality,
 							Attribute: memberAttribute,
-							Assertion: []byte(assertedDN.String()),
+							Assertion: []byte(comparisonAssertedDN.String()),
 						},
 					},
 				},
@@ -375,6 +467,13 @@ func (server *Server) authorizationGroupRuleMatches(
 		}
 		for _, entry := range entries {
 			entryDN, parseErr := directory.ParseDN(entry.DN)
+			if parseErr == nil {
+				entryDN, parseErr = normalizeSASLAuthorizationDatabaseDN(
+					runtime,
+					database,
+					entryDN,
+				)
+			}
 			if parseErr != nil || !entryDN.Equal(groupDN) {
 				return false, fmt.Errorf(
 					"SASL authorization group search for %q returned unexpected entry %q",
@@ -427,7 +526,19 @@ func (server *Server) authorizationGroupRuleMatches(
 			if err != nil {
 				continue
 			}
-			if memberDN.Equal(assertedDN) {
+			memberDN, err = normalizeRuntimeReaderDN(tx, *database, memberDN)
+			if err != nil {
+				continue
+			}
+			candidate, err := normalizeRuntimeReaderDN(
+				tx,
+				*database,
+				comparisonAssertedDN,
+			)
+			if err != nil {
+				return err
+			}
+			if memberDN.Equal(candidate) {
 				matched = true
 				break
 			}
@@ -448,9 +559,15 @@ func (server *Server) authorizationURLRuleMatches(
 	if err != nil {
 		return false, err
 	}
-	if !directory.InScope(search.base, assertedDN, search.scope) {
-		return false, nil
+	base, comparisonAssertedDN, err := normalizeSASLAuthorizationScope(
+		runtime,
+		search.base,
+		assertedDN,
+	)
+	if err != nil || !directory.InScope(base, comparisonAssertedDN, search.scope) {
+		return false, err
 	}
+	search.base = base
 	routes := databaseSearchRoutes(
 		runtime.databases,
 		search.base,
@@ -474,17 +591,25 @@ func (server *Server) authorizationURLRuleMatches(
 
 	matches := 0
 	for _, route := range routes {
-		if !directory.InScope(route.base, assertedDN, route.scope) {
+		database := &runtime.databases[route.databaseIndex]
+		routeBase, routeAssertedDN, err := normalizeSASLAuthorizationScope(
+			runtime,
+			route.base,
+			comparisonAssertedDN,
+		)
+		if err != nil {
+			return false, err
+		}
+		if !directory.InScope(routeBase, routeAssertedDN, route.scope) {
 			continue
 		}
-		database := &runtime.databases[route.databaseIndex]
 		if saslAuthorizationUsesProxyBackend(database) {
 			entries, err := server.searchProxySASLAuthorization(
 				ctx,
 				runtime,
 				*database,
 				ldapwire.SearchRequest{
-					BaseDN:       assertedDN.String(),
+					BaseDN:       routeAssertedDN.String(),
 					Scope:        directory.ScopeBase,
 					DerefAliases: ldapwire.NeverDerefAliases,
 					SizeLimit:    1,
@@ -500,10 +625,17 @@ func (server *Server) authorizationURLRuleMatches(
 			defer clearSASLAuthorizationEntries(entries)
 			for _, entry := range entries {
 				entryDN, parseErr := directory.ParseDN(entry.DN)
-				if parseErr != nil || !entryDN.Equal(assertedDN) {
+				if parseErr == nil {
+					entryDN, parseErr = normalizeSASLAuthorizationDatabaseDN(
+						runtime,
+						database,
+						entryDN,
+					)
+				}
+				if parseErr != nil || !entryDN.Equal(routeAssertedDN) {
 					return false, fmt.Errorf(
 						"SASL authorization URL search for %q returned unexpected entry %q",
-						assertedDN.String(),
+						routeAssertedDN.String(),
 						entry.DN,
 					)
 				}
@@ -515,7 +647,7 @@ func (server *Server) authorizationURLRuleMatches(
 				runtime,
 				*database,
 				authenticationDN.String(),
-				assertedDN,
+				routeAssertedDN,
 				search.filter,
 			)
 			if err != nil {

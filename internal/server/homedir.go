@@ -925,7 +925,7 @@ func (store *homedirEffectStore) Update(
 	defer coordinator.rollback()
 	var changes []homedirStorageChange
 	err := store.Store.Update(ctx, func(writer storage.Writer) error {
-		tracker := newHomedirTrackingWriter(writer)
+		tracker := newHomedirTrackingWriter(writer, runtime)
 		if err := update(tracker); err != nil {
 			return err
 		}
@@ -951,12 +951,17 @@ type homedirTrackedEntry struct {
 
 type homedirTrackingWriter struct {
 	storage.Writer
+	runtime *runtimeState
 	tracked map[string]*homedirTrackedEntry
 }
 
-func newHomedirTrackingWriter(writer storage.Writer) *homedirTrackingWriter {
+func newHomedirTrackingWriter(
+	writer storage.Writer,
+	runtime *runtimeState,
+) *homedirTrackingWriter {
 	return &homedirTrackingWriter{
 		Writer:  writer,
+		runtime: runtime,
 		tracked: make(map[string]*homedirTrackedEntry),
 	}
 }
@@ -1017,7 +1022,7 @@ func (writer *homedirTrackingWriter) putIn(
 }
 
 func (writer *homedirTrackingWriter) Delete(dn directory.DN) error {
-	partition, err := homedirEntryPartition(writer.Writer, dn)
+	partition, err := homedirEntryPartition(writer.Writer, writer.runtime, dn)
 	if err != nil {
 		return err
 	}
@@ -1025,7 +1030,11 @@ func (writer *homedirTrackingWriter) Delete(dn directory.DN) error {
 	if err != nil {
 		return err
 	}
-	if err := writer.Writer.Delete(dn); err != nil {
+	if err := homedirWriterForPartition(
+		writer.Writer,
+		writer.runtime,
+		partition,
+	).Delete(dn); err != nil {
 		return err
 	}
 	tracked.after = nil
@@ -1037,7 +1046,11 @@ func (writer *homedirTrackingWriter) DeleteIn(partition string, dn directory.DN)
 	if err != nil {
 		return err
 	}
-	if err := writer.Writer.DeleteIn(partition, dn); err != nil {
+	if err := homedirWriterForPartition(
+		writer.Writer,
+		writer.runtime,
+		partition,
+	).Delete(dn); err != nil {
 		return err
 	}
 	tracked.after = nil
@@ -1067,18 +1080,36 @@ func (writer *homedirTrackingWriter) track(
 	dn directory.DN,
 	explicitPartition bool,
 ) (*homedirTrackedEntry, error) {
-	key := partition + "\x00" + dn.Key()
+	if !explicitPartition {
+		resolved, err := homedirEntryPartition(writer.Writer, writer.runtime, dn)
+		switch {
+		case err == nil:
+			partition = resolved
+			explicitPartition = true
+		case errors.Is(err, storage.ErrEntryNotFound):
+		case err != nil:
+			return nil, err
+		}
+	}
+	normalizedDN, err := homedirNormalizeDN(writer.runtime, partition, dn)
+	if err != nil {
+		return nil, err
+	}
+	key := partition + "\x00" + normalizedDN.Key()
 	if tracked := writer.tracked[key]; tracked != nil {
 		return tracked, nil
 	}
 	var beforeEntry directory.Entry
-	var err error
 	if explicitPartition {
-		beforeEntry, err = writer.Writer.GetIn(partition, dn)
+		beforeEntry, err = homedirReaderForPartition(
+			writer.Writer,
+			writer.runtime,
+			partition,
+		).Get(normalizedDN)
 	} else {
-		beforeEntry, err = writer.Writer.Get(dn)
+		beforeEntry, err = writer.Writer.Get(normalizedDN)
 	}
-	tracked := &homedirTrackedEntry{partition: partition, dn: dn}
+	tracked := &homedirTrackedEntry{partition: partition, dn: normalizedDN}
 	if err == nil {
 		before := beforeEntry.Clone()
 		after := beforeEntry.Clone()
@@ -1109,7 +1140,57 @@ func (writer *homedirTrackingWriter) changes() []homedirStorageChange {
 	return changes
 }
 
-func homedirEntryPartition(reader storage.Reader, dn directory.DN) (string, error) {
+func homedirNormalizeDN(
+	runtime *runtimeState,
+	partition string,
+	dn directory.DN,
+) (directory.DN, error) {
+	database := runtimeDatabaseForPartition(runtime, partition)
+	if database == nil || database.dnNormalizer == nil {
+		return dn, nil
+	}
+	return normalizeRuntimeDatabaseDN(*database, dn)
+}
+
+func homedirReaderForPartition(
+	reader storage.Reader,
+	runtime *runtimeState,
+	partition string,
+) storage.Reader {
+	database := runtimeDatabaseForPartition(runtime, partition)
+	if database != nil && database.dnNormalizer != nil &&
+		databaseUsesSchemaAwareContentStorage(*database) {
+		return storage.ReaderInPartitionWithNormalizer(
+			reader,
+			partition,
+			database.dnNormalizer,
+		)
+	}
+	return storage.ReaderInPartition(reader, partition)
+}
+
+func homedirWriterForPartition(
+	writer storage.Writer,
+	runtime *runtimeState,
+	partition string,
+) storage.Writer {
+	database := runtimeDatabaseForPartition(runtime, partition)
+	if database != nil && database.dnNormalizer != nil &&
+		databaseUsesSchemaAwareContentStorage(*database) {
+		return storage.WriterInPartitionWithNormalizer(
+			writer,
+			partition,
+			database.dnNormalizer,
+		)
+	}
+	return storage.WriterInPartition(writer, partition)
+}
+
+func homedirEntryPartition(
+	reader storage.Reader,
+	runtime *runtimeState,
+	dn directory.DN,
+) (string, error) {
 	partition := ""
 	found := false
 	err := reader.ForEachPartition(func(candidatePartition string, entry directory.Entry) error {
@@ -1117,7 +1198,12 @@ func homedirEntryPartition(reader storage.Reader, dn directory.DN) (string, erro
 		if err != nil {
 			return err
 		}
-		if !candidate.Equal(dn) {
+		database := runtimeDatabaseForPartition(runtime, candidatePartition)
+		matches := candidate.Equal(dn)
+		if database != nil {
+			matches = databaseDNEqual(*database, candidate, dn)
+		}
+		if !matches {
 			return nil
 		}
 		if found && partition != candidatePartition {
@@ -1248,7 +1334,7 @@ func homedirConfigurationsForEntry(
 			continue
 		}
 		for _, suffix := range database.suffixes {
-			if suffix.Equal(dn) || suffix.AncestorOf(dn) {
+			if databaseDNAtOrBelow(*database, dn, suffix) {
 				configurations = append(configurations, *database.homedir)
 				break
 			}

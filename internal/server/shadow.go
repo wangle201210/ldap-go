@@ -18,7 +18,10 @@ func loadRuntimeShadowSettings(
 		return fmt.Errorf("%s olcUpdateDN must be single-valued", entry.DN)
 	}
 	if len(updateDNValues) == 1 {
-		updateDN, err := directory.ParseDN(string(updateDNValues[0]))
+		updateDN, err := parseRuntimeDN(
+			string(updateDNValues[0]),
+			database.dnNormalizer,
+		)
 		if err != nil {
 			return fmt.Errorf("%s olcUpdateDN: %w", entry.DN, err)
 		}
@@ -124,7 +127,7 @@ func shadowUpdateResult(
 	base := target
 	bestDepth := -1
 	for _, suffix := range database.suffixes {
-		if (suffix.Equal(target) || suffix.AncestorOf(target)) &&
+		if databaseDNAtOrBelow(database, target, suffix) &&
 			suffix.Depth() > bestDepth {
 			base = suffix
 			bestDepth = suffix.Depth()

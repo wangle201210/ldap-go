@@ -25,12 +25,20 @@ func (server *Server) lookupProxySASLAuthorizationEntry(
 	attributes []string,
 	subjectDN string,
 ) (directory.Entry, bool, error) {
+	comparisonDN, err := normalizeSASLAuthorizationDatabaseDN(
+		runtime,
+		&database,
+		dn,
+	)
+	if err != nil {
+		return directory.Entry{}, false, err
+	}
 	entries, err := server.searchProxySASLAuthorization(
 		ctx,
 		runtime,
 		database,
 		ldapwire.SearchRequest{
-			BaseDN:       dn.String(),
+			BaseDN:       comparisonDN.String(),
 			Scope:        directory.ScopeBase,
 			DerefAliases: ldapwire.NeverDerefAliases,
 			SizeLimit:    2,
@@ -49,7 +57,14 @@ func (server *Server) lookupProxySASLAuthorizationEntry(
 	var found *directory.Entry
 	for _, entry := range entries {
 		entryDN, parseErr := directory.ParseDN(entry.DN)
-		if parseErr != nil || !entryDN.Equal(dn) {
+		if parseErr == nil {
+			entryDN, parseErr = normalizeSASLAuthorizationDatabaseDN(
+				runtime,
+				&database,
+				entryDN,
+			)
+		}
+		if parseErr != nil || !entryDN.Equal(comparisonDN) {
 			return directory.Entry{}, false, fmt.Errorf(
 				"SASL authorization base search for %q returned unexpected entry %q",
 				dn.String(),

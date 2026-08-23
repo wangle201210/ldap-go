@@ -58,6 +58,15 @@ func (server *Server) handleSearch(
 			*controlFailure,
 		)
 	}
+	searchFilters := []directory.Filter{request.Filter}
+	if controls.assertion != nil {
+		searchFilters = append(searchFilters, *controls.assertion)
+	}
+	ctx = withSQLBackendSearchRequirements(
+		ctx,
+		request.Attributes,
+		searchFilters...,
+	)
 	controls.deref, controlFailure = prepareDerefControl(
 		state.runtime.schema,
 		controls.deref,
@@ -80,6 +89,14 @@ func (server *Server) handleSearch(
 			passwordPolicyRestrictionResult(),
 		)
 	}
+	base, baseErr := normalizeSearchRequestBase(state.runtime, request.BaseDN)
+	if baseErr != nil {
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
 	if handled, err := server.tryRetcodeSearch(
 		ctx,
 		connection,
@@ -91,24 +108,23 @@ func (server *Server) handleSearch(
 		return err
 	}
 	limit := effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit)
-	if limitBase, parseErr := directory.ParseDN(request.BaseDN); parseErr == nil {
-		if limitBase.Depth() == 0 &&
-			request.Scope != directory.ScopeBase &&
-			state.runtime.defaultSearchBase.configured {
-			limitBase = state.runtime.defaultSearchBase.dn
-		}
-		if databaseIndex := databaseIndexForDN(
-			state.runtime.databases,
-			limitBase,
-		); databaseIndex >= 0 {
-			limit = effectiveDatabaseSearchLimit(
-				state.runtime,
-				state.runtime.databases[databaseIndex],
-				state.boundDN,
-				server.config.MaxSearchEntries,
-				request.SizeLimit,
-			)
-		}
+	limitBase := base
+	if limitBase.Depth() == 0 &&
+		request.Scope != directory.ScopeBase &&
+		state.runtime.defaultSearchBase.configured {
+		limitBase = state.runtime.defaultSearchBase.dn
+	}
+	if databaseIndex := databaseIndexForDN(
+		state.runtime.databases,
+		limitBase,
+	); databaseIndex >= 0 {
+		limit = effectiveDatabaseSearchLimit(
+			state.runtime,
+			state.runtime.databases[databaseIndex],
+			state.boundDN,
+			server.config.MaxSearchEntries,
+			request.SizeLimit,
+		)
 	}
 	paging, pagingFailure := preparePagedSearch(
 		state,
@@ -150,30 +166,15 @@ func (server *Server) handleSearch(
 		)
 	}
 
-	base, err := directory.ParseDN(request.BaseDN)
-	if err != nil {
-		return server.writeSearchResult(
-			connection,
-			message.ID,
-			state,
-			paging,
-			sorting,
-			nil,
-			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
-			pagedSearchCursor{},
-			false,
-		)
-	}
-
 	rootDSESearch := base.Depth() == 0 &&
 		request.Scope == directory.ScopeBase
 	if !rootDSESearch &&
 		base.Depth() == 0 &&
 		state.runtime.defaultSearchBase.configured {
 		base = state.runtime.defaultSearchBase.dn
-		request.BaseDN = base.String()
 	}
-	subschemaSearch := isSubschemaDN(base)
+	request.BaseDN = base.String()
+	subschemaSearch := isRuntimeSubschemaDN(state.runtime, base)
 	if rootDSESearch || subschemaSearch {
 		var derefFailure *ldapwire.Result
 		connection, derefFailure = server.prepareDerefSearchTarget(
@@ -1030,21 +1031,24 @@ func (server *Server) handleSearch(
 		primary := routes[0]
 		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
 		primaryReader := readerForDatabase(reader, *primaryDatabase)
+		primaryBase, err := storage.NormalizeReaderDN(primaryReader, base)
+		if err != nil {
+			return fmt.Errorf("normalize primary search base %q: %w", base.String(), err)
+		}
 		var baseEntry directory.Entry
-		var err error
 		if translucentRoutes[0] != nil {
 			baseEntry, err = translucentMergedRemoteEntry(
 				primaryReader,
 				*translucentRoutes[0].base,
 			)
 		} else {
-			baseEntry, err = primaryReader.Get(base)
+			baseEntry, err = primaryReader.Get(primaryBase)
 		}
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				ancestor, found, ancestorErr := closestExistingAncestor(
 					primaryReader,
-					base,
+					primaryBase,
 				)
 				if ancestorErr != nil {
 					return ancestorErr
@@ -1075,7 +1079,7 @@ func (server *Server) handleSearch(
 					) {
 					referral, referralErr := referralResult(
 						ancestor,
-						&base,
+						&primaryBase,
 						referralScopeForSearch(request.Scope),
 					)
 					if referralErr != nil {
@@ -1089,7 +1093,7 @@ func (server *Server) handleSearch(
 					state.runtime,
 					primaryReader,
 					state.boundDN,
-					base,
+					primaryBase,
 				)
 				return nil
 			}
@@ -1135,7 +1139,7 @@ func (server *Server) handleSearch(
 			) {
 			referral, referralErr := referralResult(
 				baseEntry,
-				&base,
+				&primaryBase,
 				referralScopeForSearch(request.Scope),
 			)
 			if referralErr != nil {
@@ -1162,6 +1166,22 @@ func (server *Server) handleSearch(
 			}
 			database := &state.runtime.databases[route.databaseIndex]
 			tx := readerForDatabase(reader, *database)
+			scopeBase, normalizeErr := storage.NormalizeReaderDN(tx, route.base)
+			if normalizeErr != nil {
+				return fmt.Errorf(
+					"normalize search route base %q: %w",
+					route.base.String(),
+					normalizeErr,
+				)
+			}
+			comparisonBase, normalizeErr := storage.NormalizeReaderDN(tx, base)
+			if normalizeErr != nil {
+				return fmt.Errorf(
+					"normalize search base %q: %w",
+					base.String(),
+					normalizeErr,
+				)
+			}
 			translucentRoute := translucentRoutes[routeIndex]
 			if translucentRoute != nil {
 				references = append(references, translucentRoute.references...)
@@ -1222,10 +1242,18 @@ func (server *Server) handleSearch(
 				if err != nil {
 					return err
 				}
+				candidate, err = storage.NormalizeReaderDN(tx, candidate)
+				if err != nil {
+					return fmt.Errorf("normalize search candidate %q: %w", entry.DN, err)
+				}
+				candidateOrderKey, err := storage.ReaderDNOrderKey(tx, candidate)
+				if err != nil {
+					return fmt.Errorf("order search candidate %q: %w", entry.DN, err)
+				}
 				if paging != nil && paging.cursor.valid && !sorting.active() {
 					if routeIndex < paging.cursor.route ||
 						(routeIndex == paging.cursor.route &&
-							candidate.Key() <= paging.cursor.dnKey) {
+							candidateOrderKey <= paging.cursor.dnKey) {
 						return nil
 					}
 				}
@@ -1233,7 +1261,7 @@ func (server *Server) handleSearch(
 					result.Code = ldapwire.ResultTimeLimitExceeded
 					return errStopSearch
 				}
-				if !directory.InScope(route.base, candidate, route.scope) {
+				if !directory.InScope(scopeBase, candidate, route.scope) {
 					return nil
 				}
 				entry = withSubschemaReference(entry)
@@ -1284,7 +1312,7 @@ func (server *Server) handleSearch(
 						"alias",
 					) &&
 					(derefAliasesWhileFinding(request.DerefAliases) ||
-						!candidate.Equal(base)) {
+						!candidate.Equal(comparisonBase)) {
 					return nil
 				}
 				if !controls.manageDsaIT &&
@@ -1465,16 +1493,17 @@ func (server *Server) handleSearch(
 					return errStopSearch
 				}
 				candidates = append(candidates, searchCandidate{
-					selected: selected,
-					readable: sortReadable,
-					route:    routeIndex,
-					dn:       entry.DN,
-					syncUUID: syncUUID,
+					selected:  selected,
+					readable:  sortReadable,
+					route:     routeIndex,
+					dn:        entry.DN,
+					cursorKey: candidateOrderKey,
+					syncUUID:  syncUUID,
 				})
 				if !sorting.active() {
 					lastCursor = pagedSearchCursor{
 						route: routeIndex,
-						dnKey: candidate.Key(),
+						dnKey: candidateOrderKey,
 						valid: true,
 					}
 				}
@@ -1709,14 +1738,9 @@ func (server *Server) handleSearch(
 		}
 		if paging != nil && len(candidates) > 0 {
 			last := candidates[len(candidates)-1]
-			lastDN, parseErr := directory.ParseDN(last.dn)
-			if parseErr != nil {
-				clearPagedSearch(state)
-				return fmt.Errorf("parse paged result DN %q: %w", last.dn, parseErr)
-			}
 			lastCursor = pagedSearchCursor{
 				route: last.route,
-				dnKey: lastDN.Key(),
+				dnKey: last.cursorKey,
 				valid: true,
 			}
 		}
@@ -1874,12 +1898,16 @@ func (server *Server) continueSortedPagedSearch(
 			if item.route < 0 || item.route >= len(routes) {
 				return fmt.Errorf("sorted paged search route %d is invalid", item.route)
 			}
+			database := &state.runtime.databases[routes[item.route].databaseIndex]
+			tx := readerForDatabase(reader, *database)
 			dn, err := directory.ParseDN(item.dn)
 			if err != nil {
 				return fmt.Errorf("parse sorted paged search DN %q: %w", item.dn, err)
 			}
-			database := &state.runtime.databases[routes[item.route].databaseIndex]
-			tx := readerForDatabase(reader, *database)
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return fmt.Errorf("normalize sorted paged search DN %q: %w", item.dn, err)
+			}
 			entry, err := tx.Get(dn)
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				sorted.offset++
@@ -2036,17 +2064,17 @@ func databaseSearchRoutesFromPrimary(
 		switch scope {
 		case directory.ScopeSingleLevel:
 			parent, ok := suffix.Parent()
-			if !ok || !parent.Equal(base) {
+			if !ok || !databaseDNEqual(*database, parent, base) {
 				continue
 			}
 			route.scope = directory.ScopeBase
 		case directory.ScopeWholeSubtree:
-			if !base.Equal(suffix) && !base.AncestorOf(suffix) {
+			if !databaseDNAtOrBelow(*database, suffix, base) {
 				continue
 			}
 			route.scope = directory.ScopeWholeSubtree
 		case directory.ScopeChildren:
-			if !base.AncestorOf(suffix) {
+			if !databaseDNStrictlyBelow(*database, suffix, base) {
 				continue
 			}
 			route.scope = directory.ScopeWholeSubtree
@@ -2178,14 +2206,14 @@ func (server *Server) searchSubschema(
 	sorting *serverSideSortContext,
 ) error {
 	entry := server.subschemaEntry(state.runtime)
-	candidate, err := directory.ParseDN(entry.DN)
+	candidate, err := state.runtime.schema.NormalizeDN(entry.DN)
 	if err != nil {
 		if paging != nil {
 			clearPagedSearch(state)
 		}
 		return fmt.Errorf("parse subschema DN: %w", err)
 	}
-	base, err := directory.ParseDN(request.BaseDN)
+	base, err := state.runtime.schema.NormalizeDN(request.BaseDN)
 	if err != nil {
 		return server.writeSearchResult(
 			connection,
@@ -2526,6 +2554,28 @@ func stringValues(values ...string) [][]byte {
 		result[i] = []byte(values[i])
 	}
 	return result
+}
+
+func isRuntimeSubschemaDN(runtime *runtimeState, dn directory.DN) bool {
+	if runtime == nil || runtime.schema == nil {
+		return isSubschemaDN(dn)
+	}
+	subSchema, err := runtime.schema.NormalizeDN("cn=Subschema")
+	return err == nil && dn.Equal(subSchema)
+}
+
+func normalizeSearchRequestBase(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	legacy, err := directory.ParseDN(value)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if isConfigurationDN(legacy) || runtime == nil || runtime.schema == nil {
+		return legacy, nil
+	}
+	return runtime.schema.NormalizeDN(value)
 }
 
 func isSubschemaDN(dn directory.DN) bool {

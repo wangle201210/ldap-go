@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -18,10 +19,11 @@ type uniqueRuntimeConfiguration struct {
 }
 
 type uniqueDomain struct {
-	strict    bool
-	ignore    bool
-	serialize bool
-	uris      []uniqueURI
+	strict      bool
+	ignore      bool
+	serialize   bool
+	serializeMu *sync.Mutex
+	uris        []uniqueURI
 }
 
 type uniqueURI struct {
@@ -117,6 +119,7 @@ func parseUniqueDomain(raw string, database runtimeDatabase) (uniqueDomain, erro
 	}
 	if position < len(arguments) && strings.EqualFold(arguments[position], "serialize") {
 		domain.serialize = true
+		domain.serializeMu = &sync.Mutex{}
 		position++
 	}
 	if position < len(arguments) && strings.EqualFold(arguments[position], "strict") {
@@ -185,7 +188,10 @@ func parseLegacyUniqueDomain(
 
 	uri := uniqueURI{scope: directory.ScopeWholeSubtree}
 	if len(baseValues) == 1 {
-		base, err := directory.ParseDN(string(baseValues[0]))
+		base, err := parseRuntimeDN(
+			string(baseValues[0]),
+			database.dnNormalizer,
+		)
 		if err != nil {
 			return uniqueDomain{}, fmt.Errorf("%s olcUniqueBase: %w", entry.DN, err)
 		}
@@ -220,7 +226,10 @@ func parseLegacyUniqueDomain(
 }
 
 func parseUniqueURI(raw string, database runtimeDatabase) (uniqueURI, error) {
-	parsed, err := parseConstraintLDAPURL(raw)
+	parsed, err := parseConstraintLDAPURLWithNormalizer(
+		raw,
+		database.dnNormalizer,
+	)
 	if err != nil {
 		return uniqueURI{}, err
 	}
@@ -276,7 +285,7 @@ func uniqueFilterNodeCount(filter directory.Filter) int {
 
 func uniqueBaseWithinDatabase(database runtimeDatabase, base directory.DN) bool {
 	for _, suffix := range database.suffixes {
-		if suffix.Equal(base) || suffix.AncestorOf(base) {
+		if databaseDNAtOrBelow(database, base, suffix) {
 			return true
 		}
 	}
@@ -346,7 +355,7 @@ func (server *Server) validateUniqueAdd(
 	) {
 		return nil
 	}
-	dn, err := directory.ParseDN(entry.DN)
+	dn, err := parseRuntimeDN(entry.DN, database.dnNormalizer)
 	if err != nil {
 		return err
 	}
@@ -358,7 +367,7 @@ func (server *Server) validateUniqueAdd(
 		entry.Attributes,
 		&entry,
 		func(base directory.DN) bool {
-			return base.Equal(dn) || base.AncestorOf(dn)
+			return databaseDNAtOrBelow(database, dn, base)
 		},
 	)
 }
@@ -381,7 +390,7 @@ func (server *Server) validateUniqueModify(
 	) {
 		return nil
 	}
-	dn, err := directory.ParseDN(before.DN)
+	dn, err := parseRuntimeDN(before.DN, database.dnNormalizer)
 	if err != nil {
 		return err
 	}
@@ -400,7 +409,7 @@ func (server *Server) validateUniqueModify(
 		attributes,
 		nil,
 		func(base directory.DN) bool {
-			return base.Equal(dn) || base.AncestorOf(dn)
+			return databaseDNAtOrBelow(database, dn, base)
 		},
 	)
 }
@@ -424,7 +433,7 @@ func (server *Server) validateUniqueModifyDN(
 	) {
 		return nil
 	}
-	oldDN, err := directory.ParseDN(before.DN)
+	oldDN, err := parseRuntimeDN(before.DN, database.dnNormalizer)
 	if err != nil {
 		return err
 	}
@@ -436,11 +445,11 @@ func (server *Server) validateUniqueModifyDN(
 		newRDNAttributes,
 		nil,
 		func(base directory.DN) bool {
-			if base.Equal(oldDN) || base.AncestorOf(oldDN) {
+			if databaseDNAtOrBelow(database, oldDN, base) {
 				return true
 			}
 			return newSuperior != nil &&
-				(base.Equal(*newSuperior) || base.AncestorOf(*newSuperior))
+				databaseDNAtOrBelow(database, *newSuperior, base)
 		},
 	)
 }
@@ -472,67 +481,136 @@ func (server *Server) validateUniqueAttributes(
 	candidate *directory.Entry,
 	inDomain func(directory.DN) bool,
 ) error {
-	for _, domain := range database.unique.domains {
-		for _, uri := range domain.uris {
-			base := database.suffixes[0]
-			if uri.base != nil {
-				base = *uri.base
-			}
-			if !inDomain(base) {
-				continue
-			}
-			if candidate != nil && uri.filter != nil {
-				matches, err := uri.filter.MatchWith(*candidate, runtime.schema)
-				if err != nil {
-					return operationFailed(
-						ldapwire.ResultInappropriateMatching,
-						"unique candidate filter failed",
-					)
-				}
-				if !matches {
-					continue
-				}
-			}
+	databaseReader := readerForDatabase(reader, database)
+	ignoredDN, err := normalizeUniqueDN(databaseReader, database, ignoredDN)
+	if err != nil {
+		return err
+	}
+	if candidate != nil {
+		normalizedCandidate := candidate.Clone()
+		candidateDN, err := parseRuntimeDN(candidate.DN, database.dnNormalizer)
+		if err != nil {
+			return err
+		}
+		candidateDN, err = storage.NormalizeReaderDN(databaseReader, candidateDN)
+		if err != nil {
+			return err
+		}
+		normalizedCandidate.DN = candidateDN.String()
+		candidate = &normalizedCandidate
+	}
 
-			assertions := uniqueAssertions(
-				runtime.schema,
-				domain,
-				uri,
-				attributes,
-			)
-			if len(assertions) == 0 {
-				continue
-			}
-			filter := directory.Filter{Kind: directory.FilterOr, Children: assertions}
-			if uri.filter != nil {
-				filter = directory.Filter{
-					Kind: directory.FilterAnd,
-					Children: []directory.Filter{
-						*uri.filter,
-						filter,
-					},
-				}
-			}
-			duplicate, err := uniqueSearch(
-				runtime,
-				readerForDatabase(reader, database),
-				ignoredDN,
-				base,
-				uri.scope,
-				filter,
-			)
-			if err != nil {
-				return err
-			}
-			if duplicate {
-				return operationFailed(
-					ldapwire.ResultConstraintViolation,
-					"some attributes not unique",
-				)
-			}
+	for index := range database.unique.domains {
+		domain := &database.unique.domains[index]
+		if domain.serialize && domain.serializeMu != nil {
+			domain.serializeMu.Lock()
+		}
+		err := server.validateUniqueDomain(
+			runtime,
+			databaseReader,
+			database,
+			*domain,
+			ignoredDN,
+			attributes,
+			candidate,
+			inDomain,
+		)
+		if domain.serialize && domain.serializeMu != nil {
+			domain.serializeMu.Unlock()
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (server *Server) validateUniqueDomain(
+	runtime *runtimeState,
+	reader storage.Reader,
+	database runtimeDatabase,
+	domain uniqueDomain,
+	ignoredDN directory.DN,
+	attributes []directory.Attribute,
+	candidate *directory.Entry,
+	inDomain func(directory.DN) bool,
+) error {
+	for _, uri := range domain.uris {
+		base := database.suffixes[0]
+		if uri.base != nil {
+			base = *uri.base
+		}
+		base, err := normalizeUniqueDN(reader, database, base)
+		if err != nil {
+			return err
+		}
+		if !inDomain(base) {
+			continue
+		}
+		if candidate != nil && uri.filter != nil {
+			matches, err := uri.filter.MatchWith(*candidate, runtime.schema)
+			if err != nil {
+				return operationFailed(
+					ldapwire.ResultInappropriateMatching,
+					"unique candidate filter failed",
+				)
+			}
+			if !matches {
+				continue
+			}
+		}
+
+		assertions := uniqueAssertions(
+			runtime.schema,
+			domain,
+			uri,
+			attributes,
+		)
+		if len(assertions) == 0 {
+			continue
+		}
+		filter := directory.Filter{Kind: directory.FilterOr, Children: assertions}
+		if uri.filter != nil {
+			filter = directory.Filter{
+				Kind: directory.FilterAnd,
+				Children: []directory.Filter{
+					*uri.filter,
+					filter,
+				},
+			}
+		}
+		duplicate, err := uniqueSearch(
+			runtime,
+			reader,
+			ignoredDN,
+			base,
+			uri.scope,
+			filter,
+			database.dnNormalizer,
+		)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return operationFailed(
+				ldapwire.ResultConstraintViolation,
+				"some attributes not unique",
+			)
+		}
+	}
+	return nil
+}
+
+func normalizeUniqueDN(
+	reader storage.Reader,
+	database runtimeDatabase,
+	dn directory.DN,
+) (directory.DN, error) {
+	normalized, err := normalizeRuntimeDatabaseDN(database, dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return storage.NormalizeReaderDN(reader, normalized)
 }
 
 func uniqueAssertions(
@@ -601,17 +679,35 @@ func uniqueSearch(
 	base directory.DN,
 	scope directory.Scope,
 	filter directory.Filter,
+	normalizers ...directory.DNAttributeNormalizer,
 ) (bool, error) {
+	comparisonIgnoredDN, err := storage.NormalizeReaderDN(reader, ignoredDN)
+	if err != nil {
+		return false, err
+	}
+	comparisonBase, err := storage.NormalizeReaderDN(reader, base)
+	if err != nil {
+		return false, err
+	}
 	found := false
-	err := reader.ForEach(func(entry directory.Entry) error {
+	err = reader.ForEach(func(entry directory.Entry) error {
 		if found || runtime.schema.EntryHasObjectClass(entry, "referral") {
 			return nil
 		}
-		dn, err := directory.ParseDN(entry.DN)
+		var normalizer directory.DNAttributeNormalizer
+		if len(normalizers) != 0 {
+			normalizer = normalizers[0]
+		}
+		dn, err := parseRuntimeDN(entry.DN, normalizer)
 		if err != nil {
 			return err
 		}
-		if dn.Equal(ignoredDN) || !directory.InScope(base, dn, scope) ||
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return err
+		}
+		if dn.Equal(comparisonIgnoredDN) ||
+			!directory.InScope(comparisonBase, dn, scope) ||
 			!subentrySearchVisible(runtime, entry, scope, nil) {
 			return nil
 		}

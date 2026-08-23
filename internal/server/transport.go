@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"strings"
 	"time"
@@ -19,6 +20,20 @@ type SecureTransport interface {
 
 type standardTLSTransport struct {
 	config *tls.Config
+}
+
+type runtimeTLSTransport struct {
+	server *Server
+}
+
+func (server *Server) secureTransportAvailable(runtime *runtimeState) bool {
+	if server == nil || server.secureTransport == nil {
+		return false
+	}
+	if _, dynamic := server.secureTransport.(runtimeTLSTransport); dynamic {
+		return runtime != nil && runtime.secureTransport != nil
+	}
+	return true
 }
 
 type externalIdentityConnection interface {
@@ -56,6 +71,20 @@ func (transport standardTLSTransport) ServerHandshake(
 		return nil, err
 	}
 	return &standardTLSConnection{Conn: secured}, nil
+}
+
+func (transport runtimeTLSTransport) ServerHandshake(
+	ctx context.Context,
+	connection net.Conn,
+) (net.Conn, error) {
+	if transport.server == nil {
+		return nil, errors.New("TLS runtime is unavailable")
+	}
+	runtime := transport.server.runtime.Load()
+	if runtime == nil || runtime.secureTransport == nil {
+		return nil, errors.New("TLS is not configured")
+	}
+	return runtime.secureTransport.ServerHandshake(ctx, connection)
 }
 
 func (server *Server) secureHandshake(

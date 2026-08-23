@@ -1,9 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: test vet race fmt-check openldap openldap-strict openldap-full fuzz-smoke fuzz compat full
+.PHONY: test script-test vet race fmt-check openldap openldap-strict openldap-full fuzz-smoke fuzz compat full
 
-test:
+test: script-test
 	go test ./... -count=1
+
+script-test:
+	./scripts/test-build-openldap-reference.sh
 
 vet:
 	go vet ./...

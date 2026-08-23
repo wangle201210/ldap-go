@@ -248,7 +248,7 @@ func validateAutoCADatabase(
 	if configuration.localDN != nil {
 		inSuffix := false
 		for _, suffix := range database.suffixes {
-			if suffix.Equal(*configuration.localDN) || suffix.AncestorOf(*configuration.localDN) {
+			if databaseDNAtOrBelow(database, *configuration.localDN, suffix) {
 				inSuffix = true
 				break
 			}
@@ -476,23 +476,14 @@ func (server *Server) prepareAutoCASearch(
 				continue
 			}
 			tx := writerForDatabase(writer, *database)
-			var candidates []directory.DN
-			if err := tx.ForEach(func(entry directory.Entry) error {
-				dn, parseErr := directory.ParseDN(entry.DN)
-				if parseErr != nil {
-					return parseErr
-				}
-				if !directory.InScope(route.base, dn, route.scope) {
-					return nil
-				}
-				key := database.partition + "\x00" + dn.Key()
-				if _, ok := seen[key]; ok {
-					return nil
-				}
-				seen[key] = struct{}{}
-				candidates = append(candidates, dn)
-				return nil
-			}); err != nil {
+			candidates, err := autoCASearchCandidates(
+				tx,
+				database.partition,
+				route.base,
+				route.scope,
+				seen,
+			)
+			if err != nil {
 				return err
 			}
 			for _, dn := range candidates {
@@ -500,7 +491,8 @@ func (server *Server) prepareAutoCASearch(
 				if getErr != nil {
 					return getErr
 				}
-				if !databaseRootMatches(state.runtime, *database, subject) && !subject.Equal(dn) {
+				if !databaseRootMatches(state.runtime, *database, subject) &&
+					!databaseDNEqual(*database, subject, dn) {
 					continue
 				}
 				if !server.allowed(
@@ -543,6 +535,41 @@ func (server *Server) prepareAutoCASearch(
 	if err != nil {
 		server.config.Logger.Debug("AutoCA Search preparation failed", "error", err)
 	}
+}
+
+func autoCASearchCandidates(
+	reader storage.Reader,
+	partition string,
+	base directory.DN,
+	scope directory.Scope,
+	seen map[string]struct{},
+) ([]directory.DN, error) {
+	base, err := storage.NormalizeReaderDN(reader, base)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []directory.DN
+	err = reader.ForEach(func(entry directory.Entry) error {
+		dn, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return err
+		}
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return err
+		}
+		if !directory.InScope(base, dn, scope) {
+			return nil
+		}
+		key := partition + "\x00" + dn.Key()
+		if _, ok := seen[key]; ok {
+			return nil
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, dn)
+		return nil
+	})
+	return candidates, err
 }
 
 func (server *Server) issueAutoCAEntry(

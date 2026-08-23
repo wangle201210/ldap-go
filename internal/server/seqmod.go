@@ -104,7 +104,7 @@ func loadSeqmodRuntimeConfiguration(
 		)
 	}
 	return seqmodRuntimeConfiguration{
-		configDNKey: entryDN.Key(),
+		configDNKey: entryDN.NormalizedString(),
 		disabled:    disabled,
 		coordinator: newSeqmodCoordinator(),
 	}, nil
@@ -199,7 +199,14 @@ func acquireFrontendSeqmod(
 	for index := range runtime.databases {
 		database := &runtime.databases[index]
 		if databaseType(database.name) == "frontend" {
-			return acquireSeqmodConfiguration(ctx, database.seqmod, target)
+			if !seqmodConfigurationActive(database.seqmod) {
+				return seqmodNoopRelease, nil
+			}
+			normalized, err := normalizeSeqmodRuntimeTarget(runtime, target)
+			if err != nil {
+				return nil, err
+			}
+			return acquireSeqmodConfiguration(ctx, database.seqmod, normalized)
 		}
 	}
 	return seqmodNoopRelease, nil
@@ -213,7 +220,30 @@ func acquireDatabaseSeqmod(
 	if databaseType(database.name) == "frontend" {
 		return seqmodNoopRelease, nil
 	}
-	return acquireSeqmodConfiguration(ctx, database.seqmod, target)
+	if !seqmodConfigurationActive(database.seqmod) {
+		return seqmodNoopRelease, nil
+	}
+	normalized, err := normalizeRuntimeDatabaseDN(database, target)
+	if err != nil {
+		return nil, err
+	}
+	return acquireSeqmodConfiguration(ctx, database.seqmod, normalized)
+}
+
+func normalizeSeqmodRuntimeTarget(
+	runtime *runtimeState,
+	target directory.DN,
+) (directory.DN, error) {
+	if runtime == nil {
+		return target, nil
+	}
+	if database := databaseForDN(runtime, target); database != nil {
+		return normalizeRuntimeDatabaseDN(*database, target)
+	}
+	if runtime.schema != nil {
+		return runtime.schema.NormalizeDN(target.String())
+	}
+	return target, nil
 }
 
 func acquireSeqmodConfiguration(
@@ -221,12 +251,12 @@ func acquireSeqmodConfiguration(
 	configuration *seqmodRuntimeConfiguration,
 	target directory.DN,
 ) (func(), error) {
-	if configuration == nil || configuration.disabled || configuration.coordinator == nil {
+	if !seqmodConfigurationActive(configuration) {
 		return seqmodNoopRelease, nil
 	}
 	lock := seqmodHeldLock{
 		coordinator: configuration.coordinator,
-		targetKey:   target.Key(),
+		targetKey:   target.NormalizedString(),
 	}
 	if held, ok := ctx.Value(seqmodHeldContextKey{}).(map[seqmodHeldLock]struct{}); ok {
 		if _, exists := held[lock]; exists {
@@ -234,6 +264,12 @@ func acquireSeqmodConfiguration(
 		}
 	}
 	return configuration.coordinator.acquire(ctx, lock.targetKey)
+}
+
+func seqmodConfigurationActive(configuration *seqmodRuntimeConfiguration) bool {
+	return configuration != nil &&
+		!configuration.disabled &&
+		configuration.coordinator != nil
 }
 
 func seqmodNoopRelease() {}

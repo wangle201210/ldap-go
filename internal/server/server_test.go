@@ -262,6 +262,44 @@ func TestLDAPClientCoreWriteOperations(t *testing.T) {
 	}
 }
 
+func TestLDAPClientCompareValidatesAttributeAssertion(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("DialURL(): %v", err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatalf("root Bind(): %v", err)
+	}
+	const aliceDN = "uid=alice,ou=people,dc=example,dc=com"
+	for _, test := range []struct {
+		name      string
+		attribute string
+		assertion string
+		want      uint16
+	}{
+		{"undefined attribute", "notRegistered", "value", ldap.LDAPResultUndefinedAttributeType},
+		{"no equality rule", "jpegPhoto", "value", ldap.LDAPResultInappropriateMatching},
+		{"invalid assertion", "uidNumber", "not-an-integer", ldap.LDAPResultInvalidAttributeSyntax},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, compareErr := client.Compare(aliceDN, test.attribute, test.assertion)
+			assertLDAPResultCode(t, compareErr, test.want)
+		})
+	}
+}
+
 func TestLDAPClientLoadsAndPublishesOpenLDAPSchema(t *testing.T) {
 	t.Parallel()
 

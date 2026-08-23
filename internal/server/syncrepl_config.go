@@ -59,9 +59,10 @@ type syncConsumerTLSConfig struct {
 }
 
 type syncConsumerConfig struct {
-	order     int
-	rid       int
-	partition string
+	order      int
+	rid        int
+	partition  string
+	normalizer directory.DNAttributeNormalizer
 
 	providerURLs   []string
 	searchBase     directory.DN
@@ -112,6 +113,15 @@ func parseSyncConsumerConfig(
 	partition string,
 	suffixes []directory.DN,
 ) (syncConsumerConfig, error) {
+	return parseSyncConsumerConfigWithNormalizer(raw, partition, suffixes, nil)
+}
+
+func parseSyncConsumerConfigWithNormalizer(
+	raw string,
+	partition string,
+	suffixes []directory.DN,
+	normalizer directory.DNAttributeNormalizer,
+) (syncConsumerConfig, error) {
 	order, value, err := orderedSyncConsumerValue(raw)
 	if err != nil {
 		return syncConsumerConfig{}, err
@@ -127,6 +137,7 @@ func parseSyncConsumerConfig(
 		return syncConsumerConfig{}, err
 	}
 	config := syncConsumerConfig{
+		normalizer:         normalizer,
 		order:              order,
 		rid:                -1,
 		partition:          partition,
@@ -193,7 +204,7 @@ func parseSyncConsumerConfig(
 			config.providerURLs = providers
 			hasProvider = true
 		case "searchbase":
-			base, parseErr := directory.ParseDN(rawValue)
+			base, parseErr := parseRuntimeDN(rawValue, normalizer)
 			if parseErr != nil {
 				return syncConsumerConfig{}, fmt.Errorf(
 					"searchbase: %w",
@@ -203,7 +214,7 @@ func parseSyncConsumerConfig(
 			config.searchBase = base
 			hasSearchBase = true
 		case "suffixmassage":
-			base, parseErr := directory.ParseDN(rawValue)
+			base, parseErr := parseRuntimeDN(rawValue, normalizer)
 			if parseErr != nil {
 				return syncConsumerConfig{}, fmt.Errorf(
 					"suffixmassage: %w",
@@ -234,7 +245,7 @@ func parseSyncConsumerConfig(
 			config.logFilterText = rawValue
 			config.logFilter = &filter
 		case "logbase":
-			base, parseErr := directory.ParseDN(rawValue)
+			base, parseErr := parseRuntimeDN(rawValue, normalizer)
 			if parseErr != nil {
 				return syncConsumerConfig{}, fmt.Errorf(
 					"logbase: %w",
@@ -950,10 +961,11 @@ func loadSyncConsumerConfigs(
 	configs := make([]syncConsumerConfig, 0, len(values))
 	orders := make(map[int]struct{})
 	for _, value := range values {
-		config, err := parseSyncConsumerConfig(
+		config, err := parseSyncConsumerConfigWithNormalizer(
 			string(value),
 			database.partition,
 			database.suffixes,
+			database.dnNormalizer,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("%s olcSyncrepl: %w", entry.DN, err)

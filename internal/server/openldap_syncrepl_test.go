@@ -113,6 +113,7 @@ multiprovider TRUE`,
 		"uid=alice,ou=people,dc=example,dc=com",
 		0,
 	)
+	waitForOpenLDAPSyncSubscription(t, instance.syncChanges)
 
 	openLDAPClient, err := ldap.DialURL(openLDAPURI)
 	if err != nil {
@@ -125,6 +126,12 @@ multiprovider TRUE`,
 	if err := goClient.Add(newPersonAddRequest("from-go")); err != nil {
 		t.Fatalf("ldap-go add: %v", err)
 	}
+	assertMultiProviderEntrySID(
+		t,
+		store,
+		"uid=from-go,ou=people,dc=example,dc=com",
+		1,
+	)
 	waitForSyncConsumerAttribute(
 		t,
 		openLDAPClient,
@@ -150,6 +157,21 @@ multiprovider TRUE`,
 		2,
 	)
 	waitForMultiProviderContextSIDs(t, store, []uint16{1, 2})
+}
+
+func waitForOpenLDAPSyncSubscription(t *testing.T, hub *syncChangeHub) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		hub.mu.Lock()
+		count := len(hub.subscriptions)
+		hub.mu.Unlock()
+		if count > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("OpenLDAP syncrepl consumer did not establish a provider subscription")
 }
 
 func seedOpenLDAPMultiProviderConsumer(

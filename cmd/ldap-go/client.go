@@ -32,6 +32,10 @@ type ldapClientOptions struct {
 	uri                 string
 	simple              bool
 	bindDN              string
+	saslMechanism       string
+	saslAuthentication  string
+	saslAuthorization   string
+	saslRealm           string
 	directPassword      secretFlagValue
 	promptPassword      bool
 	passwordFile        string
@@ -39,6 +43,8 @@ type ldapClientOptions struct {
 	requireStartTLS     bool
 	timeout             time.Duration
 	tlsCAFile           string
+	tlsCertificateFile  string
+	tlsPrivateKeyFile   string
 	tlsServerName       string
 	dryRun              bool
 	generalControlSpecs repeatedStringFlag
@@ -55,6 +61,10 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	flags.StringVar(&options.uri, "H", options.uri, "LDAP URI")
 	flags.BoolVar(&options.simple, "x", false, "use simple authentication")
 	flags.StringVar(&options.bindDN, "D", "", "bind DN")
+	flags.StringVar(&options.saslMechanism, "Y", "", "SASL mechanism")
+	flags.StringVar(&options.saslAuthentication, "U", "", "SASL authentication identity")
+	flags.StringVar(&options.saslAuthorization, "X", "", "SASL authorization identity")
+	flags.StringVar(&options.saslRealm, "R", "", "SASL realm")
 	flags.Var(
 		&options.directPassword,
 		"w",
@@ -74,6 +84,18 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 		"alias for -timeout",
 	)
 	flags.StringVar(&options.tlsCAFile, "tls-ca", "", "PEM CA bundle for TLS")
+	flags.StringVar(
+		&options.tlsCertificateFile,
+		"tls-cert",
+		"",
+		"PEM client certificate for SASL EXTERNAL",
+	)
+	flags.StringVar(
+		&options.tlsPrivateKeyFile,
+		"tls-key",
+		"",
+		"PEM client private key for SASL EXTERNAL",
+	)
 	flags.StringVar(
 		&options.tlsServerName,
 		"tls-server-name",
@@ -121,10 +143,6 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 		{"o", "generic LDAP library options are not implemented"},
 		{"p", "legacy port selection is not implemented; use -H"},
 		{"P", "only LDAPv3 is implemented"},
-		{"R", "SASL realm selection is not implemented"},
-		{"U", "SASL authentication identities are not implemented"},
-		{"X", "SASL authorization identities are not implemented"},
-		{"Y", "SASL mechanisms are not implemented"},
 	} {
 		flags.String(option.name, "", "unsupported: "+option.reason)
 		options.unsupportedFlags = append(options.unsupportedFlags, unsupportedFlag(option))
@@ -193,11 +211,16 @@ func (options *ldapClientOptions) validateForWrite(
 	if flagWasSet(flags, "n") && !options.dryRun {
 		return errors.New("-n=false is not supported")
 	}
-	if requireConnection && !options.simple {
-		return fmt.Errorf(
-			"%s requires -x: SASL authentication is not implemented",
-			flags.Name(),
-		)
+	if options.dryRun {
+		for _, name := range []string{"Y", "U", "X", "R"} {
+			if flagWasSet(flags, name) {
+				return fmt.Errorf(
+					"%s option -%s is not supported with -n: SASL mechanisms are not implemented for dry runs because no authentication is performed",
+					flags.Name(),
+					name,
+				)
+			}
+		}
 	}
 	if options.tryStartTLS && options.requireStartTLS {
 		return errors.New("-Z and -ZZ are mutually exclusive")
@@ -234,17 +257,36 @@ func (options *ldapClientOptions) validateForWrite(
 	if passwordSources > 1 {
 		return errors.New("-w, -W, and -y are mutually exclusive")
 	}
-	if options.bindDN == "" && passwordSources > 0 {
-		return errors.New("a bind password requires a non-empty -D bind DN")
-	}
-	if options.bindDN != "" && passwordSources == 0 {
-		return errors.New("a non-empty -D bind DN requires one of -w, -W, or -y")
+	saslFlagsSet := flagWasSet(flags, "Y") || flagWasSet(flags, "U") ||
+		flagWasSet(flags, "X") || flagWasSet(flags, "R")
+	authenticationRequested := requireConnection || options.simple || saslFlagsSet ||
+		options.bindDN != "" || passwordSources > 0
+	if options.simple {
+		if saslFlagsSet {
+			return errors.New("-x cannot be combined with -Y, -U, -X, or -R")
+		}
+		if options.bindDN == "" && passwordSources > 0 {
+			return errors.New("a bind password requires a non-empty -D bind DN")
+		}
+		if options.bindDN != "" && passwordSources == 0 {
+			return errors.New("a non-empty -D bind DN requires one of -w, -W, or -y")
+		}
+	} else if authenticationRequested {
+		if options.bindDN != "" {
+			return errors.New("-D requires -x; use -U for a SASL authentication identity")
+		}
+		if err := options.validateSASL(flags, passwordSources); err != nil {
+			return fmt.Errorf("%s: %w", flags.Name(), err)
+		}
 	}
 	if flagWasSet(flags, "y") && options.passwordFile == "" {
 		return errors.New("-y requires a non-empty password file path")
 	}
 	if flagWasSet(flags, "tls-ca") && options.tlsCAFile == "" {
 		return errors.New("-tls-ca requires a non-empty path")
+	}
+	if (options.tlsCertificateFile == "") != (options.tlsPrivateKeyFile == "") {
+		return errors.New("-tls-cert and -tls-key must be provided together")
 	}
 	if flagWasSet(flags, "tls-server-name") && options.tlsServerName == "" {
 		return errors.New("-tls-server-name requires a non-empty hostname")
@@ -257,7 +299,11 @@ func (options *ldapClientOptions) loadPassword(
 	stdin io.Reader,
 	stderr io.Writer,
 ) ([]byte, bool, error) {
-	if options.bindDN == "" {
+	passwordIdentity := options.bindDN
+	if !options.simple {
+		passwordIdentity = options.saslAuthentication
+	}
+	if passwordIdentity == "" || strings.EqualFold(options.saslMechanism, "EXTERNAL") {
 		return nil, false, nil
 	}
 
@@ -278,6 +324,10 @@ func (options *ldapClientOptions) loadPassword(
 	}
 	if err != nil {
 		return nil, false, err
+	}
+	if !options.simple && bytesContainNUL(password) {
+		clear(password)
+		return nil, false, errors.New("SASL password must not contain NUL")
 	}
 	return password, true, nil
 }
@@ -389,6 +439,16 @@ func (options *ldapClientOptions) connectAndBind(
 		return nil, err
 	}
 	defer clear(password)
+	if !options.simple {
+		return options.connectAndBindSASL(
+			parsedURI,
+			dialURI,
+			tlsConfig,
+			password,
+			hasPassword,
+			stderr,
+		)
+	}
 
 	dial := func(useTLS bool) (*ldap.Conn, error) {
 		dialOptions := []ldap.DialOpt{
@@ -478,7 +538,9 @@ func (options *ldapClientOptions) connectionConfiguration(
 		return nil, "", nil, errors.New("-Z and -ZZ cannot be used with an ldaps:// URI")
 	}
 	tlsRequested := parsed.Scheme == "ldaps" || options.tryStartTLS || options.requireStartTLS
-	if !tlsRequested && (flagWasSet(flags, "tls-ca") || flagWasSet(flags, "tls-server-name")) {
+	if !tlsRequested && (flagWasSet(flags, "tls-ca") ||
+		flagWasSet(flags, "tls-cert") || flagWasSet(flags, "tls-key") ||
+		flagWasSet(flags, "tls-server-name")) {
 		return nil, "", nil, errors.New("TLS options require ldaps://, -Z, or -ZZ")
 	}
 
@@ -495,6 +557,16 @@ func (options *ldapClientOptions) clientTLSConfig(hostname string) (*tls.Config,
 		serverName = hostname
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
+	if options.tlsCertificateFile != "" {
+		certificate, err := tls.LoadX509KeyPair(
+			options.tlsCertificateFile,
+			options.tlsPrivateKeyFile,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("load TLS client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
 	if options.tlsCAFile != "" {
 		roots, systemErr := x509.SystemCertPool()
 		if systemErr != nil || roots == nil {

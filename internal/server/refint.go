@@ -143,14 +143,28 @@ func applyRefintChange(
 	if len(database.refint) == 0 {
 		return nil
 	}
-	base := database.suffixes[0]
+	base, err := runtime.schema.NormalizeDN(database.suffixes[0].String())
+	if err != nil {
+		return err
+	}
+	oldDN, err = runtime.schema.NormalizeDN(oldDN.String())
+	if err != nil {
+		return err
+	}
+	if newDN != nil {
+		normalized, normalizeErr := runtime.schema.NormalizeDN(newDN.String())
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		newDN = &normalized
+	}
 	for _, configuration := range database.refint {
 		if len(configuration.attributes) == 0 {
 			continue
 		}
 		var candidates []directory.DN
 		if err := writer.ForEach(func(entry directory.Entry) error {
-			entryDN, err := directory.ParseDN(entry.DN)
+			entryDN, err := runtime.schema.NormalizeDN(entry.DN)
 			if err != nil {
 				return err
 			}
@@ -212,6 +226,25 @@ func refintMutateAttribute(
 	subtree bool,
 	nothing *directory.DN,
 ) bool {
+	var err error
+	oldDN, err = registry.NormalizeDN(oldDN.String())
+	if err != nil {
+		return false
+	}
+	if newDN != nil {
+		normalized, normalizeErr := registry.NormalizeDN(newDN.String())
+		if normalizeErr != nil {
+			return false
+		}
+		newDN = &normalized
+	}
+	if nothing != nil {
+		normalized, normalizeErr := registry.NormalizeDN(nothing.String())
+		if normalizeErr != nil {
+			return false
+		}
+		nothing = &normalized
+	}
 	changed := false
 	attributes := entry.Attributes[:0]
 	for _, attribute := range entry.Attributes {
@@ -222,10 +255,13 @@ func refintMutateAttribute(
 		attributeChanged := false
 		values := make([][]byte, 0, len(attribute.Values))
 		for _, value := range attribute.Values {
-			candidate, err := directory.ParseDN(string(value))
+			candidate, err := registry.NormalizeDN(string(value))
 			matches := err == nil && (candidate.Equal(oldDN) ||
 				(subtree && oldDN.AncestorOf(candidate)))
 			if !matches {
+				if err == nil && containsDNValue(values, candidate, registry) {
+					continue
+				}
 				values = append(values, value)
 				continue
 			}
@@ -239,7 +275,7 @@ func refintMutateAttribute(
 				values = append(values, value)
 				continue
 			}
-			if !containsDNValue(values, replacement) {
+			if !containsDNValue(values, replacement, registry) {
 				values = append(values, []byte(replacement.String()))
 			}
 		}
@@ -255,9 +291,30 @@ func refintMutateAttribute(
 	return changed
 }
 
-func containsDNValue(values [][]byte, target directory.DN) bool {
+func containsDNValue(
+	values [][]byte,
+	target directory.DN,
+	registries ...*schema.Registry,
+) bool {
+	var registry *schema.Registry
+	if len(registries) > 0 {
+		registry = registries[0]
+	}
+	if registry != nil {
+		normalized, err := registry.NormalizeDN(target.String())
+		if err != nil {
+			return false
+		}
+		target = normalized
+	}
 	for _, value := range values {
-		candidate, err := directory.ParseDN(string(value))
+		var candidate directory.DN
+		var err error
+		if registry == nil {
+			candidate, err = directory.ParseDN(string(value))
+		} else {
+			candidate, err = registry.NormalizeDN(string(value))
+		}
 		if err == nil && candidate.Equal(target) {
 			return true
 		}

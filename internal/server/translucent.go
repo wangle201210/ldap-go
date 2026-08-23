@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -214,21 +213,16 @@ func (server *Server) prepareTranslucentSearchRoutes(
 			return prepared, &value, nil
 		}
 
-		for entryIndex := range entries {
-			entryDN, parseErr := directory.ParseDN(entries[entryIndex].DN)
-			if parseErr != nil {
-				return nil, nil, fmt.Errorf(
-					"parse translucent remote entry DN %q: %w",
-					entries[entryIndex].DN,
-					parseErr,
-				)
-			}
-			if entryDN.Equal(route.base) {
-				value := entries[entryIndex].Clone()
-				prepared[index].base = &value
-				break
-			}
+		baseEntry, err := server.translucentEntryAtBase(
+			ctx,
+			*database,
+			route.base,
+			entries,
+		)
+		if err != nil {
+			return nil, nil, err
 		}
+		prepared[index].base = baseEntry
 		if prepared[index].base != nil {
 			continue
 		}
@@ -257,6 +251,51 @@ func (server *Server) prepareTranslucentSearchRoutes(
 	return prepared, nil, nil
 }
 
+func (server *Server) translucentEntryAtBase(
+	ctx context.Context,
+	database runtimeDatabase,
+	base directory.DN,
+	entries []directory.Entry,
+) (*directory.Entry, error) {
+	var result *directory.Entry
+	err := server.viewStorage(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		comparisonBase, err := normalizeRuntimeReaderDN(tx, database, base)
+		if err != nil {
+			return fmt.Errorf(
+				"normalize translucent route base %q: %w",
+				base.String(),
+				err,
+			)
+		}
+		for index := range entries {
+			entryDN, err := directory.ParseDN(entries[index].DN)
+			if err != nil {
+				return fmt.Errorf(
+					"parse translucent remote entry DN %q: %w",
+					entries[index].DN,
+					err,
+				)
+			}
+			entryDN, err = normalizeRuntimeReaderDN(tx, database, entryDN)
+			if err != nil {
+				return fmt.Errorf(
+					"normalize translucent remote entry DN %q: %w",
+					entries[index].DN,
+					err,
+				)
+			}
+			if entryDN.Equal(comparisonBase) {
+				value := entries[index].Clone()
+				result = &value
+				break
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
 func (server *Server) translucentRemoteBase(
 	ctx context.Context,
 	state *connectionState,
@@ -266,8 +305,16 @@ func (server *Server) translucentRemoteBase(
 	derefAliases int,
 	timeLimit int,
 ) (*directory.Entry, *ldapwire.Result, error) {
+	comparisonBase, err := normalizeRuntimeDatabaseDN(database, base)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"normalize translucent remote base %q: %w",
+			base.String(),
+			err,
+		)
+	}
 	request := ldapwire.SearchRequest{
-		BaseDN:       base.String(),
+		BaseDN:       comparisonBase.String(),
 		Scope:        directory.ScopeBase,
 		DerefAliases: derefAliases,
 		TimeLimit:    timeLimit,
@@ -300,8 +347,16 @@ func (server *Server) translucentRemoteBase(
 	if len(entries) == 0 {
 		return nil, nil, nil
 	}
-	entry := entries[0].Clone()
-	return &entry, nil, nil
+	entry, err := server.translucentEntryAtBase(
+		ctx,
+		database,
+		comparisonBase,
+		entries,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return entry, nil, nil
 }
 
 func (server *Server) executeTranslucentOperation(
@@ -366,14 +421,6 @@ func decodeTranslucentSearchPackets(
 			references = append(references, values)
 		}
 	}
-	sort.SliceStable(entries, func(left, right int) bool {
-		leftDN, leftErr := directory.ParseDN(entries[left].DN)
-		rightDN, rightErr := directory.ParseDN(entries[right].DN)
-		if leftErr != nil || rightErr != nil {
-			return entries[left].DN < entries[right].DN
-		}
-		return leftDN.Key() < rightDN.Key()
-	})
 	return entries, references, nil
 }
 
@@ -439,6 +486,10 @@ func translucentMergedRemoteEntry(
 	if err != nil {
 		return directory.Entry{}, err
 	}
+	dn, err = storage.NormalizeReaderDN(reader, dn)
+	if err != nil {
+		return directory.Entry{}, err
+	}
 	local, err := reader.Get(dn)
 	if errors.Is(err, storage.ErrEntryNotFound) {
 		return remote.Clone(), nil
@@ -457,7 +508,16 @@ func (server *Server) translucentCompareUsesRemote(
 ) (bool, error) {
 	remote := false
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		entry, err := readerForDatabase(reader, database).Get(dn)
+		tx := readerForDatabase(reader, database)
+		comparisonDN, err := normalizeRuntimeReaderDN(tx, database, dn)
+		if err != nil {
+			return fmt.Errorf(
+				"normalize translucent compare DN %q: %w",
+				dn.String(),
+				err,
+			)
+		}
+		entry, err := tx.Get(comparisonDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			remote = true
 			return nil

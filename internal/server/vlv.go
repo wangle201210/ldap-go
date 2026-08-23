@@ -31,9 +31,11 @@ type virtualListViewRequest struct {
 }
 
 type virtualListViewItem struct {
-	route   int
-	dn      string
-	primary sortValue
+	route       int
+	dn          string
+	cursorKey   string
+	identityKey string
+	primary     sortValue
 }
 
 type virtualListViewState struct {
@@ -66,6 +68,7 @@ func prepareVirtualListView(
 		return nil, nil
 	}
 	fingerprint := virtualListViewFingerprint(
+		state.runtime.schema,
 		state.boundDN,
 		searchRequest,
 		controls,
@@ -166,9 +169,11 @@ func startVirtualListView(
 			primary.value = bytes.Clone(primary.value)
 		}
 		items[index] = virtualListViewItem{
-			route:   candidates[index].route,
-			dn:      candidates[index].dn,
-			primary: primary,
+			route:       candidates[index].route,
+			dn:          candidates[index].dn,
+			cursorKey:   candidates[index].cursorKey,
+			identityKey: candidates[index].identityKey,
+			primary:     primary,
 		}
 	}
 	view := &virtualListViewState{
@@ -356,12 +361,27 @@ func (server *Server) virtualListViewEntries(
 			}
 			database := &state.runtime.databases[routes[item.route].databaseIndex]
 			tx := readerForDatabase(reader, *database)
+			dn, err = storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return fmt.Errorf("normalize VLV DN %q: %w", item.dn, err)
+			}
 			entry, err := tx.Get(dn)
 			if errors.Is(err, storage.ErrEntryNotFound) {
 				continue
 			}
 			if err != nil {
 				return err
+			}
+			matches, err := virtualListViewItemMatchesEntry(
+				state.runtime.schema,
+				item,
+				entry,
+			)
+			if err != nil {
+				return err
+			}
+			if !matches {
+				continue
 			}
 			entry = withSubschemaReference(entry)
 			entry, err = collectivePlans.apply(database.partition, tx, entry)
@@ -426,6 +446,21 @@ func (server *Server) virtualListViewEntries(
 	return entries, err
 }
 
+func virtualListViewItemMatchesEntry(
+	registry *schema.Registry,
+	item virtualListViewItem,
+	entry directory.Entry,
+) (bool, error) {
+	if item.identityKey == "" {
+		return true, nil
+	}
+	dn, err := registry.NormalizeDN(entry.DN)
+	if err != nil {
+		return false, fmt.Errorf("normalize VLV entry DN %q: %w", entry.DN, err)
+	}
+	return dn.Key() == item.identityKey, nil
+}
+
 func virtualListViewResponseControl(
 	response ldapwire.VirtualListViewResponse,
 ) []ldapwire.Control {
@@ -437,15 +472,21 @@ func virtualListViewResponseControl(
 }
 
 func virtualListViewFingerprint(
+	registry *schema.Registry,
 	boundDN string,
 	request ldapwire.SearchRequest,
 	controls []ldapwire.Control,
 ) [sha256.Size]byte {
+	boundDN = normalizedVirtualListViewDN(registry, boundDN)
+	request.BaseDN = normalizedVirtualListViewDN(registry, request.BaseDN)
 	normalizedControls := make([]ldapwire.Control, 0, len(controls))
 	for _, control := range controls {
-		if control.OID == vlvRequestControlOID {
+		switch control.OID {
+		case vlvRequestControlOID:
 			control.Value = nil
 			control.HasValue = true
+		case sortRequestControlOID:
+			control = normalizedVirtualListViewSortControl(registry, control)
 		}
 		normalizedControls = append(normalizedControls, control)
 	}
@@ -459,4 +500,45 @@ func virtualListViewFingerprint(
 		Controls: normalizedControls,
 	})
 	return sha256.Sum256(encoded)
+}
+
+func normalizedVirtualListViewDN(registry *schema.Registry, value string) string {
+	if value == "" || registry == nil {
+		return value
+	}
+	dn, err := registry.NormalizeDN(value)
+	if err != nil {
+		return value
+	}
+	return dn.NormalizedString()
+}
+
+func normalizedVirtualListViewSortControl(
+	registry *schema.Registry,
+	control ldapwire.Control,
+) ldapwire.Control {
+	if registry == nil || !control.HasValue {
+		return control
+	}
+	keys, err := ldapwire.DecodeSortRequestValue(control.Value)
+	if err != nil {
+		return control
+	}
+	for index := range keys {
+		attribute, ok := registry.AttributeType(keys[index].AttributeType)
+		if !ok {
+			return control
+		}
+		orderingRule, err := registry.OrderingRule(
+			keys[index].AttributeType,
+			keys[index].OrderingRule,
+		)
+		if err != nil {
+			return control
+		}
+		keys[index].AttributeType = attribute.Name()
+		keys[index].OrderingRule = orderingRule
+	}
+	control.Value = ldapwire.EncodeSortRequestValue(keys)
+	return control
 }

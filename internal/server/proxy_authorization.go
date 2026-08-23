@@ -63,7 +63,10 @@ func (server *Server) applyProxyAuthorization(
 		return message, "", false, &result
 	}
 
-	authenticationDN, err := directory.ParseDN(state.boundDN)
+	authenticationDN, err := normalizeProxyAuthorizationDN(
+		state.runtime,
+		state.boundDN,
+	)
 	if err != nil {
 		result := ldapwire.ResultError(
 			ldapwire.ResultProxiedAuthorizationDenied,
@@ -116,16 +119,16 @@ func (server *Server) proxiedAuthorizationDN(
 	authorizationID := string(value)
 	if authorizationID == "" ||
 		strings.EqualFold(authorizationID, "anonymous") {
-		return directory.ParseDN("")
+		return normalizeProxyAuthorizationDN(runtime, "")
 	}
 	switch {
 	case strings.HasPrefix(strings.ToLower(authorizationID), "dn:"):
-		return directory.ParseDN(authorizationID[3:])
+		return normalizeProxyAuthorizationDN(runtime, authorizationID[3:])
 	case strings.HasPrefix(strings.ToLower(authorizationID), "u:"):
 		if mechanism == "" {
 			mechanism = "AUTHZ"
 		}
-		return server.saslUserDNAs(
+		mapped, err := server.saslUserDNAs(
 			ctx,
 			runtime,
 			mechanism,
@@ -133,9 +136,32 @@ func (server *Server) proxiedAuthorizationDN(
 			"",
 			authenticationDN,
 		)
+		if err != nil {
+			return directory.DN{}, err
+		}
+		return normalizeProxyAuthorizationDN(runtime, mapped.String())
 	default:
 		return directory.DN{}, errSASLAuthorizationDenied
 	}
+}
+
+func normalizeProxyAuthorizationDN(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	var (
+		dn  directory.DN
+		err error
+	)
+	if runtime != nil && runtime.schema != nil {
+		dn, err = runtime.schema.NormalizeDN(value)
+	} else {
+		dn, err = directory.ParseDN(value)
+	}
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return normalizeSASLAuthorizationDN(runtime, dn)
 }
 
 func supportsProxyAuthorization(request ldapwire.Request) bool {

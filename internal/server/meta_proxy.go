@@ -470,8 +470,12 @@ func metaModifyDNStaysInTarget(
 	if err != nil {
 		return false
 	}
-	return mapping.suffix.local.Equal(newSuperior) ||
-		mapping.suffix.local.AncestorOf(newSuperior)
+	newSuperior, err = mapping.normalizeDN(newSuperior)
+	if err != nil {
+		return false
+	}
+	local, err := mapping.normalizeDN(mapping.suffix.local)
+	return err == nil && (local.Equal(newSuperior) || local.AncestorOf(newSuperior))
 }
 
 func metaDescriptionIsSpecial(value string) bool {

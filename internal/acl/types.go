@@ -182,11 +182,12 @@ type Subject struct {
 }
 
 type Target struct {
-	Entry     directory.Entry
-	Attribute string
-	Value     []byte
-	DNValued  bool
-	Schema    TargetSchema
+	Entry        directory.Entry
+	Attribute    string
+	Value        []byte
+	DNValued     bool
+	Schema       TargetSchema
+	DNNormalizer directory.DNAttributeNormalizer
 }
 
 type TargetSchema interface {

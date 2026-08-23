@@ -333,7 +333,7 @@ func parseSyncConsumerAccesslogOperation(
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, err
 	}
-	remoteDN, err := directory.ParseDN(string(rawDN))
+	remoteDN, err := parseRuntimeDN(string(rawDN), config.normalizer)
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, err
 	}
@@ -409,12 +409,16 @@ func parseSyncConsumerAccesslogOperation(
 		return syncConsumerAccesslogOperation{}, err
 	}
 	if rawSuperior != nil {
-		superior, err = directory.ParseDN(string(rawSuperior))
+		superior, err = parseRuntimeDN(string(rawSuperior), config.normalizer)
 		if err != nil {
 			return syncConsumerAccesslogOperation{}, err
 		}
 	}
 	newRemoteDN, err := directory.ComposeDN(string(rawRDN), superior)
+	if err != nil {
+		return syncConsumerAccesslogOperation{}, err
+	}
+	newRemoteDN, err = parseRuntimeDN(newRemoteDN.String(), config.normalizer)
 	if err != nil {
 		return syncConsumerAccesslogOperation{}, err
 	}
@@ -561,24 +565,33 @@ func applySyncConsumerAccesslogAdd(
 	config syncConsumerConfig,
 	operation syncConsumerAccesslogOperation,
 ) error {
-	if !directory.InScope(config.searchBase, operation.remoteDN, config.scope) {
+	content := syncConsumerWriter(writer, nil, config)
+	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
+	if err != nil {
+		return err
+	}
+	if !directory.InScope(searchBase, operation.remoteDN, config.scope) {
 		return nil
 	}
 	targetDN, err := mapSyncConsumerAccesslogDN(config, operation.remoteDN)
 	if err != nil {
 		return err
 	}
-	if _, err := writer.GetIn(config.partition, targetDN); err == nil {
+	if _, err := content.Get(targetDN); err == nil {
 		return storage.ErrEntryExists
 	} else if !errors.Is(err, storage.ErrEntryNotFound) {
 		return err
 	}
-	if !targetDN.Equal(config.localBase) {
+	localBase, err := storage.NormalizeReaderDN(content, config.localBase)
+	if err != nil {
+		return err
+	}
+	if !targetDN.Equal(localBase) {
 		parent, ok := targetDN.Parent()
 		if !ok {
 			return errors.New("accesslog add has no parent")
 		}
-		if _, err := writer.GetIn(config.partition, parent); err != nil {
+		if _, err := content.Get(parent); err != nil {
 			return fmt.Errorf("accesslog add parent %s: %w", parent.String(), err)
 		}
 	}
@@ -599,7 +612,7 @@ func applySyncConsumerAccesslogAdd(
 			return fmt.Errorf("validate accesslog add %s: %w", entry.DN, err)
 		}
 	}
-	return writer.PutIn(config.partition, entry, false)
+	return content.Put(entry, false)
 }
 
 func applySyncConsumerAccesslogDelete(
@@ -607,24 +620,28 @@ func applySyncConsumerAccesslogDelete(
 	config syncConsumerConfig,
 	operation syncConsumerAccesslogOperation,
 ) error {
-	if !directory.InScope(config.searchBase, operation.remoteDN, config.scope) {
+	content := syncConsumerWriter(writer, nil, config)
+	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
+	if err != nil {
+		return err
+	}
+	if !directory.InScope(searchBase, operation.remoteDN, config.scope) {
 		return nil
 	}
 	targetDN, err := mapSyncConsumerAccesslogDN(config, operation.remoteDN)
 	if err != nil {
 		return err
 	}
-	if _, err := writer.GetIn(config.partition, targetDN); err != nil {
+	if _, err := content.Get(targetDN); err != nil {
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
 		return err
 	}
 	hasChild := false
-	if err := writer.ForEachIn(
-		config.partition,
+	if err := content.ForEach(
 		func(entry directory.Entry) error {
-			candidate, err := directory.ParseDN(entry.DN)
+			candidate, err := syncConsumerParseDN(content, entry.DN)
 			if err != nil {
 				return err
 			}
@@ -639,7 +656,7 @@ func applySyncConsumerAccesslogDelete(
 	if hasChild {
 		return errors.New("accesslog delete targets a non-leaf entry")
 	}
-	return writer.DeleteIn(config.partition, targetDN)
+	return content.Delete(targetDN)
 }
 
 func applySyncConsumerAccesslogModify(
@@ -648,14 +665,19 @@ func applySyncConsumerAccesslogModify(
 	config syncConsumerConfig,
 	operation syncConsumerAccesslogOperation,
 ) error {
-	if !directory.InScope(config.searchBase, operation.remoteDN, config.scope) {
+	content := syncConsumerWriter(writer, nil, config)
+	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
+	if err != nil {
+		return err
+	}
+	if !directory.InScope(searchBase, operation.remoteDN, config.scope) {
 		return nil
 	}
 	targetDN, err := mapSyncConsumerAccesslogDN(config, operation.remoteDN)
 	if err != nil {
 		return err
 	}
-	entry, err := writer.GetIn(config.partition, targetDN)
+	entry, err := content.Get(targetDN)
 	if err != nil {
 		return err
 	}
@@ -671,14 +693,14 @@ func applySyncConsumerAccesslogModify(
 		return err
 	}
 	if !matches {
-		return writer.DeleteIn(config.partition, targetDN)
+		return content.Delete(targetDN)
 	}
 	if config.schemaChecking && runtime != nil {
 		if err := runtime.schema.ValidateEntry(entry); err != nil {
 			return fmt.Errorf("validate accesslog modify %s: %w", entry.DN, err)
 		}
 	}
-	return writer.PutIn(config.partition, entry, true)
+	return content.Put(entry, true)
 }
 
 func applySyncConsumerAccesslogModifyDN(
@@ -687,16 +709,21 @@ func applySyncConsumerAccesslogModifyDN(
 	config syncConsumerConfig,
 	operation syncConsumerAccesslogOperation,
 ) error {
+	content := syncConsumerWriter(writer, nil, config)
 	if operation.newRemoteDN == nil {
 		return errors.New("accesslog modrdn has no destination DN")
 	}
+	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
+	if err != nil {
+		return err
+	}
 	oldInScope := directory.InScope(
-		config.searchBase,
+		searchBase,
 		operation.remoteDN,
 		config.scope,
 	)
 	newInScope := directory.InScope(
-		config.searchBase,
+		searchBase,
 		*operation.newRemoteDN,
 		config.scope,
 	)
@@ -711,7 +738,7 @@ func applySyncConsumerAccesslogModifyDN(
 		return err
 	}
 	if !newInScope {
-		return deleteSyncConsumerAccesslogSubtree(writer, config.partition, oldDN)
+		return deleteSyncConsumerAccesslogSubtree(content, oldDN)
 	}
 	newDN, err := mapSyncConsumerAccesslogDN(config, *operation.newRemoteDN)
 	if err != nil {
@@ -725,10 +752,9 @@ func applySyncConsumerAccesslogModifyDN(
 	}
 	var moves []move
 	oldKeys := make(map[string]struct{})
-	if err := writer.ForEachIn(
-		config.partition,
+	if err := content.ForEach(
 		func(entry directory.Entry) error {
-			candidate, err := directory.ParseDN(entry.DN)
+			candidate, err := syncConsumerParseDN(content, entry.DN)
 			if err != nil {
 				return err
 			}
@@ -757,7 +783,7 @@ func applySyncConsumerAccesslogModifyDN(
 		if _, moving := oldKeys[item.newDN.Key()]; moving {
 			continue
 		}
-		if _, err := writer.GetIn(config.partition, item.newDN); err == nil {
+		if _, err := content.Get(item.newDN); err == nil {
 			return storage.ErrEntryExists
 		} else if !errors.Is(err, storage.ErrEntryNotFound) {
 			return err
@@ -794,7 +820,7 @@ func applySyncConsumerAccesslogModifyDN(
 		return moves[i].oldDN.Depth() > moves[j].oldDN.Depth()
 	})
 	for _, item := range moves {
-		if err := writer.DeleteIn(config.partition, item.oldDN); err != nil {
+		if err := content.Delete(item.oldDN); err != nil {
 			return err
 		}
 	}
@@ -802,7 +828,7 @@ func applySyncConsumerAccesslogModifyDN(
 		return moves[i].newDN.Depth() < moves[j].newDN.Depth()
 	})
 	for _, item := range moves {
-		if err := writer.PutIn(config.partition, item.entry, false); err != nil {
+		if err := content.Put(item.entry, false); err != nil {
 			return err
 		}
 	}
@@ -908,14 +934,12 @@ func mapSyncConsumerAccesslogDN(
 
 func deleteSyncConsumerAccesslogSubtree(
 	writer storage.Writer,
-	partition string,
 	base directory.DN,
 ) error {
 	var dns []directory.DN
-	if err := writer.ForEachIn(
-		partition,
+	if err := writer.ForEach(
 		func(entry directory.Entry) error {
-			candidate, err := directory.ParseDN(entry.DN)
+			candidate, err := syncConsumerParseDN(writer, entry.DN)
 			if err != nil {
 				return err
 			}
@@ -934,7 +958,7 @@ func deleteSyncConsumerAccesslogSubtree(
 		return dns[i].Depth() > dns[j].Depth()
 	})
 	for _, dn := range dns {
-		if err := writer.DeleteIn(partition, dn); err != nil {
+		if err := writer.Delete(dn); err != nil {
 			return err
 		}
 	}

@@ -20,6 +20,7 @@ const metaBackendNoDefaultTarget = -1
 // database and its directly-owned olcMetaSub target entries.
 type metaBackendRuntimeConfiguration struct {
 	configDNKey         string
+	dnNormalizer        directory.DNAttributeNormalizer
 	suffixes            []directory.DN
 	targets             []metaBackendTargetRuntimeConfiguration
 	defaultTarget       int
@@ -30,6 +31,7 @@ type metaBackendRuntimeConfiguration struct {
 
 type metaBackendTargetRuntimeConfiguration struct {
 	configDNKey         string
+	dnNormalizer        directory.DNAttributeNormalizer
 	transportGeneration uint64
 	// OpenLDAP 2.6.13 leaves an online URI replacement unroutable until restart.
 	onlineURIUnavailable bool
@@ -56,7 +58,18 @@ func loadMetaBackendRuntimeConfiguration(
 	reader storage.Reader,
 	databaseEntry directory.Entry,
 ) (*metaBackendRuntimeConfiguration, error) {
-	databaseDN, suffixes, err := validateMetaBackendDatabase(databaseEntry)
+	return loadMetaBackendRuntimeConfigurationWithNormalizer(reader, databaseEntry, nil)
+}
+
+func loadMetaBackendRuntimeConfigurationWithNormalizer(
+	reader storage.Reader,
+	databaseEntry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
+) (*metaBackendRuntimeConfiguration, error) {
+	databaseDN, suffixes, err := validateMetaBackendDatabaseWithNormalizer(
+		databaseEntry,
+		normalizer,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +124,7 @@ func loadMetaBackendRuntimeConfiguration(
 
 	configuration := &metaBackendRuntimeConfiguration{
 		configDNKey:         databaseDN.Key(),
+		dnNormalizer:        normalizer,
 		suffixes:            append([]directory.DN(nil), suffixes...),
 		targets:             make([]metaBackendTargetRuntimeConfiguration, 0, len(children)),
 		defaultTarget:       metaBackendNoDefaultTarget,
@@ -122,6 +136,7 @@ func loadMetaBackendRuntimeConfiguration(
 			child.entry,
 			child.order,
 			suffixes,
+			normalizer,
 		)
 		if loadErr != nil {
 			return nil, loadErr
@@ -197,6 +212,13 @@ func loadMetaBackendDNCacheTTL(entry directory.Entry) (time.Duration, error) {
 func validateMetaBackendDatabase(
 	entry directory.Entry,
 ) (directory.DN, []directory.DN, error) {
+	return validateMetaBackendDatabaseWithNormalizer(entry, nil)
+}
+
+func validateMetaBackendDatabaseWithNormalizer(
+	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.DN, []directory.DN, error) {
 	entryDN, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.DN{}, nil, fmt.Errorf("parse meta database DN %q: %w", entry.DN, err)
@@ -241,7 +263,7 @@ func validateMetaBackendDatabase(
 	suffixes := make([]directory.DN, 0, len(rawSuffixes))
 	seen := make(map[string]struct{}, len(rawSuffixes))
 	for _, raw := range rawSuffixes {
-		suffix, parseErr := directory.ParseDN(string(raw))
+		suffix, parseErr := parseRuntimeDN(string(raw), normalizer)
 		if parseErr != nil {
 			return directory.DN{}, nil, fmt.Errorf("%s olcSuffix: %w", entry.DN, parseErr)
 		}
@@ -320,6 +342,7 @@ func loadMetaBackendTarget(
 	entry directory.Entry,
 	order int,
 	databaseSuffixes []directory.DN,
+	normalizer directory.DNAttributeNormalizer,
 ) (metaBackendTargetRuntimeConfiguration, error) {
 	if err := validateMetaBackendCompatibilitySettings(entry); err != nil {
 		return metaBackendTargetRuntimeConfiguration{}, err
@@ -355,7 +378,11 @@ func loadMetaBackendTarget(
 			entry.DN,
 		)
 	}
-	suffix, scope, endpoints, err := parseMetaBackendURIs(entry.DN, string(uriValues[0]))
+	suffix, scope, endpoints, err := parseMetaBackendURIsWithNormalizer(
+		entry.DN,
+		string(uriValues[0]),
+		normalizer,
+	)
 	if err != nil {
 		return metaBackendTargetRuntimeConfiguration{}, err
 	}
@@ -392,11 +419,11 @@ func loadMetaBackendTarget(
 		backend.remotes[index].bindPollRetries = bindPollRetries
 		backend.remotes[index].bindPollTimeout = bindPollTimeout
 	}
-	rwm, err := loadMetaBackendSuffixRewrite(entry, databaseSuffixes)
+	rwm, err := loadMetaBackendSuffixRewrite(entry, databaseSuffixes, normalizer)
 	if err != nil {
 		return metaBackendTargetRuntimeConfiguration{}, err
 	}
-	subtrees, exclude, err := loadMetaBackendSubtreeRules(entry, suffix)
+	subtrees, exclude, err := loadMetaBackendSubtreeRules(entry, suffix, normalizer)
 	if err != nil {
 		return metaBackendTargetRuntimeConfiguration{}, err
 	}
@@ -413,17 +440,18 @@ func loadMetaBackendTarget(
 		return metaBackendTargetRuntimeConfiguration{}, err
 	}
 	target := metaBackendTargetRuntimeConfiguration{
-		configDNKey: entryDN.Key(),
-		order:       order,
-		suffix:      suffix,
-		scope:       scope,
-		clientPr:    clientPr,
-		ldapBackend: backend,
-		rwm:         rwm,
-		subtrees:    subtrees,
-		exclude:     exclude,
-		filters:     filters,
-		preferred:   &proxyPreferredRemoteState{},
+		configDNKey:  entryDN.Key(),
+		dnNormalizer: normalizer,
+		order:        order,
+		suffix:       suffix,
+		scope:        scope,
+		clientPr:     clientPr,
+		ldapBackend:  backend,
+		rwm:          rwm,
+		subtrees:     subtrees,
+		exclude:      exclude,
+		filters:      filters,
+		preferred:    &proxyPreferredRemoteState{},
 	}
 	if len(backend.remotes) > 0 && len(backend.remotes[0].quarantine) > 0 {
 		target.health = &pbindQuarantineState{now: time.Now}
@@ -521,6 +549,7 @@ func loadMetaBackendClientPr(parent, target directory.Entry) (int, error) {
 func loadMetaBackendSubtreeRules(
 	entry directory.Entry,
 	targetSuffix directory.DN,
+	normalizer directory.DNAttributeNormalizer,
 ) ([]metaBackendSubtreeRule, bool, error) {
 	include := entry.Values("olcDbSubtreeInclude")
 	exclude := entry.Values("olcDbSubtreeExclude")
@@ -574,7 +603,7 @@ func loadMetaBackendSubtreeRules(
 			}
 			rule.pattern = compiled
 		} else {
-			dn, parseErr := directory.ParseDN(pattern)
+			dn, parseErr := parseRuntimeDN(pattern, normalizer)
 			if parseErr != nil ||
 				(!targetSuffix.Equal(dn) && !targetSuffix.AncestorOf(dn)) {
 				return nil, false, fmt.Errorf(
@@ -611,6 +640,14 @@ func loadMetaBackendFilterRules(entry directory.Entry) ([]*regexp.Regexp, error)
 func parseMetaBackendURIs(
 	entryDN string,
 	value string,
+) (directory.DN, directory.Scope, []string, error) {
+	return parseMetaBackendURIsWithNormalizer(entryDN, value, nil)
+}
+
+func parseMetaBackendURIsWithNormalizer(
+	entryDN string,
+	value string,
+	normalizer directory.DNAttributeNormalizer,
 ) (directory.DN, directory.Scope, []string, error) {
 	values, err := tokenizeOpenLDAPConfig(value)
 	if err != nil {
@@ -649,7 +686,7 @@ func parseMetaBackendURIs(
 				)
 			}
 			rawDN := strings.TrimPrefix(parsed.Path, "/")
-			suffix, parseErr = directory.ParseDN(rawDN)
+			suffix, parseErr = parseRuntimeDN(rawDN, normalizer)
 			if parseErr != nil || suffix.Depth() == 0 {
 				return directory.DN{}, 0, nil, fmt.Errorf(
 					"%s first olcDbURI URL has invalid target DN %q",
@@ -737,6 +774,7 @@ func parseMetaBackendURLScope(rawQuery string, forceQuery bool) (directory.Scope
 func loadMetaBackendSuffixRewrite(
 	entry directory.Entry,
 	databaseSuffixes []directory.DN,
+	normalizer directory.DNAttributeNormalizer,
 ) (*rwmRuntimeConfiguration, error) {
 	configuration := &rwmRuntimeConfiguration{
 		attributesToRemote: make(map[string]string),
@@ -768,7 +806,7 @@ func loadMetaBackendSuffixRewrite(
 		if mapping != nil {
 			return nil, fmt.Errorf("%s configures multiple suffixmassage directives", entry.DN)
 		}
-		local, parseErr := directory.ParseDN(words[1])
+		local, parseErr := parseRuntimeDN(words[1], normalizer)
 		if parseErr != nil || local.Depth() == 0 {
 			return nil, fmt.Errorf(
 				"%s suffixmassage has invalid local DN %q",
@@ -783,7 +821,7 @@ func loadMetaBackendSuffixRewrite(
 				words[1],
 			)
 		}
-		remote, parseErr := directory.ParseDN(words[2])
+		remote, parseErr := parseRuntimeDN(words[2], normalizer)
 		if parseErr != nil {
 			return nil, fmt.Errorf(
 				"%s suffixmassage has invalid remote DN %q",
@@ -914,6 +952,10 @@ func (configuration *metaBackendRuntimeConfiguration) targetsForDN(
 	if configuration == nil {
 		return nil
 	}
+	dn, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return nil
+	}
 	bestDepth := -1
 	indices := make([]int, 0, 1)
 	for index := range configuration.targets {
@@ -955,6 +997,10 @@ func (configuration *metaBackendRuntimeConfiguration) candidateTargetsForDN(
 	dn directory.DN,
 ) []metaBackendTargetRuntimeConfiguration {
 	if configuration == nil {
+		return nil
+	}
+	dn, err := configuration.normalizeDN(dn)
+	if err != nil {
 		return nil
 	}
 	result := make([]metaBackendTargetRuntimeConfiguration, 0, len(configuration.targets))
@@ -1009,6 +1055,7 @@ func (configuration *metaBackendRuntimeConfiguration) clone() *metaBackendRuntim
 	}
 	clone := &metaBackendRuntimeConfiguration{
 		configDNKey:         configuration.configDNKey,
+		dnNormalizer:        configuration.dnNormalizer,
 		suffixes:            append([]directory.DN(nil), configuration.suffixes...),
 		targets:             make([]metaBackendTargetRuntimeConfiguration, len(configuration.targets)),
 		defaultTarget:       configuration.defaultTarget,
@@ -1050,6 +1097,10 @@ func (target metaBackendTargetRuntimeConfiguration) matchesDN(
 	dn directory.DN,
 	scope directory.Scope,
 ) bool {
+	dn, err := target.normalizeDN(dn)
+	if err != nil {
+		return false
+	}
 	if target.onlineURIUnavailable ||
 		(!target.suffix.Equal(dn) && !target.suffix.AncestorOf(dn)) ||
 		(target.scope == directory.ScopeChildren && target.suffix.Equal(dn)) {
@@ -1067,7 +1118,7 @@ func (target metaBackendTargetRuntimeConfiguration) matchesDN(
 			matched = (rule.dn.Equal(dn) || rule.dn.AncestorOf(dn)) &&
 				(!rule.dn.Equal(dn) || scope != directory.ScopeBase)
 		case "regex":
-			matched = rule.pattern != nil && rule.pattern.MatchString(dn.String())
+			matched = rule.pattern != nil && rule.pattern.MatchString(dn.NormalizedString())
 		}
 		if matched {
 			break
@@ -1077,6 +1128,30 @@ func (target metaBackendTargetRuntimeConfiguration) matchesDN(
 		return !matched
 	}
 	return matched
+}
+
+func (configuration *metaBackendRuntimeConfiguration) normalizeDN(
+	dn directory.DN,
+) (directory.DN, error) {
+	if configuration == nil {
+		return dn, nil
+	}
+	return parseRuntimeDN(dn.String(), configuration.dnNormalizer)
+}
+
+func (configuration *metaBackendRuntimeConfiguration) parseDN(
+	value string,
+) (directory.DN, error) {
+	if configuration == nil {
+		return directory.ParseDN(value)
+	}
+	return parseRuntimeDN(value, configuration.dnNormalizer)
+}
+
+func (target metaBackendTargetRuntimeConfiguration) normalizeDN(
+	dn directory.DN,
+) (directory.DN, error) {
+	return parseRuntimeDN(dn.String(), target.dnNormalizer)
 }
 
 func applyMetaBackendOnlineConfigurationState(previous, next *runtimeState) {

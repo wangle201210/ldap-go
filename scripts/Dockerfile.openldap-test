@@ -9,7 +9,12 @@ RUN apt-get update \
         libssl-dev \
         libsasl2-dev \
         libsasl2-modules \
+        libsqliteodbc \
         pkg-config \
+        shellcheck \
+        sqlite3 \
+        unixodbc \
+        unixodbc-dev \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory /workspace
 
@@ -20,6 +25,8 @@ ENV PATH=/usr/local/go/bin:/go/bin:${PATH} \
     GOPROXY=https://goproxy.cn,direct \
     OPENLDAP_SOURCE_CACHE=/var/cache/ldap-go-openldap/source \
     BUILD=/var/cache/ldap-go-openldap/build \
+    ODBC_PREFIX=/usr \
+    LDAP_GO_OPENLDAP_STRICT=1 \
     LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1
 
 WORKDIR /workspace

@@ -33,6 +33,20 @@ Fixtures are generated with `slapadd` and `slapcat`, imported unchanged into
 schema, binary and base64 values, folded lines, attribute options, referrals,
 subentries, UUID/CSN metadata, and `cn=config`.
 
+Schema-aware DN migration is exercised independently of LDIF parsing.
+`TestLegacyV1SchemaAwareUpgrade` seeds physical v1 folded keys in Memory and
+bbolt, reads them through the legacy path, then verifies lazy conversion to v2
+keys for caseExact, caseIgnore, alias/OID, and multi-AVA identities.
+`TestLegacyV1SchemaAwareAmbiguityIsFailClosed` requires mixed legacy/v2
+duplicates to reject lookup, replacement, and deletion rather than select an
+arbitrary entry. `TestLegacyV1BoltMaintenancePreservesSchemaIdentity` covers
+check, backup/restore, compact, and rebuild behavior. The content-DN runtime
+matrix is exercised by the `TestDNIdentity*` tests, while
+`TestDNMultiAVARuntimeOpenLDAPSemantics` and the gated
+`TestOpenLDAPReferenceDNMultiAVADifferential` compare canonical multi-AVA
+behavior with the pinned server. These tests deliberately retain the separate
+legacy identity rules for `cn=config`.
+
 Pinned OpenLDAP 2.6.13 `slapadd` differentials import configuration emitted by
 `slaptest` and `slapcat -n 0`, then compare the tested acceptance boundary for
 unknown attributes, MUST and SINGLE-VALUE rules, default and explicit value
@@ -86,7 +100,9 @@ reference suite, and a bounded fuzz smoke pass. `make full` additionally runs
 the complete suite with the race detector, builds the fixed OpenLDAP 2.6.13
 source locally with the required backends, overlays, dynamic modules, and
 `lloadd` enabled,
-rejects every top-level skip, and fuzzes every parser target for five seconds.
+rejects every unexpected top-level skip, and fuzzes every parser target for
+five seconds. Platform-only tests such as Linux `TCP_USER_TIMEOUT` are allowed
+to skip on other operating systems through an explicit runner allowlist.
 Set `LDAP_GO_FUZZ_TIME` to extend the fuzz duration before a compatibility row
 is promoted. Corpus minimization is bounded to keep short runs deterministic;
 `LDAP_GO_FUZZ_MINIMIZE_TIME` can extend that budget.
@@ -106,7 +122,7 @@ and unexpected top-level skips fail the run. Two SCRAM-SHA-256
 cases may be reported as optional skips when the local Cyrus SASL installation
 does not provide that plugin. Feature-gated differentials are optional when the
 selected `slapd -VVV` omits their required backend or overlay: `ldap`, `meta`,
-`null`, `relay`/rwm/sssvlv, deref, homedir, pbind, and remoteauth. The strict
+`null`, `relay`/rwm/sssvlv, `sql`, deref, homedir, pbind, and remoteauth. The strict
 runner builds all of those features and converts every optional skip into a
 failure.
 `OPENLDAP_EXPECTED_VERSION` can
@@ -114,6 +130,12 @@ deliberately select another reference version, and `OPENLDAP_SCHEMA_DIR`
 selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
+
+The pinned local strict run on 2026-08-23 passed 1,359 top-level tests against
+OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
+SQLite ODBC. Its only allowed skip was the Linux-only TCP user-timeout test on
+macOS; mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache,
+and replication coverage all passed.
 
 Reference fixtures must signal `slapd` to shut down and wait for it before
 using a forced kill as a timeout fallback. On macOS, LMDB uses named POSIX
@@ -166,7 +188,7 @@ test fixture databases remain inside the disposable container.
 For reproducible full-feature evidence, `make openldap-full` uses the pinned
 OpenLDAP 2.6.13 release commit
 `d172686d3d270bc961b78f3ff00d7019c8dfb094`, enables the `ldap`, `meta`,
-`null`, `relay`, and `mdb` backends plus every overlay used by the strict suite
+`null`, `relay`, `sql`, and `mdb` backends plus every overlay used by the strict suite
 and the standalone balancer. It builds the libraries, slapd/slap tools,
 `lloadd`, and client tools, emits a sourceable runtime environment, and then
 rejects all optional skips. Dynamic-module builds require `libltdl` headers and
@@ -187,13 +209,20 @@ LIBEVENT_PREFIX=/path/to/libevent \
   make openldap-full
 ```
 
+The `/tmp/ldap-go-openldap-reference-2.6/openldap-reference.env` commands below
+assume that explicit `BUILD` value. If `BUILD`, `TMPDIR`, or
+`OPENLDAP_ENV_FILE` is changed, source the environment file emitted by the
+build instead of that example path.
+
 An existing clean checkout at that exact commit can instead be selected with
 `OPENLDAP_SOURCE`. A development branch such as `OPENLDAP_REL_ENG_2_6` is
 rejected as compatibility evidence; `OPENLDAP_ALLOW_UNVERIFIED_REFERENCE=1`
 is reserved for upstream diagnostics and emits a warning. `OPENSSL_PREFIX`,
-`LIBTOOL_PREFIX`, `CYRUS_SASL_PREFIX`, `LIBEVENT_PREFIX`, `PREFIX`, `JOBS`,
-and `OPENLDAP_ENV_FILE` are optional. On Homebrew systems the script detects
-installed `openssl@3`, `libtool`, `cyrus-sasl`, and `libevent` prefixes. The
+`LIBTOOL_PREFIX`, `CYRUS_SASL_PREFIX`, `LIBEVENT_PREFIX`, `ODBC_PREFIX`,
+`PREFIX`, `JOBS`, and `OPENLDAP_ENV_FILE` are optional. On Homebrew systems the
+script detects installed `openssl@3`, `libtool`, `cyrus-sasl`, `libevent`, and
+`unixodbc` prefixes. When `ODBC_PREFIX` is found, the OpenLDAP 2.6.13 build is
+configured with explicit unixODBC include and library paths for `back-sql`. The
 configuration signature permits deterministic incremental rebuilds while
 recording the exact OpenLDAP commit and runtime library paths.
 
@@ -299,6 +328,17 @@ normalized entry data. Overlay, control, SASL, transaction, CLI, migration,
 and replication differentials remain separate tests and are included by the
 same runner.
 
+Focused DN identity checks can be repeated without an external server:
+
+```sh
+go test -race ./internal/storage \
+  -run '^TestLegacyV1SchemaAware(Upgrade|AmbiguityIsFailClosed)$|^TestLegacyV1BoltMaintenancePreservesSchemaIdentity$' \
+  -count=1
+go test -race ./internal/server \
+  -run '^(TestDNMultiAVA(SchemaAwareIdentity|NormalizedString|RuntimeOpenLDAPSemantics)|TestDNIdentity.*)$' \
+  -count=1
+```
+
 The back-sock differential starts one Unix socket fixture and drives the same
 Bind, Search, Add, Modify, Compare, ModifyDN, Delete, Password Modify, and
 Unbind session through the pinned OpenLDAP 2.6.13 slapd and ldap-go. It compares
@@ -312,6 +352,20 @@ while a first-component Compare assertion and OpenLDAP's empty Modify are
 delegated. It compares response tags, result codes, matched DNs, diagnostics,
 network behavior, and whether the fixture was contacted.
 
+The back-sql differential starts a pinned OpenLDAP 2.6.13 `slapd` linked to
+unixODBC and a ldap-go server over two identically seeded SQLite databases. It
+compares successful and failed Bind, base/one/subtree Search, equality and
+substring filters, missing bases, Compare result codes, inherited object
+classes, binary values, `structuralObjectClass`, `entryUUID`, and
+`hasSubordinates`. It also compares mapped Add, Modify, leaf ModifyDN, and
+Delete, including No-Op execution and rollback, injected procedure failures,
+SQL rollback state, LDAP-visible state, and a successful add-through-delete
+lifecycle. `TestOpenLDAPReferenceSQLBackend` passes this live matrix.
+Server-generated `entryCSN` is deliberately excluded. The strict Docker image
+installs unixODBC and the SQLite ODBC driver; no Oracle database or client is
+required. The fixture does not prove behavior on PostgreSQL, MySQL, Oracle, or
+DB2 drivers.
+
 The `lloadd` evidence group first pins source hashes and behavioral anchors for
 message-ID forwarding, tier fallback, Bind pinning, and restriction actions.
 Always-on tests cover standalone configuration parsing, bounded BER frames,
@@ -322,13 +376,20 @@ escaped and three-slash LDAPI addresses, unsupported-operation rejection,
 explicit/disconnect/re-Bind Abandon, RFC 3909 Cancel outer/inner ID rewriting,
 same-upstream and same-association enforcement, pending-limit signaling leases,
 ProxyAuthz preservation, malformed/duplicate/retry handling, restriction
-rejection, and concurrent client multiplexing. Gated live tests run equivalent
-no-backend/restriction and Bind plus Search sequences against the built
-OpenLDAP 2.6.13 `lloadd` and the Go proxy. Cancel is verified locally against
-RFC 3909 because the pinned OpenLDAP lloadd forwards an unmodified inner ID;
-that known defect is not the compatibility oracle. These tests establish the
-documented subset, not complete daemon, TLS, SASL, dynamic-config, or monitor
-compatibility.
+rejection, and concurrent client multiplexing. TLS topologies cover
+client-facing StartTLS and LDAPS, post-upgrade Bind/Search, outstanding-request
+rejection, handshake failure, upstream LDAPS and optional/critical StartTLS,
+service Bind ordering, CA/SAN and CRL failure, and mutual TLS. Service SASL
+tests cover PLAIN, CRAM-MD5, DIGEST-MD5, SCRAM-SHA-1/256/512, invalid server
+proofs, strict challenge bounds, credential clearing, and StartTLS-before-Bind.
+Socket-option tests cover TCP keepalive before and after TLS wrapping, Linux
+`TCP_USER_TIMEOUT`, fail-closed option errors, and LDAPI exclusion. Gated live
+tests run equivalent no-backend/restriction and Bind plus Search sequences
+against the built OpenLDAP 2.6.13 `lloadd` and the Go proxy. Cancel is verified
+locally against RFC 3909 because the pinned OpenLDAP lloadd forwards an
+unmodified inner ID; that known defect is not the compatibility oracle. These
+tests establish the named auth-only subset, not GSSAPI, SASL security layers,
+PROXY v2, dynamic configuration, monitor, or complete daemon compatibility.
 
 The built-in client-tool suite uses raw LDAP wire fixtures to verify generic
 control criticality and absent/empty/string/Base64/file values across Search,
@@ -337,7 +398,32 @@ opt-in referral chasing, anonymous rebind, DN/scope rewriting, control
 preservation, loops, and the five-hop limit. A pinned source contract anchors
 the corresponding `clients/tools`, libldap request/error, and default-hop
 behavior; `ldapcompare` rejects generic controls explicitly because its current
-go-ldap API cannot attach them.
+go-ldap API cannot attach them. `TestLDAPClientSASL*` drives raw-wire and
+project-server exchanges for PLAIN, CRAM-MD5, DIGEST-MD5,
+SCRAM-SHA-1/256/512, and mutual-TLS EXTERNAL. It validates server proofs,
+malformed challenges, secret-free diagnostics, StartTLS ordering, and option
+conflicts. This is auth-only coverage; GSSAPI, channel binding, and SASL
+security layers remain outside the client subset.
+
+Global server TLS configuration has separate transaction and live-handshake
+coverage. `TestGlobalTLSConfiguration*` validates supported inline/file
+material and rejects unsupported or inexact OpenSSL directives.
+`TestGlobalTLSOnlineCertificateReload` rotates a live LDAPS/StartTLS
+certificate, checks that new connections see the candidate only after commit,
+and verifies invalid replacement rollback; `TestGlobalTLSVerifyClientDemand`
+tests required client certificates. Run the focused transport checks with:
+
+```sh
+go test -race ./internal/server \
+  -run '^(TestGlobalTLS.*|TestOnlineConfigurationRejectsUnsupportedGlobalTLSDirectiveAndRollsBack)$' \
+  -count=1
+go test -race ./internal/lloadd \
+  -run '^(Test(ClientStartTLS|BackendTLS|BackendLDAPS|BackendStartTLS|ConfigRuntimeBackendTLS|ServiceSASL|RuntimeServiceSASL|RuntimeConfigMapsServiceSASL|BackendKeepAlive|BackendSocket|BackendTCPUserTimeout|NewProxyClonesAndValidatesClientTLS).*)$' \
+  -count=1
+go test -race ./cmd/ldap-go \
+  -run '^(TestLDAPClientSASL.*|TestLloaddCommandServesStartTLSAndLDAPSListeners|TestRunLloadd.*SocketOptions|TestRunLloaddTCPUserTimeout.*)$' \
+  -count=1
+```
 
 The ACL differential suite compares filter/value/object-class targets, DN and
 attribute-value capture expansion, static and dynamic groups, connection and
@@ -519,6 +605,16 @@ Together with focused tests, it covers initial snapshot fallback, stale-entry
 cleanup, gap detection and rollback, atomic Add/Modify/ModDN/Delete replay and
 `lastChangeNumber`, restart/resume, and persistent streaming.
 
+RFC 4533 DN routing has an independent schema matrix.
+`TestDNIdentitySyncSearchRFC4533` covers base-change detection plus base,
+one-level, subtree, present, and delete routes. `TestDNIdentitySyncProviderState`
+covers context entries, checkpoint suffixes, tombstones, and session-log
+records. `TestDNIdentitySyncreplPaths` covers consumer configuration and
+application paths. Each uses caseExact/caseIgnore attributes, aliases/OIDs,
+multi-AVA DNs, and Memory/bbolt where storage is involved. Overlay-specific
+`TestDNIdentity*` cases apply the same matrix to implemented overlays; this is
+not evidence for arbitrary cross-overlay order or replication topology.
+
 No default project test requires Oracle software or `dsadm`. The commercial
 DSEE fixtures in the upstream OpenLDAP source tree (`test072-dsee-sync` and
 `test075-dsee-persist`) are optional and skip when `dsadm` is absent. They are
@@ -602,7 +698,7 @@ go test ./internal/server \
   -count=1
 
 set -a
-. /tmp/ldap-go-openldap-2.6.13-full/openldap-reference.env
+. /tmp/ldap-go-openldap-reference-2.6/openldap-reference.env
 set +a
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
@@ -650,14 +746,23 @@ offline pause/resume, query LRU, `olcPcacheMaxQueries`, deliberately stale
 proxy writes, restart no-restore behavior, and critical/noncritical RFC 2696
 handling. Configuration and state tests cover canonical and legacy names,
 template/attrset selection, normalized keys, concurrent lookup/commit,
-single-flight refresh, deep-cloned remote context, and reload state reuse. Run
-the focused checks with:
+single-flight refresh, deep-cloned remote context, and reload state reuse.
+`TestPcacheSchemaAwareTemplateContainment`,
+`TestPcacheSubstringContainmentDirection`, and
+`TestPcacheExtensibleTemplateSemantics` cover schema-aware equality,
+OpenLDAP-direction substring containment, unordered AND/OR matching,
+attribute/OID and matching-rule aliases, and extensible filters.
+`TestPcacheBindRealLDAPBackendProvider` exercises successful provider Bind,
+verifier-only storage, provider loss, offline TTL, and connection identity;
+the other `TestPcacheBind*` cases cover limits, concurrent verification,
+schema-aware DN keys, reload clearing, and pinned source anchors. Run the
+focused checks with:
 
 ```sh
 go test -race ./internal/server -run 'Pcache' -count=3
 
 set -a
-. /tmp/ldap-go-openldap-2.6.13-full/openldap-reference.env
+. /tmp/ldap-go-openldap-reference-2.6/openldap-reference.env
 set +a
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
@@ -665,9 +770,9 @@ LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
     -count=1
 ```
 
-These tests do not claim durable query restoration, Bind caching,
-private-database controls, query deletion, arbitrary filter containment, or
-cross-overlay parity.
+These tests do not claim durable query restoration, private-database controls,
+query deletion, every advanced control, a live OpenLDAP Bind-cache
+differential, or arbitrary cross-overlay parity.
 The OTP suite verifies the complete OpenLDAP 2.6.13 embedded OATH schema,
 normal LDAP schema validation, HOTP/TOTP candidate order, invalid parameter
 convergence to `invalidCredentials`, static-password failure after token
@@ -683,7 +788,7 @@ go test -race ./internal/server -run 'OTP|Otp' -count=3
 go test -race ./internal/schema -run OTP -count=3
 
 set -a
-. /tmp/ldap-go-openldap-2.6.13-full/openldap-reference.env
+. /tmp/ldap-go-openldap-reference-2.6/openldap-reference.env
 set +a
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \
@@ -710,7 +815,7 @@ go test -race ./internal/server -run 'AutoCA' -count=3
 go test -race ./internal/schema -run AutoCA -count=3
 
 set -a
-. /tmp/ldap-go-openldap-2.6.13-full/openldap-reference.env
+. /tmp/ldap-go-openldap-reference-2.6/openldap-reference.env
 set +a
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
   go test ./internal/server \

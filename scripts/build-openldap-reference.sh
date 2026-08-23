@@ -42,7 +42,7 @@ ensure_symlink() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, and OPENLDAP_ENV_FILE"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, and OPENLDAP_ENV_FILE"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -152,7 +152,7 @@ esac
 
 missing_features=
 enabled_backends=
-for feature in ldap meta null relay mdb sock; do
+for feature in ldap meta null relay mdb sock sql; do
 	case "$configure_help" in
 		*--enable-$feature*)
 			set -- "$@" "--enable-$feature=yes"
@@ -198,6 +198,45 @@ ldflags=${LDFLAGS:-}
 pkg_config_path=${PKG_CONFIG_PATH:-}
 runtime_dependency_path=
 
+odbc_prefix=${ODBC_PREFIX:-}
+if [ -z "$odbc_prefix" ] && [ "$(uname -s 2>/dev/null || true)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+	brew_odbc=$(brew --prefix unixodbc 2>/dev/null || true)
+	if [ -n "$brew_odbc" ] && [ -f "$brew_odbc/include/sql.h" ]; then
+		odbc_prefix=$brew_odbc
+	fi
+fi
+if [ -n "$odbc_prefix" ]; then
+	case "$odbc_prefix" in
+		*[[:space:]]*) die "ODBC_PREFIX must not contain whitespace: $odbc_prefix" ;;
+	esac
+	odbc_prefix=$(CDPATH= cd -- "$odbc_prefix" 2>/dev/null && pwd) ||
+		die "ODBC_PREFIX is not an accessible directory: $odbc_prefix"
+	if [ ! -f "$odbc_prefix/include/sql.h" ] || [ ! -f "$odbc_prefix/include/sqlext.h" ]; then
+		die "ODBC headers were not found below ODBC_PREFIX: $odbc_prefix"
+	fi
+	odbc_lib_dir=
+	for candidate in "$odbc_prefix/lib" "$odbc_prefix/lib64" "$odbc_prefix"/lib/*-linux-gnu; do
+		if [ -d "$candidate" ] && {
+			[ -f "$candidate/libodbc.dylib" ] ||
+			[ -f "$candidate/libodbc.so" ] ||
+			[ -f "$candidate/libodbc.a" ];
+		}; then
+			odbc_lib_dir=$candidate
+			break
+		fi
+	done
+	if [ -z "$odbc_lib_dir" ]; then
+		die "ODBC library was not found below ODBC_PREFIX: $odbc_prefix"
+	fi
+	cppflags="-I$odbc_prefix/include${cppflags:+ $cppflags}"
+	ldflags="-L$odbc_lib_dir${ldflags:+ $ldflags}"
+	runtime_dependency_path="$odbc_lib_dir${runtime_dependency_path:+:$runtime_dependency_path}"
+	case "$configure_help" in
+		*--with-odbc*) set -- "$@" --with-odbc=unixodbc ;;
+		*) die "the pinned source configure does not expose --with-odbc" ;;
+	esac
+fi
+
 openssl_prefix=${OPENSSL_PREFIX:-}
 if [ -z "$openssl_prefix" ] && [ "$(uname -s 2>/dev/null || true)" = Darwin ] && command -v brew >/dev/null 2>&1; then
 	brew_openssl=$(brew --prefix openssl@3 2>/dev/null || true)
@@ -214,7 +253,7 @@ if [ -n "$openssl_prefix" ]; then
 	if [ -d "$openssl_prefix/lib/pkgconfig" ]; then
 		pkg_config_path="$openssl_prefix/lib/pkgconfig${pkg_config_path:+:$pkg_config_path}"
 	fi
-	runtime_dependency_path=$openssl_prefix/lib
+	runtime_dependency_path="$openssl_prefix/lib${runtime_dependency_path:+:$runtime_dependency_path}"
 fi
 
 libtool_prefix=${LIBTOOL_PREFIX:-}
@@ -345,6 +384,7 @@ configuration_signature=$(
 		printf 'LIBTOOL_PREFIX=%s\n' "$libtool_prefix"
 		printf 'CYRUS_SASL_PREFIX=%s\n' "$cyrus_sasl_prefix"
 		printf 'LIBEVENT_PREFIX=%s\n' "$libevent_prefix"
+		printf 'ODBC_PREFIX=%s\n' "$odbc_prefix"
 		for argument in "$@"; do
 			printf 'argument=%s\n' "$argument"
 		done
@@ -361,6 +401,7 @@ printf 'OpenSSL prefix: %s\n' "${openssl_prefix:-system default}"
 printf 'libtool prefix: %s\n' "${libtool_prefix:-system default}"
 printf 'Cyrus SASL prefix: %s\n' "${cyrus_sasl_prefix:-system default}"
 printf 'libevent prefix: %s\n' "${libevent_prefix:-system default}"
+printf 'ODBC prefix: %s\n' "${odbc_prefix:-system default}"
 if [ "$effective_build_dir" != "$requested_build_dir" ]; then
 	printf 'Whitespace-safe work directory: %s\n' "$effective_build_dir"
 fi
@@ -465,10 +506,16 @@ dyld_fallback_path=$runtime_dependency_path
 if [ -n "${DYLD_FALLBACK_LIBRARY_PATH:-}" ]; then
 	dyld_fallback_path="${dyld_fallback_path}${dyld_fallback_path:+:}$DYLD_FALLBACK_LIBRARY_PATH"
 fi
-if ! feature_output=$(DYLD_LIBRARY_PATH="$openldap_library_path${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+if feature_output=$(DYLD_LIBRARY_PATH="$openldap_library_path${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
 	DYLD_FALLBACK_LIBRARY_PATH="$dyld_fallback_path" \
 	LD_LIBRARY_PATH="$runtime_library_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 	"$built_slapd" -VVV 2>&1); then
+	:
+else
+	feature_status=$?
+	die "the built slapd -VVV exited $feature_status: $feature_output"
+fi
+if [ -z "$feature_output" ]; then
 	die "the built slapd cannot start; runtime library path: $runtime_library_path"
 fi
 

@@ -392,13 +392,21 @@ func (server *Server) tryTranslucentDelete(
 				return operationFailed(ldapwire.ResultAssertionFailed, "")
 			}
 		}
+		comparisonDN, err := storage.NormalizeReaderDN(tx, dn)
+		if err != nil {
+			return err
+		}
 		hasChildren := false
 		if err := tx.ForEach(func(candidate directory.Entry) error {
 			candidateDN, err := directory.ParseDN(candidate.DN)
 			if err != nil {
 				return err
 			}
-			if dn.AncestorOf(candidateDN) {
+			candidateDN, err = storage.NormalizeReaderDN(tx, candidateDN)
+			if err != nil {
+				return err
+			}
+			if comparisonDN.AncestorOf(candidateDN) {
 				hasChildren = true
 			}
 			return nil
@@ -456,10 +464,26 @@ func (server *Server) tryTranslucentModifyDN(
 	request := message.Request.(ldapwire.ModifyDNRequest)
 	err := server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
+		comparisonOldDN, err := storage.NormalizeReaderDN(tx, oldDN)
+		if err != nil {
+			return err
+		}
+		comparisonNewDN, err := storage.NormalizeReaderDN(tx, newDN)
+		if err != nil {
+			return err
+		}
 		source, err := tx.Get(oldDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return operationFailed(ldapwire.ResultNoSuchObject, "")
 		}
+		if err != nil {
+			return err
+		}
+		storedOldDN, err := directory.ParseDN(source.DN)
+		if err != nil {
+			return err
+		}
+		storedOldDN, err = storage.NormalizeReaderDN(tx, storedOldDN)
 		if err != nil {
 			return err
 		}
@@ -473,7 +497,7 @@ func (server *Server) tryTranslucentModifyDN(
 			}
 		}
 		if request.DeleteOldRDN {
-			for _, value := range oldDN.RDNValues() {
+			for _, value := range storedOldDN.RDNValues() {
 				if !source.HasValue(value.Type, value.Value) {
 					return operationFailed(
 						ldapwire.ResultNoSuchAttribute,
@@ -484,6 +508,17 @@ func (server *Server) tryTranslucentModifyDN(
 		}
 		if err := ensureTranslucentParents(tx, *database, newDN, configuration.noGlue); err != nil {
 			return err
+		}
+		storedNewDN, err := translucentStoredDestinationDN(
+			tx,
+			newDN,
+			request.NewRDN,
+		)
+		if err != nil {
+			return err
+		}
+		if !storedNewDN.Equal(comparisonNewDN) {
+			return errors.New("resolved translucent destination has a different DN identity")
 		}
 
 		type move struct {
@@ -498,10 +533,18 @@ func (server *Server) tryTranslucentModifyDN(
 			if err != nil {
 				return err
 			}
-			if !oldDN.Equal(candidate) && !oldDN.AncestorOf(candidate) {
+			candidate, err = storage.NormalizeReaderDN(tx, candidate)
+			if err != nil {
+				return err
+			}
+			if !comparisonOldDN.Equal(candidate) &&
+				!comparisonOldDN.AncestorOf(candidate) {
 				return nil
 			}
-			replaced, err := candidate.ReplaceAncestor(oldDN, newDN)
+			replaced, err := candidate.ReplaceAncestor(
+				comparisonOldDN,
+				storedNewDN,
+			)
 			if err != nil {
 				return err
 			}
@@ -533,11 +576,11 @@ func (server *Server) tryTranslucentModifyDN(
 		})
 		for _, item := range moves {
 			item.entry.DN = item.newDN.String()
-			if item.oldDN.Equal(oldDN) {
+			if item.oldDN.Equal(comparisonOldDN) {
 				if request.DeleteOldRDN {
-					item.entry.DeleteRDNValues(oldDN)
+					item.entry.DeleteRDNValues(storedOldDN)
 				}
-				item.entry.EnsureRDNValues(newDN)
+				item.entry.EnsureRDNValues(storedNewDN)
 			}
 			if err := tx.Put(item.entry, false); err != nil {
 				return err
@@ -554,6 +597,40 @@ func (server *Server) tryTranslucentModifyDN(
 		ldapwire.ApplicationModifyDNResponse,
 		err,
 	)
+}
+
+func translucentStoredDestinationDN(
+	reader storage.Reader,
+	requested directory.DN,
+	newRDN string,
+) (directory.DN, error) {
+	superior, ok := requested.Parent()
+	if !ok {
+		return directory.DN{}, errors.New("translucent destination has no superior")
+	}
+	if superior.Depth() > 0 {
+		parent, err := reader.Get(superior)
+		if err != nil {
+			return directory.DN{}, err
+		}
+		superior, err = directory.ParseDN(parent.DN)
+		if err != nil {
+			return directory.DN{}, err
+		}
+		superior, err = storage.NormalizeReaderDN(reader, superior)
+		if err != nil {
+			return directory.DN{}, err
+		}
+	}
+	localName, err := directory.ParseDN(newRDN)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	localName, err = storage.NormalizeReaderDN(reader, localName)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return directory.ComposeLocalName(localName, superior)
 }
 
 func (server *Server) tryTranslucentPasswordModify(

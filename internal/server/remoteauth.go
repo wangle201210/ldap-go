@@ -322,12 +322,29 @@ func (server *Server) remoteAuthSimpleBind(
 
 	var remoteDN, domain string
 	var hasDomain bool
+	localDN, err := normalizeRuntimeDatabaseDN(database, dn)
+	if err != nil {
+		return false, ldapwire.Result{}, nil
+	}
 	localEligible := false
-	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		entry, err := readerForDatabase(reader, database).Get(dn)
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		databaseReader := readerForDatabase(reader, database)
+		comparisonDN, err := storage.NormalizeReaderDN(databaseReader, localDN)
+		if err != nil {
+			return err
+		}
+		entry, err := databaseReader.Get(comparisonDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
+		if err != nil {
+			return err
+		}
+		storedDN, err := parseRuntimeDN(entry.DN, database.dnNormalizer)
+		if err != nil {
+			return err
+		}
+		storedDN, err = storage.NormalizeReaderDN(databaseReader, storedDN)
 		if err != nil {
 			return err
 		}
@@ -349,10 +366,15 @@ func (server *Server) remoteAuthSimpleBind(
 		if !hasDomain {
 			return nil
 		}
-		remoteDN = string(dnValues[0])
-		if _, err := directory.ParseDN(remoteDN); err != nil {
+		mappedDN, err := parseRuntimeDN(
+			string(dnValues[0]),
+			remoteAuthDNNormalizer(runtime, database),
+		)
+		if err != nil {
 			return nil
 		}
+		localDN = storedDN
+		remoteDN = mappedDN.String()
 		localEligible = true
 		return nil
 	})
@@ -399,7 +421,7 @@ func (server *Server) remoteAuthSimpleBind(
 			switch result.Code {
 			case ldapwire.ResultSuccess:
 				if configuration.storeOnSuccess {
-					server.storeRemoteAuthPassword(ctx, runtime, database, dn, password)
+					server.storeRemoteAuthPassword(ctx, runtime, database, localDN, password)
 				}
 				return true, result, nil
 			case ldapwire.ResultInvalidCredentials:
@@ -417,6 +439,19 @@ func (server *Server) remoteAuthSimpleBind(
 		ldapwire.ResultOperationsError,
 		"remoteauth bind operation failed",
 	), nil
+}
+
+func remoteAuthDNNormalizer(
+	runtime *runtimeState,
+	database runtimeDatabase,
+) directory.DNAttributeNormalizer {
+	if database.dnNormalizer != nil {
+		return database.dnNormalizer
+	}
+	if runtime != nil {
+		return runtime.schema
+	}
+	return nil
 }
 
 func remoteAuthRealm(
@@ -586,7 +621,11 @@ func (server *Server) storeRemoteAuthPassword(
 	var syncChange *syncChange
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, database)
-		entry, err := tx.Get(dn)
+		comparisonDN, err := storage.NormalizeReaderDN(tx, dn)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.Get(comparisonDN)
 		if err != nil {
 			return err
 		}

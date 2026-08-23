@@ -624,6 +624,17 @@ func (server *Server) transactionOperationDatabase(
 		if err != nil || oldDN.Depth() == 0 {
 			return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
 		}
+		source := databaseForDN(runtime, oldDN)
+		if source == nil {
+			return nil, transactionResult(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			)
+		}
+		oldDN, err = normalizeRuntimeDatabaseDN(*source, oldDN)
+		if err != nil {
+			return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
+		}
 		var superior directory.DN
 		if request.HasNewSuperior {
 			superior, err = directory.ParseDN(request.NewSuperior)
@@ -641,19 +652,15 @@ func (server *Server) transactionOperationDatabase(
 		if err != nil {
 			return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
 		}
-		source := databaseForDN(runtime, oldDN)
 		destination := databaseForDN(runtime, newDN)
-		if source == nil {
-			return nil, transactionResult(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
-			)
-		}
 		if destination == nil || destination.partition != source.partition {
 			return nil, transactionResult(
 				ldapwire.ResultAffectsMultipleDSAs,
 				"cannot rename between DSAs",
 			)
+		}
+		if _, err := normalizeRuntimeDatabaseDN(*destination, newDN); err != nil {
+			return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
 		}
 		target = oldDN
 	case ldapwire.ExtendedRequest:
@@ -717,6 +724,11 @@ func (server *Server) transactionOperationDatabase(
 			ldapwire.ResultUnwillingToPerform,
 			"no global superior knowledge",
 		)
+	}
+	var err error
+	target, err = normalizeRuntimeDatabaseDN(*database, target)
+	if err != nil {
+		return nil, transactionResult(ldapwire.ResultInvalidDNSyntax, "")
 	}
 	if result := updateOperationPrecondition(runtime, state.boundDN, target); result != nil {
 		return nil, result
@@ -1020,7 +1032,7 @@ func acquireLDAPTransactionSeqmods(
 		}
 		lock := seqmodHeldLock{
 			coordinator: configuration.coordinator,
-			targetKey:   target.Key(),
+			targetKey:   target.NormalizedString(),
 		}
 		if _, exists := unique[lock]; exists {
 			return
@@ -1039,17 +1051,16 @@ func acquireLDAPTransactionSeqmods(
 		}
 	}
 	for _, operation := range operations {
-		target, frontendLock, databaseLock, err := ldapTransactionSeqmodTarget(operation)
+		targets, err := ldapTransactionSeqmodTargets(runtime, operation)
 		if err != nil {
 			return ctx, seqmodNoopRelease, err
 		}
-		if frontendLock {
-			appendLock(frontend, target)
-		}
-		if databaseLock {
-			database := databaseForDN(runtime, target)
-			if database != nil {
-				appendLock(database.seqmod, target)
+		for _, target := range targets {
+			if target.frontendLock {
+				appendLock(frontend, target.dn)
+			}
+			if target.databaseLock && target.database != nil {
+				appendLock(target.database.seqmod, target.dn)
 			}
 		}
 	}
@@ -1087,26 +1098,85 @@ func acquireLDAPTransactionSeqmods(
 	return context.WithValue(ctx, seqmodHeldContextKey{}, held), releaseAll, nil
 }
 
-func ldapTransactionSeqmodTarget(
+type ldapTransactionSeqmodTarget struct {
+	dn           directory.DN
+	database     *runtimeDatabase
+	frontendLock bool
+	databaseLock bool
+}
+
+func ldapTransactionSeqmodTargets(
+	runtime *runtimeState,
 	operation ldapTransactionOperation,
-) (directory.DN, bool, bool, error) {
+) ([]ldapTransactionSeqmodTarget, error) {
+	appendTarget := func(
+		targets []ldapTransactionSeqmodTarget,
+		dn directory.DN,
+		frontendLock bool,
+		databaseLock bool,
+	) ([]ldapTransactionSeqmodTarget, error) {
+		database := databaseForDN(runtime, dn)
+		var err error
+		if database != nil {
+			dn, err = normalizeRuntimeDatabaseDN(*database, dn)
+		} else {
+			dn, err = normalizeSeqmodRuntimeTarget(runtime, dn)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return append(targets, ldapTransactionSeqmodTarget{
+			dn:           dn,
+			database:     database,
+			frontendLock: frontendLock,
+			databaseLock: databaseLock,
+		}), nil
+	}
+
 	switch request := operation.message.Request.(type) {
 	case ldapwire.ModifyRequest:
 		target, err := directory.ParseDN(request.DN)
-		return target, true, true, err
+		if err != nil {
+			return nil, err
+		}
+		return appendTarget(nil, target, true, true)
 	case ldapwire.ModifyDNRequest:
-		target, err := directory.ParseDN(request.DN)
-		return target, true, true, err
+		oldDN, err := directory.ParseDN(request.DN)
+		if err != nil {
+			return nil, err
+		}
+		targets, err := appendTarget(nil, oldDN, true, true)
+		if err != nil {
+			return nil, err
+		}
+		var superior directory.DN
+		if request.HasNewSuperior {
+			superior, err = directory.ParseDN(request.NewSuperior)
+		} else {
+			var ok bool
+			superior, ok = oldDN.Parent()
+			if !ok {
+				return nil, errors.New("root DSE cannot be renamed")
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		newDN, err := directory.ComposeDN(request.NewRDN, superior)
+		if err != nil {
+			return nil, err
+		}
+		return appendTarget(targets, newDN, true, true)
 	case ldapwire.ExtendedRequest:
 		if request.Name != passwordModifyOID {
-			return directory.DN{}, false, false, nil
+			return nil, nil
 		}
 		passwordRequest, err := ldapwire.DecodePasswordModifyRequestValue(
 			request.Value,
 			request.HasValue,
 		)
 		if err != nil {
-			return directory.DN{}, false, false, err
+			return nil, err
 		}
 		defer clear(passwordRequest.UserIdentity)
 		defer clear(passwordRequest.OldPassword)
@@ -1116,9 +1186,12 @@ func ldapTransactionSeqmodTarget(
 			targetName = string(passwordRequest.UserIdentity)
 		}
 		target, err := directory.ParseDN(targetName)
-		return target, false, true, err
+		if err != nil {
+			return nil, err
+		}
+		return appendTarget(nil, target, false, true)
 	default:
-		return directory.DN{}, false, false, nil
+		return nil, nil
 	}
 }
 

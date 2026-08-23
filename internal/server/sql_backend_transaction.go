@@ -1,16 +1,21 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/slingdata-io/godbc"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -30,6 +35,23 @@ type sqlBackendRenameContext struct {
 type sqlBackendModifyContext struct {
 	dn      directory.DN
 	changes []ldapwire.Modification
+}
+
+type sqlBackendAttributeProcedureExecutionError struct {
+	attribute string
+	err       error
+}
+
+func (err *sqlBackendAttributeProcedureExecutionError) Error() string {
+	return fmt.Sprintf(
+		"execute SQL-backend attribute procedure for %s: %v",
+		err.attribute,
+		err.err,
+	)
+}
+
+func (err *sqlBackendAttributeProcedureExecutionError) Unwrap() error {
+	return err.err
 }
 
 func withSQLBackendModify(
@@ -213,6 +235,8 @@ func (coordinator *sqlBackendTransactionCoordinator) writer(
 			ctx:           coordinator.ctx,
 		},
 	}
+	writer.rename = sqlBackendRenameFromContext(coordinator.ctx)
+	writer.modify = sqlBackendModifyFromContext(coordinator.ctx)
 	if len(coordinator.sessions) != 0 {
 		writer.initializationErr = operationFailed(
 			ldapwire.ResultUnwillingToPerform,
@@ -227,8 +251,21 @@ func (coordinator *sqlBackendTransactionCoordinator) writer(
 	if err == nil {
 		writer.conn, err = database.Conn(coordinator.ctx)
 	}
-	if err == nil && !configuration.autocommit {
+	// ModifyDN spans the ldap_entries rename and one or more mapped RDN
+	// procedures. Keep that sequence atomic even when ordinary writes use
+	// autocommit; BeginTx failure then stops the operation before its first DML.
+	if err == nil && (!configuration.autocommit || writer.rename != nil) {
 		writer.tx, err = writer.conn.BeginTx(coordinator.ctx, nil)
+		if err != nil && configuration.autocommit && writer.rename != nil &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) &&
+			!errors.Is(err, driver.ErrBadConn) &&
+			!errors.Is(err, sql.ErrConnDone) {
+			err = operationFailed(
+				ldapwire.ResultUnwillingToPerform,
+				"SQL backend ModifyDN requires transaction support",
+			)
+		}
 	}
 	if writer.tx != nil {
 		writer.executor = writer.tx
@@ -236,9 +273,8 @@ func (coordinator *sqlBackendTransactionCoordinator) writer(
 		writer.executor = writer.conn
 	}
 	writer.reader.queryer = writer.executor
-	writer.rename = sqlBackendRenameFromContext(coordinator.ctx)
-	writer.modify = sqlBackendModifyFromContext(coordinator.ctx)
 	writer.initializationErr = sqlBackendLDAPError(err)
+	writer.reader.initializationErr = writer.initializationErr
 	coordinator.sessions[configuration] = writer
 	coordinator.order = append(coordinator.order, writer)
 	return writer
@@ -347,6 +383,97 @@ func (writer *sqlBackendWriter) sqlExecutor() sqlBackendExecutor {
 	return writer.tx
 }
 
+func (writer *sqlBackendWriter) normalizedSQLDN(
+	dn directory.DN,
+) (directory.DN, string, error) {
+	normalized, parameter, err := writer.reader.normalizedSQLDN(dn)
+	if err != nil {
+		return directory.DN{}, "", fmt.Errorf(
+			"normalize SQL-backend DN %q: %w",
+			dn.String(),
+			err,
+		)
+	}
+	return normalized, parameter, nil
+}
+
+func (writer *sqlBackendWriter) parseNormalizedSQLDN(
+	value string,
+) (directory.DN, string, error) {
+	dn, err := directory.ParseDN(value)
+	if err != nil {
+		return directory.DN{}, "", err
+	}
+	return writer.normalizedSQLDN(dn)
+}
+
+func (writer *sqlBackendWriter) entryID(dn directory.DN) (sqlEntryID, error) {
+	normalized, parameter, err := writer.normalizedSQLDN(dn)
+	if err != nil {
+		return sqlEntryID{}, err
+	}
+	if writer.reader.configuration.hasReversedDN {
+		parameter = reverseUpperASCII(parameter)
+	}
+	return writer.entryIDWithParameter(normalized, parameter)
+}
+
+func (writer *sqlBackendWriter) entryIDWithParameter(
+	normalized directory.DN,
+	parameter string,
+) (sqlEntryID, error) {
+	rows, err := writer.sqlExecutor().QueryContext(
+		writer.reader.ctx,
+		writer.reader.configuration.idQuery,
+		parameter,
+	)
+	if err != nil {
+		return sqlEntryID{}, fmt.Errorf("SQL-backend entry ID query: %w", err)
+	}
+	defer rows.Close()
+
+	var match sqlEntryID
+	found := false
+	for rows.Next() {
+		var candidate sqlEntryID
+		if err := rows.Scan(
+			&candidate.id,
+			&candidate.keyValue,
+			&candidate.objectClassID,
+			&candidate.dn,
+		); err != nil {
+			return sqlEntryID{}, fmt.Errorf("scan SQL-backend entry ID: %w", err)
+		}
+		storedDN, _, err := writer.parseNormalizedSQLDN(candidate.dn)
+		if err != nil {
+			return sqlEntryID{}, fmt.Errorf(
+				"SQL-backend entry %d DN: %w",
+				candidate.id,
+				err,
+			)
+		}
+		if !storedDN.Equal(normalized) {
+			continue
+		}
+		if found {
+			return sqlEntryID{}, fmt.Errorf(
+				"SQL-backend entry ID query returned duplicate DN identity %q",
+				normalized.String(),
+			)
+		}
+		candidate.dn = storedDN.String()
+		match = candidate
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		return sqlEntryID{}, fmt.Errorf("iterate SQL-backend entry IDs: %w", err)
+	}
+	if !found {
+		return sqlEntryID{}, storage.ErrEntryNotFound
+	}
+	return match, nil
+}
+
 func (writer *sqlBackendWriter) Put(entry directory.Entry, replace bool) (err error) {
 	defer func() { err = sqlBackendLDAPError(err) }()
 	if writer.initializationErr != nil {
@@ -359,11 +486,15 @@ func (writer *sqlBackendWriter) Put(entry directory.Entry, replace bool) (err er
 		return writer.replace(entry)
 	}
 	if writer.rename != nil && writer.pendingRename != nil {
-		newDN, parseErr := directory.ParseDN(entry.DN)
-		if parseErr != nil {
-			return parseErr
+		newDN, _, normalizeErr := writer.parseNormalizedSQLDN(entry.DN)
+		if normalizeErr != nil {
+			return normalizeErr
 		}
-		if writer.rename.newDN.Equal(newDN) {
+		expected, _, normalizeErr := writer.normalizedSQLDN(writer.rename.newDN)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		if expected.Equal(newDN) {
 			return writer.renameEntry(entry)
 		}
 	}
@@ -386,8 +517,19 @@ func (writer *sqlBackendWriter) Delete(dn directory.DN) (err error) {
 	if writer.sqlExecutor() == nil {
 		return sqlBackendWriteUnsupported()
 	}
-	if writer.rename != nil && writer.rename.oldDN.Equal(dn) {
-		id, idErr := writer.reader.entryID(dn)
+	comparisonDN, _, err := writer.normalizedSQLDN(dn)
+	if err != nil {
+		return err
+	}
+	if writer.rename != nil {
+		oldDN, _, normalizeErr := writer.normalizedSQLDN(writer.rename.oldDN)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		if !oldDN.Equal(comparisonDN) {
+			return writer.delete(comparisonDN)
+		}
+		id, idErr := writer.entryID(comparisonDN)
 		if idErr != nil {
 			return idErr
 		}
@@ -398,7 +540,7 @@ func (writer *sqlBackendWriter) Delete(dn directory.DN) (err error) {
 		writer.pendingRename = &sqlBackendPendingRename{id: id, entry: entry}
 		return nil
 	}
-	return writer.delete(dn)
+	return writer.delete(comparisonDN)
 }
 
 func (writer *sqlBackendWriter) DeleteIn(string, directory.DN) error {
@@ -429,17 +571,18 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 			"operation not permitted within namingContext",
 		)
 	}
-	keyValue, err := writer.createMappedObject(entry, mapping)
+	dn, storedDN, err := writer.parseNormalizedSQLDN(entry.DN)
 	if err != nil {
 		return err
 	}
-	dn, err := directory.ParseDN(entry.DN)
+	storedDN = dn.String()
+	keyValue, err := writer.createMappedObject(entry, mapping)
 	if err != nil {
 		return err
 	}
 	parentID := int64(0)
 	if parent, present := dn.Parent(); present && parent.Depth() > 0 {
-		parent, err := writer.reader.entryID(parent)
+		parent, err := writer.entryID(parent)
 		if err != nil {
 			return err
 		}
@@ -448,18 +591,28 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 	if _, err := writer.sqlExecutor().ExecContext(
 		writer.reader.ctx,
 		configuration.insertEntry,
-		entry.DN,
+		storedDN,
 		mapping.id,
 		parentID,
 		keyValue,
 	); err != nil {
 		return fmt.Errorf("insert SQL-backend entry: %w", err)
 	}
-	entryID, err := writer.reader.entryID(dn)
+	return writer.addEntryAttributes(entry, storedDN, keyValue, mapping)
+}
+
+func (writer *sqlBackendWriter) insertedEntryID(
+	storedDN string,
+) (sqlEntryID, error) {
+	dn, _, err := writer.parseNormalizedSQLDN(storedDN)
 	if err != nil {
-		return err
+		return sqlEntryID{}, err
 	}
-	return writer.addEntryAttributes(entry, entryID, mapping)
+	parameter := storedDN
+	if writer.reader.configuration.hasReversedDN {
+		parameter = reverseUpperASCII(parameter)
+	}
+	return writer.entryIDWithParameter(dn, parameter)
 }
 
 func (writer *sqlBackendWriter) createMappedObject(
@@ -479,11 +632,15 @@ func (writer *sqlBackendWriter) createMappedObject(
 	}
 	if mapping.createHint != "" {
 		values := entry.Values(mapping.createHint)
-		hint := ""
+		var hint []byte
 		if len(values) != 0 {
-			hint = string(values[0])
+			hint = values[0]
 		}
-		arguments = append(arguments, hint)
+		parameter, err := writer.procedureValue(mapping.createHint, hint)
+		if err != nil {
+			return 0, err
+		}
+		arguments = append(arguments, parameter)
 	}
 	if mapping.expectReturn&1 != 0 {
 		if _, err := writer.sqlExecutor().ExecContext(
@@ -526,9 +683,12 @@ func (writer *sqlBackendWriter) createMappedObject(
 
 func (writer *sqlBackendWriter) addEntryAttributes(
 	entry directory.Entry,
-	id sqlEntryID,
+	storedDN string,
+	keyValue int64,
 	mapping *sqlObjectClassMapping,
 ) error {
+	var entryID sqlEntryID
+	entryIDResolved := false
 	for _, attribute := range entry.Attributes {
 		name := strings.ToLower(strings.Split(attribute.Description, ";")[0])
 		if name == "objectclass" {
@@ -536,10 +696,27 @@ func (writer *sqlBackendWriter) addEntryAttributes(
 				if strings.EqualFold(string(value), mapping.name) {
 					continue
 				}
+				if !entryIDResolved {
+					var err error
+					entryID, err = writer.insertedEntryID(storedDN)
+					if err != nil {
+						return err
+					}
+					if entryID.objectClassID != mapping.id || entryID.keyValue != keyValue {
+						return fmt.Errorf(
+							"SQL-backend entry ID query returned oc_map_id=%d keyval=%d; want oc_map_id=%d keyval=%d",
+							entryID.objectClassID,
+							entryID.keyValue,
+							mapping.id,
+							keyValue,
+						)
+					}
+					entryIDResolved = true
+				}
 				if _, err := writer.sqlExecutor().ExecContext(
 					writer.reader.ctx,
 					"INSERT INTO ldap_entry_objclasses (entry_id,oc_name) VALUES (?,?)",
-					id.id,
+					entryID.id,
 					value,
 				); err != nil {
 					return fmt.Errorf("insert SQL-backend auxiliary objectClass: %w", err)
@@ -568,7 +745,7 @@ func (writer *sqlBackendWriter) addEntryAttributes(
 			if err := writer.executeAttributeProcedure(
 				attributeMapping,
 				true,
-				id.keyValue,
+				keyValue,
 				value,
 			); err != nil {
 				return err
@@ -579,11 +756,11 @@ func (writer *sqlBackendWriter) addEntryAttributes(
 }
 
 func (writer *sqlBackendWriter) replace(entry directory.Entry) error {
-	dn, err := directory.ParseDN(entry.DN)
+	dn, _, err := writer.parseNormalizedSQLDN(entry.DN)
 	if err != nil {
 		return err
 	}
-	id, err := writer.reader.entryID(dn)
+	id, err := writer.entryID(dn)
 	if err != nil {
 		return err
 	}
@@ -604,7 +781,14 @@ func (writer *sqlBackendWriter) replace(entry directory.Entry) error {
 			"structural objectClass cannot be changed",
 		)
 	}
-	if writer.modify != nil && writer.modify.dn.Equal(dn) {
+	if writer.modify != nil {
+		modifiedDN, _, normalizeErr := writer.normalizedSQLDN(writer.modify.dn)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		if !modifiedDN.Equal(dn) {
+			return writer.replaceMappedAttributes(before, entry, id, mapping)
+		}
 		return writer.applyMappedModifications(
 			before,
 			entry,
@@ -761,13 +945,14 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 	if pending == nil {
 		return errors.New("SQL-backend rename source is missing")
 	}
-	newDN, err := directory.ParseDN(entry.DN)
+	newDN, storedDN, err := writer.parseNormalizedSQLDN(entry.DN)
 	if err != nil {
 		return err
 	}
+	storedDN = newDN.String()
 	parentID := int64(0)
 	if parent, present := newDN.Parent(); present && parent.Depth() > 0 {
-		parentEntry, parentErr := writer.reader.entryID(parent)
+		parentEntry, parentErr := writer.entryID(parent)
 		if parentErr != nil {
 			return parentErr
 		}
@@ -776,7 +961,7 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 	if _, err := writer.sqlExecutor().ExecContext(
 		writer.reader.ctx,
 		writer.reader.configuration.renameEntry,
-		entry.DN,
+		storedDN,
 		parentID,
 		pending.id.keyValue,
 		pending.id.id,
@@ -784,10 +969,10 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 		return fmt.Errorf("rename SQL-backend entry: %w", err)
 	}
 	writer.pendingRename = nil
-	return writer.replaceFrom(pending.entry, entry, pending.id)
+	return writer.replaceFromRename(pending.entry, entry, pending.id)
 }
 
-func (writer *sqlBackendWriter) replaceFrom(
+func (writer *sqlBackendWriter) replaceFromRename(
 	before,
 	entry directory.Entry,
 	id sqlEntryID,
@@ -805,7 +990,205 @@ func (writer *sqlBackendWriter) replaceFrom(
 			"structural objectClass cannot be changed",
 		)
 	}
-	return writer.replaceMappedAttributes(before, entry, id, mapping)
+	if err := writer.replaceMappedRDNAttributeDeltas(before, entry, id, mapping); err != nil {
+		return err
+	}
+	return writer.validateRenamedEntry(entry)
+}
+
+func (writer *sqlBackendWriter) replaceMappedRDNAttributeDeltas(
+	before,
+	after directory.Entry,
+	id sqlEntryID,
+	mapping *sqlObjectClassMapping,
+) error {
+	oldDN, _, err := writer.normalizedSQLDN(writer.rename.oldDN)
+	if err != nil {
+		return err
+	}
+	newDN, _, err := writer.normalizedSQLDN(writer.rename.newDN)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]string)
+	for _, dn := range []directory.DN{oldDN, newDN} {
+		for _, value := range dn.RDNValues() {
+			base := strings.Split(value.Type, ";")[0]
+			if _, present := names[strings.ToLower(base)]; !present {
+				names[strings.ToLower(base)] = base
+			}
+		}
+	}
+	keys := make([]string, 0, len(names))
+	for name := range names {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		if name == "objectclass" || writer.skipAttribute(name) {
+			continue
+		}
+		removed, err := writer.sqlValueDifference(
+			name,
+			before.Values(names[name]),
+			after.Values(names[name]),
+		)
+		if err != nil {
+			return err
+		}
+		added, err := writer.sqlValueDifference(
+			name,
+			after.Values(names[name]),
+			before.Values(names[name]),
+		)
+		if err != nil {
+			return err
+		}
+		if len(removed) == 0 && len(added) == 0 {
+			continue
+		}
+		mappings := mapping.attributes[name]
+		if len(mappings) == 0 {
+			if writer.reader.configuration.failIfNoMapping {
+				return sqlBackendNoMapping()
+			}
+			continue
+		}
+		attributeMapping := mappings[0]
+		if err := writer.deleteMappedValues(
+			attributeMapping,
+			id.keyValue,
+			removed,
+		); err != nil {
+			return err
+		}
+		if err := writer.addMappedRDNValues(
+			attributeMapping,
+			id.keyValue,
+			added,
+		); err != nil {
+			var executionError *sqlBackendAttributeProcedureExecutionError
+			if !writer.reader.configuration.failIfNoMapping &&
+				errors.As(err, &executionError) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (writer *sqlBackendWriter) addMappedRDNValues(
+	mapping sqlAttributeMapping,
+	keyValue int64,
+	values [][]byte,
+) error {
+	if len(values) == 0 {
+		return nil
+	}
+	if mapping.addProcedure == "" {
+		if writer.reader.configuration.failIfNoMapping {
+			return sqlBackendNoMapping()
+		}
+		return nil
+	}
+	for _, value := range values {
+		if err := writer.executePreparedAttributeProcedure(
+			mapping,
+			true,
+			keyValue,
+			value,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (writer *sqlBackendWriter) validateRenamedEntry(expected directory.Entry) error {
+	dn, _, err := writer.parseNormalizedSQLDN(expected.DN)
+	if err != nil {
+		return err
+	}
+	id, err := writer.entryID(dn)
+	if err != nil {
+		return err
+	}
+	stored, err := writer.reader.loadEntry(writer.sqlExecutor(), id)
+	if err != nil {
+		return err
+	}
+	if err := writer.reader.configuration.registry.ValidateEntry(stored); err != nil {
+		return operationFailureFromSchema(err)
+	}
+	for _, namingValue := range dn.RDNValues() {
+		present := false
+		for _, storedValue := range stored.Values(namingValue.Type) {
+			comparison, compareErr := writer.reader.configuration.registry.Compare(
+				namingValue.Type,
+				"",
+				storedValue,
+				namingValue.Value,
+			)
+			if compareErr != nil {
+				return compareErr
+			}
+			if comparison == 0 {
+				present = true
+				break
+			}
+		}
+		if !present {
+			return operationFailed(
+				ldapwire.ResultNamingViolation,
+				fmt.Sprintf(
+					"naming attribute '%s' is not present in entry",
+					namingValue.Type,
+				),
+			)
+		}
+	}
+	return nil
+}
+
+func (writer *sqlBackendWriter) sqlValueDifference(
+	attribute string,
+	left,
+	right [][]byte,
+) ([][]byte, error) {
+	attributeType, attributeFound, err := writer.reader.configuration.registry.EffectiveAttributeType(
+		attribute,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var difference [][]byte
+	for _, value := range left {
+		found := false
+		for _, candidate := range right {
+			if !attributeFound || attributeType.Equality == "" {
+				found = bytes.Equal(value, candidate)
+			} else {
+				comparison, err := writer.reader.configuration.registry.Compare(
+					attribute,
+					"",
+					value,
+					candidate,
+				)
+				if err != nil {
+					return nil, err
+				}
+				found = comparison == 0
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			difference = append(difference, value)
+		}
+	}
+	return difference, nil
 }
 
 func (writer *sqlBackendWriter) replaceMappedAttributes(
@@ -917,13 +1300,16 @@ func (writer *sqlBackendWriter) replaceAuxiliaryObjectClasses(
 }
 
 func (writer *sqlBackendWriter) delete(dn directory.DN) error {
-	id, err := writer.reader.entryID(dn)
+	id, err := writer.entryID(dn)
 	if err != nil {
 		return err
 	}
 	mapping := writer.reader.configuration.objectClasses[id.objectClassID]
 	if mapping == nil {
 		return fmt.Errorf("unknown SQL-backend objectClass mapping %d", id.objectClassID)
+	}
+	if mapping.deleteProcedure == "" {
+		return sqlBackendNoMapping()
 	}
 	for name, mappings := range mapping.attributes {
 		if writer.skipAttribute(name) {
@@ -951,9 +1337,6 @@ func (writer *sqlBackendWriter) delete(dn directory.DN) error {
 		); err != nil {
 			return err
 		}
-	}
-	if mapping.deleteProcedure == "" {
-		return sqlBackendNoMapping()
 	}
 	if err := writer.executeObjectDelete(mapping, id.keyValue); err != nil {
 		return err
@@ -1007,55 +1390,236 @@ func (writer *sqlBackendWriter) executeAttributeProcedure(
 	keyValue int64,
 	value []byte,
 ) error {
+	statement, arguments, resultCode, err := writer.attributeProcedureCall(
+		mapping,
+		add,
+		keyValue,
+		value,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err = writer.sqlExecutor().ExecContext(
+		writer.reader.ctx,
+		statement,
+		arguments...,
+	); err != nil {
+		return fmt.Errorf(
+			"execute SQL-backend attribute procedure for %s: %w",
+			mapping.name,
+			err,
+		)
+	}
+	return sqlBackendProcedureResult(*resultCode, mapping.name)
+}
+
+func (writer *sqlBackendWriter) executePreparedAttributeProcedure(
+	mapping sqlAttributeMapping,
+	add bool,
+	keyValue int64,
+	value []byte,
+) error {
+	statement, arguments, resultCode, err := writer.attributeProcedureCall(
+		mapping,
+		add,
+		keyValue,
+		value,
+	)
+	if err != nil {
+		return err
+	}
+	preparer, ok := writer.sqlExecutor().(interface {
+		PrepareContext(context.Context, string) (*sql.Stmt, error)
+	})
+	if !ok {
+		return fmt.Errorf(
+			"prepare SQL-backend attribute procedure for %s: executor does not support prepared statements",
+			mapping.name,
+		)
+	}
+	prepared, err := preparer.PrepareContext(writer.reader.ctx, statement)
+	if err != nil {
+		return fmt.Errorf(
+			"prepare SQL-backend attribute procedure for %s: %w",
+			mapping.name,
+			err,
+		)
+	}
+	defer prepared.Close()
+
+	if _, err := prepared.ExecContext(writer.reader.ctx, arguments...); err != nil {
+		if !sqlBackendIgnorableProcedureExecutionError(writer.reader.ctx, err) {
+			return fmt.Errorf(
+				"execute SQL-backend attribute procedure for %s: %w",
+				mapping.name,
+				err,
+			)
+		}
+		if *resultCode != int64(ldapwire.ResultSuccess) {
+			return sqlBackendProcedureResult(*resultCode, mapping.name)
+		}
+		return &sqlBackendAttributeProcedureExecutionError{
+			attribute: mapping.name,
+			err:       err,
+		}
+	}
+	return sqlBackendProcedureResult(*resultCode, mapping.name)
+}
+
+func (writer *sqlBackendWriter) attributeProcedureCall(
+	mapping sqlAttributeMapping,
+	add bool,
+	keyValue int64,
+	value []byte,
+) (string, []any, *int64, error) {
 	statement := mapping.deleteProcedure
 	bit := int64(2)
 	if add {
 		statement = mapping.addProcedure
 		bit = 1
 	}
+	resultCode := new(int64)
+	*resultCode = int64(ldapwire.ResultSuccess)
 	arguments := make([]any, 0, 3)
-	resultCode := int64(ldapwire.ResultSuccess)
 	if mapping.expectReturn&bit != 0 {
-		arguments = append(arguments, sql.Out{Dest: &resultCode})
+		arguments = append(arguments, sql.Out{Dest: resultCode})
+	}
+	parameter, err := writer.procedureValue(mapping.name, value)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	if mapping.parameterOrder&bit != 0 {
 		arguments = append(
 			arguments,
-			writer.procedureValue(mapping.name, value),
+			parameter,
 			keyValue,
 		)
 	} else {
 		arguments = append(
 			arguments,
 			keyValue,
-			writer.procedureValue(mapping.name, value),
+			parameter,
 		)
 	}
-	if _, err := writer.sqlExecutor().ExecContext(
-		writer.reader.ctx,
-		statement,
-		arguments...,
-	); err != nil {
-		return fmt.Errorf("execute SQL-backend attribute procedure for %s: %w", mapping.name, err)
+	return statement, arguments, resultCode, nil
+}
+
+func sqlBackendIgnorableProcedureExecutionError(
+	ctx context.Context,
+	err error,
+) bool {
+	if err == nil || ctx == nil || ctx.Err() != nil ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, sql.ErrTxDone) {
+		return false
 	}
-	return sqlBackendProcedureResult(resultCode, mapping.name)
+	if message := err.Error(); strings.HasPrefix(message, "sql: converting argument ") ||
+		strings.HasPrefix(message, "sql: expected ") {
+		return false
+	}
+	var parameterError *godbc.ParameterError
+	if errors.As(err, &parameterError) {
+		return false
+	}
+	if code, ok := sqlBackendSQLiteExecutionErrorCode(err); ok {
+		// SQLite extended result codes retain the primary code in the low byte.
+		switch code & 0xff {
+		case 4, 19: // SQLITE_ABORT, SQLITE_CONSTRAINT
+			return true
+		default:
+			return false
+		}
+	}
+	var odbcError *godbc.Error
+	if errors.As(err, &odbcError) {
+		return sqlBackendIgnorableODBCExecutionError(*odbcError)
+	}
+	var odbcErrors godbc.Errors
+	if errors.As(err, &odbcErrors) {
+		if len(odbcErrors) == 0 {
+			return false
+		}
+		for _, item := range odbcErrors {
+			if !sqlBackendIgnorableODBCExecutionError(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func sqlBackendSQLiteExecutionErrorCode(err error) (int, bool) {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		typeOf := reflect.TypeOf(current)
+		if typeOf == nil {
+			continue
+		}
+		if typeOf.Kind() == reflect.Pointer {
+			typeOf = typeOf.Elem()
+		}
+		if typeOf.PkgPath() != "modernc.org/sqlite" || typeOf.Name() != "Error" {
+			continue
+		}
+		codeError, ok := current.(interface{ Code() int })
+		if !ok {
+			return 0, false
+		}
+		return codeError.Code(), true
+	}
+	return 0, false
+}
+
+func sqlBackendIgnorableODBCExecutionError(err godbc.Error) bool {
+	state := strings.ToUpper(strings.TrimSpace(err.SQLState))
+	if len(state) != 5 {
+		return false
+	}
+	switch state {
+	case "HY000":
+		// SQLite ODBC reports trigger and constraint failures as HY000 with the
+		// SQLite result code. Other native codes remain ambiguous with binding.
+		return err.NativeError&0xff == 4 || err.NativeError&0xff == 19
+	case "HY008", "HY009", "HY010", "HY013", "HY021", "HY090", "HY104", "HYC00":
+		return false
+	}
+	switch state[:2] {
+	case "07", "08": // parameter/descriptor and connection failures
+		return false
+	case "23", "27", "40", "42", "44":
+		return true
+	default:
+		return false
+	}
 }
 
 func (writer *sqlBackendWriter) procedureValue(
 	attributeName string,
 	value []byte,
-) any {
+) (any, error) {
 	attribute, found, err := writer.reader.configuration.registry.EffectiveAttributeType(
 		attributeName,
 	)
 	if err != nil || !found {
-		return value
+		return value, err
 	}
 	syntax, found := writer.reader.configuration.registry.LDAPSyntax(attribute.Syntax)
 	if found && syntax.BinaryTransferRequired {
-		return value
+		return value, nil
 	}
-	return string(value)
+	if attribute.Syntax == schema.SyntaxDistinguishedName {
+		dn, err := writer.reader.configuration.registry.NormalizeDN(string(value))
+		if err != nil {
+			return nil, fmt.Errorf(
+				"normalize SQL-backend procedure DN value for %s: %w",
+				attributeName,
+				err,
+			)
+		}
+		return dn.NormalizedString(), nil
+	}
+	return string(value), nil
 }
 
 func (writer *sqlBackendWriter) skipAttribute(description string) bool {

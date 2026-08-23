@@ -21,7 +21,7 @@ func (configuration *metaBackendRuntimeConfiguration) searchPlans(
 	if configuration == nil {
 		return nil, nil
 	}
-	base, err := directory.ParseDN(request.BaseDN)
+	base, err := configuration.parseDN(request.BaseDN)
 	if err != nil {
 		return nil, err
 	}

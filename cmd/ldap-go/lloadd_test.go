@@ -12,25 +12,49 @@ import (
 )
 
 func TestRunLloaddValidatesConfiguration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "lloadd.conf")
-	contents := `
+	for _, test := range []struct {
+		name     string
+		contents string
+	}{
+		{name: "LDAP", contents: `
 listen ldap://127.0.0.1:0/
 tier roundrobin
 backend-server uri=ldap://127.0.0.1:1389 numconns=1 bindconns=1
-`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	var stdout, stderr bytes.Buffer
-	if err := runLloadd(
-		[]string{"-f", path, "-test-config"},
-		&stdout,
-		&stderr,
-	); err != nil {
-		t.Fatalf("runLloadd(-test-config): %v; stderr=%s", err, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "configuration is valid") {
-		t.Fatalf("stdout = %q", stdout.String())
+		`},
+		{name: "upstream StartTLS", contents: `
+listen ldap://127.0.0.1:0/
+tier roundrobin
+backend-server uri=ldap://127.0.0.1:1389 starttls=critical
+		`},
+		{name: "upstream LDAPS with system roots", contents: `
+listen ldap://127.0.0.1:0/
+tier roundrobin
+backend-server uri=ldaps://127.0.0.1:1636
+		`},
+		{name: "upstream keepalive", contents: `
+listen ldap://127.0.0.1:0/
+bindconf bindmethod=none keepalive=30:3:10
+tier roundrobin
+backend-server uri=ldap://127.0.0.1:1389 numconns=1 bindconns=1
+		`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "lloadd.conf")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			var stdout, stderr bytes.Buffer
+			if err := runLloadd(
+				[]string{"-f", path, "-test-config"},
+				&stdout,
+				&stderr,
+			); err != nil {
+				t.Fatalf("runLloadd(-test-config): %v; stderr=%s", err, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "configuration is valid") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -56,33 +80,16 @@ func TestRunLloaddTestConfigRejectsUnsupportedRuntime(t *testing.T) {
 			contents: `
 listen ldaps://127.0.0.1:636/
 `,
-			want: "not implemented",
+			want: "requires -tls-cert and -tls-key",
 		},
 		{
-			name: "service SASL",
+			name: "unsupported service SASL mechanism",
 			contents: `
 listen ldap://127.0.0.1:0/
-bindconf bindmethod=sasl saslmech=PLAIN
+feature proxyauthz
+bindconf bindmethod=sasl saslmech=GSSAPI authcid=alice credentials=secret
 `,
-			want: "service-account SASL bind is not implemented",
-		},
-		{
-			name: "upstream StartTLS",
-			contents: `
-listen ldap://127.0.0.1:0/
-tier roundrobin
-backend-server uri=ldap://127.0.0.1:1389 starttls=critical
-`,
-			want: "requests StartTLS, which is not implemented",
-		},
-		{
-			name: "upstream LDAPS without TLS runtime",
-			contents: `
-listen ldap://127.0.0.1:0/
-tier roundrobin
-backend-server uri=ldaps://127.0.0.1:1636
-`,
-			want: "ldaps requires a backend TLS configuration",
+			want: "GSSAPI is not supported",
 		},
 		{
 			name: "experimental feature",
@@ -91,14 +98,6 @@ listen ldap://127.0.0.1:0/
 feature read_pause
 `,
 			want: `feature "read_pause" is not implemented`,
-		},
-		{
-			name: "upstream keepalive",
-			contents: `
-listen ldap://127.0.0.1:0/
-bindconf bindmethod=simple binddn=cn=Manager credentials=secret keepalive=30:3:10
-`,
-			want: "upstream keepalive configuration is not implemented",
 		},
 		{
 			name: "service Bind without ProxyAuthz",
@@ -128,7 +127,7 @@ bindconf bindmethod=simple binddn=cn=Manager credentials=secret
 }
 
 func TestListenLloaddURL(t *testing.T) {
-	listener, description, err := listenLloaddURL("ldap://127.0.0.1:0/")
+	listener, description, err := listenLloaddURL("ldap://127.0.0.1:0/", nil)
 	if err != nil {
 		t.Fatalf("listenLloaddURL(ldap): %v", err)
 	}
@@ -138,7 +137,8 @@ func TestListenLloaddURL(t *testing.T) {
 	_ = listener.Close()
 	socketPath := filepath.Join(t.TempDir(), "lloadd.sock")
 	listener, description, err = listenLloaddURL(
-		"ldapi://" + url.PathEscape(socketPath) + "/",
+		"ldapi://"+url.PathEscape(socketPath)+"/",
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("listenLloaddURL(ldapi): %v", err)
@@ -147,12 +147,15 @@ func TestListenLloaddURL(t *testing.T) {
 		t.Fatalf("LDAPI listener = %q, %q", listener.Addr(), description)
 	}
 	_ = listener.Close()
+	if listener, _, err := listenLloaddURL("ldaps://127.0.0.1:0/", nil); err == nil {
+		_ = listener.Close()
+		t.Fatal("listenLloaddURL(ldaps without TLS) succeeded")
+	}
 	for _, raw := range []string{
-		"ldaps://127.0.0.1:0/",
 		"pldap://127.0.0.1:0/",
 		"http://127.0.0.1:0/",
 	} {
-		if listener, _, err := listenLloaddURL(raw); err == nil {
+		if listener, _, err := listenLloaddURL(raw, nil); err == nil {
 			_ = listener.Close()
 			t.Fatalf("listenLloaddURL(%q) succeeded", raw)
 		}

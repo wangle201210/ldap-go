@@ -27,8 +27,9 @@ type aliasDerefState struct {
 }
 
 type aliasSearchEntry struct {
-	dn    directory.DN
-	entry directory.Entry
+	dn       directory.DN
+	orderKey string
+	entry    directory.Entry
 }
 
 func derefAliasesWhileFinding(mode int) bool {
@@ -121,7 +122,14 @@ func resolveAliasSearchBase(
 	requested directory.DN,
 	maxDepth int,
 ) (directory.DN, bool, *aliasDerefFailure, error) {
-	current := requested
+	current, err := storage.NormalizeReaderDN(reader, requested)
+	if err != nil {
+		return directory.DN{}, false, nil, fmt.Errorf(
+			"normalize alias search base %q: %w",
+			requested.String(),
+			err,
+		)
+	}
 	changed := false
 	state := aliasDerefState{seen: make(map[string]struct{})}
 
@@ -154,6 +162,14 @@ func resolveAliasSearchBase(
 					err,
 				)
 			}
+			targetDN, err = storage.NormalizeReaderDN(reader, targetDN)
+			if err != nil {
+				return directory.DN{}, false, nil, fmt.Errorf(
+					"normalize alias target entry DN %q: %w",
+					target.DN,
+					err,
+				)
+			}
 			return targetDN, true, nil, nil
 		case !errors.Is(err, storage.ErrEntryNotFound):
 			return directory.DN{}, false, nil, err
@@ -170,6 +186,14 @@ func resolveAliasSearchBase(
 		if err != nil {
 			return directory.DN{}, false, nil, fmt.Errorf(
 				"parse alias ancestor DN %q: %w",
+				ancestor.DN,
+				err,
+			)
+		}
+		ancestorDN, err = storage.NormalizeReaderDN(reader, ancestorDN)
+		if err != nil {
+			return directory.DN{}, false, nil, fmt.Errorf(
+				"normalize alias ancestor DN %q: %w",
 				ancestor.DN,
 				err,
 			)
@@ -192,6 +216,14 @@ func resolveAliasSearchBase(
 		if err != nil {
 			return directory.DN{}, false, nil, fmt.Errorf(
 				"parse alias target entry DN %q: %w",
+				target.DN,
+				err,
+			)
+		}
+		targetDN, err = storage.NormalizeReaderDN(reader, targetDN)
+		if err != nil {
+			return directory.DN{}, false, nil, fmt.Errorf(
+				"normalize alias target entry DN %q: %w",
 				target.DN,
 				err,
 			)
@@ -222,6 +254,14 @@ func dereferenceAlias(
 		if err != nil {
 			return directory.Entry{}, nil, fmt.Errorf(
 				"parse alias entry DN %q: %w",
+				current.DN,
+				err,
+			)
+		}
+		currentDN, err = storage.NormalizeReaderDN(reader, currentDN)
+		if err != nil {
+			return directory.Entry{}, nil, fmt.Errorf(
+				"normalize alias entry DN %q: %w",
 				current.DN,
 				err,
 			)
@@ -284,6 +324,14 @@ func dereferenceAlias(
 				matched:    current,
 			}, nil
 		}
+		targetDN, err = storage.NormalizeReaderDN(reader, targetDN)
+		if err != nil {
+			return directory.Entry{}, &aliasDerefFailure{
+				code:       ldapwire.ResultAliasProblem,
+				diagnostic: "alias has invalid aliasedObjectName",
+				matched:    current,
+			}, nil
+		}
 		target, err := reader.Get(targetDN)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return directory.Entry{}, &aliasDerefFailure{
@@ -339,7 +387,13 @@ func expandAliasSearchRoutes(
 	expanded := append([]databaseSearchRoute(nil), routes...)
 	known := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
-		known[aliasRouteKey(route)] = struct{}{}
+		database := &runtime.databases[route.databaseIndex]
+		tx := readerForDatabase(reader, *database)
+		key, err := aliasRouteKey(tx, route)
+		if err != nil {
+			return nil, err
+		}
+		known[key] = struct{}{}
 	}
 
 	for _, route := range routes {
@@ -355,7 +409,10 @@ func expandAliasSearchRoutes(
 			return nil, err
 		}
 		for _, addition := range additions {
-			key := aliasRouteKey(addition)
+			key, err := aliasRouteKey(tx, addition)
+			if err != nil {
+				return nil, err
+			}
 			if _, exists := known[key]; exists {
 				continue
 			}
@@ -375,6 +432,15 @@ func aliasSearchRoutesForRoute(
 	if route.scope == directory.ScopeBase {
 		return nil, nil
 	}
+	normalizedBase, err := storage.NormalizeReaderDN(reader, route.base)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"normalize alias search route base %q: %w",
+			route.base.String(),
+			err,
+		)
+	}
+	route.base = normalizedBase
 
 	targetScope := directory.ScopeBase
 	switch route.scope {
@@ -399,13 +465,25 @@ func aliasSearchRoutesForRoute(
 		if err != nil {
 			return err
 		}
-		aliases = append(aliases, aliasSearchEntry{dn: dn, entry: entry})
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return fmt.Errorf("normalize alias entry DN %q: %w", entry.DN, err)
+		}
+		orderKey, err := storage.ReaderDNOrderKey(reader, dn)
+		if err != nil {
+			return fmt.Errorf("order alias entry DN %q: %w", entry.DN, err)
+		}
+		aliases = append(aliases, aliasSearchEntry{
+			dn:       dn,
+			orderKey: orderKey,
+			entry:    entry,
+		})
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	sort.Slice(aliases, func(i, j int) bool {
-		return aliases[i].dn.Key() < aliases[j].dn.Key()
+		return aliases[i].orderKey < aliases[j].orderKey
 	})
 
 	for len(roundScopes) > 0 {
@@ -445,6 +523,14 @@ func aliasSearchRoutesForRoute(
 			if err != nil {
 				return nil, fmt.Errorf(
 					"parse alias target entry DN %q: %w",
+					target.DN,
+					err,
+				)
+			}
+			targetDN, err = storage.NormalizeReaderDN(reader, targetDN)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"normalize alias target entry DN %q: %w",
 					target.DN,
 					err,
 				)
@@ -510,11 +596,22 @@ func withinAnyAliasScope(
 	return false
 }
 
-func aliasRouteKey(route databaseSearchRoute) string {
+func aliasRouteKey(
+	reader storage.Reader,
+	route databaseSearchRoute,
+) (string, error) {
+	base, err := storage.NormalizeReaderDN(reader, route.base)
+	if err != nil {
+		return "", fmt.Errorf(
+			"normalize alias route base %q: %w",
+			route.base.String(),
+			err,
+		)
+	}
 	return fmt.Sprintf(
 		"%d\x00%d\x00%s",
 		route.databaseIndex,
 		route.scope,
-		route.base.Key(),
-	)
+		base.Key(),
+	), nil
 }

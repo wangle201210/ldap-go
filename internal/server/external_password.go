@@ -275,6 +275,39 @@ func externalPasswordStateChanged() error {
 	)
 }
 
+func normalizeExternalPasswordTarget(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	reader storage.Reader,
+	target directory.DN,
+) (directory.DN, error) {
+	normalizer := database.dnNormalizer
+	if normalizer == nil && runtime != nil &&
+		!isConfigDatabase(database) &&
+		!isMonitorDatabase(database) {
+		normalizer = runtime.schema
+	}
+	normalized, err := parseRuntimeDN(target.String(), normalizer)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return storage.NormalizeReaderDN(reader, normalized)
+}
+
+func normalizeExternalPasswordSubject(
+	runtime *runtimeState,
+	subject string,
+) (string, error) {
+	if subject == "" {
+		return "", nil
+	}
+	dn, err := parseRuntimeConnectionDN(runtime, subject)
+	if err != nil {
+		return "", err
+	}
+	return dn.String(), nil
+}
+
 func (server *Server) preverifyExternalPasswordBind(
 	ctx context.Context,
 	runtime *runtimeState,
@@ -288,7 +321,11 @@ func (server *Server) preverifyExternalPasswordBind(
 	lastTOTPAuthentication := time.Time{}
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
-		entry, err := tx.Get(dn)
+		target, err := normalizeExternalPasswordTarget(runtime, database, tx, dn)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.Get(target)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -378,7 +415,20 @@ func (server *Server) preverifyPasswordModification(
 	defer func() { clearExternalPasswordVerificationSequences(sequences) }()
 	err := server.viewStorage(ctx, func(reader storage.Reader) error {
 		tx := readerForDatabase(reader, database)
-		entry, err := tx.Get(target)
+		comparisonTarget, err := normalizeExternalPasswordTarget(
+			runtime,
+			database,
+			tx,
+			target,
+		)
+		if err != nil {
+			return err
+		}
+		comparisonSubject, err := normalizeExternalPasswordSubject(runtime, boundDN)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.Get(comparisonTarget)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}
@@ -403,7 +453,7 @@ func (server *Server) preverifyPasswordModification(
 				if !server.allowed(
 					runtime,
 					tx,
-					boundDN,
+					comparisonSubject,
 					entry,
 					"userPassword",
 					stored,
@@ -419,7 +469,7 @@ func (server *Server) preverifyPasswordModification(
 			prepared, err := server.preparePasswordPolicyModification(
 				runtime,
 				reader,
-				boundDN,
+				comparisonSubject,
 				database,
 				entry,
 				changes,
@@ -475,13 +525,19 @@ func (server *Server) preverifyPasswordModification(
 		if err := server.checkAssertion(
 			runtime,
 			tx,
-			boundDN,
+			comparisonSubject,
 			logicalEntry,
 			assertion,
 		); err != nil {
 			return err
 		}
-		if !server.canApplyModifications(runtime, tx, boundDN, logicalEntry, changes) {
+		if !server.canApplyModifications(
+			runtime,
+			tx,
+			comparisonSubject,
+			logicalEntry,
+			changes,
+		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		return nil
@@ -594,7 +650,17 @@ func (server *Server) preverifyEntryPasswords(
 		storedValues [][]byte
 	)
 	err := server.viewStorage(ctx, func(reader storage.Reader) error {
-		entry, err := readerForDatabase(reader, database).Get(target)
+		tx := readerForDatabase(reader, database)
+		comparisonTarget, err := normalizeExternalPasswordTarget(
+			runtime,
+			database,
+			tx,
+			target,
+		)
+		if err != nil {
+			return err
+		}
+		entry, err := tx.Get(comparisonTarget)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil
 		}

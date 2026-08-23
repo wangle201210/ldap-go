@@ -101,7 +101,7 @@ func (server *Server) handleAdd(
 		)
 	}
 
-	dn, err := directory.ParseDN(request.Entry.DN)
+	dn, err := parseCoreWriteDN(state.runtime, request.Entry.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
 			connection,
@@ -192,16 +192,30 @@ func (server *Server) handleAdd(
 	); handled {
 		return err
 	}
-	if result := validateNewEntry(request.Entry, dn); result != nil {
-		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, *result)
-	}
 	configurationWrite := isConfigurationDN(dn)
+	validationResult := validateNewEntry(request.Entry, dn)
+	if !configurationWrite {
+		validationResult = validateNewEntryWithSchema(
+			request.Entry,
+			dn,
+			state.runtime.schema,
+		)
+	}
+	if validationResult != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			*validationResult,
+		)
+	}
 	if configurationWrite {
 		server.configMu.Lock()
 		defer server.configMu.Unlock()
 	}
 
 	entry := request.Entry.Clone()
+	entry.DN = dn.String()
 	writeRecord := accesslogWriteRecord{
 		operation:       accesslogAdd,
 		session:         state.connectionID,
@@ -527,7 +541,7 @@ func (server *Server) handleAdd(
 		if controls.noOp {
 			return noOperationFailure()
 		}
-		if err := refreshNamingContexts(writer); err != nil {
+		if err := refreshRuntimeNamingContexts(writer, state.runtime); err != nil {
 			return err
 		}
 		if configurationWrite {
@@ -598,7 +612,7 @@ func (server *Server) handleModify(
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
 	}
-	dn, err := directory.ParseDN(request.DN)
+	dn, err := parseCoreWriteDN(state.runtime, request.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
 			connection,
@@ -1091,10 +1105,12 @@ func (server *Server) modifyEntry(
 				return err
 			}
 		}
-		for _, rdnValue := range dn.RDNValues() {
-			if !entry.HasValue(rdnValue.Type, rdnValue.Value) {
-				return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
-			}
+		rdnRegistry := runtime.schema
+		if configurationWrite {
+			rdnRegistry = nil
+		}
+		if !entryHasSchemaRDNValues(entry, dn, rdnRegistry) {
+			return operationFailed(ldapwire.ResultNotAllowedOnRDN, "")
 		}
 		if !configurationWrite {
 			if err := server.validateConstraintModify(
@@ -1168,7 +1184,7 @@ func (server *Server) modifyEntry(
 			)
 		}
 		if err := tx.Put(entry, true); err != nil {
-			return err
+			return fmt.Errorf("store modified entry %q: %w", entry.DN, err)
 		}
 		if !configurationWrite {
 			if err := applyMemberOfModify(
@@ -1193,7 +1209,7 @@ func (server *Server) modifyEntry(
 			var err error
 			nextRuntime, err = server.validateRuntimeConfiguration(writer)
 			if err != nil {
-				return err
+				return fmt.Errorf("reload runtime after modifying %q: %w", entry.DN, err)
 			}
 			applyMetaBackendOnlineURIModification(nextRuntime, dn, processedChanges)
 		}
@@ -1339,7 +1355,7 @@ func (server *Server) handleDelete(
 			false,
 		)
 	}
-	dn, err := directory.ParseDN(request.DN)
+	dn, err := parseCoreWriteDN(state.runtime, request.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
 			connection,
@@ -1528,18 +1544,33 @@ func (server *Server) handleDelete(
 			responseControls = append(responseControls, *preRead)
 		}
 
-		hasChildren := false
-		if err := tx.ForEach(func(entry directory.Entry) error {
-			candidate, err := directory.ParseDN(entry.DN)
+		var hasChildren bool
+		if database.sqlBackend != nil {
+			hasChildren, err = storageSQLBackendHasChildren(tx, dn)
 			if err != nil {
 				return err
 			}
-			if dn.AncestorOf(candidate) {
-				hasChildren = true
+		} else {
+			comparisonDN, err := storage.NormalizeReaderDN(tx, dn)
+			if err != nil {
+				return err
 			}
-			return nil
-		}); err != nil {
-			return err
+			if err := tx.ForEach(func(entry directory.Entry) error {
+				candidate, err := directory.ParseDN(entry.DN)
+				if err != nil {
+					return err
+				}
+				candidate, err = storage.NormalizeReaderDN(tx, candidate)
+				if err != nil {
+					return err
+				}
+				if comparisonDN.AncestorOf(candidate) {
+					hasChildren = true
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
 		}
 		if hasChildren {
 			return operationFailed(
@@ -1571,7 +1602,7 @@ func (server *Server) handleDelete(
 		if controls.noOp {
 			return noOperationFailure()
 		}
-		if err := refreshNamingContexts(writer); err != nil {
+		if err := refreshRuntimeNamingContexts(writer, state.runtime); err != nil {
 			return err
 		}
 		if configurationWrite {
@@ -1641,7 +1672,7 @@ func (server *Server) handleModifyDN(
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
 	}
-	oldDN, err := directory.ParseDN(request.DN)
+	oldDN, err := parseCoreWriteDN(state.runtime, request.DN)
 	if err != nil || oldDN.Depth() == 0 {
 		return server.writeOperationResult(
 			connection,
@@ -1659,9 +1690,22 @@ func (server *Server) handleModifyDN(
 		)
 	}
 
+	database := databaseForDN(state.runtime, oldDN)
+	if database == nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"no global superior knowledge",
+			),
+		)
+	}
+
 	var superior directory.DN
 	if request.HasNewSuperior {
-		superior, err = directory.ParseDN(request.NewSuperior)
+		superior, err = parseCoreWriteDN(state.runtime, request.NewSuperior)
 	} else {
 		var ok bool
 		superior, ok = oldDN.Parent()
@@ -1677,7 +1721,16 @@ func (server *Server) handleModifyDN(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
-	newDN, err := directory.ComposeDN(request.NewRDN, superior)
+	newRDN, err := parseRuntimeDN(request.NewRDN, database.dnNormalizer)
+	if err != nil || newRDN.Depth() != 1 {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	newDN, err := directory.ComposeLocalName(newRDN, superior)
 	if err != nil {
 		return server.writeOperationResult(
 			connection,
@@ -1691,19 +1744,7 @@ func (server *Server) handleModifyDN(
 		return err
 	}
 	defer frontendSeqmodRelease()
-	database := databaseForDN(state.runtime, oldDN)
 	destinationDatabase := databaseForDN(state.runtime, newDN)
-	if database == nil {
-		return server.writeOperationResult(
-			connection,
-			message.ID,
-			ldapwire.ApplicationModifyDNResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
-			),
-		)
-	}
 	databaseSeqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, oldDN)
 	if err != nil {
 		return err
@@ -1825,6 +1866,29 @@ func (server *Server) handleModifyDN(
 	}
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
+		rdnRegistry := state.runtime.schema
+		if configurationWrite {
+			rdnRegistry = nil
+		}
+		comparisonOldDN, err := storage.NormalizeReaderDN(tx, oldDN)
+		if err != nil {
+			return err
+		}
+		comparisonNewDN, err := storage.NormalizeReaderDN(tx, newDN)
+		if err != nil {
+			return err
+		}
+		comparisonSuperior, err := storage.NormalizeReaderDN(tx, superior)
+		if err != nil {
+			return err
+		}
+		if comparisonOldDN.Equal(comparisonNewDN) {
+			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
+		}
+		if comparisonOldDN.Equal(comparisonSuperior) ||
+			comparisonOldDN.AncestorOf(comparisonSuperior) {
+			return operationFailed(ldapwire.ResultLoopDetect, "")
+		}
 		sourceEntry, err := server.entryOrReferral(
 			state.runtime,
 			tx,
@@ -1841,6 +1905,17 @@ func (server *Server) handleModifyDN(
 		}
 		if err != nil {
 			return err
+		}
+		storedOldDN, err := directory.ParseDN(sourceEntry.DN)
+		if err != nil {
+			return err
+		}
+		storedOldDN, err = storage.NormalizeReaderDN(tx, storedOldDN)
+		if err != nil {
+			return err
+		}
+		if !storedOldDN.Equal(comparisonOldDN) {
+			return errors.New("resolved source entry has a different DN identity")
 		}
 		sourceBefore := sourceEntry.Clone()
 		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
@@ -1859,6 +1934,18 @@ func (server *Server) handleModifyDN(
 			controls.assertion,
 		); err != nil {
 			return err
+		}
+		if database.sqlBackend != nil {
+			hasChildren, err := storageSQLBackendHasChildren(tx, oldDN)
+			if err != nil {
+				return err
+			}
+			if hasChildren {
+				return operationFailed(
+					ldapwire.ResultNotAllowedOnNonLeaf,
+					"subtree rename not supported",
+				)
+			}
 		}
 		newParent := directory.Entry{DN: superior.String()}
 		if superior.Depth() > 0 {
@@ -1895,6 +1982,32 @@ func (server *Server) handleModifyDN(
 		if err != nil {
 			return err
 		}
+		storedSuperior, err := directory.ParseDN(newParent.DN)
+		if err != nil {
+			return err
+		}
+		storedSuperior, err = storage.NormalizeReaderDN(tx, storedSuperior)
+		if err != nil {
+			return err
+		}
+		storedNewRDN, err := directory.ParseDN(request.NewRDN)
+		if err != nil {
+			return err
+		}
+		storedNewRDN, err = storage.NormalizeReaderDN(tx, storedNewRDN)
+		if err != nil {
+			return err
+		}
+		storedNewDN, err := directory.ComposeLocalName(
+			storedNewRDN,
+			storedSuperior,
+		)
+		if err != nil {
+			return err
+		}
+		if !storedNewDN.Equal(comparisonNewDN) {
+			return errors.New("resolved destination has a different DN identity")
+		}
 		if !configurationWrite {
 			if err := server.validateDDSRename(
 				state.runtime,
@@ -1916,15 +2029,15 @@ func (server *Server) handleModifyDN(
 		if err != nil {
 			return err
 		}
-		newRDNAttributes := make([]directory.Attribute, 0, len(newDN.RDNValues()))
-		for _, value := range newDN.RDNValues() {
+		newRDNAttributes := make([]directory.Attribute, 0, len(storedNewDN.RDNValues()))
+		for _, value := range storedNewDN.RDNValues() {
 			newRDNAttributes = append(newRDNAttributes, directory.Attribute{
 				Description: value.Type,
 				Values:      [][]byte{value.Value},
 			})
 		}
-		oldRDNAttributes := make([]directory.Attribute, 0, len(oldDN.RDNValues()))
-		for _, value := range oldDN.RDNValues() {
+		oldRDNAttributes := make([]directory.Attribute, 0, len(storedOldDN.RDNValues()))
+		for _, value := range storedOldDN.RDNValues() {
 			oldRDNAttributes = append(oldRDNAttributes, directory.Attribute{
 				Description: value.Type,
 				Values:      [][]byte{value.Value},
@@ -1999,11 +2112,15 @@ func (server *Server) handleModifyDN(
 		}
 		if !configurationWrite {
 			constraintEntry := sourceEntry.Clone()
-			constraintEntry.DN = newDN.String()
+			constraintEntry.DN = storedNewDN.String()
 			constraintChanges := make([]ldapwire.Modification, 0,
 				len(oldRDNAttributes)+len(newRDNAttributes))
 			if request.DeleteOldRDN {
-				constraintEntry.DeleteRDNValues(oldDN)
+				deleteSchemaRDNValues(
+					&constraintEntry,
+					storedOldDN,
+					rdnRegistry,
+				)
 				for _, attribute := range oldRDNAttributes {
 					constraintChanges = append(
 						constraintChanges,
@@ -2014,7 +2131,11 @@ func (server *Server) handleModifyDN(
 					)
 				}
 			}
-			constraintEntry.EnsureRDNValues(newDN)
+			ensureSchemaRDNValues(
+				&constraintEntry,
+				storedNewDN,
+				rdnRegistry,
+			)
 			for _, attribute := range newRDNAttributes {
 				constraintChanges = append(
 					constraintChanges,
@@ -2061,15 +2182,30 @@ func (server *Server) handleModifyDN(
 		}
 		var moves []move
 		oldKeys := make(map[string]struct{})
-		if err := tx.ForEach(func(entry directory.Entry) error {
+		if database.sqlBackend != nil {
+			moves = append(moves, move{
+				oldDN: comparisonOldDN,
+				newDN: storedNewDN,
+				entry: sourceEntry,
+			})
+			oldKeys[comparisonOldDN.Key()] = struct{}{}
+		} else if err := tx.ForEach(func(entry directory.Entry) error {
 			candidate, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err
 			}
-			if !oldDN.Equal(candidate) && !oldDN.AncestorOf(candidate) {
+			candidate, err = storage.NormalizeReaderDN(tx, candidate)
+			if err != nil {
+				return err
+			}
+			if !comparisonOldDN.Equal(candidate) &&
+				!comparisonOldDN.AncestorOf(candidate) {
 				return nil
 			}
-			replaced, err := candidate.ReplaceAncestor(oldDN, newDN)
+			replaced, err := candidate.ReplaceAncestor(
+				comparisonOldDN,
+				storedNewDN,
+			)
 			if err != nil {
 				return err
 			}
@@ -2078,12 +2214,6 @@ func (server *Server) handleModifyDN(
 			return nil
 		}); err != nil {
 			return err
-		}
-		if database.sqlBackend != nil && len(moves) > 1 {
-			return operationFailed(
-				ldapwire.ResultNotAllowedOnNonLeaf,
-				"subtree rename not supported",
-			)
 		}
 
 		for _, item := range moves {
@@ -2108,11 +2238,19 @@ func (server *Server) handleModifyDN(
 		for i := range moves {
 			item := &moves[i]
 			item.entry.DN = item.newDN.String()
-			if item.oldDN.Equal(oldDN) {
+			if item.oldDN.Equal(comparisonOldDN) {
 				if request.DeleteOldRDN {
-					item.entry.DeleteRDNValues(oldDN)
+					deleteSchemaRDNValues(
+						&item.entry,
+						storedOldDN,
+						rdnRegistry,
+					)
 				}
-				item.entry.EnsureRDNValues(newDN)
+				ensureSchemaRDNValues(
+					&item.entry,
+					storedNewDN,
+					rdnRegistry,
+				)
 				if lastModEnabled(state.runtime, oldDN) {
 					server.applyModifyOperationalAttributesContext(
 						ctx,
@@ -2148,7 +2286,7 @@ func (server *Server) handleModifyDN(
 			if err := tx.Put(item.entry, false); err != nil {
 				return err
 			}
-			if item.oldDN.Equal(oldDN) {
+			if item.oldDN.Equal(comparisonOldDN) {
 				renamed := item.entry.Clone()
 				renamedEntry = &renamed
 				postRead, err := server.readResponseControl(
@@ -2175,8 +2313,8 @@ func (server *Server) handleModifyDN(
 				state.runtime,
 				tx,
 				*database,
-				oldDN,
-				newDN,
+				storedOldDN,
+				storedNewDN,
 				*renamedEntry,
 			); err != nil {
 				return err
@@ -2185,8 +2323,8 @@ func (server *Server) handleModifyDN(
 				state.runtime,
 				tx,
 				*database,
-				oldDN,
-				newDN,
+				storedOldDN,
+				storedNewDN,
 				len(moves) > 1,
 			); err != nil {
 				return err
@@ -2195,7 +2333,7 @@ func (server *Server) handleModifyDN(
 		if controls.noOp {
 			return noOperationFailure()
 		}
-		if err := refreshNamingContexts(writer); err != nil {
+		if err := refreshRuntimeNamingContexts(writer, state.runtime); err != nil {
 			return err
 		}
 		if configurationWrite {
@@ -2280,7 +2418,7 @@ func (server *Server) handleCompare(
 			false,
 		)
 	}
-	dn, err := directory.ParseDN(request.DN)
+	dn, err := parseCoreWriteDN(state.runtime, request.DN)
 	if err != nil || dn.Depth() == 0 {
 		return server.writeOperationResult(
 			connection,
@@ -2289,8 +2427,18 @@ func (server *Server) handleCompare(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	request, compareFailure := validateCompareRequest(state.runtime.schema, request)
+	if compareFailure != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationCompareResponse,
+			*compareFailure,
+		)
+	}
+	subschemaTarget := isRuntimeSubschemaDN(state.runtime, dn)
 	var database *runtimeDatabase
-	if !isSubschemaDN(dn) {
+	if !subschemaTarget {
 		database = databaseForDN(state.runtime, dn)
 		if database == nil {
 			return server.writeOperationResult(
@@ -2301,7 +2449,7 @@ func (server *Server) handleCompare(
 			)
 		}
 	}
-	if isSubschemaDN(dn) && frontendRestricts(state.runtime, restrictCompare) {
+	if subschemaTarget && frontendRestricts(state.runtime, restrictCompare) {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -2400,6 +2548,10 @@ func (server *Server) handleCompare(
 		if database != nil && !isMonitorDatabase(*database) {
 			tx = readerForDatabase(reader, *database)
 		}
+		dn, err = storage.NormalizeReaderDN(tx, dn)
+		if err != nil {
+			return err
+		}
 		var entry directory.Entry
 		if monitorEntries != nil {
 			var exists bool
@@ -2418,7 +2570,7 @@ func (server *Server) handleCompare(
 					"",
 				)
 			}
-		} else if isSubschemaDN(dn) {
+		} else if subschemaTarget {
 			entry = server.subschemaEntry(state.runtime)
 		} else {
 			var getErr error
@@ -2469,6 +2621,10 @@ func (server *Server) handleCompare(
 				return getErr
 			}
 		}
+		entry, err = normalizeCompareEntryDN(tx, entry)
+		if err != nil {
+			return err
+		}
 		if err := server.checkAssertion(
 			state.runtime,
 			tx,
@@ -2510,11 +2666,20 @@ func (server *Server) handleCompare(
 				}
 			}
 		}
+		aclEntry, aclErr := normalizeCompareACLEntry(
+			state.runtime,
+			database,
+			state.boundDN,
+			entry,
+		)
+		if aclErr != nil {
+			return aclErr
+		}
 		if !server.allowed(
 			state.runtime,
 			tx,
 			state.boundDN,
-			entry,
+			aclEntry,
 			request.Attribute,
 			request.Assertion,
 			acl.Compare,
@@ -2578,7 +2743,211 @@ func (server *Server) handleCompare(
 	return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationCompareResponse, result)
 }
 
+func normalizeCompareEntryDN(
+	reader storage.Reader,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	dn, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	dn, err = storage.NormalizeReaderDN(reader, dn)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	entry.DN = dn.String()
+	return entry, nil
+}
+
+func normalizeCompareACLEntry(
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	boundDN string,
+	entry directory.Entry,
+) (directory.Entry, error) {
+	if runtime == nil || runtime.schema == nil || database == nil ||
+		isConfigDatabase(*database) || isMonitorDatabase(*database) || boundDN == "" {
+		return entry, nil
+	}
+	subject, err := runtime.schema.NormalizeDN(boundDN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	target, err := runtime.schema.NormalizeDN(entry.DN)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	if subject.Equal(target) {
+		return entry, nil
+	}
+	legacySubject, subjectErr := directory.ParseDN(boundDN)
+	legacyTarget, targetErr := directory.ParseDN(entry.DN)
+	if subjectErr != nil || targetErr != nil || !legacySubject.Equal(legacyTarget) {
+		return entry, nil
+	}
+
+	// ACL self matching still accepts a display DN. Insert a deterministic
+	// child RDN only when legacy identity collapses schema-distinct DNs so the
+	// ACL evaluation fails closed instead of granting self privileges.
+	entry.DN = fmt.Sprintf("cn=%x,%s", target.Key(), entry.DN)
+	return entry, nil
+}
+
 func validateNewEntry(entry directory.Entry, dn directory.DN) *ldapwire.Result {
+	if result := validateNewEntryAttributes(entry); result != nil {
+		return result
+	}
+	for _, rdnValue := range dn.RDNValues() {
+		if !entry.HasValue(rdnValue.Type, rdnValue.Value) {
+			result := ldapwire.ResultError(ldapwire.ResultNamingViolation, "RDN value is missing from entry")
+			return &result
+		}
+	}
+	return nil
+}
+
+func validateNewEntryWithSchema(
+	entry directory.Entry,
+	dn directory.DN,
+	registry *schema.Registry,
+) *ldapwire.Result {
+	if registry == nil {
+		return validateNewEntry(entry, dn)
+	}
+	if result := validateNewEntryAttributes(entry); result != nil {
+		return result
+	}
+	for _, rdnValue := range dn.RDNValues() {
+		matched, err := entryHasSchemaAttributeValue(
+			entry,
+			rdnValue.Type,
+			rdnValue.Value,
+			registry,
+		)
+		if err != nil {
+			result := schemaValidationResult(err)
+			return &result
+		}
+		if !matched {
+			result := ldapwire.ResultError(
+				ldapwire.ResultNamingViolation,
+				"RDN value is missing from entry",
+			)
+			return &result
+		}
+	}
+	return nil
+}
+
+func entryHasSchemaRDNValues(
+	entry directory.Entry,
+	dn directory.DN,
+	registry *schema.Registry,
+) bool {
+	if registry == nil {
+		for _, value := range dn.RDNValues() {
+			if !entry.HasValue(value.Type, value.Value) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, value := range dn.RDNValues() {
+		matched, err := entryHasSchemaAttributeValue(
+			entry,
+			value.Type,
+			value.Value,
+			registry,
+		)
+		if err != nil || !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func entryHasSchemaAttributeValue(
+	entry directory.Entry,
+	description string,
+	want []byte,
+	registry *schema.Registry,
+) (bool, error) {
+	for _, value := range registry.AttributeValues(entry, description) {
+		comparison, err := registry.Compare(description, "", value, want)
+		if err != nil {
+			return false, err
+		}
+		if comparison == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func deleteSchemaRDNValues(
+	entry *directory.Entry,
+	dn directory.DN,
+	registry *schema.Registry,
+) {
+	if registry == nil {
+		entry.DeleteRDNValues(dn)
+		return
+	}
+	for _, rdnValue := range dn.RDNValues() {
+		attributes := make([]directory.Attribute, 0, len(entry.Attributes))
+		for _, attribute := range entry.Attributes {
+			if !registry.AttributeDescriptionSubtype(
+				attribute.Description,
+				rdnValue.Type,
+			) {
+				attributes = append(attributes, attribute)
+				continue
+			}
+			values := attribute.Values[:0]
+			for _, value := range attribute.Values {
+				comparison, err := registry.Compare(
+					rdnValue.Type,
+					"",
+					value,
+					rdnValue.Value,
+				)
+				if err != nil || comparison != 0 {
+					values = append(values, value)
+				}
+			}
+			if len(values) != 0 {
+				attribute.Values = values
+				attributes = append(attributes, attribute)
+			}
+		}
+		entry.Attributes = attributes
+	}
+}
+
+func ensureSchemaRDNValues(
+	entry *directory.Entry,
+	dn directory.DN,
+	registry *schema.Registry,
+) {
+	if registry == nil {
+		entry.EnsureRDNValues(dn)
+		return
+	}
+	for _, rdnValue := range dn.RDNValues() {
+		matched, err := entryHasSchemaAttributeValue(
+			*entry,
+			rdnValue.Type,
+			rdnValue.Value,
+			registry,
+		)
+		if err == nil && matched {
+			continue
+		}
+		_ = entry.AddValues(rdnValue.Type, [][]byte{rdnValue.Value})
+	}
+}
+
+func validateNewEntryAttributes(entry directory.Entry) *ldapwire.Result {
 	if len(entry.Attributes) == 0 || !entry.HasAttribute("objectClass") {
 		result := ldapwire.ResultError(ldapwire.ResultObjectClassViolation, "objectClass is required")
 		return &result
@@ -2602,12 +2971,6 @@ func validateNewEntry(entry directory.Entry, dn directory.DN) *ldapwire.Result {
 					return &result
 				}
 			}
-		}
-	}
-	for _, rdnValue := range dn.RDNValues() {
-		if !entry.HasValue(rdnValue.Type, rdnValue.Value) {
-			result := ldapwire.ResultError(ldapwire.ResultNamingViolation, "RDN value is missing from entry")
-			return &result
 		}
 	}
 	return nil
@@ -2982,6 +3345,10 @@ func isAuthTimestampAttribute(
 }
 
 func belowKnownNamingContext(reader storage.Reader, dn directory.DN) (bool, error) {
+	comparisonDN, err := storage.NormalizeReaderDN(reader, dn)
+	if err != nil {
+		return false, err
+	}
 	contexts, err := reader.NamingContexts()
 	if err != nil {
 		return false, err
@@ -2991,7 +3358,11 @@ func belowKnownNamingContext(reader storage.Reader, dn directory.DN) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		if contextDN.Equal(dn) || contextDN.AncestorOf(dn) {
+		contextDN, err = storage.NormalizeReaderDN(reader, contextDN)
+		if err != nil {
+			return false, err
+		}
+		if contextDN.Equal(comparisonDN) || contextDN.AncestorOf(comparisonDN) {
 			return true, nil
 		}
 	}
@@ -3004,6 +3375,43 @@ func refreshNamingContexts(writer storage.Writer) error {
 		return err
 	}
 	return writer.SetNamingContexts(contexts)
+}
+
+func refreshRuntimeNamingContexts(
+	writer storage.Writer,
+	runtime *runtimeState,
+) error {
+	if runtime == nil || runtime.schema == nil {
+		return refreshNamingContexts(writer)
+	}
+	contexts, err := storage.InferNamingContextsWithNormalizer(
+		writer,
+		runtime.schema,
+	)
+	if err != nil {
+		return err
+	}
+	return writer.SetNamingContexts(contexts)
+}
+
+func parseCoreWriteDN(
+	runtime *runtimeState,
+	value string,
+) (directory.DN, error) {
+	legacy, err := directory.ParseDN(value)
+	if err != nil || runtime == nil || isConfigurationDN(legacy) {
+		return legacy, err
+	}
+	if database := databaseForDN(runtime, legacy); database != nil {
+		if isMonitorDatabase(*database) {
+			return legacy, nil
+		}
+		return parseRuntimeDN(value, database.dnNormalizer)
+	}
+	if runtime.schema != nil {
+		return runtime.schema.NormalizeDN(value)
+	}
+	return legacy, nil
 }
 
 func (server *Server) finishOperation(

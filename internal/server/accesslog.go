@@ -386,6 +386,34 @@ func resolveAccesslogDatabases(databases []runtimeDatabase) error {
 				databases[index].name,
 			)
 		}
+		normalizedTarget, err := normalizeRuntimeDatabaseDN(
+			databases[targetIndex],
+			configuration.targetSuffix,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"%s accesslog target %q: %w",
+				databases[index].name,
+				configuration.targetSuffix.String(),
+				err,
+			)
+		}
+		configuration.targetSuffix = normalizedTarget
+		for baseIndex := range configuration.bases {
+			normalizedBase, err := normalizeRuntimeDatabaseDN(
+				databases[index],
+				configuration.bases[baseIndex].base,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"%s accesslog base %q: %w",
+					databases[index].name,
+					configuration.bases[baseIndex].base.String(),
+					err,
+				)
+			}
+			configuration.bases[baseIndex].base = normalizedBase
+		}
 		if isRelayDatabase(databases[targetIndex]) ||
 			isConfigDatabase(databases[targetIndex]) ||
 			isMonitorDatabase(databases[targetIndex]) ||
@@ -396,10 +424,47 @@ func resolveAccesslogDatabases(databases []runtimeDatabase) error {
 				databases[targetIndex].name,
 			)
 		}
+		if databases[index].sqlBackend != nil &&
+			databases[targetIndex].sqlBackend != nil &&
+			accesslogConfigurationRecordsDatabaseWrites(
+				configuration,
+				databases[index],
+			) {
+			return fmt.Errorf(
+				"%s accesslog cannot record successful writes in SQL target %s: independent SQL backends cannot be committed atomically",
+				databases[index].name,
+				databases[targetIndex].name,
+			)
+		}
 		configuration.targetDatabaseIndex = targetIndex
 		configuration.sourceDatabaseIndex = index
 	}
 	return nil
+}
+
+func accesslogConfigurationRecordsDatabaseWrites(
+	configuration *accesslogRuntimeConfiguration,
+	database runtimeDatabase,
+) bool {
+	if configuration == nil {
+		return false
+	}
+	if configuration.operations&accesslogWrites != 0 {
+		return true
+	}
+	for _, base := range configuration.bases {
+		if base.operations&accesslogWrites == 0 {
+			continue
+		}
+		for _, suffix := range database.suffixes {
+			if base.base.Equal(suffix) ||
+				base.base.AncestorOf(suffix) ||
+				suffix.AncestorOf(base.base) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (server *Server) ensureAccesslogContainers(
@@ -562,6 +627,27 @@ func (server *Server) recordAccesslogWrite(
 	sourceChange *syncChange,
 ) ([]*syncChange, error) {
 	configuration := source.accesslog
+	if configuration == nil {
+		return nil, nil
+	}
+	requestDN, err := normalizeRuntimeDatabaseDN(source, record.requestDN)
+	if err != nil {
+		return nil, fmt.Errorf("normalize accesslog reqDN: %w", err)
+	}
+	record.requestDN = requestDN
+	if record.newSuperior != nil {
+		newSuperior, normalizeErr := normalizeRuntimeDatabaseDN(
+			source,
+			*record.newSuperior,
+		)
+		if normalizeErr != nil {
+			return nil, fmt.Errorf(
+				"normalize accesslog reqNewSuperior: %w",
+				normalizeErr,
+			)
+		}
+		record.newSuperior = &newSuperior
+	}
 	if !accesslogConfigurationApplies(
 		configuration,
 		record.operation,
@@ -627,11 +713,21 @@ func (server *Server) recordAccesslogWrite(
 			)
 		}
 		if record.after != nil {
-			entry.ReplaceValues("reqNewDN", stringValues(record.after.DN))
+			newDN, parseErr := parseRuntimeDN(
+				record.after.DN,
+				source.dnNormalizer,
+			)
+			if parseErr != nil {
+				return nil, fmt.Errorf(
+					"normalize accesslog reqNewDN: %w",
+					parseErr,
+				)
+			}
+			entry.ReplaceValues("reqNewDN", stringValues(newDN.String()))
 		}
 		entry.ReplaceValues(
 			"reqMod",
-			accesslogModifyDNValues(record),
+			accesslogModifyDNValues(runtime.schema, record),
 		)
 	}
 	oldValues, err := accesslogOldValues(runtime.schema, configuration, record)
@@ -692,7 +788,7 @@ func (server *Server) storeAccesslogEntry(
 			}
 		}
 	}
-	logDN, err := directory.ParseDN(entry.DN)
+	logDN, err := syncConsumerParseDN(tx, entry.DN)
 	if err != nil {
 		return nil, err
 	}
@@ -860,6 +956,14 @@ func (server *Server) finishAccesslogObservation(
 	}
 	source := observation.runtime.databases[index]
 	configuration := source.accesslog
+	if configuration == nil {
+		return
+	}
+	normalizedTarget, err := normalizeRuntimeDatabaseDN(source, targetDN)
+	if err != nil {
+		return
+	}
+	targetDN = normalizedTarget
 	if !accesslogConfigurationApplies(configuration, operation, targetDN) {
 		return
 	}
@@ -1046,7 +1150,10 @@ func (server *Server) populateObservedAccesslogRequest(
 		var superior directory.DN
 		var hasSuperior bool
 		if typed.HasNewSuperior {
-			parsed, err := directory.ParseDN(typed.NewSuperior)
+			parsed, err := parseRuntimeDN(
+				typed.NewSuperior,
+				source.dnNormalizer,
+			)
 			if err == nil {
 				superior = parsed
 				hasSuperior = true
@@ -1059,7 +1166,12 @@ func (server *Server) populateObservedAccesslogRequest(
 		}
 		if hasSuperior {
 			if newDN, err := directory.ComposeDN(typed.NewRDN, superior); err == nil {
-				entry.ReplaceValues("reqNewDN", stringValues(newDN.String()))
+				if normalized, normalizeErr := normalizeRuntimeDatabaseDN(
+					source,
+					newDN,
+				); normalizeErr == nil {
+					entry.ReplaceValues("reqNewDN", stringValues(normalized.String()))
+				}
 			}
 		}
 	case ldapwire.CompareRequest:
@@ -1525,15 +1637,15 @@ func (server *Server) purgeAccesslogDatabase(
 	target := runtime.databases[configuration.targetDatabaseIndex]
 	cutoff := now.UTC().Add(-configuration.purgeAge)
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		content := writerForDatabase(writer, target)
 		var expired []directory.Entry
-		if err := writer.ForEachIn(
-			target.partition,
+		if err := content.ForEach(
 			func(entry directory.Entry) error {
 				values := entry.Values("reqStart")
 				if len(values) == 0 {
 					return nil
 				}
-				entryDN, err := directory.ParseDN(entry.DN)
+				entryDN, err := syncConsumerParseDN(content, entry.DN)
 				if err != nil {
 					return err
 				}
@@ -1565,7 +1677,7 @@ func (server *Server) purgeAccesslogDatabase(
 		}
 
 		minCSNs := make(syncCSNState)
-		container, err := writer.GetIn(target.partition, configuration.targetSuffix)
+		container, err := content.Get(configuration.targetSuffix)
 		if err != nil {
 			return err
 		}
@@ -1604,7 +1716,7 @@ func (server *Server) purgeAccesslogDatabase(
 			values = append(values, []byte(raw))
 		}
 		container.ReplaceValues("minCSN", values)
-		return writer.PutIn(target.partition, container, true)
+		return content.Put(container, true)
 	})
 }
 
@@ -1765,13 +1877,16 @@ func accesslogModifyValues(record accesslogWriteRecord) [][]byte {
 	)
 }
 
-func accesslogModifyDNValues(record accesslogWriteRecord) [][]byte {
+func accesslogModifyDNValues(
+	registry *schema.Registry,
+	record accesslogWriteRecord,
+) [][]byte {
 	excluded := make(map[string]struct{})
 	for _, value := range record.requestDN.RDNValues() {
 		excluded[strings.ToLower(value.Type)] = struct{}{}
 	}
 	if record.after != nil {
-		if newDN, err := directory.ParseDN(record.after.DN); err == nil {
+		if newDN, err := registry.NormalizeDN(record.after.DN); err == nil {
 			for _, value := range newDN.RDNValues() {
 				excluded[strings.ToLower(value.Type)] = struct{}{}
 			}
@@ -1819,7 +1934,7 @@ func accesslogOldValues(
 			requested = append(requested, value.Type)
 		}
 		if record.after != nil {
-			if afterDN, parseErr := directory.ParseDN(record.after.DN); parseErr == nil {
+			if afterDN, parseErr := registry.NormalizeDN(record.after.DN); parseErr == nil {
 				for _, value := range afterDN.RDNValues() {
 					requested = append(requested, value.Type)
 				}

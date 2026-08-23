@@ -26,18 +26,36 @@ type Attribute struct {
 type Entry struct {
 	DN         string      `json:"dn"`
 	Attributes []Attribute `json:"attributes"`
+	dnIdentity string
 }
 
 func (e Entry) Clone() Entry {
 	out := Entry{
 		DN:         e.DN,
 		Attributes: make([]Attribute, len(e.Attributes)),
+		dnIdentity: e.dnIdentity,
 	}
 	for i, attribute := range e.Attributes {
 		out.Attributes[i].Description = attribute.Description
 		out.Attributes[i].Values = cloneValues(attribute.Values)
 	}
 	return out
+}
+
+// WithDNIdentity returns a copy carrying a transient normalized storage key.
+// The hint is intentionally excluded from JSON and LDAP entry equality.
+func (e Entry) WithDNIdentity(dn DN) Entry {
+	e.dnIdentity = dn.Key()
+	return e
+}
+
+func (e Entry) DNIdentity() (string, bool) {
+	return e.dnIdentity, e.dnIdentity != ""
+}
+
+func (e Entry) WithoutDNIdentity() Entry {
+	e.dnIdentity = ""
+	return e
 }
 
 func (e Entry) Values(description string) [][]byte {
