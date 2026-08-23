@@ -644,6 +644,13 @@ func TestServiceGSSAPITimeoutCancelsTransportAndClearsSecrets(t *testing.T) {
 	if got := client.closes.Load(); got < 2 {
 		t.Fatalf("late GSSAPI result did not release its connection: close count = %d", got)
 	}
+	slotDeadline := time.Now().Add(time.Second)
+	for len(serviceGSSAPIInitializationSlots) != 0 && time.Now().Before(slotDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if occupied := len(serviceGSSAPIInitializationSlots); occupied != 0 {
+		t.Fatalf("service GSSAPI initialization slots after release = %d", occupied)
+	}
 	if nextID != 1 {
 		t.Fatalf("timed-out GSSAPI worker changed caller message ID to %d", nextID)
 	}
@@ -684,6 +691,60 @@ func TestServiceGSSAPIPreCanceledContextDoesNotStartWorker(t *testing.T) {
 	}
 	if got := client.closes.Load(); got != 1 {
 		t.Fatalf("pre-canceled GSSAPI transport close count = %d, want 1", got)
+	}
+}
+
+func TestServiceGSSAPIInitializationAdmissionHonorsCancellation(t *testing.T) {
+	if len(serviceGSSAPIInitializationSlots) != 0 {
+		t.Fatal("service GSSAPI initialization slots are unexpectedly occupied")
+	}
+	for range cap(serviceGSSAPIInitializationSlots) {
+		serviceGSSAPIInitializationSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for len(serviceGSSAPIInitializationSlots) > 0 {
+			<-serviceGSSAPIInitializationSlots
+		}
+	})
+
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() { _ = peer.Close() })
+	backend := serviceGSSAPIProtocolTestBackend(RuntimeBindConfig{
+		Method:           "sasl",
+		SASLMechanism:    "GSSAPI",
+		AuthenticationID: "lloadd@EXAMPLE.TEST",
+		Realm:            "EXAMPLE.TEST",
+		Credentials:      []byte("secret"),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	var factoryCalls atomic.Int64
+	nextID := int64(1)
+	go func() {
+		_, err := backend.bindServiceSASLGSSAPIWithFactory(
+			ctx,
+			client,
+			&nextID,
+			func(serviceGSSAPISettings) (serviceGSSAPIInitiator, error) {
+				factoryCalls.Add(1)
+				return nil, errors.New("unexpected factory call")
+			},
+		)
+		done <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("admission cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("service GSSAPI admission did not observe cancellation")
+	}
+	if calls := factoryCalls.Load(); calls != 0 {
+		t.Fatalf("credential factory calls = %d, want 0", calls)
 	}
 }
 

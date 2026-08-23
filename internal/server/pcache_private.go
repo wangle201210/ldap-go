@@ -301,6 +301,18 @@ func (server *Server) tryUnsupportedPcachePrivateOperation(
 	if !present {
 		return false, nil
 	}
+	if request, bind := message.Request.(ldapwire.BindRequest); bind {
+		resetPcachePrivateBindState(state)
+		if failure != nil {
+			return true, writeResultForMessage(connection, message, *failure)
+		}
+		return true, server.handlePcachePrivateBind(
+			connection,
+			state,
+			message,
+			request,
+		)
+	}
 	if failure != nil {
 		return true, writeResultForMessage(connection, message, *failure)
 	}
@@ -313,15 +325,6 @@ func (server *Server) tryUnsupportedPcachePrivateOperation(
 		return true, server.handlePcachePrivateDelete(ctx, connection, state, message, request)
 	case ldapwire.ModifyDNRequest:
 		return true, server.handlePcachePrivateModifyDN(ctx, connection, state, message, request)
-	case ldapwire.BindRequest:
-		return true, writeResultForMessage(
-			connection,
-			message,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"Bind is not supported with pcachePrivDB control",
-			),
-		)
 	}
 	target, _, _, ok := chainOperationTarget(state, message.Request)
 	if !ok {
@@ -371,6 +374,134 @@ func (server *Server) tryUnsupportedPcachePrivateOperation(
 		ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
 			"operation not supported with pcachePrivDB control",
+		),
+	)
+}
+
+func resetPcachePrivateBindState(state *connectionState) {
+	clearLDAPTransaction(state.transaction)
+	state.transaction = nil
+	clearBindCredentials(state)
+	state.boundDN = ""
+	state.authMechanism = ""
+	state.passwordPolicyRestrictedDN = ""
+	clearSearchSessions(state)
+	clearSASLSession(state)
+}
+
+func (server *Server) handlePcachePrivateBind(
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	request ldapwire.BindRequest,
+) error {
+	requestDN, err := parseRuntimeConnectionDN(state.runtime, request.Name)
+	if err != nil {
+		return writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, "invalid DN"),
+		)
+	}
+	if request.Version < 2 || request.Version > 3 {
+		return writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"requested protocol version not supported",
+			),
+		)
+	}
+	if request.Version == 2 && !state.runtime.allows.bindV2 {
+		return writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"historical protocol version requested, use LDAPv3 instead",
+			),
+		)
+	}
+	state.protocolVersion = request.Version
+
+	if request.Authentication.IsSASL {
+		if request.Version < 3 {
+			return writeResultForMessage(
+				connection,
+				message,
+				ldapwire.ResultError(
+					ldapwire.ResultProtocolError,
+					"SASL bind requires LDAPv3",
+				),
+			)
+		}
+		if request.Authentication.SASLMechanism == "" {
+			return writeResultForMessage(
+				connection,
+				message,
+				ldapwire.ResultError(
+					ldapwire.ResultAuthMethodNotSupported,
+					"no SASL mechanism provided",
+				),
+			)
+		}
+		return writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultUnavailableCriticalExtension,
+				"critical control unavailable in frontend database",
+			),
+		)
+	}
+
+	password := request.Authentication.Simple
+	if requestDN.Depth() == 0 || len(password) == 0 {
+		var result ldapwire.Result
+		switch {
+		case requestDN.Depth() == 0 && len(password) != 0 &&
+			!state.runtime.allows.bindAnonymousCredentials:
+			result = ldapwire.ResultError(ldapwire.ResultInvalidCredentials, "")
+		case requestDN.Depth() != 0 && len(password) == 0 &&
+			!state.runtime.allows.bindAnonymousDN:
+			result = ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unauthenticated bind (DN with no password) disallowed",
+			)
+		case state.runtime.disallows.anonymousBind:
+			result = ldapwire.ResultError(
+				ldapwire.ResultInappropriateAuthentication,
+				"anonymous bind disallowed",
+			)
+		default:
+			result = ldapwire.ResultError(
+				ldapwire.ResultUnavailableCriticalExtension,
+				"critical control unavailable in frontend database",
+			)
+		}
+		return writeResultForMessage(connection, message, result)
+	}
+	if state.runtime.disallows.simpleBind {
+		return writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unwilling to perform simple authentication",
+			),
+		)
+	}
+
+	// OpenLDAP do_bind() clears o_dn/o_ndn before pcache_op_privdb() calls
+	// be_isroot(). A wire Bind therefore cannot reach the cache backend's
+	// be_bind/rootpw path, even when the connection was previously root.
+	return writeResultForMessage(
+		connection,
+		message,
+		ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"pcachePrivDB: operation not allowed",
 		),
 	)
 }
@@ -1254,15 +1385,6 @@ func pcachePrivateProtectedAttribute(description string) bool {
 	default:
 		return false
 	}
-}
-
-func pcachePrivateEntryHasProtectedMetadata(entry directory.Entry) bool {
-	for _, attribute := range entry.Attributes {
-		if pcachePrivateProtectedAttribute(attribute.Description) {
-			return true
-		}
-	}
-	return false
 }
 
 func pcachePrivateEntryWithoutProtectedMetadata(entry directory.Entry) directory.Entry {

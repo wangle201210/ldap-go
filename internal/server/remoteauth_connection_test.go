@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -404,6 +405,7 @@ func TestRemoteAuthRejectsSuccessFromRetiredRuntime(t *testing.T) {
 		providerAddress,
 		0,
 	)
+	database.remoteAuth.storeOnSuccess = true
 	done := make(chan ldapwire.Result, 1)
 	go func() {
 		_, result, _ := instance.remoteAuthSimpleBind(
@@ -422,6 +424,138 @@ func TestRemoteAuthRejectsSuccessFromRetiredRuntime(t *testing.T) {
 	if result := <-done; result.Code != ldapwire.ResultOperationsError {
 		t.Fatalf("retired remoteauth result = %#v", result)
 	}
+	if values := readStoredEntry(t, instance.config.Store, dn.String()).Values("userPassword"); len(values) != 0 {
+		t.Fatalf("retired remoteauth stored a local password: %q", values)
+	}
+}
+
+func TestRemoteAuthStoreOnSuccessRuntimeCommitGate(t *testing.T) {
+	providerAddress, _ := startPBindTestProvider(
+		t,
+		func(_ int, connection net.Conn) error {
+			_, _ = connection.Read(make([]byte, 1))
+			return nil
+		},
+	)
+
+	t.Run("retired runtime cannot write", func(t *testing.T) {
+		instance, runtime, database, dn := newRemoteAuthDirectTestServer(
+			t,
+			providerAddress,
+			0,
+		)
+		manager := database.remoteAuth.connections
+		instance.runtimeActivationMu.Lock()
+		stored := make(chan bool, 1)
+		go func() {
+			stored <- instance.storeRemoteAuthPassword(
+				t.Context(), runtime, database, dn, []byte("retired-secret"), manager,
+			)
+		}()
+		retired := remoteAuthRetiredRuntime(runtime)
+		instance.runtime.Store(retired)
+		instance.runtimeActivationMu.Unlock()
+		if accepted := <-stored; accepted {
+			t.Fatal("retired remoteauth configuration passed the password commit gate")
+		}
+		if values := readStoredEntry(t, instance.config.Store, dn.String()).Values("userPassword"); len(values) != 0 {
+			t.Fatalf("retired commit gate wrote userPassword: %q", values)
+		}
+	})
+
+	t.Run("runtime activation waits for password commit", func(t *testing.T) {
+		instance, runtime, database, dn := newRemoteAuthDirectTestServer(
+			t,
+			providerAddress,
+			0,
+		)
+		blocking := &remoteAuthCommitGateStore{
+			Store:   instance.config.Store,
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		blocking.enabled.Store(true)
+		instance.config.Store = blocking
+		defer blocking.unblock()
+
+		stored := make(chan bool, 1)
+		go func() {
+			stored <- instance.storeRemoteAuthPassword(
+				t.Context(),
+				runtime,
+				database,
+				dn,
+				[]byte("committed-secret"),
+				database.remoteAuth.connections,
+			)
+		}()
+		select {
+		case <-blocking.started:
+		case <-time.After(time.Second):
+			t.Fatal("remoteauth password write did not reach the commit gate")
+		}
+
+		activated := make(chan struct{})
+		go func() {
+			instance.activateRuntime(remoteAuthRetiredRuntime(runtime))
+			close(activated)
+		}()
+		select {
+		case <-activated:
+			t.Fatal("runtime activation crossed an in-flight remoteauth password commit")
+		case <-time.After(30 * time.Millisecond):
+		}
+		blocking.unblock()
+		if accepted := <-stored; !accepted {
+			t.Fatal("current remoteauth configuration was rejected by the commit gate")
+		}
+		select {
+		case <-activated:
+		case <-time.After(time.Second):
+			t.Fatal("runtime activation did not resume after password commit")
+		}
+		if values := readStoredEntry(t, instance.config.Store, dn.String()).Values("userPassword"); len(values) != 1 {
+			t.Fatalf("committed remoteauth password values = %q", values)
+		}
+	})
+}
+
+func remoteAuthRetiredRuntime(runtime *runtimeState) *runtimeState {
+	retired := *runtime
+	retired.revision = runtime.revision + 1
+	retired.databases = append([]runtimeDatabase(nil), runtime.databases...)
+	for index := range retired.databases {
+		retired.databases[index].remoteAuth = nil
+	}
+	return &retired
+}
+
+type remoteAuthCommitGateStore struct {
+	storage.Store
+	enabled atomic.Bool
+	started chan struct{}
+	release chan struct{}
+	start   sync.Once
+	done    sync.Once
+}
+
+func (store *remoteAuthCommitGateStore) Update(
+	ctx context.Context,
+	fn func(storage.Writer) error,
+) error {
+	if store.enabled.Load() {
+		store.start.Do(func() { close(store.started) })
+		select {
+		case <-store.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return store.Store.Update(ctx, fn)
+}
+
+func (store *remoteAuthCommitGateStore) unblock() {
+	store.done.Do(func() { close(store.release) })
 }
 
 func newRemoteAuthDirectTestServer(

@@ -472,6 +472,7 @@ func TestPBindRetryableErrorClassification(t *testing.T) {
 func TestPBindRejectsSuccessFromRetiredRuntime(t *testing.T) {
 	requestReceived := make(chan struct{})
 	releaseProvider := make(chan struct{})
+	defer close(releaseProvider)
 	providerAddress, _ := startPBindTestProvider(
 		t,
 		func(_ int, connection net.Conn) error {
@@ -527,9 +528,123 @@ func TestPBindRejectsSuccessFromRetiredRuntime(t *testing.T) {
 		retired.databases[index].pbind = nil
 	}
 	instance.runtime.Store(&retired)
-	close(releaseProvider)
-	if result := <-done; result.Code != ldapwire.ResultUnavailable {
-		t.Fatalf("retired pbind result = %#v", result)
+	select {
+	case result := <-done:
+		if result.Code != ldapwire.ResultUnavailable {
+			t.Fatalf("retired pbind result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retired pbind did not cancel its active provider connection")
+	}
+}
+
+func TestPBindRuntimeRetirementCancelsAdmissionWaiter(t *testing.T) {
+	if len(pbindGlobalAttempts) != 0 {
+		t.Fatalf("global pbind attempts are unexpectedly occupied: %d", len(pbindGlobalAttempts))
+	}
+	holder := pbindRuntimeConfiguration{identity: newPBindRuntimeIdentity()}
+	releases := make([]func(), 0, cap(pbindGlobalAttempts))
+	for range cap(pbindGlobalAttempts) {
+		release, err := holder.acquirePBindAttempt(t.Context())
+		if err != nil {
+			t.Fatalf("fill global pbind admission: %v", err)
+		}
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+
+	configuration := pbindRuntimeConfiguration{identity: newPBindRuntimeIdentity()}
+	current := atomic.Bool{}
+	current.Store(true)
+	stop := watchPBindRuntime(t.Context(), configuration.identity, current.Load)
+	defer stop()
+	attemptContext, cancelAttempt := configuration.runtimeAttemptContext(t.Context())
+	defer cancelAttempt()
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := configuration.acquirePBindAttempt(attemptContext)
+		waiter <- err
+	}()
+
+	current.Store(false)
+	select {
+	case err := <-waiter:
+		if err == nil || !configuration.retired() {
+			t.Fatalf("retired admission waiter = %v, retired=%t", err, configuration.retired())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime retirement did not cancel a pbind admission waiter")
+	}
+	select {
+	case <-attemptContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime retirement did not cancel the pbind attempt context")
+	}
+}
+
+func TestPBindGlobalAdmissionAcrossRuntimeGenerations(t *testing.T) {
+	if len(pbindGlobalAttempts) != 0 {
+		t.Fatalf("global pbind attempts are unexpectedly occupied: %d", len(pbindGlobalAttempts))
+	}
+	const callers = defaultPBindConcurrentAttempts + 8
+	configurations := []pbindRuntimeConfiguration{
+		{identity: newPBindRuntimeIdentity()},
+		{identity: newPBindRuntimeIdentity()},
+	}
+	releaseAttempts := make(chan struct{})
+	results := make(chan error, callers)
+	started := make(chan struct{}, callers)
+	var active, maximum atomic.Int32
+	for index := range callers {
+		configuration := configurations[index%len(configurations)]
+		go func() {
+			release, err := configuration.acquirePBindAttempt(t.Context())
+			if err != nil {
+				results <- err
+				return
+			}
+			current := active.Add(1)
+			for {
+				observed := maximum.Load()
+				if current <= observed || maximum.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			started <- struct{}{}
+			<-releaseAttempts
+			active.Add(-1)
+			release()
+			results <- nil
+		}()
+	}
+	for range defaultPBindConcurrentAttempts {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("cross-generation callers did not fill the global pbind limit")
+		}
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := maximum.Load(); got != defaultPBindConcurrentAttempts {
+		t.Fatalf("cross-generation maximum = %d, want %d", got, defaultPBindConcurrentAttempts)
+	}
+	close(releaseAttempts)
+	for range callers {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("cross-generation pbind admission: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out draining cross-generation pbind admission")
+		}
+	}
+	if len(pbindGlobalAttempts) != 0 {
+		t.Fatalf("global pbind slots leaked after cross-generation test: %d", len(pbindGlobalAttempts))
 	}
 }
 

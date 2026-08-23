@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,328 @@ import (
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
+
+func TestOpenLDAPReferencePcachePrivateBind(t *testing.T) {
+	tools := requireOpenLDAPPcacheReferenceTools(t)
+	assertPinnedOpenLDAPPcacheReference(t, tools)
+
+	providerURI, stopProvider := startOpenLDAPReferenceServer(t, tools, nil)
+	defer stopProvider()
+	proxyURI, stopProxy, err := startOpenLDAPPcachePhaseTwoProxy(
+		t,
+		tools,
+		providerURI,
+		pcachePhaseTwoProxyConfig{
+			maxEntries:       10,
+			entryLimit:       10,
+			consistencyCheck: 60,
+			ttl:              "60",
+			negativeTTL:      "60",
+			limitTTL:         "60",
+			maxQueries:       10,
+		},
+	)
+	if err != nil {
+		t.Fatalf("start OpenLDAP pcache private Bind fixture: %v", err)
+	}
+	defer stopProxy()
+
+	const rootDN = "cn=admin,dc=example,dc=com"
+	const rootPassword = "secret"
+	control := rawPcachePrivateControl(true, false)
+	for _, test := range []struct {
+		name       string
+		prebind    bool
+		request    *ber.Packet
+		wantResult int64
+	}{
+		{
+			name:       "anonymous connection cannot use cache root password",
+			request:    rawSimpleBindRequest(rootDN, rootPassword),
+			wantResult: int64(ldap.LDAPResultUnwillingToPerform),
+		},
+		{
+			name:       "previous provider root identity is cleared before Bind",
+			prebind:    true,
+			request:    rawSimpleBindRequest(rootDN, rootPassword),
+			wantResult: int64(ldap.LDAPResultUnwillingToPerform),
+		},
+		{
+			name:       "cache root password failure is not reached",
+			prebind:    true,
+			request:    rawSimpleBindRequest(rootDN, "wrong"),
+			wantResult: int64(ldap.LDAPResultUnwillingToPerform),
+		},
+		{
+			name:       "anonymous Simple Bind rejects frontend control",
+			request:    rawSimpleBindRequest("", ""),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+		{
+			name:       "anonymous DN with credentials fails in frontend",
+			request:    rawSimpleBindRequest("", "secret"),
+			wantResult: int64(ldap.LDAPResultInvalidCredentials),
+		},
+		{
+			name:       "unauthenticated DN Bind fails in frontend",
+			request:    rawSimpleBindRequest(rootDN, ""),
+			wantResult: int64(ldap.LDAPResultUnwillingToPerform),
+		},
+		{
+			name:       "SASL ANONYMOUS rejects frontend control",
+			request:    rawSASLBindRequest("ANONYMOUS", []byte("pcache-fixture")),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+		{
+			name:       "unknown SASL mechanism rejects frontend control first",
+			request:    rawSASLBindRequest("PCACHE-NOT-A-MECHANISM", nil),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection, err := net.Dial("tcp", strings.TrimPrefix(proxyURI, "ldap://"))
+			if err != nil {
+				t.Fatalf("dial OpenLDAP pcache fixture: %v", err)
+			}
+			defer connection.Close()
+			if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("set fixture deadline: %v", err)
+			}
+			messageID := int64(1)
+			if test.prebind {
+				assertRawLDAPResult(
+					t,
+					sendRawLDAPOperation(
+						t,
+						connection,
+						messageID,
+						rawSimpleBindRequest(rootDN, rootPassword),
+					),
+					int64(ldap.LDAPResultSuccess),
+				)
+				messageID++
+			}
+			assertRawLDAPResult(
+				t,
+				sendRawLDAPOperation(t, connection, messageID, test.request, control),
+				test.wantResult,
+			)
+		})
+	}
+}
+
+func TestPcachePrivateBindHandlerOrderingAndIdentityReset(t *testing.T) {
+	t.Parallel()
+
+	runtime, _, _ := newPcachePrivateTestRuntime(t)
+	for _, test := range []struct {
+		name        string
+		request     ldapwire.BindRequest
+		wantResult  int64
+		wantVersion int
+	}{
+		{
+			name: "SASL rejects frontend control",
+			request: ldapwire.BindRequest{
+				Version: 3,
+				Authentication: ldapwire.Authentication{
+					IsSASL:        true,
+					SASLMechanism: "ANONYMOUS",
+				},
+			},
+			wantResult:  int64(ldap.LDAPResultUnavailableCriticalExtension),
+			wantVersion: 3,
+		},
+		{
+			name:        "empty anonymous Simple rejects frontend control",
+			request:     ldapwire.BindRequest{Version: 3},
+			wantResult:  int64(ldap.LDAPResultUnavailableCriticalExtension),
+			wantVersion: 3,
+		},
+		{
+			name: "anonymous DN credentials fail first",
+			request: ldapwire.BindRequest{
+				Version:        3,
+				Authentication: ldapwire.Authentication{Simple: []byte("secret")},
+			},
+			wantResult:  int64(ldap.LDAPResultInvalidCredentials),
+			wantVersion: 3,
+		},
+		{
+			name:        "nonempty DN with empty password is unwilling",
+			request:     ldapwire.BindRequest{Version: 3, Name: ldapBackendTestLocalRootDN},
+			wantResult:  int64(ldap.LDAPResultUnwillingToPerform),
+			wantVersion: 3,
+		},
+		{
+			name: "nonempty DN with password is unwilling",
+			request: ldapwire.BindRequest{
+				Version:        3,
+				Name:           ldapBackendTestLocalRootDN,
+				Authentication: ldapwire.Authentication{Simple: []byte(ldapBackendTestLocalRootPW)},
+			},
+			wantResult:  int64(ldap.LDAPResultUnwillingToPerform),
+			wantVersion: 3,
+		},
+		{
+			name: "protocol version precedes private authorization",
+			request: ldapwire.BindRequest{
+				Version:        1,
+				Name:           ldapBackendTestLocalRootDN,
+				Authentication: ldapwire.Authentication{Simple: []byte(ldapBackendTestLocalRootPW)},
+			},
+			wantResult: int64(ldap.LDAPResultProtocolError),
+		},
+		{
+			name: "DN syntax precedes protocol version",
+			request: ldapwire.BindRequest{
+				Version:        1,
+				Name:           "cn=invalid,",
+				Authentication: ldapwire.Authentication{Simple: []byte("secret")},
+			},
+			wantResult: int64(ldap.LDAPResultInvalidDNSyntax),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serverConnection, clientConnection := net.Pipe()
+			defer serverConnection.Close()
+			defer clientConnection.Close()
+			state := &connectionState{
+				runtime:                    runtime,
+				boundDN:                    ldapBackendTestLocalRootDN,
+				authMechanism:              "SIMPLE",
+				bindCredentialDN:           ldapBackendTestLocalRootDN,
+				bindCredentials:            []byte(ldapBackendTestLocalRootPW),
+				passwordPolicyRestrictedDN: ldapBackendTestLocalRootDN,
+			}
+			message := ldapwire.Message{
+				ID:      1,
+				Request: test.request,
+				Controls: []ldapwire.Control{{
+					OID:      pcachePrivateDBControl,
+					Critical: true,
+				}},
+			}
+			done := make(chan struct {
+				handled bool
+				err     error
+			}, 1)
+			go func() {
+				handled, err := (&Server{}).tryUnsupportedPcachePrivateOperation(
+					context.Background(),
+					serverConnection,
+					state,
+					message,
+				)
+				done <- struct {
+					handled bool
+					err     error
+				}{handled: handled, err: err}
+			}()
+			response, err := ber.ReadPacket(clientConnection)
+			if err != nil {
+				t.Fatalf("read private Bind handler response: %v", err)
+			}
+			assertRawLDAPResult(t, response, test.wantResult)
+			outcome := <-done
+			if !outcome.handled || outcome.err != nil {
+				t.Fatalf("handler outcome = handled %t, err %v", outcome.handled, outcome.err)
+			}
+			if state.boundDN != "" || state.authMechanism != "" ||
+				state.bindCredentialDN != "" || len(state.bindCredentials) != 0 ||
+				state.passwordPolicyRestrictedDN != "" {
+				t.Fatalf("Bind identity was not cleared: %#v", state)
+			}
+			if state.protocolVersion != test.wantVersion {
+				t.Fatalf("protocol version = %d, want %d", state.protocolVersion, test.wantVersion)
+			}
+		})
+	}
+}
+
+func TestPcachePersistenceClearsMetadataReadBuffers(t *testing.T) {
+	t.Parallel()
+
+	runtime, database, state := newPcachePrivateTestRuntime(t)
+	database.pcache.maxEntries = 10
+	store := storage.NewMemory()
+	defer store.Close()
+	configDN := "olcOverlay={0}pcache,olcDatabase={1}ldap,cn=config"
+	metadataKey := pcachePersistenceMetadataKey(configDN)
+	configurePcachePersistenceTestRuntime(
+		runtime,
+		&database,
+		state,
+		store,
+		configDN,
+		metadataKey,
+		"clear-metadata-buffers",
+		true,
+	)
+	server := &Server{config: Config{Store: store}}
+	ensurePcacheTestRuntime(t, server, store, runtime)
+	dn, err := runtime.schema.NormalizeDN("uid=metadata," + ldapBackendTestSuffix)
+	if err != nil {
+		t.Fatalf("normalize private metadata entry DN: %v", err)
+	}
+	entry := pcachePrivateValidTestEntry(dn.String(), "metadata", "Metadata")
+	entry.ReplaceValues("userPassword", stringValues("metadata-secret"))
+	suffix := database.suffixes[0]
+	suffixEntry := directory.Entry{
+		DN: suffix.String(),
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: stringValues("top", "domain")},
+			{Description: "dc", Values: stringValues("proxy")},
+		},
+	}
+	if !state.mutate(context.Background(), func(candidate *pcacheState) (bool, bool) {
+		candidate.private[suffix.Key()] = suffixEntry.Clone()
+		candidate.private[dn.Key()] = entry.Clone()
+		candidate.entries = 2
+		candidate.generation++
+		return true, true
+	}) {
+		t.Fatal("persist private metadata entry")
+	}
+
+	loadObservation := &pcacheMetadataBufferObservation{}
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		return server.preparePcachePersistence(
+			&pcacheObservingMetadataReader{
+				Reader:      reader,
+				observation: loadObservation,
+			},
+			runtime,
+		)
+	}); err != nil {
+		t.Fatalf("prepare persistence with observed metadata: %v", err)
+	}
+	loadObservation.assertCleared(t, "load")
+
+	validateObservation := &pcacheMetadataBufferObservation{}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return server.ensurePcachePersistence(
+			&pcacheObservingMetadataWriter{
+				Writer:      writer,
+				observation: validateObservation,
+			},
+			runtime,
+		)
+	}); err != nil {
+		t.Fatalf("validate persistence with observed metadata: %v", err)
+	}
+	validateObservation.assertCleared(t, "validate")
+
+	casObservation := &pcacheMetadataBufferObservation{}
+	state.mu.Lock()
+	state.persistence.store = &pcacheObservingMetadataStore{
+		Store:       store,
+		observation: casObservation,
+	}
+	state.mu.Unlock()
+	commitPcachePrivateTestQuery(t, state, "cas", "uid=cas,"+ldapBackendTestPeopleDN)
+	casObservation.assertCleared(t, "CAS")
+}
 
 func TestPcacheQueryDeleteBERAndPrivateControl(t *testing.T) {
 	t.Parallel()
@@ -315,10 +639,22 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 		rawPcachePrivateControl(true, false),
 	)
 	assertRawLDAPResult(t, bindResponse, int64(ldap.LDAPResultUnwillingToPerform))
-	invalidPrivateResponse := sendRawLDAPOperation(
+	demotedCompareResponse := sendRawLDAPOperation(
 		t,
 		raw,
 		4,
+		rawDontUseCopyCompareRequest(
+			ldapBackendTestUserDN,
+			pcacheQueryIDAttribute,
+			identifiers[0],
+		),
+		rawPcachePrivateControl(true, false),
+	)
+	assertRawLDAPResult(t, demotedCompareResponse, int64(ldap.LDAPResultUnwillingToPerform))
+	invalidPrivateResponse := sendRawLDAPOperation(
+		t,
+		raw,
+		5,
 		rawAddRequest(directory.Entry{
 			DN: "cn=invalid,",
 			Attributes: []directory.Attribute{{
@@ -332,7 +668,7 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 	unknownBeforeDN := sendRawLDAPOperation(
 		t,
 		raw,
-		5,
+		6,
 		rawAddRequest(directory.Entry{
 			DN: "cn=invalid,",
 			Attributes: []directory.Attribute{{
@@ -345,6 +681,59 @@ func TestPcachePrivateRootRestartAndQueryDelete(t *testing.T) {
 	)
 	assertRawLDAPResult(t, unknownBeforeDN, int64(ldap.LDAPResultUnavailableCriticalExtension))
 	_ = raw.Close()
+	for _, test := range []struct {
+		name       string
+		request    *ber.Packet
+		wantResult int64
+	}{
+		{
+			name:       "anonymous Simple Bind rejects frontend control",
+			request:    rawSimpleBindRequest("", ""),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+		{
+			name:       "anonymous DN with credentials fails first",
+			request:    rawSimpleBindRequest("", "secret"),
+			wantResult: int64(ldap.LDAPResultInvalidCredentials),
+		},
+		{
+			name:       "unauthenticated DN Bind fails first",
+			request:    rawSimpleBindRequest(ldapBackendTestLocalRootDN, ""),
+			wantResult: int64(ldap.LDAPResultUnwillingToPerform),
+		},
+		{
+			name:       "SASL ANONYMOUS rejects frontend control",
+			request:    rawSASLBindRequest("ANONYMOUS", []byte("pcache-fixture")),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+		{
+			name:       "unknown SASL mechanism rejects frontend control first",
+			request:    rawSASLBindRequest("PCACHE-NOT-A-MECHANISM", nil),
+			wantResult: int64(ldap.LDAPResultUnavailableCriticalExtension),
+		},
+	} {
+		t.Run("private Bind/"+test.name, func(t *testing.T) {
+			connection, err := net.Dial("tcp", firstAddress)
+			if err != nil {
+				t.Fatalf("dial ldap-go pcache fixture: %v", err)
+			}
+			defer connection.Close()
+			if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("set fixture deadline: %v", err)
+			}
+			assertRawLDAPResult(
+				t,
+				sendRawLDAPOperation(
+					t,
+					connection,
+					1,
+					test.request,
+					rawPcachePrivateControl(true, false),
+				),
+				test.wantResult,
+			)
+		})
+	}
 	root.Close()
 	stopFirst()
 	firstStopped = true
@@ -1618,6 +2007,78 @@ type pcacheFailingMetadataWriter struct {
 
 func (writer pcacheFailingMetadataWriter) SetMetadata(string, []byte) error {
 	return writer.err
+}
+
+type pcacheMetadataBufferObservation struct {
+	mu     sync.Mutex
+	values [][]byte
+}
+
+func (observation *pcacheMetadataBufferObservation) record(value []byte) {
+	if len(value) == 0 {
+		return
+	}
+	observation.mu.Lock()
+	observation.values = append(observation.values, value)
+	observation.mu.Unlock()
+}
+
+func (observation *pcacheMetadataBufferObservation) assertCleared(
+	t *testing.T,
+	stage string,
+) {
+	t.Helper()
+	observation.mu.Lock()
+	defer observation.mu.Unlock()
+	if len(observation.values) == 0 {
+		t.Fatalf("%s did not read metadata", stage)
+	}
+	for index, value := range observation.values {
+		for _, octet := range value {
+			if octet != 0 {
+				t.Fatalf("%s metadata buffer %d was not cleared", stage, index)
+			}
+		}
+	}
+}
+
+type pcacheObservingMetadataReader struct {
+	storage.Reader
+	observation *pcacheMetadataBufferObservation
+}
+
+func (reader *pcacheObservingMetadataReader) Metadata(key string) ([]byte, error) {
+	value, err := reader.Reader.Metadata(key)
+	reader.observation.record(value)
+	return value, err
+}
+
+type pcacheObservingMetadataWriter struct {
+	storage.Writer
+	observation *pcacheMetadataBufferObservation
+}
+
+func (writer *pcacheObservingMetadataWriter) Metadata(key string) ([]byte, error) {
+	value, err := writer.Writer.Metadata(key)
+	writer.observation.record(value)
+	return value, err
+}
+
+type pcacheObservingMetadataStore struct {
+	storage.Store
+	observation *pcacheMetadataBufferObservation
+}
+
+func (store *pcacheObservingMetadataStore) Update(
+	ctx context.Context,
+	update func(storage.Writer) error,
+) error {
+	return store.Store.Update(ctx, func(writer storage.Writer) error {
+		return update(&pcacheObservingMetadataWriter{
+			Writer:      writer,
+			observation: store.observation,
+		})
+	})
 }
 
 func readPcacheTestMetadata(

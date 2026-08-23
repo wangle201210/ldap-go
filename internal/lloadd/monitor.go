@@ -121,9 +121,12 @@ type ProxyMonitorCounters struct {
 	Pending   uint64
 }
 
-func (counters *monitorCounters) snapshot() ProxyMonitorCounters {
+func (counters *monitorCounters) snapshotWithAbandoned() (
+	ProxyMonitorCounters,
+	uint64,
+) {
 	if counters == nil {
-		return ProxyMonitorCounters{}
+		return ProxyMonitorCounters{}, 0
 	}
 	counters.mu.Lock()
 	defer counters.mu.Unlock()
@@ -134,16 +137,7 @@ func (counters *monitorCounters) snapshot() ProxyMonitorCounters {
 		Completed: counters.completed.Load(),
 		Failed:    counters.failed.Load(),
 		Pending:   counters.pending.Load(),
-	}
-}
-
-func (counters *monitorCounters) abandonedCount() uint64 {
-	if counters == nil {
-		return 0
-	}
-	counters.mu.Lock()
-	defer counters.mu.Unlock()
-	return counters.abandoned.Load()
+	}, counters.abandoned.Load()
 }
 
 func (counters *monitorCounters) begin() {
@@ -303,20 +297,22 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 
 	scheduler := proxy.scheduler.Snapshot()
 	runtimeState := proxy.monitorRuntimeState()
+	bindCounters, bindAbandoned := proxy.operations[0].snapshotWithAbandoned()
+	otherCounters, otherAbandoned := proxy.operations[1].snapshotWithAbandoned()
 	result := ProxyMonitorSnapshot{
 		Generation:          runtimeState.generation,
 		StartedAt:           runtimeState.startedAt,
 		Uptime:              max(time.Since(runtimeState.startedAt), 0),
 		IncomingConnections: len(clients),
 		Operations: []ProxyMonitorOperation{
-			{Name: "Bind", Counters: proxy.operations[0].snapshot(), Abandoned: proxy.operations[0].abandonedCount()},
-			{Name: "Other", Counters: proxy.operations[1].snapshot(), Abandoned: proxy.operations[1].abandonedCount()},
+			{Name: "Bind", Counters: bindCounters, Abandoned: bindAbandoned},
+			{Name: "Other", Counters: otherCounters, Abandoned: otherAbandoned},
 		},
 	}
 	for _, client := range clients {
 		client.mu.Lock()
 		if !client.closed {
-			counters := client.monitor.snapshot()
+			counters, abandoned := client.monitor.snapshotWithAbandoned()
 			state := "ready"
 			if client.draining {
 				state = "closing"
@@ -332,7 +328,7 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 				Pending:   int(counters.Pending),
 				Created:   client.created,
 				Counters:  counters,
-				Abandoned: client.monitor.abandonedCount(),
+				Abandoned: abandoned,
 			})
 		}
 		client.mu.Unlock()
@@ -342,12 +338,13 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 	for tierIndex, tier := range proxy.config.Tiers {
 		for backendIndex, backend := range tier.Backends {
 			id := fmt.Sprintf("tier-%d-backend-%d", tierIndex, backendIndex)
+			counters, abandoned := proxy.tiers[tierIndex].backends[backendIndex].monitor.snapshotWithAbandoned()
 			result.Backends = append(result.Backends, ProxyMonitorBackend{
 				TierID:    fmt.Sprintf("tier-%d", tierIndex),
 				BackendID: id,
 				URI:       backend.URI,
-				Counters:  proxy.tiers[tierIndex].backends[backendIndex].monitor.snapshot(),
-				Abandoned: proxy.tiers[tierIndex].backends[backendIndex].monitor.abandonedCount(),
+				Counters:  counters,
+				Abandoned: abandoned,
 			})
 			byID[id] = &result.Backends[len(result.Backends)-1]
 		}
@@ -386,8 +383,7 @@ func (proxy *Proxy) MonitorSnapshot() ProxyMonitorSnapshot {
 				state = "closing"
 			}
 			created = upstream.created
-			counters = upstream.monitor.snapshot()
-			abandoned = upstream.monitor.abandonedCount()
+			counters, abandoned = upstream.monitor.snapshotWithAbandoned()
 			upstream.mu.Unlock()
 		}
 		monitored.Connections = append(monitored.Connections, ProxyMonitorConnection{

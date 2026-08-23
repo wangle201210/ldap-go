@@ -30,10 +30,27 @@ const (
 	// whose default maximum is 16. Go handlers need an equivalent local bound.
 	defaultPBindConcurrentAttempts = 16
 	pbindProviderRetries           = 1
+	pbindRuntimePollInterval       = 10 * time.Millisecond
 )
 
 type pbindRuntimeIdentity struct {
-	attempts chan struct{}
+	lifecycle  context.Context
+	retire     context.CancelFunc
+	retireOnce sync.Once
+}
+
+var pbindGlobalAttempts = make(chan struct{}, defaultPBindConcurrentAttempts)
+
+func newPBindRuntimeIdentity() *pbindRuntimeIdentity {
+	lifecycle, retire := context.WithCancel(context.Background())
+	return &pbindRuntimeIdentity{lifecycle: lifecycle, retire: retire}
+}
+
+func (identity *pbindRuntimeIdentity) retireConfiguration() {
+	if identity == nil {
+		return
+	}
+	identity.retireOnce.Do(identity.retire)
 }
 
 type pbindQuarantineState struct {
@@ -53,9 +70,7 @@ func loadPBindRuntimeConfiguration(
 		connection: syncConsumerConfig{
 			securityProperties: defaultSyncConsumerSASLSecurityProperties(),
 		},
-		identity: &pbindRuntimeIdentity{
-			attempts: make(chan struct{}, defaultPBindConcurrentAttempts),
-		},
+		identity: newPBindRuntimeIdentity(),
 	}
 
 	uri, present, err := singleChainString(entry, "olcDbURI")
@@ -224,11 +239,34 @@ func (server *Server) proxySimpleBind(
 	if failure != nil {
 		return *failure, nil
 	}
-	release, acquired := configuration.acquirePBindAttempt(ctx)
-	if !acquired {
+	requestName := request.Name
+	current := func() bool {
+		return server.pbindConfigurationCurrent(requestName, configuration.identity)
+	}
+	if !current() {
+		configuration.identity.retireConfiguration()
 		return ldapwire.ResultError(
 			ldapwire.ResultUnavailable,
-			"proxy bind attempt canceled",
+			"proxy bind target configuration changed",
+		), nil
+	}
+	stopRetirementWatch := watchPBindRuntime(
+		ctx,
+		configuration.identity,
+		current,
+	)
+	defer stopRetirementWatch()
+	attemptContext, cancelAttempt := configuration.runtimeAttemptContext(ctx)
+	defer cancelAttempt()
+	release, acquireErr := configuration.acquirePBindAttempt(attemptContext)
+	if acquireErr != nil {
+		diagnostic := "proxy bind attempt canceled"
+		if configuration.retired() {
+			diagnostic = "proxy bind target configuration changed"
+		}
+		return ldapwire.ResultError(
+			ldapwire.ResultUnavailable,
+			diagnostic,
 		), nil
 	}
 	defer release()
@@ -238,6 +276,7 @@ func (server *Server) proxySimpleBind(
 		request,
 	)
 	if failure != nil {
+		configuration.identity.retireConfiguration()
 		return *failure, nil
 	}
 	if !configuration.beginPBindAttempt() {
@@ -254,15 +293,15 @@ func (server *Server) proxySimpleBind(
 	)
 	for _, provider := range configuration.providers {
 		for retry := 0; retry <= pbindProviderRetries; retry++ {
-			attemptContext, cancel := configuration.providerAttemptContext(ctx)
+			providerContext, cancel := configuration.providerAttemptContext(attemptContext)
 			result, controls, err := executePBind(
-				attemptContext,
+				providerContext,
 				configuration.connection,
 				provider,
 				message.Controls,
 				request,
 			)
-			attemptFailure := attemptContext.Err()
+			attemptFailure := providerContext.Err()
 			cancel()
 			if err == nil && result.Code != ldapwire.ResultUnavailable {
 				if !server.pbindConfigurationCurrent(request.Name, configuration.identity) {
@@ -292,7 +331,7 @@ func (server *Server) proxySimpleBind(
 			// A canceled client/server request must not start another outbound
 			// connection. A provider attempt timeout moves directly to failover;
 			// immediate connection loss gets one OpenLDAP-compatible retry.
-			if ctx.Err() != nil {
+			if attemptContext.Err() != nil {
 				break
 			}
 			if attemptFailure != nil || !pbindRetryableError(err) ||
@@ -300,15 +339,19 @@ func (server *Server) proxySimpleBind(
 				break
 			}
 		}
-		if ctx.Err() != nil {
+		if attemptContext.Err() != nil {
 			break
 		}
 	}
-	if ctx.Err() != nil {
+	if attemptContext.Err() != nil {
 		configuration.cancelPBindAttempt()
+		diagnostic := "proxy bind attempt canceled"
+		if configuration.retired() {
+			diagnostic = "proxy bind target configuration changed"
+		}
 		return ldapwire.ResultError(
 			ldapwire.ResultUnavailable,
-			"proxy bind attempt canceled",
+			diagnostic,
 		), nil
 	}
 	configuration.finishPBindAttempt(ldapwire.ResultUnavailable)
@@ -353,16 +396,84 @@ func pbindAttemptTimedOut(err error) bool {
 
 func (configuration pbindRuntimeConfiguration) acquirePBindAttempt(
 	ctx context.Context,
-) (func(), bool) {
-	if configuration.identity == nil || configuration.identity.attempts == nil {
-		return func() {}, true
+) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var retired <-chan struct{}
+	if configuration.identity != nil && configuration.identity.lifecycle != nil {
+		retired = configuration.identity.lifecycle.Done()
 	}
 	select {
-	case configuration.identity.attempts <- struct{}{}:
-		return func() { <-configuration.identity.attempts }, true
+	case pbindGlobalAttempts <- struct{}{}:
+		if configuration.retired() {
+			<-pbindGlobalAttempts
+			return nil, context.Canceled
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() { <-pbindGlobalAttempts })
+		}, nil
 	case <-ctx.Done():
-		return nil, false
+		return nil, ctx.Err()
+	case <-retired:
+		return nil, context.Canceled
 	}
+}
+
+func (configuration pbindRuntimeConfiguration) runtimeAttemptContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	attemptContext, cancel := context.WithCancel(ctx)
+	if configuration.identity == nil || configuration.identity.lifecycle == nil {
+		return attemptContext, cancel
+	}
+	stopRetirement := context.AfterFunc(configuration.identity.lifecycle, cancel)
+	return attemptContext, func() {
+		stopRetirement()
+		cancel()
+	}
+}
+
+func (configuration pbindRuntimeConfiguration) retired() bool {
+	return configuration.identity != nil &&
+		configuration.identity.lifecycle != nil &&
+		configuration.identity.lifecycle.Err() != nil
+}
+
+func watchPBindRuntime(
+	ctx context.Context,
+	identity *pbindRuntimeIdentity,
+	current func() bool,
+) func() {
+	if identity == nil || identity.lifecycle == nil || current == nil {
+		return func() {}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	watchContext, stop := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(pbindRuntimePollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchContext.Done():
+				return
+			case <-identity.lifecycle.Done():
+				return
+			case <-ticker.C:
+				if !current() {
+					identity.retireConfiguration()
+					return
+				}
+			}
+		}
+	}()
+	return stop
 }
 
 func (configuration pbindRuntimeConfiguration) providerAttemptContext(

@@ -584,7 +584,19 @@ func (server *Server) remoteAuthSimpleBind(
 			switch result.Code {
 			case ldapwire.ResultSuccess:
 				if configuration.storeOnSuccess {
-					server.storeRemoteAuthPassword(ctx, runtime, database, localDN, password)
+					if !server.storeRemoteAuthPassword(
+						ctx,
+						runtime,
+						database,
+						localDN,
+						password,
+						configuration.connections,
+					) {
+						configuration.connections.retireConfiguration()
+						lastResult = nil
+						lastError = errRemoteAuthConfigurationRetired
+						break
+					}
 				}
 				if !configurationCurrent() {
 					configuration.connections.retireConfiguration()
@@ -844,9 +856,21 @@ func (server *Server) storeRemoteAuthPassword(
 	database runtimeDatabase,
 	dn directory.DN,
 	password []byte,
-) {
+	manager *remoteAuthConnectionManager,
+) bool {
+	server.runtimeActivationMu.Lock()
+	configurationCurrent := server.remoteAuthConfigurationCurrent(dn, manager)
+	if server.runtime.Load() == nil {
+		configurationCurrent = database.remoteAuth != nil &&
+			database.remoteAuth.connections == manager
+	}
+	if !configurationCurrent {
+		server.runtimeActivationMu.Unlock()
+		return false
+	}
 	if len(runtime.passwordHashSchemes) == 0 {
-		return
+		server.runtimeActivationMu.Unlock()
+		return true
 	}
 	stored, err := hashPasswordForRuntime(runtime, password, runtime.passwordHashSchemes[0])
 	if err != nil {
@@ -885,9 +909,11 @@ func (server *Server) storeRemoteAuthPassword(
 			&syncChange,
 		)
 	})
+	server.runtimeActivationMu.Unlock()
 	if err != nil {
 		server.config.Logger.Warn("store remoteauth password", "dn", dn.String(), "error", err)
-		return
+		return true
 	}
 	server.finishWriteEffects(ctx, nil, syncChange)
+	return true
 }

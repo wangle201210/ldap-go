@@ -237,10 +237,13 @@ func (server *Server) preparePcachePersistence(
 			guardRaw, err := reader.Metadata(persistence.guardKey)
 			switch {
 			case errors.Is(err, storage.ErrMetadataNotFound):
+				clear(guardRaw)
 			case err != nil:
+				clear(guardRaw)
 				return fmt.Errorf("load pcache persistence guard for %s: %w", database.name, err)
 			default:
 				guard, decodeErr := decodePcachePersistenceGuard(guardRaw)
+				clear(guardRaw)
 				if decodeErr != nil {
 					return fmt.Errorf("decode pcache persistence guard for %s: %w", database.name, decodeErr)
 				}
@@ -250,7 +253,9 @@ func (server *Server) preparePcachePersistence(
 					raw, snapshotErr := reader.Metadata(persistence.metadataKey)
 					switch {
 					case errors.Is(snapshotErr, storage.ErrMetadataNotFound):
+						clear(raw)
 					case snapshotErr != nil:
+						clear(raw)
 						return fmt.Errorf("load pcache persistence for %s: %w", database.name, snapshotErr)
 					case len(raw) > pcacheMaxPersistedSnapshotBytes:
 						clear(raw)
@@ -323,18 +328,23 @@ func (server *Server) ensurePcachePersistence(
 				true,
 			)
 			if encodeErr != nil {
+				clear(raw)
 				return encodeErr
 			}
 			if err := writer.SetMetadata(persistence.guardKey, guard); err != nil {
+				clear(raw)
 				return err
 			}
 			if err == nil {
 				if deleteErr := writer.DeleteMetadata(persistence.metadataKey); deleteErr != nil {
+					clear(raw)
 					return deleteErr
 				}
 			} else if !errors.Is(err, storage.ErrMetadataNotFound) {
+				clear(raw)
 				return err
 			}
+			clear(raw)
 			continue
 		}
 		matching := false
@@ -355,18 +365,26 @@ func (server *Server) ensurePcachePersistence(
 					guard.Fingerprint == persistence.fingerprint &&
 					guard.Epoch == persistence.epoch
 			}
-		} else if err != nil && !errors.Is(err, storage.ErrMetadataNotFound) {
+		}
+		clear(raw)
+		clear(guardRaw)
+		if err != nil && !errors.Is(err, storage.ErrMetadataNotFound) {
 			return err
-		} else if guardErr != nil && !errors.Is(guardErr, storage.ErrMetadataNotFound) {
+		}
+		if guardErr != nil && !errors.Is(guardErr, storage.ErrMetadataNotFound) {
 			return guardErr
 		}
 		if matching {
 			continue
 		}
+		configuration.state.privateSnapshotMu.RLock()
 		configuration.state.mu.Lock()
-		candidate := configuration.state.backupLocked()
+		snapshot := snapshotPcacheStateLocked(configuration.state)
 		epoch := configuration.state.epoch
 		configuration.state.mu.Unlock()
+		candidate := detachPcacheSnapshot(snapshot)
+		clearPcacheShallowSnapshot(snapshot)
+		configuration.state.privateSnapshotMu.RUnlock()
 		encoded, encodeErr := encodePcachePersistedSnapshot(
 			persistence,
 			epoch,
@@ -688,6 +706,7 @@ func (persistence *pcachePersistence) persistSnapshot(
 	}
 	return persistence.store.Update(ctx, func(writer storage.Writer) error {
 		guardRaw, guardErr := writer.Metadata(persistence.guardKey)
+		defer clear(guardRaw)
 		switch {
 		case errors.Is(guardErr, storage.ErrMetadataNotFound):
 			if expectedGeneration != 0 {
@@ -715,6 +734,7 @@ func (persistence *pcachePersistence) persistSnapshot(
 		}
 
 		current, err := writer.Metadata(persistence.metadataKey)
+		defer clear(current)
 		if err == nil {
 			var header struct {
 				Version          int    `json:"version"`
@@ -787,7 +807,7 @@ func snapshotPcacheStateLocked(state *pcacheState) pcacheStateBackup {
 		snapshot.binds[key] = bind
 	}
 	for key, entry := range state.private {
-		snapshot.private[key] = entry.Clone()
+		snapshot.private[key] = entry
 	}
 	return snapshot
 }
@@ -815,6 +835,10 @@ func detachPcacheSnapshot(snapshot pcacheStateBackup) pcacheStateBackup {
 		detached.private[key] = entry.Clone()
 	}
 	return detached
+}
+
+func clearPcacheShallowSnapshot(snapshot pcacheStateBackup) {
+	clearPcacheStateSecrets(snapshot.queries, snapshot.binds)
 }
 
 // mutate serializes durable mutations without holding state.mu during storage
@@ -857,10 +881,12 @@ func (state *pcacheState) mutate(
 		if !persistence.acquire(ctx) {
 			return false
 		}
+		state.privateSnapshotMu.RLock()
 		state.mu.Lock()
 		if state.persistence != persistence || !persistence.enabled ||
 			persistence.store == nil || persistence.retired.Load() {
 			state.mu.Unlock()
+			state.privateSnapshotMu.RUnlock()
 			persistence.release()
 			if err := ctx.Err(); err != nil {
 				return false
@@ -876,7 +902,8 @@ func (state *pcacheState) mutate(
 		clock := state.clock
 		state.mu.Unlock()
 		candidate := detachPcacheSnapshot(snapshot)
-		clearPcacheBackup(snapshot)
+		clearPcacheShallowSnapshot(snapshot)
+		state.privateSnapshotMu.RUnlock()
 		working := &pcacheState{
 			epoch:       epoch,
 			clock:       clock,

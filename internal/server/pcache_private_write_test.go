@@ -374,6 +374,7 @@ func TestPcachePrivateSnapshotWaitDoesNotHoldStateLock(t *testing.T) {
 	lockAcquired := make(chan struct{})
 	go func() {
 		state.mu.Lock()
+		_ = state.entries
 		state.mu.Unlock()
 		close(lockAcquired)
 	}()

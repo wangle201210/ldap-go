@@ -23,13 +23,36 @@ func TestMonitorCounterTerminalInvariant(t *testing.T) {
 	counters.fail()
 	counters.reject()
 
-	snapshot := counters.snapshot()
+	snapshot, abandoned := counters.snapshotWithAbandoned()
 	terminal := snapshot.Completed + snapshot.Failed + snapshot.Rejected + snapshot.Pending
 	if snapshot.Received != terminal {
 		t.Fatalf("received = %d, terminal + pending = %d: %#v", snapshot.Received, terminal, snapshot)
 	}
-	if snapshot.Pending != 0 || snapshot.Forwarded != 1 || counters.abandonedCount() != 1 {
-		t.Fatalf("terminal counter snapshot = %#v, abandoned=%d", snapshot, counters.abandonedCount())
+	if snapshot.Pending != 0 || snapshot.Forwarded != 1 || abandoned != 1 {
+		t.Fatalf("terminal counter snapshot = %#v, abandoned=%d", snapshot, abandoned)
+	}
+}
+
+func TestMonitorCounterSnapshotKeepsAbandonedAsCompletedSubset(t *testing.T) {
+	var counters monitorCounters
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 10_000 {
+			counters.begin()
+			counters.complete(true)
+		}
+	}()
+	for {
+		snapshot, abandoned := counters.snapshotWithAbandoned()
+		if abandoned > snapshot.Completed {
+			t.Fatalf("abandoned = %d exceeds completed = %d", abandoned, snapshot.Completed)
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
 	}
 }
 

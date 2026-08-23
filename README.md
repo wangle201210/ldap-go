@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,769 top-level tests against the pinned commit.
+The latest strict run passed 1,778 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -137,8 +137,10 @@ private cache through OpenLDAP's critical privateDB control, including
 removal through the queryDelete exop. Database roots can Add/Modify/Delete/
 ModifyDN private entries; shared query responses, counts, UUIDs, URLs and
 persistent manual entries reconcile atomically with No-Op/control/rollback
-semantics. Private Bind remains explicitly unwilling; arbitrary overlay-order
-combinations remain out of scope.
+semantics. Private Bind matches OpenLDAP's frontend ordering: Bind clears the
+previous identity before privateDB authorization, so non-empty DNs are
+unwilling while anonymous/SASL requests retain their frontend result codes.
+Arbitrary overlay-order combinations remain out of scope.
 
 An imported `olcDatabase=sock` delegates Bind, Search, Compare, Add, Modify,
 ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
@@ -208,7 +210,8 @@ SCRAM-SHA-1/256/512 before ordinary traffic. GSSAPI service Bind supports
 password, `FILE` keytab, and `FILE` ccache credentials plus RFC 4752
 no-layer/integrity/confidentiality framing. Credential initialization is
 limited to 16 concurrent workers so a non-cancellable Kerberos library call
-cannot create unbounded background work. Upstream TCP keepalive plus
+cannot create unbounded background work; a blocked library call retains its
+slot until it returns. Upstream TCP keepalive plus
 Linux `TCP_USER_TIMEOUT` are applied before TLS. Its standalone configuration
 parser and runtime pass package/race tests, pinned-source contracts, and the
 existing live OpenLDAP 2.6.13 differential subset. Service Bind still requires
@@ -290,7 +293,8 @@ local provider/front-end topology and an optional OpenLDAP `back_ldap`
 differential pass. Each endpoint gets an independent timeout budget; transient
 disconnect/`unavailable` retries once, deterministic LDAP results do not retry,
 and cancellation closes the active upstream. At most 16 outbound Binds run
-concurrently. Connections intentionally remain one-shot because a successful
+concurrently process-wide; reload retires old waiters and active transports.
+Connections intentionally remain one-shot because a successful
 transport is user-bound and no later operation reuses it; pooling would risk
 cross-user identity leakage. The quarantine schedule permits one probe per
 configured retry interval.
@@ -311,7 +315,9 @@ priority, writeback, bad credentials, and provider loss. Live StartTLS tests
 cover SHA-256/SM3 public-key pins, mismatches, and missing host pins; connection
 reuse is intentionally one-shot after user Bind. Provider/realm/TLS groups have
 a 16-attempt bound and one-minute lifetime; cancellation/reload retire sockets
-and secrets. A broader platform TLS failure matrix is not claimed.
+and secrets. Runtime publication and store-on-success share a commit lock, so a
+retired configuration cannot write a local password. A broader platform TLS
+failure matrix is not claimed.
 The `homedir` overlay applies POSIX account lifecycle changes only after the
 LDAP storage transaction commits. It can provision a home from `olcSkeletonPath`,
 rename and selectively chown it when `homeDirectory`, `uidNumber`, or
