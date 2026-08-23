@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,11 +38,12 @@ const (
 )
 
 type ldapWriteOperation struct {
-	kind     ldapWriteOperationKind
-	add      *ldap.AddRequest
-	modify   *ldap.ModifyRequest
-	delete   *ldap.DelRequest
-	modifyDN *ldap.ModifyDNRequest
+	kind           ldapWriteOperationKind
+	add            *ldap.AddRequest
+	modify         *ldap.ModifyRequest
+	delete         *ldap.DelRequest
+	modifyDN       *ldap.ModifyDNRequest
+	recordControls []ldap.Control
 }
 
 func (operation *ldapWriteOperation) dn() string {
@@ -99,16 +101,27 @@ func (operation *ldapWriteOperation) setControls(controls []ldap.Control) {
 	if operation == nil {
 		return
 	}
+	combined := make([]ldap.Control, 0, len(operation.recordControls)+len(controls))
+	combined = append(combined, operation.recordControls...)
+	combined = append(combined, controls...)
 	switch operation.kind {
 	case ldapWriteAdd:
-		operation.add.Controls = controls
+		operation.add.Controls = combined
 	case ldapWriteModify:
-		operation.modify.Controls = controls
+		operation.modify.Controls = combined
 	case ldapWriteDelete:
-		operation.delete.Controls = controls
+		operation.delete.Controls = combined
 	case ldapWriteModifyDN:
-		operation.modifyDN.Controls = controls
+		operation.modifyDN.Controls = combined
 	}
+}
+
+func (operation *ldapWriteOperation) clearRecordControls() {
+	if operation == nil {
+		return
+	}
+	clearLDAPControls(operation.recordControls)
+	operation.recordControls = nil
 }
 
 type ldapWriteParseState struct {
@@ -138,6 +151,7 @@ func runLDAPModify(
 	defer client.clear()
 
 	inputPath := flags.String("f", "", "read LDIF from a file instead of stdin")
+	resumeLine := flags.Int("j", 0, "skip records beginning before this physical line")
 	continueOnError := flags.Bool("c", false, "continue after failed records")
 	failurePath := flags.String("S", "", "write failed records as LDIF")
 	addMode := false
@@ -180,6 +194,9 @@ func runLDAPModify(
 	if flagWasSet(flags, "S") && *failurePath == "" {
 		return errors.New("-S requires a non-empty output path")
 	}
+	if *resumeLine < 0 {
+		return errors.New("-j requires a non-negative line number")
+	}
 
 	failureFile, err := openLDAPWriteFailureFile(*failurePath, *inputPath)
 	if err != nil {
@@ -205,7 +222,7 @@ func runLDAPModify(
 		return err
 	}
 	defer clear(input)
-	records, err := splitLDAPWriteRecords(input)
+	records, err := splitLDAPWriteRecordsWithLines(input)
 	if err != nil {
 		return err
 	}
@@ -216,11 +233,16 @@ func runLDAPModify(
 	state := ldapWriteParseState{}
 	succeeded := 0
 	failed := 0
+	processed := 0
 	var firstFailure error
 	allowContentAdd := command == "ldapadd" || addMode
-	for index, rawRecord := range records {
+	for index, record := range records {
+		if record.line < *resumeLine {
+			continue
+		}
+		processed++
 		operation, parseErr := parseLDAPWriteRecord(
-			rawRecord,
+			record.raw,
 			allowContentAdd,
 			&state,
 		)
@@ -243,6 +265,7 @@ func runLDAPModify(
 		}
 		if parseErr == nil {
 			succeeded++
+			operation.clearRecordControls()
 			continue
 		}
 
@@ -253,9 +276,11 @@ func runLDAPModify(
 		if failureFile != nil {
 			err = failureFile.WriteOperation(operation)
 			if err != nil {
+				operation.clearRecordControls()
 				return errors.Join(firstFailure, err)
 			}
 		}
+		operation.clearRecordControls()
 		if !*continueOnError {
 			break
 		}
@@ -277,6 +302,9 @@ func runLDAPModify(
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d record(s) failed: %w", failed, firstFailure)
+	}
+	if processed == 0 && *resumeLine > 0 {
+		return nil
 	}
 	if succeeded == 0 {
 		return errors.New("LDIF input contains no operations")
@@ -540,20 +568,62 @@ func parseLDAPWriteRecord(
 		return nil, errors.New("LDIF record must begin with dn")
 	}
 
-	for _, line := range logicalLines {
+	externalBytesRemaining := maxLDAPWriteRecordSize - len(raw)
+	for index, line := range logicalLines {
 		if line == "-" {
 			continue
 		}
-		name, _, mode, err := parseLDAPWriteLine(line)
+		name, value, mode, err := parseLDAPWriteLine(line)
 		if err != nil {
 			return nil, errors.New("invalid LDIF value line")
 		}
-		if mode == ldapWriteValueURL {
-			return nil, errors.New("external URL values are not supported")
+		if mode == ldapWriteValueURL && !strings.EqualFold(name, "control") {
+			loaded, err := readLDAPWriteFileURL(string(value), externalBytesRemaining)
+			if err != nil {
+				return nil, fmt.Errorf("external value for %q: %w", name, err)
+			}
+			externalBytesRemaining -= len(loaded)
+			logicalLines[index] = name + ":: " + base64.StdEncoding.EncodeToString(loaded)
+			clear(loaded)
 		}
-		if strings.EqualFold(name, "control") {
-			return nil, errors.New("LDIF request controls are not supported")
+	}
+
+	recordControls := make([]ldap.Control, 0, 2)
+	controlEnd := 1
+	for controlEnd < len(logicalLines) {
+		name, value, _, err := parseLDAPWriteLine(logicalLines[controlEnd])
+		if err != nil || !strings.EqualFold(name, "control") {
+			break
 		}
+		control, externalBytes, err := parseLDAPWriteRecordControl(value, externalBytesRemaining)
+		if err != nil {
+			clearLDAPControls(recordControls)
+			return nil, err
+		}
+		externalBytesRemaining -= externalBytes
+		recordControls = append(recordControls, control)
+		controlEnd++
+	}
+	for index := controlEnd; index < len(logicalLines); index++ {
+		if logicalLines[index] == "-" {
+			continue
+		}
+		name, _, _, err := parseLDAPWriteLine(logicalLines[index])
+		if err == nil && strings.EqualFold(name, "control") {
+			clearLDAPControls(recordControls)
+			return nil, errors.New("LDIF request controls must follow dn before changetype")
+		}
+	}
+	if controlEnd > 1 {
+		logicalLines = append(logicalLines[:1], logicalLines[controlEnd:]...)
+	}
+	attachControls := func(operation *ldapWriteOperation, err error) (*ldapWriteOperation, error) {
+		if err != nil || operation == nil {
+			clearLDAPControls(recordControls)
+			return operation, err
+		}
+		operation.recordControls = recordControls
+		return operation, nil
 	}
 
 	changeType := ""
@@ -566,47 +636,159 @@ func parseLDAPWriteRecord(
 	if changeType == "moddn" || changeType == "modrdn" {
 		operation, err := parseLDAPModifyDNRecord(logicalLines)
 		if err != nil {
-			return nil, err
+			return attachControls(nil, err)
 		}
-		return operation, validateLDAPWriteOperation(operation)
+		return attachControls(operation, validateLDAPWriteOperation(operation))
 	}
 	if changeType == "modify" {
 		operation, err := parseLDAPModifyRecord(logicalLines, true)
 		if err != nil {
-			return nil, err
+			return attachControls(nil, err)
 		}
-		return operation, validateLDAPWriteOperation(operation)
+		return attachControls(operation, validateLDAPWriteOperation(operation))
 	}
 	if changeType == "" && !allowContentAdd {
 		operation, err := parseLDAPModifyRecord(logicalLines, false)
 		if err != nil {
-			return nil, err
+			return attachControls(nil, err)
 		}
-		return operation, validateLDAPWriteOperation(operation)
+		return attachControls(operation, validateLDAPWriteOperation(operation))
 	}
 
 	document := &ldif.LDIF{Controls: true}
 	var parsed *ldif.Entry
-	for entry, parseErr := range ldif.UnmarshalEntries(bytes.NewReader(raw), document) {
+	resolvedRaw := []byte(strings.Join(logicalLines, "\n") + "\n")
+	for entry, parseErr := range ldif.UnmarshalEntries(bytes.NewReader(resolvedRaw), document) {
 		if parseErr != nil {
-			return nil, errors.New("invalid LDIF syntax")
+			return attachControls(nil, errors.New("invalid LDIF syntax"))
 		}
 		if entry == nil {
 			continue
 		}
 		if parsed != nil {
-			return nil, errors.New("record contains multiple LDIF operations")
+			return attachControls(nil, errors.New("record contains multiple LDIF operations"))
 		}
 		parsed = entry
 	}
 	if parsed == nil {
-		return nil, nil
+		return attachControls(nil, nil)
 	}
 	operation, err := ldapWriteOperationFromLDIF(parsed, allowContentAdd)
 	if err != nil {
-		return nil, err
+		return attachControls(nil, err)
 	}
-	return operation, validateLDAPWriteOperation(operation)
+	return attachControls(operation, validateLDAPWriteOperation(operation))
+}
+
+func parseLDAPWriteRecordControl(value []byte, externalBytesRemaining int) (*ldapRawControl, int, error) {
+	text := strings.TrimSpace(string(value))
+	if text == "" {
+		return nil, 0, errors.New("LDIF control requires an OID")
+	}
+	oidEnd := strings.IndexAny(text, " \t")
+	oid := text
+	remainder := ""
+	if oidEnd >= 0 {
+		oid = text[:oidEnd]
+		remainder = strings.TrimSpace(text[oidEnd:])
+	}
+	if !validLDAPOperationOID(oid) {
+		return nil, 0, fmt.Errorf("invalid LDIF control OID %q", oid)
+	}
+	critical := false
+	for _, keyword := range []struct {
+		name  string
+		value bool
+	}{{"true", true}, {"false", false}} {
+		if len(remainder) >= len(keyword.name) &&
+			strings.EqualFold(remainder[:len(keyword.name)], keyword.name) &&
+			(len(remainder) == len(keyword.name) || remainder[len(keyword.name)] == ' ' ||
+				remainder[len(keyword.name)] == '\t' || remainder[len(keyword.name)] == ':') {
+			critical = keyword.value
+			remainder = strings.TrimSpace(remainder[len(keyword.name):])
+			break
+		}
+	}
+	control := &ldapRawControl{oid: oid, critical: critical}
+	if remainder == "" {
+		return control, 0, nil
+	}
+	control.hasValue = true
+	switch {
+	case strings.HasPrefix(remainder, "::"):
+		decoded, err := decodeLDAPControlBase64(strings.TrimSpace(remainder[2:]), oid)
+		if err != nil {
+			return nil, 0, err
+		}
+		control.value = decoded
+	case strings.HasPrefix(remainder, ":<"):
+		loaded, err := readLDAPWriteFileURL(
+			strings.TrimSpace(remainder[2:]),
+			externalBytesRemaining,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("LDIF control %s: %w", oid, err)
+		}
+		control.value = loaded
+		return control, len(loaded), nil
+	case strings.HasPrefix(remainder, ":"):
+		control.value = []byte(strings.TrimLeft(remainder[1:], " \t"))
+		if len(control.value) > maxLDAPControlValueSize {
+			control.clear()
+			return nil, 0, fmt.Errorf("LDAP control %s value exceeds %d bytes", oid, maxLDAPControlValueSize)
+		}
+	default:
+		return nil, 0, fmt.Errorf("LDIF control %s value must begin with :, ::, or :<", oid)
+	}
+	return control, 0, nil
+}
+
+func readLDAPWriteFileURL(reference string, bytesRemaining int) ([]byte, error) {
+	if bytesRemaining < 0 {
+		return nil, fmt.Errorf("expanded LDIF record exceeds %d bytes", maxLDAPWriteRecordSize)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(reference))
+	if err != nil {
+		return nil, fmt.Errorf("parse file URL: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "file") || parsed.Opaque != "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		(parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost")) {
+		return nil, errors.New("external LDIF value must use a local file:// absolute URL")
+	}
+	path := filepath.FromSlash(parsed.Path)
+	if path == "" || !filepath.IsAbs(path) || strings.IndexByte(path, 0) >= 0 {
+		return nil, errors.New("external LDIF file path must be absolute")
+	}
+	path = filepath.Clean(path)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect external LDIF value: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("external LDIF value must be a non-symlink regular file")
+	}
+	if info.Size() > int64(bytesRemaining) {
+		return nil, fmt.Errorf("expanded LDIF record exceeds %d bytes", maxLDAPWriteRecordSize)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open external LDIF value: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("external LDIF value changed while opening it")
+	}
+	value, err := io.ReadAll(io.LimitReader(file, int64(bytesRemaining)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read external LDIF value: %w", err)
+	}
+	if len(value) > bytesRemaining {
+		clear(value)
+		return nil, fmt.Errorf("expanded LDIF record exceeds %d bytes", maxLDAPWriteRecordSize)
+	}
+	return value, nil
 }
 
 func parseLDAPModifyRecord(lines []string, explicitChangeType bool) (*ldapWriteOperation, error) {
@@ -926,12 +1108,31 @@ func logicalLDAPWriteLines(raw []byte) ([]string, error) {
 }
 
 func splitLDAPWriteRecords(input []byte) ([][]byte, error) {
+	records, err := splitLDAPWriteRecordsWithLines(input)
+	if err != nil {
+		return nil, err
+	}
+	values := make([][]byte, len(records))
+	for index := range records {
+		values[index] = records[index].raw
+	}
+	return values, nil
+}
+
+type ldapWriteRawRecord struct {
+	line int
+	raw  []byte
+}
+
+func splitLDAPWriteRecordsWithLines(input []byte) ([]ldapWriteRawRecord, error) {
 	if len(input) > maxLDAPWriteInputSize {
 		return nil, fmt.Errorf("LDIF input exceeds %d bytes", maxLDAPWriteInputSize)
 	}
 	reader := bufio.NewReader(bytes.NewReader(input))
-	records := make([][]byte, 0, 16)
+	records := make([]ldapWriteRawRecord, 0, 16)
 	var current bytes.Buffer
+	lineNumber := 0
+	startLine := 1
 	flush := func() error {
 		if current.Len() == 0 {
 			return nil
@@ -939,13 +1140,17 @@ func splitLDAPWriteRecords(input []byte) ([][]byte, error) {
 		if len(records) >= maxLDAPWriteRecords {
 			return fmt.Errorf("LDIF input exceeds %d records", maxLDAPWriteRecords)
 		}
-		records = append(records, bytes.Clone(current.Bytes()))
+		records = append(records, ldapWriteRawRecord{
+			line: startLine,
+			raw:  bytes.Clone(current.Bytes()),
+		})
 		current.Reset()
 		return nil
 	}
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
+			lineNumber++
 			physical := bytes.TrimSuffix(line, []byte{'\n'})
 			physical = bytes.TrimSuffix(physical, []byte{'\r'})
 			if len(physical) > maxLDAPWriteLineSize {
@@ -955,7 +1160,11 @@ func splitLDAPWriteRecords(input []byte) ([][]byte, error) {
 				if flushErr := flush(); flushErr != nil {
 					return nil, flushErr
 				}
+				startLine = lineNumber + 1
 			} else {
+				if current.Len() == 0 {
+					startLine = lineNumber
+				}
 				if current.Len()+len(physical)+1 > maxLDAPWriteRecordSize {
 					return nil, fmt.Errorf("LDIF record exceeds %d bytes", maxLDAPWriteRecordSize)
 				}
@@ -1284,6 +1493,19 @@ func writeLDAPWriteOperationLDIF(
 ) error {
 	if err := writeLDIFAttribute(writer, "dn", []byte(operation.dn())); err != nil {
 		return err
+	}
+	for _, generic := range operation.recordControls {
+		control, ok := generic.(*ldapRawControl)
+		if !ok || control == nil || !validLDAPOperationOID(control.oid) {
+			return errors.New("cannot render invalid LDIF request control")
+		}
+		line := fmt.Sprintf("control: %s %t", control.oid, control.critical)
+		if control.hasValue {
+			line += ":: " + base64.StdEncoding.EncodeToString(control.value)
+		}
+		if err := writeFoldedLDIFLine(writer, []byte(line)); err != nil {
+			return err
+		}
 	}
 	switch operation.kind {
 	case ldapWriteAdd:

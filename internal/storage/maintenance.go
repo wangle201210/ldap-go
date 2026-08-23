@@ -18,6 +18,70 @@ import (
 
 const maintenanceTransactionSize = 64 << 20
 
+var ErrRestoreRequiresOffline = errors.New("restore requires an offline database")
+
+// PublicationDurabilityError means the complete database file was atomically
+// published, but syncing its parent directory failed. The new file is visible;
+// only its survival across an immediate system crash is uncertain.
+type PublicationDurabilityError struct {
+	Path string
+	Err  error
+}
+
+func (err *PublicationDurabilityError) Error() string {
+	return fmt.Sprintf(
+		"database %q was published but directory durability is not confirmed: %v",
+		err.Path,
+		err.Err,
+	)
+}
+
+func (err *PublicationDurabilityError) Unwrap() error { return err.Err }
+
+type atomicDatabaseFileSystem interface {
+	createTemp(string, string) (*os.File, error)
+	chmod(string, os.FileMode) error
+	syncFile(*os.File) error
+	closeFile(*os.File) error
+	rename(string, string) error
+	link(string, string) error
+	remove(string) error
+	syncDirectory(string) error
+}
+
+type osFileSystem struct{}
+
+func (osFileSystem) createTemp(directory, pattern string) (*os.File, error) {
+	return os.CreateTemp(directory, pattern)
+}
+
+func (osFileSystem) chmod(path string, mode os.FileMode) error { return os.Chmod(path, mode) }
+func (osFileSystem) syncFile(file *os.File) error              { return file.Sync() }
+func (osFileSystem) closeFile(file *os.File) error             { return file.Close() }
+func (osFileSystem) rename(oldPath, newPath string) error      { return os.Rename(oldPath, newPath) }
+func (osFileSystem) link(oldPath, newPath string) error        { return os.Link(oldPath, newPath) }
+func (osFileSystem) remove(path string) error                  { return os.Remove(path) }
+func (osFileSystem) syncDirectory(path string) error           { return syncDirectory(path) }
+
+type contextWriter struct {
+	ctx    context.Context
+	writer io.Writer
+}
+
+func (writer contextWriter) Write(value []byte) (int, error) {
+	if err := writer.ctx.Err(); err != nil {
+		return 0, err
+	}
+	written, err := writer.writer.Write(value)
+	if err != nil {
+		return written, err
+	}
+	if contextErr := writer.ctx.Err(); contextErr != nil {
+		return written, contextErr
+	}
+	return written, nil
+}
+
 type CheckReport struct {
 	Entries               int
 	Partitions            []string
@@ -65,34 +129,76 @@ func BackupBolt(
 	backupPath string,
 	replace bool,
 ) (CheckReport, error) {
-	if err := validateDistinctMaintenancePaths(databasePath, backupPath); err != nil {
-		return CheckReport{}, err
+	pathLock, err := acquireBoltPathLock(databasePath, false)
+	if err != nil {
+		return CheckReport{}, fmt.Errorf("lock backup source: %w", err)
 	}
-	if err := requireReplacePermission(backupPath, replace); err != nil {
-		return CheckReport{}, err
-	}
+	defer pathLock.Close()
 	database, err := openBoltReadOnly(databasePath)
 	if err != nil {
 		return CheckReport{}, err
 	}
 	defer database.Close()
+	return backupOpenBolt(ctx, database, backupPath, replace, osFileSystem{})
+}
 
-	report, err := checkBoltDatabase(ctx, database, nil)
-	if err != nil {
-		return CheckReport{}, fmt.Errorf("check source database: %w", err)
+func backupOpenBolt(
+	ctx context.Context,
+	database *bolt.DB,
+	backupPath string,
+	replace bool,
+	filesystem atomicDatabaseFileSystem,
+) (CheckReport, error) {
+	return backupOpenBoltWithSnapshotHook(
+		ctx,
+		database,
+		backupPath,
+		replace,
+		filesystem,
+		nil,
+	)
+}
+
+func backupOpenBoltWithSnapshotHook(
+	ctx context.Context,
+	database *bolt.DB,
+	backupPath string,
+	replace bool,
+	filesystem atomicDatabaseFileSystem,
+	snapshotReady func(),
+) (CheckReport, error) {
+	if err := ctx.Err(); err != nil {
+		return CheckReport{}, err
 	}
-	err = writeAtomicDatabaseFile(ctx, backupPath, replace, func(file *os.File) error {
+	if database == nil {
+		return CheckReport{}, errors.New("database is not open")
+	}
+	if err := validateDistinctMaintenancePaths(database.Path(), backupPath); err != nil {
+		return CheckReport{}, err
+	}
+	if err := requireReplacePermission(backupPath, replace); err != nil {
+		return CheckReport{}, err
+	}
+	var report CheckReport
+	err := writeAtomicDatabaseFileWithFS(ctx, backupPath, replace, func(file *os.File) error {
 		return database.View(func(tx *bolt.Tx) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			_, err := tx.WriteTo(file)
+			if snapshotReady != nil {
+				snapshotReady()
+			}
+			_, err := tx.WriteTo(contextWriter{ctx: ctx, writer: file})
+			if err != nil && ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		})
 	}, func(path string) error {
-		_, err := CheckBolt(ctx, path)
+		var err error
+		report, err = CheckBolt(ctx, path)
 		return err
-	})
+	}, filesystem)
 	if err != nil {
 		return CheckReport{}, fmt.Errorf("write backup: %w", err)
 	}
@@ -108,18 +214,40 @@ func RestoreBolt(
 	databasePath string,
 	replace bool,
 ) (CheckReport, error) {
+	return restoreBoltWithFS(ctx, backupPath, databasePath, replace, osFileSystem{})
+}
+
+func restoreBoltWithFS(
+	ctx context.Context,
+	backupPath,
+	databasePath string,
+	replace bool,
+	filesystem atomicDatabaseFileSystem,
+) (CheckReport, error) {
+	if err := ctx.Err(); err != nil {
+		return CheckReport{}, err
+	}
 	if err := validateDistinctMaintenancePaths(backupPath, databasePath); err != nil {
 		return CheckReport{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
+		return CheckReport{}, fmt.Errorf("create database directory: %w", err)
+	}
+	offlineLock, err := lockOfflineBoltDestination(databasePath)
+	if err != nil {
+		return CheckReport{}, err
+	}
+	defer offlineLock.Close()
 	if err := requireReplacePermission(databasePath, replace); err != nil {
 		return CheckReport{}, err
 	}
-	_, err := CheckBolt(ctx, backupPath)
+	_, err = CheckBolt(ctx, backupPath)
 	if err != nil {
 		return CheckReport{}, fmt.Errorf("backup is invalid: %w", err)
 	}
 
-	err = writeAtomicDatabaseFile(ctx, databasePath, replace, func(destination *os.File) error {
+	var verified CheckReport
+	err = writeAtomicDatabaseFileWithFS(ctx, databasePath, replace, func(destination *os.File) error {
 		source, err := os.Open(backupPath)
 		if err != nil {
 			return err
@@ -130,23 +258,75 @@ func RestoreBolt(
 		}
 		return nil
 	}, func(path string) error {
-		_, err := CheckBolt(ctx, path)
+		var err error
+		verified, err = CheckBolt(ctx, path)
 		return err
-	})
+	}, filesystem)
 	if err != nil {
 		return CheckReport{}, fmt.Errorf("restore backup: %w", err)
 	}
-	verified, err := CheckBolt(ctx, databasePath)
-	if err != nil {
-		return CheckReport{}, fmt.Errorf("verify restored database: %w", err)
+	if info, statErr := os.Stat(databasePath); statErr == nil {
+		verified.FileSize = info.Size()
 	}
 	return verified, nil
+}
+
+type restoreDestinationLock struct {
+	pathLock *boltPathLock
+}
+
+func (lock *restoreDestinationLock) Close() error {
+	if lock == nil {
+		return nil
+	}
+	return lock.pathLock.Close()
+}
+
+func lockOfflineBoltDestination(path string) (*restoreDestinationLock, error) {
+	pathLock, err := acquireBoltPathLock(path, true)
+	if errors.Is(err, errBoltPathLockBusy) {
+		return nil, fmt.Errorf("%w: %q is open", ErrRestoreRequiresOffline, path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock restore destination %q: %w", path, err)
+	}
+	lock := &restoreDestinationLock{pathLock: pathLock}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return lock, nil
+	} else if err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("inspect restore destination: %w", err)
+	}
+	if info.Size() == 0 {
+		return lock, nil
+	}
+	database, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Millisecond})
+	if errors.Is(err, bolt.ErrTimeout) {
+		_ = lock.Close()
+		return nil, fmt.Errorf("%w: %q is open", ErrRestoreRequiresOffline, path)
+	}
+	if err != nil {
+		// A sidecar-exclusive path with an unreadable bbolt file is offline and
+		// is exactly the case a validated backup must be allowed to replace.
+		return lock, nil
+	}
+	if err := database.Close(); err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("close restore destination probe %q: %w", path, err)
+	}
+	return lock, nil
 }
 
 func RebuildBolt(ctx context.Context, databasePath string) (CheckReport, error) {
 	if databasePath == "" {
 		return CheckReport{}, errors.New("database path is required")
 	}
+	pathLock, err := acquireBoltPathLock(databasePath, true)
+	if err != nil {
+		return CheckReport{}, fmt.Errorf("lock rebuild database: %w", err)
+	}
+	defer pathLock.Close()
 	source, err := openBoltReadOnly(databasePath)
 	if err != nil {
 		return CheckReport{}, err
@@ -496,23 +676,43 @@ func writeAtomicDatabaseFile(
 	write func(*os.File) error,
 	validate func(string) error,
 ) error {
+	return writeAtomicDatabaseFileWithFS(ctx, path, replace, write, validate, osFileSystem{})
+}
+
+func writeAtomicDatabaseFileWithFS(
+	ctx context.Context,
+	path string,
+	replace bool,
+	write func(*os.File) error,
+	validate func(string) error,
+	filesystem atomicDatabaseFileSystem,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	directoryPath := filepath.Dir(path)
 	if err := os.MkdirAll(directoryPath, 0o700); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(directoryPath, ".ldap-go-database-*")
+	temporary, err := filesystem.createTemp(directoryPath, ".ldap-go-database-*")
 	if err != nil {
 		return fmt.Errorf("create temporary database: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := os.Chmod(temporaryPath, 0o600); err != nil {
-		_ = temporary.Close()
+	defer func() { _ = filesystem.remove(temporaryPath) }()
+	if err := filesystem.chmod(temporaryPath, 0o600); err != nil {
+		_ = filesystem.closeFile(temporary)
 		return fmt.Errorf("secure temporary database: %w", err)
 	}
 	writeErr := write(temporary)
-	syncErr := temporary.Sync()
-	closeErr := temporary.Close()
+	if writeErr == nil {
+		writeErr = ctx.Err()
+	}
+	var syncErr error
+	if writeErr == nil {
+		syncErr = filesystem.syncFile(temporary)
+	}
+	closeErr := filesystem.closeFile(temporary)
 	if writeErr != nil {
 		return writeErr
 	}
@@ -531,21 +731,24 @@ func writeAtomicDatabaseFile(
 		return err
 	}
 	if replace {
-		if err := os.Rename(temporaryPath, path); err != nil {
+		if err := filesystem.rename(temporaryPath, path); err != nil {
 			return fmt.Errorf("publish database: %w", err)
 		}
 	} else {
-		if err := os.Link(temporaryPath, path); err != nil {
+		if err := filesystem.link(temporaryPath, path); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				return fmt.Errorf("destination %q already exists; use --replace", path)
 			}
 			return fmt.Errorf("publish database: %w", err)
 		}
-		if err := os.Remove(temporaryPath); err != nil {
+		if err := filesystem.remove(temporaryPath); err != nil {
 			return fmt.Errorf("remove temporary database link: %w", err)
 		}
 	}
-	return syncDirectory(directoryPath)
+	if err := filesystem.syncDirectory(directoryPath); err != nil {
+		return &PublicationDurabilityError{Path: path, Err: err}
+	}
+	return nil
 }
 
 func copyWithContext(

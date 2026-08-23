@@ -2170,6 +2170,18 @@ func TestProxyRewritesAbandonTarget(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("upstream did not receive Abandon")
 	}
+	waitForMonitorOperationCounters(t, proxy, "Other", ProxyMonitorCounters{
+		Received:  2,
+		Forwarded: 1,
+		Completed: 2,
+	})
+	backend := proxy.MonitorSnapshot().Backends
+	if len(backend) != 1 || backend[0].Counters != (ProxyMonitorCounters{
+		Received:  1,
+		Completed: 1,
+	}) {
+		t.Fatalf("backend counters after Abandon = %#v", backend)
+	}
 }
 
 func TestProxyDisconnectAndRebindForwardAbandon(t *testing.T) {

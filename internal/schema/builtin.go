@@ -201,6 +201,7 @@ var builtinAttributeTypes = []string{
 
 var builtinHiddenAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.35 NAME 'olcPasswordCryptSaltFormat' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.1.12.2.3.2.0.19 NAME 'olcSyncUseSubentry' DESC 'Store sync context in a subentry' EQUALITY booleanMatch SYNTAX " + SyntaxBoolean + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.30 NAME 'olcModuleLoad' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " X-ORDERED 'VALUES' )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.31 NAME 'olcModulePath' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.1 NAME ( 'olcPcache' 'olcProxyCache' ) DESC 'Proxy Cache basic parameters' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
@@ -212,6 +213,8 @@ var builtinHiddenAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.7 NAME ( 'olcPcacheValidate' 'olcProxyCheckCacheability' ) EQUALITY booleanMatch SYNTAX " + SyntaxBoolean + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.8 NAME 'olcPcacheOffline' EQUALITY booleanMatch SYNTAX " + SyntaxBoolean + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.9 NAME 'olcPcacheBind' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( 1.3.6.1.4.1.4203.666.11.9.1.1.1 NAME 'pcacheQueryID' DESC 'ID of query the entry belongs to, formatted as a UUID' EQUALITY octetStringMatch SYNTAX " + SyntaxOctetString + "{64} NO-USER-MODIFICATION USAGE directoryOperation )",
+	"( 1.3.6.1.4.1.4203.666.11.9.1.1.2 NAME 'pcacheQueryURL' DESC 'URI describing a cached query' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " NO-USER-MODIFICATION USAGE directoryOperation )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.19.1 NAME 'olcCollectInfo' DESC 'DN of entry and attribute to distribute' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.25.1 NAME 'olcNestGroupMember' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.25.2 NAME 'olcNestGroupMemberOf' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",

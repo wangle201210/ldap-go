@@ -258,7 +258,10 @@ func New(config Config) (*Server, error) {
 			if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
 				return err
 			}
-			return server.ensureAccesslogContainers(writer, runtime)
+			if err := server.ensureAccesslogContainers(writer, runtime); err != nil {
+				return err
+			}
+			return server.ensurePcachePersistence(writer, runtime)
 		},
 	); err != nil {
 		return nil, fmt.Errorf("initialize runtime-owned entries: %w", err)
@@ -859,6 +862,33 @@ func (server *Server) dispatch(
 		return false, err
 	}
 	connection = overlayConnection
+	switch request := message.Request.(type) {
+	case ldapwire.SearchRequest:
+		if handled, err := server.tryPcachePrivateSearch(
+			connection,
+			state,
+			message,
+			request,
+		); handled {
+			return false, err
+		}
+	case ldapwire.CompareRequest:
+		if handled, err := server.tryPcachePrivateCompare(
+			connection,
+			state,
+			message,
+			request,
+		); handled {
+			return false, err
+		}
+	}
+	if handled, err := server.tryUnsupportedPcachePrivateOperation(
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
 	if handled, err := server.tryMetaBackendOperation(
 		ctx,
 		connection,

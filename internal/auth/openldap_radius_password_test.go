@@ -344,7 +344,7 @@ func TestVerifyOpenLDAPRADIUSPasswordReusesRetryPacket(t *testing.T) {
 		context.Background(),
 		[]OpenLDAPRADIUSServer{{
 			Address: connection.LocalAddr().String(), Secret: secret,
-			Timeout: 30 * time.Millisecond, Attempts: 2,
+			Timeout: 250 * time.Millisecond, Attempts: 2,
 		}},
 		[]byte("raw-user"),
 		[]byte("raw-password"),

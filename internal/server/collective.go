@@ -13,9 +13,24 @@ import (
 
 const excludeAllCollectiveAttributesOID = "2.5.18.0"
 
+const (
+	autonomousAreaOID                  = "2.5.23.1"
+	collectiveAttributeSpecificAreaOID = "2.5.23.5"
+	collectiveAttributeInnerAreaOID    = "2.5.23.6"
+)
+
+type collectiveAdministrativeRole uint8
+
+const (
+	collectiveAdministrativeRoleAutonomous collectiveAdministrativeRole = 1 << iota
+	collectiveAdministrativeRoleSpecific
+	collectiveAdministrativeRoleInner
+)
+
 type collectiveAttributePlan struct {
-	registry *schema.Registry
-	sources  []collectiveAttributeSource
+	registry      *schema.Registry
+	specificAreas []directory.DN
+	sources       []collectiveAttributeSource
 }
 
 type collectiveAttributePlanCache struct {
@@ -26,8 +41,14 @@ type collectiveAttributePlanCache struct {
 type collectiveAttributeSource struct {
 	dn                  directory.DN
 	administrativePoint directory.DN
+	specificArea        directory.DN
 	specification       schema.SubtreeSpecification
 	attributes          []collectiveSourceAttribute
+}
+
+type collectiveAdministrativePoint struct {
+	dn    directory.DN
+	roles collectiveAdministrativeRole
 }
 
 type collectiveSourceAttribute struct {
@@ -56,16 +77,43 @@ func (cache *collectiveAttributePlanCache) apply(
 	reader storage.Reader,
 	entry directory.Entry,
 ) (directory.Entry, error) {
-	plan := cache.plans[partition]
+	cacheKey, planReader, _ := collectiveAttributePlanReader(partition, reader)
+	plan := cache.plans[cacheKey]
 	if plan == nil {
 		var err error
-		plan, err = buildCollectiveAttributePlan(cache.registry, reader)
+		plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
 		if err != nil {
 			return directory.Entry{}, err
 		}
-		cache.plans[partition] = plan
+		cache.plans[cacheKey] = plan
 	}
 	return plan.apply(entry)
+}
+
+type collectiveAttributePlanReaderProvider interface {
+	collectiveAttributePlanReader() (string, storage.Reader)
+}
+
+func collectiveAttributePlanReader(
+	partition string,
+	reader storage.Reader,
+) (string, storage.Reader, bool) {
+	if provider, ok := reader.(collectiveAttributePlanReaderProvider); ok {
+		if cacheKey, planReader := provider.collectiveAttributePlanReader(); cacheKey != "" && planReader != nil {
+			return cacheKey, planReader, true
+		}
+	}
+	if mapped, ok := reader.(*rwmStorageReader); ok {
+		cacheKey, planReader, changed := collectiveAttributePlanReader(partition, mapped.Reader)
+		if changed {
+			return cacheKey, &rwmStorageReader{
+				Reader:        planReader,
+				configuration: mapped.configuration,
+			}, true
+		}
+		return cacheKey, reader, false
+	}
+	return partition, reader, false
 }
 
 func withCollectiveAttributes(
@@ -89,7 +137,27 @@ func buildCollectiveAttributePlan(
 		return plan, nil
 	}
 
+	var (
+		administrativePoints []collectiveAdministrativePoint
+		candidateSources     []collectiveAttributeSource
+	)
 	if err := reader.ForEach(func(entry directory.Entry) error {
+		dn, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return fmt.Errorf("parse collective administration DN %q: %w", entry.DN, err)
+		}
+		dn, err = storage.NormalizeReaderDN(reader, dn)
+		if err != nil {
+			return fmt.Errorf("normalize collective administration DN %q: %w", entry.DN, err)
+		}
+		roles := collectiveAdministrativeRoles(registry, entry)
+		if roles != 0 {
+			administrativePoints = append(administrativePoints, collectiveAdministrativePoint{
+				dn:    dn,
+				roles: roles,
+			})
+		}
+
 		if !registry.EntryHasObjectClass(entry, "collectiveAttributeSubentry") ||
 			!registry.EntryHasObjectClass(entry, "subentry") {
 			return nil
@@ -104,14 +172,6 @@ func buildCollectiveAttributePlan(
 			// UTF-8-only validator. Such a source remains readable but cannot
 			// safely define a collection.
 			return nil
-		}
-		dn, err := directory.ParseDN(entry.DN)
-		if err != nil {
-			return fmt.Errorf("parse collective attribute subentry DN %q: %w", entry.DN, err)
-		}
-		dn, err = storage.NormalizeReaderDN(reader, dn)
-		if err != nil {
-			return fmt.Errorf("normalize collective attribute subentry DN %q: %w", entry.DN, err)
 		}
 		administrativePoint, ok := dn.Parent()
 		if !ok {
@@ -140,11 +200,49 @@ func buildCollectiveAttributePlan(
 				values: cloneCollectiveValues(attribute.Values),
 			})
 		}
-		plan.sources = append(plan.sources, source)
+		candidateSources = append(candidateSources, source)
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("scan collective attribute subentries: %w", err)
 	}
+
+	for _, point := range administrativePoints {
+		if point.roles&(collectiveAdministrativeRoleAutonomous|
+			collectiveAdministrativeRoleSpecific) != 0 {
+			plan.specificAreas = append(plan.specificAreas, point.dn)
+		}
+	}
+	sort.SliceStable(plan.specificAreas, func(left, right int) bool {
+		return plan.specificAreas[left].Depth() > plan.specificAreas[right].Depth()
+	})
+	for _, source := range candidateSources {
+		point, ok := collectiveAdministrativePointAt(
+			administrativePoints,
+			source.administrativePoint,
+		)
+		if !ok {
+			continue
+		}
+		switch {
+		case point.roles&(collectiveAdministrativeRoleAutonomous|
+			collectiveAdministrativeRoleSpecific) != 0:
+			source.specificArea = point.dn
+		case point.roles&collectiveAdministrativeRoleInner != 0:
+			var found bool
+			source.specificArea, found = closestCollectiveSpecificArea(
+				plan.specificAreas,
+				point.dn,
+				false,
+			)
+			if !found {
+				continue
+			}
+		default:
+			continue
+		}
+		plan.sources = append(plan.sources, source)
+	}
+
 	type orderedSource struct {
 		source collectiveAttributeSource
 		key    string
@@ -207,7 +305,15 @@ func (plan *collectiveAttributePlan) apply(entry directory.Entry) (directory.Ent
 	excludeAll, excludedOIDs := collectiveExclusions(plan.registry, entry)
 	derived := make(map[string]*collectiveDerivedAttribute)
 	var sourceDNs [][]byte
+	targetSpecificArea, inCollectiveArea := closestCollectiveSpecificArea(
+		plan.specificAreas,
+		entryDN,
+		true,
+	)
 	for _, source := range plan.sources {
+		if !inCollectiveArea || !source.specificArea.Equal(targetSpecificArea) {
+			continue
+		}
 		matches, err := plan.registry.SubtreeSpecificationMatches(
 			source.specification,
 			source.administrativePoint,
@@ -271,6 +377,49 @@ func (plan *collectiveAttributePlan) apply(entry directory.Entry) (directory.Ent
 		})
 	}
 	return result, nil
+}
+
+func collectiveAdministrativeRoles(
+	registry *schema.Registry,
+	entry directory.Entry,
+) collectiveAdministrativeRole {
+	var roles collectiveAdministrativeRole
+	for _, value := range registry.AttributeValues(entry, "administrativeRole") {
+		switch strings.ToLower(strings.TrimSpace(string(value))) {
+		case autonomousAreaOID, "autonomousarea":
+			roles |= collectiveAdministrativeRoleAutonomous
+		case collectiveAttributeSpecificAreaOID, "collectiveattributespecificarea":
+			roles |= collectiveAdministrativeRoleSpecific
+		case collectiveAttributeInnerAreaOID, "collectiveattributeinnerarea":
+			roles |= collectiveAdministrativeRoleInner
+		}
+	}
+	return roles
+}
+
+func collectiveAdministrativePointAt(
+	points []collectiveAdministrativePoint,
+	dn directory.DN,
+) (collectiveAdministrativePoint, bool) {
+	for _, point := range points {
+		if point.dn.Equal(dn) {
+			return point, true
+		}
+	}
+	return collectiveAdministrativePoint{}, false
+}
+
+func closestCollectiveSpecificArea(
+	areas []directory.DN,
+	dn directory.DN,
+	includeSelf bool,
+) (directory.DN, bool) {
+	for _, area := range areas {
+		if includeSelf && area.Equal(dn) || area.AncestorOf(dn) {
+			return area, true
+		}
+	}
+	return directory.DN{}, false
 }
 
 func collectiveExclusions(

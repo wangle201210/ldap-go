@@ -769,7 +769,9 @@ func (client *clientConnection) abandonOperation(
 	upstreamID := operation.upstreamID
 	requestSent := operation.requestSent
 	operation.mu.Unlock()
-	if !operation.finish(false) {
+	// OpenLDAP counts an operation explicitly abandoned by its client as
+	// completed. Internal teardown still finishes the operation as failed.
+	if !operation.finish(frame != nil && upstream != nil && requestSent) {
 		operation.responseMu.Unlock()
 		return
 	}

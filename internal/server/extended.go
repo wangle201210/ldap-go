@@ -24,6 +24,26 @@ func (server *Server) handleExtended(
 	message ldapwire.Message,
 	request ldapwire.ExtendedRequest,
 ) error {
+	if request.Name == pcacheQueryDeleteOID {
+		if hasUnsupportedCriticalControl(message.Controls) {
+			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+				message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"unsupported critical control",
+				),
+				nil,
+			))
+		}
+		return server.handlePcacheQueryDelete(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+		)
+	}
 	if request.Name != passwordModifyOID &&
 		hasUnsupportedCriticalControl(message.Controls) {
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(

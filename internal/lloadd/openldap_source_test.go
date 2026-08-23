@@ -144,6 +144,79 @@ func TestOpenLDAPReferenceLloaddSourceContract(t *testing.T) {
 	assertLloaddTierBusyStopsFallback(t, sources["backend.c"], sources["tier_roundrobin.c"])
 }
 
+func TestOpenLDAPReferenceLloaddMonitorSemantics(t *testing.T) {
+	sourceRoot := requirePinnedOpenLDAPLloaddSource(t)
+	checks := []struct {
+		path    string
+		hash    string
+		anchors []string
+	}{
+		{
+			path: "servers/lloadd/client.c",
+			hash: "ae2f24969883bba77195b8bd5fff2f4f5ee066a8111b05d54e8ebdc4b1283563",
+			anchors: []string{
+				"case LDAP_REQ_UNBIND:",
+				"op->o_res = LLOAD_OP_COMPLETED;",
+				"case LDAP_REQ_ABANDON:",
+				"return request_abandon( c, op );",
+			},
+		},
+		{
+			path: "servers/lloadd/operation.c",
+			hash: "db8b8afc1e7e8a5dbef7eccf56614c6594a1f2426b118702def0314b3e1552d7",
+			anchors: []string{
+				"for now consider all abandoned operations completed",
+				"op->o_res = LLOAD_OP_COMPLETED;",
+				"operation_update_global_rejected",
+			},
+		},
+		{
+			path: "servers/lloadd/bind.c",
+			hash: "f5f4657e98b9f01b5e916ba43b7f049842f28367d70de5d39ecbe5694a721a15",
+			anchors: []string{
+				"LDAP_EXOP_WHO_AM_I",
+				"resolving final authzid name",
+				"handle_whoami_response",
+			},
+		},
+		{
+			path: "servers/lloadd/monitor.c",
+			hash: "3fa06bb9d7bdb2f96cc588141e01db7ebc5829e95ef215dd258d9860db404306",
+			anchors: []string{
+				"olmReceivedOps",
+				"olmForwardedOps",
+				"olmRejectedOps",
+				"olmCompletedOps",
+				"olmFailedOps",
+			},
+		},
+		{
+			path: "servers/slapd/overlays/sssvlv.c",
+			hash: "b8fc0018468124513b702f06ae1bf126fe9581e9f8fe4c1facd832f30334389f",
+			anchors: []string{
+				"If non-critical send all entries",
+				"Sort control is required with VLV",
+				"find_session_by_context",
+				"sort_conns[op->o_conn->c_conn_idx]",
+			},
+		},
+	}
+	for _, check := range checks {
+		contents, err := os.ReadFile(filepath.Join(sourceRoot, check.path))
+		if err != nil {
+			t.Fatalf("read pinned OpenLDAP source %s: %v", check.path, err)
+		}
+		if got := fmt.Sprintf("%x", sha256.Sum256(contents)); got != check.hash {
+			t.Fatalf("SHA-256(%s) = %s, want %s", check.path, got, check.hash)
+		}
+		for _, anchor := range check.anchors {
+			if !strings.Contains(string(contents), anchor) {
+				t.Fatalf("pinned OpenLDAP source %s lacks %q", check.path, anchor)
+			}
+		}
+	}
+}
+
 func requirePinnedOpenLDAPLloaddSource(t *testing.T) string {
 	t.Helper()
 	if got := os.Getenv(openLDAPReferenceTestsEnv); got != "1" {

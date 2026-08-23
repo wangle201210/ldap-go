@@ -77,6 +77,23 @@ changetype: delete
 		t.Fatalf("successful slapmodify record stored sn %q", got)
 	}
 
+	resume := "invalid skipped record\n\n" +
+		"dn: " + offlineCommandBobDN + "\nchangetype: modify\n" +
+		"replace: description\ndescription: resumed\n"
+	stdout, stderr, exitCode = runOfflineToolCommand(
+		[]string{"slapmodify", "-db", databasePath, "-n", "1", "-j", "3", "-w", "-v"},
+		resume,
+	)
+	if exitCode != 0 || stderr != "" || !strings.Contains(stdout, "applied 1 change record") {
+		t.Fatalf("slapmodify -j -w exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	if got := offlineCommandAttribute(t, databasePath, offlineCommandBobDN, "description"); got != "resumed" {
+		t.Fatalf("resumed description = %q", got)
+	}
+	if got := offlineCommandAttribute(t, databasePath, "dc=example,dc=com", "contextCSN"); got == "" {
+		t.Fatal("slapmodify -w did not update contextCSN")
+	}
+
 	stdout, stderr, exitCode = runOfflineToolCommand(
 		[]string{"slapindex", "-db", databasePath, "-n", "1", "-q", "uid"},
 		"",
@@ -206,6 +223,27 @@ cn: Alice Updated
 		slapmodify, "-f", configPath, "-l", modifyPath,
 	).CombinedOutput(); err != nil {
 		t.Fatalf("OpenLDAP slapmodify: %v\n%s", err, output)
+	}
+
+	resumePath := filepath.Join(directory, "resume.ldif")
+	resume := "invalid skipped record\n\n" + `dn: uid=bob,ou=people,dc=example,dc=com
+changetype: modify
+replace: description
+description: resumed
+`
+	if err := os.WriteFile(resumePath, []byte(resume), 0o600); err != nil {
+		t.Fatalf("write resume LDIF: %v", err)
+	}
+	if output, err := exec.Command(
+		slapmodify, "-f", configPath, "-j", "3", "-w", "-l", resumePath,
+	).CombinedOutput(); err != nil {
+		t.Fatalf("OpenLDAP slapmodify -j -w: %v\n%s", err, output)
+	}
+	slapcat := filepath.Join(toolDirectory, "slapcat")
+	resumeOutput, err := exec.Command(slapcat, "-f", configPath).CombinedOutput()
+	if err != nil || !bytes.Contains(resumeOutput, []byte("description: resumed")) ||
+		!bytes.Contains(resumeOutput, []byte("contextCSN:")) {
+		t.Fatalf("OpenLDAP slapmodify -j -w result: %v\n%s", err, resumeOutput)
 	}
 
 	// ldap-go intentionally extends slapmodify with offline moddn support.

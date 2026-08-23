@@ -56,15 +56,12 @@ func TestOpenLDAPCryptNationalKnownVectors(t *testing.T) {
 }
 
 func TestOpenLDAPCryptNationalLimitsAndUnknownFormats(t *testing.T) {
-	t.Parallel()
-
 	for _, test := range []struct{ name, format, want string }{
 		{"SM3 rounds", "$sm3$rounds=1000001$%.8s", "SM3-crypt rounds 1000001 exceeds 1000000"},
 		{"SM3 yescrypt memory", "$sm3y$jDT$%.7s", "memory exceeds"},
 		{"GOST yescrypt memory", "$gy$jDT$%.7s", "memory exceeds"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			_, err := HashPasswordOpenLDAPCrypt(
 				[]byte("password"), test.format,
 				bytes.NewReader(make([]byte, openLDAPCryptEntropyLength)),

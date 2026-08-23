@@ -312,6 +312,8 @@ type OfflineModifyOptions struct {
 	SkipSchema          bool
 	SkipValueValidation bool
 	ServerID            uint16
+	ResumeLine          int
+	UpdateContextCSN    bool
 }
 
 type OfflineModifyFailure struct {
@@ -323,6 +325,15 @@ type OfflineModifyFailure struct {
 type OfflineModifyReport struct {
 	Applied  int
 	Failures []OfflineModifyFailure
+}
+
+type offlineContextCSNCandidate struct {
+	partition string
+	value     []byte
+}
+
+type offlineChangeResult struct {
+	contextCSNs []offlineContextCSNCandidate
 }
 
 var (
@@ -338,7 +349,11 @@ func ApplyOfflineChanges(
 	reader io.Reader,
 	options OfflineModifyOptions,
 ) (OfflineModifyReport, error) {
-	changes, parseFailures, err := parseOfflineChanges(reader, options.Continue)
+	changes, parseFailures, err := parseOfflineChanges(
+		reader,
+		options.Continue,
+		options.ResumeLine,
+	)
 	report := OfflineModifyReport{Failures: parseFailures}
 	if err != nil {
 		return report, err
@@ -351,8 +366,9 @@ func ApplyOfflineChanges(
 		var dryRunErr error
 		applyErr := store.Update(ctx, func(writer storage.Writer) error {
 			for _, change := range changes {
+				var changeResult offlineChangeResult
 				changeErr := applyOfflineChangeTransaction(
-					ctx, instance, writer, change, options,
+					ctx, instance, writer, change, options, &changeResult,
 				)
 				if changeErr == nil {
 					report.Applied++
@@ -380,21 +396,41 @@ func ApplyOfflineChanges(
 		}
 		return report, nil
 	}
+	var contextCSNs []offlineContextCSNCandidate
 	for _, change := range changes {
+		var changeResult offlineChangeResult
 		applyErr := store.Update(ctx, func(writer storage.Writer) error {
 			return applyOfflineChangeTransaction(
-				ctx, instance, writer, change, options,
+				ctx, instance, writer, change, options, &changeResult,
 			)
 		})
 		if applyErr == nil {
 			report.Applied++
+			contextCSNs = append(contextCSNs, changeResult.contextCSNs...)
 			continue
 		}
 		report.Failures = append(report.Failures, OfflineModifyFailure{
 			Line: change.line, DN: change.dn, Err: applyErr,
 		})
 		if !options.Continue {
+			if report.Applied > 0 && options.UpdateContextCSN {
+				if updateErr := updateOfflineContextCSN(
+					ctx, store, instance, options, contextCSNs,
+				); updateErr != nil {
+					return report, errors.Join(
+						fmt.Errorf("line %d: %w", change.line, applyErr),
+						updateErr,
+					)
+				}
+			}
 			return report, fmt.Errorf("line %d: %w", change.line, applyErr)
+		}
+	}
+	if report.Applied > 0 && options.UpdateContextCSN {
+		if err := updateOfflineContextCSN(
+			ctx, store, instance, options, contextCSNs,
+		); err != nil {
+			return report, err
 		}
 	}
 	sortOfflineModifyFailures(&report)
@@ -402,6 +438,189 @@ func ApplyOfflineChanges(
 		return report, fmt.Errorf("slapmodify rejected %d record(s)", len(report.Failures))
 	}
 	return report, nil
+}
+
+func updateOfflineContextCSN(
+	ctx context.Context,
+	store storage.Store,
+	instance *Server,
+	options OfflineModifyOptions,
+	candidates []offlineContextCSNCandidate,
+) error {
+	return store.Update(ctx, func(writer storage.Writer) error {
+		runtime, err := buildOfflineRuntimeWithServer(instance, writer)
+		if err != nil {
+			return err
+		}
+		indexes, err := selectOfflineDatabases(
+			runtime,
+			options.Database,
+			options.IncludeSubordinates,
+		)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			database := runtime.databases[index]
+			if !database.lastMod || len(database.suffixes) == 0 {
+				continue
+			}
+			if !offlineDatabaseWritable(database) {
+				return fmt.Errorf(
+					"database %q does not support offline contextCSN updates",
+					database.name,
+				)
+			}
+			databaseCandidates := make([][]byte, 0, len(candidates))
+			for _, candidate := range candidates {
+				if candidate.partition == database.partition {
+					databaseCandidates = append(databaseCandidates, candidate.value)
+				}
+			}
+			if err := updateOfflineDatabaseContextCSN(
+				writerForDatabase(writer, database),
+				database,
+				runtime.schema,
+				databaseCandidates,
+			); err != nil {
+				return fmt.Errorf("database %q contextCSN: %w", database.name, err)
+			}
+		}
+		return nil
+	})
+}
+
+func updateOfflineDatabaseContextCSN(
+	tx storage.Writer,
+	database runtimeDatabase,
+	registry *schema.Registry,
+	candidates [][]byte,
+) error {
+	maximum := make(map[uint16][]byte)
+	for _, raw := range candidates {
+		normalized, sid, err := normalizeOfflineCSN(registry, raw)
+		if err != nil {
+			return fmt.Errorf("committed change CSN: %w", err)
+		}
+		maximum[sid] = normalized
+	}
+	if err := tx.ForEach(func(entry directory.Entry) error {
+		for _, raw := range entry.Values("entryCSN") {
+			normalized, sid, err := normalizeOfflineCSN(registry, raw)
+			if err != nil {
+				return fmt.Errorf("entry %q entryCSN: %w", entry.DN, err)
+			}
+			previous, found := maximum[sid]
+			if !found {
+				maximum[sid] = normalized
+				continue
+			}
+			comparison, err := registry.CompareOrdering(
+				"entryCSN", "", normalized, previous,
+			)
+			if err != nil {
+				return err
+			}
+			if comparison > 0 {
+				maximum[sid] = normalized
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(maximum) == 0 {
+		return nil
+	}
+
+	contextDN := database.suffixes[0]
+	if database.syncUseSubentry {
+		var err error
+		contextDN, err = parseRuntimeDN(
+			"cn=ldapsync,"+contextDN.String(),
+			database.dnNormalizer,
+		)
+		if err != nil {
+			return fmt.Errorf("construct sync context subentry: %w", err)
+		}
+	}
+	contextEntry, err := tx.Get(contextDN)
+	createContextEntry := database.syncUseSubentry && errors.Is(err, storage.ErrEntryNotFound)
+	if createContextEntry {
+		contextEntry = directory.Entry{
+			DN: contextDN.String(),
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: [][]byte{
+					[]byte("top"),
+					[]byte("subentry"),
+					[]byte("syncProviderSubentry"),
+				}},
+				{Description: "structuralObjectClass", Values: [][]byte{[]byte("subentry")}},
+				{Description: "cn", Values: [][]byte{[]byte("ldapsync")}},
+				{Description: "subtreeSpecification", Values: [][]byte{[]byte("{}")}},
+			},
+		}
+		err = nil
+	}
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return fmt.Errorf("context entry %q is missing", contextDN.String())
+	}
+	if err != nil {
+		return err
+	}
+	for _, raw := range contextEntry.Values("contextCSN") {
+		normalized, sid, err := normalizeOfflineCSN(registry, raw)
+		if err != nil {
+			return fmt.Errorf("existing contextCSN: %w", err)
+		}
+		candidate, found := maximum[sid]
+		if !found {
+			maximum[sid] = normalized
+			continue
+		}
+		comparison, err := registry.CompareOrdering(
+			"entryCSN", "", normalized, candidate,
+		)
+		if err != nil {
+			return err
+		}
+		if comparison > 0 {
+			maximum[sid] = normalized
+		}
+	}
+	sids := make([]int, 0, len(maximum))
+	for sid := range maximum {
+		sids = append(sids, int(sid))
+	}
+	sort.Ints(sids)
+	values := make([][]byte, len(sids))
+	for index, sid := range sids {
+		values[index] = maximum[uint16(sid)]
+	}
+	contextEntry.ReplaceValues("contextCSN", values)
+	if err := tx.Put(contextEntry, !createContextEntry); err != nil {
+		return fmt.Errorf("store context entry %q: %w", contextDN.String(), err)
+	}
+	return nil
+}
+
+func normalizeOfflineCSN(
+	registry *schema.Registry,
+	raw []byte,
+) ([]byte, uint16, error) {
+	normalized, err := registry.NormalizeEqualityValue("entryCSN", raw)
+	if err != nil {
+		return nil, 0, err
+	}
+	parts := strings.Split(string(normalized), "#")
+	if len(parts) != 4 {
+		return nil, 0, fmt.Errorf("invalid CSN %q", raw)
+	}
+	sid, err := strconv.ParseUint(parts[2], 16, 12)
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid CSN SID %q", parts[2])
+	}
+	return normalized, uint16(sid), nil
 }
 
 func sortOfflineModifyFailures(report *OfflineModifyReport) {
@@ -416,7 +635,9 @@ func applyOfflineChangeTransaction(
 	writer storage.Writer,
 	change offlineChange,
 	options OfflineModifyOptions,
+	result *offlineChangeResult,
 ) error {
+	*result = offlineChangeResult{}
 	runtime, err := buildOfflineRuntimeWithServer(instance, writer)
 	if err != nil {
 		return err
@@ -438,7 +659,7 @@ func applyOfflineChangeTransaction(
 		allowed[index] = struct{}{}
 	}
 	if err := instance.applyOfflineChange(
-		ctx, writer, runtime, allowed, change, options,
+		ctx, writer, runtime, allowed, change, options, result,
 	); err != nil {
 		return err
 	}
@@ -504,6 +725,7 @@ func (server *Server) applyOfflineChange(
 	allowed map[int]struct{},
 	change offlineChange,
 	options OfflineModifyOptions,
+	result *offlineChangeResult,
 ) error {
 	legacyDN, err := directory.ParseDN(change.dn)
 	if err != nil || legacyDN.Depth() == 0 {
@@ -596,6 +818,12 @@ func (server *Server) applyOfflineChange(
 		}
 		if err := tx.Delete(dn); err != nil {
 			return fmt.Errorf("delete %q: %w", change.dn, err)
+		}
+		if database.lastMod && options.UpdateContextCSN {
+			result.contextCSNs = append(result.contextCSNs, offlineContextCSNCandidate{
+				partition: database.partition,
+				value:     []byte(server.nextCSNContext(ctx, options.ServerID)),
+			})
 		}
 	case offlineChangeModifyDN:
 		return server.applyOfflineModifyDN(
@@ -1097,6 +1325,7 @@ type offlineRawRecord struct {
 func parseOfflineChanges(
 	reader io.Reader,
 	continueOnError bool,
+	resumeLine int,
 ) ([]offlineChange, []OfflineModifyFailure, error) {
 	if reader == nil {
 		return nil, nil, errors.New("LDIF reader is required")
@@ -1116,6 +1345,9 @@ func parseOfflineChanges(
 	var failures []OfflineModifyFailure
 	sawVersion := false
 	for _, record := range records {
+		if record.line < resumeLine {
+			continue
+		}
 		change, skip, parseErr := parseOfflineChangeRecord(record, &sawVersion)
 		if parseErr != nil {
 			failure := OfflineModifyFailure{Line: record.line, Err: parseErr}

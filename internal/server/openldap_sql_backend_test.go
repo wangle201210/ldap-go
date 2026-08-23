@@ -312,6 +312,7 @@ func startLDAPGoSQLDifferentialServer(t *testing.T, databaseName string) string 
 			{Description: "olcDbName", Values: stringValues(databaseName)},
 			{Description: "olcDbUser", Values: stringValues("unused")},
 			{Description: "olcSqlUpperFunc", Values: stringValues("UPPER")},
+			{Description: "olcSqlSubtreeCond", Values: stringValues("UPPER(ldap_entries.dn) LIKE UPPER(?)")},
 			{Description: "olcSqlHasLDAPinfoDnRu", Values: stringValues("FALSE")},
 			{Description: "olcSqlAutocommit", Values: stringValues("FALSE")},
 			{Description: "olcAccess", Values: stringValues(
@@ -350,6 +351,7 @@ func observeSQLDifferentialServer(t *testing.T, uri string) sqlDifferentialObser
 	}{
 		{"dc=example,dc=com", ldap.ScopeBaseObject, "(objectClass=domain)", stableSQLDifferentialAttributes()},
 		{"ou=people,dc=example,dc=com", ldap.ScopeSingleLevel, "(&(objectClass=inetOrgPerson)(|(cn=*example)(sn=builder)))", stableSQLDifferentialAttributes()},
+		{"ou=people,dc=example,dc=com", ldap.ScopeWholeSubtree, "(objectClass=person)", stableSQLDifferentialAttributes()},
 		{"dc=example,dc=com", ldap.ScopeWholeSubtree, "(objectClass=person)", stableSQLDifferentialAttributes()},
 		{"dc=example,dc=com", ldap.ScopeWholeSubtree, "(cn=alice example)", stableSQLDifferentialAttributes()},
 		{"dc=example,dc=com", ldap.ScopeWholeSubtree, "(cn=*build*)", stableSQLDifferentialAttributes()},

@@ -687,6 +687,12 @@ func TestCollectOverlayRemainsSeparateFromRFC3671CollectiveAttributes(t *testing
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	seedOnlineConfiguration(t, store)
+	setCollectiveAdministrativeRoles(
+		t,
+		store,
+		collectPeopleDN,
+		"collectiveAttributeSpecificArea",
+	)
 	address, stop := startServer(t, store, Config{
 		RootDN:       "cn=admin,dc=example,dc=com",
 		RootPassword: []byte("admin-secret"),

@@ -267,8 +267,8 @@ func runSlapModify(
 	quick := flags.Bool("q", false, "skip value syntax checks")
 	skipSchema := flags.Bool("s", false, "disable schema checking")
 	serverID := flags.Int("S", 0, "server ID for generated entryCSN values")
-	flags.Int("j", 0, "unsupported resume line")
-	flags.Bool("w", false, "unsupported contextCSN update")
+	resumeLine := flags.Int("j", 0, "skip records beginning before this physical line")
+	updateContextCSN := flags.Bool("w", false, "update contextCSN from committed entryCSN values")
 	flags.Bool("v", false, "write a completion summary")
 	registerOfflineConfigFlags(flags)
 	if err := flags.Parse(args); err != nil {
@@ -280,12 +280,6 @@ func runSlapModify(
 	if err := rejectOfflineConfigFlags("slapmodify", flags); err != nil {
 		return err
 	}
-	if err := rejectUnsupportedFlags("slapmodify", flags, []unsupportedFlag{
-		{name: "j", reason: "physical-line resume is not implemented"},
-		{name: "w", reason: "offline contextCSN aggregation is not implemented for change records"},
-	}); err != nil {
-		return err
-	}
 	for _, option := range []struct {
 		name    string
 		enabled bool
@@ -295,6 +289,7 @@ func runSlapModify(
 		{name: "u", enabled: *dryRun},
 		{name: "q", enabled: *quick},
 		{name: "s", enabled: *skipSchema},
+		{name: "w", enabled: *updateContextCSN},
 	} {
 		if flagWasSet(flags, option.name) && !option.enabled {
 			return fmt.Errorf("slapmodify option -%s=false is not supported", option.name)
@@ -302,6 +297,9 @@ func runSlapModify(
 	}
 	if *serverID < 0 || *serverID > 0x0fff {
 		return fmt.Errorf("slapmodify server ID must be between 0 and %d", 0x0fff)
+	}
+	if *resumeLine < 0 {
+		return errors.New("slapmodify option -j requires a non-negative line number")
 	}
 	selected, err := resolveOfflineDatabaseSelection(
 		"slapmodify", flags, *databasePath, *database, *suffix,
@@ -330,7 +328,8 @@ func runSlapModify(
 			Database: selected, IncludeSubordinates: !*disableSubordinateGlue,
 			Continue: *continueOnError, DryRun: *dryRun,
 			SkipSchema: *skipSchema, SkipValueValidation: *quick,
-			ServerID: uint16(*serverID),
+			ServerID: uint16(*serverID), ResumeLine: *resumeLine,
+			UpdateContextCSN: *updateContextCSN,
 		},
 	)
 	for _, failure := range report.Failures {

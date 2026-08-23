@@ -302,6 +302,9 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
 	}
+	if err := server.preparePcachePersistence(reader, runtime); err != nil {
+		return nil, err
+	}
 	return runtime, nil
 }
 
@@ -627,6 +630,12 @@ func (server *Server) validateRuntimeConfiguration(
 	}
 	reuseSeqmodCoordinators(previous, runtime)
 	reusePcacheStates(previous, runtime)
+	if err := server.ensurePcachePersistence(writer, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"invalid pcache persistence: "+err.Error(),
+		)
+	}
 	if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
 		return nil, operationFailed(
 			ldapwire.ResultConstraintViolation,

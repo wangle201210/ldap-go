@@ -66,6 +66,7 @@ type runtimeDatabase struct {
 	syncSessionLogSize    int
 	syncNoPresent         bool
 	syncReloadHint        bool
+	syncUseSubentry       bool
 	syncConsumers         []syncConsumerConfig
 	dds                   *ddsRuntimeConfiguration
 	ppolicy               *passwordPolicyRuntimeConfiguration
@@ -341,6 +342,10 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 		} else if present {
 			database.lastMod = lastMod
 		}
+		database.syncUseSubentry, _, err = singleBoolean(entry, "olcSyncUseSubentry")
+		if err != nil {
+			return err
+		}
 		database.lastBind, _, err = singleBoolean(entry, "olcLastBind")
 		if err != nil {
 			return err
@@ -450,6 +455,7 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			if err != nil {
 				return err
 			}
+			configuration.collectivePlanKey = database.configDNKey
 			database.sqlBackend = configuration
 			// back-sql stores directory entries in the configured SQL database.
 			database.partition = ""

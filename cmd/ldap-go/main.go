@@ -45,10 +45,23 @@ const (
 var version = "dev"
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(runWithContext(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 }
 
 func run(
+	args []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	getenv func(string) string,
+) int {
+	return runWithContext(context.Background(), args, stdin, stdout, stderr, getenv)
+}
+
+func runWithContext(
+	ctx context.Context,
 	args []string,
 	stdin io.Reader,
 	stdout io.Writer,
@@ -65,7 +78,7 @@ func run(
 	case "audit-verify":
 		err = runAuditVerify(args[1:], stdout, stderr, getenv)
 	case "backup":
-		err = runBackup(args[1:], stdout, stderr)
+		err = runBackup(ctx, args[1:], stdout, stderr)
 	case "check":
 		err = runCheck(args[1:], stdout, stderr)
 	case "config-test", "slaptest":
@@ -105,7 +118,7 @@ func run(
 	case "rebuild", "reindex", "slapindex":
 		err = runRebuild(args[0], args[1:], stdout, stderr)
 	case "restore":
-		err = runRestore(args[1:], stdout, stderr)
+		err = runRestore(ctx, args[1:], stdout, stderr)
 	case "serve":
 		err = runServe(args[1:], stdout, stderr, getenv)
 	case "version":
@@ -328,7 +341,7 @@ func runConfigurationTest(
 	return err
 }
 
-func runBackup(args []string, stdout, stderr io.Writer) error {
+func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) (runErr error) {
 	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "source database path")
@@ -343,19 +356,21 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if *backupPath == "" {
 		return errors.New("-out is required")
 	}
-	report, err := storage.BackupBolt(
-		context.Background(),
-		*databasePath,
-		*backupPath,
-		*replace,
-	)
+	store, err := storage.OpenBoltReadOnly(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, store.Close())
+	}()
+	report, err := store.Backup(ctx, *backupPath, *replace)
 	if err != nil {
 		return err
 	}
 	return printMaintenanceReport(stdout, "backed up", *backupPath, report)
 }
 
-func runRestore(args []string, stdout, stderr io.Writer) error {
+func runRestore(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	backupPath := flags.String("backup", "", "source backup path")
@@ -371,7 +386,7 @@ func runRestore(args []string, stdout, stderr io.Writer) error {
 		return errors.New("-backup is required")
 	}
 	report, err := storage.RestoreBolt(
-		context.Background(),
+		ctx,
 		*backupPath,
 		*databasePath,
 		*replace,

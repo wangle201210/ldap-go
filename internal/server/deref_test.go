@@ -628,6 +628,22 @@ func TestDerefResponseACLBackendAndValueSemantics(t *testing.T) {
 	}
 
 	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		peopleDN, err := directory.ParseDN("ou=people,dc=example,dc=com")
+		if err != nil {
+			return err
+		}
+		people, err := writer.Get(peopleDN)
+		if err != nil {
+			return err
+		}
+		people.ReplaceValues(
+			"administrativeRole",
+			stringValues("collectiveAttributeSpecificArea"),
+		)
+		if err := writer.Put(people, true); err != nil {
+			return err
+		}
+
 		configDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
 		if err != nil {
 			return err

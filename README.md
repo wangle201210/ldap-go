@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,589 top-level tests against the pinned commit.
+The latest strict run passed 1,622 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -65,7 +65,9 @@ not a claim that arbitrary OpenLDAP backend files are interchangeable.
 ## Current runnable milestone
 
 The current server milestone supports atomic content-LDIF import/export,
-validated offline bbolt backup/restore/check/rebuild commands,
+validated bbolt backup/restore/check/rebuild commands, including consistent
+online backup through an already-open `Bolt` handle and offline restore guarded
+by a stable cross-process sidecar lock,
 anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
@@ -125,9 +127,12 @@ reloads, clears verifiers on every successful runtime reload, preserves the acti
 cache when a candidate configuration rolls back, and never stores the
 cleartext credential. `olcPcacheValidate` rechecks provider responses and TTR
 refreshes; `olcPcachePosition=head|tail` is accepted for the current exclusive
-back-ldap callback path. Private cache-database management,
-all advanced controls, and arbitrary overlay-order combinations remain out of
-scope.
+back-ldap callback path. `olcPcachePersist` stores query/bind snapshots and
+restores valid unexpired state after restart. Database roots can inspect the
+private cache through OpenLDAP's critical privateDB control, including
+`pcacheQueryID`, persisted query URLs, Compare membership, and selected-query
+removal through the queryDelete exop. Unsupported private-database writes fail
+explicitly; arbitrary overlay-order combinations remain out of scope.
 
 An imported `olcDatabase=sock` delegates Bind, Search, Compare, Add, Modify,
 ModifyDN, Delete, Password Modify, and Unbind to a Unix-domain socket using
@@ -168,12 +173,15 @@ cross-driver comparison semantics; even equal SQLite TEXT and BLOB values can
 compare unequal. Final LDAP evaluation remains authoritative. Requested
 attributes, filter attributes, and `olcSqlFetchAttrs`
 restrict mapped attribute reads unless `olcSqlFetchAllAttrs` is enabled; binary
-values are unchanged. The
-`olcSqlBaseObject: TRUE` subset synthesizes the configured suffix entry and
-de-duplicates an equivalent mapped row. File-backed base objects, native
-`olcSqlLayer`, custom scope SQL templates, subtree shortcuts, and
-`olcSqlCheckSchema` are rejected explicitly. Final LDAP scope, filter, overlay,
-and ACL evaluation still runs after SQL candidate selection.
+values are unchanged. `olcSqlBaseObject: TRUE` synthesizes the configured
+suffix entry and de-duplicates an equivalent mapped row; an absolute, regular,
+non-symlink LDIF file can instead supply bounded base-object records. The safe
+`olcSqlLayer` subset supports `identity` and one `suffixmassage` mapping.
+Parameterized one-level/subtree scope templates and subtree shortcuts are
+validated before use, and `olcSqlCheckSchema` validates mapped structural
+classes while accepting legal subclasses. Final LDAP scope, filter, overlay,
+and ACL evaluation still runs after SQL candidate selection; arbitrary native
+SQL layer plugins remain unsupported.
 
 The separate `ldap-go lloadd` command implements the verified core of
 OpenLDAP's LDAP-aware load balancer. It forwards bounded BER frames while
@@ -203,8 +211,11 @@ shutdown/gentle-shutdown semantics; the ldap-go extension `-hot-reload` moves
 reload to `SIGUSR1`, with `-drain-timeout` bounding old generations. Its
 read-only `cn=Monitor` view provides connection/backend and operation counters,
 OpenLDAP ACL evaluation, paging snapshots, Assertion, server-side Sort, VLV,
-and ManageDsaIT. It is not the complete OpenLDAP monitor schema or an embedded
-slapd-module ABI.
+and ManageDsaIT. Terminal success/error/abandon counters are updated once per
+operation, and raw BER tests cover noncritical Sort/VLV failures. Serving this
+Monitor view on the data listener is an ldap-go extension: standalone OpenLDAP
+2.6.13 returns `unavailable` there. It is not the complete OpenLDAP monitor
+schema or an embedded slapd-module ABI.
 The `read_pause` feature applies capacity backpressure before reading more
 client requests. The `vc` feature maps Simple Bind to OpenLDAP's Verify
 Credentials exop and fails explicitly when the backend does not provide it;
@@ -286,7 +297,10 @@ RFC 3671 collective attributes include the standard `c-*` schema, strict
 subtree-specification scopes, in-memory value propagation and merging,
 collective exclusions, source references, and logical-entry behavior across
 Search, Compare, assertions, read controls, paging, sorting/VLV, and ACL
-evaluation.
+evaluation. X.501 specific/inner administrative areas, autonomous boundaries,
+nested areas, role name/OID aliases, and multiple collective subentries are
+enforced. This is a deliberate standards extension over the pinned OpenLDAP
+2.6.13 build, which rejects those administrative-role values with result 21.
 OpenLDAP's separate `collect` overlay loads ordered `olcCollectInfo` rules on
 one database and one frontend instance. Matching ancestor values are
 equality-normalized and appended, without de-duplication, only while final
@@ -666,7 +680,10 @@ missing referral DN deliberately retains the original base DN, avoiding the
 root-search expansion observed in the 2.6.13 binary.
 `ldapmodify -a` defaults records without `changetype` to Add, while ordinary
 `ldapmodify` parses the same records as Modify and supports `add`, `delete`,
-`replace`, and `increment` blocks with an optional final separator.
+`replace`, and `increment` blocks with an optional final separator. It supports
+OpenLDAP-style `-j` physical-line resume, bounded absolute `file://` values,
+record-level controls, and `-S` failure LDIF that preserves those controls for
+safe replay.
 `ldapcompare` carries generic `-e` controls and noncritical `-M` or critical
 `-MM` ManageDsaIT through its raw Compare path, including referral chasing;
 `-v` renders TRUE, FALSE, UNDEFINED, LDAP result details, referrals, and
@@ -701,7 +718,8 @@ go run ./cmd/ldap-go export \
   -db ./data/ldap-go.db \
   -ldif ./data/export.ldif
 
-# Stop the server before direct bbolt maintenance.
+# Stop the server before direct CLI maintenance. Online backup is available
+# through the already-open storage handle, not by reopening the bbolt path.
 go run ./cmd/ldap-go check -db ./data/ldap-go.db
 go run ./cmd/ldap-go backup \
   -db ./data/ldap-go.db \
@@ -911,7 +929,7 @@ go run ./cmd/ldap-go slapadd -db ./data/ldap-go.db -l data-1.ldif -n 1 -S 1 -w
 go run ./cmd/ldap-go slapcat -db ./data/ldap-go.db -l exported.ldif -n 1
 go run ./cmd/ldap-go slapauth -db ./data/ldap-go.db 'uid=alice,cn=auth'
 go run ./cmd/ldap-go slapschema -db ./data/ldap-go.db -v
-go run ./cmd/ldap-go slapmodify -db ./data/ldap-go.db -l changes.ldif
+go run ./cmd/ldap-go slapmodify -db ./data/ldap-go.db -l changes.ldif -j 1 -w
 go run ./cmd/ldap-go slapindex -db ./data/ldap-go.db cn uid
 go run ./cmd/ldap-go slappasswd -h '{PBKDF2-SM3}'
 ```

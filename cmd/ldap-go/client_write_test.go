@@ -742,8 +742,8 @@ func TestLDAPWriteRejectsConflictingAndUnsupportedOptions(t *testing.T) {
 		{name: "false dry-run", args: []string{"ldapadd", "-n=false"}, stdin: validLDIF, message: "-n=false is not supported"},
 		{name: "dry-run URI", args: []string{"ldapadd", "-n", "-H", "https://localhost"}, stdin: validLDIF, message: "must use an ldap:// or ldaps:// URI"},
 		{name: "dry-run TLS options", args: []string{"ldapadd", "-n", "-tls-server-name", "localhost"}, stdin: validLDIF, message: "TLS options require"},
-		{name: "URL value", args: []string{"ldapadd", "-n"}, stdin: "dn: uid=url," + clientToolPeopleDN + "\ncn:< file:///tmp/value\n\n", message: "external URL values are not supported"},
-		{name: "request control", args: []string{"ldapmodify", "-n"}, stdin: "dn: uid=x," + clientToolPeopleDN + "\ncontrol: 1.2.3\nchangetype: delete\n\n", message: "LDIF request controls are not supported"},
+		{name: "remote URL value", args: []string{"ldapadd", "-n"}, stdin: "dn: uid=url," + clientToolPeopleDN + "\ncn:< https://example.test/value\n\n", message: "local file:// absolute URL"},
+		{name: "misplaced request control", args: []string{"ldapmodify", "-n"}, stdin: "dn: uid=x," + clientToolPeopleDN + "\nchangetype: delete\ncontrol: 1.2.3\n\n", message: "must follow dn before changetype"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

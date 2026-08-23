@@ -45,6 +45,11 @@ func (reader *sqlBackendReader) sqlBackendSearchRequirements() (
 	if reader.ctx == nil {
 		return sqlBackendSearchRequirements{}, false
 	}
+	if ignored, _ := reader.ctx.Value(
+		sqlBackendIgnoreSearchRequirementsContextKey{},
+	).(bool); ignored {
+		return sqlBackendSearchRequirements{}, false
+	}
 	requirements, specified := reader.ctx.Value(
 		sqlBackendSearchRequirementsContextKey{},
 	).(sqlBackendSearchRequirements)
@@ -150,6 +155,9 @@ func (configuration *sqlBackendRuntimeConfiguration) prepareBaseObject() error {
 	if configuration.baseObject == "" {
 		configuration.baseObjectEntry = nil
 		return nil
+	}
+	if configuration.baseObject != "TRUE" {
+		return configuration.prepareBaseObjectFile()
 	}
 	dn, err := configuration.registry.NormalizeDN(configuration.baseObjectSuffix)
 	if err != nil {
@@ -260,6 +268,74 @@ func (reader *sqlBackendReader) sqlBackendFilterCandidates(
 	}
 	sort.Slice(ids, func(left, right int) bool { return ids[left].id < ids[right].id })
 	return ids, true, nil
+}
+
+func (reader *sqlBackendReader) sqlBackendScopeCandidates(
+	queryer sqlBackendQueryer,
+) ([]sqlEntryID, bool, error) {
+	requirements, specified := reader.sqlBackendSearchRequirements()
+	if !specified || !requirements.hasScope {
+		return nil, false, nil
+	}
+	if requirements.scope != directory.ScopeWholeSubtree &&
+		requirements.scope != directory.ScopeChildren {
+		return nil, false, nil
+	}
+	base, err := reader.configuration.mapLDAPDNToSQL(requirements.base)
+	if err != nil {
+		return nil, false, err
+	}
+	if reader.configuration.useSubtreeShortcut {
+		for _, suffix := range reader.configuration.serverSuffixes() {
+			normalized, normalizeErr := reader.configuration.normalizeLayerDN(suffix)
+			if normalizeErr != nil {
+				return nil, false, normalizeErr
+			}
+			requested, normalizeErr := reader.configuration.normalizeLayerDN(requirements.base)
+			if normalizeErr != nil {
+				return nil, false, normalizeErr
+			}
+			if requested.Equal(normalized) {
+				ids, scanErr := reader.scanSQLBackendEntryIDs(queryer)
+				return ids, true, scanErr
+			}
+		}
+	}
+	template := reader.configuration.subtreeTemplate
+	parameter := "%" + base.NormalizedString()
+	if requirements.scope == directory.ScopeChildren {
+		if reader.configuration.childrenTemplate != sqlScopeTemplateNone {
+			template = reader.configuration.childrenTemplate
+		}
+		parameter = "%," + base.NormalizedString()
+	}
+	expression := template.queryExpression()
+	if expression == "" {
+		return nil, false, nil
+	}
+	ids, err := reader.querySQLBackendEntryIDs(
+		queryer,
+		"SELECT id,keyval,oc_map_id,dn FROM ldap_entries WHERE "+expression+" ORDER BY id",
+		parameter,
+	)
+	return ids, true, err
+}
+
+func intersectSQLBackendEntryIDs(left, right []sqlEntryID) []sqlEntryID {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	rightIDs := make(map[int64]struct{}, len(right))
+	for _, candidate := range right {
+		rightIDs[candidate.id] = struct{}{}
+	}
+	result := make([]sqlEntryID, 0, len(left))
+	for _, candidate := range left {
+		if _, found := rightIDs[candidate.id]; found {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }
 
 func (reader *sqlBackendReader) planSQLBackendFilter(

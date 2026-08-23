@@ -151,7 +151,11 @@ collective-attribute subentries once per partition and read transaction,
 evaluates their subtree specifications, merges schema-normalized values, and
 applies member exclusions before filters and authorization. Storage and write
 validation continue to use the raw entry, so derived values and generated
-source references are never persisted.
+source references are never persisted. Specific and inner administrative areas
+are bounded by `administrativeRole`; autonomous areas terminate inheritance,
+and nested-area planning selects only sources governed by the effective area.
+SQL-backed plans use an unpruned metadata reader derived from the same SQL
+transaction and cache by database identity rather than the empty SQL partition.
 
 Attribute selection is also schema-aware. A requested bare attribute can
 project optioned language values, an exact language option selects that
@@ -175,7 +179,10 @@ OpenLDAP 2.6.13, maps malformed URLs to result 89 and unsupported critical
 extensions to 92, and deliberately preserves the original base when the URL
 has no DN. This last rule is a safety boundary: it does not reproduce the
 reference binary's root-search expansion. `ldapmodify` chooses Add for omitted
-`changetype` only under `-a`, otherwise parsing change blocks as Modify.
+`changetype` only under `-a`, otherwise parsing change blocks as Modify. Record
+controls remain attached to failed `-S` output, `-j` resumes at physical record
+lines, and bounded absolute `file://` values count against one expanded-record
+memory limit.
 `ldapcompare` uses its raw request path to retain result metadata, referrals,
 and controls for verbose output; Compare `-E` is rejected before dialing because
 the 2.6.13 executable never registers its otherwise present handler.
@@ -210,7 +217,14 @@ candidate-selection and indexing architecture must support:
 - stable entry IDs and entry UUIDs;
 - atomic Modify and ModifyDN, including subtree moves;
 - snapshot reads and ordered change records for replication;
-- offline backup, restore, consistency checking, and atomic database rebuild.
+- online snapshot backup through an open storage handle, offline restore,
+  consistency checking, and atomic database rebuild.
+
+bbolt instances and destructive maintenance share a persistent sidecar OS file
+lock keyed by the resolved database path. Restore takes the exclusive lock
+before inspecting or publishing the target, so a valid backup can replace a
+corrupt offline file without racing a concurrent opener. Atomic publication
+fsyncs the file and parent directory; direct CLI maintenance remains offline.
 
 Memory and bbolt use a storage-owned posting layout derived from each selected
 database's `olcDbIndex` values. Equality and presence postings store normalized
@@ -373,10 +387,12 @@ and `1.1` retain their LDAP selection meanings. Extensible filters without an
 attribute force all mappings because their dependencies cannot be proven.
 `olcSqlBaseObject: TRUE` creates a synthetic suffix entry from the naming RDN,
 reports subordinates from rows whose parent is `baseObject`, and suppresses an
-equivalent mapped duplicate. File-mode base objects, native `olcSqlLayer`,
-scope-template directives, subtree shortcuts, and `olcSqlCheckSchema` reject
-instead of silently changing semantics. This remains a partial back-sql model,
-not a portable SQL schema or complete plugin ABI.
+equivalent mapped duplicate. An absolute regular non-symlink LDIF file can
+provide bounded base records. The built-in `olcSqlLayer` path accepts identity
+or one suffix massage, while scope templates are restricted to parameterized
+portable forms and subtree shortcuts. `olcSqlCheckSchema` validates mapped
+structural classes and legal subclasses. Native layer plugins still reject;
+this remains a partial back-sql model, not a portable SQL schema or plugin ABI.
 
 ### Overlays
 

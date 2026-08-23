@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -34,7 +36,23 @@ const (
 	defaultSQLDeleteEntryStatement         = "DELETE FROM ldap_entries WHERE id=?"
 	defaultSQLRenameEntryStatement         = "UPDATE ldap_entries SET dn=?,parent=?,keyval=? WHERE id=?"
 	defaultSQLDeleteObjectClassesStatement = "DELETE FROM ldap_entry_objclasses WHERE entry_id=?"
+	maxSQLBaseObjectFileSize               = 8 << 20
+	maxSQLBaseObjectRecords                = 1024
 )
+
+type sqlScopeTemplate uint8
+
+const (
+	sqlScopeTemplateNone sqlScopeTemplate = iota
+	sqlScopeTemplateLike
+	sqlScopeTemplateUpperLike
+)
+
+type sqlDNLayer struct {
+	kind   string
+	local  directory.DN
+	remote directory.DN
+}
 
 type sqlBackendRuntimeConfiguration struct {
 	databaseName string
@@ -43,33 +61,44 @@ type sqlBackendRuntimeConfiguration struct {
 	databaseHost string
 	driverName   string
 
-	ocQuery           string
-	attributeQuery    string
-	idQuery           string
-	idQueryConfigured bool
-	dnMatchCondition  string
-	dnMatchConfigured bool
-	hasChildrenQuery  string
-	createNeedsSelect bool
-	upperFunction     string
-	upperNeedsCast    bool
-	hasReversedDN     bool
-	reversedDNSet     bool
-	failIfNoMapping   bool
-	allowOrphans      bool
-	baseObject        string
-	baseObjectSuffix  string
-	baseObjectEntry   *directory.Entry
-	layers            []string
-	fetchAllAttrs     bool
-	fetchAttrs        []string
-	aliasingKeyword   string
-	aliasingQuote     string
-	autocommit        bool
-	insertEntry       string
-	deleteEntry       string
-	renameEntry       string
-	deleteObjectClass string
+	ocQuery            string
+	attributeQuery     string
+	idQuery            string
+	idQueryConfigured  bool
+	dnMatchCondition   string
+	dnMatchConfigured  bool
+	hasChildrenQuery   string
+	createNeedsSelect  bool
+	upperFunction      string
+	upperNeedsCast     bool
+	hasReversedDN      bool
+	reversedDNSet      bool
+	failIfNoMapping    bool
+	allowOrphans       bool
+	baseObject         string
+	baseObjectSuffix   string
+	baseObjectDigest   [sha256.Size]byte
+	baseObjectData     []byte
+	baseObjectEntry    *directory.Entry
+	layers             []string
+	dnLayer            *sqlDNLayer
+	subtreeCondition   string
+	subtreeTemplate    sqlScopeTemplate
+	childrenCondition  string
+	childrenTemplate   sqlScopeTemplate
+	useSubtreeShortcut bool
+	checkSchema        bool
+	suffixes           []string
+	fetchAllAttrs      bool
+	fetchAttrs         []string
+	aliasingKeyword    string
+	aliasingQuote      string
+	autocommit         bool
+	insertEntry        string
+	deleteEntry        string
+	renameEntry        string
+	deleteObjectClass  string
+	collectivePlanKey  string
 
 	registry *schema.Registry
 	server   *Server
@@ -83,36 +112,45 @@ type sqlBackendRuntimeConfiguration struct {
 }
 
 type sqlBackendSettings struct {
-	databaseName      string
-	databaseUser      string
-	databasePass      string
-	databaseHost      string
-	driverName        string
-	ocQuery           string
-	attributeQuery    string
-	idQuery           string
-	idQueryConfigured bool
-	dnMatchCondition  string
-	dnMatchConfigured bool
-	createNeedsSelect bool
-	upperFunction     string
-	upperNeedsCast    bool
-	hasReversedDN     bool
-	reversedDNSet     bool
-	failIfNoMapping   bool
-	allowOrphans      bool
-	baseObject        string
-	baseObjectSuffix  string
-	layers            []string
-	fetchAllAttrs     bool
-	fetchAttrs        []string
-	aliasingKeyword   string
-	aliasingQuote     string
-	autocommit        bool
-	insertEntry       string
-	deleteEntry       string
-	renameEntry       string
-	deleteObjectClass string
+	databaseName       string
+	databaseUser       string
+	databasePass       string
+	databaseHost       string
+	driverName         string
+	ocQuery            string
+	attributeQuery     string
+	idQuery            string
+	idQueryConfigured  bool
+	dnMatchCondition   string
+	dnMatchConfigured  bool
+	createNeedsSelect  bool
+	upperFunction      string
+	upperNeedsCast     bool
+	hasReversedDN      bool
+	reversedDNSet      bool
+	failIfNoMapping    bool
+	allowOrphans       bool
+	baseObject         string
+	baseObjectSuffix   string
+	baseObjectDigest   [sha256.Size]byte
+	layers             []string
+	dnLayer            *sqlDNLayer
+	subtreeCondition   string
+	subtreeTemplate    sqlScopeTemplate
+	childrenCondition  string
+	childrenTemplate   sqlScopeTemplate
+	useSubtreeShortcut bool
+	checkSchema        bool
+	suffixes           []string
+	fetchAllAttrs      bool
+	fetchAttrs         []string
+	aliasingKeyword    string
+	aliasingQuote      string
+	autocommit         bool
+	insertEntry        string
+	deleteEntry        string
+	renameEntry        string
+	deleteObjectClass  string
 }
 
 type sqlObjectClassMapping struct {
@@ -151,11 +189,16 @@ type sqlEntryID struct {
 
 type sqlBackendSearchRequirementsContextKey struct{}
 
+type sqlBackendIgnoreSearchRequirementsContextKey struct{}
+
 type sqlBackendSearchRequirements struct {
 	hasSubordinates bool
 	attributes      []string
 	filter          directory.Filter
 	hasFilter       bool
+	base            directory.DN
+	scope           directory.Scope
+	hasScope        bool
 }
 
 func withSQLBackendSearchRequirements(
@@ -172,6 +215,27 @@ func withSQLBackendSearchRequirements(
 		requirements.hasFilter = true
 	}
 	return context.WithValue(ctx, sqlBackendSearchRequirementsContextKey{}, requirements)
+}
+
+func withSQLBackendScopeRequirements(
+	ctx context.Context,
+	base directory.DN,
+	scope directory.Scope,
+) context.Context {
+	requirements, _ := ctx.Value(
+		sqlBackendSearchRequirementsContextKey{},
+	).(sqlBackendSearchRequirements)
+	requirements.base = base
+	requirements.scope = scope
+	requirements.hasScope = true
+	return context.WithValue(ctx, sqlBackendSearchRequirementsContextKey{}, requirements)
+}
+
+func withoutSQLBackendSearchRequirements(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, sqlBackendIgnoreSearchRequirementsContextKey{}, true)
 }
 
 func sqlBackendSearchRequestsHasSubordinates(
@@ -246,6 +310,10 @@ func loadSQLBackendRuntimeConfiguration(
 		deleteEntry:       defaultSQLDeleteEntryStatement,
 		renameEntry:       defaultSQLRenameEntryStatement,
 		deleteObjectClass: defaultSQLDeleteObjectClassesStatement,
+		checkSchema:       true,
+	}
+	for _, value := range entry.Values("olcSuffix") {
+		configuration.suffixes = append(configuration.suffixes, string(value))
 	}
 	if configuration.databasePass, err = optionalSQLString(entry, "olcDbPass"); err != nil {
 		return nil, err
@@ -327,7 +395,6 @@ func loadSQLBackendRuntimeConfiguration(
 		}
 		*option.target = value
 	}
-	configuration.prepareHasChildrenQuery()
 	for _, raw := range entry.Values("olcSqlLayer") {
 		value := strings.TrimSpace(string(raw))
 		if value == "" {
@@ -336,24 +403,31 @@ func loadSQLBackendRuntimeConfiguration(
 		configuration.layers = append(configuration.layers, value)
 	}
 	if configuration.baseObject != "" {
-		if !strings.EqualFold(strings.TrimSpace(configuration.baseObject), "TRUE") {
-			return nil, fmt.Errorf(
-				"%s olcSqlBaseObject file mode is not supported; use TRUE or remove the directive",
-				entry.DN,
-			)
-		}
 		suffixes := entry.Values("olcSuffix")
 		if len(suffixes) == 0 {
 			return nil, fmt.Errorf("%s olcSqlBaseObject requires olcSuffix", entry.DN)
 		}
-		configuration.baseObject = "TRUE"
+		if strings.EqualFold(strings.TrimSpace(configuration.baseObject), "TRUE") {
+			configuration.baseObject = "TRUE"
+		} else {
+			path, pathErr := filepath.Abs(strings.TrimSpace(configuration.baseObject))
+			if pathErr != nil || !filepath.IsAbs(strings.TrimSpace(configuration.baseObject)) {
+				return nil, fmt.Errorf(
+					"%s olcSqlBaseObject file must be an absolute path",
+					entry.DN,
+				)
+			}
+			configuration.baseObject = path
+			configuration.baseObjectData, configuration.baseObjectDigest, err =
+				readSQLBaseObjectFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("%s olcSqlBaseObject: %w", entry.DN, err)
+			}
+		}
 		configuration.baseObjectSuffix = string(suffixes[0])
 	}
-	if len(configuration.layers) != 0 {
-		return nil, fmt.Errorf(
-			"%s olcSqlLayer requires the OpenLDAP native back-sql plugin ABI, which is not supported",
-			entry.DN,
-		)
+	if err := configuration.prepareSQLLayers(entry); err != nil {
+		return nil, err
 	}
 	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlFetchAttrs"); valueErr != nil {
 		return nil, valueErr
@@ -365,8 +439,6 @@ func loadSQLBackendRuntimeConfiguration(
 	}
 	unsupportedStrings := []string{
 		"olcSqlConcatPattern",
-		"olcSqlSubtreeCond",
-		"olcSqlChildrenCond",
 		"olcSqlStrcastFunc",
 	}
 	for _, attribute := range unsupportedStrings {
@@ -380,19 +452,38 @@ func loadSQLBackendRuntimeConfiguration(
 			)
 		}
 	}
-	for _, attribute := range []string{"olcSqlUseSubtreeShortcut", "olcSqlCheckSchema"} {
-		_, present, valueErr := singleBoolean(entry, attribute)
-		if valueErr != nil {
-			return nil, valueErr
-		}
-		if present {
-			return nil, fmt.Errorf(
-				"%s %s is not supported by the SQL backend",
-				entry.DN,
-				attribute,
-			)
+	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlSubtreeCond"); valueErr != nil {
+		return nil, valueErr
+	} else if present {
+		configuration.subtreeCondition = value
+		configuration.subtreeTemplate, err = parseSQLScopeTemplate(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcSqlSubtreeCond: %w", entry.DN, err)
 		}
 	}
+	if value, present, valueErr := singleOptionalSQLString(entry, "olcSqlChildrenCond"); valueErr != nil {
+		return nil, valueErr
+	} else if present {
+		configuration.childrenCondition = value
+		configuration.childrenTemplate, err = parseSQLScopeTemplate(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s olcSqlChildrenCond: %w", entry.DN, err)
+		}
+	}
+	if configuration.useSubtreeShortcut, _, err = singleBoolean(entry, "olcSqlUseSubtreeShortcut"); err != nil {
+		return nil, err
+	}
+	// OpenLDAP enables this unconditionally at database open when there is
+	// exactly one naming context, even if the directive was absent or false.
+	if len(configuration.suffixes) == 1 {
+		configuration.useSubtreeShortcut = true
+	}
+	if value, present, valueErr := singleBoolean(entry, "olcSqlCheckSchema"); valueErr != nil {
+		return nil, valueErr
+	} else if present {
+		configuration.checkSchema = value
+	}
+	configuration.prepareHasChildrenQuery()
 	return configuration, nil
 }
 
@@ -542,36 +633,45 @@ func (configuration *sqlBackendRuntimeConfiguration) settings() sqlBackendSettin
 		dnMatchCondition = ""
 	}
 	return sqlBackendSettings{
-		databaseName:      configuration.databaseName,
-		databaseUser:      configuration.databaseUser,
-		databasePass:      configuration.databasePass,
-		databaseHost:      configuration.databaseHost,
-		driverName:        configuration.driverName,
-		ocQuery:           configuration.ocQuery,
-		attributeQuery:    configuration.attributeQuery,
-		idQuery:           idQuery,
-		idQueryConfigured: configuration.idQueryConfigured,
-		dnMatchCondition:  dnMatchCondition,
-		dnMatchConfigured: configuration.dnMatchConfigured,
-		createNeedsSelect: configuration.createNeedsSelect,
-		upperFunction:     configuration.upperFunction,
-		upperNeedsCast:    configuration.upperNeedsCast,
-		hasReversedDN:     hasReversedDN,
-		reversedDNSet:     configuration.reversedDNSet,
-		failIfNoMapping:   configuration.failIfNoMapping,
-		allowOrphans:      configuration.allowOrphans,
-		baseObject:        configuration.baseObject,
-		baseObjectSuffix:  configuration.baseObjectSuffix,
-		layers:            append([]string(nil), configuration.layers...),
-		fetchAllAttrs:     configuration.fetchAllAttrs,
-		fetchAttrs:        append([]string(nil), configuration.fetchAttrs...),
-		aliasingKeyword:   configuration.aliasingKeyword,
-		aliasingQuote:     configuration.aliasingQuote,
-		autocommit:        configuration.autocommit,
-		insertEntry:       configuration.insertEntry,
-		deleteEntry:       configuration.deleteEntry,
-		renameEntry:       configuration.renameEntry,
-		deleteObjectClass: configuration.deleteObjectClass,
+		databaseName:       configuration.databaseName,
+		databaseUser:       configuration.databaseUser,
+		databasePass:       configuration.databasePass,
+		databaseHost:       configuration.databaseHost,
+		driverName:         configuration.driverName,
+		ocQuery:            configuration.ocQuery,
+		attributeQuery:     configuration.attributeQuery,
+		idQuery:            idQuery,
+		idQueryConfigured:  configuration.idQueryConfigured,
+		dnMatchCondition:   dnMatchCondition,
+		dnMatchConfigured:  configuration.dnMatchConfigured,
+		createNeedsSelect:  configuration.createNeedsSelect,
+		upperFunction:      configuration.upperFunction,
+		upperNeedsCast:     configuration.upperNeedsCast,
+		hasReversedDN:      hasReversedDN,
+		reversedDNSet:      configuration.reversedDNSet,
+		failIfNoMapping:    configuration.failIfNoMapping,
+		allowOrphans:       configuration.allowOrphans,
+		baseObject:         configuration.baseObject,
+		baseObjectSuffix:   configuration.baseObjectSuffix,
+		baseObjectDigest:   configuration.baseObjectDigest,
+		layers:             append([]string(nil), configuration.layers...),
+		dnLayer:            cloneSQLDNLayer(configuration.dnLayer),
+		subtreeCondition:   configuration.subtreeCondition,
+		subtreeTemplate:    configuration.subtreeTemplate,
+		childrenCondition:  configuration.childrenCondition,
+		childrenTemplate:   configuration.childrenTemplate,
+		useSubtreeShortcut: configuration.useSubtreeShortcut,
+		checkSchema:        configuration.checkSchema,
+		suffixes:           append([]string(nil), configuration.suffixes...),
+		fetchAllAttrs:      configuration.fetchAllAttrs,
+		fetchAttrs:         append([]string(nil), configuration.fetchAttrs...),
+		aliasingKeyword:    configuration.aliasingKeyword,
+		aliasingQuote:      configuration.aliasingQuote,
+		autocommit:         configuration.autocommit,
+		insertEntry:        configuration.insertEntry,
+		deleteEntry:        configuration.deleteEntry,
+		renameEntry:        configuration.renameEntry,
+		deleteObjectClass:  configuration.deleteObjectClass,
 	}
 }
 
@@ -1059,6 +1159,19 @@ type sqlBackendReader struct {
 	initializationErr error
 }
 
+func (reader *sqlBackendReader) collectiveAttributePlanReader() (string, storage.Reader) {
+	if reader == nil || reader.configuration == nil {
+		return "", reader
+	}
+	cacheKey := reader.configuration.collectivePlanKey
+	if cacheKey == "" {
+		cacheKey = fmt.Sprintf("%p", reader.configuration)
+	}
+	metadata := *reader
+	metadata.ctx = withoutSQLBackendSearchRequirements(reader.ctx)
+	return "sql:" + cacheKey, &metadata
+}
+
 func (reader *sqlBackendReader) NormalizeDNIdentity(
 	dn directory.DN,
 ) (directory.DN, error) {
@@ -1085,7 +1198,11 @@ func (reader *sqlBackendReader) normalizedSQLDN(
 	if err != nil {
 		return directory.DN{}, "", err
 	}
-	return normalized, normalized.NormalizedString(), nil
+	mapped, err := reader.configuration.mapLDAPDNToSQL(normalized)
+	if err != nil {
+		return directory.DN{}, "", err
+	}
+	return normalized, mapped.NormalizedString(), nil
 }
 
 func (reader *sqlBackendReader) AccessContext() any {
@@ -1151,7 +1268,16 @@ func (reader *sqlBackendReader) ForEach(
 	if err != nil {
 		return err
 	}
-	if !planned {
+	scopeIDs, scopePlanned, err := reader.sqlBackendScopeCandidates(queryer)
+	if err != nil {
+		return err
+	}
+	switch {
+	case planned && scopePlanned:
+		ids = intersectSQLBackendEntryIDs(ids, scopeIDs)
+	case scopePlanned:
+		ids = scopeIDs
+	case !planned:
 		ids, err = reader.scanSQLBackendEntryIDs(queryer)
 		if err != nil {
 			return err
@@ -1186,7 +1312,7 @@ func (reader *sqlBackendReader) ForEach(
 			if parseErr != nil {
 				return fmt.Errorf("SQL-backend entry %d DN: %w", id.id, parseErr)
 			}
-			candidate, parseErr = reader.NormalizeDNIdentity(candidate)
+			candidate, parseErr = reader.configuration.mapSQLDNToLDAP(candidate)
 			if parseErr != nil {
 				return fmt.Errorf("SQL-backend entry %d DN: %w", id.id, parseErr)
 			}
@@ -1268,7 +1394,7 @@ func (reader *sqlBackendReader) loadEntryWithSelection(
 	if err != nil {
 		return directory.Entry{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
 	}
-	normalizedDN, err = reader.NormalizeDNIdentity(normalizedDN)
+	normalizedDN, err = reader.configuration.mapSQLDNToLDAP(normalizedDN)
 	if err != nil {
 		return directory.Entry{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
 	}
@@ -1325,18 +1451,37 @@ func (reader *sqlBackendReader) loadEntryWithSelection(
 			}
 		}
 	}
-	appendSQLAttributeValue(&entry, "structuralObjectClass", []byte(objectClass.name))
+	structuralObjectClass := objectClass.name
+	if reader.configuration.checkSchema {
+		structural, err := reader.configuration.registry.StructuralObjectClass(entry)
+		if err != nil {
+			return directory.Entry{}, operationFailureFromSchema(err)
+		}
+		if !reader.configuration.registry.EntryHasObjectClass(
+			directory.Entry{Attributes: []directory.Attribute{{
+				Description: "objectClass",
+				Values:      stringValues(structural),
+			}}},
+			objectClass.name,
+		) {
+			return directory.Entry{}, operationFailed(
+				ldapwire.ResultObjectClassViolation,
+				fmt.Sprintf(
+					"SQL-backend structural objectClass %q does not match mapping %q",
+					structural,
+					objectClass.name,
+				),
+			)
+		}
+		structuralObjectClass = structural
+	}
+	appendSQLAttributeValue(&entry, "structuralObjectClass", []byte(structuralObjectClass))
 	appendSQLAttributeValue(&entry, "entryUUID", []byte(sqlEntryUUID(id.objectClassID, id.keyValue)))
 	return entry, nil
 }
 
 func (reader *sqlBackendReader) searchRequiresHasSubordinates() (bool, bool) {
-	if reader.ctx == nil {
-		return false, false
-	}
-	requirements, specified := reader.ctx.Value(
-		sqlBackendSearchRequirementsContextKey{},
-	).(sqlBackendSearchRequirements)
+	requirements, specified := reader.sqlBackendSearchRequirements()
 	return requirements.hasSubordinates, specified
 }
 
@@ -1496,14 +1641,13 @@ func (reader *sqlBackendReader) entryIDWithQueryer(
 	if err != nil {
 		return sqlEntryID{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
 	}
-	storedDN, err = reader.NormalizeDNIdentity(storedDN)
+	storedDN, err = reader.configuration.mapSQLDNToLDAP(storedDN)
 	if err != nil {
 		return sqlEntryID{}, fmt.Errorf("SQL-backend entry %d DN: %w", id.id, err)
 	}
 	if !storedDN.Equal(normalized) {
 		return sqlEntryID{}, storage.ErrEntryNotFound
 	}
-	id.dn = storedDN.String()
 	return id, nil
 }
 

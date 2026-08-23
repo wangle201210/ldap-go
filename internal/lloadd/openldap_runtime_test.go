@@ -64,6 +64,35 @@ restrict_control 1.2.3.4 reject
 	}
 }
 
+func TestOpenLDAPReferenceLloaddMonitorDataListenerDifference(t *testing.T) {
+	requirePinnedOpenLDAPLloaddSource(t)
+	configText := `
+sockbuf_max_incoming_client 4194303
+sockbuf_max_incoming_upstream 4194303
+`
+	referenceAddress := startOpenLDAPReferenceLloadd(t, configText)
+	_, goAddress := startRuntimeProxy(t, RuntimeConfig{})
+
+	referenceEntries, referenceCode := searchLloaddMonitorBase(t, referenceAddress)
+	if referenceCode != ldap.LDAPResultUnavailable || len(referenceEntries) != 0 {
+		t.Fatalf(
+			"OpenLDAP standalone lloadd monitor data listener = entries %d code %d, want 0/%d",
+			len(referenceEntries),
+			referenceCode,
+			ldap.LDAPResultUnavailable,
+		)
+	}
+	goEntries, goCode := searchLloaddMonitorBase(t, goAddress)
+	if goCode != ldap.LDAPResultSuccess || len(goEntries) != 1 ||
+		goEntries[0].DN != MonitorLoadBalancerDN {
+		t.Fatalf(
+			"ldap-go lloadd monitor data listener = %#v code %d",
+			goEntries,
+			goCode,
+		)
+	}
+}
+
 func TestOpenLDAPReferenceLloaddBindProxyAuthzDifferential(t *testing.T) {
 	requirePinnedOpenLDAPLloaddSource(t)
 	authz := make(chan string, 4)
@@ -415,6 +444,34 @@ func searchLDAPResultCode(t *testing.T, address string, controls []ldap.Control)
 		t.Fatalf("Search(%s) = %v, want LDAP error", address, err)
 	}
 	return ldapErr.ResultCode
+}
+
+func searchLloaddMonitorBase(t *testing.T, address string) ([]*ldap.Entry, uint16) {
+	t.Helper()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatalf("dial %s: %v", address, err)
+	}
+	defer client.Close()
+	result, err := client.Search(ldap.NewSearchRequest(
+		MonitorLoadBalancerDN,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"cn"},
+		nil,
+	))
+	if err == nil {
+		return result.Entries, ldap.LDAPResultSuccess
+	}
+	var ldapErr *ldap.Error
+	if !errors.As(err, &ldapErr) {
+		t.Fatalf("Search(%s) = %v, want LDAP result", address, err)
+	}
+	return nil, ldapErr.ResultCode
 }
 
 func retryBindSearch(address string, timeout time.Duration) (string, error) {

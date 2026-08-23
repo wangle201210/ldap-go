@@ -24,7 +24,8 @@ var (
 )
 
 type Bolt struct {
-	db *bolt.DB
+	db       *bolt.DB
+	pathLock *boltPathLock
 }
 
 func OpenBolt(path string) (*Bolt, error) {
@@ -34,12 +35,17 @@ func OpenBolt(path string) (*Bolt, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
+	pathLock, err := acquireBoltPathLock(path, false)
+	if err != nil {
+		return nil, fmt.Errorf("lock database path: %w", err)
+	}
 
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
+		_ = pathLock.Close()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	store := &Bolt{db: db}
+	store := &Bolt{db: db, pathLock: pathLock}
 	if err := db.Update(func(tx *bolt.Tx) error {
 		if _, err := tx.CreateBucketIfNotExists(entriesBucket); err != nil {
 			return err
@@ -53,20 +59,26 @@ func OpenBolt(path string) (*Bolt, error) {
 		_, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket)
 		return err
 	}); err != nil {
-		_ = db.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("initialize database: %w", err)
 	}
 	return store, nil
 }
 
 // OpenBoltReadOnly opens an existing ldap-go database without creating or
-// modifying the database file, its parent directory, or any buckets.
+// modifying the database file or its buckets. It creates the stable sidecar
+// lock file when an older database does not have one yet.
 func OpenBoltReadOnly(path string) (*Bolt, error) {
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
+	pathLock, err := acquireBoltPathLock(path, false)
+	if err != nil {
+		return nil, fmt.Errorf("lock database path: %w", err)
+	}
 	db, err := openBoltReadOnly(path)
 	if err != nil {
+		_ = pathLock.Close()
 		return nil, err
 	}
 	if err := db.View(func(tx *bolt.Tx) error {
@@ -76,9 +88,10 @@ func OpenBoltReadOnly(path string) (*Bolt, error) {
 		return nil
 	}); err != nil {
 		_ = db.Close()
+		_ = pathLock.Close()
 		return nil, fmt.Errorf("validate database %q: %w", path, err)
 	}
-	return &Bolt{db: db}, nil
+	return &Bolt{db: db, pathLock: pathLock}, nil
 }
 
 func (store *Bolt) View(ctx context.Context, fn func(Reader) error) error {
@@ -103,8 +116,33 @@ func (store *Bolt) Update(ctx context.Context, fn func(Writer) error) error {
 	})
 }
 
+// Backup writes a transactionally consistent snapshot of an open bbolt store.
+// The read transaction remains pinned while bbolt copies the pages, so callers
+// may continue committing writes while the backup is in progress.
+func (store *Bolt) Backup(
+	ctx context.Context,
+	backupPath string,
+	replace bool,
+) (CheckReport, error) {
+	if store == nil || store.db == nil {
+		return CheckReport{}, errors.New("database is not open")
+	}
+	return backupOpenBolt(ctx, store.db, backupPath, replace, osFileSystem{})
+}
+
 func (store *Bolt) Close() error {
-	return store.db.Close()
+	if store == nil {
+		return nil
+	}
+	var databaseErr error
+	if store.db != nil {
+		databaseErr = store.db.Close()
+	}
+	var lockErr error
+	if store.pathLock != nil {
+		lockErr = store.pathLock.Close()
+	}
+	return errors.Join(databaseErr, lockErr)
 }
 
 type boltTx struct {

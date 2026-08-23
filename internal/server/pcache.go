@@ -23,6 +23,7 @@ const (
 	pcacheMaxAttributeSets  = 500
 	pcacheDefaultMaxQueries = 10000
 	pcachePrivateDBControl  = "1.3.6.1.4.1.4203.666.11.9.5.1"
+	pcacheQueryDeleteOID    = "1.3.6.1.4.1.4203.666.11.9.6.1"
 )
 
 type pcacheRuntimeConfiguration struct {
@@ -38,7 +39,7 @@ type pcacheRuntimeConfiguration struct {
 	entryLimit        int
 	consistencyPeriod time.Duration
 	offline           bool
-	persist           bool // Accepted and fingerprinted; query state is intentionally not restored.
+	persist           bool
 	attributeSets     []pcacheAttributeSet
 	templates         []pcacheTemplate
 	binds             []pcacheBindRuntimeConfiguration
@@ -83,14 +84,15 @@ type pcacheBindRuntimeConfiguration struct {
 }
 
 type pcacheState struct {
-	mu         sync.Mutex
-	epoch      time.Time
-	clock      func() time.Time
-	queries    map[string]pcacheCachedQuery
-	binds      map[string]pcacheCachedBind
-	entries    int
-	sequence   uint64
-	generation uint64
+	mu          sync.Mutex
+	epoch       time.Time
+	clock       func() time.Time
+	queries     map[string]pcacheCachedQuery
+	binds       map[string]pcacheCachedBind
+	entries     int
+	sequence    uint64
+	generation  uint64
+	persistence *pcachePersistence
 }
 
 type pcacheCachedBind struct {
@@ -101,6 +103,8 @@ type pcacheCachedBind struct {
 }
 
 type pcacheCachedQuery struct {
+	identifier string
+	attrset    int
 	response   pcacheSearchResponse
 	replay     ldapwire.Message
 	remote     pcacheRemoteContext
@@ -120,6 +124,7 @@ type pcacheRefreshPolicy struct {
 	ttr               time.Duration
 	consistencyPeriod time.Duration
 	entryLimit        int
+	attrset           int
 }
 
 type pcacheRefreshLease struct {
@@ -807,6 +812,16 @@ func clearPcacheBindStates(runtime *runtimeState) {
 	}
 }
 
+func runtimeSupportsPcachePrivateDatabase(databases []runtimeDatabase) bool {
+	for index := range databases {
+		configuration := databases[index].pcache
+		if configuration != nil && !configuration.disabled {
+			return true
+		}
+	}
+	return false
+}
+
 func configurationKey(configuration *pcacheRuntimeConfiguration) string {
 	if configuration == nil {
 		return ""
@@ -1045,6 +1060,7 @@ func (server *Server) tryPcacheSearch(
 					ttr:               match.template.ttr,
 					consistencyPeriod: database.pcache.consistencyPeriod,
 					entryLimit:        database.pcache.entryLimit,
+					attrset:           match.attrset.index,
 				},
 				database.pcache.maxEntries,
 				database.pcache.maxQueries,
@@ -1961,15 +1977,26 @@ func (state *pcacheState) lookupValidated(
 ) (pcacheSearchResponse, bool, *pcacheRefreshLease) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	var backup pcacheStateBackup
 	if !offline {
-		state.purgeExpired(now)
+		backup = state.backupLocked()
+		if state.purgeExpired(now) {
+			if !state.finishMutationLocked(backup) {
+				return pcacheSearchResponse{}, false, nil
+			}
+		} else {
+			clearPcacheBackup(backup)
+		}
 	}
 	query, found := state.queries[key]
 	if !found {
 		return pcacheSearchResponse{}, false, nil
 	}
 	if validate != nil && !validate(query.response) {
+		backup := state.backupLocked()
 		state.removeQueryLocked(key, query)
+		state.generation++
+		state.finishMutationLocked(backup)
 		return pcacheSearchResponse{}, false, nil
 	}
 	state.sequence++
@@ -2025,6 +2052,7 @@ func (state *pcacheState) rememberBind(
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	backup := state.backupLocked()
 	state.purgeExpired(now)
 	if existing, found := state.binds[key]; found {
 		clear(existing.passwordHash)
@@ -2036,15 +2064,17 @@ func (state *pcacheState) rememberBind(
 			lastUsed:     state.sequence,
 			generation:   state.generation,
 		}
-		return true
+		return state.finishMutationLocked(backup)
 	}
 	if len(state.queries)+len(state.binds) >= maxQueries {
 		clear(passwordHash)
+		state.restoreBackupLocked(backup)
 		return false
 	}
 	for state.entries > maxEntries {
 		if !state.evictLeastRecentlyUsed() {
 			clear(passwordHash)
+			state.restoreBackupLocked(backup)
 			return false
 		}
 	}
@@ -2057,7 +2087,7 @@ func (state *pcacheState) rememberBind(
 		generation:   state.generation,
 	}
 	state.entries++
-	return true
+	return state.finishMutationLocked(backup)
 }
 
 func (state *pcacheState) lookupBind(
@@ -2107,6 +2137,7 @@ func (state *pcacheState) clearBinds() {
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	backup := state.backupLocked()
 	for key, bind := range state.binds {
 		clear(bind.passwordHash)
 		delete(state.binds, key)
@@ -2116,6 +2147,7 @@ func (state *pcacheState) clearBinds() {
 		state.entries = 0
 	}
 	state.generation++
+	state.finishMutationLocked(backup)
 }
 
 func (state *pcacheState) commit(
@@ -2139,18 +2171,22 @@ func (state *pcacheState) commit(
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	backup := state.backupLocked()
 	if !offline {
 		state.purgeExpired(now)
 	}
 	if _, duplicate := state.queries[key]; duplicate {
+		state.restoreBackupLocked(backup)
 		return false
 	}
 	if maxQueries <= 0 || len(state.queries)+len(state.binds) >= maxQueries {
+		state.restoreBackupLocked(backup)
 		return false
 	}
 	for index := 0; index < entries; index++ {
 		for state.entries > maxEntries {
 			if !state.evictLeastRecentlyUsed() {
+				state.restoreBackupLocked(backup)
 				return false
 			}
 		}
@@ -2159,6 +2195,8 @@ func (state *pcacheState) commit(
 	state.sequence++
 	state.generation++
 	query := pcacheCachedQuery{
+		identifier: newPcacheQueryIdentifier(entries),
+		attrset:    policy.attrset,
 		response:   clonePcacheSearchResponse(response),
 		replay:     clonePcacheMessage(replay),
 		remote:     clonePcacheRemoteContext(remote),
@@ -2173,7 +2211,7 @@ func (state *pcacheState) commit(
 		query.refreshAt = now.Add(policy.ttr)
 	}
 	state.queries[key] = query
-	return true
+	return state.finishMutationLocked(backup)
 }
 
 func (state *pcacheState) completeRefresh(
@@ -2183,8 +2221,10 @@ func (state *pcacheState) completeRefresh(
 ) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	backup := state.backupLocked()
 	query, found := state.queries[refresh.key]
 	if !found || query.generation != refresh.generation || !query.refreshing {
+		clearPcacheBackup(backup)
 		return false
 	}
 	entries := response.entryCount()
@@ -2196,11 +2236,17 @@ func (state *pcacheState) completeRefresh(
 	if ttl <= 0 {
 		clear(query.remote.bindCredentials)
 		delete(state.queries, refresh.key)
-		return true
+		state.generation++
+		return state.finishMutationLocked(backup)
 	}
 	state.entries += entries
 	query.response = clonePcacheSearchResponse(response)
 	query.entries = entries
+	if entries == 0 {
+		query.identifier = ""
+	} else if query.identifier == "" {
+		query.identifier = newPcacheQueryIdentifier(entries)
+	}
 	query.purgeAt = state.expirationTime(
 		now,
 		ttl,
@@ -2213,18 +2259,22 @@ func (state *pcacheState) completeRefresh(
 		query.refreshAt = time.Time{}
 	}
 	state.queries[refresh.key] = query
-	return true
+	state.generation++
+	return state.finishMutationLocked(backup)
 }
 
 func (state *pcacheState) invalidateRefresh(refresh pcacheRefreshLease) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	backup := state.backupLocked()
 	query, found := state.queries[refresh.key]
 	if !found || query.generation != refresh.generation || !query.refreshing {
+		clearPcacheBackup(backup)
 		return false
 	}
 	state.removeQueryLocked(refresh.key, query)
-	return true
+	state.generation++
+	return state.finishMutationLocked(backup)
 }
 
 func (state *pcacheState) abortRefresh(refresh pcacheRefreshLease, now time.Time) {
@@ -2298,12 +2348,14 @@ func (state *pcacheState) evictLeastRecentlyUsed() bool {
 	return true
 }
 
-func (state *pcacheState) purgeExpired(now time.Time) {
+func (state *pcacheState) purgeExpired(now time.Time) bool {
+	changed := false
 	for key, query := range state.queries {
 		if now.Before(query.purgeAt) {
 			continue
 		}
 		state.removeQueryLocked(key, query)
+		changed = true
 	}
 	for key, bind := range state.binds {
 		if now.Before(bind.purgeAt) {
@@ -2312,7 +2364,12 @@ func (state *pcacheState) purgeExpired(now time.Time) {
 		state.entries--
 		clear(bind.passwordHash)
 		delete(state.binds, key)
+		changed = true
 	}
+	if changed {
+		state.generation++
+	}
+	return changed
 }
 
 func (state *pcacheState) removeQueryLocked(

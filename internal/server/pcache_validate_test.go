@@ -470,7 +470,7 @@ func TestPcacheValidateOnlineReloadInvalidatesState(t *testing.T) {
 	}
 }
 
-func TestPcachePrivateOperationsRemainExplicitlyRejected(t *testing.T) {
+func TestPcachePrivateRootSeesEmptyDatabase(t *testing.T) {
 	provider := startPcacheValidateProvider(t)
 	provider.set(
 		pcacheValidateProviderEntry("Cached"),
@@ -491,7 +491,7 @@ func TestPcachePrivateOperationsRemainExplicitlyRejected(t *testing.T) {
 		ldap.NewControlString(pcachePrivateDBControl, true, ""),
 	}
 	_, err := client.Search(privateSearch)
-	if code := ldapBackendResultCode(err); code != ldap.LDAPResultUnavailableCriticalExtension {
+	if code := ldapBackendResultCode(err); code != ldap.LDAPResultNoSuchObject {
 		t.Fatalf("private DB control result = %d (%v)", code, err)
 	}
 	if searches := provider.searches.Load(); searches != 0 {

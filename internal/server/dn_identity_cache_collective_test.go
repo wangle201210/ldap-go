@@ -54,6 +54,14 @@ func TestDNIdentityCollectiveSources(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	const partition = "dn-identity-collective"
 	sources := []directory.Entry{
+		collectiveAdministrativePointEntry(
+			"cacheExactName=Tenant,dc=example,dc=com",
+			"collectiveAttributeSpecificArea",
+		),
+		collectiveAdministrativePointEntry(
+			"cacheExactName=tenant,dc=example,dc=com",
+			collectiveAttributeSpecificAreaOID,
+		),
 		collectiveServerSource(
 			"cn=source,cacheExactName=Tenant,dc=example,dc=com",
 			"{}",

@@ -131,7 +131,12 @@ func sqlBackendReadCoordinatorFromContext(
 func (coordinator *sqlBackendReadCoordinator) reader(
 	configuration *sqlBackendRuntimeConfiguration,
 	base storage.Reader,
+	contexts ...context.Context,
 ) *sqlBackendReader {
+	ctx := coordinator.ctx
+	if len(contexts) != 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	session, found := coordinator.sessions[configuration]
@@ -160,7 +165,7 @@ func (coordinator *sqlBackendReadCoordinator) reader(
 	return &sqlBackendReader{
 		Reader:            base,
 		configuration:     configuration,
-		ctx:               coordinator.ctx,
+		ctx:               ctx,
 		queryer:           session.queryer,
 		initializationErr: session.err,
 	}
@@ -444,10 +449,18 @@ func (writer *sqlBackendWriter) entryIDWithParameter(
 		); err != nil {
 			return sqlEntryID{}, fmt.Errorf("scan SQL-backend entry ID: %w", err)
 		}
-		storedDN, _, err := writer.parseNormalizedSQLDN(candidate.dn)
+		storedDN, err := directory.ParseDN(candidate.dn)
 		if err != nil {
 			return sqlEntryID{}, fmt.Errorf(
 				"SQL-backend entry %d DN: %w",
+				candidate.id,
+				err,
+			)
+		}
+		storedDN, err = writer.reader.configuration.mapSQLDNToLDAP(storedDN)
+		if err != nil {
+			return sqlEntryID{}, fmt.Errorf(
+				"SQL-backend entry %d DN layer: %w",
 				candidate.id,
 				err,
 			)
@@ -461,7 +474,6 @@ func (writer *sqlBackendWriter) entryIDWithParameter(
 				normalized.String(),
 			)
 		}
-		candidate.dn = storedDN.String()
 		match = candidate
 		found = true
 	}
@@ -575,7 +587,11 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 	if err != nil {
 		return err
 	}
-	storedDN = dn.String()
+	stored, err := configuration.mapLDAPDNToSQL(dn)
+	if err != nil {
+		return err
+	}
+	storedDN = stored.String()
 	keyValue, err := writer.createMappedObject(entry, mapping)
 	if err != nil {
 		return err
@@ -604,7 +620,11 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 func (writer *sqlBackendWriter) insertedEntryID(
 	storedDN string,
 ) (sqlEntryID, error) {
-	dn, _, err := writer.parseNormalizedSQLDN(storedDN)
+	stored, err := directory.ParseDN(storedDN)
+	if err != nil {
+		return sqlEntryID{}, err
+	}
+	dn, err := writer.reader.configuration.mapSQLDNToLDAP(stored)
 	if err != nil {
 		return sqlEntryID{}, err
 	}
@@ -787,17 +807,26 @@ func (writer *sqlBackendWriter) replace(entry directory.Entry) error {
 			return normalizeErr
 		}
 		if !modifiedDN.Equal(dn) {
-			return writer.replaceMappedAttributes(before, entry, id, mapping)
+			if err := writer.replaceMappedAttributes(before, entry, id, mapping); err != nil {
+				return err
+			}
+			return writer.validateMappedEntry(entry)
 		}
-		return writer.applyMappedModifications(
+		if err := writer.applyMappedModifications(
 			before,
 			entry,
 			id,
 			mapping,
 			writer.modify.changes,
-		)
+		); err != nil {
+			return err
+		}
+		return writer.validateMappedEntry(entry)
 	}
-	return writer.replaceMappedAttributes(before, entry, id, mapping)
+	if err := writer.replaceMappedAttributes(before, entry, id, mapping); err != nil {
+		return err
+	}
+	return writer.validateMappedEntry(entry)
 }
 
 func (writer *sqlBackendWriter) applyMappedModifications(
@@ -949,7 +978,11 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 	if err != nil {
 		return err
 	}
-	storedDN = newDN.String()
+	stored, err := writer.reader.configuration.mapLDAPDNToSQL(newDN)
+	if err != nil {
+		return err
+	}
+	storedDN = stored.String()
 	parentID := int64(0)
 	if parent, present := newDN.Parent(); present && parent.Depth() > 0 {
 		parentEntry, parentErr := writer.entryID(parent)
@@ -1106,6 +1139,10 @@ func (writer *sqlBackendWriter) addMappedRDNValues(
 }
 
 func (writer *sqlBackendWriter) validateRenamedEntry(expected directory.Entry) error {
+	return writer.validateMappedEntry(expected)
+}
+
+func (writer *sqlBackendWriter) validateMappedEntry(expected directory.Entry) error {
 	dn, _, err := writer.parseNormalizedSQLDN(expected.DN)
 	if err != nil {
 		return err
@@ -1118,8 +1155,10 @@ func (writer *sqlBackendWriter) validateRenamedEntry(expected directory.Entry) e
 	if err != nil {
 		return err
 	}
-	if err := writer.reader.configuration.registry.ValidateEntry(stored); err != nil {
-		return operationFailureFromSchema(err)
+	if writer.reader.configuration.checkSchema {
+		if err := writer.reader.configuration.registry.ValidateEntry(stored); err != nil {
+			return operationFailureFromSchema(err)
+		}
 	}
 	for _, namingValue := range dn.RDNValues() {
 		present := false

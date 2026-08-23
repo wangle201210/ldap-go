@@ -438,11 +438,7 @@ func (client *clientConnection) handleMonitorSearch(frame proxyFrame) (bool, boo
 		}
 		if result != nil {
 			responseControls = append(responseControls, monitorVLVResponseControl(response))
-			if controls.vlv.critical {
-				return true, client.sendMonitorDone(message.ID, *result, responseControls...)
-			}
-			selected = snapshot.entries
-			result = nil
+			return true, client.sendMonitorDone(message.ID, *result, responseControls...)
 		}
 		if result == nil && len(responseControls) == 0 ||
 			(len(responseControls) != 0 && responseControls[len(responseControls)-1].OID != monitorVLVResponseOID) {

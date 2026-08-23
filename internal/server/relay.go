@@ -552,7 +552,7 @@ func readerForDatabase(
 		}
 		var backend *sqlBackendReader
 		if coordinator := sqlBackendReadCoordinatorFromContext(ctx); coordinator != nil {
-			backend = coordinator.reader(database.sqlBackend, reader)
+			backend = coordinator.reader(database.sqlBackend, reader, ctx)
 		} else {
 			backend = &sqlBackendReader{
 				Reader:        reader,

@@ -22,6 +22,14 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
+	if handled, err := server.tryPcachePrivateSearch(
+		connection,
+		state,
+		message,
+		request,
+	); handled {
+		return err
+	}
 	var sortLease *serverSideSortLease
 	defer func() {
 		releaseServerSideSortLease(state, sortLease)
@@ -97,6 +105,7 @@ func (server *Server) handleSearch(
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
 		)
 	}
+	ctx = withSQLBackendScopeRequirements(ctx, base, request.Scope)
 	if handled, err := server.tryRetcodeSearch(
 		ctx,
 		connection,
@@ -1166,7 +1175,8 @@ func (server *Server) handleSearch(
 				continue
 			}
 			database := &state.runtime.databases[route.databaseIndex]
-			tx := readerForDatabase(reader, *database)
+			routeContext := withSQLBackendScopeRequirements(ctx, route.base, route.scope)
+			tx := readerForDatabase(reader, *database, routeContext)
 			scopeBase, normalizeErr := storage.NormalizeReaderDN(tx, route.base)
 			if normalizeErr != nil {
 				return fmt.Errorf(
@@ -2456,6 +2466,9 @@ func (server *Server) rootDSE(
 	if server.secureTransport != nil {
 		supportedExtensions = append([]string{startTLSOID}, supportedExtensions...)
 	}
+	if runtimeSupportsPcachePrivateDatabase(runtime.databases) {
+		supportedExtensions = append(supportedExtensions, pcacheQueryDeleteOID)
+	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),
@@ -2499,6 +2512,9 @@ func (server *Server) rootDSE(
 	}
 	if runtimeSupportsSyncProvider(runtime.databases) {
 		supportedControls = append(supportedControls, syncRequestControlOID)
+	}
+	if runtimeSupportsPcachePrivateDatabase(runtime.databases) {
+		supportedControls = append(supportedControls, pcachePrivateDBControl)
 	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedControl",

@@ -2397,6 +2397,14 @@ func (server *Server) handleCompare(
 	message ldapwire.Message,
 	request ldapwire.CompareRequest,
 ) error {
+	if handled, err := server.tryPcachePrivateCompare(
+		connection,
+		state,
+		message,
+		request,
+	); handled {
+		return err
+	}
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
 		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy|supportsNoOp,

@@ -17,6 +17,12 @@ func TestLDAPClientCollectiveAttributeOperations(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	seedDirectory(t, store)
+	setCollectiveAdministrativeRoles(
+		t,
+		store,
+		"ou=people,dc=example,dc=com",
+		"collectiveAttributeSpecificArea",
+	)
 	registry := collectiveServerRegistry(t)
 
 	const (
@@ -321,6 +327,12 @@ func TestCollectiveAttributesParticipateInMemberACL(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	seedDirectory(t, store)
+	setCollectiveAdministrativeRoles(
+		t,
+		store,
+		"ou=people,dc=example,dc=com",
+		collectiveAttributeSpecificAreaOID,
+	)
 	registry, err := schema.NewBuiltinRegistry()
 	if err != nil {
 		t.Fatalf("NewBuiltinRegistry(): %v", err)
@@ -394,6 +406,12 @@ func TestCollectiveAttributesParticipateInSortingAndVLV(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	seedDirectory(t, store)
+	setCollectiveAdministrativeRoles(
+		t,
+		store,
+		"ou=people,dc=example,dc=com",
+		"collectiveAttributeSpecificArea",
+	)
 	if err := store.Update(context.Background(), func(writer storage.Writer) error {
 		return writer.Put(directory.Entry{
 			DN: "olcOverlay={0}sssvlv,olcDatabase={1}mdb,cn=config",
@@ -521,6 +539,10 @@ func TestCollectiveAttributePlanDerivesValuesWithoutWriteback(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	entries := []directory.Entry{
+		collectiveAdministrativePointEntry(
+			"ou=People,dc=example,dc=com",
+			"collectiveAttributeSpecificArea",
+		),
 		collectiveServerSource(
 			"cn=first,ou=People,dc=example,dc=com",
 			"{}",
@@ -745,6 +767,41 @@ func collectiveServerSource(
 	}
 	entry.Attributes = append(entry.Attributes, attributes...)
 	return entry
+}
+
+func collectiveAdministrativePointEntry(
+	dn string,
+	roles ...string,
+) directory.Entry {
+	return directory.Entry{
+		DN: dn,
+		Attributes: []directory.Attribute{
+			{Description: "administrativeRole", Values: stringValues(roles...)},
+		},
+	}
+}
+
+func setCollectiveAdministrativeRoles(
+	t *testing.T,
+	store storage.Store,
+	rawDN string,
+	roles ...string,
+) {
+	t.Helper()
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN(rawDN)
+		if err != nil {
+			return err
+		}
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("administrativeRole", stringValues(roles...))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("set collective administrative roles on %q: %v", rawDN, err)
+	}
 }
 
 func collectiveServerPerson(dn string, exclusions [][]byte) directory.Entry {
