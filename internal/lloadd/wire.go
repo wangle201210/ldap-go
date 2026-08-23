@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -93,11 +94,13 @@ func (authentication BindAuthentication) String() string {
 // BindMetadata intentionally excludes simple passwords and SASL credential
 // bytes. HasSASLCredentials records only whether the optional element exists.
 type BindMetadata struct {
-	Version            int64
-	DN                 string
-	Authentication     BindAuthentication
-	SASLMechanism      string
-	HasSASLCredentials bool
+	Version              int64
+	DN                   string
+	Authentication       BindAuthentication
+	SASLMechanism        string
+	SASLAuthenticationID string
+	SASLAuthorizationID  string
+	HasSASLCredentials   bool
 }
 
 type Frame struct {
@@ -435,6 +438,8 @@ func projectProxyFrame(frame Frame) proxyFrame {
 		projected.BindDN = frame.Bind.DN
 		projected.BindSASL = frame.Bind.Authentication == BindAuthenticationSASL
 		projected.BindMechanism = frame.Bind.SASLMechanism
+		projected.BindAuthcID = frame.Bind.SASLAuthenticationID
+		projected.BindAuthzID = frame.Bind.SASLAuthorizationID
 	}
 	if frame.ResultCode != nil {
 		projected.ResultCode = ldapwire.ResultCode(*frame.ResultCode)
@@ -684,6 +689,10 @@ func parseBindMetadata(raw []byte, protocol berElement) (BindMetadata, error) {
 				return BindMetadata{}, malformed("invalid SASL credentials element")
 			}
 			metadata.HasSASLCredentials = true
+			if strings.EqualFold(metadata.SASLMechanism, "PLAIN") {
+				metadata.SASLAuthorizationID, metadata.SASLAuthenticationID =
+					parseSASLPlainIdentities(raw[credentials.contentStart:credentials.end])
+			}
 		} else if mechanismEnd != authentication.end {
 			return BindMetadata{}, malformed("invalid SASL authentication")
 		}
@@ -691,6 +700,24 @@ func parseBindMetadata(raw []byte, protocol berElement) (BindMetadata, error) {
 		return BindMetadata{}, malformed("unsupported Bind authentication choice")
 	}
 	return metadata, nil
+}
+
+func parseSASLPlainIdentities(credentials []byte) (string, string) {
+	first := bytes.IndexByte(credentials, 0)
+	if first < 0 {
+		return "", ""
+	}
+	secondRelative := bytes.IndexByte(credentials[first+1:], 0)
+	if secondRelative < 0 {
+		return "", ""
+	}
+	second := first + 1 + secondRelative
+	authzID := credentials[:first]
+	authcID := credentials[first+1 : second]
+	if len(authcID) == 0 || !utf8.Valid(authzID) || !utf8.Valid(authcID) {
+		return "", ""
+	}
+	return string(authzID), string(authcID)
 }
 
 func parseExtendedRequestMetadata(

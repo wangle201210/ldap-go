@@ -45,10 +45,10 @@ func TestLoadPasswordHashSchemes(t *testing.T) {
 			want:        []string{"{SSHA}", "{SHA}"},
 		},
 		{
-			name:        "unsupported",
-			frontend:    []string{"{CRYPT}"},
+			name:        "OpenLDAP CRYPT",
+			frontend:    []string{"{crypt}"},
 			addFrontend: true,
-			wantError:   true,
+			want:        []string{auth.OpenLDAPCryptHashScheme},
 		},
 		{
 			name:        "verify-only Netscape scheme",
@@ -125,6 +125,55 @@ func TestLoadPasswordHashSchemes(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("loadPasswordHashSchemes() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadPasswordCryptSaltFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    []string
+		want      string
+		wantError bool
+	}{
+		{name: "secure default", want: auth.DefaultOpenLDAPCryptSaltFormat},
+		{name: "configured", values: []string{"$5$rounds=2000$%.16s"}, want: "$5$rounds=2000$%.16s"},
+		{name: "fixed salt", values: []string{"fixed"}, wantError: true},
+		{name: "multiple", values: []string{"$5$%.8s", "$6$%.16s"}, wantError: true},
+		{name: "unsupported", values: []string{"$unknown$%.8s"}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			if len(test.values) != 0 {
+				if err := store.Update(t.Context(), func(writer storage.Writer) error {
+					return writer.Put(directory.Entry{
+						DN: "cn=config",
+						Attributes: []directory.Attribute{{
+							Description: "olcPasswordCryptSaltFormat",
+							Values:      stringValues(test.values...),
+						}},
+					}, false)
+				}); err != nil {
+					t.Fatalf("seed configuration: %v", err)
+				}
+			}
+			var got string
+			err := store.View(t.Context(), func(reader storage.Reader) error {
+				var err error
+				got, err = loadPasswordCryptSaltFormat(reader)
+				return err
+			})
+			if test.wantError {
+				if err == nil {
+					t.Fatalf("loadPasswordCryptSaltFormat() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("loadPasswordCryptSaltFormat() = %q, %v; want %q", got, err, test.want)
 			}
 		})
 	}

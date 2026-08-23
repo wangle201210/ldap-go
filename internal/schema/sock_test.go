@@ -40,6 +40,19 @@ func TestRegisterOpenLDAPSockSchema(t *testing.T) {
 		extensions.SingleValue {
 		t.Fatalf("olcDbSocketExtensions = %#v", extensions)
 	}
+	callbackTimeout, ok := registry.AttributeType(ldapGoSockCallbackTimeoutName)
+	if !ok {
+		t.Fatalf("%s is not registered", ldapGoSockCallbackTimeoutName)
+	}
+	if callbackTimeout.OID != ldapGoSockExtensionOID+".1" ||
+		callbackTimeout.Syntax != SyntaxDirectoryString ||
+		!callbackTimeout.SingleValue ||
+		!reflect.DeepEqual(
+			callbackTimeout.Extensions["X-ORIGIN"],
+			[]string{"ldap-go extension"},
+		) {
+		t.Fatalf("%s = %#v", ldapGoSockCallbackTimeoutName, callbackTimeout)
+	}
 
 	objectClass, ok := registry.ObjectClass("olcDbSocketConfig")
 	if !ok {
@@ -55,9 +68,31 @@ func TestRegisterOpenLDAPSockSchema(t *testing.T) {
 		t.Fatalf("olcDbSocketConfig = %#v", objectClass)
 	}
 
+	overlay, ok := registry.ObjectClass("olcOvSocketConfig")
+	if !ok {
+		t.Fatal("olcOvSocketConfig is not registered")
+	}
+	if overlay.OID != openLDAPSockDatabaseObjectOID+".2" ||
+		!reflect.DeepEqual(overlay.Superiors, []string{"olcOverlayConfig"}) ||
+		!reflect.DeepEqual(overlay.Must, []string{"olcDbSocketPath"}) ||
+		!reflect.DeepEqual(overlay.May, []string{
+			"olcDbSocketExtensions",
+			"olcOvSocketOps",
+			"olcOvSocketResps",
+			"olcOvSocketDNpat",
+			ldapGoSockCallbackTimeoutName,
+		}) {
+		t.Fatalf("olcOvSocketConfig = %#v", overlay)
+	}
+
 	for _, description := range openLDAPSockAttributeTypes {
 		if _, err := ParseAttributeType(description); err != nil {
 			t.Fatalf("parse emitted attribute type %q: %v", description, err)
+		}
+	}
+	for _, description := range ldapGoSockExtensionAttributeTypes {
+		if _, err := ParseAttributeType(description); err != nil {
+			t.Fatalf("parse ldap-go extension attribute type %q: %v", description, err)
 		}
 	}
 	for _, description := range openLDAPSockObjectClasses {

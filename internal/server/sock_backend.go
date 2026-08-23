@@ -536,7 +536,7 @@ func sockRequestForOperation(
 			IncludePeerName: database.sockBackend.extensions&sockExtensionPeerName != 0,
 			PeerName:        openLDAPConnectionName(remoteAddress(state.connection)),
 			IncludeSSF:      database.sockBackend.extensions&sockExtensionSSF != 0,
-			SSF:             int(state.externalSSF),
+			SSF:             int(connectionOverallSSF(state)),
 			IncludeConnID:   database.sockBackend.extensions&sockExtensionConnectionID != 0,
 			ConnID:          state.connectionID,
 		},

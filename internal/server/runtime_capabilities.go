@@ -3,18 +3,21 @@ package server
 import "fmt"
 
 var supportedRuntimeDatabaseTypes = map[string]struct{}{
-	"config":   {},
-	"frontend": {},
-	"ldap":     {},
-	"ldif":     {},
-	"mdb":      {},
-	"meta":     {},
-	"monitor":  {},
-	"null":     {},
-	"relay":    {},
-	"sock":     {},
-	"sql":      {},
-	"wt":       {},
+	"asyncmeta": {},
+	"config":    {},
+	"dnssrv":    {},
+	"frontend":  {},
+	"ldap":      {},
+	"ldif":      {},
+	"mdb":       {},
+	"meta":      {},
+	"monitor":   {},
+	"null":      {},
+	"passwd":    {},
+	"relay":     {},
+	"sock":      {},
+	"sql":       {},
+	"wt":        {},
 }
 
 var supportedRuntimeOverlayTypes = map[string]struct{}{
@@ -40,6 +43,7 @@ var supportedRuntimeOverlayTypes = map[string]struct{}{
 	"retcode":     {},
 	"rwm":         {},
 	"seqmod":      {},
+	"sock":        {},
 	"sssvlv":      {},
 	"syncprov":    {},
 	"totp":        {},

@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -32,7 +33,7 @@ const (
 	defaultLDAPClientTimeout = 10 * time.Second
 	defaultLDAPReferralHops  = 5
 	maxClientCAFileSize      = 16 << 20
-	ldapSearchLDIFLineWidth  = 76
+	ldapSearchLDIFLineWidth  = 78
 	maxLDAPSearchBatchSize   = 8 << 20
 	maxLDAPSearchBatchLine   = 1 << 20
 	maxLDAPSearchBatchCount  = 100000
@@ -41,29 +42,35 @@ const (
 )
 
 type ldapClientOptions struct {
-	uri                 string
-	simple              bool
-	bindDN              string
-	saslMechanism       string
-	saslAuthentication  string
-	saslAuthorization   string
-	saslRealm           string
-	directPassword      secretFlagValue
-	promptPassword      bool
-	passwordFile        string
-	tryStartTLS         bool
-	requireStartTLS     bool
-	timeout             time.Duration
-	tlsCAFile           string
-	tlsCertificateFile  string
-	tlsPrivateKeyFile   string
-	tlsServerName       string
-	dryRun              bool
-	generalControlSpecs repeatedStringFlag
-	generalControls     []ldap.Control
-	chaseReferrals      bool
-	referralHopLimit    int
-	unsupportedFlags    []unsupportedFlag
+	uri                  string
+	simple               bool
+	bindDN               string
+	saslMechanism        string
+	saslAuthentication   string
+	saslAuthorization    string
+	saslRealm            string
+	saslSecurity         string
+	gssapiChannelBinding string
+	directPassword       secretFlagValue
+	promptPassword       bool
+	passwordFile         string
+	tryStartTLS          bool
+	requireStartTLS      bool
+	timeout              time.Duration
+	tlsCAFile            string
+	tlsCertificateFile   string
+	tlsPrivateKeyFile    string
+	tlsServerName        string
+	dryRun               bool
+	generalControlSpecs  repeatedStringFlag
+	generalControls      []ldap.Control
+	chaseReferrals       bool
+	referralHopLimit     int
+	unsupportedFlags     []unsupportedFlag
+	observeSearch        bool
+	searchObserver       *ldapSearchResponseObserver
+	searchObserverMu     sync.Mutex
+	referralObservers    []*ldapSearchResponseObserver
 }
 
 func (options *ldapClientOptions) register(flags *flag.FlagSet) {
@@ -77,6 +84,13 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	flags.StringVar(&options.saslAuthentication, "U", "", "SASL authentication identity")
 	flags.StringVar(&options.saslAuthorization, "X", "", "SASL authorization identity")
 	flags.StringVar(&options.saslRealm, "R", "", "SASL realm")
+	flags.StringVar(&options.saslSecurity, "O", "", "SASL security properties")
+	flags.StringVar(
+		&options.gssapiChannelBinding,
+		"gssapi-channel-binding",
+		"",
+		"explicit GSSAPI channel binding extension: tls-server-end-point",
+	)
 	flags.Var(
 		&options.directPassword,
 		"w",
@@ -151,7 +165,6 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	}{
 		{"d", "LDAP library debug output is not implemented"},
 		{"h", "legacy host selection is not implemented; use -H"},
-		{"O", "SASL security properties are not implemented"},
 		{"o", "generic LDAP library options are not implemented"},
 		{"p", "legacy port selection is not implemented; use -H"},
 		{"P", "only LDAPv3 is implemented"},
@@ -178,6 +191,10 @@ func (options *ldapClientOptions) clear() {
 	options.directPassword.clear()
 	clearLDAPControls(options.generalControls)
 	options.generalControls = nil
+	options.searchObserver = nil
+	options.searchObserverMu.Lock()
+	options.referralObservers = nil
+	options.searchObserverMu.Unlock()
 }
 
 func (options *ldapClientOptions) validate(flags *flag.FlagSet) error {
@@ -224,7 +241,7 @@ func (options *ldapClientOptions) validateForWrite(
 		return errors.New("-n=false is not supported")
 	}
 	if options.dryRun {
-		for _, name := range []string{"Y", "U", "X", "R"} {
+		for _, name := range []string{"Y", "U", "X", "R", "O"} {
 			if flagWasSet(flags, name) {
 				return fmt.Errorf(
 					"%s option -%s is not supported with -n: SASL mechanisms are not implemented for dry runs because no authentication is performed",
@@ -270,12 +287,12 @@ func (options *ldapClientOptions) validateForWrite(
 		return errors.New("-w, -W, and -y are mutually exclusive")
 	}
 	saslFlagsSet := flagWasSet(flags, "Y") || flagWasSet(flags, "U") ||
-		flagWasSet(flags, "X") || flagWasSet(flags, "R")
+		flagWasSet(flags, "X") || flagWasSet(flags, "R") || flagWasSet(flags, "O")
 	authenticationRequested := requireConnection || options.simple || saslFlagsSet ||
 		options.bindDN != "" || passwordSources > 0
 	if options.simple {
 		if saslFlagsSet {
-			return errors.New("-x cannot be combined with -Y, -U, -X, or -R")
+			return errors.New("-x cannot be combined with -Y, -U, -X, -R, or -O")
 		}
 		if options.bindDN == "" && passwordSources > 0 {
 			return errors.New("a bind password requires a non-empty -D bind DN")
@@ -463,6 +480,19 @@ func (options *ldapClientOptions) connectAndBind(
 	}
 
 	dial := func(useTLS bool) (*ldap.Conn, error) {
+		if options.observeSearch {
+			connection, observer, err := dialObservedLDAPConnection(
+				dialURI,
+				useTLS,
+				false,
+				tlsConfig,
+				options.timeout,
+			)
+			if err == nil {
+				options.searchObserver = observer
+			}
+			return connection, err
+		}
 		dialOptions := []ldap.DialOpt{
 			ldap.DialWithDialer(&net.Dialer{Timeout: options.timeout}),
 		}
@@ -477,16 +507,41 @@ func (options *ldapClientOptions) connectAndBind(
 		return connection, nil
 	}
 
-	connection, err := dial(parsedURI.Scheme == "ldaps")
+	var connection *ldap.Conn
+	if options.observeSearch && (options.tryStartTLS || options.requireStartTLS) {
+		connection, options.searchObserver, err = dialObservedLDAPConnection(
+			dialURI,
+			false,
+			true,
+			tlsConfig,
+			options.timeout,
+		)
+	} else {
+		connection, err = dial(parsedURI.Scheme == "ldaps")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", dialURI, err)
+		if !(options.observeSearch && options.tryStartTLS) {
+			return nil, fmt.Errorf("connect to %s: %w", dialURI, err)
+		}
+		if _, writeErr := fmt.Fprintf(
+			stderr,
+			"warning: StartTLS with %s failed; continuing over cleartext LDAP: %v\n",
+			dialURI,
+			err,
+		); writeErr != nil {
+			return nil, writeErr
+		}
+		connection, err = dial(false)
+		if err != nil {
+			return nil, fmt.Errorf("reconnect to %s after StartTLS failure: %w", dialURI, err)
+		}
 	}
 	closeOnError := func(err error) (*ldap.Conn, error) {
 		_ = connection.Close()
 		return nil, err
 	}
 
-	if options.tryStartTLS || options.requireStartTLS {
+	if (options.tryStartTLS || options.requireStartTLS) && !options.observeSearch {
 		if err := connection.StartTLS(tlsConfig.Clone()); err != nil {
 			if options.requireStartTLS {
 				return closeOnError(fmt.Errorf("StartTLS with %s: %w", dialURI, err))
@@ -618,6 +673,358 @@ func readLimitedClientFile(path string, maximum int64, source string) ([]byte, e
 	return data, nil
 }
 
+type ldapSearchResponseControl struct {
+	oid      string
+	critical bool
+	value    []byte
+	hasValue bool
+}
+
+type ldapSearchWireResponse struct {
+	tag                 ber.Tag
+	controls            []ldapSearchResponseControl
+	intermediateOID     string
+	intermediateData    []byte
+	hasIntermediateData bool
+}
+
+type ldapSearchResponseObserver struct {
+	mu          sync.Mutex
+	readBuffer  []byte
+	writeBuffer []byte
+	searchIDs   []int64
+	responses   map[int64][]ldapSearchWireResponse
+}
+
+type ldapSearchObservedConn struct {
+	net.Conn
+	observer *ldapSearchResponseObserver
+}
+
+func dialObservedLDAPConnection(
+	rawURI string,
+	directTLS,
+	startTLS bool,
+	tlsConfig *tls.Config,
+	timeout time.Duration,
+) (*ldap.Conn, *ldapSearchResponseObserver, error) {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return nil, nil, err
+	}
+	port := parsed.Port()
+	if port == "" {
+		if directTLS {
+			port = "636"
+		} else {
+			port = "389"
+		}
+	}
+	raw, err := (&net.Dialer{Timeout: timeout}).Dial(
+		"tcp",
+		net.JoinHostPort(parsed.Hostname(), port),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	closeOnError := func(err error) (*ldap.Conn, *ldapSearchResponseObserver, error) {
+		return nil, nil, errors.Join(err, raw.Close())
+	}
+
+	transport := raw
+	if startTLS {
+		if err := requestLDAPStartTLS(raw, timeout); err != nil {
+			return closeOnError(err)
+		}
+	}
+	if directTLS || startTLS {
+		secured := tls.Client(raw, tlsConfig.Clone())
+		if err := secured.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return closeOnError(err)
+		}
+		if err := secured.Handshake(); err != nil {
+			return closeOnError(err)
+		}
+		if err := secured.SetDeadline(time.Time{}); err != nil {
+			return closeOnError(err)
+		}
+		transport = secured
+	}
+
+	observer := &ldapSearchResponseObserver{
+		responses: make(map[int64][]ldapSearchWireResponse),
+	}
+	connection := ldap.NewConn(
+		&ldapSearchObservedConn{Conn: transport, observer: observer},
+		directTLS || startTLS,
+	)
+	connection.SetTimeout(timeout)
+	connection.Start()
+	return connection, observer, nil
+}
+
+func requestLDAPStartTLS(connection net.Conn, timeout time.Duration) error {
+	request := ber.NewSequence("LDAP Request")
+	request.AppendChild(ber.NewInteger(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagInteger,
+		int64(1),
+		"Message ID",
+	))
+	extended := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ldap.ApplicationExtendedRequest,
+		nil,
+		"Extended Request",
+	)
+	extended.AppendChild(ber.NewString(
+		ber.ClassContext,
+		ber.TypePrimitive,
+		0,
+		"1.3.6.1.4.1.1466.20037",
+		"Request Name",
+	))
+	request.AppendChild(extended)
+	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	encoded := request.Bytes()
+	for len(encoded) > 0 {
+		written, err := connection.Write(encoded)
+		if err != nil {
+			return fmt.Errorf("send StartTLS request: %w", err)
+		}
+		if written == 0 {
+			return fmt.Errorf("send StartTLS request: %w", io.ErrNoProgress)
+		}
+		encoded = encoded[written:]
+	}
+	response, err := ber.ReadPacket(connection)
+	if err != nil {
+		return fmt.Errorf("read StartTLS response: %w", err)
+	}
+	if err := ldap.GetLDAPError(response); err != nil {
+		return fmt.Errorf("StartTLS request: %w", err)
+	}
+	return connection.SetDeadline(time.Time{})
+}
+
+func (connection *ldapSearchObservedConn) Read(buffer []byte) (int, error) {
+	count, err := connection.Conn.Read(buffer)
+	if count > 0 {
+		connection.observer.observeRead(buffer[:count])
+	}
+	return count, err
+}
+
+func (connection *ldapSearchObservedConn) Write(buffer []byte) (int, error) {
+	count, err := connection.Conn.Write(buffer)
+	if count > 0 {
+		connection.observer.observeWrite(buffer[:count])
+	}
+	return count, err
+}
+
+func (observer *ldapSearchResponseObserver) observeRead(data []byte) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.readBuffer = append(observer.readBuffer, data...)
+	observer.consumeFrames(&observer.readBuffer, false)
+}
+
+func (observer *ldapSearchResponseObserver) observeWrite(data []byte) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.writeBuffer = append(observer.writeBuffer, data...)
+	observer.consumeFrames(&observer.writeBuffer, true)
+}
+
+func (observer *ldapSearchResponseObserver) consumeFrames(buffer *[]byte, request bool) {
+	for {
+		length, complete, valid := ldapBERFrameLength(*buffer)
+		if !valid {
+			*buffer = nil
+			return
+		}
+		if !complete {
+			return
+		}
+		frame := append([]byte(nil), (*buffer)[:length]...)
+		*buffer = (*buffer)[length:]
+		packet, err := ber.DecodePacketErr(frame)
+		if err != nil || len(packet.Children) < 2 {
+			continue
+		}
+		messageID, ok := packet.Children[0].Value.(int64)
+		if !ok {
+			continue
+		}
+		operation := packet.Children[1]
+		if request {
+			if operation.ClassType == ber.ClassApplication &&
+				operation.Tag == ldap.ApplicationSearchRequest {
+				observer.searchIDs = append(observer.searchIDs, messageID)
+			}
+			continue
+		}
+		if operation.ClassType != ber.ClassApplication {
+			continue
+		}
+		switch operation.Tag {
+		case ldap.ApplicationSearchResultEntry,
+			ldap.ApplicationSearchResultDone,
+			ldap.ApplicationSearchResultReference,
+			ldap.ApplicationIntermediateResponse:
+		default:
+			continue
+		}
+		response := ldapSearchWireResponse{tag: operation.Tag}
+		response.controls = parseLDAPSearchResponseControls(packet)
+		if operation.Tag == ldap.ApplicationIntermediateResponse {
+			for _, child := range operation.Children {
+				switch {
+				case child.ClassType == ber.ClassContext && child.Tag == 0:
+					response.intermediateOID = ldapBERString(child)
+				case child.ClassType == ber.ClassContext && child.Tag == 1:
+					response.intermediateData = ldapBERBytes(child)
+					response.hasIntermediateData = true
+				}
+			}
+		}
+		observer.responses[messageID] = append(observer.responses[messageID], response)
+	}
+}
+
+func ldapBERFrameLength(data []byte) (int, bool, bool) {
+	if len(data) < 2 {
+		return 0, false, true
+	}
+	if data[0] != 0x30 {
+		return 0, false, false
+	}
+	lengthBytes := int(data[1] & 0x7f)
+	header := 2
+	content := 0
+	if data[1]&0x80 == 0 {
+		content = int(data[1])
+	} else {
+		if lengthBytes == 0 || lengthBytes > 4 {
+			return 0, false, false
+		}
+		if len(data) < 2+lengthBytes {
+			return 0, false, true
+		}
+		header += lengthBytes
+		for _, value := range data[2:header] {
+			content = content<<8 | int(value)
+		}
+	}
+	if content < 0 || content > maxLDAPSearchValueSize*4 {
+		return 0, false, false
+	}
+	total := header + content
+	return total, len(data) >= total, true
+}
+
+func parseLDAPSearchResponseControls(packet *ber.Packet) []ldapSearchResponseControl {
+	if len(packet.Children) < 3 || packet.Children[2].ClassType != ber.ClassContext ||
+		packet.Children[2].Tag != 0 {
+		return nil
+	}
+	controls := make([]ldapSearchResponseControl, 0, len(packet.Children[2].Children))
+	for _, encoded := range packet.Children[2].Children {
+		if encoded == nil || len(encoded.Children) == 0 {
+			continue
+		}
+		control := ldapSearchResponseControl{oid: ldapBERString(encoded.Children[0])}
+		if control.oid == "" {
+			continue
+		}
+		index := 1
+		if index < len(encoded.Children) {
+			if critical, ok := encoded.Children[index].Value.(bool); ok {
+				control.critical = critical
+				index++
+			}
+		}
+		if index < len(encoded.Children) {
+			control.value = ldapBERBytes(encoded.Children[index])
+			control.hasValue = true
+		}
+		controls = append(controls, control)
+	}
+	return controls
+}
+
+func ldapBERString(packet *ber.Packet) string {
+	if packet == nil {
+		return ""
+	}
+	if value, ok := packet.Value.(string); ok {
+		return value
+	}
+	return string(ldapBERBytes(packet))
+}
+
+func ldapBERBytes(packet *ber.Packet) []byte {
+	if packet == nil {
+		return nil
+	}
+	if packet.Data != nil {
+		return append([]byte(nil), packet.Data.Bytes()...)
+	}
+	if value, ok := packet.Value.(string); ok {
+		return []byte(value)
+	}
+	if value, ok := packet.Value.([]byte); ok {
+		return append([]byte(nil), value...)
+	}
+	return nil
+}
+
+func (observer *ldapSearchResponseObserver) takeSearchResponses() []ldapSearchWireResponse {
+	if observer == nil {
+		return nil
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.searchIDs) == 0 {
+		return nil
+	}
+	var responses []ldapSearchWireResponse
+	for _, messageID := range observer.searchIDs {
+		responses = append(responses, observer.responses[messageID]...)
+		delete(observer.responses, messageID)
+	}
+	observer.searchIDs = nil
+	return responses
+}
+
+func (options *ldapClientOptions) addReferralSearchObserver(
+	observer *ldapSearchResponseObserver,
+) {
+	if observer == nil {
+		return
+	}
+	options.searchObserverMu.Lock()
+	options.referralObservers = append(options.referralObservers, observer)
+	options.searchObserverMu.Unlock()
+}
+
+func (options *ldapClientOptions) takeSearchResponses() []ldapSearchWireResponse {
+	responses := options.searchObserver.takeSearchResponses()
+	options.searchObserverMu.Lock()
+	referrals := options.referralObservers
+	options.referralObservers = nil
+	options.searchObserverMu.Unlock()
+	for _, observer := range referrals {
+		responses = append(responses, observer.takeSearchResponses()...)
+	}
+	return responses
+}
+
 type repeatedStringFlag []string
 
 func (values *repeatedStringFlag) String() string {
@@ -634,7 +1041,7 @@ func runLDAPSearch(
 	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) (runErr error) {
-	args, ldifLevel := normalizeLDAPSearchLDIFArgs(args)
+	args, ldifLevel, valuesToFilesLevel := normalizeLDAPSearchArgs(args)
 	flags := flag.NewFlagSet("ldapsearch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var client ldapClientOptions
@@ -652,7 +1059,7 @@ func runLDAPSearch(
 	pageSize := flags.Uint64("page-size", 0, "RFC 2696 page size")
 	batchPath := flags.String("f", "", "read batch filter values from a file, or - for stdin")
 	valueURLPrefix := flags.String("F", "", "URL prefix for temporary value files")
-	valuesToFiles := flags.Bool("t", false, "write non-printable values to temporary files")
+	valuesToFiles := flags.Bool("t", false, "write attribute values to temporary files")
 	temporaryDirectory := flags.String("T", "", "directory for temporary value files")
 	sortAttribute := flags.String("S", "", "sort results by attribute; empty sorts by DN")
 	includeUFN := flags.Bool("u", false, "include User Friendly entry names")
@@ -751,7 +1158,7 @@ func runLDAPSearch(
 		return fmt.Errorf("ldapsearch controls: %w", err)
 	}
 	valueFiles, err := openLDAPSearchValueFiles(
-		*valuesToFiles,
+		valuesToFilesLevel > 0,
 		*temporaryDirectory,
 		*valueURLPrefix,
 	)
@@ -763,6 +1170,7 @@ func runLDAPSearch(
 			runErr = errors.Join(runErr, valueFiles.Close())
 		}()
 	}
+	client.observeSearch = true
 
 	queries := []string{filter}
 	if *batchPath != "" && *batchPath != "-" {
@@ -793,6 +1201,7 @@ func runLDAPSearch(
 		typesOnly:     *typesOnly,
 		level:         ldifLevel,
 		valueFiles:    valueFiles,
+		allValueFiles: valuesToFilesLevel > 1,
 		sort:          flagWasSet(flags, "S"),
 		sortAttribute: *sortAttribute,
 		includeUFN:    *includeUFN,
@@ -853,9 +1262,10 @@ func runLDAPSearch(
 	return continuousErr
 }
 
-func normalizeLDAPSearchLDIFArgs(args []string) ([]string, int) {
+func normalizeLDAPSearchArgs(args []string) ([]string, int, int) {
 	normalized := make([]string, 0, len(args))
-	level := 0
+	ldifLevel := 0
+	valueFileLevel := 0
 	options := true
 	for _, argument := range args {
 		if options && argument == "--" {
@@ -866,15 +1276,29 @@ func normalizeLDAPSearchLDIFArgs(args []string) ([]string, int) {
 		if options && len(argument) > 1 && argument[0] == '-' &&
 			strings.Trim(argument[1:], "L") == "" {
 			count := len(argument) - 1
-			level += count
+			ldifLevel += count
 			for range count {
 				normalized = append(normalized, "-L")
 			}
 			continue
 		}
+		if options && len(argument) > 1 && argument[0] == '-' &&
+			strings.Trim(argument[1:], "t") == "" {
+			count := len(argument) - 1
+			valueFileLevel += count
+			for range count {
+				normalized = append(normalized, "-t")
+			}
+			continue
+		}
 		normalized = append(normalized, argument)
 	}
-	return normalized, min(level, 3)
+	return normalized, min(ldifLevel, 3), min(valueFileLevel, 2)
+}
+
+func normalizeLDAPSearchLDIFArgs(args []string) ([]string, int) {
+	normalized, level, _ := normalizeLDAPSearchArgs(args)
+	return normalized, level
 }
 
 func runLDAPWhoAmI(
@@ -1182,12 +1606,13 @@ func runLDAPSearchQuery(
 		(!paging.critical && !paging.prompt && !output.sort && output.level >= 2) {
 		messageID := output.nextSearchMessageID()
 		result, searchErr := client.searchWithReferrals(connection, request, paging.size)
+		wireResponses := client.takeSearchResponses()
 		var outputErr error
 		if result != nil {
-			outputErr = output.writeEntries(result.Entries)
+			outputErr = output.writeEntriesWithResponses(result.Entries, wireResponses)
 		}
 		if outputErr == nil {
-			outputErr = output.writeResult(result, searchErr, true, messageID)
+			outputErr = output.writeResult(result, searchErr, true, messageID, wireResponses)
 		}
 		return ldapSearchResultError(searchErr, outputErr, stderr, output.level)
 	}
@@ -1201,16 +1626,17 @@ func runLDAPSearchQuery(
 		sent := *request
 		sent.Controls = append(cloneLDAPControls(request.Controls), pagingControl)
 		result, searchErr := client.searchWithReferrals(connection, &sent, 0)
+		wireResponses := client.takeSearchResponses()
 		clearLDAPControls(sent.Controls)
 		var outputErr error
 		if result != nil {
-			outputErr = output.writeEntries(result.Entries)
+			outputErr = output.writeEntriesWithResponses(result.Entries, wireResponses)
 		}
 		if outputErr != nil {
 			return outputErr
 		}
 		if searchErr != nil {
-			if err := output.writeResult(result, searchErr, true, messageID); err != nil {
+			if err := output.writeResult(result, searchErr, true, messageID, wireResponses); err != nil {
 				return errors.Join(err, searchErr)
 			}
 			return ldapSearchResultError(searchErr, nil, stderr, output.level)
@@ -1220,7 +1646,7 @@ func runLDAPSearchQuery(
 		}
 		responseControl := ldap.FindControl(result.Controls, ldap.ControlTypePaging)
 		if responseControl == nil {
-			if err := output.writeResult(result, nil, true, messageID); err != nil {
+			if err := output.writeResult(result, nil, true, messageID, wireResponses); err != nil {
 				return err
 			}
 			return nil
@@ -1231,7 +1657,13 @@ func runLDAPSearchQuery(
 		}
 		clear(cookie)
 		cookie = append(cookie[:0], responsePaging.Cookie...)
-		if err := output.writeResult(result, nil, len(cookie) == 0, messageID); err != nil {
+		if err := output.writeResult(
+			result,
+			nil,
+			len(cookie) == 0,
+			messageID,
+			wireResponses,
+		); err != nil {
 			return err
 		}
 		if len(cookie) == 0 {
@@ -1440,6 +1872,7 @@ type ldapSearchLDIFOutput struct {
 	minimal       bool
 	started       bool
 	valueFiles    *ldapSearchValueFiles
+	allValueFiles bool
 	sort          bool
 	sortAttribute string
 	includeUFN    bool
@@ -1447,6 +1880,7 @@ type ldapSearchLDIFOutput struct {
 	responses     int
 	entries       int
 	references    int
+	partials      int
 	messageID     int64
 }
 
@@ -1532,6 +1966,7 @@ func (output *ldapSearchLDIFOutput) startQuery(query string, index int) error {
 	output.responses = 0
 	output.entries = 0
 	output.references = 0
+	output.partials = 0
 	if output.batch && index > 0 {
 		if _, err := io.WriteString(output.writer, "\n"); err != nil {
 			return err
@@ -1557,6 +1992,7 @@ func (output *ldapSearchLDIFOutput) writeResult(
 	searchErr error,
 	final bool,
 	messageID int64,
+	wireResponses []ldapSearchWireResponse,
 ) error {
 	if result != nil {
 		output.responses += len(result.Entries)
@@ -1564,6 +2000,12 @@ func (output *ldapSearchLDIFOutput) writeResult(
 		if err := output.writeReferences(result.Referrals); err != nil {
 			return err
 		}
+	}
+	if err := output.writeReferenceControls(wireResponses); err != nil {
+		return err
+	}
+	if err := output.writeIntermediateResponses(wireResponses); err != nil {
+		return err
 	}
 
 	var ldapError *ldap.Error
@@ -1616,6 +2058,13 @@ func (output *ldapSearchLDIFOutput) writeResult(
 			}
 		}
 	}
+	controls := ldapSearchDoneControls(wireResponses)
+	if len(controls) == 0 && result != nil {
+		controls = ldapSearchControlsFromDecoded(result.Controls)
+	}
+	if err := output.writeResponseControls(controls); err != nil {
+		return err
+	}
 	if !final {
 		return nil
 	}
@@ -1627,6 +2076,11 @@ func (output *ldapSearchLDIFOutput) writeResult(
 	}
 	if output.entries > 0 {
 		if _, err := fmt.Fprintf(output.writer, "# numEntries: %d\n", output.entries); err != nil {
+			return err
+		}
+	}
+	if output.partials > 0 {
+		if _, err := fmt.Fprintf(output.writer, "# numPartial: %d\n", output.partials); err != nil {
 			return err
 		}
 	}
@@ -1665,7 +2119,193 @@ func (output *ldapSearchLDIFOutput) writeReferences(referrals []string) error {
 	return nil
 }
 
+func (output *ldapSearchLDIFOutput) writeReferenceControls(
+	responses []ldapSearchWireResponse,
+) error {
+	for _, response := range responses {
+		if response.tag != ldap.ApplicationSearchResultReference {
+			continue
+		}
+		if err := output.writeResponseControls(response.controls); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (output *ldapSearchLDIFOutput) writeIntermediateResponses(
+	responses []ldapSearchWireResponse,
+) error {
+	for _, response := range responses {
+		if response.tag != ldap.ApplicationIntermediateResponse {
+			continue
+		}
+		output.responses++
+		output.partials++
+		if response.intermediateOID == ldap.ControlTypeSyncInfo {
+			if err := output.writeSyncInfoIntermediate(response); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(output.writer, "\n"); err != nil {
+				return err
+			}
+			continue
+		}
+		if output.level >= 2 {
+			continue
+		}
+		if _, err := io.WriteString(output.writer, "# extended partial response\n"); err != nil {
+			return err
+		}
+		if output.level == 0 {
+			if err := writeLDIFAttribute(
+				output.writer,
+				"partial",
+				[]byte(response.intermediateOID),
+			); err != nil {
+				return err
+			}
+			if response.hasIntermediateData {
+				if err := writeBase64LDIFAttribute(
+					output.writer,
+					"data",
+					response.intermediateData,
+					false,
+				); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := writeCommentLDIFAttribute(
+				output.writer,
+				"partial",
+				[]byte(response.intermediateOID),
+				false,
+			); err != nil {
+				return err
+			}
+			if response.hasIntermediateData {
+				if err := writeBase64LDIFAttribute(
+					output.writer,
+					"data",
+					response.intermediateData,
+					true,
+				); err != nil {
+					return err
+				}
+			}
+		}
+		if err := output.writeResponseControls(response.controls); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(output.writer, "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (output *ldapSearchLDIFOutput) writeResponseControls(
+	controls []ldapSearchResponseControl,
+) error {
+	return output.writeOpenLDAPResponseControls(controls)
+}
+
+func ldapSearchDoneControls(
+	responses []ldapSearchWireResponse,
+) []ldapSearchResponseControl {
+	for index := len(responses) - 1; index >= 0; index-- {
+		if responses[index].tag == ldap.ApplicationSearchResultDone {
+			return responses[index].controls
+		}
+	}
+	return nil
+}
+
+func ldapSearchControlsFromDecoded(controls []ldap.Control) []ldapSearchResponseControl {
+	result := make([]ldapSearchResponseControl, 0, len(controls))
+	for _, control := range controls {
+		if control == nil || control.GetControlType() == "" {
+			continue
+		}
+		encoded := control.Encode()
+		decoded := parseLDAPSearchResponseControl(encoded)
+		if decoded.oid == "" {
+			decoded.oid = control.GetControlType()
+		}
+		result = append(result, decoded)
+	}
+	return result
+}
+
+func parseLDAPSearchResponseControl(encoded *ber.Packet) ldapSearchResponseControl {
+	if encoded == nil || len(encoded.Children) == 0 {
+		return ldapSearchResponseControl{}
+	}
+	control := ldapSearchResponseControl{oid: ldapBERString(encoded.Children[0])}
+	index := 1
+	if index < len(encoded.Children) {
+		if critical, ok := encoded.Children[index].Value.(bool); ok {
+			control.critical = critical
+			index++
+		}
+	}
+	if index < len(encoded.Children) {
+		control.value = ldapBERBytes(encoded.Children[index])
+		control.hasValue = true
+	}
+	return control
+}
+
+func writeCommentLDIFAttribute(
+	writer io.Writer,
+	name string,
+	value []byte,
+	binary bool,
+) error {
+	line := make([]byte, 0, len(name)+5+len(value)*2)
+	line = append(line, '#', ' ')
+	line = append(line, name...)
+	line = append(line, ':')
+	if binary {
+		line = append(line, ':')
+	}
+	if len(value) > 0 {
+		line = append(line, ' ')
+		line = append(line, value...)
+	}
+	return writeFoldedLDIFLineWithWidth(writer, line, ldapSearchLDIFLineWidth+1)
+}
+
+func writeBase64LDIFAttribute(
+	writer io.Writer,
+	name string,
+	value []byte,
+	comment bool,
+) error {
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(value)))
+	base64.StdEncoding.Encode(encoded, value)
+	if comment {
+		return writeCommentLDIFAttribute(writer, name, encoded, true)
+	}
+	line := make([]byte, 0, len(name)+4+len(encoded))
+	line = append(line, name...)
+	line = append(line, ':', ':')
+	if len(encoded) > 0 {
+		line = append(line, ' ')
+		line = append(line, encoded...)
+	}
+	return writeFoldedLDIFLine(writer, line)
+}
+
 func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
+	return output.writeEntriesWithResponses(entries, nil)
+}
+
+func (output *ldapSearchLDIFOutput) writeEntriesWithResponses(
+	entries []*ldap.Entry,
+	responses []ldapSearchWireResponse,
+) error {
 	if err := output.ensureStarted(); err != nil {
 		return err
 	}
@@ -1674,6 +2314,14 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 		entries, err = sortLDAPSearchEntries(entries, output.sortAttribute)
 		if err != nil {
 			return err
+		}
+	}
+	entryControls := make(map[*ldap.Entry][]ldapSearchResponseControl, len(entries))
+	entryIndex := 0
+	for _, response := range responses {
+		if response.tag == ldap.ApplicationSearchResultEntry && entryIndex < len(entries) {
+			entryControls[entries[entryIndex]] = response.controls
+			entryIndex++
 		}
 	}
 	for _, entry := range entries {
@@ -1695,6 +2343,11 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 		}
 		if err := writeLDIFAttribute(output.writer, "dn", []byte(entry.DN)); err != nil {
 			return err
+		}
+		if controls, ok := entryControls[entry]; ok {
+			if err := output.writeResponseControls(controls); err != nil {
+				return err
+			}
 		}
 		if output.includeUFN {
 			ufn, _, err := ldapSearchUserFriendlyDN(entry.DN)
@@ -1730,7 +2383,8 @@ func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
 				}
 			}
 			for _, value := range values {
-				if output.valueFiles != nil && ldifValueRequiresBase64(value) {
+				if output.valueFiles != nil &&
+					(output.allValueFiles || ldifValueRequiresBase64(value)) {
 					reference, err := output.valueFiles.Write(attribute.Name, value)
 					if err != nil {
 						return fmt.Errorf("write search value for attribute %s: %w", attribute.Name, err)
@@ -2169,9 +2823,13 @@ func ldifValueRequiresBase64(value []byte) bool {
 }
 
 func writeFoldedLDIFLine(writer io.Writer, line []byte) error {
+	return writeFoldedLDIFLineWithWidth(writer, line, ldapSearchLDIFLineWidth)
+}
+
+func writeFoldedLDIFLineWithWidth(writer io.Writer, line []byte, lineWidth int) error {
 	first := true
 	for len(line) > 0 {
-		width := ldapSearchLDIFLineWidth
+		width := lineWidth
 		if !first {
 			if _, err := writer.Write([]byte{' '}); err != nil {
 				return err

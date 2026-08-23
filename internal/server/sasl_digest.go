@@ -13,6 +13,8 @@ import (
 	"hash"
 	"io"
 	"net"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -29,6 +31,8 @@ const (
 	maxSASLDigestMD5BufferSize      = 0xFFFFFF
 	saslDigestMD5SecretAttribute    = "cmusaslsecretDIGEST-MD5"
 	saslDigestMD5AuthenticationQOP  = "auth"
+	saslDigestMD5IntegrityQOP       = "auth-int"
+	saslDigestMD5ConfidentialityQOP = "auth-conf"
 	saslDigestMD5AuthenticationVerb = "AUTHENTICATE"
 )
 
@@ -37,9 +41,14 @@ var errSASLDigestMD5CredentialsUnavailable = errors.New(
 )
 
 type serverSASLDigestMD5Session struct {
-	nonce     string
-	realm     string
-	challenge []byte
+	nonce          string
+	realm          string
+	challenge      []byte
+	allowAuth      bool
+	allowIntegrity bool
+	ciphers        map[string]saslDigestMD5Cipher
+	maxBufferSize  uint32
+	expectedHosts  map[string]struct{}
 }
 
 type saslDigestMD5Response struct {
@@ -53,6 +62,8 @@ type saslDigestMD5Response struct {
 	response         string
 	authorization    string
 	hasAuthorization bool
+	maxBufferSize    uint32
+	cipher           string
 }
 
 type saslDigestMD5Directive struct {
@@ -73,8 +84,15 @@ func (credentials *saslDigestMD5Credentials) clear() {
 
 func startSASLDigestMD5Session(
 	runtime *runtimeState,
+	externalSSF uint32,
+	expectedHosts ...string,
 ) (*serverSASLSession, error) {
-	conversation, err := newSASLDigestMD5Session(runtime, rand.Reader)
+	conversation, err := newSASLDigestMD5SessionWithSSF(
+		runtime,
+		externalSSF,
+		rand.Reader,
+		expectedHosts...,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +106,15 @@ func startSASLDigestMD5Session(
 func newSASLDigestMD5Session(
 	runtime *runtimeState,
 	random io.Reader,
+) (*serverSASLDigestMD5Session, error) {
+	return newSASLDigestMD5SessionWithSSF(runtime, 0, random)
+}
+
+func newSASLDigestMD5SessionWithSSF(
+	runtime *runtimeState,
+	externalSSF uint32,
+	random io.Reader,
+	additionalHosts ...string,
 ) (*serverSASLDigestMD5Session, error) {
 	entropy := make([]byte, saslDigestMD5NonceSize)
 	if _, err := io.ReadFull(random, entropy); err != nil {
@@ -108,12 +135,62 @@ func newSASLDigestMD5Session(
 		return nil, errors.New("DIGEST-MD5 maxbuf exceeds RFC limit")
 	}
 
+	properties := runtime.sasl.securityProperties
+	requiredSSF := uint32(0)
+	if properties.minSSF > externalSSF {
+		requiredSSF = properties.minSSF - externalSSF
+	}
+	maximumSSF := uint32(0)
+	if properties.maxSSF > externalSSF {
+		maximumSSF = properties.maxSSF - externalSSF
+	}
+	allowAuth := requiredSSF == 0
+	allowIntegrity := properties.maxBufferSize != 0 &&
+		requiredSSF <= 1 && maximumSSF >= 1
+	ciphers := availableSASLDigestMD5Ciphers(requiredSSF, maximumSSF)
+	if properties.maxBufferSize == 0 {
+		ciphers = nil
+	}
+	if !allowAuth && !allowIntegrity && len(ciphers) == 0 {
+		return nil, errors.New(
+			"DIGEST-MD5 cannot satisfy the configured SASL SSF",
+		)
+	}
+
+	qops := make([]string, 0, 3)
+	if allowAuth {
+		qops = append(qops, saslDigestMD5AuthenticationQOP)
+	}
+	if allowIntegrity {
+		qops = append(qops, saslDigestMD5IntegrityQOP)
+	}
+	if len(ciphers) != 0 {
+		qops = append(qops, saslDigestMD5ConfidentialityQOP)
+	}
+
 	var challenge strings.Builder
 	challenge.WriteString(`nonce="`)
 	challenge.WriteString(quoteSASLDigestMD5Value(nonce))
 	challenge.WriteString(`",realm="`)
 	challenge.WriteString(quoteSASLDigestMD5Value(realm))
-	challenge.WriteString(`",qop="auth"`)
+	challenge.WriteString(`",qop="`)
+	challenge.WriteString(strings.Join(qops, ","))
+	challenge.WriteByte('"')
+	if len(ciphers) != 0 {
+		challenge.WriteString(`,cipher="`)
+		wroteCipher := false
+		for _, cipher := range orderedSASLDigestMD5Ciphers() {
+			if _, ok := ciphers[cipher.name]; !ok {
+				continue
+			}
+			if wroteCipher {
+				challenge.WriteByte(',')
+			}
+			challenge.WriteString(cipher.name)
+			wroteCipher = true
+		}
+		challenge.WriteByte('"')
+	}
 	if runtime.sasl.securityProperties.maxBufferSize != 0 {
 		challenge.WriteString(",maxbuf=")
 		challenge.WriteString(strconv.FormatUint(
@@ -126,10 +203,21 @@ func newSASLDigestMD5Session(
 		return nil, errors.New("DIGEST-MD5 challenge exceeds 2047 bytes")
 	}
 	encoded := []byte(challenge.String())
+	expectedHosts := make(map[string]struct{}, len(additionalHosts)+1)
+	for _, host := range append([]string{runtime.sasl.host}, additionalHosts...) {
+		if normalized, ok := normalizeSASLDigestMD5Host(host); ok {
+			expectedHosts[normalized] = struct{}{}
+		}
+	}
 	return &serverSASLDigestMD5Session{
-		nonce:     nonce,
-		realm:     realm,
-		challenge: encoded,
+		nonce:          nonce,
+		realm:          realm,
+		challenge:      encoded,
+		allowAuth:      allowAuth,
+		allowIntegrity: allowIntegrity,
+		ciphers:        ciphers,
+		maxBufferSize:  properties.maxBufferSize,
+		expectedHosts:  expectedHosts,
 	}, nil
 }
 
@@ -180,7 +268,7 @@ func (server *Server) handleSASLDigestMD5Step(
 	}
 	defer credentials.clear()
 
-	rspauth, valid := verifySASLDigestMD5Response(
+	rspauth, sessionKey, valid := verifySASLDigestMD5Response(
 		response,
 		credentials,
 	)
@@ -188,6 +276,7 @@ func (server *Server) handleSASLDigestMD5Step(
 		clearSASLSession(state)
 		return writeSASLInvalidCredentials(connection, message.ID)
 	}
+	defer clear(sessionKey)
 
 	authorizationDN, err := server.resolveSASLAuthorizationDN(
 		ctx,
@@ -212,13 +301,43 @@ func (server *Server) handleSASLDigestMD5Step(
 	state.boundDN = authorizationDN.String()
 	state.authMechanism = session.mechanism
 	clearSASLSession(state)
-	return ldapwire.Write(connection, ldapwire.EncodeSASLBindResponse(
+	if err := ldapwire.Write(connection, ldapwire.EncodeSASLBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
 		[]byte("rspauth="+rspauth),
 		true,
 		nil,
-	))
+	)); err != nil {
+		return err
+	}
+	if response.qop == saslDigestMD5IntegrityQOP {
+		securityLayer, err := newSASLDigestMD5ServerIntegrityConnection(
+			state.connection,
+			sessionKey,
+			response.maxBufferSize,
+			session.digestMD5Session.maxBufferSize,
+		)
+		if err != nil {
+			return err
+		}
+		state.connection = securityLayer
+		state.saslSSF = 1
+	} else if response.qop == saslDigestMD5ConfidentialityQOP {
+		cipher := session.digestMD5Session.ciphers[response.cipher]
+		securityLayer, err := newSASLDigestMD5ServerPrivacyConnection(
+			state.connection,
+			sessionKey,
+			cipher,
+			response.maxBufferSize,
+			session.digestMD5Session.maxBufferSize,
+		)
+		if err != nil {
+			return err
+		}
+		state.connection = securityLayer
+		state.saslSSF = cipher.ssf
+	}
+	return nil
 }
 
 func (server *Server) lookupSASLDigestMD5Credentials(
@@ -355,16 +474,54 @@ func parseSASLDigestMD5Response(
 			"DIGEST-MD5 nonce does not match",
 		)
 	}
-	if !strings.EqualFold(response.qop, saslDigestMD5AuthenticationQOP) {
+	switch {
+	case strings.EqualFold(response.qop, saslDigestMD5AuthenticationQOP):
+		response.qop = saslDigestMD5AuthenticationQOP
+		if !session.allowAuth {
+			return saslDigestMD5Response{}, errors.New(
+				"DIGEST-MD5 auth qop was not offered",
+			)
+		}
+	case strings.EqualFold(response.qop, saslDigestMD5IntegrityQOP):
+		response.qop = saslDigestMD5IntegrityQOP
+		if !session.allowIntegrity {
+			return saslDigestMD5Response{}, errors.New(
+				"DIGEST-MD5 auth-int qop was not offered",
+			)
+		}
+	case strings.EqualFold(response.qop, saslDigestMD5ConfidentialityQOP):
+		response.qop = saslDigestMD5ConfidentialityQOP
+		cipherName, present := directives["cipher"]
+		if !present || cipherName == "" {
+			return saslDigestMD5Response{}, errors.New(
+				"DIGEST-MD5 auth-conf response has no cipher",
+			)
+		}
+		response.cipher = strings.ToLower(cipherName)
+		if _, ok := session.ciphers[response.cipher]; !ok {
+			if response.cipher == "des" || response.cipher == "3des" {
+				return saslDigestMD5Response{}, errors.New(
+					"DIGEST-MD5 DES confidentiality ciphers are not supported",
+				)
+			}
+			return saslDigestMD5Response{}, errors.New(
+				"DIGEST-MD5 auth-conf cipher was not offered",
+			)
+		}
+	default:
 		return saslDigestMD5Response{}, errors.New(
 			"DIGEST-MD5 qop is not supported",
 		)
 	}
-	if len(response.digestURI) < len("ldap/") ||
-		!strings.EqualFold(response.digestURI[:len("ldap/")], "ldap/") {
-		return saslDigestMD5Response{}, errors.New(
-			"DIGEST-MD5 digest-uri is not an LDAP service",
-		)
+	if response.qop != saslDigestMD5ConfidentialityQOP {
+		if _, present := directives["cipher"]; present {
+			return saslDigestMD5Response{}, errors.New(
+				"DIGEST-MD5 cipher is only valid with auth-conf",
+			)
+		}
+	}
+	if err := validateSASLDigestMD5URI(response.digestURI, session.expectedHosts); err != nil {
+		return saslDigestMD5Response{}, err
 	}
 	if len(response.response) != hex.EncodedLen(md5.Size) ||
 		!isLowerHex(response.response) {
@@ -386,6 +543,7 @@ func parseSASLDigestMD5Response(
 			"DIGEST-MD5 charset is not UTF-8",
 		)
 	}
+	response.maxBufferSize = saslDigestMD5DefaultMaxBuffer
 	if maxBuffer, ok := directives["maxbuf"]; ok {
 		size, err := strconv.ParseUint(maxBuffer, 10, 32)
 		if err != nil ||
@@ -395,8 +553,68 @@ func parseSASLDigestMD5Response(
 				"DIGEST-MD5 maxbuf is invalid",
 			)
 		}
+		response.maxBufferSize = uint32(size)
 	}
 	return response, nil
+}
+
+func validateSASLDigestMD5URI(
+	digestURI string,
+	expectedHosts map[string]struct{},
+) error {
+	parts := strings.Split(digestURI, "/")
+	if len(parts) < 2 || len(parts) > 3 ||
+		!strings.EqualFold(parts[0], "ldap") {
+		return errors.New("DIGEST-MD5 digest-uri is not an LDAP service")
+	}
+	if len(parts) == 3 && parts[2] != "" && !strings.EqualFold(parts[2], "ldap") {
+		return errors.New("DIGEST-MD5 digest-uri service name is not accepted")
+	}
+	host, ok := normalizeSASLDigestMD5Host(parts[1])
+	if !ok {
+		return errors.New("DIGEST-MD5 digest-uri host is invalid")
+	}
+	if _, ok := expectedHosts[host]; !ok {
+		return fmt.Errorf("DIGEST-MD5 digest-uri host %q does not match this LDAP service", parts[1])
+	}
+	return nil
+}
+
+func normalizeSASLDigestMD5Host(host string) (string, bool) {
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || strings.ContainsAny(host, "/\x00\r\n\t ") {
+		return "", false
+	}
+	return strings.ToLower(host), true
+}
+
+func saslDigestMD5ConnectionHosts(
+	connection net.Conn,
+	listenerURLs []string,
+) []string {
+	hosts := make([]string, 0, len(listenerURLs)+1)
+	if connection != nil && connection.LocalAddr() != nil {
+		if host, _, err := net.SplitHostPort(connection.LocalAddr().String()); err == nil {
+			hosts = append(hosts, host)
+			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+				hosts = append(hosts, "localhost")
+			}
+		}
+	}
+	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+		hosts = append(hosts, hostname)
+	}
+	for _, raw := range listenerURLs {
+		parsed, err := url.Parse(raw)
+		if err == nil && parsed.Hostname() != "" {
+			hosts = append(hosts, parsed.Hostname())
+		}
+	}
+	return hosts
 }
 
 func parseSASLDigestMD5Directives(
@@ -560,7 +778,7 @@ func isLowerHex(value string) bool {
 func verifySASLDigestMD5Response(
 	response saslDigestMD5Response,
 	credentials saslDigestMD5Credentials,
-) (string, bool) {
+) (string, []byte, bool) {
 	var secrets [][]byte
 	if credentials.secret != nil {
 		secrets = append(secrets, credentials.secret)
@@ -599,10 +817,13 @@ func verifySASLDigestMD5Response(
 			[]byte(expected),
 			[]byte(response.response),
 		) == 1 {
-			return rspauth, true
+			return rspauth, calculateSASLDigestMD5SessionKey(
+				secret,
+				response,
+			), true
 		}
 	}
-	return "", false
+	return "", nil, false
 }
 
 func calculateSASLDigestMD5Secret(
@@ -662,13 +883,9 @@ func calculateSASLDigestMD5Exchange(
 	secret []byte,
 	response saslDigestMD5Response,
 ) (string, string) {
-	a1 := md5.New()
-	_, _ = a1.Write(secret)
-	_, _ = a1.Write([]byte(":" + response.nonce + ":" + response.cnonce))
-	if response.hasAuthorization {
-		_, _ = a1.Write([]byte(":" + response.authorization))
-	}
-	sessionKey := hex.EncodeToString(a1.Sum(nil))
+	binarySessionKey := calculateSASLDigestMD5SessionKey(secret, response)
+	defer clear(binarySessionKey)
+	sessionKey := hex.EncodeToString(binarySessionKey)
 	client := calculateSASLDigestMD5Digest(
 		sessionKey,
 		response,
@@ -682,12 +899,30 @@ func calculateSASLDigestMD5Exchange(
 	return client, server
 }
 
+func calculateSASLDigestMD5SessionKey(
+	secret []byte,
+	response saslDigestMD5Response,
+) []byte {
+	a1 := md5.New()
+	_, _ = a1.Write(secret)
+	_, _ = a1.Write([]byte(":" + response.nonce + ":" + response.cnonce))
+	if response.hasAuthorization {
+		_, _ = a1.Write([]byte(":" + response.authorization))
+	}
+	return a1.Sum(nil)
+}
+
 func calculateSASLDigestMD5Digest(
 	sessionKey string,
 	response saslDigestMD5Response,
 	method string,
 ) string {
-	a2 := md5.Sum([]byte(method + ":" + response.digestURI))
+	a2Value := method + ":" + response.digestURI
+	if response.qop == saslDigestMD5IntegrityQOP ||
+		response.qop == saslDigestMD5ConfidentialityQOP {
+		a2Value += ":00000000000000000000000000000000"
+	}
+	a2 := md5.Sum([]byte(a2Value))
 	a2Hex := hex.EncodeToString(a2[:])
 	nonceCount := fmt.Sprintf("%08x", response.nonceCount)
 	value := strings.Join([]string{

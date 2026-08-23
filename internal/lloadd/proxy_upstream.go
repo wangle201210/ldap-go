@@ -144,6 +144,8 @@ func (upstream *upstreamConnection) handleBindResponse(
 			client.binding = false
 			client.bindPin = nil
 			client.authzID = nil
+			client.authcID = nil
+			client.saslMech = ""
 			client.restriction = RuntimeRestrictionNone
 			client.upstreamAffinity = nil
 			client.mu.Unlock()
@@ -197,14 +199,30 @@ func applyBindResultLocked(
 	client.bindPin = nil
 	if result == ldapwire.ResultSuccess {
 		if operation.bindSASL {
-			client.authzID = nil
+			authzID := operation.bindAuthzID
+			if authzID == "" && operation.bindAuthcID != "" {
+				authzID = "u:" + operation.bindAuthcID
+			}
+			client.authzID = []byte(authzID)
+			if operation.bindAuthcID != "" {
+				client.authcID = []byte("u:" + operation.bindAuthcID)
+			} else {
+				client.authcID = nil
+			}
+			client.saslMech = operation.bindSASLMechanism
 		} else if operation.bindDN == "" {
 			client.authzID = []byte{}
+			client.authcID = []byte{}
+			client.saslMech = ""
 		} else {
 			client.authzID = []byte("dn:" + operation.bindDN)
+			client.authcID = []byte("dn:" + operation.bindDN)
+			client.saslMech = ""
 		}
 	} else {
 		client.authzID = nil
+		client.authcID = nil
+		client.saslMech = ""
 	}
 	if result == ldapwire.ResultSuccess &&
 		(!client.proxy.config.ProxyAuthz || operation.bindSASL) {

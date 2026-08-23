@@ -278,7 +278,7 @@ func TestLoadDatabaseEqualityIndexesDefaultNoLangAndApproximate(t *testing.T) {
 	}
 
 	canonical, equality, _, err := indexed.ResolveEqualityIndexAttribute("description;lang-en")
-	if err != nil || canonical != "2.5.4.13" || equality {
+	if err != nil || canonical != "2.5.4.13;lang-en" || equality {
 		t.Fatalf("nolang tagged equality = %q %v err=%v", canonical, equality, err)
 	}
 	canonical, equality, _, err = indexed.ResolveEqualityIndexAttribute("description")
@@ -287,7 +287,7 @@ func TestLoadDatabaseEqualityIndexesDefaultNoLangAndApproximate(t *testing.T) {
 	}
 }
 
-func TestLoadDatabaseEqualityIndexesRejectsUnimplementedSubitems(t *testing.T) {
+func TestLoadDatabaseEqualityIndexesRejectsInvalidModes(t *testing.T) {
 	registry, err := schema.NewBuiltinRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -296,8 +296,7 @@ func TestLoadDatabaseEqualityIndexesRejectsUnimplementedSubitems(t *testing.T) {
 		"objectClass sub",
 		"objectClass ordering",
 		"objectClass approx",
-		"description;lang-en eq",
-		"cn nosubtypes",
+		"description; eq",
 		"cn",
 	} {
 		t.Run(strings.ReplaceAll(value, " ", "_"), func(t *testing.T) {
@@ -312,6 +311,55 @@ func TestLoadDatabaseEqualityIndexesRejectsUnimplementedSubitems(t *testing.T) {
 				t.Fatalf("olcDbIndex %q was accepted", value)
 			}
 		})
+	}
+}
+
+func TestLoadDatabaseIndexesOptionSpecificAndNoSubtypes(t *testing.T) {
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := directory.Entry{
+		DN: "olcDatabase={1}mdb,cn=config",
+		Attributes: []directory.Attribute{{
+			Description: "olcDbIndex",
+			Values: [][]byte{
+				[]byte("description eq,notags"),
+				[]byte("description;LANG-EN eq,pres"),
+				[]byte("name eq,nosubtypes"),
+			},
+		}},
+	}
+	normalizer, config, err := loadDatabaseEqualityIndexes(entry, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Attributes) != 3 {
+		t.Fatalf("config = %#v", config)
+	}
+	indexed := normalizer.(*databaseEqualityIndexNormalizer)
+	canonical, equality, presence, err := indexed.ResolveEqualityIndexAttribute("description;lang-en")
+	if err != nil || canonical != "2.5.4.13;lang-en" || !equality || !presence {
+		t.Fatalf("exact option index = %q %v %v err=%v", canonical, equality, presence, err)
+	}
+	canonical, equality, _, err = indexed.ResolveEqualityIndexAttribute("description;lang-fr")
+	if err != nil || equality {
+		t.Fatalf("notags fallback = %q %v err=%v", canonical, equality, err)
+	}
+	canonical, equality, _, err = indexed.ResolveEqualityIndexAttribute("cn")
+	if err != nil || equality {
+		t.Fatalf("nosubtypes inherited index = %q %v err=%v", canonical, equality, err)
+	}
+
+	entry.Attributes[0].Values = [][]byte{[]byte("name eq")}
+	normalizer, _, err = loadDatabaseEqualityIndexes(entry, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, equality, _, err = normalizer.(*databaseEqualityIndexNormalizer).
+		ResolveEqualityIndexAttribute("cn")
+	if err != nil || canonical != "2.5.4.41" || !equality {
+		t.Fatalf("inherited name index = %q %v err=%v", canonical, equality, err)
 	}
 }
 
@@ -434,7 +482,7 @@ func TestDatabaseIndexDefaultNoLangApproximateMemoryAndBolt(t *testing.T) {
 			}, false, []string{"uid=alice,dc=example"})
 			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
 				Kind: directory.FilterApprox, Attribute: "cn", Assertion: []byte("Alice Smyth"),
-			}, false, []string{"uid=alice,dc=example"})
+			}, true, []string{"uid=alice,dc=example"})
 			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
 				Kind: directory.FilterApprox, Attribute: "uidNumber", Assertion: []byte("100"),
 			}, true, []string{"uid=alice,dc=example"})
@@ -473,6 +521,178 @@ func TestDatabaseIndexDefaultNoLangApproximateMemoryAndBolt(t *testing.T) {
 				Kind: directory.FilterEquality, Attribute: "uid", Assertion: []byte("carol"),
 			}, true, []string{"uid=carol,dc=example"})
 		})
+	}
+}
+
+func TestDatabaseIndexApproximateOptionsAndNoSubtypesLifecycle(t *testing.T) {
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newNormalizer := func(noSubtypes bool) *databaseEqualityIndexNormalizer {
+		nameModes := "name eq"
+		if noSubtypes {
+			nameModes += ",nosubtypes"
+		}
+		entry := directory.Entry{
+			DN: "olcDatabase={1}mdb,cn=config",
+			Attributes: []directory.Attribute{{
+				Description: "olcDbIndex",
+				Values: [][]byte{
+					[]byte("description eq,notags"),
+					[]byte("description;lang-en eq,pres"),
+					[]byte(nameModes),
+					[]byte("cn approx"),
+				},
+			}},
+		}
+		normalizer, _, err := loadDatabaseEqualityIndexes(entry, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return normalizer.(*databaseEqualityIndexNormalizer)
+	}
+
+	for _, backend := range []string{"memory", "bolt"} {
+		t.Run(backend, func(t *testing.T) {
+			var store storage.Store
+			if backend == "memory" {
+				store = storage.NewMemory()
+			} else {
+				store, err = storage.OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			indexed := newNormalizer(true)
+			alice := directory.Entry{
+				DN: "uid=alice,dc=example",
+				Attributes: []directory.Attribute{
+					{Description: "cn", Values: [][]byte{[]byte("Alice Smith")}},
+					{Description: "sn", Values: [][]byte{[]byte("Smith")}},
+					{Description: "description;lang-en", Values: [][]byte{[]byte("English")}},
+				},
+			}
+			bob := directory.Entry{
+				DN: "uid=bob,dc=example",
+				Attributes: []directory.Attribute{
+					{Description: "cn", Values: [][]byte{[]byte("Alice Jones")}},
+					{Description: "sn", Values: [][]byte{[]byte("Jones")}},
+					{Description: "description", Values: [][]byte{[]byte("English")}},
+				},
+			}
+			reverse := directory.Entry{
+				DN: "uid=reverse,dc=example",
+				Attributes: []directory.Attribute{
+					{Description: "cn", Values: [][]byte{[]byte("Smyth Alice")}},
+					{Description: "sn", Values: [][]byte{[]byte("Reverse")}},
+				},
+			}
+			numeric := directory.Entry{
+				DN: "uid=numeric,dc=example",
+				Attributes: []directory.Attribute{{
+					Description: "cn", Values: [][]byte{[]byte("123")},
+				}},
+			}
+			if err := store.Update(context.Background(), func(writer storage.Writer) error {
+				if err := writer.PutIn("db", alice, false); err != nil {
+					return err
+				}
+				if err := writer.PutIn("db", bob, false); err != nil {
+					return err
+				}
+				if err := writer.PutIn("db", reverse, false); err != nil {
+					return err
+				}
+				if err := writer.PutIn("db", numeric, false); err != nil {
+					return err
+				}
+				return storage.EnsureEqualityIndexes(writer, "db", indexed)
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterApprox, Attribute: "cn", Assertion: []byte("Alice Smyth"),
+			}, true, []string{"uid=alice,dc=example"})
+			assertDatabaseIndexCandidateDNs(t, store, indexed, directory.Filter{
+				Kind: directory.FilterApprox, Attribute: "cn", Assertion: []byte("Alice Smyth"),
+			}, []string{"uid=alice,dc=example", "uid=reverse,dc=example"})
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterApprox, Attribute: "cn", Assertion: []byte("123"),
+			}, false, []string{"uid=numeric,dc=example"})
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterEquality, Attribute: "description;lang-en", Assertion: []byte("English"),
+			}, true, []string{"uid=alice,dc=example"})
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterEquality, Attribute: "description;lang-fr", Assertion: []byte("English"),
+			}, false, nil)
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterEquality, Attribute: "sn", Assertion: []byte("Smith"),
+			}, false, []string{"uid=alice,dc=example"})
+
+			alice.Attributes = []directory.Attribute{
+				{Description: "cn", Values: [][]byte{[]byte("Carol Brown")}},
+				{Description: "sn", Values: [][]byte{[]byte("Brown")}},
+				{Description: "description;lang-fr", Values: [][]byte{[]byte("French")}},
+			}
+			if err := store.Update(context.Background(), func(writer storage.Writer) error {
+				wrapped := storage.WriterInPartitionWithNormalizer(writer, "db", indexed)
+				return wrapped.Put(alice, true)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterApprox, Attribute: "cn", Assertion: []byte("Alice Smyth"),
+			}, true, nil)
+			assertDatabaseIndexMatchesScan(t, store, indexed, registry, directory.Filter{
+				Kind: directory.FilterEquality, Attribute: "description;lang-en", Assertion: []byte("English"),
+			}, true, nil)
+
+			inherited := newNormalizer(false)
+			if err := store.Update(context.Background(), func(writer storage.Writer) error {
+				return storage.EnsureEqualityIndexes(writer, "db", inherited)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertDatabaseIndexMatchesScan(t, store, inherited, registry, directory.Filter{
+				Kind: directory.FilterEquality, Attribute: "sn", Assertion: []byte("Jones"),
+			}, true, []string{"uid=bob,dc=example"})
+		})
+	}
+}
+
+func assertDatabaseIndexCandidateDNs(
+	t *testing.T,
+	store storage.Store,
+	normalizer *databaseEqualityIndexNormalizer,
+	filter directory.Filter,
+	want []string,
+) {
+	t.Helper()
+	var got []string
+	err := store.View(context.Background(), func(reader storage.Reader) error {
+		planned, _, err := storage.ForEachFilterCandidate(
+			storage.ReaderInPartitionWithNormalizer(reader, "db", normalizer),
+			filter,
+			func(entry directory.Entry) error {
+				got = append(got, entry.DN)
+				return nil
+			},
+		)
+		if err == nil && !planned {
+			t.Fatal("filter was not index planned")
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("index candidates = %v, want %v", got, want)
 	}
 }
 
@@ -557,6 +777,7 @@ func TestOpenLDAPMDBIndexSemanticSourceContract(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		`{ BER_BVC("nolang"), 0 },`,
+		`{ BER_BVC("nosubtypes"), SLAP_INDEX_NOSUBTYPES },`,
 		`while ( !idxstr[i].mask ) i--;`,
 	} {
 		if !bytes.Contains(indexSource, []byte(fragment)) {
@@ -573,12 +794,23 @@ func TestOpenLDAPMDBIndexSemanticSourceContract(t *testing.T) {
 			t.Fatalf("pinned OpenLDAP back-mdb/attr.c no longer contains %q", fragment)
 		}
 	}
-	if !bytes.Contains(backendIndexSource, []byte("Use EQUALITY rule and index for approximate match")) {
-		t.Fatal("pinned OpenLDAP equality fallback contract changed")
+	for _, fragment := range []string{
+		"Use EQUALITY rule and index for approximate match",
+		"slap_ad_is_tagged( desc )",
+		"SLAP_INDEX_NOTAGS",
+		"SLAP_INDEX_NOSUBTYPES",
+		"sat_approx->smr_indexer",
+	} {
+		if !bytes.Contains(backendIndexSource, []byte(fragment)) {
+			t.Fatalf("pinned OpenLDAP back-mdb/index.c no longer contains %q", fragment)
+		}
 	}
 	for _, fragment := range []string{
 		"UTF8bvnormalize( value, NULL, LDAP_UTF8_APPROX, NULL )",
 		"values[i] = phonetic(c);",
+		"approxIndexer(",
+		"approxFilter(",
+		"ber_str2bv( phonetic( c )",
 		"nextavail=i+1;",
 	} {
 		if !bytes.Contains(schemaSource, []byte(fragment)) {

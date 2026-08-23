@@ -108,6 +108,18 @@ func (server *Server) tryMetaBackendSearch(
 		plans[index].request.SizeLimit = limit
 	}
 
+	if database.asyncMetaBackend != nil {
+		return server.runAsyncMetaBackendSearch(
+			ctx,
+			connection,
+			state,
+			message,
+			database,
+			request,
+			plans,
+			limit,
+		)
+	}
 	return server.runMetaBackendSearch(
 		ctx,
 		connection,

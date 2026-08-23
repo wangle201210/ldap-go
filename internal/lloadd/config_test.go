@@ -20,7 +20,8 @@ func TestDefaultConfigMatchesOpenLDAP2613(t *testing.T) {
 		config.MaxIncomingClient != 16777215 ||
 		config.MaxIncomingUpstream != 16777215 ||
 		config.ClientMaxPending != 0 || config.WriteCoherence != 0 ||
-		config.IOTimeout != 10*time.Second || config.NetworkTimeout != 0 ||
+		config.IOTimeout != 10*time.Second || config.IdleTimeout != 0 ||
+		config.NetworkTimeout != 0 ||
 		config.ProxyAuthz || config.BindConf.Method != BindNone ||
 		len(config.Tiers) != 0 || len(config.Restrictions) != 0 {
 		t.Fatalf("DefaultConfig() = %#v", config)
@@ -42,11 +43,13 @@ func TestParseStandaloneConfig(t *testing.T) {
 
 	input := `# a complete runtime configuration
 listen "ldap://127.0.0.1:1389 ldaps://[::1]:1636/"
+gentlehup on
 sockbuf_max_incoming_client 1048576
 sockbuf_max_incoming_upstream 2097152
 client_max_pending 64
 write_coherence -1
 iotimeout 1250
+idletimeout 45
 feature proxyauthz read_pause
 restrict_exop 1.1 reject
 restrict_exop 1.3.6.1.1.21.1 connection
@@ -72,8 +75,9 @@ backend-server uri=ldaps://two.example.com:6636/ numconns=5 bindconns=1 \
 	}
 	if config.MaxIncomingClient != 1048576 || config.MaxIncomingUpstream != 2097152 ||
 		config.ClientMaxPending != 64 || config.WriteCoherence != -time.Second ||
-		config.IOTimeout != 1250*time.Millisecond || config.NetworkTimeout != 3*time.Second ||
-		!config.ProxyAuthz || !config.HasFeature(FeatureReadPause) {
+		config.IOTimeout != 1250*time.Millisecond || config.IdleTimeout != 45*time.Second ||
+		config.NetworkTimeout != 3*time.Second ||
+		!config.GentleHUP || !config.ProxyAuthz || !config.HasFeature(FeatureReadPause) {
 		t.Fatalf("global config = %#v", config)
 	}
 	bind := config.BindConf

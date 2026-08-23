@@ -3,11 +3,14 @@ package server
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
+
+const asyncMetaTransportOwnerMarker = "\x00async-metaconn="
 
 type metaTransportCacheEntry struct {
 	transport *syncConsumerTransport
@@ -184,6 +187,28 @@ func (cache *metaTransportCache) remove(key string, transport *syncConsumerTrans
 	cache.mu.Unlock()
 }
 
+func (cache *metaTransportCache) resetOwner(owner string) {
+	if cache == nil || owner == "" {
+		return
+	}
+	var stale []*syncConsumerTransport
+	cache.mu.Lock()
+	for key, entry := range cache.entries {
+		if entry == nil || entry.owner != owner {
+			continue
+		}
+		delete(cache.entries, key)
+		entry.inUse = false
+		entry.retired = true
+		if !entry.closed {
+			entry.closed = true
+			stale = append(stale, entry.transport)
+		}
+	}
+	cache.mu.Unlock()
+	closeMetaTransportCacheTransports(stale)
+}
+
 func (cache *metaTransportCache) configureOwners(active map[string]struct{}) {
 	if cache == nil {
 		return
@@ -206,7 +231,7 @@ func (cache *metaTransportCache) configureOwners(active map[string]struct{}) {
 			delete(cache.entries, key)
 			continue
 		}
-		if _, active := owners[entry.owner]; active {
+		if _, active := owners[metaTransportLifecycleOwner(entry.owner)]; active {
 			continue
 		}
 		entry.retired = true
@@ -258,8 +283,15 @@ func (cache *metaTransportCache) ownerActiveLocked(owner string) bool {
 	if !cache.ownersConfigured {
 		return true
 	}
-	_, active := cache.activeOwners[owner]
+	_, active := cache.activeOwners[metaTransportLifecycleOwner(owner)]
 	return active
+}
+
+func metaTransportLifecycleOwner(owner string) string {
+	if index := strings.Index(owner, asyncMetaTransportOwnerMarker); index >= 0 {
+		return owner[:index]
+	}
+	return owner
 }
 
 func closeMetaTransportCacheTransports(transports []*syncConsumerTransport) {

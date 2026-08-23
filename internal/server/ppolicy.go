@@ -1343,10 +1343,10 @@ func (server *Server) passwordPolicyModificationProcessor(
 			if database.ppolicy.hashCleartext &&
 				!options.passwordModify &&
 				!passwordPolicyStoredScheme(candidate) {
-				hashed, hashErr := auth.HashPassword(
+				hashed, hashErr := hashPasswordForRuntime(
+					runtime,
 					candidate,
 					runtime.passwordHashSchemes[0],
-					nil,
 				)
 				if hashErr != nil {
 					if errors.Is(hashErr, auth.ErrPasswordHashUnavailable) {
@@ -1567,10 +1567,10 @@ func (server *Server) applyPasswordPolicyAdd(
 	}
 	if database.ppolicy.hashCleartext &&
 		!passwordPolicyStoredScheme(passwordValues[0]) {
-		hashed, err := auth.HashPassword(
+		hashed, err := hashPasswordForRuntime(
+			runtime,
 			passwordValues[0],
 			runtime.passwordHashSchemes[0],
-			nil,
 		)
 		if err != nil {
 			if errors.Is(err, auth.ErrPasswordHashUnavailable) {

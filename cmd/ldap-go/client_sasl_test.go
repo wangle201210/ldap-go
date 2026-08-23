@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/server"
@@ -95,6 +96,68 @@ func TestLDAPClientSASLPlainWireExchange(t *testing.T) {
 	}
 }
 
+func TestLDAPSearchSASLObserverPreservesResponseControls(t *testing.T) {
+	const password = "plain-search-secret"
+	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		switch request := message.Request.(type) {
+		case ldapwire.BindRequest:
+			if !request.Authentication.IsSASL ||
+				request.Authentication.SASLMechanism != "PLAIN" {
+				return nil, fmt.Errorf("unexpected SASL bind: %#v", request)
+			}
+			return [][]byte{ldapwire.EncodeBindResponse(
+				message.ID,
+				ldapwire.Result{Code: ldapwire.ResultSuccess},
+				nil,
+			)}, nil
+		case ldapwire.SearchRequest:
+			entry := directory.Entry{
+				DN: "uid=sasl,dc=example,dc=com",
+				Attributes: []directory.Attribute{{
+					Description: "uid",
+					Values:      [][]byte{[]byte("sasl")},
+				}},
+			}
+			return [][]byte{
+				ldapwire.EncodeSearchResultEntry(message.ID, entry, []ldapwire.Control{{
+					OID:      "1.2.3.70",
+					Value:    []byte("sasl-entry"),
+					HasValue: true,
+				}}),
+				ldapwire.EncodeSearchResultDone(
+					message.ID,
+					ldapwire.Result{Code: ldapwire.ResultSuccess},
+					[]ldapwire.Control{{
+						OID:      "1.2.3.71",
+						Value:    []byte("sasl-result"),
+						HasValue: true,
+					}},
+				),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected request %T", message.Request)
+		}
+	})
+
+	stdout, stderr, exitCode := runLDAPClientCommand([]string{
+		"ldapsearch", "-H", fixture.uri,
+		"-Y", "PLAIN", "-U", "alice", "-w", password,
+		"-b", "dc=example,dc=com", "-s", "sub",
+		"(uid=sasl)", "uid",
+	}, "")
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("SASL ldapsearch exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, expected := range []string{
+		"control: 1.2.3.70 false c2FzbC1lbnRyeQ==",
+		"control: 1.2.3.71 false c2FzbC1yZXN1bHQ=",
+	} {
+		if !strings.Contains(stdout, expected) {
+			t.Fatalf("SASL ldapsearch omitted %q: %q", expected, stdout)
+		}
+	}
+}
+
 func TestLDAPClientSASLDigestMD5WireExchange(t *testing.T) {
 	t.Parallel()
 
@@ -104,7 +167,7 @@ func TestLDAPClientSASLDigestMD5WireExchange(t *testing.T) {
 	)
 	challenge := []byte(
 		`realm="other.example",realm="example.com",nonce="` + nonce +
-			`",qop="auth,auth-int",charset=utf-8,algorithm=md5-sess`,
+			`",qop="auth",charset=utf-8,algorithm=md5-sess`,
 	)
 	var mutex sync.Mutex
 	step := 0
@@ -307,6 +370,35 @@ func TestLDAPClientSASLPlainOverRequiredStartTLS(t *testing.T) {
 	)
 	if exitCode != 0 || stdout != "dn:uid=alice,"+clientToolPeopleDN+"\n" || stderr != "" {
 		t.Fatalf("StartTLS PLAIN exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
+func TestLDAPClientSASLDigestMD5AuthIntOverRequiredStartTLS(t *testing.T) {
+	t.Parallel()
+
+	serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
+	uri := startLDAPClientToolSASLServer(t, serverTLS)
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		[]string{
+			"ldapwhoami", "-H", uri, "-ZZ", "-tls-ca", caPath,
+			"-tls-server-name", "localhost", "-Y", "DIGEST-MD5",
+			"-U", "alice", "-R", "example.com", "-w", "sasl-client-secret",
+			"-O", "minssf=1,maxssf=1",
+		},
+		"",
+	)
+	if exitCode != 0 || stdout != "dn:uid=alice,"+clientToolPeopleDN+"\n" ||
+		stderr != "" {
+		t.Fatalf(
+			"StartTLS DIGEST-MD5 auth-int exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout,
+			stderr,
+		)
 	}
 }
 
@@ -635,7 +727,7 @@ func TestLDAPClientSASLValidation(t *testing.T) {
 	}{
 		{name: "explicit mechanism", args: nil, message: "requires -Y"},
 		{name: "simple conflict", args: []string{"-x", "-Y", "PLAIN"}, message: "cannot be combined"},
-		{name: "unsupported mechanism", args: []string{"-Y", "GSSAPI"}, message: "unsupported SASL mechanism"},
+		{name: "unsupported mechanism", args: []string{"-Y", "GSS-SPNEGO"}, message: "unsupported SASL mechanism"},
 		{name: "plain authcid", args: []string{"-Y", "PLAIN", "-w", "hidden"}, message: "requires a non-empty -U"},
 		{name: "plain realm", args: []string{"-Y", "PLAIN", "-U", "alice", "-R", "example", "-w", "hidden"}, message: "only supported with SASL DIGEST-MD5"},
 		{name: "digest password", args: []string{"-Y", "DIGEST-MD5", "-U", "alice"}, message: "requires one of -w"},
@@ -643,7 +735,7 @@ func TestLDAPClientSASLValidation(t *testing.T) {
 		{name: "cram whitespace", args: []string{"-Y", "CRAM-MD5", "-U", "alice smith", "-w", "hidden"}, message: "must not contain whitespace"},
 		{name: "scram realm", args: []string{"-Y", "SCRAM-SHA-256", "-U", "alice", "-R", "example", "-w", "hidden"}, message: "only supported with SASL DIGEST-MD5"},
 		{name: "scram plus", args: []string{"-Y", "SCRAM-SHA-256-PLUS", "-U", "alice", "-w", "hidden"}, message: "SCRAM-PLUS mechanisms are not supported"},
-		{name: "security layer", args: []string{"-Y", "SCRAM-SHA-256", "-U", "alice", "-w", "hidden", "-O", "auth-int"}, message: "option -O is not supported"},
+		{name: "security layer", args: []string{"-Y", "SCRAM-SHA-256", "-U", "alice", "-w", "hidden", "-O", "auth-int"}, message: "-O is only supported with SASL DIGEST-MD5"},
 		{name: "external password", args: []string{"-Y", "EXTERNAL", "-w", "hidden"}, message: "does not use"},
 		{name: "external certificate", args: []string{"-Y", "EXTERNAL"}, message: "requires -tls-cert and -tls-key"},
 		{name: "bind DN", args: []string{"-Y", "PLAIN", "-D", clientToolRootDN, "-U", "alice", "-w", "hidden"}, message: "-D requires -x"},
@@ -660,6 +752,71 @@ func TestLDAPClientSASLValidation(t *testing.T) {
 				t.Fatalf("run(%v) exposed password: stdout=%q stderr=%q", args, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestLDAPCompareSASLDigestMD5SecurityLayers(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		properties string
+	}{
+		{name: "auth-int", properties: "minssf=1,maxssf=1"},
+		{name: "rc4-40", properties: "minssf=40,maxssf=40"},
+		{name: "rc4-56", properties: "minssf=56,maxssf=56"},
+		{name: "rc4", properties: "minssf=128,maxssf=128"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			uri := startLDAPClientToolSASLServer(t, nil)
+			stdout, stderr, exitCode := runLDAPClientCommand(
+				[]string{
+					"ldapcompare", "-H", uri,
+					"-Y", "DIGEST-MD5", "-U", "alice", "-R", "example.com",
+					"-w", "sasl-client-secret", "-O", test.properties,
+					"uid=alice," + clientToolPeopleDN, "uid:alice",
+				},
+				"",
+			)
+			if exitCode != ldap.LDAPResultCompareTrue || stdout != "TRUE\n" || stderr != "" {
+				t.Fatalf(
+					"DIGEST-MD5 %s ldapcompare exit=%d stdout=%q stderr=%q",
+					test.name,
+					exitCode,
+					stdout,
+					stderr,
+				)
+			}
+		})
+	}
+}
+
+func TestLDAPCompareSASLDigestMD5AuthConfAfterStartTLS(t *testing.T) {
+	t.Parallel()
+
+	serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
+	uri := startLDAPClientToolSASLServer(t, serverTLS)
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		[]string{
+			"ldapcompare", "-H", uri, "-ZZ", "-tls-ca", caPath,
+			"-tls-server-name", "localhost", "-Y", "DIGEST-MD5",
+			"-U", "alice", "-R", "example.com", "-w", "sasl-client-secret",
+			"-O", "minssf=128,maxssf=256",
+			"uid=alice," + clientToolPeopleDN, "uid:alice",
+		},
+		"",
+	)
+	if exitCode != ldap.LDAPResultCompareTrue || stdout != "TRUE\n" || stderr != "" {
+		t.Fatalf(
+			"StartTLS DIGEST-MD5 auth-conf ldapcompare exit=%d stdout=%q stderr=%q",
+			exitCode,
+			stdout,
+			stderr,
+		)
 	}
 }
 

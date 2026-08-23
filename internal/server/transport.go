@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/saslkrb5"
 )
 
 const defaultSecureHandshakeTimeout = 10 * time.Second
@@ -48,6 +50,14 @@ type securityStrengthConnection interface {
 
 type standardTLSConnection struct {
 	*tls.Conn
+	channelBinding []byte
+}
+
+func (connection *standardTLSConnection) TLSChannelBinding() ([]byte, bool) {
+	if len(connection.channelBinding) == 0 {
+		return nil, false
+	}
+	return append([]byte(nil), connection.channelBinding...), true
 }
 
 func (connection *standardTLSConnection) ExternalIdentity() (string, bool) {
@@ -70,7 +80,46 @@ func (transport standardTLSTransport) ServerHandshake(
 	if err := secured.HandshakeContext(ctx); err != nil {
 		return nil, err
 	}
-	return &standardTLSConnection{Conn: secured}, nil
+	return &standardTLSConnection{
+		Conn:           secured,
+		channelBinding: staticTLSServerEndpoint(transport.config),
+	}, nil
+}
+
+func staticTLSServerEndpoint(configuration *tls.Config) []byte {
+	if configuration == nil || len(configuration.Certificates) != 1 ||
+		configuration.GetCertificate != nil || configuration.GetConfigForClient != nil ||
+		len(configuration.Certificates[0].Certificate) == 0 {
+		return nil
+	}
+	certificate, err := x509.ParseCertificate(
+		configuration.Certificates[0].Certificate[0],
+	)
+	if err != nil {
+		return nil
+	}
+	binding, err := saslkrb5.TLSServerEndpoint(certificate)
+	if err != nil {
+		return nil
+	}
+	return binding
+}
+
+type tlsChannelBindingConnection interface {
+	net.Conn
+	TLSChannelBinding() ([]byte, bool)
+}
+
+func connectionTLSChannelBinding(connection net.Conn) []byte {
+	provider, ok := connection.(tlsChannelBindingConnection)
+	if !ok {
+		return nil
+	}
+	binding, ok := provider.TLSChannelBinding()
+	if !ok {
+		return nil
+	}
+	return binding
 }
 
 func (transport runtimeTLSTransport) ServerHandshake(

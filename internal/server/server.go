@@ -12,10 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/saslkrb5"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -50,10 +52,19 @@ type Config struct {
 	Clock                     func() time.Time
 	RADIUSConfigPath          string
 	RADIUSNASIdentifier       string
+	// GSSAPIKeytabPath enables the SASL GSSAPI acceptor. FILE: paths are
+	// accepted for parity with KRB5_KTNAME.
+	GSSAPIKeytabPath string
+	// GSSAPIChannelBinding enables an explicit non-RFC4752 extension. The
+	// empty value uses the RFC-mandated NULL channel binding.
+	GSSAPIChannelBinding string
 	// SQLDriver selects the database/sql driver used by OpenLDAP back-sql
 	// databases. The default is "odbc"; tests and embedded deployments may
 	// register and select another compatible driver.
 	SQLDriver string
+	// DNSSRVResolver overrides the system resolver for back-dnssrv. It is
+	// primarily useful to embedded deployments and deterministic tests.
+	DNSSRVResolver DNSSRVResolver
 }
 
 type Server struct {
@@ -92,6 +103,7 @@ type Server struct {
 	sqlBackends           map[*sqlBackendRuntimeConfiguration]struct{}
 	runtimeSequence       atomic.Uint64
 	metaTransportSequence atomic.Uint64
+	gssapiKeytab          *keytab.Keytab
 }
 
 func New(config Config) (*Server, error) {
@@ -141,6 +153,28 @@ func New(config Config) (*Server, error) {
 			return nil, errors.New("root password is required when root DN is configured")
 		}
 	}
+	var gssapiKeytab *keytab.Keytab
+	gssapiChannelBinding, err := saslkrb5.NormalizeChannelBinding(
+		config.GSSAPIChannelBinding,
+	)
+	if err != nil {
+		return nil, err
+	}
+	config.GSSAPIChannelBinding = gssapiChannelBinding
+	if config.GSSAPIKeytabPath != "" {
+		path, err := parseSyncConsumerKerberosFileCredential(
+			config.GSSAPIKeytabPath,
+			"GSSAPI keytab",
+			true,
+		)
+		if err != nil {
+			return nil, err
+		}
+		gssapiKeytab, err = keytab.Load(path)
+		if err != nil {
+			return nil, fmt.Errorf("load GSSAPI acceptor keytab: %w", err)
+		}
+	}
 	secureTransport := config.SecureTransport
 	if config.TLSConfig != nil {
 		if secureTransport != nil {
@@ -170,6 +204,7 @@ func New(config Config) (*Server, error) {
 		ddsWake:              make(chan struct{}, 1),
 		accesslogWake:        make(chan struct{}, 1),
 		monitor:              newMonitorState(),
+		gssapiKeytab:         gssapiKeytab,
 	}
 	started := false
 	defer func() {
@@ -184,7 +219,7 @@ func New(config Config) (*Server, error) {
 	config.Store = server.config.Store
 	server.syncConsumers = newSyncConsumerManager(server)
 	var runtime *runtimeState
-	err := config.Store.View(context.Background(), func(reader storage.Reader) error {
+	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
 		var err error
 		runtime, err = server.buildRuntimeState(reader)
 		return err
@@ -338,11 +373,12 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
 	state := connectionState{
-		connectionID:   server.nextConnectionID.Add(1),
-		connection:     connection,
-		externalSSF:    connectionSecurityStrength(connection, false),
-		auditIdentity:  &connectionAuditIdentityState{},
-		metaTransports: newMetaTransportCache(time.Now),
+		connectionID:    server.nextConnectionID.Add(1),
+		connection:      connection,
+		externalSSF:     connectionSecurityStrength(connection, false),
+		auditIdentity:   &connectionAuditIdentityState{},
+		metaTransports:  newMetaTransportCache(time.Now),
+		gssapiAvailable: server.gssapiKeytab != nil,
 	}
 	server.registerMetaTransportCache(state.metaTransports)
 	defer func() {
@@ -813,6 +849,16 @@ func (server *Server) dispatch(
 		}()
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
+	overlayConnection, handled, err := server.trySockOverlayOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	)
+	if handled {
+		return false, err
+	}
+	connection = overlayConnection
 	if handled, err := server.tryMetaBackendOperation(
 		ctx,
 		connection,
@@ -821,7 +867,23 @@ func (server *Server) dispatch(
 	); handled {
 		return false, err
 	}
+	if handled, err := server.tryDNSSRVBackendOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
 	if handled, err := server.tryLDAPBackendOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return false, err
+	}
+	if handled, err := server.tryPasswdBackendOperation(
 		ctx,
 		connection,
 		state,
@@ -1103,6 +1165,25 @@ func (server *Server) handleBind(
 		requestDN,
 	); handled {
 		canonicalizeBindEntryState(state, requestDN)
+		return err
+	}
+	if handled, err := server.tryDNSSRVBackendBind(
+		ctx,
+		connection,
+		state,
+		message,
+		request,
+		requestDN,
+	); handled {
+		canonicalizeBindEntryState(state, requestDN)
+		return err
+	}
+	if handled, err := server.tryPasswdBackendBind(
+		connection,
+		state,
+		message,
+		requestDN,
+	); handled {
 		return err
 	}
 	if database := databaseForDN(state.runtime, requestDN); database != nil &&
@@ -1392,6 +1473,8 @@ type connectionState struct {
 	connection                 net.Conn
 	secure                     bool
 	externalSSF                uint32
+	saslSSF                    uint32
+	gssapiAvailable            bool
 	externalDN                 string
 	saslSession                *serverSASLSession
 	pagedSearch                *pagedSearchState

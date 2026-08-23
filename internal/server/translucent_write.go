@@ -6,7 +6,6 @@ import (
 	"net"
 	"sort"
 
-	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -705,7 +704,7 @@ func (server *Server) tryTranslucentPasswordModify(
 	}
 	hashes := make([][]byte, 0, len(state.runtime.passwordHashSchemes))
 	for _, scheme := range state.runtime.passwordHashSchemes {
-		stored, err := auth.HashPassword(newPassword, scheme, nil)
+		stored, err := hashPasswordForRuntime(state.runtime, newPassword, scheme)
 		if err != nil {
 			return true, server.internalPasswordModifyError(connection, message.ID, err)
 		}

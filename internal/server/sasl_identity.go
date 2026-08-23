@@ -106,11 +106,13 @@ func (configuration saslRuntimeConfiguration) rewriteUserIdentity(
 			"cn="+ldap.EscapeDN(realm),
 		)
 	}
-	components = append(
-		components,
-		"cn="+ldap.EscapeDN(strings.ToLower(mechanism)),
-		"cn=auth",
-	)
+	if mechanism != "" {
+		components = append(
+			components,
+			"cn="+ldap.EscapeDN(strings.ToLower(mechanism)),
+		)
+	}
+	components = append(components, "cn=auth")
 	requestDN, err := normalizeSASLIdentityDN(
 		runtime,
 		strings.Join(components, ","),

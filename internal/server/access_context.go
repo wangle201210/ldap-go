@@ -108,11 +108,19 @@ func (server *Server) connectionACLSubject(state *connectionState) acl.Subject {
 	} else {
 		subject.TransportSSF = strength
 	}
+	subject.SASLSSF = int(state.saslSSF)
 	subject.SSF = max(subject.TransportSSF, subject.TLSSSF, subject.SASLSSF)
 	if subject.RealDN == "" {
 		subject.RealDN = subject.DN
 	}
 	return subject
+}
+
+func connectionOverallSSF(state *connectionState) uint32 {
+	if state == nil {
+		return 0
+	}
+	return max(state.externalSSF, state.saslSSF)
 }
 
 func localAddress(connection net.Conn) net.Addr {

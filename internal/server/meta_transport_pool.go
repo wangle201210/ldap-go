@@ -287,6 +287,37 @@ func (pool *metaTransportPool) release(
 	}
 }
 
+func (pool *metaTransportPool) resetOwner(owner string) {
+	if pool == nil || owner == "" {
+		return
+	}
+	var stale []*syncConsumerTransport
+	pool.mu.Lock()
+	for key, group := range pool.groups {
+		if group == nil || group.owner != owner {
+			continue
+		}
+		group.retired = true
+		kept := group.entries[:0]
+		for _, entry := range group.entries {
+			entry.retired = true
+			if entry.references == 0 && !entry.closed {
+				entry.closed = true
+				stale = append(stale, entry.transport)
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		group.entries = kept
+		if len(group.entries) == 0 && group.opening == 0 {
+			delete(pool.groups, key)
+		}
+	}
+	pool.signalLocked()
+	pool.mu.Unlock()
+	closeMetaPoolTransports(stale)
+}
+
 func (pool *metaTransportPool) configureOwners(active map[string]struct{}) {
 	if pool == nil {
 		return
@@ -306,7 +337,7 @@ func (pool *metaTransportPool) configureOwners(active map[string]struct{}) {
 	pool.activeOwners = configured
 	pool.ownersConfigured = true
 	transports = pool.retireGroupsLocked(func(owner string) bool {
-		_, active := configured[owner]
+		_, active := configured[metaTransportLifecycleOwner(owner)]
 		return !active
 	})
 	pool.signalLocked()
@@ -376,7 +407,7 @@ func (pool *metaTransportPool) ownerActiveLocked(owner string) bool {
 	if !pool.ownersConfigured {
 		return true
 	}
-	_, active := pool.activeOwners[owner]
+	_, active := pool.activeOwners[metaTransportLifecycleOwner(owner)]
 	return active
 }
 

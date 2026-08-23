@@ -1,10 +1,13 @@
-FROM golang:1.25-bookworm
+FROM golang:1.26-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         git \
+        libcrypt-dev \
         libevent-dev \
         libssl-dev \
         libsasl2-dev \

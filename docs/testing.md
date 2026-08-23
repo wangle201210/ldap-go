@@ -131,11 +131,12 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,492 top-level tests against
+The latest pinned local strict run passed 1,589 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
-SQLite ODBC. Its only allowed skip was the Linux-only TCP user-timeout test on
-macOS; mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache,
-and replication coverage all passed.
+SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
+Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
+mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache, and
+replication coverage all passed.
 
 Reference fixtures must signal `slapd` to shut down and wait for it before
 using a forced kill as a timeout fallback. On macOS, LMDB uses named POSIX
@@ -432,8 +433,10 @@ tests run equivalent no-backend/restriction and Bind plus Search sequences
 against the built OpenLDAP 2.6.13 `lloadd` and the Go proxy. Cancel is verified
 locally against RFC 3909 because the pinned OpenLDAP lloadd forwards an
 unmodified inner ID; that known defect is not the compatibility oracle. These
-tests establish the named auth-only subset, not GSSAPI, SASL security layers,
-dynamic configuration, monitor, or complete daemon compatibility. Local
+tests establish the named service-authentication subset. Separate local tests
+cover DIGEST-MD5 integrity/privacy, GSSAPI protocol layers, hot reload, Monitor
+ACL/sort/VLV/paging, and hardening; a repeatable real-KDC lloadd topology and
+complete daemon compatibility remain. Local
 listener topologies cover PROXY v2 TCP4/TCP6 logical addresses and copied TLVs,
 logical versus transport metadata, malformed/truncated/timeout recovery,
 bounded option bytes/TLV metadata count, `pldaps` header-before-TLS ordering,

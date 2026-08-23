@@ -27,6 +27,7 @@ type runtimeState struct {
 	disallows           disallowsRuntimeConfiguration
 	defaultSearchBase   defaultSearchBaseConfiguration
 	passwordHashSchemes []string
+	passwordCryptSalt   string
 	externalPasswords   externalPasswordRuntimeConfiguration
 	sasl                saslRuntimeConfiguration
 	syncContexts        map[string]syncCSNState
@@ -95,6 +96,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 					target.rwm.schema = registry
 				}
 			}
+		}
+		if databases[index].dnssrvBackend != nil {
+			databases[index].dnssrvBackend.resolver = server.config.DNSSRVResolver
+			databases[index].dnssrvBackend.now = server.clock
 		}
 		if err := validateCollectSchema(
 			registry,
@@ -255,6 +260,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	passwordCryptSalt, err := loadPasswordCryptSaltFormat(reader)
+	if err != nil {
+		return nil, err
+	}
 	externalPasswords, err := loadExternalPasswordRuntimeConfiguration(
 		reader,
 		server.config,
@@ -286,6 +295,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		disallows:           disallows,
 		defaultSearchBase:   defaultSearchBase,
 		passwordHashSchemes: passwordHashSchemes,
+		passwordCryptSalt:   passwordCryptSalt,
 		externalPasswords:   externalPasswords,
 		sasl:                sasl,
 	}
@@ -293,6 +303,40 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, err
 	}
 	return runtime, nil
+}
+
+func loadPasswordCryptSaltFormat(reader storage.Reader) (string, error) {
+	entry, err := reader.Get(configurationSuffix)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return auth.DefaultOpenLDAPCryptSaltFormat, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load global crypt salt configuration: %w", err)
+	}
+	values := entry.Values("olcPasswordCryptSaltFormat")
+	if len(values) == 0 {
+		return auth.DefaultOpenLDAPCryptSaltFormat, nil
+	}
+	if len(values) != 1 {
+		return "", errors.New("olcPasswordCryptSaltFormat must contain exactly one value")
+	}
+	format := string(values[0])
+	if err := auth.ValidateOpenLDAPCryptSaltFormat(format); err != nil {
+		return "", fmt.Errorf("olcPasswordCryptSaltFormat: %w", err)
+	}
+	return format, nil
+}
+
+func hashPasswordForRuntime(
+	runtime *runtimeState,
+	password []byte,
+	scheme string,
+) ([]byte, error) {
+	saltFormat := auth.DefaultOpenLDAPCryptSaltFormat
+	if runtime != nil && runtime.passwordCryptSalt != "" {
+		saltFormat = runtime.passwordCryptSalt
+	}
+	return auth.HashPasswordWithCryptSaltFormat(password, scheme, saltFormat, nil)
 }
 
 func loadPasswordHashSchemes(reader storage.Reader) ([]string, error) {

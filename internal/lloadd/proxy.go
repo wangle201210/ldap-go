@@ -20,7 +20,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 )
 
 const (
@@ -46,9 +48,11 @@ type RuntimeConfig struct {
 	WriteCoherence         time.Duration
 	NetworkTimeout         time.Duration
 	IOTimeout              time.Duration
+	ClientIdleTimeout      time.Duration
 	ProxyAuthz             bool
 	VerifyCredentials      bool
 	ReadPause              bool
+	MonitorAccess          []string
 	PrivilegedIdentity     string
 	UpstreamKeepAliveSet   bool
 	UpstreamKeepAlive      net.KeepAliveConfig
@@ -112,14 +116,23 @@ type Proxy struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu          sync.Mutex
-	listener    net.Listener
-	clients     map[*clientConnection]struct{}
-	upstreams   map[string]*upstreamConnection
-	started     bool
-	closed      bool
-	connections sync.WaitGroup
-	backends    sync.WaitGroup
+	mu                   sync.Mutex
+	listener             net.Listener
+	clients              map[*clientConnection]struct{}
+	clientWake           chan struct{}
+	upstreams            map[string]*upstreamConnection
+	started              bool
+	draining             bool
+	closed               bool
+	connections          sync.WaitGroup
+	backends             sync.WaitGroup
+	shutdownOnce         sync.Once
+	shutdownDone         chan struct{}
+	nextClientID         atomic.Uint64
+	operations           [2]monitorCounters
+	monitorSchema        *schema.Registry
+	monitorAccess        *acl.Policy
+	monitorSnapshotBytes atomic.Int64
 }
 
 type runtimeTier struct {
@@ -138,6 +151,7 @@ type runtimeBackend struct {
 	bind    []*upstreamConnection
 	closed  bool
 	done    chan struct{}
+	monitor monitorCounters
 }
 
 type upstreamConnection struct {
@@ -156,6 +170,8 @@ type upstreamConnection struct {
 	once            sync.Once
 	done            chan struct{}
 	retired         chan struct{}
+	monitor         monitorCounters
+	created         time.Time
 }
 
 type backendConnectFunc func(
@@ -168,17 +184,27 @@ type clientConnection struct {
 	proxy *Proxy
 	conn  net.Conn
 
-	metadata ConnectionMetadata
+	metadata             ConnectionMetadata
+	id                   uint64
+	created              time.Time
+	monitor              monitorCounters
+	monitorSnapshots     map[string]*monitorSnapshot
+	monitorSnapshotBytes int64
 
-	writeMu  sync.Mutex
-	mu       sync.Mutex
-	closed   bool
-	done     chan struct{}
-	readWake chan struct{}
-	binding  bool
-	bindPin  *upstreamConnection
-	authzID  []byte
-	ops      map[int64]*proxyOperation
+	writeMu      sync.Mutex
+	mu           sync.Mutex
+	closed       bool
+	draining     bool
+	done         chan struct{}
+	readWake     chan struct{}
+	binding      bool
+	bindPin      *upstreamConnection
+	authzID      []byte
+	authcID      []byte
+	saslMech     string
+	transportSSF int
+	saslSSF      int
+	ops          map[int64]*proxyOperation
 
 	restriction      RuntimeRestriction
 	backendAffinity  *runtimeBackend
@@ -189,6 +215,7 @@ type clientConnection struct {
 	protocolVersion  int
 	tlsActive        bool
 	tlsUpgrading     bool
+	tlsSSF           int
 }
 
 type proxyOperation struct {
@@ -203,6 +230,9 @@ type proxyOperation struct {
 	restriction       RuntimeRestriction
 	bind              bool
 	bindSASL          bool
+	bindAuthcID       string
+	bindAuthzID       string
+	bindSASLMechanism string
 	verifyCredentials bool
 	bindDN            string
 	bindGeneration    uint64
@@ -239,6 +269,8 @@ type proxyFrame struct {
 	BindDN           string
 	BindSASL         bool
 	BindMechanism    string
+	BindAuthcID      string
+	BindAuthzID      string
 	ResultCode       ldapwire.ResultCode
 	HasResultCode    bool
 	FinalResponse    bool
@@ -455,6 +487,9 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	if config.IOTimeout < 0 {
 		return nil, errors.New("I/O timeout cannot be negative")
 	}
+	if config.ClientIdleTimeout < 0 {
+		return nil, errors.New("client idle timeout cannot be negative")
+	}
 	if config.Bind.Timeout < 0 {
 		return nil, errors.New("upstream bind timeout cannot be negative")
 	}
@@ -503,11 +538,19 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	if config.VerifyCredentials && !config.ProxyAuthz {
 		return nil, errors.New("Verify Credentials requires ProxyAuthz")
 	}
+	monitorSchema, monitorAccess, err := newMonitorRuntime(config.MonitorAccess)
+	if err != nil {
+		return nil, err
+	}
 
 	proxy := &Proxy{
-		config:    config,
-		clients:   make(map[*clientConnection]struct{}),
-		upstreams: make(map[string]*upstreamConnection),
+		config:        config,
+		clients:       make(map[*clientConnection]struct{}),
+		clientWake:    make(chan struct{}),
+		upstreams:     make(map[string]*upstreamConnection),
+		shutdownDone:  make(chan struct{}),
+		monitorSchema: monitorSchema,
+		monitorAccess: monitorAccess,
 	}
 	proxy.codec = runtimeFrameCodec{frameCodec: berFrameCodec{}}
 	schedulerConfig := SchedulerConfig{}
@@ -591,7 +634,6 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 		schedulerConfig.Tiers = append(schedulerConfig.Tiers, schedulerTier)
 		proxy.tiers = append(proxy.tiers, tier)
 	}
-	var err error
 	proxy.scheduler, err = NewScheduler(schedulerConfig)
 	if err != nil {
 		return nil, err
@@ -713,16 +755,23 @@ func runtimeLDAPURLScheme(raw string) string {
 	return strings.ToLower(raw[:separator])
 }
 
-func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
-	if listener == nil {
-		return errors.New("listener is required")
+// Start activates the upstream topology without owning a listener. It is used
+// by the standalone daemon so listener ownership can be swapped independently
+// from connections already assigned to this proxy generation.
+func (proxy *Proxy) Start(ctx context.Context) error {
+	return proxy.start(ctx, nil)
+}
+
+func (proxy *Proxy) start(ctx context.Context, listener net.Listener) error {
+	if ctx == nil {
+		return errors.New("context is required")
 	}
 	proxy.mu.Lock()
 	if proxy.started {
 		proxy.mu.Unlock()
 		return errors.New("lloadd proxy has already been started")
 	}
-	if proxy.closed {
+	if proxy.closed || proxy.draining {
 		proxy.mu.Unlock()
 		return ErrProxyClosed
 	}
@@ -739,6 +788,145 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 				backend.maintain(proxy.ctx)
 			}(backend)
 		}
+	}
+	return nil
+}
+
+// ServeConnection assigns one accepted client connection to this proxy
+// generation. The connection remains attached to this generation until it
+// closes, even when the daemon publishes a newer topology.
+func (proxy *Proxy) ServeConnection(connection net.Conn) error {
+	if connection == nil {
+		return errors.New("client connection is required")
+	}
+	proxy.mu.Lock()
+	if !proxy.started {
+		proxy.mu.Unlock()
+		return errors.New("lloadd proxy has not been started")
+	}
+	if proxy.closed || proxy.draining {
+		proxy.mu.Unlock()
+		return ErrProxyClosed
+	}
+	ctx := proxy.ctx
+	proxy.mu.Unlock()
+
+	metadata, hasMetadata := MetadataFromConnection(connection)
+	if !hasMetadata {
+		metadata = ConnectionMetadata{
+			SourceAddress:               connection.RemoteAddr(),
+			DestinationAddress:          connection.LocalAddr(),
+			TransportSourceAddress:      connection.RemoteAddr(),
+			TransportDestinationAddress: connection.LocalAddr(),
+		}
+	}
+	client := &clientConnection{
+		proxy:            proxy,
+		conn:             connection,
+		metadata:         metadata,
+		id:               proxy.nextClientID.Add(1),
+		created:          time.Now().UTC(),
+		ops:              make(map[int64]*proxyOperation),
+		monitorSnapshots: make(map[string]*monitorSnapshot),
+		done:             make(chan struct{}),
+		readWake:         make(chan struct{}),
+		protocolVersion:  3,
+		transportSSF:     connectionTransportSSF(metadata.TransportSourceAddress),
+	}
+	client.tlsActive = connectionUsesTLS(connection)
+	if hasMetadata {
+		proxy.config.Logger.Debug(
+			"accepted proxied lloadd client",
+			"source", addressString(metadata.SourceAddress),
+			"destination", addressString(metadata.DestinationAddress),
+			"transport_source", addressString(metadata.TransportSourceAddress),
+			"transport_destination", addressString(metadata.TransportDestinationAddress),
+			"local", metadata.ProxyProtocolLocal,
+		)
+	}
+	proxy.mu.Lock()
+	if proxy.closed || proxy.draining {
+		proxy.mu.Unlock()
+		return ErrProxyClosed
+	}
+	proxy.clients[client] = struct{}{}
+	proxy.signalClientChangeLocked()
+	proxy.connections.Add(1)
+	proxy.mu.Unlock()
+	go client.runMonitorSnapshotJanitor(monitorSnapshotCleanupInterval)
+	go func() {
+		defer proxy.connections.Done()
+		client.serve(ctx)
+	}()
+	return nil
+}
+
+func (proxy *Proxy) signalClientChangeLocked() {
+	close(proxy.clientWake)
+	proxy.clientWake = make(chan struct{})
+}
+
+// WaitForIdle waits until all client sessions assigned to this generation have
+// ended. It does not count upstream maintenance connections.
+func (proxy *Proxy) WaitForIdle(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	for {
+		proxy.mu.Lock()
+		if len(proxy.clients) == 0 {
+			proxy.mu.Unlock()
+			return nil
+		}
+		wake := proxy.clientWake
+		proxy.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+// Drain prevents new sessions, closes idle sessions immediately and lets
+// already forwarded operations deliver their final responses. The context is
+// the hard drain deadline; once it expires all remaining sessions are closed.
+func (proxy *Proxy) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	proxy.mu.Lock()
+	proxy.draining = true
+	clients := make([]*clientConnection, 0, len(proxy.clients))
+	for client := range proxy.clients {
+		clients = append(clients, client)
+	}
+	proxy.mu.Unlock()
+	for _, client := range clients {
+		client.beginDrain()
+	}
+	if err := proxy.WaitForIdle(ctx); err != nil {
+		proxy.mu.Lock()
+		clients = clients[:0]
+		for client := range proxy.clients {
+			clients = append(clients, client)
+		}
+		proxy.mu.Unlock()
+		for _, client := range clients {
+			client.close()
+		}
+		return err
+	}
+	return nil
+}
+
+// Serve retains the original single-listener API.
+func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
+	if listener == nil {
+		return errors.New("listener is required")
+	}
+	if err := proxy.start(ctx, listener); err != nil {
+		return err
 	}
 
 	stopAccept := make(chan struct{})
@@ -761,56 +949,27 @@ func (proxy *Proxy) Serve(ctx context.Context, listener net.Listener) error {
 			proxy.shutdown()
 			return fmt.Errorf("accept lloadd client: %w", err)
 		}
-		metadata, hasMetadata := MetadataFromConnection(connection)
-		if !hasMetadata {
-			metadata = ConnectionMetadata{
-				SourceAddress:               connection.RemoteAddr(),
-				DestinationAddress:          connection.LocalAddr(),
-				TransportSourceAddress:      connection.RemoteAddr(),
-				TransportDestinationAddress: connection.LocalAddr(),
-			}
-		}
-		client := &clientConnection{
-			proxy:           proxy,
-			conn:            connection,
-			metadata:        metadata,
-			ops:             make(map[int64]*proxyOperation),
-			done:            make(chan struct{}),
-			readWake:        make(chan struct{}),
-			protocolVersion: 3,
-		}
-		client.tlsActive = connectionUsesTLS(connection)
-		if hasMetadata {
-			proxy.config.Logger.Debug(
-				"accepted proxied lloadd client",
-				"source", addressString(metadata.SourceAddress),
-				"destination", addressString(metadata.DestinationAddress),
-				"transport_source", addressString(metadata.TransportSourceAddress),
-				"transport_destination", addressString(metadata.TransportDestinationAddress),
-				"local", metadata.ProxyProtocolLocal,
-			)
-		}
-		proxy.mu.Lock()
-		if proxy.closed {
-			proxy.mu.Unlock()
+		if err := proxy.ServeConnection(connection); err != nil {
 			_ = connection.Close()
-			continue
+			if errors.Is(err, ErrProxyClosed) {
+				continue
+			}
+			proxy.shutdown()
+			return err
 		}
-		proxy.clients[client] = struct{}{}
-		proxy.mu.Unlock()
-		proxy.connections.Add(1)
-		go func() {
-			defer proxy.connections.Done()
-			client.serve(proxy.ctx)
-		}()
 	}
 }
 
 func connectionUsesTLS(connection net.Conn) bool {
+	_, ok := connectionTLSState(connection)
+	return ok
+}
+
+func connectionTLSState(connection net.Conn) (tls.ConnectionState, bool) {
 	const maximumWrappers = 16
 	for depth := 0; depth < maximumWrappers && connection != nil; depth++ {
-		if _, ok := connection.(*tls.Conn); ok {
-			return true
+		if secured, ok := connection.(*tls.Conn); ok {
+			return secured.ConnectionState(), true
 		}
 		var next net.Conn
 		switch wrapped := connection.(type) {
@@ -819,14 +978,43 @@ func connectionUsesTLS(connection net.Conn) bool {
 		case interface{ Unwrap() net.Conn }:
 			next = wrapped.Unwrap()
 		default:
-			return false
+			return tls.ConnectionState{}, false
 		}
 		if next == nil || next == connection {
-			return false
+			return tls.ConnectionState{}, false
 		}
 		connection = next
 	}
-	return false
+	return tls.ConnectionState{}, false
+}
+
+func tlsCipherSecurityStrength(state tls.ConnectionState) int {
+	name := tls.CipherSuiteName(state.CipherSuite)
+	switch {
+	case strings.Contains(name, "CHACHA20"), strings.Contains(name, "AES_256"):
+		return 256
+	case strings.Contains(name, "AES_128"), strings.Contains(name, "RC4"):
+		return 128
+	case strings.Contains(name, "3DES"):
+		return 112
+	default:
+		return 0
+	}
+
+}
+
+func (client *clientConnection) refreshTLSSecurityStrength() {
+	client.mu.Lock()
+	connection := client.conn
+	client.mu.Unlock()
+	state, ok := connectionTLSState(connection)
+	if !ok || !state.HandshakeComplete {
+		return
+	}
+	client.mu.Lock()
+	client.tlsActive = true
+	client.tlsSSF = tlsCipherSecurityStrength(state)
+	client.mu.Unlock()
 }
 
 func addressString(address net.Addr) string {
@@ -854,38 +1042,44 @@ func (proxy *Proxy) Close() error {
 	if cancel != nil {
 		cancel()
 	}
+	var err error
 	if listener != nil {
-		return listener.Close()
+		err = listener.Close()
 	}
-	return nil
+	proxy.shutdown()
+	return err
 }
 
 func (proxy *Proxy) shutdown() {
-	proxy.mu.Lock()
-	cancel := proxy.cancel
-	if !proxy.closed {
-		proxy.closed = true
-	}
-	clients := make([]*clientConnection, 0, len(proxy.clients))
-	for client := range proxy.clients {
-		clients = append(clients, client)
-	}
-	proxy.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	for _, client := range clients {
-		client.close()
-	}
-	for _, tier := range proxy.tiers {
-		for _, backend := range tier.backends {
-			backend.close()
+	proxy.shutdownOnce.Do(func() {
+		defer close(proxy.shutdownDone)
+		proxy.mu.Lock()
+		cancel := proxy.cancel
+		if !proxy.closed {
+			proxy.closed = true
 		}
-	}
-	proxy.connections.Wait()
-	proxy.backends.Wait()
-	clear(proxy.config.Bind.Credentials)
-	proxy.config.Bind.Credentials = nil
+		clients := make([]*clientConnection, 0, len(proxy.clients))
+		for client := range proxy.clients {
+			clients = append(clients, client)
+		}
+		proxy.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		for _, client := range clients {
+			client.close()
+		}
+		for _, tier := range proxy.tiers {
+			for _, backend := range tier.backends {
+				backend.close()
+			}
+		}
+		proxy.connections.Wait()
+		proxy.backends.Wait()
+		clear(proxy.config.Bind.Credentials)
+		proxy.config.Bind.Credentials = nil
+	})
+	<-proxy.shutdownDone
 }
 
 func (backend *runtimeBackend) maintain(ctx context.Context) {
@@ -1073,6 +1267,7 @@ func (backend *runtimeBackend) connect(
 		nextID:  nextID,
 		done:    make(chan struct{}),
 		retired: make(chan struct{}),
+		created: time.Now().UTC(),
 	}
 	upstream.conn = &trackedUpstreamConnection{Conn: connection, upstream: upstream}
 	return upstream, nil

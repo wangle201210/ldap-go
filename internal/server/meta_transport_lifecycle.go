@@ -57,8 +57,12 @@ func cloneMetaBackendTransportConfigurations(runtime *runtimeState) {
 	}
 	runtime.databases = append([]runtimeDatabase(nil), runtime.databases...)
 	for index := range runtime.databases {
-		runtime.databases[index].metaBackend =
-			runtime.databases[index].metaBackend.clone()
+		database := &runtime.databases[index]
+		database.metaBackend = database.metaBackend.clone()
+		if database.asyncMetaBackend != nil {
+			database.asyncMetaBackend =
+				database.asyncMetaBackend.cloneWithMeta(database.metaBackend)
+		}
 	}
 }
 

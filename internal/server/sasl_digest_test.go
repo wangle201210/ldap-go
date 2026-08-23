@@ -108,6 +108,81 @@ func TestSASLDigestMD5RFC2831Vector(t *testing.T) {
 	if rspauth != "ea40f60335c427b5527b84dbabcdfffd" {
 		t.Fatalf("RFC 2831 rspauth = %q", rspauth)
 	}
+	response.qop = saslDigestMD5IntegrityQOP
+	got, rspauth = calculateSASLDigestMD5Exchange(secret, response)
+	if got != "89fdc8198a2499ec4b6d0045c00ae24a" {
+		t.Fatalf("RFC 2831 auth-int response = %q", got)
+	}
+	if rspauth != "2342e4b9b84956beda20b94d83cc8fe0" {
+		t.Fatalf("RFC 2831 auth-int rspauth = %q", rspauth)
+	}
+}
+
+func TestSASLDigestMD5ChallengeHonorsSSFAndNegotiatesAuthConf(t *testing.T) {
+	t.Parallel()
+
+	runtime := &runtimeState{sasl: saslRuntimeConfiguration{
+		host:  "ldap.example.test",
+		realm: "example.com",
+		securityProperties: saslSecurityProperties{
+			minSSF:        1,
+			maxSSF:        256,
+			maxBufferSize: saslDigestMD5DefaultMaxBuffer,
+		},
+	}}
+	session, err := newSASLDigestMD5SessionWithSSF(
+		runtime,
+		0,
+		bytes.NewReader(make([]byte, saslDigestMD5NonceSize)),
+	)
+	if err != nil {
+		t.Fatalf("create minssf DIGEST-MD5 session: %v", err)
+	}
+	directives, err := parseSASLDigestMD5Directives(session.challenge)
+	if err != nil || directives["qop"] != "auth-int,auth-conf" ||
+		directives["cipher"] != "rc4-40,rc4-56,rc4" ||
+		session.allowAuth || !session.allowIntegrity || len(session.ciphers) != 3 {
+		t.Fatalf("minssf DIGEST-MD5 challenge = %#v, %v", directives, err)
+	}
+
+	response := []byte(
+		`username="alice",realm="example.com",nonce="` + session.nonce +
+			`",cnonce="client",nc=00000001,qop=auth-conf,` +
+			`cipher=rc4,digest-uri="ldap/ldap.example.test",` +
+			`response=00000000000000000000000000000000`,
+	)
+	parsed, err := parseSASLDigestMD5Response(response, session)
+	if err != nil || parsed.qop != saslDigestMD5ConfidentialityQOP ||
+		parsed.cipher != saslDigestMD5RC4Cipher {
+		t.Fatalf("auth-conf response = %#v, %v", parsed, err)
+	}
+
+	for _, test := range []struct {
+		name, cipher, want string
+	}{
+		{name: "missing", want: "no cipher"},
+		{name: "DES", cipher: "des", want: "DES"},
+		{name: "3DES", cipher: "3des", want: "DES"},
+		{name: "unknown", cipher: "aes", want: "not offered"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			cipherDirective := ""
+			if test.cipher != "" {
+				cipherDirective = "cipher=" + test.cipher + ","
+			}
+			invalid := []byte(
+				`username="alice",realm="example.com",nonce="` + session.nonce +
+					`",cnonce="client",nc=00000001,qop=auth-conf,` +
+					cipherDirective + `digest-uri="ldap/ldap.example.test",` +
+					`response=00000000000000000000000000000000`,
+			)
+			if _, err := parseSASLDigestMD5Response(invalid, session); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("auth-conf %s error = %v", test.name, err)
+			}
+		})
+	}
 }
 
 func TestSASLDigestMD5ChallengeAndSuccessData(t *testing.T) {
@@ -528,7 +603,7 @@ func TestOpenLDAPClientSASLDigestMD5Bind(t *testing.T) {
 		"-w",
 		"secret",
 		"-O",
-		"none",
+		"maxssf=0",
 		"-H",
 		"ldap://"+address,
 	)
@@ -707,6 +782,12 @@ func formatSASLDigestMD5Response(
 			`,authzid="%s"`,
 			quoteSASLDigestMD5Value(response.authorization),
 		)
+	}
+	if response.cipher != "" {
+		fmt.Fprintf(&value, ",cipher=%s", response.cipher)
+	}
+	if response.maxBufferSize != 0 {
+		fmt.Fprintf(&value, ",maxbuf=%d", response.maxBufferSize)
 	}
 	value.WriteString(",charset=utf-8")
 	return []byte(value.String())

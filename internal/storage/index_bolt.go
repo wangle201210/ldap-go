@@ -251,6 +251,66 @@ func (tx *boltTx) rebuildEqualityIndexes(
 	return tx.buildEqualityIndexes(partition, schema, config)
 }
 
+func (tx *boltTx) rebuildSelectedEqualityIndexes(
+	partition string,
+	schema EqualityIndexSchema,
+	attributes []string,
+) error {
+	if !tx.tx.Writable() {
+		return errorsReadOnly()
+	}
+	want, err := normalizeEqualityIndexConfig(schema.EqualityIndexConfiguration())
+	if err != nil {
+		return err
+	}
+	selected, err := selectedEqualityIndexConfig(want, attributes)
+	if err != nil {
+		return err
+	}
+	current, present, err := tx.equalityIndexConfig(partition)
+	if err != nil {
+		return err
+	}
+	if present {
+		current, err = normalizeEqualityIndexConfig(current)
+	}
+	if !present || err != nil || !equalityIndexConfigsEqual(current, want) {
+		return tx.buildEqualityIndexes(partition, schema, want)
+	}
+	if err := tx.ensureEqualityIndexBuckets(); err != nil {
+		return err
+	}
+	for _, definition := range selected.Attributes {
+		prefix := equalityIndexAttributePrefix(partition, definition.Attribute)
+		cursor := tx.equalityIndexes.Cursor()
+		var keys [][]byte
+		for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+			keys = append(keys, bytes.Clone(key))
+		}
+		for _, key := range keys {
+			if err := tx.equalityIndexes.Delete(key); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.entries.ForEach(func(key, value []byte) error {
+		if err := tx.ctx.Err(); err != nil {
+			return err
+		}
+		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
+		if entryPartition != partition {
+			return nil
+		}
+		entry, err := decodeAndValidateEntry(entryKey, value)
+		if err != nil {
+			return err
+		}
+		return tx.addEqualityIndexEntry(
+			partition, string(key), entry, schema, selected,
+		)
+	})
+}
+
 func (tx *boltTx) ensureEqualityIndexes(
 	partition string,
 	schema EqualityIndexSchema,
@@ -265,12 +325,9 @@ func (tx *boltTx) ensureEqualityIndexes(
 	}
 	if ok {
 		current, err = normalizeEqualityIndexConfig(current)
-		if err != nil {
-			return EqualityIndexConfig{}, err
+		if err == nil && equalityIndexConfigsEqual(current, config) {
+			return config, nil
 		}
-	}
-	if ok && equalityIndexConfigsEqual(current, config) {
-		return config, nil
 	}
 	return config, tx.buildEqualityIndexes(partition, schema, config)
 }
@@ -453,3 +510,4 @@ func equalityIndexPartitionPrefix(partition string) []byte {
 }
 
 var _ equalityIndexStorageWriter = (*boltTx)(nil)
+var _ selectiveEqualityIndexStorageWriter = (*boltTx)(nil)

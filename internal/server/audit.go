@@ -89,7 +89,7 @@ func (server *Server) newAuditObservation(
 			AuthenticationMechanism: auditSafeString(mechanism),
 			RemoteAddress:           auditRemoteAddress(state.connection),
 			Secure:                  state.secure,
-			SecurityStrengthFactor:  state.externalSSF,
+			SecurityStrengthFactor:  connectionOverallSSF(state),
 			RequestControls:         controls,
 		},
 	}
@@ -340,7 +340,7 @@ func (server *Server) writeMalformedMessageAudit(state *connectionState) {
 		Operation:              "malformed_message",
 		RemoteAddress:          auditRemoteAddress(state.connection),
 		Secure:                 state.secure,
-		SecurityStrengthFactor: state.externalSSF,
+		SecurityStrengthFactor: connectionOverallSSF(state),
 		ResultCode:             &code,
 		Outcome:                "failure",
 	})

@@ -321,6 +321,61 @@ func TestLDAPSearchReferralChasingDisableRebindAndControls(t *testing.T) {
 	}
 }
 
+func TestLDAPSearchReferralObserverPreservesTargetControls(t *testing.T) {
+	const targetBase = "ou=target,dc=example,dc=com"
+	provider := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		switch message.Request.(type) {
+		case ldapwire.BindRequest:
+			return nil, nil
+		case ldapwire.SearchRequest:
+			entry := directory.Entry{
+				DN: "uid=target," + targetBase,
+				Attributes: []directory.Attribute{{
+					Description: "uid",
+					Values:      [][]byte{[]byte("target")},
+				}},
+			}
+			return [][]byte{
+				ldapwire.EncodeSearchResultEntry(message.ID, entry, []ldapwire.Control{{
+					OID:      "1.2.3.80",
+					Value:    []byte("referral-entry"),
+					HasValue: true,
+				}}),
+				ldapwire.EncodeSearchResultDone(
+					message.ID,
+					ldapwire.Result{Code: ldapwire.ResultSuccess},
+					[]ldapwire.Control{{
+						OID:      "1.2.3.81",
+						Value:    []byte("referral-result"),
+						HasValue: true,
+					}},
+				),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider request %T", message.Request)
+		}
+	})
+	referralURL := provider.uri + "/" + url.PathEscape(targetBase)
+	source := startLDAPClientWireFixture(t, searchReferralFixtureHandler(referralURL))
+
+	stdout, stderr, exitCode := runLDAPClientCommand([]string{
+		"ldapsearch", "-H", source.uri, "-x", "-C",
+		"-b", clientToolPeopleDN, "-s", "one",
+		"(uid=target)", "uid",
+	}, "")
+	if exitCode != 0 || stderr != "" {
+		t.Fatalf("referral ldapsearch exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	for _, expected := range []string{
+		"control: 1.2.3.80 false cmVmZXJyYWwtZW50cnk=",
+		"control: 1.2.3.81 false cmVmZXJyYWwtcmVzdWx0",
+	} {
+		if !strings.Contains(stdout, expected) {
+			t.Fatalf("referral ldapsearch omitted %q: %q", expected, stdout)
+		}
+	}
+}
+
 func TestLDAPWriteReferralChasingPreservesDNAndControls(t *testing.T) {
 	const sourceDN = "uid=source,dc=example,dc=com"
 	const targetDN = "uid=target,dc=example,dc=com"
@@ -559,6 +614,9 @@ func startLDAPClientWireFixture(
 							ldapwire.Result{Code: ldapwire.ResultSuccess},
 							nil,
 						)}
+					}
+					if _, unbind := message.Request.(ldapwire.UnbindRequest); unbind {
+						return
 					}
 					if len(responses) == 0 {
 						fixture.report(fmt.Errorf("LDAP fixture has no response for %T", message.Request))

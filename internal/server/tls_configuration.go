@@ -2,29 +2,34 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"go/version"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
+	"github.com/emmansun/gmsm/pkcs"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-var unsupportedGlobalTLSDirectives = []string{
-	"olcTLSRandFile",
-	"olcTLSDHParamFile",
-}
-
-var recognizedGlobalTLSDirectives = append([]string{
+var recognizedGlobalTLSDirectives = []string{
 	"olcTLSCACertificate",
 	"olcTLSCACertificateFile",
 	"olcTLSCACertificatePath",
@@ -38,7 +43,9 @@ var recognizedGlobalTLSDirectives = append([]string{
 	"olcTLSECName",
 	"olcTLSVerifyClient",
 	"olcTLSProtocolMin",
-}, unsupportedGlobalTLSDirectives...)
+	"olcTLSRandFile",
+	"olcTLSDHParamFile",
+}
 
 type globalTLSAttributes struct {
 	caCertificate      []byte
@@ -54,6 +61,8 @@ type globalTLSAttributes struct {
 	ecName             string
 	verifyClient       string
 	protocolMin        string
+	randFile           string
+	dhParamFile        string
 }
 
 func (server *Server) loadGlobalTLSConfiguration(
@@ -86,19 +95,15 @@ func (server *Server) loadGlobalTLSConfiguration(
 		return nil, nil
 	}
 
-	for _, directive := range unsupportedGlobalTLSDirectives {
-		if globalTLSAttributePresent(entry, directive) {
-			return nil, fmt.Errorf(
-				"%s %s is unsupported by the Go TLS runtime",
-				entry.DN,
-				directive,
-			)
-		}
-	}
-
 	attributes, err := parseGlobalTLSAttributes(entry)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateGlobalTLSRandFile(attributes.randFile); err != nil {
+		return nil, fmt.Errorf("%s olcTLSRandFile: %w", entry.DN, err)
+	}
+	if err := loadGlobalTLSDHParameters(attributes.dhParamFile); err != nil {
+		return nil, fmt.Errorf("%s olcTLSDHParamFile: %w", entry.DN, err)
 	}
 	crlPolicy, err := parseGlobalTLSCRLCheck(attributes.crlCheck)
 	if err != nil {
@@ -281,6 +286,18 @@ func parseGlobalTLSAttributes(entry directory.Entry) (globalTLSAttributes, error
 	); err != nil {
 		return globalTLSAttributes{}, err
 	}
+	if attributes.randFile, err = globalTLSSingleString(
+		entry,
+		"olcTLSRandFile",
+	); err != nil {
+		return globalTLSAttributes{}, err
+	}
+	if attributes.dhParamFile, err = globalTLSSingleString(
+		entry,
+		"olcTLSDHParamFile",
+	); err != nil {
+		return globalTLSAttributes{}, err
+	}
 	return attributes, nil
 }
 
@@ -394,7 +411,17 @@ func (server *Server) buildGlobalTLSConfig(
 			return nil, fmt.Errorf("%s olcTLSCipherSuite: %w", entryDN, err)
 		}
 	}
+	if attributes.dhParamFile != "" &&
+		!globalTLSDHParametersAreHandshakeInert(configuration) {
+		return nil, fmt.Errorf(
+			"%s olcTLSDHParamFile cannot be represented while TLS 1.2 or earlier uses the OpenSSL default cipher list, which may negotiate finite-field DHE; configure olcTLSProtocolMin 3.4 or an exact non-DHE olcTLSCipherSuite",
+			entryDN,
+		)
+	}
 	if attributes.ecName != "" {
+		// OpenSSL accepts an ordered group list (and newer tuple/key-share
+		// selectors). crypto/tls only exposes an allowed set here and explicitly
+		// ignores its order, selecting groups with Go's internal preference.
 		configuration.CurvePreferences, err = parseGlobalTLSECName(attributes.ecName)
 		if err != nil {
 			return nil, fmt.Errorf("%s olcTLSECName: %w", entryDN, err)
@@ -454,6 +481,74 @@ func (server *Server) buildGlobalTLSConfig(
 		)
 	}
 	return configuration, nil
+}
+
+// Modern OpenLDAP builds with URANDOM_DEVICE make TLSRandFile an inert
+// compatibility setting. Go's crypto/tls also seeds itself from the operating
+// system, so only the LDAP string representation needs validation here.
+func validateGlobalTLSRandFile(path string) error {
+	if strings.IndexByte(path, 0) >= 0 {
+		return errors.New("path contains a NUL byte")
+	}
+	return nil
+}
+
+type globalTLSDHParameters struct {
+	Prime              *big.Int
+	Generator          *big.Int
+	PrivateValueLength int `asn1:"optional"`
+}
+
+func loadGlobalTLSDHParameters(path string) error {
+	if path == "" {
+		return nil
+	}
+	data, _, err := readGlobalTLSFile(path, "olcTLSDHParamFile")
+	if err != nil {
+		return err
+	}
+	block, trailing := pem.Decode(data)
+	if block == nil {
+		return errors.New("DH parameters are not PEM encoded")
+	}
+	if block.Type != "DH PARAMETERS" {
+		return fmt.Errorf(
+			"unsupported PEM block %q; expected DH PARAMETERS",
+			block.Type,
+		)
+	}
+	if len(bytes.TrimSpace(trailing)) != 0 {
+		return errors.New("DH parameters contain trailing data")
+	}
+	var parameters globalTLSDHParameters
+	rest, err := asn1.Unmarshal(block.Bytes, &parameters)
+	if err != nil {
+		return fmt.Errorf("parse PKCS#3 DH parameters: %w", err)
+	}
+	if len(rest) != 0 {
+		return errors.New("PKCS#3 DH parameters contain trailing DER data")
+	}
+	if parameters.Prime == nil || parameters.Prime.Sign() <= 0 {
+		return errors.New("PKCS#3 DH prime must be positive")
+	}
+	if parameters.Generator == nil || parameters.Generator.Cmp(big.NewInt(2)) < 0 ||
+		parameters.Generator.Cmp(parameters.Prime) >= 0 {
+		return errors.New("PKCS#3 DH generator is outside the valid range")
+	}
+	if parameters.PrivateValueLength < 0 {
+		return errors.New("PKCS#3 DH private-value length cannot be negative")
+	}
+	return nil
+}
+
+func globalTLSDHParametersAreHandshakeInert(configuration *tls.Config) bool {
+	if configuration.MinVersion >= tls.VersionTLS13 {
+		return true
+	}
+	// crypto/tls exposes no finite-field DHE suites. A non-empty exact list
+	// therefore proves that OpenSSL cannot select a suite which consumes the
+	// configured parameters for TLS 1.2 or earlier.
+	return len(configuration.CipherSuites) != 0
 }
 
 func parseGlobalTLSCRLCheck(value string) (string, error) {
@@ -651,13 +746,18 @@ func globalTLSData(inline []byte, path, kind string) ([]byte, error) {
 }
 
 const (
-	globalTLSMaximumFileSize                         = 16 << 20
-	globalTLSMaximumPassword                         = 4 << 10
-	globalTLSMaximumCADirectories                    = 16
-	globalTLSMaximumCADirectoryFiles                 = 4096
-	globalTLSMaximumCADirectoryBytes           int64 = 64 << 20
-	globalTLSMaximumCADirectoryCertificates          = 4096
-	globalTLSPrivateKeyPasswordFileEnvironment       = "LDAP_GO_TLS_KEY_PASSWORD_FILE"
+	globalTLSMaximumFileSize                          = 16 << 20
+	globalTLSMaximumPassword                          = 4 << 10
+	globalTLSPKCS8MaximumIterations                   = 10_000_000
+	globalTLSPKCS8MaximumSaltSize                     = 1 << 10
+	globalTLSPKCS8MaximumDerivedKeySize               = 1 << 10
+	globalTLSPKCS8MaximumScryptMemory          uint64 = 256 << 20
+	globalTLSPKCS8MaximumScryptWork            uint64 = 64 << 20
+	globalTLSMaximumCADirectories                     = 16
+	globalTLSMaximumCADirectoryFiles                  = 4096
+	globalTLSMaximumCADirectoryBytes           int64  = 64 << 20
+	globalTLSMaximumCADirectoryCertificates           = 4096
+	globalTLSPrivateKeyPasswordFileEnvironment        = "LDAP_GO_TLS_KEY_PASSWORD_FILE"
 )
 
 var globalTLSCAHashFileName = regexp.MustCompile(`^[0-9A-Fa-f]{8}\.[0-9]+$`)
@@ -775,6 +875,15 @@ func parseGlobalTLSCertificates(data []byte) ([]*x509.Certificate, error) {
 }
 
 func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("private key data is empty")
+	}
+	if len(data) > globalTLSMaximumFileSize {
+		return nil, fmt.Errorf(
+			"private key data exceeds the %d-byte limit",
+			globalTLSMaximumFileSize,
+		)
+	}
 	remaining := data
 	for {
 		block, rest := pem.Decode(remaining)
@@ -810,9 +919,28 @@ func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
 			return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 		}
 		if block.Type == "ENCRYPTED PRIVATE KEY" {
-			return nil, errors.New(
-				"PKCS#8 encrypted private keys cannot be decoded by the Go standard library; use traditional RFC 1423 PEM encryption",
-			)
+			password, err := loadGlobalTLSPrivateKeyPassword()
+			if err != nil {
+				return nil, err
+			}
+			decrypted, err := decryptGlobalTLSPKCS8PrivateKey(block.Bytes, password)
+			clearGlobalTLSSecret(password)
+			if err != nil {
+				return nil, err
+			}
+			defer clearGlobalTLSSecret(decrypted)
+			privateKey, err := parseGlobalTLSDERPrivateKey(decrypted)
+			if err != nil {
+				return nil, errors.New(
+					"decrypt PKCS#8 encrypted private key: incorrect password or invalid private key",
+				)
+			}
+			der, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			if err != nil {
+				return nil, fmt.Errorf("marshal decrypted PKCS#8 private key: %w", err)
+			}
+			defer clearGlobalTLSSecret(der)
+			return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 		}
 		return pem.EncodeToMemory(block), nil
 	}
@@ -828,11 +956,232 @@ func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
+var (
+	globalTLSPBES2OID   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
+	globalTLSSMPBESOID  = asn1.ObjectIdentifier{1, 2, 156, 10197, 6, 4, 1, 5, 2}
+	globalTLSPBKDF2OID  = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
+	globalTLSSMPBKDFOID = asn1.ObjectIdentifier{1, 2, 156, 10197, 6, 4, 1, 5, 1}
+	globalTLSScryptOID  = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11591, 4, 11}
+)
+
+type globalTLSEncryptedPrivateKeyInfo struct {
+	EncryptionAlgorithm pkix.AlgorithmIdentifier
+	EncryptedData       []byte
+}
+
+type globalTLSPBKDF2Parameters struct {
+	Salt           []byte
+	IterationCount int
+	KeyLength      int                      `asn1:"optional"`
+	PRF            pkix.AlgorithmIdentifier `asn1:"optional"`
+}
+
+type globalTLSScryptParameters struct {
+	Salt                     []byte
+	CostParameter            int
+	BlockSize                int
+	ParallelizationParameter int
+	KeyLength                int `asn1:"optional"`
+}
+
+type globalTLSPBES1Parameters struct {
+	Salt       []byte
+	Iterations int
+}
+
+func decryptGlobalTLSPKCS8PrivateKey(data, password []byte) ([]byte, error) {
+	information, err := parseAndValidateGlobalTLSEncryptedPrivateKey(data)
+	if err != nil {
+		return nil, err
+	}
+	var decrypted []byte
+	switch {
+	case pkcs.IsPBES2(information.EncryptionAlgorithm) ||
+		pkcs.IsSMPBES(information.EncryptionAlgorithm):
+		var parameters pkcs.PBES2Params
+		if err := unmarshalGlobalTLSPKCS8(
+			information.EncryptionAlgorithm.Parameters.FullBytes,
+			&parameters,
+		); err != nil {
+			return nil, fmt.Errorf("parse PKCS#8 PBES2 parameters: %w", err)
+		}
+		decrypted, _, err = parameters.Decrypt(password, information.EncryptedData)
+	case pkcs.IsPBES1(information.EncryptionAlgorithm):
+		decrypted, _, err = (&pkcs.PBES1{
+			Algorithm: information.EncryptionAlgorithm,
+		}).Decrypt(password, information.EncryptedData)
+	default:
+		return nil, fmt.Errorf(
+			"unsupported PKCS#8 encryption algorithm %s",
+			information.EncryptionAlgorithm.Algorithm.String(),
+		)
+	}
+	if err != nil {
+		clearGlobalTLSSecret(decrypted)
+		return nil, errors.New(
+			"decrypt PKCS#8 encrypted private key: incorrect password or invalid encryption parameters",
+		)
+	}
+	if len(decrypted) == 0 || len(decrypted) > globalTLSMaximumFileSize {
+		clearGlobalTLSSecret(decrypted)
+		return nil, errors.New("decrypted PKCS#8 private key has an invalid size")
+	}
+	return decrypted, nil
+}
+
+func parseAndValidateGlobalTLSEncryptedPrivateKey(
+	data []byte,
+) (globalTLSEncryptedPrivateKeyInfo, error) {
+	var information globalTLSEncryptedPrivateKeyInfo
+	if err := unmarshalGlobalTLSPKCS8(data, &information); err != nil {
+		return information, fmt.Errorf("parse PKCS#8 encrypted private key: %w", err)
+	}
+	if len(information.EncryptedData) == 0 ||
+		len(information.EncryptedData) > globalTLSMaximumFileSize {
+		return information, errors.New("PKCS#8 encrypted private key has an invalid payload size")
+	}
+	switch {
+	case information.EncryptionAlgorithm.Algorithm.Equal(globalTLSPBES2OID),
+		information.EncryptionAlgorithm.Algorithm.Equal(globalTLSSMPBESOID):
+		if err := validateGlobalTLSPBES2Parameters(
+			information.EncryptionAlgorithm.Parameters.FullBytes,
+		); err != nil {
+			return information, err
+		}
+	case pkcs.IsPBES1(information.EncryptionAlgorithm):
+		var parameters globalTLSPBES1Parameters
+		if err := unmarshalGlobalTLSPKCS8(
+			information.EncryptionAlgorithm.Parameters.FullBytes,
+			&parameters,
+		); err != nil {
+			return information, fmt.Errorf("parse PKCS#8 PBES1 parameters: %w", err)
+		}
+		if err := validateGlobalTLSPKCS8SaltAndIterations(
+			parameters.Salt,
+			parameters.Iterations,
+		); err != nil {
+			return information, fmt.Errorf("PKCS#8 PBES1 parameters: %w", err)
+		}
+	default:
+		return information, fmt.Errorf(
+			"unsupported PKCS#8 encryption algorithm %s",
+			information.EncryptionAlgorithm.Algorithm.String(),
+		)
+	}
+	return information, nil
+}
+
+func validateGlobalTLSPBES2Parameters(data []byte) error {
+	var parameters pkcs.PBES2Params
+	if err := unmarshalGlobalTLSPKCS8(data, &parameters); err != nil {
+		return fmt.Errorf("parse PKCS#8 PBES2 parameters: %w", err)
+	}
+	switch {
+	case parameters.KeyDerivationFunc.Algorithm.Equal(globalTLSPBKDF2OID),
+		parameters.KeyDerivationFunc.Algorithm.Equal(globalTLSSMPBKDFOID):
+		var kdf globalTLSPBKDF2Parameters
+		if err := unmarshalGlobalTLSPKCS8(
+			parameters.KeyDerivationFunc.Parameters.FullBytes,
+			&kdf,
+		); err != nil {
+			return fmt.Errorf("parse PKCS#8 PBKDF2 parameters: %w", err)
+		}
+		if err := validateGlobalTLSPKCS8SaltAndIterations(
+			kdf.Salt,
+			kdf.IterationCount,
+		); err != nil {
+			return fmt.Errorf("PKCS#8 PBKDF2 parameters: %w", err)
+		}
+		return validateGlobalTLSPKCS8KeyLength(kdf.KeyLength)
+	case parameters.KeyDerivationFunc.Algorithm.Equal(globalTLSScryptOID):
+		var kdf globalTLSScryptParameters
+		if err := unmarshalGlobalTLSPKCS8(
+			parameters.KeyDerivationFunc.Parameters.FullBytes,
+			&kdf,
+		); err != nil {
+			return fmt.Errorf("parse PKCS#8 scrypt parameters: %w", err)
+		}
+		return validateGlobalTLSPKCS8Scrypt(kdf)
+	default:
+		return fmt.Errorf(
+			"unsupported PKCS#8 KDF %s",
+			parameters.KeyDerivationFunc.Algorithm.String(),
+		)
+	}
+}
+
+func validateGlobalTLSPKCS8SaltAndIterations(salt []byte, iterations int) error {
+	if len(salt) > globalTLSPKCS8MaximumSaltSize {
+		return fmt.Errorf("salt exceeds the %d-byte limit", globalTLSPKCS8MaximumSaltSize)
+	}
+	if iterations < 1 || iterations > globalTLSPKCS8MaximumIterations {
+		return fmt.Errorf(
+			"iteration count must be between 1 and %d",
+			globalTLSPKCS8MaximumIterations,
+		)
+	}
+	return nil
+}
+
+func validateGlobalTLSPKCS8KeyLength(length int) error {
+	if length < 0 || length > globalTLSPKCS8MaximumDerivedKeySize {
+		return fmt.Errorf(
+			"derived key length must not exceed %d bytes",
+			globalTLSPKCS8MaximumDerivedKeySize,
+		)
+	}
+	return nil
+}
+
+func validateGlobalTLSPKCS8Scrypt(parameters globalTLSScryptParameters) error {
+	if len(parameters.Salt) > globalTLSPKCS8MaximumSaltSize {
+		return fmt.Errorf("PKCS#8 scrypt salt exceeds the %d-byte limit", globalTLSPKCS8MaximumSaltSize)
+	}
+	if err := validateGlobalTLSPKCS8KeyLength(parameters.KeyLength); err != nil {
+		return fmt.Errorf("PKCS#8 scrypt parameters: %w", err)
+	}
+	if parameters.CostParameter <= 1 ||
+		parameters.CostParameter&(parameters.CostParameter-1) != 0 ||
+		parameters.BlockSize <= 0 ||
+		parameters.ParallelizationParameter <= 0 {
+		return errors.New("PKCS#8 scrypt cost, block size, and parallelism are invalid")
+	}
+	cost := uint64(parameters.CostParameter)
+	blockSize := uint64(parameters.BlockSize)
+	parallelism := uint64(parameters.ParallelizationParameter)
+	if blockSize > globalTLSPKCS8MaximumScryptMemory/128 ||
+		cost > globalTLSPKCS8MaximumScryptMemory/(128*blockSize) {
+		return fmt.Errorf(
+			"PKCS#8 scrypt memory cost exceeds the %d-byte limit",
+			globalTLSPKCS8MaximumScryptMemory,
+		)
+	}
+	if blockSize > globalTLSPKCS8MaximumScryptWork/cost ||
+		parallelism > globalTLSPKCS8MaximumScryptWork/(cost*blockSize) {
+		return fmt.Errorf(
+			"PKCS#8 scrypt work factor exceeds the %d-unit limit",
+			globalTLSPKCS8MaximumScryptWork,
+		)
+	}
+	return nil
+}
+
+func unmarshalGlobalTLSPKCS8(data []byte, value any) error {
+	rest, err := asn1.Unmarshal(data, value)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 0 {
+		return errors.New("ASN.1 data contains trailing bytes")
+	}
+	return nil
+}
+
 func loadGlobalTLSPrivateKeyPassword() ([]byte, error) {
 	path, configured := os.LookupEnv(globalTLSPrivateKeyPasswordFileEnvironment)
 	if !configured || path == "" {
 		return nil, fmt.Errorf(
-			"traditional encrypted PEM private key requires %s",
+			"encrypted private key requires %s",
 			globalTLSPrivateKeyPasswordFileEnvironment,
 		)
 	}
@@ -1158,7 +1507,194 @@ func loadGlobalTLSCAHashFile(
 		)
 	}
 	budget.certificates += len(parsed)
-	return parsed, nil
+	expectedHash := strings.ToLower(name[:8])
+	matching := make([]*x509.Certificate, 0, len(parsed))
+	for _, certificate := range parsed {
+		hash, hashErr := globalTLSOpenSSLSubjectHash(certificate)
+		if hashErr != nil {
+			return nil, fmt.Errorf(
+				"hash CA directory entry %q in %q: %w",
+				name,
+				configuredPath,
+				hashErr,
+			)
+		}
+		if hash == expectedHash {
+			matching = append(matching, certificate)
+		}
+	}
+	return matching, nil
+}
+
+func globalTLSOpenSSLSubjectHash(certificate *x509.Certificate) (string, error) {
+	if certificate == nil || len(certificate.RawSubject) == 0 {
+		return "", errors.New("certificate subject is empty")
+	}
+	canonical, err := globalTLSOpenSSLCanonicalName(certificate.RawSubject)
+	if err != nil {
+		return "", err
+	}
+	digest := sha1.Sum(canonical)
+	return fmt.Sprintf("%08x", binary.LittleEndian.Uint32(digest[:4])), nil
+}
+
+// OpenSSL hashes X.509 names after converting supported ASN.1 strings to
+// UTF-8, folding ASCII case and whitespace, sorting each SET, and omitting the
+// outer Name SEQUENCE. This mirrors x509_name_canon()/X509_NAME_hash_ex().
+func globalTLSOpenSSLCanonicalName(rawSubject []byte) ([]byte, error) {
+	var sequence asn1.RawValue
+	rest, err := asn1.Unmarshal(rawSubject, &sequence)
+	if err != nil || len(rest) != 0 || sequence.Class != asn1.ClassUniversal ||
+		sequence.Tag != asn1.TagSequence || !sequence.IsCompound {
+		return nil, errors.New("invalid X.509 subject name")
+	}
+	canonical := make([]byte, 0, len(rawSubject))
+	sets := sequence.Bytes
+	for len(sets) > 0 {
+		var set asn1.RawValue
+		sets, err = asn1.Unmarshal(sets, &set)
+		if err != nil || set.Class != asn1.ClassUniversal || set.Tag != asn1.TagSet ||
+			!set.IsCompound {
+			return nil, errors.New("invalid X.509 subject RDN set")
+		}
+		entries := make([][]byte, 0, 1)
+		values := set.Bytes
+		for len(values) > 0 {
+			var entry asn1.RawValue
+			values, err = asn1.Unmarshal(values, &entry)
+			if err != nil || entry.Class != asn1.ClassUniversal ||
+				entry.Tag != asn1.TagSequence || !entry.IsCompound {
+				return nil, errors.New("invalid X.509 subject attribute")
+			}
+			var oid asn1.ObjectIdentifier
+			attributeRest, oidErr := asn1.Unmarshal(entry.Bytes, &oid)
+			if oidErr != nil || len(oid) == 0 {
+				return nil, errors.New("invalid X.509 subject attribute OID")
+			}
+			var value asn1.RawValue
+			attributeRest, valueErr := asn1.Unmarshal(attributeRest, &value)
+			if valueErr != nil || len(attributeRest) != 0 {
+				return nil, errors.New("invalid X.509 subject attribute value")
+			}
+			oidDER, marshalErr := asn1.Marshal(oid)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal X.509 subject OID: %w", marshalErr)
+			}
+			valueDER, canonicalErr := globalTLSOpenSSLCanonicalString(value)
+			if canonicalErr != nil {
+				return nil, canonicalErr
+			}
+			body := append(append(make([]byte, 0, len(oidDER)+len(valueDER)), oidDER...), valueDER...)
+			entries = append(entries, globalTLSDERValue(0x30, body))
+		}
+		sort.Slice(entries, func(left, right int) bool {
+			return bytes.Compare(entries[left], entries[right]) < 0
+		})
+		setBody := make([]byte, 0)
+		for _, entry := range entries {
+			setBody = append(setBody, entry...)
+		}
+		canonical = append(canonical, globalTLSDERValue(0x31, setBody)...)
+	}
+	return canonical, nil
+}
+
+func globalTLSOpenSSLCanonicalString(value asn1.RawValue) ([]byte, error) {
+	if value.Class != asn1.ClassUniversal {
+		return append([]byte(nil), value.FullBytes...), nil
+	}
+	var decoded []byte
+	switch value.Tag {
+	case asn1.TagUTF8String:
+		if !utf8.Valid(value.Bytes) {
+			return nil, errors.New("invalid UTF-8 X.509 subject value")
+		}
+		decoded = append([]byte(nil), value.Bytes...)
+	case asn1.TagPrintableString, asn1.TagIA5String, 26: // VisibleString
+		decoded = append([]byte(nil), value.Bytes...)
+	case 20: // T61String is converted by OpenSSL as an ISO-8859-1 byte string.
+		for _, character := range value.Bytes {
+			decoded = utf8.AppendRune(decoded, rune(character))
+		}
+	case 28: // UniversalString
+		if len(value.Bytes)%4 != 0 {
+			return nil, errors.New("invalid UniversalString X.509 subject value")
+		}
+		for offset := 0; offset < len(value.Bytes); offset += 4 {
+			character := rune(binary.BigEndian.Uint32(value.Bytes[offset : offset+4]))
+			if !utf8.ValidRune(character) {
+				return nil, errors.New("invalid UniversalString code point")
+			}
+			decoded = utf8.AppendRune(decoded, character)
+		}
+	case 30: // BMPString
+		if len(value.Bytes)%2 != 0 {
+			return nil, errors.New("invalid BMPString X.509 subject value")
+		}
+		units := make([]uint16, len(value.Bytes)/2)
+		for index := range units {
+			units[index] = binary.BigEndian.Uint16(value.Bytes[index*2 : index*2+2])
+		}
+		for _, character := range utf16.Decode(units) {
+			if character == utf8.RuneError {
+				return nil, errors.New("invalid BMPString code point")
+			}
+			decoded = utf8.AppendRune(decoded, character)
+		}
+		clear(units)
+	default:
+		return append([]byte(nil), value.FullBytes...), nil
+	}
+	defer clear(decoded)
+	canonical := make([]byte, 0, len(decoded))
+	start := 0
+	for start < len(decoded) && globalTLSOpenSSLASCIIWhitespace(decoded[start]) {
+		start++
+	}
+	end := len(decoded)
+	for end > start && globalTLSOpenSSLASCIIWhitespace(decoded[end-1]) {
+		end--
+	}
+	for index := start; index < end; {
+		character := decoded[index]
+		if character < utf8.RuneSelf && globalTLSOpenSSLASCIIWhitespace(character) {
+			canonical = append(canonical, ' ')
+			for index < end && globalTLSOpenSSLASCIIWhitespace(decoded[index]) {
+				index++
+			}
+			continue
+		}
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+		canonical = append(canonical, character)
+		index++
+	}
+	return globalTLSDERValue(0x0c, canonical), nil
+}
+
+func globalTLSOpenSSLASCIIWhitespace(value byte) bool {
+	return value == ' ' || (value >= '\t' && value <= '\r')
+}
+
+func globalTLSDERValue(tag byte, value []byte) []byte {
+	result := make([]byte, 0, 1+5+len(value))
+	result = append(result, tag)
+	if len(value) < 128 {
+		result = append(result, byte(len(value)))
+	} else {
+		length := uint64(len(value))
+		var encoded [8]byte
+		index := len(encoded)
+		for length != 0 {
+			index--
+			encoded[index] = byte(length)
+			length >>= 8
+		}
+		result = append(result, 0x80|byte(len(encoded)-index))
+		result = append(result, encoded[index:]...)
+	}
+	return append(result, value...)
 }
 
 func parseGlobalTLSVerifyClient(value string) (tls.ClientAuthType, error) {
@@ -1204,29 +1740,99 @@ func parseGlobalTLSECName(value string) ([]tls.CurveID, error) {
 	if selector == "" {
 		return nil, errors.New("curve name is empty")
 	}
-	if strings.ContainsAny(selector, ":, \t\r\n?*+/{ }") {
+	if strings.ContainsAny(selector, ", \t\r\n?*+/{ }") {
 		return nil, fmt.Errorf(
-			"OpenSSL group selector %q cannot be mapped exactly to Go TLS; configure one named group",
+			"OpenSSL group selector %q cannot be mapped to a Go TLS allowed-group set",
 			value,
 		)
 	}
-	var curve tls.CurveID
-	switch strings.ToUpper(selector) {
+	names := strings.Split(selector, ":")
+	curves := make([]tls.CurveID, 0, len(names))
+	seen := make(map[tls.CurveID]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			return nil, errors.New("OpenSSL group list contains an empty name")
+		}
+		curve, minimumGoVersion, ok := globalTLSNamedGroup(name)
+		if !ok {
+			return nil, fmt.Errorf(
+				"OpenSSL named group %q is not available in crypto/tls",
+				name,
+			)
+		}
+		if minimumGoVersion != "" &&
+			version.Compare(runtime.Version(), minimumGoVersion) < 0 {
+			return nil, fmt.Errorf(
+				"OpenSSL named group %q requires %s or later; runtime is %s",
+				name,
+				minimumGoVersion,
+				runtime.Version(),
+			)
+		}
+		if disabledBy, disabled := globalTLSNamedGroupDisabledByGoDebug(curve); disabled {
+			return nil, fmt.Errorf(
+				"OpenSSL named group %q is disabled by GODEBUG=%s=0",
+				name,
+				disabledBy,
+			)
+		}
+		if _, duplicate := seen[curve]; duplicate {
+			continue
+		}
+		seen[curve] = struct{}{}
+		curves = append(curves, curve)
+	}
+	return curves, nil
+}
+
+func globalTLSNamedGroup(name string) (tls.CurveID, string, bool) {
+	switch strings.ToUpper(name) {
 	case "X25519":
-		curve = tls.X25519
+		return tls.X25519, "", true
 	case "P-256", "PRIME256V1", "SECP256R1":
-		curve = tls.CurveP256
+		return tls.CurveP256, "", true
 	case "P-384", "SECP384R1":
-		curve = tls.CurveP384
+		return tls.CurveP384, "", true
 	case "P-521", "SECP521R1":
-		curve = tls.CurveP521
+		return tls.CurveP521, "", true
+	case "X25519MLKEM768":
+		return tls.X25519MLKEM768, "go1.24", true
+	case "SECP256R1MLKEM768":
+		return tls.SecP256r1MLKEM768, "go1.26", true
+	case "SECP384R1MLKEM1024":
+		return tls.SecP384r1MLKEM1024, "go1.26", true
 	default:
-		return nil, fmt.Errorf(
-			"OpenSSL named group %q is not available in crypto/tls",
-			value,
-		)
+		return 0, "", false
 	}
-	return []tls.CurveID{curve}, nil
+}
+
+func globalTLSNamedGroupDisabledByGoDebug(curve tls.CurveID) (string, bool) {
+	if value, configured := globalTLSGoDebugValue("tlsmlkem"); configured && value == "0" {
+		switch curve {
+		case tls.X25519MLKEM768,
+			tls.SecP256r1MLKEM768,
+			tls.SecP384r1MLKEM1024:
+			return "tlsmlkem", true
+		}
+	}
+	if value, configured := globalTLSGoDebugValue("tlssecpmlkem"); configured && value == "0" {
+		switch curve {
+		case tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024:
+			return "tlssecpmlkem", true
+		}
+	}
+	return "", false
+}
+
+func globalTLSGoDebugValue(name string) (string, bool) {
+	settings := strings.Split(os.Getenv("GODEBUG"), ",")
+	for index := len(settings) - 1; index >= 0; index-- {
+		key, value, found := strings.Cut(strings.TrimSpace(settings[index]), "=")
+		if found && key == name {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func parseGlobalTLSCipherSuites(value string) ([]uint16, error) {

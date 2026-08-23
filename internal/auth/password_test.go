@@ -288,8 +288,14 @@ func TestHashPasswordRejectsInvalidInput(t *testing.T) {
 	if _, err := HashPassword(nil, "{SSHA}", nil); err == nil {
 		t.Fatal("empty password was accepted")
 	}
-	if _, err := HashPassword([]byte("secret"), "{CRYPT}", nil); err == nil {
-		t.Fatal("unsupported scheme was accepted")
+	stored, err := HashPassword(
+		[]byte("secret"),
+		OpenLDAPCryptHashScheme,
+		bytes.NewReader(make([]byte, openLDAPCryptEntropyLength)),
+	)
+	if err != nil || !bytes.HasPrefix(stored, []byte(OpenLDAPCryptHashScheme)) ||
+		!VerifyPassword(stored, []byte("secret")) {
+		t.Fatalf("CRYPT scheme was not generated and verified: stored=%q err=%v", stored, err)
 	}
 	if _, err := HashPassword([]byte("secret"), "{SSHA}", errorReader{}); err == nil {
 		t.Fatal("salt generation failure was ignored")

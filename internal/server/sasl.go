@@ -128,7 +128,14 @@ func (server *Server) handleSASLBind(
 	case "DIGEST-MD5":
 		if session == nil {
 			var err error
-			session, err = startSASLDigestMD5Session(runtime)
+			session, err = startSASLDigestMD5Session(
+				runtime,
+				state.externalSSF,
+				saslDigestMD5ConnectionHosts(
+					state.connection,
+					server.config.ListenerURLs,
+				)...,
+			)
 			if err != nil {
 				return err
 			}
@@ -147,6 +154,27 @@ func (server *Server) handleSASLBind(
 			ctx,
 			connection,
 			state,
+			session,
+			message,
+			request,
+		)
+	case "GSSAPI":
+		if server.gssapiKeytab == nil {
+			clearSASLSession(state)
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultAuthMethodNotSupported,
+					"SASL GSSAPI acceptor keytab is not configured",
+				),
+				nil,
+			))
+		}
+		return server.handleSASLGSSAPIStep(
+			ctx,
+			connection,
+			state,
+			runtime,
 			session,
 			message,
 			request,
@@ -380,6 +408,9 @@ func writeSASLChallenge(
 }
 
 func clearSASLSession(state *connectionState) {
+	if state.saslSession != nil {
+		state.saslSession.gssapiSession.clear()
+	}
 	state.saslSession = nil
 }
 
@@ -458,6 +489,13 @@ func saslMechanismPolicyFailure(
 			noPlain:     true,
 			noAnonymous: true,
 		}
+	case "GSSAPI":
+		security = saslMechanismSecurity{
+			noDictionary: true,
+			noPlain:      true,
+			noActive:     true,
+			noAnonymous:  true,
+		}
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
 		security = saslMechanismSecurity{
 			noPlain:     true,
@@ -472,7 +510,16 @@ func saslMechanismPolicyFailure(
 		return &result
 	}
 
-	if properties.minSSF > externalSSF {
+	maximumMechanismSSF := uint32(0)
+	if mechanism == "DIGEST-MD5" && properties.maxBufferSize != 0 &&
+		properties.maxSSF > externalSSF {
+		maximumMechanismSSF = saslDigestMD5RC4SSF
+	}
+	if mechanism == "GSSAPI" && properties.maxBufferSize != 0 &&
+		properties.maxSSF > externalSSF {
+		maximumMechanismSSF = 256
+	}
+	if properties.minSSF > externalSSF+maximumMechanismSSF {
 		result := ldapwire.ResultError(
 			ldapwire.ResultStrongerAuthRequired,
 			"SASL security strength requirement is not met",
@@ -533,6 +580,13 @@ func supportedSASLMechanisms(state *connectionState) []string {
 		state.externalSSF,
 	) == nil {
 		mechanisms = append(mechanisms, "DIGEST-MD5")
+	}
+	if state.gssapiAvailable && saslMechanismPolicyFailure(
+		properties,
+		"GSSAPI",
+		state.externalSSF,
+	) == nil {
+		mechanisms = append(mechanisms, "GSSAPI")
 	}
 	for _, mechanism := range []string{
 		"SCRAM-SHA-512",

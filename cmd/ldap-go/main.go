@@ -74,6 +74,12 @@ func run(
 		err = runDN(args[0], args[1:], stdout, stderr)
 	case "import", "slapadd":
 		err = runImport(args[0], args[1:], stdin, stdout, stderr)
+	case "slapauth":
+		err = runSlapAuth(args[1:], stdout, stderr)
+	case "slapschema":
+		err = runSlapSchema(args[1:], stdout, stderr)
+	case "slapmodify":
+		err = runSlapModify(args[1:], stdin, stdout, stderr)
 	case "ldapsearch":
 		err = runLDAPSearch(args[1:], stdin, stdout, stderr)
 	case "ldapwhoami":
@@ -397,12 +403,19 @@ func runRebuild(command string, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	var database, suffix, configFile, configDirectory string
+	var databaseNumber int
+	var disableSubordinateGlue, quick bool
 	if command == "slapindex" {
-		flags.String("b", "", "unsupported: select a database by suffix")
-		flags.Int("n", -1, "unsupported: select a database by number")
+		flags.StringVar(&database, "database", "", "OpenLDAP database selector")
+		flags.StringVar(&suffix, "b", "", "select a database by suffix")
+		databaseNumber = -1
+		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
+		flags.StringVar(&configFile, "f", "", "unsupported OpenLDAP slapd.conf path")
+		flags.StringVar(&configDirectory, "F", "", "unsupported OpenLDAP config directory")
 		registerUnsupportedBool(flags, "c", "continue after index errors")
-		registerUnsupportedBool(flags, "g", "disable subordinate gluing")
-		registerUnsupportedBool(flags, "q", "skip consistency checks")
+		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
+		flags.BoolVar(&quick, "q", false, "commit index rebuilds in quick mode")
 		registerUnsupportedBool(flags, "t", "truncate attribute indexes")
 	}
 	if err := flags.Parse(args); err != nil {
@@ -410,21 +423,41 @@ func runRebuild(command string, args []string, stdout, stderr io.Writer) error {
 	}
 	if command == "slapindex" {
 		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{
-			{name: "b", reason: "the bbolt rebuild operates on the complete database file"},
-			{name: "n", reason: "the bbolt rebuild operates on the complete database file"},
+			{name: "f", reason: "ldap-go loads cn=config from -db and cannot consume slapd.conf"},
+			{name: "F", reason: "ldap-go loads cn=config from -db and cannot consume an OpenLDAP config directory"},
 			{name: "c", reason: "the atomic rebuild stops on the first error"},
-			{name: "g", reason: "bbolt partitions do not implement subordinate gluing"},
-			{name: "q", reason: "the atomic rebuild always performs consistency checks"},
-			{name: "t", reason: "ldap-go has no independent attribute-index database"},
+			{name: "t", reason: "each partition index is already truncated and rebuilt atomically"},
 		}); err != nil {
 			return err
 		}
-		if flags.NArg() != 0 {
-			return errors.New(
-				"slapindex attribute selection is not supported: " +
-					"ldap-go rebuilds the complete bbolt database",
-			)
+		selected, err := resolveOfflineDatabaseSelection(
+			command,
+			flags,
+			*databasePath,
+			database,
+			suffix,
+			databaseNumber,
+			"",
+		)
+		if err != nil {
+			return err
 		}
+		store, err := storage.OpenBolt(*databasePath)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		count, err := server.ReindexOfflineSelected(
+			context.Background(), store, server.OfflineReindexOptions{
+				Database: selected, IncludeSubordinates: !disableSubordinateGlue,
+				Attributes: flags.Args(), Quick: quick,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "reindexed %d database(s)\n", count)
+		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
@@ -509,7 +542,7 @@ func runPassword(
 	scheme := auth.SMPBKDF2HashScheme
 	var directSecret secretFlagValue
 	var generate, omitNewline, rfc2307 bool
-	var passwordFile string
+	var cryptSaltFormat, passwordFile string
 	if command == "slappasswd" {
 		scheme = auth.OpenLDAPDefaultHashScheme
 		flags.StringVar(&scheme, "h", scheme, "RFC 2307 password scheme")
@@ -518,7 +551,7 @@ func runPassword(
 		flags.BoolVar(&omitNewline, "n", false, "omit the trailing newline")
 		flags.BoolVar(&rfc2307, "u", true, "generate an RFC 2307 value")
 		flags.StringVar(&passwordFile, "T", "", "read the password from a file")
-		flags.String("c", "", "unsupported: crypt(3) salt format")
+		flags.StringVar(&cryptSaltFormat, "c", "", "crypt(3) salt format")
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -528,11 +561,11 @@ func runPassword(
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	if command == "slappasswd" {
-		if err := rejectUnsupportedFlags(command, flags, []unsupportedFlag{{
-			name:   "c",
-			reason: "ldap-go does not implement the platform-specific {CRYPT} scheme",
-		}}); err != nil {
-			return err
+		if flagWasSet(flags, "c") {
+			if flagWasSet(flags, "h") {
+				return errors.New("slappasswd options -c and -h are mutually exclusive")
+			}
+			scheme = auth.OpenLDAPCryptHashScheme
 		}
 		if flagWasSet(flags, "u") && !rfc2307 {
 			return errors.New(
@@ -600,6 +633,15 @@ func runPassword(
 	var stored []byte
 	if normalizedScheme == auth.SMPBKDF2HashScheme {
 		stored, err = auth.HashPasswordSMPBKDF2(password, *iterations, nil)
+	} else if normalizedScheme == auth.OpenLDAPCryptHashScheme &&
+		flagWasSet(flags, "c") {
+		if flagWasSet(flags, "iterations") {
+			return fmt.Errorf(
+				"-iterations is only valid with %s",
+				auth.SMPBKDF2HashScheme,
+			)
+		}
+		stored, err = auth.HashPasswordOpenLDAPCrypt(password, cryptSaltFormat, nil)
 	} else {
 		if flagWasSet(flags, "iterations") {
 			return fmt.Errorf(
@@ -1191,7 +1233,8 @@ func resolveOfflineDatabaseSelection(
 	targetDN := ""
 	if flagWasSet(flags, "b") {
 		targetDN = suffix
-	} else if command == "slapcat" && strings.TrimSpace(subtree) != "" {
+	} else if (command == "slapcat" || command == "slapschema") &&
+		strings.TrimSpace(subtree) != "" {
 		targetDN = subtree
 	}
 	if targetDN == "" {
@@ -1365,6 +1408,16 @@ func runServe(
 		"",
 		"NAS-Identifier override for {RADIUS} password verification",
 	)
+	gssapiKeytab := flags.String(
+		"gssapi-keytab",
+		"",
+		"FILE keytab for the SASL GSSAPI acceptor; defaults to KRB5_KTNAME",
+	)
+	gssapiChannelBinding := flags.String(
+		"gssapi-channel-binding",
+		"",
+		"explicit GSSAPI channel binding extension: tls-server-end-point",
+	)
 	tlsCertificate := flags.String("tls-cert", "", "PEM server certificate for StartTLS or LDAPS")
 	tlsPrivateKey := flags.String("tls-key", "", "PEM private key for StartTLS or LDAPS")
 	tlsClientCA := flags.String("tls-client-ca", "", "PEM CA bundle for TLS client certificates")
@@ -1426,6 +1479,9 @@ func runServe(
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *gssapiKeytab == "" {
+		*gssapiKeytab = getenv("KRB5_KTNAME")
 	}
 
 	level, err := parseLogLevel(*logLevel)
@@ -1541,6 +1597,8 @@ func runServe(
 		ShutdownTimeout:           shutdownTimeout,
 		RADIUSConfigPath:          *radiusConfigPath,
 		RADIUSNASIdentifier:       *radiusNASIdentifier,
+		GSSAPIKeytabPath:          *gssapiKeytab,
+		GSSAPIChannelBinding:      *gssapiChannelBinding,
 	})
 	if err != nil {
 		return err
@@ -1785,6 +1843,9 @@ commands:
   slapdn   alias for dn
   import   atomically import slapcat-compatible LDIF
   slapadd  OpenLDAP-style alias for import
+	  slapauth  check configured SASL authentication and authorization identities
+	  slapschema  check stored entries against the configured schema
+	  slapmodify  atomically apply offline LDIF change records
 	  ldapsearch  search a remote LDAP directory and print LDIF
 	  ldapwhoami  print the authorization identity reported by an LDAP server
 	  ldapcompare  compare an LDAP attribute assertion

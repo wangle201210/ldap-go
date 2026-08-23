@@ -61,6 +61,24 @@ fi
 if ! grep -F 'lib/*-linux-gnu' "$script" >/dev/null 2>&1; then
 	die "ODBC library discovery does not support multiarch directories"
 fi
+for required_argument in \
+	'--enable-crypt=yes' \
+	'asyncmeta dnssrv ldap meta null passwd relay mdb sock sql'
+do
+	if ! grep -F -- "$required_argument" "$script" >/dev/null 2>&1; then
+		die "reference build does not require $required_argument"
+	fi
+done
+for capability in \
+	OPENLDAP_HAS_BACKEND_PASSWD \
+	OPENLDAP_HAS_BACKEND_DNSSRV \
+	OPENLDAP_HAS_BACKEND_ASYNCMETA \
+	OPENLDAP_HAS_SLAPD_CRYPT
+do
+	if ! grep -F -- "write_export $capability \"1\"" "$script" >/dev/null 2>&1; then
+		die "reference environment does not publish $capability"
+	fi
+done
 
 runtime_setup=$(sed -n '/^openldap_library_path=/,/^if feature_output=/p' "$script" | sed '$d')
 if [ -z "$runtime_setup" ]; then
@@ -110,6 +128,7 @@ ldflags=
 slapd='/tmp/OpenLDAP Reference Build/servers/slapd/slapd'
 slapadd='/tmp/OpenLDAP Reference Build/reference-tools/slapadd'
 lloadd='/tmp/OpenLDAP Reference Build/servers/lloadd/lloadd'
+slappasswd='/tmp/OpenLDAP Reference Build/reference-tools/slappasswd'
 schema_dir='/tmp/OpenLDAP Source/servers/slapd/schema'
 version=2.6.13
 expected_runtime_version=2.6.13
@@ -141,6 +160,17 @@ fi
 	if [ "$SASL_PATH" != "$cyrus_sasl_lib_dir/sasl2:/ambient/sasl" ]; then
 		die "generated SASL_PATH is incomplete: $SASL_PATH"
 	fi
+	for capability in \
+		OPENLDAP_HAS_BACKEND_PASSWD \
+		OPENLDAP_HAS_BACKEND_DNSSRV \
+		OPENLDAP_HAS_BACKEND_ASYNCMETA \
+		OPENLDAP_HAS_SLAPD_CRYPT
+	do
+		eval "capability_value=\${$capability:-}"
+		if [ "$capability_value" != "1" ]; then
+			die "generated environment omitted $capability"
+		fi
+	done
 )
 
 printf 'build-openldap-reference runtime dependency path test passed\n'

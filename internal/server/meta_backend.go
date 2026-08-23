@@ -16,6 +16,25 @@ import (
 
 const metaBackendNoDefaultTarget = -1
 
+type metaBackendConfigurationFlavor struct {
+	backendType       string
+	targetAttribute   string
+	targetObjectClass string
+}
+
+var (
+	metaBackendFlavor = metaBackendConfigurationFlavor{
+		backendType:       "meta",
+		targetAttribute:   "olcMetaSub",
+		targetObjectClass: "olcMetaTargetConfig",
+	}
+	asyncMetaBackendFlavor = metaBackendConfigurationFlavor{
+		backendType:       "asyncmeta",
+		targetAttribute:   "olcAsyncMetaSub",
+		targetObjectClass: "olcAsyncMetaTargetConfig",
+	}
+)
+
 // metaBackendRuntimeConfiguration is an immutable snapshot of one back-meta
 // database and its directly-owned olcMetaSub target entries.
 type metaBackendRuntimeConfiguration struct {
@@ -66,9 +85,24 @@ func loadMetaBackendRuntimeConfigurationWithNormalizer(
 	databaseEntry directory.Entry,
 	normalizer directory.DNAttributeNormalizer,
 ) (*metaBackendRuntimeConfiguration, error) {
-	databaseDN, suffixes, err := validateMetaBackendDatabaseWithNormalizer(
+	return loadMetaBackendRuntimeConfigurationFlavor(
+		reader,
 		databaseEntry,
 		normalizer,
+		metaBackendFlavor,
+	)
+}
+
+func loadMetaBackendRuntimeConfigurationFlavor(
+	reader storage.Reader,
+	databaseEntry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
+	flavor metaBackendConfigurationFlavor,
+) (*metaBackendRuntimeConfiguration, error) {
+	databaseDN, suffixes, err := validateMetaBackendDatabaseFlavor(
+		databaseEntry,
+		normalizer,
+		flavor,
 	)
 	if err != nil {
 		return nil, err
@@ -89,10 +123,11 @@ func loadMetaBackendRuntimeConfigurationWithNormalizer(
 			return fmt.Errorf("parse entry DN %q: %w", entry.DN, parseErr)
 		}
 		parent, ok := entryDN.Parent()
-		if !ok || !parent.Equal(databaseDN) || !metaBackendTargetEntry(entry, entryDN) {
+		if !ok || !parent.Equal(databaseDN) ||
+			!metaBackendTargetEntryFlavor(entry, entryDN, flavor) {
 			return nil
 		}
-		order, validateErr := validateMetaBackendTargetIdentity(entry, entryDN)
+		order, validateErr := validateMetaBackendTargetIdentity(entry, entryDN, flavor)
 		if validateErr != nil {
 			return validateErr
 		}
@@ -219,6 +254,14 @@ func validateMetaBackendDatabaseWithNormalizer(
 	entry directory.Entry,
 	normalizer directory.DNAttributeNormalizer,
 ) (directory.DN, []directory.DN, error) {
+	return validateMetaBackendDatabaseFlavor(entry, normalizer, metaBackendFlavor)
+}
+
+func validateMetaBackendDatabaseFlavor(
+	entry directory.Entry,
+	normalizer directory.DNAttributeNormalizer,
+	flavor metaBackendConfigurationFlavor,
+) (directory.DN, []directory.DN, error) {
 	entryDN, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.DN{}, nil, fmt.Errorf("parse meta database DN %q: %w", entry.DN, err)
@@ -238,8 +281,12 @@ func validateMetaBackendDatabaseWithNormalizer(
 	if len(values) != 1 {
 		return directory.DN{}, nil, fmt.Errorf("%s olcDatabase must be single-valued", entry.DN)
 	}
-	if databaseType(string(values[0])) != "meta" {
-		return directory.DN{}, nil, fmt.Errorf("%s must use the meta backend", entry.DN)
+	if databaseType(string(values[0])) != flavor.backendType {
+		return directory.DN{}, nil, fmt.Errorf(
+			"%s must use the %s backend",
+			entry.DN,
+			flavor.backendType,
+		)
 	}
 	rdn := entryDN.RDNValues()
 	if len(rdn) != 1 || !strings.EqualFold(rdn[0].Type, "olcDatabase") ||
@@ -281,38 +328,64 @@ func validateMetaBackendDatabaseWithNormalizer(
 }
 
 func metaBackendTargetEntry(entry directory.Entry, entryDN directory.DN) bool {
-	if entry.HasAttribute("olcMetaSub") {
+	return metaBackendTargetEntryFlavor(entry, entryDN, metaBackendFlavor) ||
+		metaBackendTargetEntryFlavor(entry, entryDN, asyncMetaBackendFlavor)
+}
+
+func metaBackendTargetEntryFlavor(
+	entry directory.Entry,
+	entryDN directory.DN,
+	flavor metaBackendConfigurationFlavor,
+) bool {
+	if entry.HasAttribute(flavor.targetAttribute) {
 		return true
 	}
 	for _, value := range entry.Values("objectClass") {
-		if strings.EqualFold(strings.TrimSpace(string(value)), "olcMetaTargetConfig") {
+		if strings.EqualFold(
+			strings.TrimSpace(string(value)),
+			flavor.targetObjectClass,
+		) {
 			return true
 		}
 	}
 	rdn := entryDN.RDNValues()
-	return len(rdn) == 1 && strings.EqualFold(rdn[0].Type, "olcMetaSub")
+	return len(rdn) == 1 && strings.EqualFold(rdn[0].Type, flavor.targetAttribute)
 }
 
 func validateMetaBackendTargetIdentity(
 	entry directory.Entry,
 	entryDN directory.DN,
+	flavor metaBackendConfigurationFlavor,
 ) (int, error) {
-	values := entry.Values("olcMetaSub")
+	values := entry.Values(flavor.targetAttribute)
 	if len(values) != 1 {
-		return 0, fmt.Errorf("%s olcMetaSub must be single-valued", entry.DN)
+		return 0, fmt.Errorf(
+			"%s %s must be single-valued",
+			entry.DN,
+			flavor.targetAttribute,
+		)
 	}
 	raw := strings.TrimSpace(string(values[0]))
 	rdn := entryDN.RDNValues()
-	if len(rdn) != 1 || !strings.EqualFold(rdn[0].Type, "olcMetaSub") ||
+	if len(rdn) != 1 || !strings.EqualFold(rdn[0].Type, flavor.targetAttribute) ||
 		!strings.EqualFold(strings.TrimSpace(string(rdn[0].Value)), raw) {
-		return 0, fmt.Errorf("%s RDN must match its single olcMetaSub value", entry.DN)
+		return 0, fmt.Errorf(
+			"%s RDN must match its single %s value",
+			entry.DN,
+			flavor.targetAttribute,
+		)
 	}
 	order, name, err := parseMetaBackendOrderedName(raw)
 	if err != nil {
-		return 0, fmt.Errorf("%s olcMetaSub: %w", entry.DN, err)
+		return 0, fmt.Errorf("%s %s: %w", entry.DN, flavor.targetAttribute, err)
 	}
 	if !strings.EqualFold(name, "uri") {
-		return 0, fmt.Errorf("%s olcMetaSub must name uri, got %q", entry.DN, name)
+		return 0, fmt.Errorf(
+			"%s %s must name uri, got %q",
+			entry.DN,
+			flavor.targetAttribute,
+			name,
+		)
 	}
 	return order, nil
 }
@@ -370,6 +443,19 @@ func loadMetaBackendTarget(
 			"%s olcDbConnectionPoolMax belongs on the meta parent",
 			entry.DN,
 		)
+	}
+	for _, description := range []string{
+		"olcDbMaxPendingOps",
+		"olcDbMaxTargetConns",
+		"olcDbMaxTimeoutOps",
+	} {
+		if len(entry.Values(description)) != 0 {
+			return metaBackendTargetRuntimeConfiguration{}, fmt.Errorf(
+				"%s %s belongs on the asyncmeta parent",
+				entry.DN,
+				description,
+			)
+		}
 	}
 	uriValues := entry.Values("olcDbURI")
 	if len(uriValues) != 1 {
@@ -783,6 +869,29 @@ func loadMetaBackendSuffixRewrite(
 		classesToLocal:     make(map[string]string),
 	}
 	var mapping *rwmSuffixMapping
+	for _, raw := range entry.Values("olcDbSuffixMassage") {
+		words, err := splitRWMConfigurationWords(string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("%s olcDbSuffixMassage: %w", entry.DN, err)
+		}
+		if len(words) != 2 {
+			return nil, fmt.Errorf(
+				"%s olcDbSuffixMassage expects local and remote DNs",
+				entry.DN,
+			)
+		}
+		parsed, err := newMetaBackendSuffixMapping(
+			entry,
+			words[0],
+			words[1],
+			databaseSuffixes,
+			normalizer,
+		)
+		if err != nil {
+			return nil, err
+		}
+		mapping = parsed
+	}
 	for _, raw := range entry.Values("olcDbRewrite") {
 		value, err := stripRWMOrderingPrefix(string(raw))
 		if err != nil {
@@ -806,30 +915,16 @@ func loadMetaBackendSuffixRewrite(
 		if mapping != nil {
 			return nil, fmt.Errorf("%s configures multiple suffixmassage directives", entry.DN)
 		}
-		local, parseErr := parseRuntimeDN(words[1], normalizer)
-		if parseErr != nil || local.Depth() == 0 {
-			return nil, fmt.Errorf(
-				"%s suffixmassage has invalid local DN %q",
-				entry.DN,
-				words[1],
-			)
+		mapping, err = newMetaBackendSuffixMapping(
+			entry,
+			words[1],
+			words[2],
+			databaseSuffixes,
+			normalizer,
+		)
+		if err != nil {
+			return nil, err
 		}
-		if !metaBackendDNWithinSuffixes(local, databaseSuffixes) {
-			return nil, fmt.Errorf(
-				"%s suffixmassage local DN %q is outside the meta database naming contexts",
-				entry.DN,
-				words[1],
-			)
-		}
-		remote, parseErr := parseRuntimeDN(words[2], normalizer)
-		if parseErr != nil {
-			return nil, fmt.Errorf(
-				"%s suffixmassage has invalid remote DN %q",
-				entry.DN,
-				words[2],
-			)
-		}
-		mapping = &rwmSuffixMapping{local: local, remote: remote}
 	}
 	for _, raw := range entry.Values("olcDbMap") {
 		value, err := stripRWMOrderingPrefix(string(raw))
@@ -849,6 +944,39 @@ func loadMetaBackendSuffixRewrite(
 	}
 	configuration.suffix = mapping
 	return configuration, nil
+}
+
+func newMetaBackendSuffixMapping(
+	entry directory.Entry,
+	localValue string,
+	remoteValue string,
+	databaseSuffixes []directory.DN,
+	normalizer directory.DNAttributeNormalizer,
+) (*rwmSuffixMapping, error) {
+	local, err := parseRuntimeDN(localValue, normalizer)
+	if err != nil || local.Depth() == 0 {
+		return nil, fmt.Errorf(
+			"%s suffixmassage has invalid local DN %q",
+			entry.DN,
+			localValue,
+		)
+	}
+	if !metaBackendDNWithinSuffixes(local, databaseSuffixes) {
+		return nil, fmt.Errorf(
+			"%s suffixmassage local DN %q is outside the meta database naming contexts",
+			entry.DN,
+			localValue,
+		)
+	}
+	remote, err := parseRuntimeDN(remoteValue, normalizer)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%s suffixmassage has invalid remote DN %q",
+			entry.DN,
+			remoteValue,
+		)
+	}
+	return &rwmSuffixMapping{local: local, remote: remote}, nil
 }
 
 func loadMetaBackendDefaultTarget(entry directory.Entry, targetCount int) (int, error) {

@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_SQLITE_ODBC_DRIVER, and the exported OpenLDAP reference environment"
+	die "this script accepts configuration through OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -64,6 +64,10 @@ slapadd=$(find_tool slapadd \
 	"${OPENLDAP_SLAPADD:-}" \
 	/opt/homebrew/opt/openldap/sbin/slapadd \
 	/usr/sbin/slapadd)
+slappasswd=$(find_tool slappasswd \
+	"${OPENLDAP_SLAPPASSWD:-}" \
+	/opt/homebrew/opt/openldap/sbin/slappasswd \
+	/usr/sbin/slappasswd)
 lloadd=$(find_tool lloadd \
 	"${OPENLDAP_LLOADD:-}" \
 	/opt/homebrew/opt/openldap/libexec/lloadd \
@@ -93,6 +97,20 @@ export PATH
 for tool in slapcat slaptest ldapsearch ldapmodify ldapwhoami ldapexop; do
 	find_tool "$tool" >/dev/null
 done
+
+if [ "$strict" = "1" ]; then
+	for capability in \
+		OPENLDAP_HAS_BACKEND_PASSWD \
+		OPENLDAP_HAS_BACKEND_DNSSRV \
+		OPENLDAP_HAS_BACKEND_ASYNCMETA \
+		OPENLDAP_HAS_SLAPD_CRYPT
+	do
+		eval "capability_value=\${$capability:-}"
+		if [ "$capability_value" != "1" ]; then
+			die "strict reference environment is missing $capability=1; rebuild it with LDAP_GO_OPENLDAP_REBUILD=1"
+		fi
+	done
+fi
 if ! command -v go >/dev/null 2>&1; then
 	die "go was not found"
 fi
@@ -127,6 +145,48 @@ lloadd_version=$(printf '%s\n' "$lloadd_version_output" | sed -n 's/.*lloadd \([
 if [ "$lloadd_version" != "$expected_version" ]; then
 	die "OpenLDAP lloadd version $expected_version is required, found ${lloadd_version:-unknown} at $lloadd"
 fi
+
+feature_output=$("$slapd" -VVV 2>&1) ||
+	die "cannot inspect OpenLDAP reference features at $slapd"
+for backend in passwd dnssrv asyncmeta; do
+	case "$feature_output" in
+		*"    $backend"*) ;;
+		*) die "OpenLDAP reference does not expose required backend: $backend" ;;
+	esac
+done
+crypt_probe=$($slappasswd -s ldap-go-strict-crypt-probe -h '{CRYPT}' 2>&1) ||
+	die "OpenLDAP reference does not support {CRYPT}: $crypt_probe"
+case "$crypt_probe" in
+	'{CRYPT}'?*) ;;
+	*) die "OpenLDAP reference returned an invalid {CRYPT} probe: $crypt_probe" ;;
+esac
+
+gssapi_auto=${LDAP_GO_OPENLDAP_GSSAPI_AUTO:-1}
+case "$gssapi_auto" in
+	0|1) ;;
+	*) die "LDAP_GO_OPENLDAP_GSSAPI_AUTO must be 0 or 1, got: $gssapi_auto" ;;
+esac
+gssapi_reference=0
+if [ "$gssapi_auto" = "1" ] && command -v krb5kdc >/dev/null 2>&1; then
+	for tool in kdb5_util kadmin.local kinit; do
+		if ! command -v "$tool" >/dev/null 2>&1; then
+			die "local MIT KDC was detected but required GSSAPI tool '$tool' is missing"
+		fi
+	done
+	if command -v pluginviewer >/dev/null 2>&1; then
+		plugin_viewer=pluginviewer
+	elif command -v saslpluginviewer >/dev/null 2>&1; then
+		plugin_viewer=saslpluginviewer
+	else
+		die "local MIT KDC was detected but no Cyrus SASL plugin viewer is installed"
+	fi
+	if ! "$plugin_viewer" -m GSSAPI >/dev/null 2>&1; then
+		die "local MIT KDC was detected but the Cyrus SASL GSSAPI plugin is unavailable"
+	fi
+	gssapi_reference=1
+fi
+LDAP_GO_OPENLDAP_GSSAPI_TESTS=$gssapi_reference
+export LDAP_GO_OPENLDAP_GSSAPI_TESTS
 
 find_sqlite_odbc_driver() {
 	if [ -n "${LDAP_GO_SQLITE_ODBC_DRIVER:-}" ]; then
@@ -167,6 +227,8 @@ if [ -n "${OPENLDAP_COMMIT:-}" ]; then
 		"$OPENLDAP_COMMIT" "${OPENLDAP_REFERENCE_VERIFIED:-unknown}"
 fi
 printf 'OpenLDAP schema:    %s\n' "$OPENLDAP_SCHEMA_DIR"
+printf 'Required features:  passwd dnssrv asyncmeta {CRYPT}\n'
+printf 'GSSAPI topology:    %s\n' "$(if [ "$gssapi_reference" = "1" ]; then printf enabled; else printf unavailable; fi)"
 if [ -n "$sqlite_odbc_driver" ]; then
 	printf 'SQL fixture:        SQLite ODBC (%s)\n' "$sqlite_odbc_driver"
 else
@@ -248,6 +310,10 @@ TestOpenLDAPReferenceTransactionControlCombinations
 TestOpenLDAPReferenceLanguageAttributeOptionProjection
 TestOpenLDAPMDBIndexSemanticSourceContract
 TestOpenLDAPReferenceApproximateMatching
+TestOpenLDAPReferencePasswdBackendDifferential
+TestOpenLDAPReferenceDNSSRVBackendDifferential
+TestOpenLDAPReferenceAsyncMetaBackendDifferential
+TestOpenLDAPReferenceCryptDifferential
 TestOpenLDAPReferenceDNMultiAVADifferential
 TestOpenLDAPReferenceDNIdentityModifyDNPrettyForm
 TestOpenLDAPReferenceLDIFDNIdentityCompatibility
@@ -295,6 +361,10 @@ TestOpenLDAPReferenceSQLBackendModifyDNAutocommitFailure'
 if [ "$strict" = "1" ]; then
 	mandatory_tests="$mandatory_tests
 $strict_mandatory_tests"
+fi
+if [ "$gssapi_reference" = "1" ]; then
+	mandatory_tests="$mandatory_tests
+TestOpenLDAPReferenceGSSAPIDifferential"
 fi
 
 missing_tests=

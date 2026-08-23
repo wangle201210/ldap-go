@@ -14,7 +14,12 @@ import (
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
-const equalityIndexFormatVersion = 1
+const equalityIndexFormatVersion = 2
+
+// EqualityIndexFormatVersion is persisted with each index configuration. It is
+// exported so database-specific schema adapters can request the current term
+// format without duplicating its version number.
+const EqualityIndexFormatVersion = equalityIndexFormatVersion
 
 const (
 	substringIndexNGramSize = 3
@@ -36,6 +41,8 @@ func equalityIndexPostingKindConfigured(definition EqualityIndexAttribute, kind 
 		return definition.SubstringFinal
 	case equalityIndexOrdering:
 		return definition.Ordering
+	case equalityIndexApproximate:
+		return definition.Approximate
 	default:
 		return false
 	}
@@ -59,6 +66,7 @@ type EqualityIndexAttribute struct {
 	SubstringFinal   bool   `json:"substringFinal,omitempty"`
 	Ordering         bool   `json:"ordering,omitempty"`
 	NoTags           bool   `json:"noTags,omitempty"`
+	NoSubtypes       bool   `json:"noSubtypes,omitempty"`
 }
 
 // EqualityIndexConfig is the storage-neutral representation of olcDbIndex eq
@@ -81,15 +89,9 @@ type EqualityIndexSchema interface {
 	ResolveOrderingIndexAttribute(description string) (canonical string, ordering bool, err error)
 	NormalizeOrderingIndexAssertion(description string, value []byte) ([]byte, error)
 	OrderingIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
-}
-
-// approximateEqualityIndexSchema is optional because approximate filters are
-// normally scan-only. Implementations may expose the OpenLDAP equality-index
-// fallback used only by attribute types that have no associated approximate
-// matching rule.
-type approximateEqualityIndexSchema interface {
-	ResolveApproximateIndexAttribute(description string) (canonical string, equalityFallback bool, err error)
-	NormalizeApproximateIndexAssertion(description string, value []byte) ([]byte, error)
+	ResolveApproximateIndexAttribute(description string) (canonical string, approximate, equalityFallback bool, err error)
+	ApproximateIndexAssertionTerms(description string, value []byte) (terms [][]byte, usable bool, err error)
+	ApproximateIndexValues(entry directory.Entry, canonicalAttribute string) ([][]byte, error)
 }
 
 type equalityIndexStorageReader interface {
@@ -119,6 +121,14 @@ type equalityIndexStorageWriter interface {
 		schema EqualityIndexSchema,
 	) error
 	rebuildEqualityIndexes(partition string, schema EqualityIndexSchema) error
+}
+
+type selectiveEqualityIndexStorageWriter interface {
+	rebuildSelectedEqualityIndexes(
+		partition string,
+		schema EqualityIndexSchema,
+		attributes []string,
+	) error
 }
 
 type equalityIndexCandidatePlanner interface {
@@ -165,6 +175,26 @@ func RebuildEqualityIndexes(
 	return indexed.rebuildEqualityIndexes(partition, schema)
 }
 
+// RebuildSelectedEqualityIndexes replaces postings for configured canonical
+// attributes while preserving every other attribute index. A stale or missing
+// persisted configuration triggers a complete rebuild so partial publication
+// can never make an incompatible index authoritative.
+func RebuildSelectedEqualityIndexes(
+	writer Writer,
+	partition string,
+	schema EqualityIndexSchema,
+	attributes []string,
+) error {
+	if len(attributes) == 0 {
+		return RebuildEqualityIndexes(writer, partition, schema)
+	}
+	indexed, ok := writer.(selectiveEqualityIndexStorageWriter)
+	if !ok {
+		return errors.New("writer does not support selective equality index rebuilds")
+	}
+	return indexed.rebuildSelectedEqualityIndexes(partition, schema, attributes)
+}
+
 // EnsureEqualityIndexes creates or refreshes one partition's indexes only when
 // the persisted configuration does not match the requested schema.
 func EnsureEqualityIndexes(
@@ -186,12 +216,9 @@ func EnsureEqualityIndexes(
 	}
 	if present {
 		current, err = normalizeEqualityIndexConfig(current)
-		if err != nil {
-			return err
+		if err == nil && equalityIndexConfigsEqual(current, want) {
+			return nil
 		}
-	}
-	if present && equalityIndexConfigsEqual(current, want) {
-		return nil
 	}
 	return indexed.rebuildEqualityIndexes(partition, schema)
 }
@@ -259,7 +286,7 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	}
 	stored, err = normalizeEqualityIndexConfig(stored)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if !equalityIndexConfigsEqual(stored, want) {
 		return nil, false, nil
@@ -310,30 +337,45 @@ func planEqualityIndexFilter(
 		)
 		return stringSet(keys), true, err
 	case directory.FilterApprox:
-		approximate, ok := schema.(approximateEqualityIndexSchema)
-		if !ok {
-			return nil, false, nil
-		}
-		attribute, equalityFallback, err := approximate.ResolveApproximateIndexAttribute(
+		attribute, approximate, equalityFallback, err := schema.ResolveApproximateIndexAttribute(
 			filter.Attribute,
 		)
-		if err != nil || !equalityFallback {
+		if err != nil || !approximate && !equalityFallback {
 			return nil, false, err
 		}
-		normalized, err := approximate.NormalizeApproximateIndexAssertion(
-			filter.Attribute,
-			filter.Assertion,
-		)
-		if err != nil {
+		if equalityFallback {
+			normalized, err := schema.NormalizeEqualityIndexAssertion(filter.Attribute, filter.Assertion)
+			if err != nil {
+				return nil, false, err
+			}
+			keys, err := reader.equalityIndexPostings(
+				partition, attribute, equalityIndexValue, normalized,
+			)
+			return stringSet(keys), true, err
+		}
+		terms, usable, err := schema.ApproximateIndexAssertionTerms(filter.Attribute, filter.Assertion)
+		if err != nil || !usable {
 			return nil, false, err
 		}
-		keys, err := reader.equalityIndexPostings(
-			partition,
-			attribute,
-			equalityIndexValue,
-			normalized,
-		)
-		return stringSet(keys), true, err
+		if len(terms) == 0 {
+			return map[string]struct{}{}, true, nil
+		}
+		var result map[string]struct{}
+		for _, term := range uniqueIndexValues(terms) {
+			keys, err := reader.equalityIndexPostings(
+				partition, attribute, equalityIndexApproximate, term,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			candidate := stringSet(keys)
+			if result == nil {
+				result = candidate
+			} else {
+				intersectStringSets(result, candidate)
+			}
+		}
+		return result, true, nil
 	case directory.FilterPresent:
 		attribute, _, presence, err := schema.ResolveEqualityIndexAttribute(filter.Attribute)
 		if err != nil || !presence {
@@ -573,7 +615,7 @@ func normalizeEqualityIndexConfig(
 			(hasSubstring && attribute.SubstringRule == "") ||
 			(attribute.Ordering && attribute.OrderingRule == "") ||
 			(!attribute.Equality && !attribute.Presence && !attribute.Approximate &&
-				!hasSubstring && !attribute.Ordering && !attribute.NoTags) {
+				!hasSubstring && !attribute.Ordering && !attribute.NoTags && !attribute.NoSubtypes) {
 			return EqualityIndexConfig{}, errors.New(
 				"index attribute, enabled mode, and matching rules are required",
 			)
@@ -608,6 +650,7 @@ func normalizeEqualityIndexConfig(
 			attribute.SubstringFinal = attribute.SubstringFinal || existing.SubstringFinal
 			attribute.Ordering = attribute.Ordering || existing.Ordering
 			attribute.NoTags = attribute.NoTags || existing.NoTags
+			attribute.NoSubtypes = attribute.NoSubtypes || existing.NoSubtypes
 		}
 		byAttribute[attribute.Attribute] = attribute
 	}
@@ -619,6 +662,46 @@ func normalizeEqualityIndexConfig(
 		return config.Attributes[left].Attribute < config.Attributes[right].Attribute
 	})
 	return config, nil
+}
+
+func selectedEqualityIndexConfig(
+	config EqualityIndexConfig,
+	attributes []string,
+) (EqualityIndexConfig, error) {
+	config, err := normalizeEqualityIndexConfig(config)
+	if err != nil {
+		return EqualityIndexConfig{}, err
+	}
+	selected := EqualityIndexConfig{Version: config.Version}
+	seen := make(map[string]struct{}, len(attributes))
+	for _, raw := range attributes {
+		attribute := strings.ToLower(strings.TrimSpace(raw))
+		if attribute == "" {
+			return EqualityIndexConfig{}, errors.New("selected index attribute must not be empty")
+		}
+		if _, duplicate := seen[attribute]; duplicate {
+			continue
+		}
+		definition, found := equalityIndexAttributeDefinition(config, attribute)
+		if !found {
+			return EqualityIndexConfig{}, fmt.Errorf("no index configured for attribute %q", raw)
+		}
+		seen[attribute] = struct{}{}
+		selected.Attributes = append(selected.Attributes, definition)
+	}
+	if len(selected.Attributes) == 0 {
+		return EqualityIndexConfig{}, errors.New("at least one index attribute is required")
+	}
+	sort.Slice(selected.Attributes, func(left, right int) bool {
+		return selected.Attributes[left].Attribute < selected.Attributes[right].Attribute
+	})
+	return selected, nil
+}
+
+func equalityIndexAttributePrefix(partition, attribute string) []byte {
+	result := []byte{equalityIndexFormatVersion}
+	result = appendLengthPrefixed(result, []byte(partition))
+	return appendLengthPrefixed(result, []byte(attribute))
 }
 
 func rulesConflict(left, right string) bool {
@@ -667,10 +750,11 @@ func equalityIndexAttributeDefinition(
 }
 
 type equalityIndexAttributeTerms struct {
-	present   bool
-	equality  [][]byte
-	substring [][]byte
-	ordering  [][]byte
+	present     bool
+	equality    [][]byte
+	approximate [][]byte
+	substring   [][]byte
+	ordering    [][]byte
 }
 
 func equalityIndexEntryTerms(
@@ -688,6 +772,14 @@ func equalityIndexEntryTerms(
 			}
 			result.present = len(values) > 0
 			result.equality = uniqueIndexValues(values)
+		}
+		if attribute.Approximate {
+			values, err := schema.ApproximateIndexValues(entry, attribute.Attribute)
+			if err != nil {
+				return nil, fmt.Errorf("normalize entry %q approximate index %s: %w", entry.DN, attribute.Attribute, err)
+			}
+			result.present = result.present || len(values) > 0
+			result.approximate = uniqueIndexValues(values)
 		}
 		if attribute.SubstringInitial || attribute.SubstringAny || attribute.SubstringFinal {
 			values, err := schema.SubstringIndexValues(entry, attribute.Attribute)
@@ -739,6 +831,11 @@ func equalityIndexTermsForAttribute(
 	if definition.Equality {
 		for _, value := range values.equality {
 			result = append(result, equalityIndexTerm{kind: equalityIndexValue, value: value})
+		}
+	}
+	if definition.Approximate {
+		for _, value := range values.approximate {
+			result = append(result, equalityIndexTerm{kind: equalityIndexApproximate, value: value})
 		}
 	}
 	if definition.SubstringInitial || definition.SubstringAny || definition.SubstringFinal {
@@ -812,6 +909,7 @@ const (
 	equalityIndexSubstringFinal    byte = 4
 	equalityIndexSubstringOverflow byte = 5
 	equalityIndexOrdering          byte = 6
+	equalityIndexApproximate       byte = 7
 )
 
 func equalityIndexPostingPrefix(
@@ -876,7 +974,8 @@ func decodeEqualityIndexPostingKey(
 	switch kind {
 	case equalityIndexPresence, equalityIndexSubstringOverflow:
 	case equalityIndexValue, equalityIndexSubstringInitial,
-		equalityIndexSubstringAny, equalityIndexSubstringFinal:
+		equalityIndexSubstringAny, equalityIndexSubstringFinal,
+		equalityIndexApproximate:
 		value, position, err = readLengthPrefixed(key, position)
 		if err != nil {
 			return "", "", 0, nil, "", err

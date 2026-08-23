@@ -32,8 +32,8 @@ const (
 
 var ErrPasswordHashUnavailable = errors.New("scheme provided no hash function")
 
-// VerifyPassword accepts portable OpenLDAP digest schemes and ldap-go's SM3
-// extensions without relying on platform-specific crypt(3).
+// VerifyPassword accepts portable OpenLDAP digest schemes, bounded pure-Go
+// crypt(3) formats, and ldap-go's SM3 extensions.
 func VerifyPassword(stored, supplied []byte) bool {
 	if len(stored) == 0 || len(supplied) == 0 {
 		return false
@@ -111,6 +111,8 @@ func VerifyPassword(stored, supplied []byte) bool {
 		return verifyOpenLDAPPBKDF2(scheme, payload, supplied)
 	case "APR1", "BSDMD5":
 		return verifyOpenLDAPPHK(scheme, payload, supplied)
+	case "CRYPT":
+		return verifyOpenLDAPCrypt(payload, supplied)
 	case "NS-MTA-MD5":
 		return verifyOpenLDAPNetscape(payload, supplied)
 	default:
@@ -166,6 +168,7 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		OpenLDAPPBKDF2SHA512HashScheme,
 		OpenLDAPAPR1HashScheme,
 		OpenLDAPBSDMD5HashScheme,
+		OpenLDAPCryptHashScheme,
 		OpenLDAPNetscapeMTAHashScheme,
 		OpenLDAPRADIUSHashScheme,
 		SMPBKDF2HashScheme:
@@ -183,6 +186,22 @@ func IsKnownPasswordScheme(value string) bool {
 }
 
 func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, error) {
+	return HashPasswordWithCryptSaltFormat(
+		password,
+		scheme,
+		DefaultOpenLDAPCryptSaltFormat,
+		random,
+	)
+}
+
+// HashPasswordWithCryptSaltFormat hashes a password and applies saltFormat
+// only when the selected scheme is {CRYPT}.
+func HashPasswordWithCryptSaltFormat(
+	password []byte,
+	scheme,
+	saltFormat string,
+	random io.Reader,
+) ([]byte, error) {
 	if len(password) == 0 {
 		if normalized, ok := openLDAPVerifyOnlyHashScheme(scheme); ok {
 			return nil, fmt.Errorf("%s: %w", normalized, ErrPasswordHashUnavailable)
@@ -317,6 +336,12 @@ func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, err
 		)
 	case OpenLDAPAPR1HashScheme, OpenLDAPBSDMD5HashScheme:
 		return hashPasswordOpenLDAPPHK(password, normalized, random)
+	case OpenLDAPCryptHashScheme:
+		return HashPasswordOpenLDAPCrypt(
+			password,
+			saltFormat,
+			random,
+		)
 	case OpenLDAPNetscapeMTAHashScheme, OpenLDAPRADIUSHashScheme:
 		return nil, fmt.Errorf("%s: %w", normalized, ErrPasswordHashUnavailable)
 	default:

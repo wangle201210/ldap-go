@@ -139,6 +139,7 @@ set -- \
 	"--prefix=$effective_prefix_dir" \
 	--enable-slapd=yes \
 	--enable-balancer=yes \
+	--enable-crypt=yes \
 	--enable-shared=yes \
 	--disable-static \
 	--with-tls=openssl
@@ -152,7 +153,7 @@ esac
 
 missing_features=
 enabled_backends=
-for feature in ldap meta null relay mdb sock sql; do
+for feature in asyncmeta dnssrv ldap meta null passwd relay mdb sock sql; do
 	case "$configure_help" in
 		*--enable-$feature*)
 			set -- "$@" "--enable-$feature=yes"
@@ -459,6 +460,7 @@ for required_path in \
 	"$effective_build_dir/servers/lloadd/lloadd" \
 	"$effective_build_dir/servers/slapd/slapadd" \
 	"$effective_build_dir/servers/slapd/slapcat" \
+	"$effective_build_dir/servers/slapd/slappasswd" \
 	"$effective_build_dir/servers/slapd/slaptest" \
 	"$effective_build_dir/clients/tools/ldapsearch" \
 	"$effective_build_dir/clients/tools/ldapmodify" \
@@ -496,6 +498,7 @@ do
 		die "cannot create slap tool link: $tool_pathname"
 done
 slapadd=$slap_tool_dir/slapadd
+slappasswd=$slap_tool_dir/slappasswd
 
 openldap_library_path=$artifact_build_dir/libraries/libldap/.libs:$artifact_build_dir/libraries/liblber/.libs
 runtime_library_path=$openldap_library_path
@@ -536,6 +539,18 @@ for feature in $enabled_overlays; do
 	esac
 done
 
+crypt_probe_password=ldap-go-reference-crypt-probe
+if ! crypt_probe_output=$(DYLD_LIBRARY_PATH="$openldap_library_path${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+	DYLD_FALLBACK_LIBRARY_PATH="$dyld_fallback_path" \
+	LD_LIBRARY_PATH="$runtime_library_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+	"$slappasswd" -s "$crypt_probe_password" -h '{CRYPT}' 2>&1); then
+	die "the built slappasswd does not support {CRYPT}: $crypt_probe_output"
+fi
+case "$crypt_probe_output" in
+	'{CRYPT}'?*) ;;
+	*) die "the built slappasswd returned an invalid {CRYPT} probe: $crypt_probe_output" ;;
+esac
+
 version=$(printf '%s\n' "$feature_output" | sed -n 's/.*slapd \([^[:space:]]*\).*/\1/p' | head -n 1)
 if [ -z "$version" ]; then
 	die "could not determine the built slapd version"
@@ -564,7 +579,12 @@ tool_path=$slap_tool_dir:$artifact_build_dir/servers/slapd:$artifact_build_dir/s
 	write_export OPENLDAP_LIBTOOL_PREFIX "$libtool_prefix"
 	write_export OPENLDAP_SLAPD "$slapd"
 	write_export OPENLDAP_SLAPADD "$slapadd"
+	write_export OPENLDAP_SLAPPASSWD "$slappasswd"
 	write_export OPENLDAP_LLOADD "$lloadd"
+	write_export OPENLDAP_HAS_BACKEND_PASSWD "1"
+	write_export OPENLDAP_HAS_BACKEND_DNSSRV "1"
+	write_export OPENLDAP_HAS_BACKEND_ASYNCMETA "1"
+	write_export OPENLDAP_HAS_SLAPD_CRYPT "1"
 	write_export OPENLDAP_SCHEMA_DIR "$schema_dir"
 	write_export OPENLDAP_ACTUAL_VERSION "$version"
 	write_export OPENLDAP_EXPECTED_VERSION "$expected_runtime_version"

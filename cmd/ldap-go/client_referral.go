@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -291,6 +292,9 @@ func (options *ldapClientOptions) connectLDAPReferral(
 	if err != nil {
 		return nil, err
 	}
+	if options.observeSearch {
+		return options.connectObservedLDAPReferral(target, parsed, tlsConfig)
+	}
 	dialOptions := []ldap.DialOpt{
 		ldap.DialWithDialer(&net.Dialer{Timeout: options.timeout}),
 	}
@@ -331,6 +335,38 @@ func (options *ldapClientOptions) connectLDAPReferral(
 	if err := connection.UnauthenticatedBind(""); err != nil {
 		return closeOnError(fmt.Errorf("anonymous bind to referral %s: %w", target.endpoint, err))
 	}
+	return connection, nil
+}
+
+func (options *ldapClientOptions) connectObservedLDAPReferral(
+	target ldapReferralTarget,
+	parsed *url.URL,
+	tlsConfig *tls.Config,
+) (*ldap.Conn, error) {
+	dial := func(startTLS bool) (*ldap.Conn, *ldapSearchResponseObserver, error) {
+		return dialObservedLDAPConnection(
+			target.endpoint,
+			parsed.Scheme == "ldaps",
+			startTLS,
+			tlsConfig,
+			options.timeout,
+		)
+	}
+	connection, observer, err := dial(target.startTLS)
+	if err != nil && target.startTLS && !target.startTLSRequired {
+		connection, observer, err = dial(false)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connect to referral %s: %w", target.endpoint, err)
+	}
+	closeOnError := func(err error) (*ldap.Conn, error) {
+		_ = connection.Close()
+		return nil, err
+	}
+	if err := connection.UnauthenticatedBind(""); err != nil {
+		return closeOnError(fmt.Errorf("anonymous bind to referral %s: %w", target.endpoint, err))
+	}
+	options.addReferralSearchObserver(observer)
 	return connection, nil
 }
 

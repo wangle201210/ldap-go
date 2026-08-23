@@ -116,6 +116,17 @@ func (server *Server) handleStartTLS(
 			nil,
 		))
 	}
+	if state.saslSSF > 0 {
+		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultOperationsError,
+				"cannot start TLS after a SASL security layer is installed",
+			),
+			nil,
+		))
+	}
 	if !state.runtime.disallows.tlsToAnonymous && state.boundDN != "" {
 		state.boundDN = ""
 		state.authMechanism = ""

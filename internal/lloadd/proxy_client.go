@@ -30,7 +30,7 @@ const (
 var errOperationFinished = errors.New("lloadd operation already finished")
 
 func (client *clientConnection) serve(ctx context.Context) {
-	defer client.close()
+	defer client.finishServing()
 	transport := client.currentConnection()
 	go func() {
 		select {
@@ -43,16 +43,23 @@ func (client *clientConnection) serve(ctx context.Context) {
 		if !client.waitForReadCapacity(ctx) {
 			return
 		}
+		if err := client.armIdleReadDeadline(); err != nil {
+			return
+		}
 		frame, err := client.proxy.codec.Read(
 			client.currentConnection(),
 			client.proxy.config.ClientMaxMessageSize,
 		)
 		if err != nil {
+			if isTimeoutError(err) && client.idleTimeoutEnabled() {
+				_ = client.sendDisconnectNotice("connection idle timeout")
+			}
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
 				client.proxy.config.Logger.Debug("closing malformed lloadd client", "error", err)
 			}
 			return
 		}
+		client.refreshTLSSecurityStrength()
 		if !client.handleFrame(ctx, frame) {
 			return
 		}
@@ -64,17 +71,24 @@ func (client *clientConnection) handleFrame(ctx context.Context, frame proxyFram
 		return false
 	}
 	client.mu.Lock()
+	if client.draining {
+		client.mu.Unlock()
+		return false
+	}
 	_, duplicateMessageID := client.ops[frame.MessageID]
 	client.mu.Unlock()
 	if duplicateMessageID {
 		client.close()
 		return false
 	}
+	client.recordMonitorReceived(frame.ProtocolTag)
 	switch frame.ProtocolTag {
 	case ldapwire.ApplicationUnbindRequest:
+		client.recordMonitorCompleted(frame.ProtocolTag)
 		return false
 	case ldapwire.ApplicationAbandonRequest:
 		client.handleAbandon(frame)
+		client.recordMonitorCompleted(frame.ProtocolTag)
 		return true
 	case ldapwire.ApplicationBindRequest:
 		client.handleBind(ctx, frame)
@@ -88,12 +102,21 @@ func (client *clientConnection) handleFrame(ctx context.Context, frame proxyFram
 	binding := client.binding
 	client.mu.Unlock()
 	if binding {
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
 			ldapwire.ResultProtocolError,
 			"bind in progress",
 		)
+		return true
+	}
+	if handled, written := client.handleMonitorSearch(frame); handled {
+		if written {
+			client.recordMonitorCompleted(frame.ProtocolTag)
+		} else {
+			client.recordMonitorFailed(frame.ProtocolTag)
+		}
 		return true
 	}
 	if frame.ProtocolTag == ldapwire.ApplicationExtendedRequest {
@@ -115,6 +138,7 @@ func (client *clientConnection) handleStartTLS(
 	switch {
 	case client.protocolVersion != 3:
 		client.mu.Unlock()
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
@@ -124,6 +148,7 @@ func (client *clientConnection) handleStartTLS(
 		return true
 	case frame.HasExtendedValue:
 		client.mu.Unlock()
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
@@ -133,6 +158,7 @@ func (client *clientConnection) handleStartTLS(
 		return true
 	case client.tlsActive || client.tlsUpgrading:
 		client.mu.Unlock()
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
@@ -142,6 +168,7 @@ func (client *clientConnection) handleStartTLS(
 		return true
 	case client.binding || len(client.ops) != 0:
 		client.mu.Unlock()
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
@@ -151,6 +178,7 @@ func (client *clientConnection) handleStartTLS(
 		return true
 	case client.proxy.config.ClientTLS == nil:
 		client.mu.Unlock()
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(
 			frame.MessageID,
 			frame.ProtocolTag,
@@ -170,6 +198,7 @@ func (client *clientConnection) handleStartTLS(
 		"",
 	)
 	if err != nil {
+		client.recordMonitorFailed(frame.ProtocolTag)
 		client.clearTLSUpgrade()
 		return false
 	}
@@ -197,17 +226,19 @@ func (client *clientConnection) handleStartTLS(
 	}
 	if err == nil {
 		client.mu.Lock()
-		if client.closed {
+		if client.closed || client.draining {
 			err = net.ErrClosed
 		} else {
 			client.conn = secured
 			client.tlsActive = true
+			client.tlsSSF = tlsCipherSecurityStrength(secured.ConnectionState())
 			client.tlsUpgrading = false
 		}
 		client.mu.Unlock()
 	}
 	client.writeMu.Unlock()
 	if err != nil {
+		client.recordMonitorFailed(frame.ProtocolTag)
 		client.clearTLSUpgrade()
 		if connection != nil {
 			_ = connection.Close()
@@ -215,6 +246,7 @@ func (client *clientConnection) handleStartTLS(
 		client.proxy.config.Logger.Debug("client StartTLS handshake failed", "error", err)
 		return false
 	}
+	client.recordMonitorCompleted(frame.ProtocolTag)
 	return true
 }
 
@@ -305,11 +337,14 @@ func (client *clientConnection) resetForBind(reuseBindPin bool) {
 	}
 	client.binding = false
 	client.authzID = nil
+	client.authcID = nil
+	client.saslMech = ""
 	client.restriction = RuntimeRestrictionNone
 	client.backendAffinity = nil
 	client.upstreamAffinity = nil
 	client.writeInflight = 0
 	client.writeCompletedAt = time.Time{}
+	client.clearMonitorSnapshotsLocked()
 	client.mu.Unlock()
 	for _, operation := range operations {
 		client.abandonOperation(operation, nil, true)
@@ -327,6 +362,7 @@ func (client *clientConnection) route(ctx context.Context, frame proxyFrame, bin
 	if !bind {
 		restriction = client.requestRestriction(frame)
 		if restriction == RuntimeRestrictionReject {
+			client.recordMonitorRejected(frame.ProtocolTag)
 			client.sendResult(
 				frame.MessageID,
 				frame.ProtocolTag,
@@ -344,6 +380,9 @@ func (client *clientConnection) route(ctx context.Context, frame proxyFrame, bin
 		restriction:       restriction,
 		bind:              bind,
 		bindSASL:          frame.BindSASL,
+		bindAuthcID:       frame.BindAuthcID,
+		bindAuthzID:       frame.BindAuthzID,
+		bindSASLMechanism: frame.BindMechanism,
 		verifyCredentials: bind && client.proxy.config.VerifyCredentials,
 		bindDN:            frame.BindDN,
 		started:           time.Now(),
@@ -358,10 +397,12 @@ func (client *clientConnection) route(ctx context.Context, frame proxyFrame, bin
 			client.close()
 			return
 		}
+		client.recordMonitorRejected(frame.ProtocolTag)
 		client.sendResult(frame.MessageID, frame.ProtocolTag, code, diagnostic)
 		client.clearBindAttempt(operation)
 		return
 	}
+	client.clearIdleReadDeadline()
 
 	var upstream *upstreamConnection
 	selection := reserveUnavailable
@@ -497,6 +538,7 @@ func (operation *proxyOperation) writeRequest(encoded []byte) error {
 		return err
 	}
 	operation.requestSent = true
+	operation.recordMonitorForwarded()
 	return nil
 }
 
@@ -544,7 +586,7 @@ func (client *clientConnection) register(operation *proxyOperation) (
 ) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.closed {
+	if client.closed || client.draining {
 		return ldapwire.ResultUnavailable, "client connection is closed", false, false
 	}
 	if _, exists := client.ops[operation.clientID]; exists {
@@ -859,6 +901,7 @@ func (client *clientConnection) close() {
 		owned = client.bindPin
 	}
 	connection := client.conn
+	client.clearMonitorSnapshotsLocked()
 	client.mu.Unlock()
 	if connection != nil {
 		_ = connection.Close()
@@ -871,7 +914,97 @@ func (client *clientConnection) close() {
 	}
 	client.proxy.mu.Lock()
 	delete(client.proxy.clients, client)
+	client.proxy.signalClientChangeLocked()
 	client.proxy.mu.Unlock()
+}
+
+func (client *clientConnection) beginDrain() {
+	client.mu.Lock()
+	if client.closed || client.draining {
+		client.mu.Unlock()
+		return
+	}
+	client.draining = true
+	idle := len(client.ops) == 0 && !client.binding && !client.tlsUpgrading
+	connection := client.conn
+	client.signalReadCapacityLocked()
+	client.mu.Unlock()
+	_ = client.sendDisconnectNotice("connection closing")
+	if idle {
+		client.close()
+		return
+	}
+	interruptConnectionRead(connection)
+}
+
+func (client *clientConnection) finishServing() {
+	client.mu.Lock()
+	preserveWrites := client.draining && !client.closed && len(client.ops) != 0
+	client.mu.Unlock()
+	if !preserveWrites {
+		client.close()
+	}
+}
+
+func interruptConnectionRead(connection net.Conn) {
+	if connection == nil {
+		return
+	}
+	if closer, ok := connection.(interface{ CloseRead() error }); ok {
+		_ = closer.CloseRead()
+		return
+	}
+	_ = connection.SetReadDeadline(time.Now())
+}
+
+func (client *clientConnection) armIdleReadDeadline() error {
+	timeout := client.proxy.config.ClientIdleTimeout
+	connection := client.currentConnection()
+	if connection == nil {
+		return net.ErrClosed
+	}
+	client.mu.Lock()
+	idle := !client.closed && len(client.ops) == 0 && !client.binding && !client.tlsUpgrading
+	client.mu.Unlock()
+	if timeout <= 0 || !idle {
+		return connection.SetReadDeadline(time.Time{})
+	}
+	return connection.SetReadDeadline(time.Now().Add(timeout))
+}
+
+func (client *clientConnection) clearIdleReadDeadline() {
+	connection := client.currentConnection()
+	if connection != nil {
+		_ = connection.SetReadDeadline(time.Time{})
+	}
+}
+
+func (client *clientConnection) idleTimeoutEnabled() bool {
+	if client.proxy.config.ClientIdleTimeout <= 0 {
+		return false
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return !client.closed && len(client.ops) == 0 && !client.binding && !client.tlsUpgrading
+}
+
+func isTimeoutError(err error) bool {
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+func (client *clientConnection) sendDisconnectNotice(diagnostic string) error {
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	connection := client.currentConnection()
+	if connection == nil {
+		return net.ErrClosed
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	return writeConnection(connection, ldapwire.EncodeNoticeOfDisconnection(ldapwire.Result{
+		Code:              ldapwire.ResultUnavailable,
+		DiagnosticMessage: diagnostic,
+	}), client.proxy.config.IOTimeout)
 }
 
 func (proxy *Proxy) selectUpstream(
@@ -996,7 +1129,7 @@ func (upstream *upstreamConnection) attach(
 	client := operation.client
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.closed {
+	if client.closed || client.draining {
 		return false
 	}
 	if upstream.closed || bind && !operation.verifyCredentials && !upstream.bind ||
@@ -1175,7 +1308,9 @@ func (operation *proxyOperation) finish(response bool) bool {
 	upstream := operation.upstream
 	lease := operation.lease
 	cancelTarget := operation.cancelTarget
+	forwarded := operation.requestSent && upstream != nil
 	operation.mu.Unlock()
+	operation.recordMonitorFinished(forwarded, response)
 	if upstream != nil {
 		upstream.mu.Lock()
 		if upstream.pending[operation.upstreamID] == operation {
@@ -1202,7 +1337,14 @@ func (operation *proxyOperation) finish(response bool) bool {
 			client.writeCompletedAt = time.Now()
 		}
 	}
+	closeAfterDrain := client.draining && len(client.ops) == 0
 	client.mu.Unlock()
+	if !closeAfterDrain {
+		_ = client.armIdleReadDeadline()
+	}
+	if closeAfterDrain {
+		client.close()
+	}
 	_ = response
 	return true
 }

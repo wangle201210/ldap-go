@@ -477,7 +477,8 @@ func ldapBackendHasReusableSimpleIdentity(
 			state.metaBindDatabaseKey == database.configDNKey &&
 			state.metaBindTargetKey == database.metaTargetKey
 	}
-	return credentialDatabase.ldapBackend != nil
+	return credentialDatabase.ldapBackend != nil ||
+		credentialDatabase.dnssrvBackend != nil
 }
 
 func (server *Server) executeLDAPBackendTarget(

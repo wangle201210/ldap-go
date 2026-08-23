@@ -5,34 +5,44 @@ import (
 	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // DIGEST-MD5 is required for OpenLDAP CLI interoperability.
 	"crypto/rand"
+	"crypto/rc4" //nolint:gosec // RFC 2831 requires RC4 for DIGEST-MD5 auth-conf interoperability.
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/saslkrb5"
 	"github.com/xdg-go/scram"
 	"github.com/xdg-go/stringprep"
 )
 
 const (
-	ldapClientSASLMaxChallengeSize = 64 << 10
-	ldapClientCRAMMaxChallengeSize = 1024
-	ldapClientSCRAMMinIterations   = 4096
-	ldapClientSCRAMMaxIterations   = 10_000_000
-	ldapClientSCRAMMaxSaltSize     = 1024
+	ldapClientSASLMaxChallengeSize  = 64 << 10
+	ldapClientCRAMMaxChallengeSize  = 1024
+	ldapClientSCRAMMinIterations    = 4096
+	ldapClientSCRAMMaxIterations    = 10_000_000
+	ldapClientSCRAMMaxSaltSize      = 1024
+	ldapClientDigestMD5MaxBuffer    = 65536
+	ldapClientDigestMD5MaxRFCBuffer = 0xFFFFFF
+	ldapClientDigestMD5Overhead     = 4 + 10 + 2 + 4
 )
 
 type ldapClientSASLResult struct {
@@ -41,6 +51,705 @@ type ldapClientSASLResult struct {
 	serverCredentials    []byte
 	hasServerCredentials bool
 	packet               *ber.Packet
+}
+
+const (
+	ldapClientDigestMD5SigningClientServer = "Digest session key to client-to-server signing key magic constant"
+	ldapClientDigestMD5SigningServerClient = "Digest session key to server-to-client signing key magic constant"
+	ldapClientDigestMD5SealingClientServer = "Digest H(A1) to client-to-server sealing key magic constant"
+	ldapClientDigestMD5SealingServerClient = "Digest H(A1) to server-to-client sealing key magic constant"
+	ldapClientDigestMD5MessageType         = 1
+	ldapClientDigestMD5MACSize             = 10
+)
+
+const (
+	ldapClientDigestMD5RC440Cipher = "rc4-40"
+	ldapClientDigestMD5RC456Cipher = "rc4-56"
+	ldapClientDigestMD5RC4Cipher   = "rc4"
+)
+
+type ldapClientDigestMD5Cipher struct {
+	name      string
+	ssf       uint32
+	keyPrefix int
+}
+
+func ldapClientDigestMD5Ciphers() []ldapClientDigestMD5Cipher {
+	return []ldapClientDigestMD5Cipher{
+		{name: ldapClientDigestMD5RC440Cipher, ssf: 40, keyPrefix: 5},
+		{name: ldapClientDigestMD5RC456Cipher, ssf: 56, keyPrefix: 7},
+		{name: ldapClientDigestMD5RC4Cipher, ssf: 128, keyPrefix: md5.Size},
+	}
+}
+
+var (
+	errLDAPClientDigestMD5Integrity = errors.New("DIGEST-MD5 integrity check failed")
+	errLDAPClientDigestMD5Sequence  = errors.New("DIGEST-MD5 sequence number is invalid")
+	errLDAPClientDigestMD5Frame     = errors.New("DIGEST-MD5 security frame is invalid")
+)
+
+type ldapClientSASLSwitchConnection struct {
+	mu         sync.RWMutex
+	connection net.Conn
+}
+
+func (connection *ldapClientSASLSwitchConnection) Read(value []byte) (int, error) {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.Read(value)
+}
+
+func (connection *ldapClientSASLSwitchConnection) Write(value []byte) (int, error) {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.Write(value)
+}
+
+func (connection *ldapClientSASLSwitchConnection) Close() error {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.Close()
+}
+
+func (connection *ldapClientSASLSwitchConnection) LocalAddr() net.Addr {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.LocalAddr()
+}
+
+func (connection *ldapClientSASLSwitchConnection) RemoteAddr() net.Addr {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.RemoteAddr()
+}
+
+func (connection *ldapClientSASLSwitchConnection) SetDeadline(value time.Time) error {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.SetDeadline(value)
+}
+
+func (connection *ldapClientSASLSwitchConnection) SetReadDeadline(value time.Time) error {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.SetReadDeadline(value)
+}
+
+func (connection *ldapClientSASLSwitchConnection) SetWriteDeadline(value time.Time) error {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	return connection.connection.SetWriteDeadline(value)
+}
+
+func (connection *ldapClientSASLSwitchConnection) gssapiChannelBinding() ([]byte, error) {
+	connection.mu.RLock()
+	defer connection.mu.RUnlock()
+	secured, ok := connection.connection.(interface {
+		ConnectionState() tls.ConnectionState
+	})
+	if !ok {
+		return nil, nil
+	}
+	state := secured.ConnectionState()
+	if !state.HandshakeComplete || len(state.PeerCertificates) == 0 {
+		return nil, errors.New("TLS server certificate is unavailable for GSSAPI channel binding")
+	}
+	return saslkrb5.TLSServerEndpoint(state.PeerCertificates[0])
+}
+
+func (connection *ldapClientSASLSwitchConnection) installDigestMD5Security(
+	qop string,
+	cipher ldapClientDigestMD5Cipher,
+	sessionKey []byte,
+	peerMaxBuffer,
+	localMaxBuffer uint32,
+) error {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	transport := connection.connection
+	switch previous := transport.(type) {
+	case *ldapClientDigestMD5IntegrityConnection:
+		transport = previous.Conn
+	case *ldapClientDigestMD5PrivacyConnection:
+		transport = previous.Conn
+	}
+	var layer net.Conn
+	var err error
+	switch qop {
+	case "auth-int":
+		layer, err = newLDAPClientDigestMD5IntegrityConnection(
+			transport,
+			sessionKey,
+			peerMaxBuffer,
+			localMaxBuffer,
+		)
+	case "auth-conf":
+		layer, err = newLDAPClientDigestMD5PrivacyConnection(
+			transport,
+			sessionKey,
+			cipher,
+			peerMaxBuffer,
+			localMaxBuffer,
+		)
+	default:
+		return fmt.Errorf("DIGEST-MD5 security qop %q is invalid", qop)
+	}
+	if err != nil {
+		return err
+	}
+	connection.connection = layer
+	return nil
+}
+
+func (connection *ldapClientSASLSwitchConnection) installGSSAPISecurity(
+	key types.EncryptionKey,
+	confidential bool,
+	state saslkrb5.SecurityState,
+	peerMaxBuffer,
+	localMaxBuffer uint32,
+) error {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	var layer net.Conn
+	var err error
+	if confidential {
+		layer, err = saslkrb5.NewConfidentialityConnection(
+			connection.connection,
+			key,
+			false,
+			state,
+			peerMaxBuffer,
+			localMaxBuffer,
+		)
+	} else {
+		layer, err = saslkrb5.NewIntegrityConnection(
+			connection.connection,
+			key,
+			false,
+			state,
+			peerMaxBuffer,
+			localMaxBuffer,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	connection.connection = layer
+	return nil
+}
+
+type ldapClientDigestMD5PrivacyConnection struct {
+	net.Conn
+
+	sendKey    [md5.Size]byte
+	receiveKey [md5.Size]byte
+	sendCipher *rc4.Cipher
+	recvCipher *rc4.Cipher
+	maxSend    uint32
+	maxReceive uint32
+
+	writeMu     sync.Mutex
+	readMu      sync.Mutex
+	sendSeq     uint64
+	receiveSeq  uint64
+	readPending []byte
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+func newLDAPClientDigestMD5PrivacyConnection(
+	connection net.Conn,
+	sessionKey []byte,
+	cipher ldapClientDigestMD5Cipher,
+	peerMaxBuffer,
+	localMaxBuffer uint32,
+) (*ldapClientDigestMD5PrivacyConnection, error) {
+	if connection == nil {
+		return nil, errors.New("DIGEST-MD5 security layer has no transport")
+	}
+	if len(sessionKey) != md5.Size {
+		return nil, errors.New("DIGEST-MD5 session key has an invalid size")
+	}
+	knownCipher, ok := ldapClientDigestMD5CipherByName(cipher.name)
+	if !ok || knownCipher != cipher {
+		return nil, errors.New("DIGEST-MD5 confidentiality cipher is not supported")
+	}
+	if peerMaxBuffer == 0 {
+		peerMaxBuffer = ldapClientDigestMD5MaxBuffer
+	}
+	if localMaxBuffer == 0 {
+		localMaxBuffer = ldapClientDigestMD5MaxBuffer
+	}
+	const cyrusPrivacyOverhead = 25
+	if peerMaxBuffer <= cyrusPrivacyOverhead ||
+		localMaxBuffer <= ldapClientDigestMD5Overhead ||
+		peerMaxBuffer > ldapClientDigestMD5MaxRFCBuffer ||
+		localMaxBuffer > ldapClientDigestMD5MaxRFCBuffer {
+		return nil, errors.New("DIGEST-MD5 security maxbuf is invalid")
+	}
+	sendSeal, err := ldapClientDigestMD5SealingKey(
+		sessionKey,
+		cipher.keyPrefix,
+		ldapClientDigestMD5SealingClientServer,
+	)
+	if err != nil {
+		return nil, err
+	}
+	receiveSeal, err := ldapClientDigestMD5SealingKey(
+		sessionKey,
+		cipher.keyPrefix,
+		ldapClientDigestMD5SealingServerClient,
+	)
+	if err != nil {
+		clear(sendSeal[:])
+		return nil, err
+	}
+	sendCipher, err := rc4.NewCipher(sendSeal[:]) //nolint:gosec // Required by RFC 2831.
+	clear(sendSeal[:])
+	if err != nil {
+		clear(receiveSeal[:])
+		return nil, err
+	}
+	receiveCipher, err := rc4.NewCipher(receiveSeal[:]) //nolint:gosec // Required by RFC 2831.
+	clear(receiveSeal[:])
+	if err != nil {
+		return nil, err
+	}
+	layer := &ldapClientDigestMD5PrivacyConnection{
+		Conn:       connection,
+		sendCipher: sendCipher,
+		recvCipher: receiveCipher,
+		maxSend:    peerMaxBuffer - cyrusPrivacyOverhead,
+		maxReceive: localMaxBuffer - 4,
+	}
+	layer.sendKey = ldapClientDigestMD5SigningKey(
+		sessionKey,
+		ldapClientDigestMD5SigningClientServer,
+	)
+	layer.receiveKey = ldapClientDigestMD5SigningKey(
+		sessionKey,
+		ldapClientDigestMD5SigningServerClient,
+	)
+	return layer, nil
+}
+
+func ldapClientDigestMD5CipherByName(name string) (ldapClientDigestMD5Cipher, bool) {
+	for _, cipher := range ldapClientDigestMD5Ciphers() {
+		if cipher.name == name {
+			return cipher, true
+		}
+	}
+	return ldapClientDigestMD5Cipher{}, false
+}
+
+func ldapClientDigestMD5SealingKey(
+	sessionKey []byte,
+	keyPrefix int,
+	magic string,
+) ([md5.Size]byte, error) {
+	if len(sessionKey) != md5.Size || keyPrefix < 1 || keyPrefix > len(sessionKey) {
+		return [md5.Size]byte{}, errors.New("DIGEST-MD5 sealing key parameters are invalid")
+	}
+	digest := md5.New() //nolint:gosec // Required by DIGEST-MD5.
+	_, _ = digest.Write(sessionKey[:keyPrefix])
+	_, _ = digest.Write([]byte(magic))
+	var key [md5.Size]byte
+	copy(key[:], digest.Sum(nil))
+	return key, nil
+}
+
+func (connection *ldapClientDigestMD5PrivacyConnection) Write(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	connection.writeMu.Lock()
+	defer connection.writeMu.Unlock()
+	written := 0
+	for written < len(value) {
+		if connection.sendSeq > math.MaxUint32 {
+			return written, errors.New("DIGEST-MD5 sequence space is exhausted")
+		}
+		chunkSize := len(value) - written
+		if uint64(chunkSize) > uint64(connection.maxSend) {
+			chunkSize = int(connection.maxSend)
+		}
+		frame := connection.encodeDigestMD5Frame(value[written:written+chunkSize], uint32(connection.sendSeq))
+		err := ldapClientWriteDigestMD5Frame(connection.Conn, frame)
+		clear(frame)
+		if err != nil {
+			return written, err
+		}
+		connection.sendSeq++
+		written += chunkSize
+	}
+	return written, nil
+}
+
+func (connection *ldapClientDigestMD5PrivacyConnection) encodeDigestMD5Frame(
+	message []byte,
+	sequence uint32,
+) []byte {
+	encryptedLength := len(message) + ldapClientDigestMD5MACSize
+	payloadLength := encryptedLength + 6
+	frame := make([]byte, 4+payloadLength)
+	binary.BigEndian.PutUint32(frame[:4], uint32(payloadLength))
+	plaintext := make([]byte, encryptedLength)
+	copy(plaintext, message)
+	mac := ldapClientDigestMD5MAC(connection.sendKey[:], sequence, message)
+	copy(plaintext[len(message):], mac)
+	clear(mac)
+	connection.sendCipher.XORKeyStream(frame[4:4+encryptedLength], plaintext)
+	clear(plaintext)
+	offset := 4 + encryptedLength
+	binary.BigEndian.PutUint16(frame[offset:offset+2], ldapClientDigestMD5MessageType)
+	binary.BigEndian.PutUint32(frame[offset+2:offset+6], sequence)
+	return frame
+}
+
+func (connection *ldapClientDigestMD5PrivacyConnection) Read(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	connection.readMu.Lock()
+	defer connection.readMu.Unlock()
+	for len(connection.readPending) == 0 {
+		message, err := connection.readDigestMD5Frame()
+		if err != nil {
+			return 0, err
+		}
+		connection.readPending = message
+	}
+	written := copy(value, connection.readPending)
+	clear(connection.readPending[:written])
+	connection.readPending = connection.readPending[written:]
+	if len(connection.readPending) == 0 {
+		connection.readPending = nil
+	}
+	return written, nil
+}
+
+func (connection *ldapClientDigestMD5PrivacyConnection) Close() error {
+	connection.closeOnce.Do(func() {
+		connection.closeErr = connection.Conn.Close()
+		connection.writeMu.Lock()
+		connection.readMu.Lock()
+		clear(connection.sendKey[:])
+		clear(connection.receiveKey[:])
+		if connection.sendCipher != nil {
+			connection.sendCipher.Reset()
+			connection.sendCipher = nil
+		}
+		if connection.recvCipher != nil {
+			connection.recvCipher.Reset()
+			connection.recvCipher = nil
+		}
+		clear(connection.readPending)
+		connection.readPending = nil
+		connection.readMu.Unlock()
+		connection.writeMu.Unlock()
+	})
+	return connection.closeErr
+}
+
+func (connection *ldapClientDigestMD5PrivacyConnection) readDigestMD5Frame() ([]byte, error) {
+	if connection.receiveSeq > math.MaxUint32 {
+		return nil, errors.New("DIGEST-MD5 sequence space is exhausted")
+	}
+	var header [4]byte
+	if _, err := io.ReadFull(connection.Conn, header[:]); err != nil {
+		return nil, err
+	}
+	payloadLength := binary.BigEndian.Uint32(header[:])
+	if payloadLength < ldapClientDigestMD5MACSize+6 || payloadLength > connection.maxReceive {
+		return nil, fmt.Errorf("%w: payload length %d", errLDAPClientDigestMD5Frame, payloadLength)
+	}
+	payload := make([]byte, payloadLength)
+	if _, err := io.ReadFull(connection.Conn, payload); err != nil {
+		clear(payload)
+		return nil, err
+	}
+	typeOffset := len(payload) - 6
+	messageType := binary.BigEndian.Uint16(payload[typeOffset : typeOffset+2])
+	sequence := binary.BigEndian.Uint32(payload[typeOffset+2 : typeOffset+6])
+	if messageType != ldapClientDigestMD5MessageType {
+		clear(payload)
+		return nil, fmt.Errorf("%w: message type %d", errLDAPClientDigestMD5Frame, messageType)
+	}
+	if uint64(sequence) != connection.receiveSeq {
+		clear(payload)
+		return nil, fmt.Errorf("%w: received %d, expected %d", errLDAPClientDigestMD5Sequence, sequence, connection.receiveSeq)
+	}
+	plaintext := make([]byte, typeOffset)
+	connection.recvCipher.XORKeyStream(plaintext, payload[:typeOffset])
+	clear(payload)
+	messageLength := len(plaintext) - ldapClientDigestMD5MACSize
+	expected := ldapClientDigestMD5MAC(connection.receiveKey[:], sequence, plaintext[:messageLength])
+	valid := subtle.ConstantTimeCompare(expected, plaintext[messageLength:]) == 1
+	clear(expected)
+	if !valid {
+		clear(plaintext)
+		return nil, errLDAPClientDigestMD5Integrity
+	}
+	message := bytes.Clone(plaintext[:messageLength])
+	clear(plaintext)
+	connection.receiveSeq++
+	return message, nil
+}
+
+type ldapClientDigestMD5IntegrityConnection struct {
+	net.Conn
+
+	sendKey    [md5.Size]byte
+	receiveKey [md5.Size]byte
+	maxSend    uint32
+	maxReceive uint32
+
+	writeMu     sync.Mutex
+	readMu      sync.Mutex
+	sendSeq     uint64
+	receiveSeq  uint64
+	readPending []byte
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+func newLDAPClientDigestMD5IntegrityConnection(
+	connection net.Conn,
+	sessionKey []byte,
+	peerMaxBuffer,
+	localMaxBuffer uint32,
+) (*ldapClientDigestMD5IntegrityConnection, error) {
+	if connection == nil {
+		return nil, errors.New("DIGEST-MD5 security layer has no transport")
+	}
+	if len(sessionKey) != md5.Size {
+		return nil, errors.New("DIGEST-MD5 session key has an invalid size")
+	}
+	if peerMaxBuffer == 0 {
+		peerMaxBuffer = ldapClientDigestMD5MaxBuffer
+	}
+	if localMaxBuffer == 0 {
+		localMaxBuffer = ldapClientDigestMD5MaxBuffer
+	}
+	if peerMaxBuffer <= ldapClientDigestMD5Overhead ||
+		localMaxBuffer <= ldapClientDigestMD5Overhead ||
+		peerMaxBuffer > ldapClientDigestMD5MaxRFCBuffer ||
+		localMaxBuffer > ldapClientDigestMD5MaxRFCBuffer {
+		return nil, errors.New("DIGEST-MD5 security maxbuf is invalid")
+	}
+	layer := &ldapClientDigestMD5IntegrityConnection{
+		Conn:       connection,
+		maxSend:    peerMaxBuffer - ldapClientDigestMD5Overhead,
+		maxReceive: localMaxBuffer - 4,
+	}
+	layer.sendKey = ldapClientDigestMD5SigningKey(
+		sessionKey,
+		ldapClientDigestMD5SigningClientServer,
+	)
+	layer.receiveKey = ldapClientDigestMD5SigningKey(
+		sessionKey,
+		ldapClientDigestMD5SigningServerClient,
+	)
+	return layer, nil
+}
+
+func ldapClientDigestMD5SigningKey(
+	sessionKey []byte,
+	magic string,
+) [md5.Size]byte {
+	digest := md5.New() //nolint:gosec // Required by DIGEST-MD5.
+	_, _ = digest.Write(sessionKey)
+	_, _ = digest.Write([]byte(magic))
+	var key [md5.Size]byte
+	copy(key[:], digest.Sum(nil))
+	return key
+}
+
+func (connection *ldapClientDigestMD5IntegrityConnection) Write(
+	value []byte,
+) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	connection.writeMu.Lock()
+	defer connection.writeMu.Unlock()
+	written := 0
+	for written < len(value) {
+		if connection.sendSeq > math.MaxUint32 {
+			return written, errors.New("DIGEST-MD5 sequence space is exhausted")
+		}
+		chunkSize := len(value) - written
+		if uint64(chunkSize) > uint64(connection.maxSend) {
+			chunkSize = int(connection.maxSend)
+		}
+		frame := connection.encodeDigestMD5Frame(
+			value[written:written+chunkSize],
+			uint32(connection.sendSeq),
+		)
+		err := ldapClientWriteDigestMD5Frame(connection.Conn, frame)
+		clear(frame)
+		if err != nil {
+			return written, err
+		}
+		connection.sendSeq++
+		written += chunkSize
+	}
+	return written, nil
+}
+
+func (connection *ldapClientDigestMD5IntegrityConnection) encodeDigestMD5Frame(
+	message []byte,
+	sequence uint32,
+) []byte {
+	payloadLength := len(message) + ldapClientDigestMD5Overhead - 4
+	frame := make([]byte, payloadLength+4)
+	binary.BigEndian.PutUint32(frame[:4], uint32(payloadLength))
+	copy(frame[4:], message)
+	mac := ldapClientDigestMD5MAC(connection.sendKey[:], sequence, message)
+	copy(frame[4+len(message):], mac)
+	clear(mac)
+	offset := 4 + len(message) + ldapClientDigestMD5MACSize
+	binary.BigEndian.PutUint16(
+		frame[offset:offset+2],
+		ldapClientDigestMD5MessageType,
+	)
+	binary.BigEndian.PutUint32(frame[offset+2:offset+6], sequence)
+	return frame
+}
+
+func ldapClientWriteDigestMD5Frame(writer io.Writer, frame []byte) error {
+	for len(frame) != 0 {
+		written, err := writer.Write(frame)
+		if written > 0 {
+			frame = frame[written:]
+		}
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func (connection *ldapClientDigestMD5IntegrityConnection) Read(
+	value []byte,
+) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	connection.readMu.Lock()
+	defer connection.readMu.Unlock()
+	for len(connection.readPending) == 0 {
+		message, err := connection.readDigestMD5Frame()
+		if err != nil {
+			return 0, err
+		}
+		connection.readPending = message
+	}
+	written := copy(value, connection.readPending)
+	clear(connection.readPending[:written])
+	connection.readPending = connection.readPending[written:]
+	if len(connection.readPending) == 0 {
+		connection.readPending = nil
+	}
+	return written, nil
+}
+
+func (connection *ldapClientDigestMD5IntegrityConnection) Close() error {
+	connection.closeOnce.Do(func() {
+		connection.closeErr = connection.Conn.Close()
+		connection.writeMu.Lock()
+		connection.readMu.Lock()
+		clear(connection.sendKey[:])
+		clear(connection.receiveKey[:])
+		clear(connection.readPending)
+		connection.readPending = nil
+		connection.readMu.Unlock()
+		connection.writeMu.Unlock()
+	})
+	return connection.closeErr
+}
+
+func (connection *ldapClientDigestMD5IntegrityConnection) readDigestMD5Frame() (
+	[]byte,
+	error,
+) {
+	if connection.receiveSeq > math.MaxUint32 {
+		return nil, errors.New("DIGEST-MD5 sequence space is exhausted")
+	}
+	var header [4]byte
+	if _, err := io.ReadFull(connection.Conn, header[:]); err != nil {
+		return nil, err
+	}
+	payloadLength := binary.BigEndian.Uint32(header[:])
+	if payloadLength < ldapClientDigestMD5Overhead-4 ||
+		payloadLength > connection.maxReceive {
+		return nil, fmt.Errorf(
+			"%w: payload length %d",
+			errLDAPClientDigestMD5Frame,
+			payloadLength,
+		)
+	}
+	payload := make([]byte, payloadLength)
+	if _, err := io.ReadFull(connection.Conn, payload); err != nil {
+		clear(payload)
+		return nil, err
+	}
+	messageLength := len(payload) - (ldapClientDigestMD5Overhead - 4)
+	typeOffset := messageLength + ldapClientDigestMD5MACSize
+	messageType := binary.BigEndian.Uint16(payload[typeOffset : typeOffset+2])
+	sequence := binary.BigEndian.Uint32(payload[typeOffset+2 : typeOffset+6])
+	if messageType != ldapClientDigestMD5MessageType {
+		clear(payload)
+		return nil, fmt.Errorf(
+			"%w: message type %d",
+			errLDAPClientDigestMD5Frame,
+			messageType,
+		)
+	}
+	if uint64(sequence) != connection.receiveSeq {
+		clear(payload)
+		return nil, fmt.Errorf(
+			"%w: received %d, expected %d",
+			errLDAPClientDigestMD5Sequence,
+			sequence,
+			connection.receiveSeq,
+		)
+	}
+	expected := ldapClientDigestMD5MAC(
+		connection.receiveKey[:],
+		sequence,
+		payload[:messageLength],
+	)
+	received := payload[messageLength : messageLength+ldapClientDigestMD5MACSize]
+	valid := subtle.ConstantTimeCompare(expected, received) == 1
+	clear(expected)
+	if !valid {
+		clear(payload)
+		return nil, errLDAPClientDigestMD5Integrity
+	}
+	message := bytes.Clone(payload[:messageLength])
+	clear(payload)
+	connection.receiveSeq++
+	return message, nil
+}
+
+func ldapClientDigestMD5MAC(
+	key []byte,
+	sequence uint32,
+	message []byte,
+) []byte {
+	digest := hmac.New(md5.New, key) //nolint:gosec // Required by DIGEST-MD5.
+	var encodedSequence [4]byte
+	binary.BigEndian.PutUint32(encodedSequence[:], sequence)
+	_, _ = digest.Write(encodedSequence[:])
+	_, _ = digest.Write(message)
+	result := digest.Sum(nil)
+	mac := bytes.Clone(result[:ldapClientDigestMD5MACSize])
+	clear(result)
+	return mac
 }
 
 func (result ldapClientSASLResult) err() error {
@@ -98,6 +807,9 @@ func (options *ldapClientOptions) validateSASL(
 		if passwordSources == 0 {
 			return errors.New("SASL DIGEST-MD5 requires one of -w, -W, or -y")
 		}
+		if _, err := parseLDAPClientDigestMD5SecurityProperties(options.saslSecurity); err != nil {
+			return fmt.Errorf("invalid DIGEST-MD5 -O security properties: %w", err)
+		}
 	case "CRAM-MD5":
 		if options.saslAuthentication == "" {
 			return errors.New("SASL CRAM-MD5 requires a non-empty -U authentication identity")
@@ -143,15 +855,40 @@ func (options *ldapClientOptions) validateSASL(
 		if options.tlsCertificateFile == "" || options.tlsPrivateKeyFile == "" {
 			return errors.New("SASL EXTERNAL requires -tls-cert and -tls-key")
 		}
+	case "GSSAPI":
+		if passwordSources > 0 && options.saslAuthentication == "" {
+			return errors.New("SASL GSSAPI password credentials require a non-empty -U authentication identity")
+		}
+		if flagWasSet(flags, "R") && options.saslRealm == "" {
+			return errors.New("-R requires a non-empty SASL realm")
+		}
+		if _, err := parseLDAPClientDigestMD5SecurityProperties(options.saslSecurity); err != nil {
+			return fmt.Errorf("invalid GSSAPI -O security properties: %w", err)
+		}
+		channelBinding, err := saslkrb5.NormalizeChannelBinding(
+			options.gssapiChannelBinding,
+		)
+		if err != nil {
+			return err
+		}
+		options.gssapiChannelBinding = channelBinding
 	default:
 		if strings.HasPrefix(options.saslMechanism, "SCRAM-") &&
 			strings.HasSuffix(options.saslMechanism, "-PLUS") {
 			return errors.New("SCRAM-PLUS mechanisms are not supported by the auth-only client")
 		}
 		return fmt.Errorf(
-			"unsupported SASL mechanism %q; supported mechanisms are PLAIN, CRAM-MD5, DIGEST-MD5, SCRAM-SHA-1, SCRAM-SHA-256, SCRAM-SHA-512, and EXTERNAL",
+			"unsupported SASL mechanism %q; supported mechanisms are PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, SCRAM-SHA-1, SCRAM-SHA-256, SCRAM-SHA-512, and EXTERNAL",
 			options.saslMechanism,
 		)
+	}
+	if flagWasSet(flags, "O") && options.saslMechanism != "DIGEST-MD5" &&
+		options.saslMechanism != "GSSAPI" {
+		return errors.New("-O is only supported with SASL DIGEST-MD5 or GSSAPI")
+	}
+	if flagWasSet(flags, "gssapi-channel-binding") &&
+		options.saslMechanism != "GSSAPI" {
+		return errors.New("-gssapi-channel-binding is only supported with SASL GSSAPI")
 	}
 	if flagWasSet(flags, "X") && options.saslAuthorization == "" {
 		return errors.New("-X requires a non-empty SASL authorization identity")
@@ -237,8 +974,10 @@ func (options *ldapClientOptions) connectAndBindSASL(
 			secure = true
 		}
 	}
+	connection = &ldapClientSASLSwitchConnection{connection: connection}
 
-	if !hasPassword && options.saslMechanism != "EXTERNAL" {
+	if !hasPassword && options.saslMechanism != "EXTERNAL" &&
+		options.saslMechanism != "GSSAPI" {
 		return closeOnError(fmt.Errorf("SASL %s password was not loaded", options.saslMechanism))
 	}
 	if err := connection.SetDeadline(time.Now().Add(options.timeout)); err != nil {
@@ -248,12 +987,20 @@ func (options *ldapClientOptions) connectAndBindSASL(
 		connection,
 		parsedURI.Hostname(),
 		password,
+		hasPassword,
 		&messageID,
 	); err != nil {
 		return closeOnError(err)
 	}
 	if err := connection.SetDeadline(time.Time{}); err != nil {
 		return closeOnError(fmt.Errorf("clear SASL bind deadline: %w", err))
+	}
+	if options.observeSearch {
+		observer := &ldapSearchResponseObserver{
+			responses: make(map[int64][]ldapSearchWireResponse),
+		}
+		options.searchObserver = observer
+		connection = &ldapSearchObservedConn{Conn: connection, observer: observer}
 	}
 
 	client := ldap.NewConn(connection, secure)
@@ -305,6 +1052,7 @@ func (options *ldapClientOptions) bindSASL(
 	connection net.Conn,
 	host string,
 	password []byte,
+	hasPassword bool,
 	messageID *int64,
 ) error {
 	switch options.saslMechanism {
@@ -318,6 +1066,8 @@ func (options *ldapClientOptions) bindSASL(
 		return options.bindSASLSCRAM(connection, password, messageID)
 	case "EXTERNAL":
 		return options.bindSASLExternal(connection, messageID)
+	case "GSSAPI":
+		return options.bindSASLGSSAPI(connection, host, password, hasPassword, messageID)
 	default:
 		return fmt.Errorf("unsupported SASL mechanism %q", options.saslMechanism)
 	}
@@ -703,16 +1453,21 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 	if !first.hasServerCredentials {
 		return errors.New("SASL DIGEST-MD5 server omitted its challenge")
 	}
-	response, expectedRspauth, err := options.digestMD5Response(
+	_, canInstallSecurity := connection.(*ldapClientSASLSwitchConnection)
+	response, expectedRspauth, negotiated, err := options.digestMD5Response(
 		first.serverCredentials,
 		host,
 		password,
+		canInstallSecurity,
 	)
 	if err != nil {
 		return fmt.Errorf("process SASL DIGEST-MD5 challenge: %w", err)
 	}
 	defer clear(response)
 	defer clear(expectedRspauth)
+	if negotiated != nil {
+		defer negotiated.clear()
+	}
 
 	second, err := exchangeLDAPClientSASLBind(
 		connection,
@@ -736,7 +1491,10 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 		return err
 	}
 	if second.code == ldap.LDAPResultSuccess {
-		return nil
+		return installLDAPClientDigestMD5SecurityLayer(
+			connection,
+			negotiated,
+		)
 	}
 
 	final, err := exchangeLDAPClientSASLBind(
@@ -754,6 +1512,29 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 	}
 	if final.hasServerCredentials {
 		return errors.New("SASL DIGEST-MD5 server returned unexpected final credentials")
+	}
+	return installLDAPClientDigestMD5SecurityLayer(connection, negotiated)
+}
+
+func installLDAPClientDigestMD5SecurityLayer(
+	connection net.Conn,
+	negotiated *ldapClientDigestMD5NegotiatedSecurity,
+) error {
+	if negotiated == nil {
+		return nil
+	}
+	switching, ok := connection.(*ldapClientSASLSwitchConnection)
+	if !ok {
+		return errors.New("SASL DIGEST-MD5 security layer requires a switchable connection")
+	}
+	if err := switching.installDigestMD5Security(
+		negotiated.qop,
+		negotiated.cipher,
+		negotiated.sessionKey,
+		negotiated.peerMaxBuffer,
+		negotiated.localMaxBuffer,
+	); err != nil {
+		return fmt.Errorf("install SASL DIGEST-MD5 %s layer: %w", negotiated.qop, err)
 	}
 	return nil
 }
@@ -902,46 +1683,172 @@ type ldapClientDigestMD5Values struct {
 	cnonce        string
 	digestURI     string
 	authorization string
+	qop           string
+	convertLatin1 bool
+}
+
+type ldapClientDigestMD5NegotiatedSecurity struct {
+	sessionKey     []byte
+	peerMaxBuffer  uint32
+	localMaxBuffer uint32
+	qop            string
+	cipher         ldapClientDigestMD5Cipher
+}
+
+type ldapClientDigestMD5SecurityProperties struct {
+	minimumSSF    uint32
+	maximumSSF    uint32
+	maxBufferSize uint32
+}
+
+func parseLDAPClientDigestMD5SecurityProperties(
+	value string,
+) (ldapClientDigestMD5SecurityProperties, error) {
+	properties := ldapClientDigestMD5SecurityProperties{
+		maximumSSF:    math.MaxInt32,
+		maxBufferSize: ldapClientDigestMD5MaxBuffer,
+	}
+	if strings.TrimSpace(value) == "" {
+		return properties, nil
+	}
+	for _, raw := range strings.Split(value, ",") {
+		part := strings.ToLower(strings.TrimSpace(raw))
+		if part == "" {
+			return ldapClientDigestMD5SecurityProperties{}, errors.New("empty property")
+		}
+		if part == "none" {
+			continue
+		}
+		name, encoded, ok := strings.Cut(part, "=")
+		if !ok || encoded == "" {
+			return ldapClientDigestMD5SecurityProperties{}, fmt.Errorf("unsupported property %q", raw)
+		}
+		parsed, err := strconv.ParseUint(encoded, 10, 31)
+		if err != nil {
+			return ldapClientDigestMD5SecurityProperties{}, fmt.Errorf("invalid %s value", name)
+		}
+		switch name {
+		case "minssf":
+			properties.minimumSSF = uint32(parsed)
+		case "maxssf":
+			properties.maximumSSF = uint32(parsed)
+		case "maxbufsize":
+			if parsed > ldapClientDigestMD5MaxRFCBuffer {
+				return ldapClientDigestMD5SecurityProperties{}, errors.New("maxbufsize exceeds RFC limit")
+			}
+			properties.maxBufferSize = uint32(parsed)
+		default:
+			return ldapClientDigestMD5SecurityProperties{}, fmt.Errorf("unsupported property %q", name)
+		}
+	}
+	if properties.minimumSSF > properties.maximumSSF {
+		return ldapClientDigestMD5SecurityProperties{}, errors.New("minssf exceeds maxssf")
+	}
+	return properties, nil
+}
+
+func (security *ldapClientDigestMD5NegotiatedSecurity) clear() {
+	if security == nil {
+		return
+	}
+	clear(security.sessionKey)
+	security.sessionKey = nil
 }
 
 func (options *ldapClientOptions) digestMD5Response(
 	challenge []byte,
 	host string,
 	password []byte,
-) ([]byte, []byte, error) {
+	canInstallSecurity bool,
+) ([]byte, []byte, *ldapClientDigestMD5NegotiatedSecurity, error) {
 	directives, realms, err := parseLDAPClientDigestMD5Directives(challenge, true)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !strings.EqualFold(directives["algorithm"], "md5-sess") {
-		return nil, nil, errors.New("DIGEST-MD5 challenge does not use md5-sess")
+		return nil, nil, nil, errors.New("DIGEST-MD5 challenge does not use md5-sess")
 	}
 	if charset, present := directives["charset"]; present &&
 		!strings.EqualFold(charset, "utf-8") {
-		return nil, nil, errors.New("DIGEST-MD5 challenge uses an unsupported charset")
+		return nil, nil, nil, errors.New("DIGEST-MD5 challenge uses an unsupported charset")
 	}
 	if _, utf8Offered := directives["charset"]; utf8Offered && !utf8.Valid(password) {
-		return nil, nil, errors.New("DIGEST-MD5 password is not valid UTF-8")
+		return nil, nil, nil, errors.New("DIGEST-MD5 password is not valid UTF-8")
 	}
 	if stale, present := directives["stale"]; present && strings.EqualFold(stale, "true") {
-		return nil, nil, errors.New("DIGEST-MD5 server marked its nonce stale")
+		return nil, nil, nil, errors.New("DIGEST-MD5 server marked its nonce stale")
 	}
 	nonce := directives["nonce"]
 	if nonce == "" {
-		return nil, nil, errors.New("DIGEST-MD5 challenge has no nonce")
+		return nil, nil, nil, errors.New("DIGEST-MD5 challenge has no nonce")
 	}
-	qop := directives["qop"]
-	if qop == "" {
+	offeredQOP := directives["qop"]
+	if offeredQOP == "" {
+		offeredQOP = "auth"
+	}
+	properties, err := parseLDAPClientDigestMD5SecurityProperties(options.saslSecurity)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	qop := ""
+	var selectedCipher ldapClientDigestMD5Cipher
+	if canInstallSecurity && properties.maxBufferSize != 0 &&
+		ldapClientDigestMD5ListContains(offeredQOP, "auth-conf") {
+		offeredCiphers := directives["cipher"]
+		for index := len(ldapClientDigestMD5Ciphers()) - 1; index >= 0; index-- {
+			cipher := ldapClientDigestMD5Ciphers()[index]
+			if cipher.ssf >= properties.minimumSSF && cipher.ssf <= properties.maximumSSF &&
+				ldapClientDigestMD5ListContains(offeredCiphers, cipher.name) {
+				selectedCipher = cipher
+				qop = "auth-conf"
+				break
+			}
+		}
+		if qop == "" &&
+			(ldapClientDigestMD5ListContains(offeredCiphers, "des") ||
+				ldapClientDigestMD5ListContains(offeredCiphers, "3des")) &&
+			properties.minimumSSF > 1 {
+			return nil, nil, nil, errors.New(
+				"DIGEST-MD5 server only offers unsupported DES confidentiality ciphers",
+			)
+		}
+	}
+	if qop == "" && canInstallSecurity && properties.maxBufferSize != 0 &&
+		properties.minimumSSF <= 1 && properties.maximumSSF >= 1 &&
+		ldapClientDigestMD5ListContains(offeredQOP, "auth-int") {
+		qop = "auth-int"
+	}
+	if qop == "" && properties.minimumSSF == 0 &&
+		ldapClientDigestMD5ListContains(offeredQOP, "auth") {
 		qop = "auth"
 	}
-	if !ldapClientDigestMD5ListContains(qop, "auth") {
-		return nil, nil, errors.New("DIGEST-MD5 challenge does not offer auth qop")
+	if qop == "" {
+		if !canInstallSecurity &&
+			(ldapClientDigestMD5ListContains(offeredQOP, "auth-int") ||
+				ldapClientDigestMD5ListContains(offeredQOP, "auth-conf")) {
+			return nil, nil, nil, errors.New(
+				"DIGEST-MD5 server requires a security layer but this transport cannot install it",
+			)
+		}
+		return nil, nil, nil, errors.New("DIGEST-MD5 challenge offers no acceptable qop or cipher")
 	}
+	peerMaxBuffer := uint32(ldapClientDigestMD5MaxBuffer)
 	if rawMaximum, present := directives["maxbuf"]; present {
 		maximum, parseErr := strconv.ParseUint(rawMaximum, 10, 24)
-		if parseErr != nil || maximum <= 16 {
-			return nil, nil, errors.New("DIGEST-MD5 challenge has invalid maxbuf")
+		if parseErr != nil || maximum <= 16 ||
+			maximum > ldapClientDigestMD5MaxRFCBuffer {
+			return nil, nil, nil, errors.New("DIGEST-MD5 challenge has invalid maxbuf")
 		}
+		peerMaxBuffer = uint32(maximum)
+	}
+	minimumPeerBuffer := uint32(ldapClientDigestMD5Overhead)
+	if qop == "auth-conf" {
+		minimumPeerBuffer = 25
+	}
+	if qop != "auth" && peerMaxBuffer <= minimumPeerBuffer {
+		return nil, nil, nil, errors.New(
+			"DIGEST-MD5 challenge maxbuf is too small for the selected security layer",
+		)
 	}
 	realm := options.saslRealm
 	if realm == "" && len(realms) > 0 {
@@ -949,11 +1856,11 @@ func (options *ldapClientOptions) digestMD5Response(
 	}
 	if options.saslRealm != "" && len(realms) > 0 &&
 		!ldapClientStringSliceContains(realms, options.saslRealm) {
-		return nil, nil, errors.New("requested DIGEST-MD5 realm was not offered by the server")
+		return nil, nil, nil, errors.New("requested DIGEST-MD5 realm was not offered by the server")
 	}
 	entropy := make([]byte, 24)
 	if _, err := io.ReadFull(rand.Reader, entropy); err != nil {
-		return nil, nil, fmt.Errorf("generate DIGEST-MD5 cnonce: %w", err)
+		return nil, nil, nil, fmt.Errorf("generate DIGEST-MD5 cnonce: %w", err)
 	}
 	cnonce := base64.RawStdEncoding.EncodeToString(entropy)
 	clear(entropy)
@@ -964,15 +1871,24 @@ func (options *ldapClientOptions) digestMD5Response(
 		cnonce:        cnonce,
 		digestURI:     "ldap/" + strings.ToLower(host),
 		authorization: options.saslAuthorization,
+		qop:           qop,
+	}
+	if _, utf8Offered := directives["charset"]; utf8Offered {
+		values.convertLatin1 = ldapClientDigestMD5CanUseLatin1(
+			[]byte(values.username),
+		) && ldapClientDigestMD5CanUseLatin1(
+			[]byte(values.realm),
+		) && ldapClientDigestMD5CanUseLatin1(password)
 	}
 	responseDigest, rspauth := ldapClientDigestMD5Exchange(values, password)
 	response := fmt.Sprintf(
 		`username="%s",realm="%s",nonce="%s",cnonce="%s",nc=00000001,`+
-			`qop=auth,digest-uri="%s",response=%s`,
+			`qop=%s,digest-uri="%s",response=%s`,
 		ldapClientDigestMD5Quote(values.username),
 		ldapClientDigestMD5Quote(values.realm),
 		ldapClientDigestMD5Quote(values.nonce),
 		ldapClientDigestMD5Quote(values.cnonce),
+		values.qop,
 		ldapClientDigestMD5Quote(values.digestURI),
 		responseDigest,
 	)
@@ -982,16 +1898,79 @@ func (options *ldapClientOptions) digestMD5Response(
 	if _, present := directives["charset"]; present {
 		response += ",charset=utf-8"
 	}
-	return []byte(response), []byte(rspauth), nil
+	var negotiated *ldapClientDigestMD5NegotiatedSecurity
+	if qop == "auth-conf" {
+		response += ",cipher=" + selectedCipher.name
+	}
+	if qop == "auth-int" || qop == "auth-conf" {
+		response += ",maxbuf=" + strconv.FormatUint(
+			uint64(properties.maxBufferSize),
+			10,
+		)
+		negotiated = &ldapClientDigestMD5NegotiatedSecurity{
+			sessionKey:     ldapClientDigestMD5SessionKey(values, password),
+			peerMaxBuffer:  peerMaxBuffer,
+			localMaxBuffer: properties.maxBufferSize,
+			qop:            qop,
+			cipher:         selectedCipher,
+		}
+	}
+	return []byte(response), []byte(rspauth), negotiated, nil
 }
 
 func ldapClientDigestMD5Exchange(
 	values ldapClientDigestMD5Values,
 	password []byte,
 ) (string, string) {
+	qop := values.qop
+	if qop == "" {
+		qop = "auth"
+	}
+	binarySessionKey := ldapClientDigestMD5SessionKey(values, password)
+	defer clear(binarySessionKey)
+	sessionKey := hex.EncodeToString(binarySessionKey)
+	calculate := func(method string) string {
+		a2Value := method + ":" + values.digestURI
+		if qop == "auth-int" || qop == "auth-conf" {
+			a2Value += ":00000000000000000000000000000000"
+		}
+		a2 := md5.Sum([]byte(a2Value)) //nolint:gosec
+		material := strings.Join([]string{
+			sessionKey,
+			values.nonce,
+			"00000001",
+			values.cnonce,
+			qop,
+			hex.EncodeToString(a2[:]),
+		}, ":")
+		digest := md5.Sum([]byte(material)) //nolint:gosec
+		return hex.EncodeToString(digest[:])
+	}
+	return calculate("AUTHENTICATE"), calculate("")
+}
+
+func ldapClientDigestMD5SessionKey(
+	values ldapClientDigestMD5Values,
+	password []byte,
+) []byte {
 	secretHash := md5.New() //nolint:gosec // Required by DIGEST-MD5.
-	_, _ = secretHash.Write([]byte(values.username + ":" + values.realm + ":"))
-	_, _ = secretHash.Write(password)
+	ldapClientWriteDigestMD5Secret(
+		secretHash,
+		[]byte(values.username),
+		values.convertLatin1,
+	)
+	_, _ = secretHash.Write([]byte{':'})
+	ldapClientWriteDigestMD5Secret(
+		secretHash,
+		[]byte(values.realm),
+		values.convertLatin1,
+	)
+	_, _ = secretHash.Write([]byte{':'})
+	ldapClientWriteDigestMD5Secret(
+		secretHash,
+		password,
+		values.convertLatin1,
+	)
 	secret := secretHash.Sum(nil)
 	a1 := md5.New() //nolint:gosec // Required by DIGEST-MD5.
 	_, _ = a1.Write(secret)
@@ -1000,21 +1979,46 @@ func ldapClientDigestMD5Exchange(
 	if values.authorization != "" {
 		_, _ = a1.Write([]byte(":" + values.authorization))
 	}
-	sessionKey := hex.EncodeToString(a1.Sum(nil))
-	calculate := func(method string) string {
-		a2 := md5.Sum([]byte(method + ":" + values.digestURI)) //nolint:gosec
-		material := strings.Join([]string{
-			sessionKey,
-			values.nonce,
-			"00000001",
-			values.cnonce,
-			"auth",
-			hex.EncodeToString(a2[:]),
-		}, ":")
-		digest := md5.Sum([]byte(material)) //nolint:gosec
-		return hex.EncodeToString(digest[:])
+	return a1.Sum(nil)
+}
+
+func ldapClientWriteDigestMD5Secret(
+	digest hash.Hash,
+	value []byte,
+	convertLatin1 bool,
+) {
+	if convertLatin1 {
+		converted, ok := ldapClientDigestMD5Latin1(value)
+		if ok {
+			_, _ = digest.Write(converted)
+			clear(converted)
+			return
+		}
 	}
-	return calculate("AUTHENTICATE"), calculate("")
+	_, _ = digest.Write(value)
+}
+
+func ldapClientDigestMD5CanUseLatin1(value []byte) bool {
+	if !utf8.Valid(value) {
+		return false
+	}
+	for _, character := range string(value) {
+		if character > 0xff {
+			return false
+		}
+	}
+	return true
+}
+
+func ldapClientDigestMD5Latin1(value []byte) ([]byte, bool) {
+	if !ldapClientDigestMD5CanUseLatin1(value) {
+		return nil, false
+	}
+	converted := make([]byte, 0, len(value))
+	for _, character := range string(value) {
+		converted = append(converted, byte(character))
+	}
+	return converted, true
 }
 
 func verifyLDAPClientDigestMD5Rspauth(

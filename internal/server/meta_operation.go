@@ -46,6 +46,21 @@ func (server *Server) tryMetaBackendOperation(
 			),
 		)
 	}
+	if database.asyncMetaBackend != nil {
+		var lease *asyncMetaOperationLease
+		ctx, lease = asyncMetaContextWithLease(ctx, database.asyncMetaBackend)
+		if lease == nil {
+			return true, writeResultForMessage(
+				connection,
+				message,
+				ldapwire.ResultError(
+					ldapwire.ResultBusy,
+					"maximum pending asyncmeta operations exceeded",
+				),
+			)
+		}
+		defer lease.release()
+	}
 	if request, search := message.Request.(ldapwire.SearchRequest); search {
 		return server.tryMetaBackendSearch(
 			ctx,
@@ -161,6 +176,21 @@ func (server *Server) tryMetaBackendBind(
 			*database,
 			rootPassword,
 		)
+	}
+	if database.asyncMetaBackend != nil {
+		var lease *asyncMetaOperationLease
+		ctx, lease = asyncMetaContextWithLease(ctx, database.asyncMetaBackend)
+		if lease == nil {
+			return true, ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultBusy,
+					"maximum pending asyncmeta operations exceeded",
+				),
+				nil,
+			))
+		}
+		defer lease.release()
 	}
 	target, selectionFailure := server.selectMetaBackendTarget(
 		ctx,
@@ -447,6 +477,11 @@ func (server *Server) executeMetaBackendOperationWithHooks(
 		target,
 		len(target.ldapBackend.remotes),
 	)
+	transportOwner := metaBackendTransportOwner(target)
+	lease := asyncMetaLeaseFromContext(ctx)
+	if database.asyncMetaBackend != nil && lease != nil {
+		transportOwner = lease.transportOwner(transportOwner)
+	}
 	replayed := false
 	for position := 0; position < len(remoteOrder); {
 		index := remoteOrder[position]
@@ -473,7 +508,7 @@ func (server *Server) executeMetaBackendOperationWithHooks(
 			remote,
 			remote,
 			forwarded,
-			metaBackendTransportOwner(target),
+			transportOwner,
 			packetSink,
 			requestStarted,
 		)
@@ -490,6 +525,20 @@ func (server *Server) executeMetaBackendOperationWithHooks(
 			continue
 		}
 		position++
+	}
+	if database.asyncMetaBackend != nil && lease != nil {
+		retiredOwners := lease.observeTarget(
+			metaBackendTransportOwner(target),
+			database.asyncMetaBackend.maxTimeoutOperations,
+			ctx.Err() == nil && chainRequestTimedOut(attempt.transportErr),
+			attempt.responses > 0,
+		)
+		for _, retiredOwner := range retiredOwners {
+			server.metaTransports.resetOwner(retiredOwner)
+			if state != nil && state.metaTransports != nil {
+				state.metaTransports.resetOwner(retiredOwner)
+			}
+		}
 	}
 	if ctx.Err() == nil {
 		target.finishAttempt(metaBackendAttemptCode(attempt))

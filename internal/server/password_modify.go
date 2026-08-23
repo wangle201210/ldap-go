@@ -233,7 +233,7 @@ func (server *Server) handlePasswordModify(
 
 	hashes := make([][]byte, 0, len(state.runtime.passwordHashSchemes))
 	for _, scheme := range state.runtime.passwordHashSchemes {
-		stored, err := auth.HashPassword(newPassword, scheme, nil)
+		stored, err := hashPasswordForRuntime(state.runtime, newPassword, scheme)
 		if err != nil {
 			return server.internalPasswordModifyError(connection, message.ID, err)
 		}

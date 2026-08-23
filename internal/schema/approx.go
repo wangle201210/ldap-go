@@ -23,6 +23,35 @@ func AssociatedApproximateMatchingRule(equality string) (string, bool) {
 	}
 }
 
+// ApproximateIndexKeys returns the OpenLDAP approximate index keys for one
+// value. Each non-empty normalized word contributes one Metaphone key. The
+// boolean reports whether every word produced an indexable key; callers must
+// scan for assertions containing an empty Metaphone key to avoid false
+// negatives.
+func ApproximateIndexKeys(rule string, value []byte) ([][]byte, bool) {
+	switch canonicalMatchingRule(rule) {
+	case "directorystringapproxmatch", "ia5stringapproxmatch":
+	default:
+		return nil, false
+	}
+	normalized, ok := normalizeOpenLDAPApproximate(value)
+	if !ok {
+		return nil, false
+	}
+	words := splitOpenLDAPApproximateWords(normalized)
+	keys := make([][]byte, 0, len(words))
+	complete := true
+	for _, word := range words {
+		key := openLDAPMetaphone(word)
+		if key != "" {
+			keys = append(keys, []byte(key))
+		} else {
+			complete = false
+		}
+	}
+	return keys, complete
+}
+
 // MatchApproximate applies an attribute's associated approximate rule. When
 // no rule is associated, OpenLDAP falls back to the equality matching rule.
 func (registry *Registry) MatchApproximate(

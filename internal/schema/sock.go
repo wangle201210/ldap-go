@@ -9,15 +9,25 @@ import (
 const (
 	openLDAPSockDatabaseAttributeOID = "1.3.6.1.4.1.4203.1.12.2.3.2.7"
 	openLDAPSockDatabaseObjectOID    = "1.3.6.1.4.1.4203.1.12.2.4.2.7"
+	ldapGoSockExtensionOID           = "1.3.6.1.4.1.4203.666.11.99.9"
+	ldapGoSockCallbackTimeoutName    = "olcOvSocketCallbackTimeout"
 )
 
 var openLDAPSockAttributeTypes = []string{
 	"( " + openLDAPSockDatabaseAttributeOID + ".1 NAME 'olcDbSocketPath' DESC 'Pathname for Unix domain socket' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( " + openLDAPSockDatabaseAttributeOID + ".2 NAME 'olcDbSocketExtensions' DESC 'binddn, peername, or ssf' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( " + openLDAPSockDatabaseAttributeOID + ".3 NAME 'olcOvSocketOps' DESC 'Operation types to forward' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( " + openLDAPSockDatabaseAttributeOID + ".4 NAME 'olcOvSocketResps' DESC 'Response types to forward' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " )",
+	"( " + openLDAPSockDatabaseAttributeOID + ".5 NAME 'olcOvSocketDNpat' DESC 'DN pattern to match' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
+}
+
+var ldapGoSockExtensionAttributeTypes = []string{
+	"( " + ldapGoSockExtensionOID + ".1 NAME '" + ldapGoSockCallbackTimeoutName + "' DESC 'Maximum time to wait for a socket overlay response callback consumer' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE X-ORIGIN 'ldap-go extension' )",
 }
 
 var openLDAPSockObjectClasses = []string{
 	"( " + openLDAPSockDatabaseObjectOID + ".1 NAME 'olcDbSocketConfig' DESC 'Socket backend configuration' SUP olcDatabaseConfig MUST olcDbSocketPath MAY olcDbSocketExtensions )",
+	"( " + openLDAPSockDatabaseObjectOID + ".2 NAME 'olcOvSocketConfig' DESC 'Socket overlay configuration' SUP olcOverlayConfig MUST olcDbSocketPath MAY ( olcDbSocketExtensions $ olcOvSocketOps $ olcOvSocketResps $ olcOvSocketDNpat ) )",
 }
 
 var openLDAPSockExtensionNames = map[string]struct{}{
@@ -28,20 +38,25 @@ var openLDAPSockExtensionNames = map[string]struct{}{
 }
 
 // RegisterOpenLDAPSockSchema registers the cn=config schema exposed by the
-// OpenLDAP 2.6.13 back-sock database backend. The overlay-only schema belongs
-// to a separate configuration surface and is intentionally not registered.
+// OpenLDAP 2.6.13 back-sock database backend and sock overlay.
 func RegisterOpenLDAPSockSchema(registry *Registry) error {
 	if registry == nil {
 		return fmt.Errorf("register OpenLDAP back-sock schema: nil registry")
 	}
 
-	for _, description := range openLDAPSockAttributeTypes {
-		attribute, err := ParseAttributeType(description)
-		if err != nil {
-			return fmt.Errorf("parse OpenLDAP back-sock attribute type: %w", err)
-		}
-		if err := registerCompatibleSockAttribute(registry, attribute); err != nil {
-			return err
+	attributeGroups := [][]string{
+		openLDAPSockAttributeTypes,
+		ldapGoSockExtensionAttributeTypes,
+	}
+	for _, descriptions := range attributeGroups {
+		for _, description := range descriptions {
+			attribute, err := ParseAttributeType(description)
+			if err != nil {
+				return fmt.Errorf("parse OpenLDAP back-sock attribute type: %w", err)
+			}
+			if err := registerCompatibleSockAttribute(registry, attribute); err != nil {
+				return err
+			}
 		}
 	}
 	for _, description := range openLDAPSockObjectClasses {
@@ -49,11 +64,21 @@ func RegisterOpenLDAPSockSchema(registry *Registry) error {
 		if err != nil {
 			return fmt.Errorf("parse OpenLDAP back-sock object class: %w", err)
 		}
+		objectClass = extendSockOverlayWithCallbackTimeout(objectClass)
 		if err := registerCompatibleSockObjectClass(registry, objectClass); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func extendSockOverlayWithCallbackTimeout(objectClass ObjectClass) ObjectClass {
+	if !strings.EqualFold(objectClass.Name(), "olcOvSocketConfig") ||
+		containsAllSockNames(objectClass.May, []string{ldapGoSockCallbackTimeoutName}) {
+		return objectClass
+	}
+	objectClass.May = append(objectClass.May, ldapGoSockCallbackTimeoutName)
+	return objectClass
 }
 
 // ValidateOpenLDAPSockExtensions applies the value constraint implemented by
@@ -178,6 +203,26 @@ func registerCompatibleSockObjectClass(registry *Registry, want ObjectClass) err
 		}
 		return nil
 	}
+	if compatibleSockObjectClass(existing, want) {
+		return nil
+	}
+	if strings.EqualFold(want.Name(), "olcOvSocketConfig") &&
+		containsAllSockNames(want.May, []string{ldapGoSockCallbackTimeoutName}) {
+		openLDAPDefinition := want
+		openLDAPDefinition.May = removeSockName(
+			append([]string(nil), want.May...),
+			ldapGoSockCallbackTimeoutName,
+		)
+		if compatibleSockObjectClass(existing, openLDAPDefinition) {
+			if err := registry.UpsertObjectClass(want); err != nil {
+				return fmt.Errorf(
+					"extend OpenLDAP back-sock object class %q: %w",
+					want.Name(), err,
+				)
+			}
+			return nil
+		}
+	}
 	if !compatibleSockObjectClass(existing, want) {
 		return fmt.Errorf(
 			"register OpenLDAP back-sock object class %q: incompatible existing definition",
@@ -185,6 +230,16 @@ func registerCompatibleSockObjectClass(registry *Registry, want ObjectClass) err
 		)
 	}
 	return nil
+}
+
+func removeSockName(values []string, target string) []string {
+	filtered := values[:0]
+	for _, value := range values {
+		if !strings.EqualFold(value, target) {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func findSockObjectClass(

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -232,8 +233,76 @@ func TestLDAPClientPasswordHashConfigurationReloadsAtomically(t *testing.T) {
 	}
 	assertStoredSMPBKDF2Password(t, store, "online-sm3-secret")
 
+	useCrypt := ldap.NewModifyRequest(frontendDN, nil)
+	useCrypt.Replace("olcPasswordHash", []string{auth.OpenLDAPCryptHashScheme})
+	if err := configClient.Modify(useCrypt); err != nil {
+		t.Fatalf("configure CRYPT: %v", err)
+	}
+	if _, err := user.PasswordModify(ldap.NewPasswordModifyRequest(
+		"",
+		"online-sm3-secret",
+		"online-crypt-secret",
+	)); err != nil {
+		t.Fatalf("PasswordModify() after CRYPT reload: %v", err)
+	}
+	assertStoredCryptPassword(t, store, "online-crypt-secret")
+	assertStoredCryptPasswordPrefix(
+		t,
+		store,
+		"online-crypt-secret",
+		"{CRYPT}$6$rounds=100000$",
+	)
+	assertBindPassword(t, address, aliceDN, "online-crypt-secret", true)
+	assertBindPassword(t, address, aliceDN, "online-sm3-secret", false)
+
+	const customSaltFormat = "$5$rounds=2000$%.16s"
+	customSalt := ldap.NewModifyRequest("cn=config", nil)
+	customSalt.Replace("olcPasswordCryptSaltFormat", []string{customSaltFormat})
+	if err := configClient.Modify(customSalt); err != nil {
+		t.Fatalf("configure CRYPT salt format: %v", err)
+	}
+	if _, err := user.PasswordModify(ldap.NewPasswordModifyRequest(
+		"",
+		"online-crypt-secret",
+		"custom-crypt-secret",
+	)); err != nil {
+		t.Fatalf("PasswordModify() after salt format reload: %v", err)
+	}
+	assertStoredCryptPasswordPrefix(
+		t,
+		store,
+		"custom-crypt-secret",
+		"{CRYPT}$5$rounds=2000$",
+	)
+
+	invalidSalt := ldap.NewModifyRequest("cn=config", nil)
+	invalidSalt.Replace("olcPasswordCryptSaltFormat", []string{"fixed-salt"})
+	assertLDAPResultCode(
+		t,
+		configClient.Modify(invalidSalt),
+		ldap.LDAPResultConstraintViolation,
+	)
+	if _, err := user.PasswordModify(ldap.NewPasswordModifyRequest(
+		"",
+		"custom-crypt-secret",
+		"salt-rollback-secret",
+	)); err != nil {
+		t.Fatalf("PasswordModify() after salt rollback: %v", err)
+	}
+	assertStoredCryptPasswordPrefix(
+		t,
+		store,
+		"salt-rollback-secret",
+		"{CRYPT}$5$rounds=2000$",
+	)
+	global := readStoredEntry(t, store, "cn=config")
+	saltValues := global.Values("olcPasswordCryptSaltFormat")
+	if len(saltValues) != 1 || string(saltValues[0]) != customSaltFormat {
+		t.Fatalf("rolled-back olcPasswordCryptSaltFormat = %q", saltValues)
+	}
+
 	invalid := ldap.NewModifyRequest(frontendDN, nil)
-	invalid.Replace("olcPasswordHash", []string{"{CRYPT}"})
+	invalid.Replace("olcPasswordHash", []string{"{UNKNOWN}"})
 	assertLDAPResultCode(
 		t,
 		configClient.Modify(invalid),
@@ -241,16 +310,16 @@ func TestLDAPClientPasswordHashConfigurationReloadsAtomically(t *testing.T) {
 	)
 	if _, err := user.PasswordModify(ldap.NewPasswordModifyRequest(
 		"",
-		"online-sm3-secret",
+		"salt-rollback-secret",
 		"after-rollback-secret",
 	)); err != nil {
 		t.Fatalf("PasswordModify() after config rollback: %v", err)
 	}
-	assertStoredSMPBKDF2Password(t, store, "after-rollback-secret")
+	assertStoredCryptPassword(t, store, "after-rollback-secret")
 
 	config := readStoredEntry(t, store, frontendDN)
 	values := config.Values("olcPasswordHash")
-	if len(values) != 1 || string(values[0]) != auth.SMPBKDF2HashScheme {
+	if len(values) != 1 || string(values[0]) != auth.OpenLDAPCryptHashScheme {
 		t.Fatalf("rolled-back olcPasswordHash = %q", values)
 	}
 }
@@ -347,6 +416,37 @@ func assertBindPassword(
 	}
 	if !want {
 		assertLDAPResultCode(t, err, ldap.LDAPResultInvalidCredentials)
+	}
+}
+
+func assertStoredCryptPassword(
+	t *testing.T,
+	store storage.Store,
+	password string,
+) {
+	t.Helper()
+
+	entry := readStoredEntry(t, store, aliceDN)
+	stored := entry.Values("userPassword")
+	if len(stored) != 1 ||
+		!bytes.HasPrefix(stored[0], []byte(auth.OpenLDAPCryptHashScheme)) ||
+		!auth.VerifyPassword(stored[0], []byte(password)) {
+		t.Fatalf("stored CRYPT userPassword = %q", stored)
+	}
+}
+
+func assertStoredCryptPasswordPrefix(
+	t *testing.T,
+	store storage.Store,
+	password,
+	prefix string,
+) {
+	t.Helper()
+	entry := readStoredEntry(t, store, aliceDN)
+	stored := entry.Values("userPassword")
+	if len(stored) != 1 || !bytes.HasPrefix(stored[0], []byte(prefix)) ||
+		!auth.VerifyPassword(stored[0], []byte(password)) {
+		t.Fatalf("stored CRYPT userPassword = %q, want prefix %q", stored, prefix)
 	}
 }
 

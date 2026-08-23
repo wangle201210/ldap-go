@@ -1,6 +1,6 @@
 module github.com/wangle201210/ldap-go
 
-go 1.25.0
+go 1.26.0
 
 require (
 	gitee.com/Trisia/gotlcp v1.5.0
@@ -10,7 +10,12 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.14
 	github.com/go-ldap/ldif v0.0.0-20260715232944-3a3254950c8d
 	github.com/google/uuid v1.6.0
+	github.com/jcmturner/gofork v1.7.6
+	github.com/jcmturner/gokrb5/v8 v8.4.4
+	github.com/openwall/yescrypt-go v1.0.0
+	github.com/sergeymakinen/go-crypt v1.0.5
 	github.com/slingdata-io/godbc v0.0.9
+	github.com/tarantool/go-gostcrypto v0.1.0
 	github.com/xdg-go/scram v1.2.0
 	github.com/xdg-go/stringprep v1.0.4
 	go.etcd.io/bbolt v1.4.3
@@ -30,9 +35,7 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
-	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
-	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

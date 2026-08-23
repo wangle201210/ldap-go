@@ -188,11 +188,6 @@ func TestMaintenanceCommands(t *testing.T) {
 			args:   []string{"reindex", "-db", restoredPath},
 			action: "rebuilt",
 		},
-		{
-			name:   "slapindex alias",
-			args:   []string{"slapindex", "-db", restoredPath},
-			action: "rebuilt",
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -218,6 +213,22 @@ func TestMaintenanceCommands(t *testing.T) {
 				t.Fatalf("stdout = %q", stdout.String())
 			}
 		})
+	}
+	var slapindexStdout bytes.Buffer
+	var slapindexStderr bytes.Buffer
+	if exitCode := run(
+		[]string{"slapindex", "-db", restoredPath},
+		strings.NewReader(""),
+		&slapindexStdout,
+		&slapindexStderr,
+		func(string) string { return "" },
+	); exitCode != 0 || slapindexStdout.String() != "reindexed 1 database(s)\n" {
+		t.Fatalf(
+			"slapindex exit=%d stdout=%q stderr=%q",
+			exitCode,
+			slapindexStdout.String(),
+			slapindexStderr.String(),
+		)
 	}
 
 	restored, err := storage.OpenBolt(restoredPath)
@@ -1709,6 +1720,89 @@ func TestSlappasswdCompatibilityOptions(t *testing.T) {
 	}
 }
 
+func TestSlappasswdCryptFormats(t *testing.T) {
+	t.Parallel()
+
+	const secret = "crypt-compatibility-secret"
+	for _, test := range []struct {
+		name   string
+		args   []string
+		prefix string
+	}{
+		{
+			name:   "default CRYPT scheme",
+			args:   []string{"slappasswd", "-h", auth.OpenLDAPCryptHashScheme, "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme,
+		},
+		{
+			name:   "traditional DES",
+			args:   []string{"slappasswd", "-c", "%.2s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme,
+		},
+		{
+			name:   "MD5 crypt",
+			args:   []string{"slappasswd", "-c", "$1$%.8s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$1$",
+		},
+		{
+			name:   "bcrypt 2a",
+			args:   []string{"slappasswd", "-c", "$2a$05$%.22s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$2a$05$",
+		},
+		{
+			name:   "bcrypt 2b",
+			args:   []string{"slappasswd", "-c", "$2b$05$%.22s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$2b$05$",
+		},
+		{
+			name:   "bcrypt 2y",
+			args:   []string{"slappasswd", "-c", "$2y$05$%.22s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$2y$05$",
+		},
+		{
+			name:   "SHA256 crypt",
+			args:   []string{"slappasswd", "-c", "$5$%.16s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$5$",
+		},
+		{
+			name:   "SHA512 crypt with rounds",
+			args:   []string{"slappasswd", "-c", "$6$rounds=1000$%.8s", "-n", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$6$rounds=1000$",
+		},
+		{
+			name:   "SM3 crypt",
+			args:   []string{"slappasswd", "-c", "$sm3$rounds=1000$%.16s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$sm3$rounds=1000$",
+		},
+		{
+			name:   "SM3 yescrypt",
+			args:   []string{"slappasswd", "-c", "$sm3y$j75$%.16s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$sm3y$j75$",
+		},
+		{
+			name:   "GOST yescrypt",
+			args:   []string{"slappasswd", "-c", "$gy$j75$%.16s", "-s", secret},
+			prefix: auth.OpenLDAPCryptHashScheme + "$gy$j75$",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stdout, stderr, exitCode := runCLIForTest(t, test.args, "unused stdin")
+			if exitCode != 0 || stderr != "" {
+				t.Fatalf("slappasswd exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+			}
+			stored := []byte(strings.TrimSuffix(stdout, "\n"))
+			if !bytes.HasPrefix(stored, []byte(test.prefix)) ||
+				!auth.VerifyPassword(stored, []byte(secret)) ||
+				auth.VerifyPassword(stored, []byte("wrong")) {
+				t.Fatalf("slappasswd output = %q", stdout)
+			}
+			if strings.Contains(stdout, secret) {
+				t.Fatalf("slappasswd exposed the password: %q", stdout)
+			}
+		})
+	}
+}
+
 func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 	t.Parallel()
 
@@ -1721,17 +1815,15 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		{name: "slapadd false continue", args: []string{"slapadd", "-c=false"}, message: "-c=false is not supported"},
 		{name: "slapadd false quick", args: []string{"slapadd", "-q=false"}, message: "-q=false is not supported"},
 		{name: "slapcat continue", args: []string{"slapcat", "-c"}, message: "option -c is not supported"},
-		{name: "slapindex suffix", args: []string{"slapindex", "-b", "dc=example,dc=com"}, message: "option -b is not supported"},
-		{name: "slapindex number", args: []string{"slapindex", "-n", "1"}, message: "option -n is not supported"},
-		{name: "slapindex quick", args: []string{"slapindex", "-q"}, message: "option -q is not supported"},
 		{name: "slapindex continue", args: []string{"slapindex", "-c"}, message: "option -c is not supported"},
-		{name: "slapindex glue", args: []string{"slapindex", "-g"}, message: "option -g is not supported"},
 		{name: "slapindex truncate", args: []string{"slapindex", "-t"}, message: "option -t is not supported"},
-		{name: "slapindex attribute", args: []string{"slapindex", "uid"}, message: "attribute selection is not supported"},
-		{name: "slappasswd crypt format", args: []string{"slappasswd", "-c", "%.2s"}, message: "option -c is not supported"},
+		{name: "slappasswd crypt unknown", args: []string{"slappasswd", "-c", "$9$%.16s", "-s", secret}, message: "unsupported crypt hash"},
+		{name: "slappasswd crypt bcrypt cost", args: []string{"slappasswd", "-c", "$2b$17$%.22s", "-s", secret}, message: "exceeds 16"},
+		{name: "slappasswd crypt SHA rounds", args: []string{"slappasswd", "-c", "$6$rounds=1000001$%.8s", "-s", secret}, message: "exceeds 1000000"},
+		{name: "slappasswd crypt format", args: []string{"slappasswd", "-c", "%x", "-s", secret}, message: "only supports"},
+		{name: "slappasswd crypt scheme conflict", args: []string{"slappasswd", "-c", "%.2s", "-h", "{SSHA}", "-s", secret}, message: "mutually exclusive"},
 		{name: "slappasswd generated hash", args: []string{"slappasswd", "-g", "-h", "{SSHA}"}, message: "mutually exclusive"},
 		{name: "slappasswd secret sources", args: []string{"slappasswd", "-s", secret, "-T", "password.txt"}, message: "mutually exclusive"},
-		{name: "slappasswd unsupported scheme", args: []string{"slappasswd", "-h", "{CRYPT}", "-s", secret}, message: "unsupported password hash scheme"},
 		{name: "slappasswd verify-only Netscape scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPNetscapeMTAHashScheme, "-s", secret}, message: "scheme provided no hash function"},
 		{name: "slappasswd empty verify-only Netscape scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPNetscapeMTAHashScheme, "-s", ""}, message: "scheme provided no hash function"},
 		{name: "slappasswd verify-only RADIUS scheme", args: []string{"slappasswd", "-h", auth.OpenLDAPRADIUSHashScheme, "-s", secret}, message: "scheme provided no hash function"},

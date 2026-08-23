@@ -24,6 +24,26 @@ import (
 )
 
 func runLloadd(args []string, stdout, stderr io.Writer) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	management := make(chan os.Signal, 2)
+	signal.Notify(management, syscall.SIGHUP, syscall.SIGUSR1)
+	defer signal.Stop(management)
+	return runLloaddWithSignals(ctx, management, args, stdout, stderr)
+}
+
+func runLloaddWithSignals(
+	ctx context.Context,
+	management <-chan os.Signal,
+	args []string,
+	stdout, stderr io.Writer,
+) error {
+	if ctx == nil {
+		return errors.New("lloadd context is required")
+	}
+	if management == nil {
+		return errors.New("lloadd management signal channel is required")
+	}
 	flags := flag.NewFlagSet("lloadd", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("f", "lloadd.conf", "standalone lloadd configuration file")
@@ -32,11 +52,16 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 	tlsCertificate := flags.String("tls-cert", "", "PEM certificate for client StartTLS and LDAPS listeners")
 	tlsKey := flags.String("tls-key", "", "PEM private key for client StartTLS and LDAPS listeners")
 	checkConfig := flags.Bool("test-config", false, "validate configuration and exit")
+	hotReload := flags.Bool("hot-reload", false, "reload configuration on SIGUSR1")
+	drainTimeout := flags.Duration("drain-timeout", 30*time.Second, "maximum graceful drain duration")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if *drainTimeout <= 0 {
+		return errors.New("-drain-timeout must be positive")
 	}
 	config, err := lloadd.ParseConfigFile(*configPath)
 	if err != nil {
@@ -69,36 +94,139 @@ func runLloadd(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
-	proxy, err := newLloaddProxy(*config, logger, clientTLS)
+	overrideURLs := strings.Fields(*listenURLs)
+	daemon, err := lloadd.NewDaemon(lloadd.DaemonOptions{
+		Load: func(context.Context) (lloadd.DaemonTopology, error) {
+			candidate, err := lloadd.ParseConfigFile(*configPath)
+			if err != nil {
+				return lloadd.DaemonTopology{}, err
+			}
+			if len(overrideURLs) != 0 {
+				candidate.ListenURLs = append([]string(nil), overrideURLs...)
+				if err := candidate.Validate(); err != nil {
+					return lloadd.DaemonTopology{}, err
+				}
+			}
+			loadedTLS, err := loadLloaddClientTLS(*tlsCertificate, *tlsKey)
+			if err != nil {
+				return lloadd.DaemonTopology{}, err
+			}
+			if err := validateLloaddListeners(candidate.ListenURLs, loadedTLS); err != nil {
+				return lloadd.DaemonTopology{}, err
+			}
+			runtime, err := candidate.RuntimeConfig()
+			if err != nil {
+				return lloadd.DaemonTopology{}, err
+			}
+			runtime.Logger = logger
+			if loadedTLS != nil {
+				runtime.ClientTLS = loadedTLS.Clone()
+			}
+			return lloadd.DaemonTopology{
+				Runtime:    runtime,
+				ListenURLs: append([]string(nil), candidate.ListenURLs...),
+				GentleHUP:  candidate.GentleHUP,
+			}, nil
+		},
+		ListenerKey: lloaddListenerKey,
+		Listen: func(raw string) (net.Listener, string, error) {
+			return listenLloaddRawURL(raw)
+		},
+		Prepare:      prepareLloaddAcceptedConnection,
+		DrainTimeout: *drainTimeout,
+		Logger:       logger,
+	})
 	if err != nil {
 		return err
 	}
-	listeners := make([]net.Listener, 0, len(config.ListenURLs))
-	listenerDescriptions := make([]string, 0, len(config.ListenURLs))
-	for _, rawURL := range config.ListenURLs {
-		listener, description, err := listenLloaddURL(rawURL, clientTLS)
-		if err != nil {
-			closeListeners(listeners)
-			return err
-		}
-		listeners = append(listeners, listener)
-		listenerDescriptions = append(listenerDescriptions, description)
-	}
-	listener, err := newCombinedListener(listeners)
+	result, err := daemon.Start(ctx)
 	if err != nil {
-		closeListeners(listeners)
 		return err
 	}
-	defer listener.Close()
-	defer proxy.Close()
-	for _, description := range listenerDescriptions {
+	defer daemon.Close()
+	for _, description := range result.Listeners {
 		if _, err := fmt.Fprintf(stdout, "ldap-go lloadd listening on %s\n", description); err != nil {
 			return err
 		}
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	return proxy.Serve(ctx, listener)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-daemon.Errors():
+			return err
+		case received := <-management:
+			switch received {
+			case syscall.SIGHUP:
+				gentle := daemon.Snapshot().GentleHUP
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), *drainTimeout)
+				err := daemon.Shutdown(shutdownCtx, gentle)
+				shutdownCancel()
+				return err
+			case syscall.SIGUSR1:
+				if !*hotReload {
+					logger.Warn("lloadd SIGUSR1 hot reload ignored; enable -hot-reload")
+					continue
+				}
+				if _, err := daemon.Reload(ctx); err != nil {
+					logger.Error("lloadd SIGUSR1 reload failed; keeping current topology", "error", err)
+				}
+			}
+		}
+	}
+}
+
+func listenLloaddRawURL(raw string) (net.Listener, string, error) {
+	scheme, network, address, err := parseLloaddListenerURL(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	listener, err := net.Listen(network, address)
+	if err != nil {
+		return nil, "", fmt.Errorf("listen on %s: %w", raw, err)
+	}
+	if network == "unix" {
+		return listener, "ldapi://" + address, nil
+	}
+	return listener, scheme + "://" + listener.Addr().String(), nil
+}
+
+func prepareLloaddAcceptedConnection(
+	raw string,
+	runtime lloadd.RuntimeConfig,
+	connection net.Conn,
+) (net.Conn, error) {
+	scheme, _, _, err := parseLloaddListenerURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	if scheme == "pldap" || scheme == "pldaps" {
+		connection, err = readLloaddProxyProtocolV2(connection, lloaddProxyProtocolTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if scheme == "ldaps" || scheme == "pldaps" {
+		if runtime.ClientTLS == nil {
+			return nil, errors.New("LDAPS listener has no TLS configuration")
+		}
+		secured := tls.Server(connection, runtime.ClientTLS.Clone())
+		timeout := runtime.IOTimeout
+		if timeout <= 0 {
+			timeout = lloadd.DefaultIOTimeout
+		}
+		if err := secured.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return nil, fmt.Errorf("set LDAPS handshake deadline: %w", err)
+		}
+		if err := secured.Handshake(); err != nil {
+			return nil, fmt.Errorf("LDAPS handshake: %w", err)
+		}
+		if err := secured.SetDeadline(time.Time{}); err != nil {
+			return nil, fmt.Errorf("clear LDAPS handshake deadline: %w", err)
+		}
+		connection = secured
+	}
+	return connection, nil
 }
 
 func loadLloaddClientTLS(certificatePath, keyPath string) (*tls.Config, error) {
@@ -216,6 +344,14 @@ func parseLloaddListenerURL(raw string) (string, string, string, error) {
 	default:
 		return "", "", "", fmt.Errorf("unsupported lloadd listener scheme %q", parsed.Scheme)
 	}
+}
+
+func lloaddListenerKey(raw string) (string, error) {
+	scheme, network, address, err := parseLloaddListenerURL(raw)
+	if err != nil {
+		return "", err
+	}
+	return scheme + "|" + network + "|" + address, nil
 }
 
 const (

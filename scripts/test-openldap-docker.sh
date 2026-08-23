@@ -23,7 +23,7 @@ if [ ! -f "$dockerfile" ]; then
 	die "Dockerfile was not found: $dockerfile"
 fi
 
-image=${LDAP_GO_OPENLDAP_DOCKER_IMAGE:-ldap-go-openldap-test:1.25-bookworm}
+image=${LDAP_GO_OPENLDAP_DOCKER_IMAGE:-ldap-go-openldap-test:1.26-bookworm}
 cache_volume=${LDAP_GO_OPENLDAP_DOCKER_CACHE_VOLUME:-ldap-go-openldap-2.6.13-cache}
 goproxy=${GOPROXY:-https://goproxy.cn,direct}
 
@@ -51,9 +51,9 @@ exec docker run \
 	--ulimit nofile=4096:4096 \
 	--volume "$root:/workspace:ro" \
 	--volume "$cache_volume:/var/cache/ldap-go-openldap" \
-	--env PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-	--env "GOPROXY=$goproxy" \
-	--env LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 \
+		--env PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+		--env "GOPROXY=$goproxy" \
+		--env LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 \
 	--env OPENLDAP_SOURCE_CACHE=/var/cache/ldap-go-openldap/source \
 	--env BUILD=/var/cache/ldap-go-openldap/build \
 	"$image" \

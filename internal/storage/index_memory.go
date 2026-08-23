@@ -247,6 +247,56 @@ func (tx *memoryTx) rebuildEqualityIndexes(
 	return tx.buildEqualityIndexes(partition, schema, config)
 }
 
+func (tx *memoryTx) rebuildSelectedEqualityIndexes(
+	partition string,
+	schema EqualityIndexSchema,
+	attributes []string,
+) error {
+	if tx.readOnly {
+		return errorsReadOnly()
+	}
+	want, err := normalizeEqualityIndexConfig(schema.EqualityIndexConfiguration())
+	if err != nil {
+		return err
+	}
+	selected, err := selectedEqualityIndexConfig(want, attributes)
+	if err != nil {
+		return err
+	}
+	current, present := tx.equalityIndexConfigs[partition]
+	if present {
+		current, err = normalizeEqualityIndexConfig(current)
+	}
+	if !present || err != nil || !equalityIndexConfigsEqual(current, want) {
+		return tx.buildEqualityIndexes(partition, schema, want)
+	}
+	postings := tx.equalityPostings[partition]
+	for _, definition := range selected.Attributes {
+		prefix := string(equalityIndexAttributePrefix(partition, definition.Attribute))
+		for term := range postings {
+			if strings.HasPrefix(term, prefix) {
+				delete(postings, term)
+			}
+		}
+	}
+	keys := make([]string, 0)
+	for key := range tx.entries {
+		entryPartition, _ := splitPartitionedEntryKey(key)
+		if entryPartition == partition {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := tx.addEqualityIndexEntry(
+			partition, key, tx.entries[key], schema, selected,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (tx *memoryTx) ensureEqualityIndexes(
 	partition string,
 	schema EqualityIndexSchema,
@@ -398,3 +448,4 @@ func deleteMemoryEqualityPosting(
 }
 
 var _ equalityIndexStorageWriter = (*memoryTx)(nil)
+var _ selectiveEqualityIndexStorageWriter = (*memoryTx)(nil)

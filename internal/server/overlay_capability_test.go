@@ -37,6 +37,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 		"retcode",
 		"rwm",
 		"seqmod",
+		"sock",
 		"sssvlv",
 		"syncprov",
 		"totp",

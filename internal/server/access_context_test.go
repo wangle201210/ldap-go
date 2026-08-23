@@ -9,6 +9,28 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
+func TestConnectionACLSubjectSeparatesSASLStrength(t *testing.T) {
+	server := &Server{}
+	subject := server.connectionACLSubject(&connectionState{
+		secure:      true,
+		externalSSF: 256,
+		saslSSF:     1,
+	})
+	if subject.TLSSSF != 256 || subject.TransportSSF != 0 ||
+		subject.SASLSSF != 1 || subject.SSF != 256 {
+		t.Fatalf("TLS plus SASL subject = %#v", subject)
+	}
+
+	subject = server.connectionACLSubject(&connectionState{
+		externalSSF: 71,
+		saslSSF:     128,
+	})
+	if subject.TransportSSF != 71 || subject.TLSSSF != 0 ||
+		subject.SASLSSF != 128 || subject.SSF != 128 {
+		t.Fatalf("transport plus SASL subject = %#v", subject)
+	}
+}
+
 func TestLDAPClientACLConnectionContext(t *testing.T) {
 	t.Parallel()
 

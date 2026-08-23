@@ -70,28 +70,6 @@ func TestGlobalTLSConfigurationLoadsInlineDER(t *testing.T) {
 	}
 }
 
-func TestGlobalTLSConfigurationRejectsUnsupportedDirectives(t *testing.T) {
-	for _, attribute := range unsupportedGlobalTLSDirectives {
-		t.Run(attribute, func(t *testing.T) {
-			store := storage.NewMemory()
-			t.Cleanup(func() { _ = store.Close() })
-			seedGlobalTLSAttributes(t, store, map[string][][]byte{
-				attribute: {[]byte("configured")},
-			})
-
-			_, err := ValidateConfiguration(context.Background(), Config{Store: store})
-			if err == nil {
-				t.Fatalf("ValidateConfiguration() accepted %s", attribute)
-			}
-			for _, want := range []string{attribute, "unsupported"} {
-				if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(want)) {
-					t.Fatalf("error = %q, want substring %q", err, want)
-				}
-			}
-		})
-	}
-}
-
 func TestGlobalTLSCRLCheckNoneIsAnInertImportDefault(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })

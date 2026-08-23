@@ -932,13 +932,12 @@ content is represented in bbolt rather than native backend files. Arbitrary
 custom syntax/matching-rule modules, exact OpenLDAP dry-run diagnostics, and
 broader nested glue/backend combinations are not implemented.
 MDB indexes are never imported. The destination rebuilds its own configured
-equality, presence, substring, and ordering postings. `default`,
-`nolang`/`notags`, and supported `approx` declarations are retained in the
-configuration fingerprint, but associated phonetic approximate queries scan
-until a semantics-equivalent posting format exists. Option-specific indexes,
-`nosubtypes`, unsupported rules, and invalidated plans either reject at load or
-scan the selected partition as documented. These are explicit non-drop-in
-boundaries.
+equality, presence, substring, ordering, and multi-term Metaphone approximate
+postings. `default`, `nolang`/`notags`, option-specific AttributeDescriptions,
+and `nosubtypes` are retained in the versioned configuration fingerprint.
+Empty phonetic terms, unsupported rules, and invalidated plans safely scan the
+selected partition. These indexes remain a bbolt-native format rather than
+OpenLDAP MDB pages.
 
 ## Dependency policy
 

@@ -435,6 +435,7 @@ func connectLDAPCompareRaw(
 			connection = upgraded
 		}
 	}
+	connection = &ldapClientSASLSwitchConnection{connection: connection}
 
 	if err := connection.SetDeadline(time.Now().Add(client.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set LDAP bind deadline: %w", err))
@@ -453,7 +454,8 @@ func connectLDAPCompareRaw(
 			return closeOnError(fmt.Errorf("anonymous bind: %w", err))
 		}
 	} else {
-		if !hasPassword && client.saslMechanism != "EXTERNAL" {
+		if !hasPassword && client.saslMechanism != "EXTERNAL" &&
+			client.saslMechanism != "GSSAPI" {
 			return closeOnError(fmt.Errorf(
 				"SASL %s password was not loaded",
 				client.saslMechanism,
@@ -463,6 +465,7 @@ func connectLDAPCompareRaw(
 			connection,
 			parsedURI.Hostname(),
 			password,
+			hasPassword,
 			&messageID,
 		); err != nil {
 			return closeOnError(err)

@@ -25,7 +25,11 @@ type runtimeDatabase struct {
 	dnNormalizer          directory.DNAttributeNormalizer
 	ldapBackend           *ldapBackendRuntimeConfiguration
 	metaBackend           *metaBackendRuntimeConfiguration
+	asyncMetaBackend      *asyncMetaBackendRuntimeConfiguration
+	passwdBackend         *passwdBackendRuntimeConfiguration
+	dnssrvBackend         *dnssrvBackendRuntimeConfiguration
 	sockBackend           *sockBackendRuntimeConfiguration
+	sockOverlays          []sockOverlayRuntimeConfiguration
 	sqlBackend            *sqlBackendRuntimeConfiguration
 	metaTargetKey         string
 	relay                 *relayRuntimeConfiguration
@@ -221,6 +225,8 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			!isNullDatabase(database) &&
 			!isLDAPBackendDatabase(database) &&
 			!isMetaBackendDatabase(database) &&
+			!isPasswdBackendDatabase(database) &&
+			!isDNSSRVBackendDatabase(database) &&
 			!isSockBackendDatabase(database) &&
 			!isSQLBackendDatabase(database) {
 			indexedNormalizer, indexes, err := loadDatabaseEqualityIndexes(
@@ -400,6 +406,35 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			// A meta proxy database never owns a local data partition.
 			database.partition = ""
 		}
+		if isAsyncMetaBackendDatabase(database) {
+			configuration, err := loadAsyncMetaBackendRuntimeConfigurationWithNormalizer(
+				reader,
+				entry,
+				normalizer,
+			)
+			if err != nil {
+				return err
+			}
+			database.asyncMetaBackend = configuration
+			database.metaBackend = configuration.meta
+			database.partition = ""
+		}
+		if isPasswdBackendDatabase(database) {
+			configuration, err := loadPasswdBackendRuntimeConfiguration(entry, database)
+			if err != nil {
+				return err
+			}
+			database.passwdBackend = configuration
+			database.partition = ""
+		}
+		if isDNSSRVBackendDatabase(database) {
+			configuration, err := loadDNSSRVBackendRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.dnssrvBackend = configuration
+			database.partition = ""
+		}
 		if isSockBackendDatabase(database) {
 			configuration, err := loadSockBackendRuntimeConfiguration(entry)
 			if err != nil {
@@ -532,52 +567,58 @@ func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexConfiguration() 
 func (normalizer *databaseEqualityIndexNormalizer) ResolveEqualityIndexAttribute(
 	description string,
 ) (canonical string, equality, presence bool, err error) {
-	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	canonical, configured, found, err := normalizer.resolveIndexAttribute(description)
 	if err != nil || !found {
-		return "", false, false, err
+		return canonical, false, false, err
 	}
-	canonical = strings.ToLower(attribute.OID)
-	for _, configured := range normalizer.config.Attributes {
-		if configured.Attribute == canonical {
-			if configured.NoTags && strings.Contains(description, ";") {
-				return canonical, false, false, nil
-			}
-			return canonical, configured.Equality, configured.Presence, nil
-		}
-	}
-	return canonical, false, false, nil
+	return canonical, configured.Equality, configured.Presence, nil
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) ResolveApproximateIndexAttribute(
 	description string,
-) (canonical string, equalityFallback bool, err error) {
-	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+) (canonical string, approximate, equalityFallback bool, err error) {
+	canonical, configured, found, err := normalizer.resolveIndexAttribute(description)
 	if err != nil || !found {
-		return "", false, err
+		return canonical, false, false, err
 	}
-	canonical = strings.ToLower(attribute.OID)
-	for _, configured := range normalizer.config.Attributes {
-		if configured.Attribute != canonical {
-			continue
-		}
-		if configured.NoTags && strings.Contains(description, ";") {
-			return canonical, false, nil
-		}
-		// OpenLDAP falls back to the equality index only when the attribute's
-		// equality rule has no associated approximate rule. Associated rules
-		// use a phonetic, multi-key normalization that this index does not
-		// reproduce, so those filters must retain the complete scan candidate set.
-		_, hasAssociatedApproximateRule := openLDAPApproximateMatchingRule(attribute.Equality)
-		return canonical, configured.Equality && !hasAssociatedApproximateRule, nil
+	attribute, typeFound, err := normalizer.registry.EffectiveAttributeType(description)
+	if err != nil || !typeFound {
+		return canonical, false, false, err
 	}
-	return canonical, false, nil
+	_, hasAssociatedApproximateRule := openLDAPApproximateMatchingRule(attribute.Equality)
+	return canonical,
+		configured.Approximate && hasAssociatedApproximateRule,
+		configured.Equality && !hasAssociatedApproximateRule,
+		nil
 }
 
-func (normalizer *databaseEqualityIndexNormalizer) NormalizeApproximateIndexAssertion(
+func (normalizer *databaseEqualityIndexNormalizer) ApproximateIndexAssertionTerms(
 	description string,
 	value []byte,
-) ([]byte, error) {
-	return normalizer.registry.NormalizeEqualityAssertion(description, value)
+) ([][]byte, bool, error) {
+	_, configured, found, err := normalizer.resolveIndexAttribute(description)
+	if err != nil || !found || !configured.Approximate {
+		return nil, false, err
+	}
+	keys, complete := schema.ApproximateIndexKeys(configured.ApproximateRule, value)
+	return keys, complete, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ApproximateIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	configured, found := normalizer.indexAttributeDefinition(canonicalAttribute)
+	if !found || !configured.Approximate {
+		return nil, nil
+	}
+	values := normalizer.registry.AttributeValues(entry, canonicalAttribute)
+	var result [][]byte
+	for _, value := range values {
+		keys, _ := schema.ApproximateIndexKeys(configured.ApproximateRule, value)
+		result = append(result, keys...)
+	}
+	return result, nil
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeEqualityIndexAssertion(
@@ -612,20 +653,11 @@ func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexValues(
 func (normalizer *databaseEqualityIndexNormalizer) ResolveSubstringIndexAttribute(
 	description string,
 ) (canonical string, initial, any, final bool, err error) {
-	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	canonical, configured, found, err := normalizer.resolveIndexAttribute(description)
 	if err != nil || !found {
-		return "", false, false, false, err
+		return canonical, false, false, false, err
 	}
-	canonical = strings.ToLower(attribute.OID)
-	for _, configured := range normalizer.config.Attributes {
-		if configured.Attribute == canonical {
-			if configured.NoTags && strings.Contains(description, ";") {
-				return canonical, false, false, false, nil
-			}
-			return canonical, configured.SubstringInitial, configured.SubstringAny, configured.SubstringFinal, nil
-		}
-	}
-	return canonical, false, false, false, nil
+	return canonical, configured.SubstringInitial, configured.SubstringAny, configured.SubstringFinal, nil
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeSubstringIndexAssertion(
@@ -670,20 +702,59 @@ func (normalizer *databaseEqualityIndexNormalizer) SubstringIndexValues(
 func (normalizer *databaseEqualityIndexNormalizer) ResolveOrderingIndexAttribute(
 	description string,
 ) (canonical string, ordering bool, err error) {
-	attribute, found, err := normalizer.registry.EffectiveAttributeType(description)
+	canonical, configured, found, err := normalizer.resolveIndexAttribute(description)
 	if err != nil || !found {
-		return "", false, err
+		return canonical, false, err
 	}
-	canonical = strings.ToLower(attribute.OID)
-	for _, configured := range normalizer.config.Attributes {
-		if configured.Attribute == canonical {
-			if configured.NoTags && strings.Contains(description, ";") {
-				return canonical, false, nil
-			}
-			return canonical, configured.Ordering, nil
+	return canonical, configured.Ordering, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) resolveIndexAttribute(
+	description string,
+) (string, storage.EqualityIndexAttribute, bool, error) {
+	canonical, base, attribute, err := canonicalDatabaseIndexAttributeDescription(
+		normalizer.registry,
+		description,
+	)
+	if err != nil {
+		return "", storage.EqualityIndexAttribute{}, false, err
+	}
+	if configured, found := normalizer.indexAttributeDefinition(canonical); found {
+		return canonical, configured, true, nil
+	}
+	if canonical != base {
+		if configured, found := normalizer.indexAttributeDefinition(base); found && !configured.NoTags {
+			return base, configured, true, nil
 		}
 	}
-	return canonical, false, nil
+	for attribute.Superior != "" {
+		superior, found, err := normalizer.registry.EffectiveAttributeType(attribute.Superior)
+		if err != nil {
+			return "", storage.EqualityIndexAttribute{}, false, err
+		}
+		if !found {
+			break
+		}
+		key := strings.ToLower(superior.OID)
+		if configured, configuredFound := normalizer.indexAttributeDefinition(key); configuredFound && !configured.NoSubtypes {
+			return key, configured, true, nil
+		}
+		attribute = superior
+	}
+	return canonical, storage.EqualityIndexAttribute{}, false, nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) indexAttributeDefinition(
+	canonical string,
+) (storage.EqualityIndexAttribute, bool) {
+	index := sort.Search(len(normalizer.config.Attributes), func(index int) bool {
+		return normalizer.config.Attributes[index].Attribute >= canonical
+	})
+	if index >= len(normalizer.config.Attributes) ||
+		normalizer.config.Attributes[index].Attribute != canonical {
+		return storage.EqualityIndexAttribute{}, false
+	}
+	return normalizer.config.Attributes[index], true
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeOrderingIndexAssertion(
@@ -983,6 +1054,8 @@ func loadDatabaseEqualityIndexes(
 				case "nolang", "notags":
 					// slap_str2index maps the legacy nolang spelling to NOTAGS.
 					modes.noTags = true
+				case "nosubtypes":
+					modes.noSubtypes = true
 				default:
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 						"%s olcDbIndex has unknown index type %q",
@@ -1007,27 +1080,16 @@ func loadDatabaseEqualityIndexes(
 				defaultModes.merge(modes)
 				continue
 			}
-			if strings.Contains(description, ";") {
-				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-					"%s olcDbIndex attribute %q has options; option-specific index databases are not implemented, use a base attribute with nolang/notags when tagged filters must scan",
-					entry.DN,
-					description,
-				)
-			}
-			attribute, found, err := registry.EffectiveAttributeType(description)
+			canonicalDescription, _, attribute, err := canonicalDatabaseIndexAttributeDescription(
+				registry,
+				description,
+			)
 			if err != nil {
 				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 					"%s olcDbIndex attribute %q: %w",
 					entry.DN,
 					description,
 					err,
-				)
-			}
-			if !found {
-				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
-					"%s olcDbIndex attribute %q is undefined",
-					entry.DN,
-					description,
 				)
 			}
 			if modes.equality && attribute.Equality == "" {
@@ -1074,6 +1136,7 @@ func loadDatabaseEqualityIndexes(
 			}
 			approximateRule := ""
 			if modes.approximate {
+				var found bool
 				approximateRule, found = openLDAPApproximateMatchingRule(attribute.Equality)
 				if !found {
 					return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
@@ -1083,7 +1146,7 @@ func loadDatabaseEqualityIndexes(
 					)
 				}
 			}
-			key := strings.ToLower(attribute.OID)
+			key := canonicalDescription
 			if previous, duplicate := definedAttributes[key]; duplicate {
 				return nil, storage.EqualityIndexConfig{}, fmt.Errorf(
 					"%s olcDbIndex duplicate index definition for attr %q (already defined as %q)",
@@ -1115,10 +1178,11 @@ func loadDatabaseEqualityIndexes(
 			configured.SubstringFinal = configured.SubstringFinal || modes.substringFinal
 			configured.Ordering = configured.Ordering || modes.ordering
 			configured.NoTags = configured.NoTags || modes.noTags
+			configured.NoSubtypes = configured.NoSubtypes || modes.noSubtypes
 			byAttribute[key] = configured
 		}
 	}
-	config := storage.EqualityIndexConfig{Version: 1}
+	config := storage.EqualityIndexConfig{Version: storage.EqualityIndexFormatVersion}
 	for _, attribute := range byAttribute {
 		config.Attributes = append(config.Attributes, attribute)
 	}
@@ -1140,12 +1204,13 @@ type databaseIndexModes struct {
 	substringFinal   bool
 	ordering         bool
 	noTags           bool
+	noSubtypes       bool
 }
 
 func (modes databaseIndexModes) enabled() bool {
 	return modes.equality || modes.presence || modes.approximate ||
 		modes.substringInitial || modes.substringAny || modes.substringFinal ||
-		modes.ordering || modes.noTags
+		modes.ordering || modes.noTags || modes.noSubtypes
 }
 
 func (modes *databaseIndexModes) merge(other databaseIndexModes) {
@@ -1157,6 +1222,58 @@ func (modes *databaseIndexModes) merge(other databaseIndexModes) {
 	modes.substringFinal = modes.substringFinal || other.substringFinal
 	modes.ordering = modes.ordering || other.ordering
 	modes.noTags = modes.noTags || other.noTags
+	modes.noSubtypes = modes.noSubtypes || other.noSubtypes
+}
+
+func canonicalDatabaseIndexAttributeDescription(
+	registry databaseEqualityIndexRegistry,
+	description string,
+) (canonical, base string, attribute schema.AttributeType, err error) {
+	parts := strings.Split(strings.TrimSpace(description), ";")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return "", "", schema.AttributeType{}, errors.New("empty AttributeDescription")
+	}
+	attribute, found, err := registry.EffectiveAttributeType(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return "", "", schema.AttributeType{}, err
+	}
+	if !found {
+		return "", "", schema.AttributeType{}, fmt.Errorf("undefined attribute type %q", parts[0])
+	}
+	base = strings.ToLower(attribute.OID)
+	if len(parts) == 1 {
+		return base, base, attribute, nil
+	}
+	options := make([]string, 0, len(parts)-1)
+	seen := make(map[string]struct{}, len(parts)-1)
+	for _, raw := range parts[1:] {
+		option := strings.ToLower(strings.TrimSpace(raw))
+		if !validDatabaseIndexAttributeOption(option) {
+			return "", "", schema.AttributeType{}, fmt.Errorf("invalid attribute option %q", raw)
+		}
+		if _, duplicate := seen[option]; duplicate {
+			continue
+		}
+		seen[option] = struct{}{}
+		options = append(options, option)
+	}
+	sort.Strings(options)
+	return base + ";" + strings.Join(options, ";"), base, attribute, nil
+}
+
+func validDatabaseIndexAttributeOption(option string) bool {
+	if option == "" {
+		return false
+	}
+	for index, character := range option {
+		if character >= 'a' && character <= 'z' ||
+			character >= '0' && character <= '9' && index > 0 ||
+			character == '-' && index > 0 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 type orderedDatabaseIndexDirective struct {
@@ -1515,6 +1632,12 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		switch overlayType {
+		case "sock":
+			configuration, err := loadSockOverlayRuntimeConfiguration(entry)
+			if err != nil {
+				return err
+			}
+			database.sockOverlays = append(database.sockOverlays, configuration)
 		case "autoca":
 			if database.autoca != nil {
 				return fmt.Errorf(
@@ -2672,6 +2795,18 @@ func isMetaBackendDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "meta"
 }
 
+func isAsyncMetaBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "asyncmeta"
+}
+
+func isPasswdBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "passwd"
+}
+
+func isDNSSRVBackendDatabase(database runtimeDatabase) bool {
+	return databaseType(database.name) == "dnssrv"
+}
+
 func isSockBackendDatabase(database runtimeDatabase) bool {
 	return databaseType(database.name) == "sock"
 }
@@ -2688,6 +2823,8 @@ func databaseUsesLocalContentStorage(database runtimeDatabase) bool {
 		database.relay == nil &&
 		database.ldapBackend == nil &&
 		database.metaBackend == nil &&
+		database.passwdBackend == nil &&
+		database.dnssrvBackend == nil &&
 		database.sockBackend == nil &&
 		database.sqlBackend == nil
 }
@@ -2699,6 +2836,8 @@ func databaseUsesSchemaAwareContentStorage(database runtimeDatabase) bool {
 		!isNullDatabase(database) &&
 		database.ldapBackend == nil &&
 		database.metaBackend == nil &&
+		database.passwdBackend == nil &&
+		database.dnssrvBackend == nil &&
 		database.sockBackend == nil &&
 		database.sqlBackend == nil
 }

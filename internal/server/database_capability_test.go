@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -13,9 +14,6 @@ import (
 
 func TestLoadRuntimeDatabasesRejectsUnsupportedBackendTypes(t *testing.T) {
 	tests := []string{
-		"asyncmeta",
-		"dnssrv",
-		"passwd",
 		"perl",
 		"unknown-backend",
 		"bootstrap",
@@ -105,42 +103,33 @@ func TestRuntimeAddsInternalBootstrapDatabase(t *testing.T) {
 	t.Fatalf("loadRuntimeDatabases() did not add internal bootstrap database: %#v", databases)
 }
 
-func TestNewRejectsUnsupportedDatabaseBackend(t *testing.T) {
+func TestNewAcceptsPasswdDatabaseBackend(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
-	entry := capabilityDatabaseEntry("{1}passwd", "dc=passwd,dc=test")
+	fixture := writePasswdCapabilityFixture(t)
+	entry := capabilityDatabaseEntry(
+		"{1}passwd",
+		"dc=passwd,dc=test",
+		directory.Attribute{Description: "olcPasswdFile", Values: stringValues(fixture)},
+	)
 	seedCapabilityConfiguration(t, store, entry)
 
 	instance, err := New(Config{Store: store})
-	if err == nil {
-		instance.closeSQLBackends()
-		t.Fatal("New() accepted an unsupported passwd database backend")
+	if err != nil {
+		t.Fatalf("New() rejected passwd database backend: %v", err)
 	}
-	for _, want := range []string{entry.DN, "passwd", "unsupported"} {
-		if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(want)) {
-			t.Fatalf("New() error = %q, want substring %q", err, want)
-		}
-	}
+	instance.closeSQLBackends()
 }
 
-func TestValidateConfigurationRejectsUnsupportedDatabaseBackend(t *testing.T) {
+func TestValidateConfigurationAcceptsDNSSRVDatabaseBackend(t *testing.T) {
 	store := storage.NewMemory()
 	t.Cleanup(func() { _ = store.Close() })
 	entry := capabilityDatabaseEntry("{1}dnssrv", "dc=dnssrv,dc=test")
 	seedCapabilityConfiguration(t, store, entry)
 
 	_, err := ValidateConfiguration(context.Background(), Config{Store: store})
-	if err == nil {
-		t.Fatal("ValidateConfiguration() accepted an unsupported dnssrv backend")
-	}
-	for _, want := range []string{entry.DN, "dnssrv", "unsupported"} {
-		if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(want)) {
-			t.Fatalf(
-				"ValidateConfiguration() error = %q, want substring %q",
-				err,
-				want,
-			)
-		}
+	if err != nil {
+		t.Fatalf("ValidateConfiguration() rejected dnssrv backend: %v", err)
 	}
 }
 
@@ -193,6 +182,7 @@ func TestOnlineConfigurationRejectsUnsupportedDatabaseBackend(t *testing.T) {
 }
 
 func TestLoadRuntimeDatabasesAcceptsImplementedBackendTypes(t *testing.T) {
+	passwdFixture := writePasswdCapabilityFixture(t)
 	tests := []struct {
 		name    string
 		backend string
@@ -232,6 +222,20 @@ func TestLoadRuntimeDatabasesAcceptsImplementedBackendTypes(t *testing.T) {
 			name:    "null",
 			backend: "null",
 			entries: []directory.Entry{capabilityDatabaseEntry("{1}null", "dc=null,dc=test")},
+		},
+		{
+			name:    "passwd",
+			backend: "passwd",
+			entries: []directory.Entry{capabilityDatabaseEntry(
+				"{1}passwd",
+				"dc=passwd,dc=test",
+				directory.Attribute{Description: "olcPasswdFile", Values: stringValues(passwdFixture)},
+			)},
+		},
+		{
+			name:    "dnssrv",
+			backend: "dnssrv",
+			entries: []directory.Entry{capabilityDatabaseEntry("{1}dnssrv", "dc=dnssrv,dc=test")},
 		},
 		{
 			name:    "relay",
@@ -311,6 +315,19 @@ func TestLoadRuntimeDatabasesAcceptsImplementedBackendTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func writePasswdCapabilityFixture(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir() + "/passwd"
+	if err := os.WriteFile(
+		path,
+		[]byte("fixture:x:1000:1000:Fixture User:/home/fixture:/bin/sh\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write passwd fixture: %v", err)
+	}
+	return path
 }
 
 func capabilityDatabaseEntry(

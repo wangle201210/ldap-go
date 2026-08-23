@@ -62,6 +62,43 @@ func (schema indexTestSchema) ResolveEqualityIndexAttribute(
 	return canonical, false, false, nil
 }
 
+func (schema indexTestSchema) ResolveApproximateIndexAttribute(
+	description string,
+) (string, bool, bool, error) {
+	canonical, ok := indexTestAttribute(description)
+	if !ok {
+		return "", false, false, nil
+	}
+	for _, configured := range schema.config.Attributes {
+		if configured.Attribute == canonical {
+			return canonical, configured.Approximate, configured.Equality && !configured.Approximate, nil
+		}
+	}
+	return canonical, false, false, nil
+}
+
+func (schema indexTestSchema) ApproximateIndexAssertionTerms(
+	_ string,
+	value []byte,
+) ([][]byte, bool, error) {
+	return indexTestApproximateTerms(value), true, nil
+}
+
+func (schema indexTestSchema) ApproximateIndexValues(
+	entry directory.Entry,
+	canonicalAttribute string,
+) ([][]byte, error) {
+	values, err := schema.EqualityIndexValues(entry, canonicalAttribute)
+	if err != nil {
+		return nil, err
+	}
+	var result [][]byte
+	for _, value := range values {
+		result = append(result, indexTestApproximateTerms(value)...)
+	}
+	return result, nil
+}
+
 func (schema indexTestSchema) NormalizeEqualityIndexAssertion(
 	_ string,
 	value []byte,
@@ -181,8 +218,17 @@ func indexTestNormalize(value []byte) []byte {
 	return []byte(strings.ToLower(strings.Join(strings.Fields(string(value)), " ")))
 }
 
+func indexTestApproximateTerms(value []byte) [][]byte {
+	fields := strings.Fields(string(indexTestNormalize(value)))
+	result := make([][]byte, len(fields))
+	for index, field := range fields {
+		result[index] = []byte(field)
+	}
+	return result
+}
+
 func indexTestConfig(attributes ...EqualityIndexAttribute) EqualityIndexConfig {
-	return EqualityIndexConfig{Version: 1, Attributes: attributes}
+	return EqualityIndexConfig{Version: EqualityIndexFormatVersion, Attributes: attributes}
 }
 
 func indexTestCNConfig() EqualityIndexConfig {
@@ -198,10 +244,12 @@ func indexTestCNPhase2Config() EqualityIndexConfig {
 	return indexTestConfig(EqualityIndexAttribute{
 		Attribute:        "2.5.4.3",
 		EqualityRule:     "caseignorematch",
+		ApproximateRule:  "testapproxmatch",
 		SubstringRule:    "caseignoresubstringsmatch",
 		OrderingRule:     "caseignoreorderingmatch",
 		Equality:         true,
 		Presence:         true,
+		Approximate:      true,
 		SubstringInitial: true,
 		SubstringAny:     true,
 		SubstringFinal:   true,

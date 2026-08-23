@@ -96,11 +96,17 @@ func NewBuiltinRegistry() (*Registry, error) {
 	if err := RegisterOpenLDAPMetaSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP back-meta schema: %w", err)
 	}
+	if err := RegisterOpenLDAPAsyncMetaSchema(registry); err != nil {
+		return nil, fmt.Errorf("register OpenLDAP back-asyncmeta schema: %w", err)
+	}
 	if err := RegisterOpenLDAPSockSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP back-sock schema: %w", err)
 	}
 	if err := RegisterOpenLDAPSQLSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP back-sql schema: %w", err)
+	}
+	if err := RegisterOpenLDAPPasswdDNSSRVSchema(registry); err != nil {
+		return nil, fmt.Errorf("register passwd and dnssrv schema: %w", err)
 	}
 	return registry, nil
 }
@@ -194,6 +200,7 @@ var builtinAttributeTypes = []string{
 }
 
 var builtinHiddenAttributeTypes = []string{
+	"( 1.3.6.1.4.1.4203.1.12.2.3.0.35 NAME 'olcPasswordCryptSaltFormat' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.30 NAME 'olcModuleLoad' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " X-ORDERED 'VALUES' )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.31 NAME 'olcModulePath' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.3.2.1 NAME ( 'olcPcache' 'olcProxyCache' ) DESC 'Proxy Cache basic parameters' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",

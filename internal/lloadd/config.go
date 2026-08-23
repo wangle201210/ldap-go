@@ -38,6 +38,7 @@ const (
 	DefaultBackendWeight       = 1
 
 	DefaultIOTimeout      = 10 * time.Second
+	DefaultIdleTimeout    = 0
 	DefaultNetworkTimeout = 0
 	DefaultWriteCoherence = 0
 	DefaultBackendRetry   = 5 * time.Second
@@ -51,11 +52,14 @@ const (
 // promoted because it controls every upstream connection.
 type Config struct {
 	ListenURLs          []string
+	GentleHUP           bool
+	Access              []string
 	MaxIncomingClient   int
 	MaxIncomingUpstream int
 	ClientMaxPending    int
 	WriteCoherence      time.Duration
 	IOTimeout           time.Duration
+	IdleTimeout         time.Duration
 	NetworkTimeout      time.Duration
 	ProxyAuthz          bool
 	Features            []Feature
@@ -241,6 +245,7 @@ func DefaultConfig() Config {
 		ClientMaxPending:    DefaultClientMaxPending,
 		WriteCoherence:      DefaultWriteCoherence,
 		IOTimeout:           DefaultIOTimeout,
+		IdleTimeout:         DefaultIdleTimeout,
 		NetworkTimeout:      DefaultNetworkTimeout,
 		BindConf:            BindConfig{Method: BindNone},
 	}
@@ -429,6 +434,25 @@ func (parser *configParser) parseDirective(words []string, baseDir string, depth
 		}
 		parser.config.ListenURLs = listeners
 		return nil
+	case "gentlehup":
+		if err := parser.markSingleton(directive, location); err != nil {
+			return err
+		}
+		if err := requireArgumentCount(directive, args, 1, 1); err != nil {
+			return err
+		}
+		enabled, err := parseOnOff(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid gentlehup: %w", err)
+		}
+		parser.config.GentleHUP = enabled
+		return nil
+	case "access":
+		if len(args) == 0 {
+			return errors.New("access requires an OpenLDAP ACL rule")
+		}
+		parser.config.Access = append(parser.config.Access, strings.Join(args, " "))
+		return nil
 	case "sockbuf_max_incoming_client":
 		return parser.parseLimitSingleton(directive, args, location, &parser.config.MaxIncomingClient)
 	case "sockbuf_max_incoming_upstream":
@@ -460,6 +484,19 @@ func (parser *configParser) parseDirective(words []string, baseDir string, depth
 			return fmt.Errorf("invalid iotimeout: %w", err)
 		}
 		parser.config.IOTimeout = value
+		return nil
+	case "idletimeout":
+		if err := parser.markSingleton(directive, location); err != nil {
+			return err
+		}
+		if err := requireArgumentCount(directive, args, 1, 1); err != nil {
+			return err
+		}
+		value, err := parseIntegerDuration(args[0], time.Second, false)
+		if err != nil {
+			return fmt.Errorf("invalid idletimeout: %w", err)
+		}
+		parser.config.IdleTimeout = value
 		return nil
 	case "feature":
 		if len(args) == 0 {
@@ -866,6 +903,17 @@ func splitWords(line string) ([]string, error) {
 	return words, nil
 }
 
+func parseOnOff(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "on", "yes", "true", "1":
+		return true, nil
+	case "off", "no", "false", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected on or off, got %q", raw)
+	}
+}
+
 func (config Config) Validate() error {
 	if len(config.ListenURLs) == 0 {
 		return errors.New("lloadd config has no listener URLs")
@@ -890,8 +938,8 @@ func (config Config) Validate() error {
 			return fmt.Errorf("%s cannot be negative", name)
 		}
 	}
-	if config.IOTimeout < 0 || config.NetworkTimeout < 0 {
-		return errors.New("I/O and network timeouts cannot be negative")
+	if config.IOTimeout < 0 || config.IdleTimeout < 0 || config.NetworkTimeout < 0 {
+		return errors.New("I/O, idle, and network timeouts cannot be negative")
 	}
 	features := make(map[Feature]struct{}, len(config.Features))
 	for _, feature := range config.Features {

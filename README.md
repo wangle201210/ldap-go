@@ -34,7 +34,8 @@ make full
 ```
 
 `make full` builds the pinned OpenLDAP 2.6.13 release commit locally with the
-`ldap`, `meta`, `null`, `relay`, `sock`, `sql`, and `mdb` backends, the required overlays,
+`ldap`, `meta`, `asyncmeta`, `null`, `relay`, `sock`, `sql`, `passwd`,
+`dnssrv`, and `mdb` backends, the required overlays, `{CRYPT}` support,
 dynamic-module support, and the reference `lloadd` binary. The suite compiles
 OpenLDAP's contrib `pw-sha2`, `pw-pbkdf2`, `pw-apr1`, `pw-netscape`,
 `pw-radius`, and `pw-totp` modules against that build. It rejects unexpected
@@ -47,6 +48,10 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
+The latest strict run passed 1,589 top-level tests against the pinned commit.
+The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
+`{CRYPT}` as required features; missing support fails strict validation rather
+than turning its differential into an optional skip.
 
 Content DNs use a schema-aware v2 identity derived from each naming
 attribute's equality rule. Attribute aliases and numeric OIDs converge,
@@ -98,6 +103,18 @@ credentials and authorization rules through `acl-bind`/IDAssert, including
 group and local LDAP-URL rules; native outbound SASL assertion carries the
 mapped authorization ID.
 
+`olcDatabase=asyncmeta` reuses the verified meta routing and mapping engine but
+adds fixed metaconn slots, per-metaconn pending limits, target connection caps,
+and target-wide consecutive-timeout retirement across all slots. Multi-target
+Search, Bind/operation leases, Cancel/Abandon propagation, online reload, and
+rollback have topology and race coverage. `olcDatabase=passwd` exposes a
+read-only, ACL-filtered snapshot of a bounded passwd file and refreshes it when
+the opened file's identity, size, or modification time changes. The
+`olcDatabase=dnssrv` implementation follows OpenLDAP's security model: it
+returns SRV-derived LDAP referrals, rejects password Bind before DNS lookup,
+and never proxies credentials or writes to DNS-selected hosts. Its resolver
+uses bounded TTL/LRU caching and single-flight misses.
+
 The database-local `pcache` overlay supports schema-aware equality,
 substring, unordered AND/OR, and extensible-filter containment, including
 attribute and matching-rule aliases. Canonical query keys prevent equivalent
@@ -129,11 +146,17 @@ RFC 5805 updates targeting a sock database fail with `unwillingToPerform` while
 the operation is queued, before a Unix socket is opened; a commit-time queue
 scan is an additional fail-closed guard. Critical chaining controls and a
 critical password-policy control on Bind are likewise rejected before external
-I/O, while unsupported noncritical controls are ignored. The protocol package
-can parse a strict, sole `CONTINUE` overlay response and encode one-way `ENTRY`
-and `RESULT` notifications. Socket-overlay configuration, operation wrapping,
-callback dispatch, referrals/response controls in `RESULT`, and complete
-overlay parity remain outside this milestone.
+I/O, while unsupported noncritical controls are ignored. The separate
+socket-overlay runtime loads `olcOvSocketConfig`, operation and response masks,
+DN patterns, connection extensions, socket paths, and the bounded ldap-go
+extension `olcOvSocketCallbackTimeout`. It executes configured operation
+callbacks in order, accepts `CONTINUE` or a direct `RESULT`, and serializes
+Search `ENTRY` and final `RESULT` notifications. Timeout or malformed
+callbacks fail closed and leave the LDAP association usable where the protocol
+allows. SASL Bind and response fields that the text protocol cannot represent,
+including referral and response-control payloads, are rejected rather than
+silently discarded. Exact POSIX ERE locale behavior and every multi-overlay
+callback combination remain unclaimed.
 
 The partial `back-sql` runtime now reduces Search candidates with parameterized
 object-class equality and mapped-attribute presence queries.
@@ -166,15 +189,22 @@ and recovers backend connections. Client listeners support LDAP StartTLS and
 implicit LDAPS with one configured certificate. Upstream connections support
 LDAPS and optional/critical StartTLS with CA, hostname/SAN, client-certificate,
 protocol, cipher, curve, and CRL policy validation. Service authentication can
-use Simple Bind or auth-only PLAIN, CRAM-MD5, DIGEST-MD5, and
+use Simple Bind or PLAIN, CRAM-MD5, DIGEST-MD5, and
 SCRAM-SHA-1/256/512 before ordinary traffic, and upstream TCP keepalive plus
 Linux `TCP_USER_TIMEOUT` are applied before TLS. Its standalone configuration
 parser and runtime pass package/race tests, pinned-source contracts, and the
 existing live OpenLDAP 2.6.13 differential subset. Service Bind still requires
 ProxyAuthz, and client SASL EXTERNAL is rejected rather than forwarded with an
-identity the proxy cannot safely restore. GSSAPI, SASL security layers and
-channel binding, dynamic topology, embedded
-`cn=config`/`cn=monitor`, and complete lloadd daemon parity remain unsupported.
+identity the proxy cannot safely restore. The standalone daemon atomically
+publishes candidate topologies, drains retired generations, bounds connection
+preparation, idle time, TLS handshakes, retained generations, and Monitor
+snapshots, and supports same-address TLS replacement. `SIGHUP` follows
+shutdown/gentle-shutdown semantics; the ldap-go extension `-hot-reload` moves
+reload to `SIGUSR1`, with `-drain-timeout` bounding old generations. Its
+read-only `cn=Monitor` view provides connection/backend and operation counters,
+OpenLDAP ACL evaluation, paging snapshots, Assertion, server-side Sort, VLV,
+and ManageDsaIT. It is not the complete OpenLDAP monitor schema or an embedded
+slapd-module ABI.
 The `read_pause` feature applies capacity backpressure before reading more
 client requests. The `vc` feature maps Simple Bind to OpenLDAP's Verify
 Credentials exop and fails explicitly when the backend does not provide it;
@@ -374,6 +404,17 @@ in differential tests. Policy configuration and all operational state survive
 `olcPPolicyForwardUpdates` sends policy state changes to the provider without
 mutating the consumer copy. Native C `check_password()` modules remain pending;
 configured native checker paths fail closed.
+The pure-Go `{CRYPT}` adapter imports and verifies traditional DES, BSDI
+extended DES, bigcrypt, MD5-crypt, bcrypt `2a/2b/2y`, SHA-256/512-crypt,
+yescrypt, scrypt, SHA1-crypt, SunMD5, NT crypt, SM3-crypt, SM3-yescrypt, and
+GOST/Streebog-yescrypt values. `slappasswd -c`,
+`olcPasswordCryptSaltFormat`, Password Modify, ppolicy, remoteauth, and
+translucent use the same bounded generator. New `{CRYPT}` values default to
+SHA-512-crypt with 100,000 rounds rather than legacy DES; imported DES values
+remain readable. Salt formats require exactly one controlled `%s` conversion,
+and a process-wide admission controller bounds concurrent CPU and estimated
+memory use for high-cost hashes. Unsupported libxcrypt extensions and
+third-party internal buffers that Go cannot clear remain documented limits.
 OpenLDAP's contrib `pw-sha2` module is data-compatible for `{SHA256}`,
 `{SSHA256}`, `{SHA384}`, `{SSHA384}`, `{SHA512}`, and `{SSHA512}`. Salted
 hashes use the module's eight-byte salt, and Password Modify,
@@ -586,9 +627,10 @@ The built-in LDAP client commands accept generic `-e`/`-E` controls with
 critical, absent, empty, string, Base64, and file-backed values on applicable
 operations. `-C` enables anonymous referral chasing with DN/scope rewriting,
 control preservation, loop detection, and the OpenLDAP default five-hop limit.
-They also implement auth-only `-Y` SASL for PLAIN, CRAM-MD5, DIGEST-MD5,
-SCRAM-SHA-1/256/512, and EXTERNAL, with `-U`, `-X`, and `-R`, strict server
-proof validation, and client certificates for EXTERNAL over LDAPS or StartTLS.
+They also implement `-Y` SASL for PLAIN, CRAM-MD5, DIGEST-MD5,
+SCRAM-SHA-1/256/512, GSSAPI, and EXTERNAL, with `-U`, `-X`, and `-R`,
+strict server proof validation, and client certificates for EXTERNAL over
+LDAPS or StartTLS.
 `ldapsearch` supports bounded `-f` batch filters with `%s`, `-F` file-URL
 prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
 paging. Critical/prompt paging with referral chasing is explicitly rejected
@@ -609,6 +651,13 @@ joins multi-valued RDNs with ` + `, folds a trailing run of `dc` RDNs into a
 dotted domain, emits escaped bytes as uppercase hexadecimal such as `\2C`, and
 preserves hexadecimal BER AVAs. Focused tests and a pinned OpenLDAP 2.6.13
 fixture cover these forms; arbitrary locale-dependent ordering is not claimed.
+`-t` writes only non-printable values to secure files, while `-tt`, repeated
+`-t`, and higher repetitions write every value. Default and `-L` output
+render paging, Sort, VLV, password-policy, pre/post-read, Sync State/Done,
+unknown controls, and Sync Info intermediate responses; `-LL/-LLL` apply
+OpenLDAP's suppression rules. The wire observer also covers simple, SASL, and
+followed-referral search paths, and entry controls remain associated after
+client-side sorting.
 Referral URLs are parsed into RFC 4516 DN, attributes, scope, filter, and
 extension fields. Following OpenLDAP 2.6.13 referral chasing, only DN and scope
 replace the original Search request; malformed URLs map to LDAP parameter error
@@ -626,9 +675,8 @@ does not register the option, so all `ldapcompare -E` forms are compatibly
 rejected before connecting rather than sent as a control. `ldapexop passwd`
 uses the same old/new password, prompt/file, control, dry-run, target identity,
 and generated-password response behavior as `ldappasswd`.
-GSSAPI, SCRAM-PLUS/channel binding, SASL security layers, interactive SASL
-callbacks, and the complete historical ldap-tools option set remain outside
-this subset.
+Interactive SASL callbacks, SCRAM-PLUS, every native GSS credential provider,
+and the complete historical ldap-tools option set remain outside this subset.
 
 ```sh
 go run ./cmd/ldap-go import \
@@ -725,11 +773,21 @@ up to 16 semicolon-separated OpenSSL hash directories, loads only `hash.N`
 entries, de-duplicates certificates, blocks directory escape, and applies
 bounded file, byte, and certificate budgets. Traditional RFC 1423 encrypted
 PEM private keys use a permission-restricted password file named by
-`LDAP_GO_TLS_KEY_PASSWORD_FILE`; encrypted PKCS#8 remains unsupported.
-`olcTLSECName` maps one `X25519`, P-256, P-384, or P-521 name, including common
-OpenSSL aliases. Multi-group selectors, unsupported groups, DH/random-file
-directives, complete OpenSSL cipher expressions, and TLS 1.3 cipher-suite
-selection are rejected because Go TLS cannot reproduce those semantics.
+`LDAP_GO_TLS_KEY_PASSWORD_FILE`; standard encrypted PKCS#8 `ENCRYPTED PRIVATE
+KEY` values are supported through bounded PBES1/PBES2, PBKDF2, and scrypt
+parameters. `olcTLSECName` accepts colon-separated groups from the Go TLS
+group set, including the supported post-quantum hybrid groups, and rejects
+groups disabled by the applicable `GODEBUG` switch. Go treats this list as an
+allowed set and may not preserve OpenSSL's preference ordering.
+`olcTLSDHParamFile` validates bounded PKCS#3 parameters and is accepted only
+when the TLS policy cannot require finite-field DHE; Go TLS does not perform a
+DHE handshake with those parameters. `olcTLSRandFile` is accepted as an inert
+compatibility directive because both the pinned OpenLDAP build and Go use the
+operating-system CSPRNG. CA hash directories additionally verify each
+certificate's canonical OpenSSL subject hash before adding it to the trust
+pool. Unsupported provider algorithms, X448/FFDHE/brainpool groups, complete
+OpenSSL cipher expressions, and TLS 1.3 cipher-suite selection remain explicit
+boundaries.
 
 GB/T 38636 TLCP uses separate SM2 signing and encryption certificates:
 
@@ -802,8 +860,11 @@ DIGEST-MD5 shares that mapping and ACL path, emits a Cyrus-compatible
 nonce/realm challenge, verifies both historical Latin-1 and UTF-8 digest
 forms, and returns the required `rspauth`. It accepts raw or `{CLEARTEXT}`
 `userPassword`, or the legacy 16-byte `cmusaslsecretDIGEST-MD5` value.
-`qop=auth-int` and `qop=auth-conf` remain unavailable until the connection
-layer can apply negotiated SASL integrity and privacy framing.
+`qop=auth-int` installs RFC 2831 integrity framing; `qop=auth-conf` supports
+the Cyrus-compatible `rc4`, `rc4-56`, and `rc4-40` privacy ciphers. Both
+paths enforce frame/MAC/sequence limits, negotiated SSF, host-bound
+`digest-uri`, Latin-1 conversion, concurrent I/O, and close-time key cleanup.
+DES and 3DES privacy ciphers remain explicitly unsupported.
 
 For `olcSyncrepl` with `saslmech=GSSAPI`, an explicitly configured
 `credentials` value is used as the Kerberos password. Without that field,
@@ -812,9 +873,16 @@ ldap-go checks `KRB5_CLIENT_KTNAME`, then `KRB5_KTNAME`, and finally
 own principal. `FILE:` keytabs and caches are supported, and the Unix default
 cache is `/tmp/krb5cc_<uid>`. KCM, KEYRING, DIR, and macOS API caches are not
 read by the pure-Go Kerberos client. `KRB5_CONFIG` selects the Kerberos
-configuration file. The current GSSAPI implementation negotiates no SASL
-integrity or privacy layer, so TLS, TLCP, or another protected transport is
-required when replication traffic itself must be encrypted.
+configuration file. The pure-Go GSSAPI implementation performs AP-REQ/AP-REP
+mutual authentication, preserves initial sequence numbers and acceptor
+subkeys, and negotiates RFC 4752 no-layer, integrity, or confidentiality
+framing with RFC 4121 tokens. RFC 4752 defaults to NULL channel binding;
+`tls-server-end-point` is an explicit ldap-go extension. Password, FILE
+keytab, and FILE ccache acquisition have deterministic and race coverage, and
+a temporary MIT KDC was exercised manually. A reproducible real
+KDC/OpenLDAP/Cyrus topology is not yet automated, so native interoperability,
+platform credential stores, delegation, and dependency-specific Kerberos
+capabilities are not claimed as complete.
 
 For the supported multi-database LDIF migration flow, import `cn=config` first
 and then select each database using the same numeric index accepted by
@@ -841,7 +909,10 @@ go run ./cmd/ldap-go slaptest -db ./data/ldap-go.db
 go run ./cmd/ldap-go slapdn -db ./data/ldap-go.db 'uid=alice,dc=example,dc=com'
 go run ./cmd/ldap-go slapadd -db ./data/ldap-go.db -l data-1.ldif -n 1 -S 1 -w
 go run ./cmd/ldap-go slapcat -db ./data/ldap-go.db -l exported.ldif -n 1
-go run ./cmd/ldap-go slapindex -db ./data/ldap-go.db
+go run ./cmd/ldap-go slapauth -db ./data/ldap-go.db 'uid=alice,cn=auth'
+go run ./cmd/ldap-go slapschema -db ./data/ldap-go.db -v
+go run ./cmd/ldap-go slapmodify -db ./data/ldap-go.db -l changes.ldif
+go run ./cmd/ldap-go slapindex -db ./data/ldap-go.db cn uid
 go run ./cmd/ldap-go slappasswd -h '{PBKDF2-SM3}'
 ```
 
@@ -935,11 +1006,14 @@ maintained across writes and renames, rebuilt for legacy/config changes, and
 checked through backup/restore/compact; raw writes invalidate them and fall
 back to scans. Ordered `olcDbIndex` values support accumulated `default` modes,
 the synonymous `nolang`/`notags` tag-suppression mode, and `approx` where
-OpenLDAP associates a supported approximate rule. Final approximate matching
-uses OpenLDAP-compatible UTF-8 normalization and Metaphone behavior; phonetic
-postings are not yet stored, so those filters safely scan. Option-specific
-index databases and `nosubtypes` remain unsupported, as do requested matching
-rules without a proven equivalent normalization.
+OpenLDAP associates a supported approximate rule. Approximate matching and
+postings use OpenLDAP-compatible UTF-8 normalization and multi-word Metaphone
+terms; empty phonetic terms safely fall back to a scan. Option-specific
+AttributeDescription indexes normalize OIDs/options and select exact postings,
+while `nosubtypes` controls whether a parent attribute index can serve subtype
+filters. The index format is versioned and legacy/configuration mismatches
+rebuild or scan rather than produce false negatives. Requested rules without a
+proven equivalent normalization still fall back or reject explicitly.
 Migration size, lock time, and remaining scan paths must still be qualified
 before production use. These limits are part of why ldap-go is not yet a
 complete OpenLDAP drop-in replacement.

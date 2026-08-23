@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/emmansun/gmsm/sm3"
-	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -606,7 +605,7 @@ func (server *Server) storeRemoteAuthPassword(
 	if len(runtime.passwordHashSchemes) == 0 {
 		return
 	}
-	stored, err := auth.HashPassword(password, runtime.passwordHashSchemes[0], nil)
+	stored, err := hashPasswordForRuntime(runtime, password, runtime.passwordHashSchemes[0])
 	if err != nil {
 		server.config.Logger.Warn(
 			"remoteauth password hashing failed; storing cleartext for OpenLDAP compatibility",
