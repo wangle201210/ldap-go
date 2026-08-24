@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,778 top-level tests against the pinned commit.
+The latest strict run passed 1,779 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -945,10 +945,15 @@ subkeys, and negotiates RFC 4752 no-layer, integrity, or confidentiality
 framing with RFC 4121 tokens. RFC 4752 defaults to NULL channel binding;
 `tls-server-end-point` is an explicit ldap-go extension. Password, FILE
 keytab, and FILE ccache acquisition have deterministic and race coverage, and
-a temporary MIT KDC was exercised manually. A reproducible real
-KDC/OpenLDAP/Cyrus topology is not yet automated, so native interoperability,
-platform credential stores, delegation, and dependency-specific Kerberos
-capabilities are not claimed as complete.
+when MIT/Cyrus tools are auto-detected the strict suite provisions an
+isolated realm and drives the pinned OpenLDAP 2.6.13/Cyrus `ldapwhoami`
+client through no-layer, integrity, and
+confidentiality GSSAPI Binds against ldap-go. The same realm drives ldap-go's
+pure-Go password, FILE keytab, and FILE ccache initiators; ccache covers all
+three layers and protected Who Am I, including a live KDC service-ticket
+request. OpenLDAP-acceptor, proxy/replication, platform credential-store,
+delegation, and broader
+dependency-specific Kerberos matrices remain outside this topology.
 
 For the supported multi-database LDIF migration flow, import `cn=config` first
 and then select each database using the same numeric index accepted by

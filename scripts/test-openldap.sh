@@ -55,6 +55,22 @@ find_tool() {
 	exit 1
 }
 
+find_optional_tool() {
+	name=$1
+	shift
+	for candidate in "$@"; do
+		if [ -x "$candidate" ]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	if command -v "$name" >/dev/null 2>&1; then
+		command -v "$name"
+		return
+	fi
+	return 1
+}
+
 slapd=$(find_tool slapd \
 	"${OPENLDAP_SLAPD:-}" \
 	/opt/homebrew/opt/openldap/libexec/slapd \
@@ -167,22 +183,45 @@ case "$gssapi_auto" in
 	*) die "LDAP_GO_OPENLDAP_GSSAPI_AUTO must be 0 or 1, got: $gssapi_auto" ;;
 esac
 gssapi_reference=0
-if [ "$gssapi_auto" = "1" ] && command -v krb5kdc >/dev/null 2>&1; then
-	for tool in kdb5_util kadmin.local kinit; do
-		if ! command -v "$tool" >/dev/null 2>&1; then
-			die "local MIT KDC was detected but required GSSAPI tool '$tool' is missing"
+krb5kdc=
+if [ "$gssapi_auto" = "1" ]; then
+	krb5kdc=$(find_optional_tool krb5kdc \
+		/opt/homebrew/opt/krb5/sbin/krb5kdc \
+		/usr/local/opt/krb5/sbin/krb5kdc \
+		/usr/sbin/krb5kdc || true)
+fi
+if [ -n "$krb5kdc" ]; then
+	krb5_sbin=$(dirname "$krb5kdc")
+	krb5_prefix=$(dirname "$krb5_sbin")
+	krb5_bin=$krb5_prefix/bin
+	kdb5_util=$(find_optional_tool kdb5_util "$krb5_sbin/kdb5_util" /usr/sbin/kdb5_util || true)
+	kadmin_local=$(find_optional_tool kadmin.local "$krb5_sbin/kadmin.local" /usr/sbin/kadmin.local || true)
+	kinit=$(find_optional_tool kinit "$krb5_bin/kinit" /usr/bin/kinit || true)
+	for tool_value in "$kdb5_util" "$kadmin_local" "$kinit"; do
+		if [ -z "$tool_value" ]; then
+			die "local MIT KDC was detected but its kdb5_util, kadmin.local, or kinit companion is missing"
 		fi
 	done
-	if command -v pluginviewer >/dev/null 2>&1; then
-		plugin_viewer=pluginviewer
-	elif command -v saslpluginviewer >/dev/null 2>&1; then
-		plugin_viewer=saslpluginviewer
-	else
+	plugin_viewer=$(find_optional_tool pluginviewer \
+		/opt/homebrew/opt/cyrus-sasl/sbin/pluginviewer \
+		/usr/local/opt/cyrus-sasl/sbin/pluginviewer || true)
+	if [ -z "$plugin_viewer" ]; then
+		plugin_viewer=$(find_optional_tool saslpluginviewer \
+			/usr/sbin/saslpluginviewer || true)
+	fi
+	if [ -z "$plugin_viewer" ]; then
 		die "local MIT KDC was detected but no Cyrus SASL plugin viewer is installed"
 	fi
 	if ! "$plugin_viewer" -m GSSAPI >/dev/null 2>&1; then
 		die "local MIT KDC was detected but the Cyrus SASL GSSAPI plugin is unavailable"
 	fi
+	PATH="$krb5_sbin:$krb5_bin:$PATH"
+	export PATH
+	LDAP_GO_KRB5KDC=$krb5kdc
+	LDAP_GO_KDB5_UTIL=$kdb5_util
+	LDAP_GO_KADMIN_LOCAL=$kadmin_local
+	LDAP_GO_KINIT=$kinit
+	export LDAP_GO_KRB5KDC LDAP_GO_KDB5_UTIL LDAP_GO_KADMIN_LOCAL LDAP_GO_KINIT
 	gssapi_reference=1
 fi
 LDAP_GO_OPENLDAP_GSSAPI_TESTS=$gssapi_reference
@@ -303,6 +342,13 @@ for skipped in $skips; do
 		TestBackendTCPUserTimeoutLinux)
 			# The kernel option is Linux-only; Darwin and Windows exercise the
 			# explicit unsupported-platform path in separate tests.
+			;;
+		TestOpenLDAPReferenceGSSAPIDifferential)
+			# A local MIT KDC plus Cyrus GSSAPI is an optional external
+			# dependency. Once auto-detected, this test becomes mandatory.
+			if [ "$gssapi_reference" = "1" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
 			;;
 		TestOpenLDAPClientSASLSCRAMSHA256Bind|\
 		TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding|\

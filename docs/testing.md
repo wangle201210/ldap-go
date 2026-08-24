@@ -131,12 +131,26 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,778 top-level tests against
+The latest pinned local strict run passed 1,779 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
 mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache, and
 replication coverage all passed.
+
+`scripts/test-openldap.sh` enables the real-KDC GSSAPI differential when it
+finds MIT `krb5kdc`, `kdb5_util`, `kadmin.local`, and `kinit` plus the Cyrus
+GSSAPI plugin. Homebrew `/opt/homebrew/opt/krb5` and
+`/usr/local/opt/krb5` installations and standard Linux paths are discovered
+without changing the user's Kerberos database. The test creates a temporary
+realm, database, keytabs, ccache, and random KDC port, then runs the pinned
+OpenLDAP `ldapwhoami` client against ldap-go with RFC 4752 no-layer,
+integrity, and confidentiality. It also runs ldap-go's pure-Go password, FILE
+keytab, and FILE ccache initiators. The ccache case runs first, forcing live
+service-ticket acquisition before exercising all three protected connection
+modes and Who Am I. Once dependencies are detected the test is mandatory; set
+`LDAP_GO_OPENLDAP_GSSAPI_AUTO=0` to disable discovery on hosts that
+intentionally prohibit local KDC processes.
 
 Reference fixtures must signal `slapd` to shut down and wait for it before
 using a forced kill as a timeout fallback. On macOS, LMDB uses named POSIX

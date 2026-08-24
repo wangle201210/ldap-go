@@ -490,9 +490,9 @@ func equalOpenLDAPPasswordPolicyTimingObservation(
 			5,
 		) &&
 		left.badBindCode == right.badBindCode &&
-		bytes.Equal(left.badBindControl, right.badBindControl) &&
+		equalOpenLDAPPasswordPolicyTimingControl(left.badBindControl, right.badBindControl, 5) &&
 		left.delayedBindCode == right.delayedBindCode &&
-		bytes.Equal(left.delayedBindControl, right.delayedBindControl) &&
+		equalOpenLDAPPasswordPolicyTimingControl(left.delayedBindControl, right.delayedBindControl, 5) &&
 		left.temporaryInactive == right.temporaryInactive &&
 		within(
 			left.temporarySecondsToUnlock,
@@ -500,9 +500,70 @@ func equalOpenLDAPPasswordPolicyTimingObservation(
 			5,
 		) &&
 		left.resetBindCode == right.resetBindCode &&
-		bytes.Equal(left.resetBindControl, right.resetBindControl) &&
+		equalOpenLDAPPasswordPolicyTimingControl(left.resetBindControl, right.resetBindControl, 5) &&
 		left.futureBindCode == right.futureBindCode &&
-		bytes.Equal(left.futureBindControl, right.futureBindControl)
+		equalOpenLDAPPasswordPolicyTimingControl(left.futureBindControl, right.futureBindControl, 5)
+}
+
+type openLDAPPasswordPolicyControlValue struct {
+	warningKind  int64
+	warningValue int64
+	errorCode    int64
+}
+
+func equalOpenLDAPPasswordPolicyTimingControl(left, right []byte, tolerance int64) bool {
+	if bytes.Equal(left, right) {
+		return true
+	}
+	leftValue, leftOK := decodeOpenLDAPPasswordPolicyTimingControl(left)
+	rightValue, rightOK := decodeOpenLDAPPasswordPolicyTimingControl(right)
+	if !leftOK || !rightOK || leftValue.warningKind != rightValue.warningKind ||
+		leftValue.errorCode != rightValue.errorCode {
+		return false
+	}
+	difference := leftValue.warningValue - rightValue.warningValue
+	if difference < 0 {
+		difference = -difference
+	}
+	return difference <= tolerance
+}
+
+func decodeOpenLDAPPasswordPolicyTimingControl(
+	value []byte,
+) (openLDAPPasswordPolicyControlValue, bool) {
+	decoded := openLDAPPasswordPolicyControlValue{warningKind: -1, errorCode: -1}
+	packet, err := ber.DecodePacketErr(value)
+	if err != nil || packet.ClassType != ber.ClassUniversal ||
+		packet.Tag != ber.TagSequence {
+		return openLDAPPasswordPolicyControlValue{}, false
+	}
+	for _, child := range packet.Children {
+		switch {
+		case child.ClassType == ber.ClassContext && child.Tag == 0 &&
+			len(child.Children) == 1 && decoded.warningKind == -1:
+			warning := child.Children[0]
+			if warning.ClassType != ber.ClassContext ||
+				(warning.Tag != 0 && warning.Tag != 1) {
+				return openLDAPPasswordPolicyControlValue{}, false
+			}
+			parsed, parseErr := ber.ParseInt64(warning.Data.Bytes())
+			if parseErr != nil {
+				return openLDAPPasswordPolicyControlValue{}, false
+			}
+			decoded.warningKind = int64(warning.Tag)
+			decoded.warningValue = parsed
+		case child.ClassType == ber.ClassContext && child.Tag == 1 &&
+			decoded.errorCode == -1:
+			parsed, parseErr := ber.ParseInt64(child.Data.Bytes())
+			if parseErr != nil {
+				return openLDAPPasswordPolicyControlValue{}, false
+			}
+			decoded.errorCode = parsed
+		default:
+			return openLDAPPasswordPolicyControlValue{}, false
+		}
+	}
+	return decoded, true
 }
 
 func startLDAPGoPasswordExpirationReferenceServer(
