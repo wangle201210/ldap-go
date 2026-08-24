@@ -27,7 +27,9 @@ func sockBackendControlSupport(request ldapwire.Request) requestControlSupport {
 		ldapwire.DeleteRequest,
 		ldapwire.ModifyDNRequest:
 		return supportsRelax
-	case ldapwire.SearchRequest, ldapwire.CompareRequest:
+	case ldapwire.SearchRequest:
+		return supportsDontUseCopy | supportsMatchedValues
+	case ldapwire.CompareRequest:
 		return supportsDontUseCopy
 	default:
 		return 0

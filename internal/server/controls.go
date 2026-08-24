@@ -51,6 +51,7 @@ const (
 	supportsNoOp
 	supportsPermissiveModify
 	supportsDeref
+	supportsMatchedValues
 )
 
 type requestControls struct {
@@ -71,6 +72,7 @@ type requestControls struct {
 	permissiveModify bool
 	valueSort        *valueSortControlRequest
 	deref            *derefControlRequest
+	matchedValues    *matchedValuesControlRequest
 	chaining         *chainBehaviorRequest
 }
 
@@ -86,6 +88,11 @@ type syncRequestControl struct {
 
 type valueSortControlRequest struct {
 	raw      bool
+	critical bool
+}
+
+type matchedValuesControlRequest struct {
+	filters  []directory.Filter
 	critical bool
 }
 
@@ -148,6 +155,42 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.assertion = &filter
+		case ldapwire.MatchedValuesControlOID:
+			if supported&supportsMatchedValues == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.matchedValues != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valuesReturnFilter control specified multiple times",
+				)
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valuesReturnFilter control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valuesReturnFilter control value is empty",
+				)
+			}
+			filters, err := ldapwire.DecodeValuesReturnFilter(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"valuesReturnFilter control could not be decoded",
+				)
+			}
+			parsed.matchedValues = &matchedValuesControlRequest{
+				filters:  filters,
+				critical: control.Critical,
+			}
 		case preReadControlOID:
 			if supported&supportsPreRead == 0 {
 				if control.Critical {

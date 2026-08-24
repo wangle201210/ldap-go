@@ -327,9 +327,13 @@ func (server *Server) tryDNSSRVBackendOperation(
 			ldapwire.ResultUnwillingToPerform, "operation restricted",
 		))
 	}
+	support := supportsManageDsaIT
+	if _, search := message.Request.(ldapwire.SearchRequest); search {
+		support |= supportsMatchedValues
+	}
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
-		supportsManageDsaIT,
+		support,
 		state.runtime.disallows,
 	)
 	if controlFailure != nil {

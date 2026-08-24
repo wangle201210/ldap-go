@@ -131,7 +131,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,779 top-level tests against
+The latest pinned local strict run passed 1,790 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -342,6 +342,14 @@ ldap-go. It compares result codes, matched DNs, diagnostics, referrals, and
 normalized entry data. Overlay, control, SASL, transaction, CLI, migration,
 and replication differentials remain separate tests and are included by the
 same runner.
+
+`TestOpenLDAPReferenceMatchedValuesControl` sends the same RFC 3876 control
+to the pinned slapd and ldap-go. It compares value-level union filtering,
+unknown attributes, numeric attribute OIDs, language options, OpenLDAP's inert
+approx item, empty filter sequences, and `typesOnly`. Local tests additionally
+cover ordering and extensible rules, ACL-hidden values, paging, malformed BER
+disconnects, Root DSE publication, pCache cache-fill stripping, and the
+built-in `ldapsearch -E mv=` encoder.
 
 Focused DN identity checks can be repeated without an external server:
 

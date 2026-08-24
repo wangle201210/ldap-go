@@ -972,7 +972,7 @@ func (server *Server) tryPcacheSearch(
 			)
 		}
 	}
-	forwarded.Controls = pcacheWithoutPagingControls(forwarded.Controls)
+	forwarded.Controls = pcacheWithoutTransientSearchControls(forwarded.Controls)
 
 	now := database.pcache.state.clock()
 	lookup := func(
@@ -1748,10 +1748,11 @@ func pcacheAppendFilterKey(value *strings.Builder, filter directory.Filter) {
 	value.WriteByte(']')
 }
 
-func pcacheWithoutPagingControls(controls []ldapwire.Control) []ldapwire.Control {
+func pcacheWithoutTransientSearchControls(controls []ldapwire.Control) []ldapwire.Control {
 	filtered := make([]ldapwire.Control, 0, len(controls))
 	for _, control := range controls {
-		if control.OID != pagedResultsControlOID {
+		if control.OID != pagedResultsControlOID &&
+			control.OID != ldapwire.MatchedValuesControlOID {
 			filtered = append(filtered, control)
 		}
 	}
@@ -1792,7 +1793,7 @@ func decodePcacheSearchAttempt(attempt chainAttempt) (pcacheSearchResponse, erro
 				controls:   cloneLDAPControls(controls),
 			})
 		case ldapwire.ApplicationSearchResultDone:
-			response.doneControls = pcacheWithoutPagingControls(controls)
+			response.doneControls = pcacheWithoutTransientSearchControls(controls)
 			done = true
 		default:
 			return pcacheSearchResponse{}, fmt.Errorf(
@@ -1972,7 +1973,7 @@ func (server *Server) writePcacheResponse(
 		connection,
 		messageID,
 		result,
-		pcacheWithoutPagingControls(controls),
+		pcacheWithoutTransientSearchControls(controls),
 	)
 }
 

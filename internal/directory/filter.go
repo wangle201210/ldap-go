@@ -20,6 +20,7 @@ const (
 	FilterPresent
 	FilterApprox
 	FilterExtensible
+	FilterComputed
 )
 
 type Substring struct {

@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,779 top-level tests against the pinned commit.
+The latest strict run passed 1,790 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -72,7 +72,9 @@ anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
 also supports RFC 4528 Assertion, RFC 4527 pre-read/post-read, and RFC 2696
-simple paged-results controls on their applicable operations. OpenLDAP's
+simple paged-results controls on their applicable operations. RFC 3876 Matched
+Values filters final SearchResultEntry values after ACL, projection,
+sorting/VLV, paging, and Sync state processing. OpenLDAP's
 hidden No-Op control atomically validates and rolls back Add, Modify, Delete,
 and ModifyDN, while permissiveModify ignores duplicate additions and missing
 deletions. Both controls pass direct MDB differentials. RFC 4511
@@ -691,8 +693,9 @@ strict server proof validation, and client certificates for EXTERNAL over
 LDAPS or StartTLS.
 `ldapsearch` supports bounded `-f` batch filters with `%s`, `-F` file-URL
 prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
-paging. Critical/prompt paging with referral chasing is explicitly rejected
-because each referral requires an independent cookie stream.
+paging. It accepts OpenLDAP-compatible `-E [!]mv=<filter>` for RFC 3876,
+including simple-filter lists. Critical/prompt paging with referral chasing is
+explicitly rejected because each referral requires an independent cookie stream.
 Its default output is OpenLDAP-style extended LDIF with query metadata, UFN
 comments, result metadata, SearchReference URLs, and counts. `-L`, `-LL`, and
 `-LLL` progressively suppress extended output; arbitrary repeated `L` forms

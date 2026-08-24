@@ -26,6 +26,7 @@ import (
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"golang.org/x/term"
 )
 
@@ -1579,6 +1580,7 @@ func resolveLDAPSearchExtensions(
 	extensions repeatedStringFlag,
 ) (ldapSearchPagingOptions, []ldap.Control, error) {
 	pageExtension := ""
+	matchedValuesExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
 		name := strings.TrimLeft(extension, "!")
@@ -1592,6 +1594,15 @@ func resolveLDAPSearchExtensions(
 			pageExtension = extension
 			continue
 		}
+		if strings.EqualFold(name, "mv") {
+			if matchedValuesExtension != "" {
+				return ldapSearchPagingOptions{}, nil, errors.New(
+					"ldapsearch matched-values extension was provided more than once",
+				)
+			}
+			matchedValuesExtension = extension
+			continue
+		}
 		controlSpecs = append(controlSpecs, extension)
 	}
 	if flagWasSet(flags, "page-size") && pageExtension != "" {
@@ -1600,6 +1611,26 @@ func resolveLDAPSearchExtensions(
 	controls, err := parseLDAPControlSpecs(controlSpecs, ldapControlValueLDIF)
 	if err != nil {
 		return ldapSearchPagingOptions{}, nil, fmt.Errorf("ldapsearch -E: %w", err)
+	}
+	if matchedValuesExtension != "" {
+		control, controlErr := parseLDAPSearchMatchedValuesExtension(matchedValuesExtension)
+		if controlErr != nil {
+			clearLDAPControls(controls)
+			return ldapSearchPagingOptions{}, nil, controlErr
+		}
+		for _, existing := range controls {
+			if existing.GetControlType() == ldapwire.MatchedValuesControlOID {
+				if raw, ok := control.(*ldapRawControl); ok {
+					raw.clear()
+				}
+				clearLDAPControls(controls)
+				return ldapSearchPagingOptions{}, nil, fmt.Errorf(
+					"LDAP control %s was provided more than once",
+					ldapwire.MatchedValuesControlOID,
+				)
+			}
+		}
+		controls = append(controls, control)
 	}
 	paging := ldapSearchPagingOptions{}
 	if pageExtension != "" {
@@ -1616,6 +1647,98 @@ func resolveLDAPSearchExtensions(
 		paging.size = uint32(pageSize)
 	}
 	return paging, controls, nil
+}
+
+func parseLDAPSearchMatchedValuesExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !found || !strings.EqualFold(name, "mv") || strings.TrimSpace(parameter) == "" {
+		return nil, fmt.Errorf("invalid matched-values extension %q", value)
+	}
+	items, err := splitLDAPSearchMatchedValuesFilters(parameter)
+	if err != nil {
+		return nil, err
+	}
+	sequence := ber.NewSequence("ValuesReturnFilter")
+	for _, item := range items {
+		packet, err := ldap.CompileFilter(item)
+		if err != nil || packet.ClassType != ber.ClassContext || packet.Tag < 3 || packet.Tag > 9 {
+			return nil, fmt.Errorf("invalid matched-values simple filter %q", item)
+		}
+		sequence.AppendChild(packet)
+	}
+	return &ldapRawControl{
+		oid:      ldapwire.MatchedValuesControlOID,
+		critical: critical,
+		value:    sequence.Bytes(),
+		hasValue: true,
+	}, nil
+}
+
+func splitLDAPSearchMatchedValuesFilters(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "(") {
+		value = "(" + value + ")"
+	}
+	items, err := splitLDAPSearchTopLevelFilters(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid matched-values filter %q", value)
+	}
+	if len(items) == 1 && items[0] == value {
+		inner := strings.TrimSpace(value[1 : len(value)-1])
+		if strings.HasPrefix(inner, "(") {
+			items, err = splitLDAPSearchTopLevelFilters(inner)
+			if err != nil {
+				return nil, fmt.Errorf("invalid matched-values filter list %q", value)
+			}
+		}
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("matched-values filter list is empty")
+	}
+	return items, nil
+}
+
+func splitLDAPSearchTopLevelFilters(value string) ([]string, error) {
+	var items []string
+	for offset := 0; offset < len(value); {
+		for offset < len(value) && (value[offset] == ' ' || value[offset] == '\t') {
+			offset++
+		}
+		if offset == len(value) {
+			break
+		}
+		if value[offset] != '(' {
+			return nil, errors.New("filter item does not start with '('")
+		}
+		start := offset
+		depth := 0
+		escaped := false
+		for ; offset < len(value); offset++ {
+			switch {
+			case escaped:
+				escaped = false
+			case value[offset] == '\\':
+				escaped = true
+			case value[offset] == '(':
+				depth++
+			case value[offset] == ')':
+				depth--
+				if depth == 0 {
+					offset++
+					items = append(items, value[start:offset])
+					goto next
+				}
+				if depth < 0 {
+					return nil, errors.New("unbalanced filter parentheses")
+				}
+			}
+		}
+		return nil, errors.New("unterminated filter item")
+	next:
+	}
+	return items, nil
 }
 
 func parseLDAPSearchPagingExtension(value string) (ldapSearchPagingOptions, error) {

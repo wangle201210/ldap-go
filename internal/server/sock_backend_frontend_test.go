@@ -21,8 +21,11 @@ func TestSockBackendControlSupport(t *testing.T) {
 			t.Errorf("%T support = %d, want Relax", request, support)
 		}
 	}
+	if support := sockBackendControlSupport(ldapwire.SearchRequest{}); support !=
+		supportsDontUseCopy|supportsMatchedValues {
+		t.Errorf("Search support = %d, want DontUseCopy|MatchedValues", support)
+	}
 	for _, request := range []ldapwire.Request{
-		ldapwire.SearchRequest{},
 		ldapwire.CompareRequest{},
 	} {
 		if support := sockBackendControlSupport(request); support != supportsDontUseCopy {

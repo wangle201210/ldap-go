@@ -142,6 +142,7 @@ func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 		supportsSubentries |
 		supportsDontUseCopy |
 		supportsAccountUsability |
+		supportsMatchedValues |
 		supportsNoOp
 	if runtime == nil {
 		return support
@@ -2702,6 +2703,7 @@ func (server *Server) rootDSE(
 		accountUsabilityControlOID,
 		netscapePasswordExpiredOID,
 		netscapePasswordExpiringOID,
+		ldapwire.MatchedValuesControlOID,
 	}
 	if runtimeSupportsDeref(runtime.databases) {
 		supportedControls = append(supportedControls, ldapwire.DerefControlOID)

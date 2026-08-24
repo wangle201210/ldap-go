@@ -864,6 +864,30 @@ func (server *Server) dispatch(
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
+		parsedControls, privateSearch, failure := prevalidateSearchRequestControls(
+			state.runtime,
+			message.Controls,
+		)
+		if failure != nil {
+			if failure.Code == ldapwire.ResultProtocolError &&
+				failure.DiagnosticMessage == "valuesReturnFilter control could not be decoded" {
+				return true, ldapwire.Write(
+					connection,
+					ldapwire.EncodeNoticeOfDisconnection(*failure),
+				)
+			}
+			return false, writeResultForMessage(connection, message, *failure)
+		}
+		if !privateSearch && parsedControls.matchedValues != nil {
+			connection = &matchedValuesConnection{
+				Conn:      connection,
+				messageID: message.ID,
+				registry:  state.runtime.schema,
+				request:   parsedControls.matchedValues,
+				typesOnly: request.TypesOnly,
+			}
+			message.Controls = withoutMatchedValuesControl(message.Controls)
+		}
 		database := searchRequestDatabase(state.runtime, request)
 		if database != nil {
 			if databaseSearchCandidatesAreDelegated(state.runtime, *database) {
