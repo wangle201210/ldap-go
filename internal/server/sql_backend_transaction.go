@@ -27,6 +27,8 @@ type sqlBackendRenameContextKey struct{}
 
 type sqlBackendModifyContextKey struct{}
 
+type sqlBackendTreeDeleteContextKey struct{}
+
 type sqlBackendRenameContext struct {
 	oldDN directory.DN
 	newDN directory.DN
@@ -67,6 +69,18 @@ func sqlBackendModifyFromContext(ctx context.Context) *sqlBackendModifyContext {
 	}
 	modify, _ := ctx.Value(sqlBackendModifyContextKey{}).(*sqlBackendModifyContext)
 	return modify
+}
+
+func withSQLBackendTreeDelete(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sqlBackendTreeDeleteContextKey{}, true)
+}
+
+func sqlBackendTreeDeleteFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	treeDelete, _ := ctx.Value(sqlBackendTreeDeleteContextKey{}).(bool)
+	return treeDelete
 }
 
 func withSQLBackendRename(
@@ -256,19 +270,24 @@ func (coordinator *sqlBackendTransactionCoordinator) writer(
 	if err == nil {
 		writer.conn, err = database.Conn(coordinator.ctx)
 	}
-	// ModifyDN spans the ldap_entries rename and one or more mapped RDN
-	// procedures. Keep that sequence atomic even when ordinary writes use
-	// autocommit; BeginTx failure then stops the operation before its first DML.
-	if err == nil && (!configuration.autocommit || writer.rename != nil) {
+	// ModifyDN and Tree Delete span multiple mapped statements. Keep those
+	// sequences atomic even when ordinary writes use autocommit; BeginTx
+	// failure then stops the operation before its first DML.
+	treeDelete := sqlBackendTreeDeleteFromContext(coordinator.ctx)
+	if err == nil && (!configuration.autocommit || writer.rename != nil || treeDelete) {
 		writer.tx, err = writer.conn.BeginTx(coordinator.ctx, nil)
-		if err != nil && configuration.autocommit && writer.rename != nil &&
+		if err != nil && configuration.autocommit && (writer.rename != nil || treeDelete) &&
 			!errors.Is(err, context.Canceled) &&
 			!errors.Is(err, context.DeadlineExceeded) &&
 			!errors.Is(err, driver.ErrBadConn) &&
 			!errors.Is(err, sql.ErrConnDone) {
+			diagnostic := "SQL backend ModifyDN requires transaction support"
+			if treeDelete {
+				diagnostic = "SQL backend Tree Delete requires transaction support"
+			}
 			err = operationFailed(
 				ldapwire.ResultUnwillingToPerform,
-				"SQL backend ModifyDN requires transaction support",
+				diagnostic,
 			)
 		}
 	}
@@ -1394,6 +1413,21 @@ func (writer *sqlBackendWriter) delete(dn directory.DN) error {
 		id.id,
 	); err != nil {
 		return fmt.Errorf("delete SQL-backend entry: %w", err)
+	}
+	return nil
+}
+
+func (writer *sqlBackendWriter) treeDeletePreflight(dn directory.DN) error {
+	id, err := writer.entryID(dn)
+	if err != nil {
+		return err
+	}
+	mapping := writer.reader.configuration.objectClasses[id.objectClassID]
+	if mapping == nil || mapping.deleteProcedure == "" {
+		return operationFailed(
+			ldapwire.ResultUnwillingToPerform,
+			"subtree delete not possible",
+		)
 	}
 	return nil
 }

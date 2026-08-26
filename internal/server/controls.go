@@ -31,6 +31,7 @@ const (
 	valueSortControlOID        = "1.3.6.1.4.1.4203.666.5.14"
 	domainScopeControlOID      = ldapwire.DomainScopeControlOID
 	searchOptionsControlOID    = ldapwire.SearchOptionsControlOID
+	treeDeleteControlOID       = "1.2.840.113556.1.4.805"
 )
 
 type requestControlSupport uint32
@@ -56,6 +57,7 @@ const (
 	supportsMatchedValues
 	supportsDomainScope
 	supportsSearchOptions
+	supportsTreeDelete
 )
 
 type requestControls struct {
@@ -79,6 +81,7 @@ type requestControls struct {
 	matchedValues    *matchedValuesControlRequest
 	chaining         *chainBehaviorRequest
 	domainScope      bool
+	treeDelete       *treeDeleteControlRequest
 }
 
 type readControlRequest struct {
@@ -98,6 +101,10 @@ type valueSortControlRequest struct {
 
 type matchedValuesControlRequest struct {
 	filters  []directory.Filter
+	critical bool
+}
+
+type treeDeleteControlRequest struct {
 	critical bool
 }
 
@@ -260,6 +267,26 @@ func parseRequestControlsWithDisallows(
 				}
 				parsed.domainScope = true
 			}
+		case treeDeleteControlOID:
+			if supported&supportsTreeDelete == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.treeDelete != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"treeDelete control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"treeDelete control value not absent",
+				)
+			}
+			parsed.treeDelete = &treeDeleteControlRequest{critical: control.Critical}
 		case preReadControlOID:
 			if supported&supportsPreRead == 0 {
 				if control.Critical {

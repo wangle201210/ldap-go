@@ -1342,7 +1342,8 @@ func (server *Server) handleDelete(
 			supportsPreRead|
 			supportsManageDsaIT|
 			supportsRelax|
-			supportsNoOp,
+			supportsNoOp|
+			supportsTreeDelete,
 	)
 	if result != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationDeleteResponse, *result)
@@ -1383,6 +1384,23 @@ func (server *Server) handleDelete(
 				"no global superior knowledge",
 			),
 		)
+	}
+	if controls.treeDelete != nil && database.sqlBackend == nil {
+		if controls.treeDelete.critical {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationDeleteResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnavailableCriticalExtension,
+					"critical extension is unavailable",
+				),
+			)
+		}
+		controls.treeDelete = nil
+	}
+	if controls.treeDelete != nil {
+		ctx = withSQLBackendTreeDelete(ctx)
 	}
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
@@ -1544,32 +1562,48 @@ func (server *Server) handleDelete(
 			responseControls = append(responseControls, *preRead)
 		}
 
+		entriesToDelete := []directory.Entry{entry}
+		if controls.treeDelete != nil {
+			entriesToDelete, err = server.prepareSQLTreeDelete(
+				state.runtime,
+				tx,
+				state.boundDN,
+				dn,
+				collectivePlan,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
 		var hasChildren bool
-		if database.sqlBackend != nil {
-			hasChildren, err = storageSQLBackendHasChildren(tx, dn)
-			if err != nil {
-				return err
-			}
-		} else {
-			comparisonDN, err := storage.NormalizeReaderDN(tx, dn)
-			if err != nil {
-				return err
-			}
-			if err := tx.ForEach(func(entry directory.Entry) error {
-				candidate, err := directory.ParseDN(entry.DN)
+		if controls.treeDelete == nil {
+			if database.sqlBackend != nil {
+				hasChildren, err = storageSQLBackendHasChildren(tx, dn)
 				if err != nil {
 					return err
 				}
-				candidate, err = storage.NormalizeReaderDN(tx, candidate)
+			} else {
+				comparisonDN, err := storage.NormalizeReaderDN(tx, dn)
 				if err != nil {
 					return err
 				}
-				if comparisonDN.AncestorOf(candidate) {
-					hasChildren = true
+				if err := tx.ForEach(func(entry directory.Entry) error {
+					candidate, err := directory.ParseDN(entry.DN)
+					if err != nil {
+						return err
+					}
+					candidate, err = storage.NormalizeReaderDN(tx, candidate)
+					if err != nil {
+						return err
+					}
+					if comparisonDN.AncestorOf(candidate) {
+						hasChildren = true
+					}
+					return nil
+				}); err != nil {
+					return err
 				}
-				return nil
-			}); err != nil {
-				return err
 			}
 		}
 		if hasChildren {
@@ -1578,8 +1612,20 @@ func (server *Server) handleDelete(
 				"subordinate objects must be deleted first",
 			)
 		}
-		if err := tx.Delete(dn); err != nil {
-			return err
+		if controls.treeDelete == nil {
+			if err := tx.Delete(dn); err != nil {
+				return err
+			}
+		} else {
+			for _, deleteEntry := range entriesToDelete {
+				deleteDN, parseErr := state.runtime.schema.NormalizeDN(deleteEntry.DN)
+				if parseErr != nil {
+					return parseErr
+				}
+				if err := tx.Delete(deleteDN); err != nil {
+					return err
+				}
+			}
 		}
 		if !configurationWrite {
 			if err := applyMemberOfDelete(

@@ -379,6 +379,17 @@ audit isolation, trusted identity separation, LDAP proxy preservation plus
 generated-control ordering, pCache refresh stripping, sock overlay handling,
 and Root DSE hiding.
 
+`TestOpenLDAPReferenceTreeDeleteMDBProtocol` pins hidden-control parsing,
+criticality, leaf/non-leaf behavior, operation scope, and Root DSE hiding for
+MDB. `TestOpenLDAPReferenceTreeDeleteBackSQL` runs the same SQLite data through
+OpenLDAP ODBC back-sql and ldap-go for critical/noncritical success, No-Op, and
+ACL failure. Successful and No-Op database snapshots match exactly. The ACL
+case records a hardened divergence: OpenLDAP commits a partial prefix and
+returns success, while ldap-go's preflight returns `insufficientAccessRights`
+without changing any SQL row. Local tests add three-level deletion, child ACL,
+base-only Pre-Read, procedure execution, forced transactions under
+`olcSqlAutocommit`, and atomic rollback coverage.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

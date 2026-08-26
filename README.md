@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,809 top-level tests against the pinned commit.
+The latest strict run passed 1,818 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -85,6 +85,9 @@ local, proxy, pCache, chain, and socket search paths. These controls pass direct
 MDB differentials. The hidden OpenLDAP Session Tracking control is accepted on
 Bind, read/write, and supported extended operations, retained through LDAP/meta
 proxies, and recorded as untrusted operation-local structured audit metadata.
+The hidden Tree Delete control matches MDB's unsupported critical/noncritical
+behavior and implements OpenLDAP back-sql subtree preflight, depth-first SQL
+deletion, No-Op rollback, ACL checks, and base-only read/log overlay effects.
 RFC 4511
 Abandon and RFC 3909 Cancel can interrupt active Search operations on the same
 LDAP connection. RFC 3296 named referrals and ManageDsaIT support base

@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -802,6 +803,21 @@ func (reader *rwmStorageReader) ForEachPartition(
 type rwmStorageWriter struct {
 	*rwmStorageReader
 	writer storage.Writer
+}
+
+func (writer *rwmStorageWriter) treeDeletePreflight(dn directory.DN) error {
+	preflight, ok := writer.writer.(treeDeletePreflighter)
+	if !ok {
+		return operationFailed(
+			ldapwire.ResultUnwillingToPerform,
+			"subtree delete not possible",
+		)
+	}
+	remote, err := writer.configuration.mapDNToRemote(dn)
+	if err != nil {
+		return err
+	}
+	return preflight.treeDeletePreflight(remote)
 }
 
 func (writer *rwmStorageWriter) Put(entry directory.Entry, replace bool) error {
