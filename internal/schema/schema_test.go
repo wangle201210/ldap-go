@@ -978,6 +978,24 @@ func TestObjectClassAttributeSetsAndACLPseudoAttributes(t *testing.T) {
 			)
 		}
 	}
+	attributes, extensible, known := registry.ObjectClassAttributeDescriptions("person")
+	if !known || extensible ||
+		!slices.Contains(attributes, "objectClass") ||
+		!slices.Contains(attributes, "cn") ||
+		!slices.Contains(attributes, "sn") ||
+		!slices.Contains(attributes, "description") ||
+		slices.Contains(attributes, "uid") {
+		t.Fatalf("person inherited attributes = %q, extensible=%t known=%t", attributes, extensible, known)
+	}
+	for _, invalid := range []string{" person", "person ", "person;option", "01.2"} {
+		if _, _, known := registry.ObjectClassAttributeDescriptions(invalid); known {
+			t.Errorf("invalid object class selector %q was recognized", invalid)
+		}
+	}
+	attributes, extensible, known = registry.ObjectClassAttributeDescriptions("extensibleObject")
+	if !known || !extensible || len(attributes) != 0 {
+		t.Fatalf("extensibleObject attributes = %q, extensible=%t known=%t", attributes, extensible, known)
+	}
 	for _, attribute := range []string{"entry", "children"} {
 		if !registry.HasAttributeType(attribute) || !registry.IsOperational(attribute) {
 			t.Errorf("ACL pseudo-attribute %q is not registered as operational", attribute)

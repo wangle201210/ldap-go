@@ -62,6 +62,7 @@ outside the compatibility claim.
 | Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | partial | RFC 3296 referrals, RFC 4511/4512 aliases, OpenLDAP 2.6.13 differentials, and chain-overlay integration tests pass |
 | LDAP URLs and attribute options | partial | RFC 4516 referral and direct-search DN/attributes/scope/filter/extensions parsing, strict percent decoding, malformed-URL result 89, critical-extension handling, and schema-aware Search projection pass. Referral chasing preserves OpenLDAP 2.6.13 DN/scope-only replacement. `ldapsearch -H ldap://host/` keeps normal CLI semantics; non-empty URL query components provide an explicit RFC 4516 direct-search extension because the pinned OpenLDAP CLI ignores them. The complete attribute-option matrix remains |
+| Object-class attribute selection | complete | RFC 4529 `@objectClass` selection covers inherited MUST/MAY attributes, names/numeric OIDs, subtypes/options, `extensibleObject`, `1.1`, `typesOnly`, ACL filtering, Root DSE publication, Search and RFC 4527 read controls. Request-entry expansion covers local, SQL, proxy/sock, ordinary pCache, and private pCache paths; incomplete pCache attrsets fail closed. Search matches pinned OpenLDAP 2.6.13; ldap-go intentionally accepts the selector in pre/post-read where that OpenLDAP version returns `undefinedAttributeType` contrary to RFC 4529 |
 
 ## Controls and extended operations
 

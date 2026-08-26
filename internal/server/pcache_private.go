@@ -578,7 +578,11 @@ func (server *Server) pcachePrivateReadControl(
 	if request == nil {
 		return nil, nil
 	}
-	for _, attribute := range request.attributes {
+	attributes := expandObjectClassAttributeSelection(
+		runtime.schema,
+		request.attributes,
+	)
+	for _, attribute := range attributes {
 		if isSpecialAttributeSelection(attribute) {
 			continue
 		}
@@ -590,7 +594,7 @@ func (server *Server) pcachePrivateReadControl(
 			return nil, &result
 		}
 	}
-	selected := server.selectEntry(runtime, entry, request.attributes, false)
+	selected := server.selectEntry(runtime, entry, attributes, false)
 	return &ldapwire.Control{
 		OID: oid, Value: ldapwire.EncodeReadControlValue(selected), HasValue: true,
 	}, nil

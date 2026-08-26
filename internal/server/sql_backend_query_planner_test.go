@@ -274,6 +274,47 @@ func TestSQLBackendRequestedAttributePruningAndBinary(t *testing.T) {
 	}
 }
 
+func TestSQLBackendObjectClassAttributeSelectionLoadsMappedAttributes(t *testing.T) {
+	configuration, database := openSQLBackendQueryPlanner(t)
+	attributes := expandObjectClassAttributeSelection(
+		configuration.registry,
+		[]string{"@inetOrgPerson"},
+	)
+	reader := &sqlBackendReader{
+		configuration: configuration,
+		queryer:       database,
+		ctx: withSQLBackendSearchRequirements(
+			context.Background(),
+			attributes,
+			directory.Filter{Kind: directory.FilterPresent, Attribute: "objectClass"},
+		),
+	}
+	var alice directory.Entry
+	if err := reader.ForEach(func(entry directory.Entry) error {
+		if strings.HasPrefix(strings.ToLower(entry.DN), "uid=alice,") {
+			alice = entry
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEach(@inetOrgPerson): %v", err)
+	}
+	for _, attribute := range []string{
+		"objectClass", "uid", "cn", "sn", "userPassword", "jpegPhoto",
+	} {
+		if !alice.HasAttribute(attribute) {
+			t.Errorf("@inetOrgPerson did not load mapped %s: %#v", attribute, alice)
+		}
+	}
+
+	all := expandObjectClassAttributeSelection(
+		configuration.registry,
+		[]string{"@extensibleObject"},
+	)
+	if len(all) != 2 || all[0] != "*" || all[1] != "+" {
+		t.Fatalf("@extensibleObject expansion = %q", all)
+	}
+}
+
 func TestSQLBackendBaseObjectTrueAndUnsupportedDirectives(t *testing.T) {
 	databaseName := filepath.Join(t.TempDir(), "base-object.db")
 	seedSQLBackendDatabase(t, databaseName)

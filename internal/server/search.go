@@ -7,18 +7,22 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"time"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 var errDatabaseSearchLimitGroupUnverifiable = errors.New(
 	"group limit membership cannot be verified by this backend",
 )
+
+const objectClassAttributesFeatureOID = "1.3.6.1.4.1.4203.1.5.2"
 
 func (server *Server) effectiveDatabaseSearchLimitsForRequest(
 	runtime *runtimeState,
@@ -169,6 +173,10 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
+	request.Attributes = expandObjectClassAttributeSelection(
+		state.runtime.schema,
+		request.Attributes,
+	)
 	if handled, err := server.tryPcachePrivateSearch(
 		connection,
 		state,
@@ -2679,7 +2687,10 @@ func (server *Server) rootDSE(
 	})
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedFeatures",
-		Values:      stringValues(absoluteFiltersFeatureOID),
+		Values: stringValues(
+			absoluteFiltersFeatureOID,
+			objectClassAttributesFeatureOID,
+		),
 	})
 	if subtrees := dynamicSubtrees(runtime.databases); len(subtrees) > 0 {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
@@ -2796,6 +2807,51 @@ func (server *Server) selectEntry(
 		runtime.schema.IsOperational,
 		runtime.schema.AttributeDescriptionSubtype,
 	)
+}
+
+func expandObjectClassAttributeSelection(
+	registry *schema.Registry,
+	requested []string,
+) []string {
+	if registry == nil || len(requested) == 0 {
+		return requested
+	}
+	expanded := make([]string, 0, len(requested))
+	for _, selector := range requested {
+		if len(selector) < 2 || selector[0] != '@' {
+			expanded = append(expanded, selector)
+			continue
+		}
+		attributes, extensible, known := registry.ObjectClassAttributeDescriptions(
+			selector[1:],
+		)
+		if !known {
+			expanded = append(expanded, selector)
+			continue
+		}
+		if extensible {
+			expanded = append(expanded, "*", "+")
+		} else if len(attributes) == 0 {
+			expanded = append(expanded, "1.1")
+		} else {
+			expanded = append(expanded, attributes...)
+		}
+	}
+	return uniqueAttributeSelections(expanded)
+}
+
+func uniqueAttributeSelections(attributes []string) []string {
+	seen := make(map[string]struct{}, len(attributes))
+	unique := attributes[:0]
+	for _, attribute := range attributes {
+		key := strings.ToLower(attribute)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, attribute)
+	}
+	return unique
 }
 
 func subentrySearchVisible(

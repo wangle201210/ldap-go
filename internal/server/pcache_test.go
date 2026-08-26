@@ -206,6 +206,15 @@ func TestPcacheTemplateMatchingAndCacheKey(t *testing.T) {
 	if _, ok := server.matchPcacheRequest(runtime, configuration, request); ok {
 		t.Fatal("attrset answered an attribute it does not contain")
 	}
+	for _, selector := range []string{"@person", "@extensibleObject"} {
+		request.Attributes = expandObjectClassAttributeSelection(
+			runtime.schema,
+			[]string{selector},
+		)
+		if _, ok := server.matchPcacheRequest(runtime, configuration, request); ok {
+			t.Errorf("incomplete attrset answered %s", selector)
+		}
+	}
 	other, err := ldapwire.CompileFilter("(cn=Cached)")
 	if err != nil {
 		t.Fatalf("CompileFilter(other): %v", err)

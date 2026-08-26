@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,790 top-level tests against the pinned commit.
+The latest strict run passed 1,795 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -72,7 +72,9 @@ anonymous and simple Bind, Root DSE discovery, base/one/subtree Search, common
 LDAP filters, binary attributes, size/time limits, Add, Modify, leaf Delete,
 subtree ModifyDN, Compare, Unbind, StartTLS, and RFC 3062 Password Modify. It
 also supports RFC 4528 Assertion, RFC 4527 pre-read/post-read, and RFC 2696
-simple paged-results controls on their applicable operations. RFC 3876 Matched
+simple paged-results controls on their applicable operations. RFC 4529
+`@objectClass` attribute selection expands inherited MUST/MAY attributes in
+Search and pre-read/post-read controls. RFC 3876 Matched
 Values filters final SearchResultEntry values after ACL, projection,
 sorting/VLV, paging, and Sync state processing. OpenLDAP's
 hidden No-Op control atomically validates and rolls back Add, Modify, Delete,

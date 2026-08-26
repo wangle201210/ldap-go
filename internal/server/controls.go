@@ -721,7 +721,11 @@ func (server *Server) readResponseControl(
 	if request == nil {
 		return nil, nil
 	}
-	for _, attribute := range request.attributes {
+	attributes := expandObjectClassAttributeSelection(
+		runtime.schema,
+		request.attributes,
+	)
+	for _, attribute := range attributes {
 		if isSpecialAttributeSelection(attribute) {
 			continue
 		}
@@ -778,7 +782,7 @@ func (server *Server) readResponseControl(
 	selected := server.selectEntry(
 		runtime,
 		readable,
-		request.attributes,
+		attributes,
 		false,
 	)
 	return &ldapwire.Control{

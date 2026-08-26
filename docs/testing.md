@@ -351,6 +351,15 @@ cover ordering and extensible rules, ACL-hidden values, paging, malformed BER
 disconnects, Root DSE publication, pCache cache-fill stripping, and the
 built-in `ldapsearch -E mv=` encoder.
 
+`TestOpenLDAPReferenceObjectClassAttributeSelection` compares RFC 4529 Search
+projection with pinned OpenLDAP 2.6.13 for inherited classes, numeric OIDs,
+`extensibleObject`, unknown classes/options, mixed selectors, `1.1`, and
+`typesOnly`. It also pins the read-control difference: OpenLDAP rejects a
+known `@objectClass` in pre/post-read, while ldap-go implements the RFC 4529
+AttributeSelection requirement. Local tests cover ACL filtering and critical
+unknown-class rollback, strict selector syntax, SQL on-demand attribute
+loading, and fail-closed pCache attrset coverage.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

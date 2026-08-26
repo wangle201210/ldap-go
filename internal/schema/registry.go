@@ -615,6 +615,56 @@ func (registry *Registry) ObjectClass(name string) (ObjectClass, bool) {
 	return *objectClass, true
 }
 
+// ObjectClassAttributeDescriptions returns the canonical inherited MUST and
+// MAY attribute descriptions for an exact RFC 4512 object identifier.
+func (registry *Registry) ObjectClassAttributeDescriptions(
+	name string,
+) (attributes []string, extensible, known bool) {
+	if !validObjectIdentifier(name) {
+		return nil, false, false
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	objectClass, ok := registry.objectClasses[strings.ToLower(name)]
+	if !ok {
+		return nil, false, false
+	}
+	if strings.EqualFold(objectClass.OID, "1.3.6.1.4.1.1466.101.120.111") {
+		return nil, true, true
+	}
+	classes := make(map[string]*ObjectClass)
+	if err := registry.collectObjectClass(
+		objectClass,
+		classes,
+		make(map[string]bool),
+	); err != nil {
+		return nil, false, true
+	}
+	seen := make(map[string]struct{})
+	for _, class := range classes {
+		for _, descriptions := range [][]string{class.Must, class.May} {
+			for _, description := range descriptions {
+				attribute, found := registry.attributes[schemaKey(description)]
+				key := schemaKey(description)
+				if found {
+					key = schemaKey(attribute.OID)
+					description = attribute.Name()
+				}
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				attributes = append(attributes, description)
+			}
+		}
+	}
+	sort.Slice(attributes, func(left, right int) bool {
+		return strings.ToLower(attributes[left]) < strings.ToLower(attributes[right])
+	})
+	return attributes, false, true
+}
+
 // ObjectClassAllowsAttribute reports whether an attribute is included in an
 // object class's inherited MUST or MAY set. The second result distinguishes an
 // unknown class from a known class that does not include the attribute.
