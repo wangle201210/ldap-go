@@ -231,6 +231,107 @@ func TestLDAPClientPagedSearchHonorsTotalSizeLimit(t *testing.T) {
 	}
 }
 
+func TestLDAPClientPagedSearchIgnoresPageAtRequestSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	seedPagedPeople(t, store, 2)
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+
+	matchCases := []struct {
+		name       string
+		filter     string
+		matches    int
+		resultCode uint16
+	}{
+		{
+			name:       "fewer matches",
+			filter:     "(uid=alice)",
+			matches:    1,
+			resultCode: ldap.LDAPResultSuccess,
+		},
+		{
+			name:       "equal matches",
+			filter:     "(|(uid=alice)(uid=page-00))",
+			matches:    2,
+			resultCode: ldap.LDAPResultSuccess,
+		},
+		{
+			name:       "more matches",
+			filter:     "(|(uid=alice)(uid=page-00)(uid=page-01))",
+			matches:    2,
+			resultCode: ldap.LDAPResultSizeLimitExceeded,
+		},
+	}
+	for _, pageSize := range []uint32{2, 3} {
+		pageName := "equal page size"
+		if pageSize > 2 {
+			pageName = "greater page size"
+		}
+		for _, critical := range []bool{false, true} {
+			criticalName := "noncritical"
+			if critical {
+				criticalName = "critical"
+			}
+			for _, matchCase := range matchCases {
+				t.Run(
+					fmt.Sprintf("%s/%s/%s", pageName, criticalName, matchCase.name),
+					func(t *testing.T) {
+						client := bindPagedRootClient(t, address)
+						defer client.Close()
+
+						request := newPagedPeopleSearch(2, nil)
+						request.Filter = matchCase.filter
+						request.Controls = []ldap.Control{&ldap.ControlString{
+							ControlType: pagedResultsControlOID,
+							Criticality: critical,
+							ControlValue: string(
+								ldapwire.EncodePagedResultsValue(int(pageSize), nil),
+							),
+						}}
+
+						result, err := client.Search(request)
+						if matchCase.resultCode == ldap.LDAPResultSuccess {
+							if err != nil {
+								t.Fatalf("Search(): %v", err)
+							}
+						} else {
+							assertLDAPResultCode(t, err, matchCase.resultCode)
+						}
+						entryCount := 0
+						if result != nil {
+							entryCount = len(result.Entries)
+						}
+						if entryCount != matchCase.matches {
+							t.Fatalf(
+								"Search() entries = %d, want %d",
+								entryCount,
+								matchCase.matches,
+							)
+						}
+						if result == nil {
+							t.Fatal("Search() returned a nil result")
+						}
+						if control := ldap.FindControl(
+							result.Controls,
+							ldap.ControlTypePaging,
+						); control != nil {
+							t.Fatalf("ignored paging response control = %#v", control)
+						}
+					},
+				)
+			}
+		}
+	}
+}
+
 func TestLDAPClientPagedSearchAcrossGlueDatabases(t *testing.T) {
 	t.Parallel()
 

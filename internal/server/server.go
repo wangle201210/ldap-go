@@ -572,7 +572,28 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		switch request := message.Request.(type) {
 		case ldapwire.AbandonRequest:
 			if !hasUnsupportedCriticalControl(message.Controls) {
-				operations.abandon(request.MessageID)
+				if discarded := queue.remove(request.MessageID); discarded != nil {
+					discarded.operation.requestAbandon()
+					operations.finish(discarded.operation)
+					discardedAudit := server.newOperationAuditObservation(
+						&state,
+						discarded.message,
+					)
+					server.finishOperationAudit(
+						discardedAudit,
+						&state,
+						operationAbandoned,
+						nil,
+					)
+					server.monitor.startOperation(state.monitor, false)
+					server.monitor.completeOperation(
+						state.monitor,
+						discarded.message.Request,
+						false,
+					)
+				} else {
+					operations.abandon(request.MessageID)
+				}
 			}
 			observation := server.newImmediateAuditObservation(&state, message)
 			server.finishOperationAudit(
@@ -584,6 +605,33 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			server.monitor.completeImmediateOperation(state.monitor, message.Request)
 			continue
 		case ldapwire.ExtendedRequest:
+			if result := server.startTLSOutstandingResult(
+				&state,
+				operations,
+				message,
+				request,
+			); result != nil {
+				baseConnection := &serializedResponseConnection{
+					Conn:              readConnection,
+					mu:                writeMutex,
+					monitor:           server.monitor,
+					monitorConnection: state.monitor,
+				}
+				observation := server.newImmediateAuditObservation(&state, message)
+				observation.setResult(result.Code)
+				err := writeResultForMessage(baseConnection, message, *result)
+				server.finishOperationAudit(
+					observation,
+					&state,
+					operationRunning,
+					err,
+				)
+				server.monitor.completeImmediateOperation(state.monitor, message.Request)
+				if err != nil {
+					return
+				}
+				continue
+			}
 			if request.Name == cancelOID {
 				baseConnection := &serializedResponseConnection{
 					Conn:              readConnection,
@@ -636,10 +684,16 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			completion: make(chan operationCompletion, 1),
 		}
 		server.monitor.queueOperation(state.monitor)
-		if !queue.push(queued) {
+		pushResult := queue.push(
+			queued,
+			server.connectionMaxPending(&state),
+		)
+		if pushResult != operationQueuePushed {
 			server.monitor.startOperation(state.monitor, false)
-			server.monitor.completeOperation(state.monitor, message.Request, false)
 			operations.finish(operation)
+			if pushResult == operationQueueClosed {
+				server.monitor.completeOperation(state.monitor, message.Request, false)
+			}
 			return
 		}
 		if !connectionBarrier(message) {
@@ -783,6 +837,7 @@ func (server *Server) runConnectionOperations(
 		)
 
 		operations.finish(queued.operation)
+		queue.complete()
 		queued.completion <- operationCompletion{
 			closeConnection: closeConnection,
 			connection:      state.connection,
@@ -808,6 +863,20 @@ func (server *Server) runConnectionOperations(
 			return
 		}
 	}
+}
+
+func (server *Server) connectionMaxPending(state *connectionState) int {
+	limits := connectionPendingRuntimeConfiguration{
+		maxPending:     defaultConnectionMaxPending,
+		maxPendingAuth: defaultConnectionMaxPendingAuth,
+	}
+	if runtime := server.runtime.Load(); runtime != nil {
+		limits = runtime.connectionPending
+	}
+	if state != nil && state.boundDN != "" {
+		return limits.maxPendingAuth
+	}
+	return limits.maxPending
 }
 
 type searchSessionSnapshot struct {
@@ -871,6 +940,31 @@ func connectionBarrier(message ldapwire.Message) bool {
 	default:
 		return false
 	}
+}
+
+func (server *Server) startTLSOutstandingResult(
+	state *connectionState,
+	operations *operationRegistry,
+	message ldapwire.Message,
+	request ldapwire.ExtendedRequest,
+) *ldapwire.Result {
+	if request.Name != startTLSOID || !operations.hasOutstanding() {
+		return nil
+	}
+	// Preserve the existing extended-operation validation order. Only take
+	// the immediate path when outstanding operations are the first failure.
+	if state.transaction != nil ||
+		state.saslSession != nil ||
+		message.ControlsPresent || len(message.Controls) != 0 ||
+		frontendRestricts(server.runtime.Load(), requestDatabaseRestriction(request)) ||
+		request.HasValue || state.secure || state.saslSSF > 0 {
+		return nil
+	}
+	result := ldapwire.ResultError(
+		ldapwire.ResultOperationsError,
+		"cannot start TLS when operations are outstanding",
+	)
+	return &result
 }
 
 func channelClosed(channel <-chan struct{}) bool {

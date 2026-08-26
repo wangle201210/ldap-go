@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,827 top-level tests against the pinned commit.
+The latest strict run passed 1,840 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -77,6 +77,16 @@ simple paged-results controls on their applicable operations. RFC 4529
 Search and pre-read/post-read controls. RFC 3876 Matched
 Values filters final SearchResultEntry values after ACL, projection,
 sorting/VLV, paging, and Sync state processing. OpenLDAP's
+`olcConnMaxPending` and `olcConnMaxPendingAuth` limits bound each connection's
+queued operations with OpenLDAP's 100/1,000 defaults and current anonymous or
+authenticated identity. An overflow closes the connection without an LDAP
+response, while Abandon, Cancel, and Unbind retain their immediate paths;
+Abandon also removes a pending target and releases its queue slot immediately.
+StartTLS returns `operationsError` immediately when another operation is
+outstanding instead of waiting behind a long-running Search. RFC 2696 requests
+whose page size is at least the request size limit are treated as a single
+unpaged Search and do not create a cookie or paging response control.
+OpenLDAP's
 hidden No-Op control atomically validates and rolls back Add, Modify, Delete,
 and ModifyDN, while permissiveModify ignores duplicate additions and missing
 deletions. Microsoft/OpenLDAP Domain Scope and Search Options controls suppress

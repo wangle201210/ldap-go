@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -15,6 +16,11 @@ import (
 )
 
 var configurationSuffix = staticRuntimeDN("cn=config")
+
+const (
+	defaultConnectionMaxPending     = 100
+	defaultConnectionMaxPendingAuth = 1000
+)
 
 type runtimeState struct {
 	revision            uint64
@@ -30,7 +36,13 @@ type runtimeState struct {
 	passwordCryptSalt   string
 	externalPasswords   externalPasswordRuntimeConfiguration
 	sasl                saslRuntimeConfiguration
+	connectionPending   connectionPendingRuntimeConfiguration
 	syncContexts        map[string]syncCSNState
+}
+
+type connectionPendingRuntimeConfiguration struct {
+	maxPending     int
+	maxPendingAuth int
 }
 
 type allowsRuntimeConfiguration struct {
@@ -275,6 +287,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	connectionPending, err := loadConnectionPendingRuntimeConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -298,6 +314,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		passwordCryptSalt:   passwordCryptSalt,
 		externalPasswords:   externalPasswords,
 		sasl:                sasl,
+		connectionPending:   connectionPending,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
@@ -309,6 +326,58 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, err
 	}
 	return runtime, nil
+}
+
+func loadConnectionPendingRuntimeConfiguration(
+	reader storage.Reader,
+) (connectionPendingRuntimeConfiguration, error) {
+	configuration := connectionPendingRuntimeConfiguration{
+		maxPending:     defaultConnectionMaxPending,
+		maxPendingAuth: defaultConnectionMaxPendingAuth,
+	}
+	entry, err := reader.Get(configurationSuffix)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return configuration, nil
+	}
+	if err != nil {
+		return connectionPendingRuntimeConfiguration{}, fmt.Errorf(
+			"load global connection pending configuration: %w",
+			err,
+		)
+	}
+
+	for _, attribute := range []struct {
+		description string
+		target      *int
+	}{
+		{"olcConnMaxPending", &configuration.maxPending},
+		{"olcConnMaxPendingAuth", &configuration.maxPendingAuth},
+	} {
+		values := entry.Values(attribute.description)
+		if len(values) == 0 {
+			continue
+		}
+		if len(values) != 1 {
+			return connectionPendingRuntimeConfiguration{}, fmt.Errorf(
+				"%s must contain exactly one value",
+				attribute.description,
+			)
+		}
+		value, err := strconv.ParseInt(
+			strings.TrimLeft(string(values[0]), " \t\n\v\f\r"),
+			0,
+			32,
+		)
+		if err != nil {
+			return connectionPendingRuntimeConfiguration{}, fmt.Errorf(
+				"%s must be a 32-bit integer: %w",
+				attribute.description,
+				err,
+			)
+		}
+		*attribute.target = int(value)
+	}
+	return configuration, nil
 }
 
 func loadPasswordCryptSaltFormat(reader storage.Reader) (string, error) {

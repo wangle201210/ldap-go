@@ -210,6 +210,12 @@ func (registry *operationRegistry) contains(messageID int64) bool {
 	return registry.operations[messageID] != nil
 }
 
+func (registry *operationRegistry) hasOutstanding() bool {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return len(registry.operations) != 0
+}
+
 func (registry *operationRegistry) register(
 	parent context.Context,
 	message ldapwire.Message,
@@ -298,12 +304,21 @@ type operationCompletion struct {
 }
 
 type operationQueue struct {
-	mu     sync.Mutex
-	ready  *sync.Cond
-	items  []*queuedOperation
-	closed bool
-	drain  bool
+	mu        sync.Mutex
+	ready     *sync.Cond
+	items     []*queuedOperation
+	executing bool
+	closed    bool
+	drain     bool
 }
+
+type operationQueuePushResult uint8
+
+const (
+	operationQueuePushed operationQueuePushResult = iota
+	operationQueueClosed
+	operationQueueLimitExceeded
+)
 
 func newOperationQueue() *operationQueue {
 	queue := &operationQueue{}
@@ -311,15 +326,27 @@ func newOperationQueue() *operationQueue {
 	return queue
 }
 
-func (queue *operationQueue) push(operation *queuedOperation) bool {
+func (queue *operationQueue) push(
+	operation *queuedOperation,
+	maxPending int,
+) operationQueuePushResult {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 	if queue.closed {
-		return false
+		return operationQueueClosed
+	}
+	pending := len(queue.items) + 1
+	if !queue.executing {
+		// The first queued item can be activated immediately and is not an
+		// OpenLDAP pending operation.
+		pending--
+	}
+	if pending > 0 && pending > maxPending {
+		return operationQueueLimitExceeded
 	}
 	queue.items = append(queue.items, operation)
 	queue.ready.Signal()
-	return true
+	return operationQueuePushed
 }
 
 func (queue *operationQueue) pop() (*queuedOperation, bool) {
@@ -334,10 +361,38 @@ func (queue *operationQueue) pop() (*queuedOperation, bool) {
 	operation := queue.items[0]
 	queue.items[0] = nil
 	queue.items = queue.items[1:]
+	queue.executing = true
 	if len(queue.items) == 0 {
 		queue.items = nil
 	}
 	return operation, true
+}
+
+func (queue *operationQueue) complete() {
+	queue.mu.Lock()
+	queue.executing = false
+	queue.mu.Unlock()
+}
+
+func (queue *operationQueue) remove(messageID int64) *queuedOperation {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	for index, queued := range queue.items {
+		if queued == nil || queued.message.ID != messageID {
+			continue
+		}
+		copy(queue.items[index:], queue.items[index+1:])
+		last := len(queue.items) - 1
+		queue.items[last] = nil
+		queue.items = queue.items[:last]
+		if len(queue.items) == 0 {
+			queue.items = nil
+		} else {
+			queue.ready.Signal()
+		}
+		return queued
+	}
+	return nil
 }
 
 func (queue *operationQueue) pending() int {
@@ -354,6 +409,7 @@ func (queue *operationQueue) close() {
 	queue.closed = true
 	queue.drain = false
 	queue.items = nil
+	queue.executing = false
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
 }

@@ -71,6 +71,12 @@ func preparePagedSearch(
 	if paging == nil {
 		return nil, nil
 	}
+	if len(paging.cookie) == 0 &&
+		request.SizeLimit > 0 &&
+		paging.size >= request.SizeLimit {
+		clearPagedSearch(state)
+		return nil, nil
+	}
 	if limits.pageTotal == -2 {
 		clearPagedSearch(state)
 		return nil, pagingResult(
