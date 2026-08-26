@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,821 top-level tests against the pinned commit.
+The latest strict run passed 1,827 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -455,6 +455,11 @@ operation-specific `protocolError` response and connection close, including
 empty/malformed wrappers, silent Abandon/Unbind behavior, and a subsequent
 LDAPv3 Bind using its own version. Release-hidden Relax and Transaction
 Specification controls remain usable but are omitted from Root DSE discovery.
+The hidden Lazy Commit control is validated and forwarded on all OpenLDAP
+ACCESS operations. Matching the pinned release, it is a local durability
+no-op: bundled LMDB clears the transaction-local `MDB_NOMETASYNC` flag, so
+ldap-go deliberately keeps normal bbolt durability instead of weakening it
+with the non-equivalent global `NoSync` mode.
 RFC 2589 dynamic directory services are enabled by an imported
 `olcOverlay=dds`. Dynamic Add generates `entryTtl` and the OpenLDAP
 `entryExpireTimestamp`, Refresh enforces configured min/max TTL and `manage`

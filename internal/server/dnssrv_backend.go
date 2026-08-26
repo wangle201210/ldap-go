@@ -327,7 +327,7 @@ func (server *Server) tryDNSSRVBackendOperation(
 			ldapwire.ResultUnwillingToPerform, "operation restricted",
 		))
 	}
-	support := supportsManageDsaIT
+	support := supportsManageDsaIT | supportsLazyCommit
 	if _, search := message.Request.(ldapwire.SearchRequest); search {
 		support |= supportsMatchedValues
 	}

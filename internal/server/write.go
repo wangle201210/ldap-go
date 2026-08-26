@@ -87,6 +87,7 @@ func (server *Server) handleAdd(
 			supportsManageDsaIT|
 			supportsPasswordPolicy|
 			supportsRelax|
+			supportsLazyCommit|
 			supportsNoOp,
 	)
 	if result != nil {
@@ -606,6 +607,7 @@ func (server *Server) handleModify(
 			supportsManageDsaIT|
 			supportsPasswordPolicy|
 			supportsRelax|
+			supportsLazyCommit|
 			supportsNoOp|
 			supportsPermissiveModify,
 	)
@@ -1342,6 +1344,7 @@ func (server *Server) handleDelete(
 			supportsPreRead|
 			supportsManageDsaIT|
 			supportsRelax|
+			supportsLazyCommit|
 			supportsNoOp|
 			supportsTreeDelete,
 	)
@@ -1713,6 +1716,7 @@ func (server *Server) handleModifyDN(
 			supportsPostRead|
 			supportsManageDsaIT|
 			supportsRelax|
+			supportsLazyCommit|
 			supportsNoOp,
 	)
 	if result != nil {
@@ -2453,7 +2457,7 @@ func (server *Server) handleCompare(
 	}
 	controls, controlFailure := parseRequestControlsWithDisallows(
 		message.Controls,
-		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy|supportsNoOp,
+		supportsAssertion|supportsManageDsaIT|supportsDontUseCopy|supportsNoOp|supportsLazyCommit,
 		state.runtime.disallows,
 	)
 	if controlFailure != nil {

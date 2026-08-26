@@ -926,6 +926,9 @@ func (server *Server) dispatch(
 			),
 		)
 	}
+	if failure := prevalidateLazyCommitControls(message.Request, message.Controls); failure != nil {
+		return false, writeResultForMessage(connection, message, *failure)
+	}
 	sessionTracking, sessionTrackingFailure := parseSessionTrackingControls(
 		message.Request,
 		message.Controls,
@@ -1060,6 +1063,7 @@ func (server *Server) dispatch(
 	}
 	overlayMessage := message
 	overlayMessage.Controls = withoutSessionTrackingControls(message.Controls)
+	overlayMessage.Controls = withoutLazyCommitControls(overlayMessage.Controls)
 	overlayConnection, handled, err := server.trySockOverlayOperation(
 		ctx,
 		connection,
@@ -1076,12 +1080,15 @@ func (server *Server) dispatch(
 			messageID: message.ID,
 		}
 	}
+	consumedControlMessage := message
+	consumedControlMessage.Controls = withoutSessionTrackingControls(message.Controls)
+	consumedControlMessage.Controls = withoutLazyCommitControls(consumedControlMessage.Controls)
 	switch request := message.Request.(type) {
 	case ldapwire.SearchRequest:
 		if handled, err := server.tryPcachePrivateSearch(
 			connection,
 			state,
-			message,
+			consumedControlMessage,
 			request,
 		); handled {
 			return false, err
@@ -1090,7 +1097,7 @@ func (server *Server) dispatch(
 		if handled, err := server.tryPcachePrivateCompare(
 			connection,
 			state,
-			message,
+			consumedControlMessage,
 			request,
 		); handled {
 			return false, err
@@ -1100,7 +1107,7 @@ func (server *Server) dispatch(
 		ctx,
 		connection,
 		state,
-		message,
+		consumedControlMessage,
 	); handled {
 		return false, err
 	}

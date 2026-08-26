@@ -266,7 +266,7 @@ func (server *Server) searchPasswdBackend(
 ) error {
 	controls, failure := parseRequestControlsWithDisallows(
 		message.Controls,
-		supportsAssertion|supportsManageDsaIT|supportsMatchedValues,
+		supportsAssertion|supportsManageDsaIT|supportsMatchedValues|supportsLazyCommit,
 		state.runtime.disallows,
 	)
 	if failure != nil {

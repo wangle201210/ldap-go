@@ -32,6 +32,7 @@ const (
 	domainScopeControlOID      = ldapwire.DomainScopeControlOID
 	searchOptionsControlOID    = ldapwire.SearchOptionsControlOID
 	treeDeleteControlOID       = "1.2.840.113556.1.4.805"
+	lazyCommitControlOID       = "1.2.840.113556.1.4.619"
 )
 
 type requestControlSupport uint32
@@ -58,6 +59,7 @@ const (
 	supportsDomainScope
 	supportsSearchOptions
 	supportsTreeDelete
+	supportsLazyCommit
 )
 
 type requestControls struct {
@@ -82,6 +84,7 @@ type requestControls struct {
 	chaining         *chainBehaviorRequest
 	domainScope      bool
 	treeDelete       *treeDeleteControlRequest
+	lazyCommit       bool
 }
 
 type readControlRequest struct {
@@ -287,6 +290,26 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.treeDelete = &treeDeleteControlRequest{critical: control.Critical}
+		case lazyCommitControlOID:
+			if supported&supportsLazyCommit == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.lazyCommit {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					`"Lazy Commit?" control specified multiple times`,
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					`"Lazy Commit?" control value not absent`,
+				)
+			}
+			parsed.lazyCommit = true
 		case preReadControlOID:
 			if supported&supportsPreRead == 0 {
 				if control.Critical {

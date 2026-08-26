@@ -397,6 +397,14 @@ elements, failed authentication retaining v2 state, control-free Abandon, and
 v2-to-v3 rebind. `TestOpenLDAPReferenceHiddenControlDiscovery` verifies that
 Relax and Transaction Specification remain usable but hidden from Root DSE.
 
+`TestOpenLDAPReferenceLazyCommitControl` compares critical/noncritical
+acceptance, absent/value/duplicate validation, unsupported Bind/Extended
+operations, write lifecycle, and Root DSE hiding. The paired pinned source
+contract proves why no durability fault test is claimed: OpenLDAP 2.6.13's
+bundled LMDB masks out the operation flag before transaction creation and its
+commit path only observes global environment flags. Local tests verify normal
+write and No-Op results without weakening Memory or bbolt durability.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

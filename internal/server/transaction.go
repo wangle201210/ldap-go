@@ -541,6 +541,7 @@ func validateTransactionOperationControls(
 			supportsManageDsaIT |
 			supportsPasswordPolicy |
 			supportsRelax |
+			supportsLazyCommit |
 			supportsNoOp
 	case ldapwire.ModifyRequest:
 		supported = supportsAssertion |
@@ -549,6 +550,7 @@ func validateTransactionOperationControls(
 			supportsManageDsaIT |
 			supportsPasswordPolicy |
 			supportsRelax |
+			supportsLazyCommit |
 			supportsNoOp |
 			supportsPermissiveModify
 	case ldapwire.DeleteRequest:
@@ -556,6 +558,7 @@ func validateTransactionOperationControls(
 			supportsPreRead |
 			supportsManageDsaIT |
 			supportsRelax |
+			supportsLazyCommit |
 			supportsNoOp
 	case ldapwire.ModifyDNRequest:
 		supported = supportsAssertion |
@@ -563,6 +566,7 @@ func validateTransactionOperationControls(
 			supportsPostRead |
 			supportsManageDsaIT |
 			supportsRelax |
+			supportsLazyCommit |
 			supportsNoOp
 	case ldapwire.ExtendedRequest:
 		if request.Name == passwordModifyOID {

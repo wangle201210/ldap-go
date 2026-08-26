@@ -149,6 +149,7 @@ func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 		supportsMatchedValues |
 		supportsDomainScope |
 		supportsSearchOptions |
+		supportsLazyCommit |
 		supportsNoOp
 	if runtime == nil {
 		return support
