@@ -173,10 +173,6 @@ func (server *Server) handleSearch(
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
 ) error {
-	request.Attributes = expandObjectClassAttributeSelection(
-		state.runtime.schema,
-		request.Attributes,
-	)
 	if handled, err := server.tryPcachePrivateSearch(
 		connection,
 		state,

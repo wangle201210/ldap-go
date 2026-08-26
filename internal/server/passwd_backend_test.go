@@ -73,6 +73,25 @@ func TestPasswdBackendFixtureSearchProjectionACLAndReadOnlyResults(t *testing.T)
 	if got := entry.GetAttributeValues("description"); len(got) != 0 {
 		t.Fatalf("ACL-visible description = %q, want hidden", got)
 	}
+	byClass, err := client.Search(ldap.NewSearchRequest(
+		"uid=alice,"+passwdTestSuffix,
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"@person"},
+		nil,
+	))
+	if err != nil || len(byClass.Entries) != 1 ||
+		!entryHasLDAPAttribute(byClass.Entries[0], "objectClass") ||
+		!entryHasLDAPAttribute(byClass.Entries[0], "cn") ||
+		!entryHasLDAPAttribute(byClass.Entries[0], "sn") ||
+		entryHasLDAPAttribute(byClass.Entries[0], "uid") ||
+		entryHasLDAPAttribute(byClass.Entries[0], "description") {
+		t.Fatalf("passwd @person projection = %#v, %v", byClass, err)
+	}
 
 	hiddenFilter, err := client.Search(ldap.NewSearchRequest(
 		passwdTestSuffix,

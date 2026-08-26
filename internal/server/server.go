@@ -864,6 +864,11 @@ func (server *Server) dispatch(
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
+		request.Attributes = expandObjectClassAttributeSelection(
+			state.runtime.schema,
+			request.Attributes,
+		)
+		message.Request = request
 		parsedControls, privateSearch, failure := prevalidateSearchRequestControls(
 			state.runtime,
 			message.Controls,
