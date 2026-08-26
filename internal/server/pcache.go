@@ -1062,11 +1062,12 @@ func (server *Server) tryPcacheSearch(
 			ttl = match.template.negativeTTL
 		}
 		if ttl > 0 {
+			replay := pcacheReplayMessage(forwarded)
 			database.pcache.state.commitContext(
 				ctx,
 				match.key,
 				response,
-				forwarded,
+				replay,
 				capturePcacheRemoteContext(state),
 				database.pcache.state.clock(),
 				pcacheRefreshPolicy{
@@ -1091,6 +1092,11 @@ func (server *Server) tryPcacheSearch(
 		response,
 		false,
 	)
+}
+
+func pcacheReplayMessage(message ldapwire.Message) ldapwire.Message {
+	message.Controls = withoutSessionTrackingControls(message.Controls)
+	return message
 }
 
 func (server *Server) refreshPcacheSearch(

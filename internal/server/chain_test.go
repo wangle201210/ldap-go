@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"testing"
@@ -841,6 +842,23 @@ func TestChainSessionTrackingControl(t *testing.T) {
 		if err != nil || string(raw) != want[index] {
 			t.Fatalf("session tracking field %d = %q, %v", index, raw, err)
 		}
+	}
+	clientControl := ldapwire.Control{
+		OID:      sessionTrackingControlOID,
+		HasValue: true,
+		Value:    ldapwire.EncodeSessionTrackingValue(ldapwire.SessionTrackingValue{FormatOID: []byte("1.2")}),
+	}
+	controls := appendChainSessionTrackingControl(
+		[]ldapwire.Control{clientControl},
+		&connectionState{
+			boundDN:    "uid=alice,dc=example,dc=com",
+			connection: remote,
+		},
+	)
+	if len(controls) != 2 || controls[0].OID != sessionTrackingControlOID ||
+		controls[1].OID != sessionTrackingControlOID ||
+		!bytes.Equal(controls[0].Value, clientControl.Value) {
+		t.Fatalf("client plus generated session tracking controls = %#v", controls)
 	}
 }
 

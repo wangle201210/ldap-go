@@ -21,11 +21,10 @@ import (
 )
 
 const (
-	absoluteFiltersFeatureOID        = "1.3.6.1.4.1.4203.1.5.3"
-	chainingBehaviorControlOID       = "1.3.6.1.4.1.4203.666.11.3"
-	sessionTrackingControlOID        = "1.3.6.1.4.1.21008.108.63.1"
-	sessionTrackingUsernameFormatOID = sessionTrackingControlOID + ".3"
-	chainCannotChainResultCode       = ldapwire.ResultCode(0x4111)
+	absoluteFiltersFeatureOID  = "1.3.6.1.4.1.4203.1.5.3"
+	chainingBehaviorControlOID = "1.3.6.1.4.1.4203.666.11.3"
+	sessionTrackingControlOID  = ldapwire.SessionTrackingControlOID
+	chainCannotChainResultCode = ldapwire.ResultCode(0x4111)
 )
 
 type chainBehavior uint8
@@ -936,10 +935,8 @@ func (server *Server) executeChainTarget(
 			resolvedCancelMode = "exop"
 		}
 	}
-	if remote.sessionTracking && !hasLDAPControl(message.Controls, sessionTrackingControlOID) {
-		if control, ok := chainSessionTrackingControl(state); ok {
-			message.Controls = append(message.Controls, control)
-		}
+	if remote.sessionTracking {
+		message.Controls = appendChainSessionTrackingControl(message.Controls, state)
 	}
 	if chain.outboundChaining != nil &&
 		!hasLDAPControl(message.Controls, chainingBehaviorControlOID) {
@@ -2081,28 +2078,27 @@ func chainSessionTrackingControl(state *connectionState) (ldapwire.Control, bool
 	if ip == "" && identifier == "" {
 		return ldapwire.Control{}, false
 	}
-	value := ber.NewSequence("SessionTrackingControlValue")
-	for _, field := range []string{
-		ip,
-		"",
-		sessionTrackingUsernameFormatOID,
-		identifier,
-	} {
-		child := ber.Encode(
-			ber.ClassUniversal,
-			ber.TypePrimitive,
-			ber.TagOctetString,
-			nil,
-			"sessionTrackingField",
-		)
-		_, _ = child.Data.Write([]byte(field))
-		value.AppendChild(child)
-	}
+	value := ldapwire.EncodeSessionTrackingValue(ldapwire.SessionTrackingValue{
+		SessionSourceIP:           []byte(ip),
+		FormatOID:                 []byte(sessionTrackingUsernameFormatOID),
+		SessionTrackingIdentifier: []byte(identifier),
+	})
 	return ldapwire.Control{
 		OID:      sessionTrackingControlOID,
-		Value:    value.Bytes(),
+		Value:    value,
 		HasValue: true,
 	}, true
+}
+
+func appendChainSessionTrackingControl(
+	controls []ldapwire.Control,
+	state *connectionState,
+) []ldapwire.Control {
+	control, ok := chainSessionTrackingControl(state)
+	if !ok {
+		return controls
+	}
+	return append(controls, control)
 }
 
 func withoutSearchDone(packets []*ber.Packet) []*ber.Packet {

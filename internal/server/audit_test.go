@@ -25,6 +25,7 @@ func (sink *recordingAuditSink) Record(event audit.Event) error {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	event.RequestControls = append([]string(nil), event.RequestControls...)
+	event.SessionTracking = append([]audit.SessionTracking(nil), event.SessionTracking...)
 	sink.events = append(sink.events, event)
 	return nil
 }

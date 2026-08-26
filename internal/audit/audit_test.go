@@ -40,6 +40,10 @@ func TestChainWriterVerifyAndDetectTampering(t *testing.T) {
 			ResultCode:     &success,
 			Outcome:        "success",
 			DurationMicros: 40,
+			SessionTracking: []SessionTracking{{
+				SourceIP: "192.0.2.10", FormatOID: "1.2.3",
+				Identifier: "session-1", IdentifierPresent: true,
+			}},
 		},
 	} {
 		if err := writer.Record(event); err != nil {
@@ -69,6 +73,11 @@ func TestChainWriterVerifyAndDetectTampering(t *testing.T) {
 	}
 	if second.Previous != first.Integrity {
 		t.Fatalf("second previous = %q, want %q", second.Previous, first.Integrity)
+	}
+	if len(second.Event.SessionTracking) != 1 ||
+		second.Event.SessionTracking[0].Identifier != "session-1" ||
+		second.Event.SessionTracking[0].Trusted {
+		t.Fatalf("session tracking audit JSON = %#v", second.Event.SessionTracking)
 	}
 
 	tampered := bytes.Replace(

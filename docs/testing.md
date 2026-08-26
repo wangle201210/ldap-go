@@ -369,6 +369,16 @@ Local tests additionally cover frontend control stripping, LDAP proxying,
 complete-response pCache hits, streaming sock responses, response controls,
 Root DSE hiding, and `ldapsearch -E domainScope`.
 
+`TestOpenLDAPReferenceSessionTrackingControl` pins the hidden Session Tracking
+control against OpenLDAP 2.6.13. It covers required/empty fields, permissive
+inner tags and the single trailing-tag edge, IP/name/OID limits, duplicate
+controls, criticality, non-printable fields, and OpenLDAP's invalid-format-OID
+success/ignore defect. Its operation matrix covers Bind, Search, Add, Modify,
+ModifyDN, Delete, and Who Am I. Local tests additionally verify operation-local
+audit isolation, trusted identity separation, LDAP proxy preservation plus
+generated-control ordering, pCache refresh stripping, sock overlay handling,
+and Root DSE hiding.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

@@ -259,6 +259,18 @@ func (observation *operationAuditObservation) setAuthorizationDN(value string) {
 	observation.mu.Unlock()
 }
 
+func (observation *operationAuditObservation) setSessionTracking(
+	values []audit.SessionTracking,
+) {
+	if observation == nil {
+		return
+	}
+	cloned := append([]audit.SessionTracking(nil), values...)
+	observation.mu.Lock()
+	observation.event.SessionTracking = cloned
+	observation.mu.Unlock()
+}
+
 func (server *Server) finishOperationAudit(
 	observation *operationAuditObservation,
 	state *connectionState,
@@ -381,5 +393,16 @@ func (connection *auditResponseConnection) Write(value []byte) (int, error) {
 func setAuditAuthorizationDN(connection net.Conn, value string) {
 	if audited, ok := connection.(interface{ setAuditAuthorizationDN(string) }); ok {
 		audited.setAuditAuthorizationDN(value)
+	}
+}
+
+func setAuditSessionTracking(
+	connection net.Conn,
+	values []audit.SessionTracking,
+) {
+	if audited, ok := connection.(interface {
+		setAuditSessionTracking([]audit.SessionTracking)
+	}); ok {
+		audited.setAuditSessionTracking(values)
 	}
 }

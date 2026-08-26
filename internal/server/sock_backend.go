@@ -108,6 +108,7 @@ func (server *Server) trySockBackendOperation(
 	if database == nil {
 		return false, nil
 	}
+	message.Controls = withoutSessionTrackingControls(message.Controls)
 	if hasLDAPControl(message.Controls, transactionSpecificationControlOID) {
 		// RFC 5805 controls belong to the transaction queue layer. Yield before
 		// opening a socket so malformed controls retain their RFC result codes

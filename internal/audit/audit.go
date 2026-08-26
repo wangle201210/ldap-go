@@ -21,26 +21,38 @@ const (
 	maximumLineSize = 1 << 20
 )
 
-// Event contains only operation metadata. Request values and credentials are
-// deliberately absent so callers cannot accidentally persist them.
+// Event contains operation metadata and explicitly bounded session-tracking
+// metadata. Directory assertions, attribute values, and credentials remain
+// absent so callers cannot accidentally persist them.
 type Event struct {
-	Timestamp               time.Time `json:"timestamp"`
-	ConnectionID            uint64    `json:"connection_id"`
-	MessageID               int64     `json:"message_id"`
-	RelatedMessageID        int64     `json:"related_message_id,omitempty"`
-	Operation               string    `json:"operation"`
-	TargetDN                string    `json:"target_dn,omitempty"`
-	ExtendedOperation       string    `json:"extended_operation,omitempty"`
-	AuthenticationDN        string    `json:"authentication_dn,omitempty"`
-	AuthorizationDN         string    `json:"authorization_dn,omitempty"`
-	AuthenticationMechanism string    `json:"authentication_mechanism,omitempty"`
-	RemoteAddress           string    `json:"remote_address,omitempty"`
-	Secure                  bool      `json:"secure"`
-	SecurityStrengthFactor  uint32    `json:"security_strength_factor,omitempty"`
-	RequestControls         []string  `json:"request_controls,omitempty"`
-	ResultCode              *int      `json:"result_code,omitempty"`
-	Outcome                 string    `json:"outcome"`
-	DurationMicros          int64     `json:"duration_micros"`
+	Timestamp               time.Time         `json:"timestamp"`
+	ConnectionID            uint64            `json:"connection_id"`
+	MessageID               int64             `json:"message_id"`
+	RelatedMessageID        int64             `json:"related_message_id,omitempty"`
+	Operation               string            `json:"operation"`
+	TargetDN                string            `json:"target_dn,omitempty"`
+	ExtendedOperation       string            `json:"extended_operation,omitempty"`
+	AuthenticationDN        string            `json:"authentication_dn,omitempty"`
+	AuthorizationDN         string            `json:"authorization_dn,omitempty"`
+	AuthenticationMechanism string            `json:"authentication_mechanism,omitempty"`
+	RemoteAddress           string            `json:"remote_address,omitempty"`
+	Secure                  bool              `json:"secure"`
+	SecurityStrengthFactor  uint32            `json:"security_strength_factor,omitempty"`
+	RequestControls         []string          `json:"request_controls,omitempty"`
+	SessionTracking         []SessionTracking `json:"session_tracking,omitempty"`
+	ResultCode              *int              `json:"result_code,omitempty"`
+	Outcome                 string            `json:"outcome"`
+	DurationMicros          int64             `json:"duration_micros"`
+}
+
+type SessionTracking struct {
+	SourceIP          string `json:"source_ip,omitempty"`
+	SourceName        string `json:"source_name,omitempty"`
+	FormatOID         string `json:"format_oid"`
+	FormatName        string `json:"format_name,omitempty"`
+	Identifier        string `json:"identifier,omitempty"`
+	IdentifierPresent bool   `json:"identifier_present,omitempty"`
+	Trusted           bool   `json:"trusted"`
 }
 
 type Sink interface {

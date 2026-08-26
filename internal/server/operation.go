@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
@@ -428,4 +429,10 @@ func (connection *operationResponseConnection) beginFinalResponse() error {
 
 func (connection *operationResponseConnection) setAuditAuthorizationDN(value string) {
 	connection.audit.setAuthorizationDN(value)
+}
+
+func (connection *operationResponseConnection) setAuditSessionTracking(
+	values []audit.SessionTracking,
+) {
+	connection.audit.setSessionTracking(values)
 }

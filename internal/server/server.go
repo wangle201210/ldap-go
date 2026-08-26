@@ -822,6 +822,26 @@ func (server *Server) dispatch(
 	}
 	state.runtime = runtime
 	refreshPasswordPolicyRestriction(state)
+	sessionTracking, sessionTrackingFailure := parseSessionTrackingControls(
+		message.Request,
+		message.Controls,
+	)
+	if len(sessionTracking) != 0 {
+		setAuditSessionTracking(connection, sessionTracking)
+		logged := make([]string, len(sessionTracking))
+		for index := range sessionTracking {
+			logged[index] = sessionTrackingLogValue(sessionTracking[index])
+		}
+		server.config.Logger.Debug(
+			"LDAP session tracking",
+			"message_id", message.ID,
+			"session_tracking_count", len(logged),
+			"session_tracking", logged,
+		)
+	}
+	if sessionTrackingFailure != nil {
+		return false, writeResultForMessage(connection, message, *sessionTrackingFailure)
+	}
 	switch message.Request.(type) {
 	case ldapwire.UnbindRequest, ldapwire.AbandonRequest:
 	default:
@@ -934,11 +954,13 @@ func (server *Server) dispatch(
 			}
 		}
 	}
+	overlayMessage := message
+	overlayMessage.Controls = withoutSessionTrackingControls(message.Controls)
 	overlayConnection, handled, err := server.trySockOverlayOperation(
 		ctx,
 		connection,
 		state,
-		message,
+		overlayMessage,
 	)
 	if handled {
 		return false, err
