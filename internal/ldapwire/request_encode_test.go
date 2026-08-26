@@ -161,7 +161,9 @@ func TestEncodeRequestMessageRoundTrips(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			message := Message{ID: 23, Request: test.request, Controls: controls}
+			message := Message{
+				ID: 23, Request: test.request, Controls: controls, ControlsPresent: true,
+			}
 			encoded, err := EncodeRequestMessage(message)
 			if err != nil {
 				t.Fatalf("EncodeRequestMessage(): %v", err)
@@ -186,6 +188,31 @@ func TestEncodeRequestMessageRejectsUnsupportedRequest(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("EncodeRequestMessage() accepted unsupported request")
+	}
+}
+
+func TestEncodeRequestMessagePreservesEmptyControlsWrapper(t *testing.T) {
+	t.Parallel()
+	message := Message{
+		ID: 17,
+		Request: SearchRequest{
+			Scope: directory.ScopeBase,
+			Filter: directory.Filter{
+				Kind: directory.FilterPresent, Attribute: "objectClass",
+			},
+		},
+		ControlsPresent: true,
+	}
+	encoded, err := EncodeRequestMessage(message)
+	if err != nil {
+		t.Fatalf("EncodeRequestMessage(): %v", err)
+	}
+	decoded, err := ReadMessage(bytes.NewReader(encoded), int64(len(encoded)))
+	if err != nil {
+		t.Fatalf("ReadMessage(): %v", err)
+	}
+	if !decoded.ControlsPresent || len(decoded.Controls) != 0 {
+		t.Fatalf("empty controls wrapper round trip = %#v", decoded)
 	}
 }
 

@@ -390,6 +390,13 @@ without changing any SQL row. Local tests add three-level deletion, child ACL,
 base-only Pre-Read, procedure execution, forced transactions under
 `olcSqlAutocommit`, and atomic rollback coverage.
 
+`TestOpenLDAPReferenceLDAPv2ControlsDisconnect` drives identical raw LDAPv2
+Bind, Search, Modify, Abandon, and Unbind sequences against slapd and ldap-go.
+It covers critical and noncritical controls, empty wrappers, malformed Control
+elements, failed authentication retaining v2 state, control-free Abandon, and
+v2-to-v3 rebind. `TestOpenLDAPReferenceHiddenControlDiscovery` verifies that
+Relax and Transaction Specification remain usable but hidden from Root DSE.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

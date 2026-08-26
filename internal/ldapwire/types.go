@@ -29,9 +29,10 @@ const (
 const DefaultMaxMessageSize int64 = 16 << 20
 
 type Message struct {
-	ID       int64
-	Request  Request
-	Controls []Control
+	ID              int64
+	Request         Request
+	Controls        []Control
+	ControlsPresent bool
 }
 
 type Request interface {

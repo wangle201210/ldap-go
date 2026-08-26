@@ -769,7 +769,7 @@ func TestLDAPTransactionDiscovery(t *testing.T) {
 	controls := result.Entries[0].GetAttributeValues("supportedControl")
 	if !containsString(extensions, transactionStartOID) ||
 		!containsString(extensions, transactionEndOID) ||
-		!containsString(controls, transactionSpecificationControlOID) {
+		containsString(controls, transactionSpecificationControlOID) {
 		t.Fatalf(
 			"transaction discovery extensions=%q controls=%q",
 			extensions,

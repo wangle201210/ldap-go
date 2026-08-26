@@ -19,7 +19,12 @@ func EncodeRequestMessage(message Message) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return encodeMessage(message.ID, operation, message.Controls), nil
+	return encodeMessageWithControlPresence(
+		message.ID,
+		operation,
+		message.Controls,
+		message.ControlsPresent,
+	), nil
 }
 
 func encodeRequest(request Request) (*ber.Packet, error) {

@@ -320,6 +320,29 @@ func TestReadControlPreservesEmptyValuePresence(t *testing.T) {
 	}
 }
 
+func TestReadUnbindIgnoresMalformedControl(t *testing.T) {
+	t.Parallel()
+	unbind := ber.Encode(
+		ber.ClassApplication,
+		ber.TypePrimitive,
+		ApplicationUnbindRequest,
+		nil,
+		"UnbindRequest",
+	)
+	message := testMessage(11, unbind)
+	wrapper := ber.Encode(ber.ClassContext, ber.TypeConstructed, 0, nil, "controls")
+	wrapper.AppendChild(ber.NewSequence("malformed empty Control"))
+	message.AppendChild(wrapper)
+	decoded, err := ReadMessage(bytes.NewReader(message.Bytes()), 1024)
+	if err != nil {
+		t.Fatalf("ReadMessage(Unbind malformed control): %v", err)
+	}
+	if _, ok := decoded.Request.(UnbindRequest); !ok ||
+		!decoded.ControlsPresent || len(decoded.Controls) != 0 {
+		t.Fatalf("decoded Unbind = %#v", decoded)
+	}
+}
+
 func TestReadExtendedRequest(t *testing.T) {
 	t.Parallel()
 

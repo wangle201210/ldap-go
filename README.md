@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,818 top-level tests against the pinned commit.
+The latest strict run passed 1,821 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -450,6 +450,11 @@ global `olcDisallows` policies enforce `bind_anon`, `bind_simple`,
 `olcAllows` LDAPv2, anonymous-DN, and anonymous-credential Bind exceptions
 follow OpenLDAP's precedence. Online changes, invalid-value rollback, restart,
 and slapd differential cases pass.
+LDAPv2 requests with a Controls wrapper match OpenLDAP's same-message,
+operation-specific `protocolError` response and connection close, including
+empty/malformed wrappers, silent Abandon/Unbind behavior, and a subsequent
+LDAPv3 Bind using its own version. Release-hidden Relax and Transaction
+Specification controls remain usable but are omitted from Root DSE discovery.
 RFC 2589 dynamic directory services are enabled by an imported
 `olcOverlay=dds`. Dynamic Add generates `entryTtl` and the OpenLDAP
 `entryExpireTimestamp`, Refresh enforces configured min/max TTL and `manage`

@@ -223,6 +223,15 @@ func appendLDAPResult(packet *ber.Packet, result Result) {
 }
 
 func encodeMessage(messageID int64, operation *ber.Packet, controls []Control) []byte {
+	return encodeMessageWithControlPresence(messageID, operation, controls, false)
+}
+
+func encodeMessageWithControlPresence(
+	messageID int64,
+	operation *ber.Packet,
+	controls []Control,
+	controlsPresent bool,
+) []byte {
 	message := ber.NewSequence("LDAPMessage")
 	message.AppendChild(ber.NewInteger(
 		ber.ClassUniversal,
@@ -232,7 +241,7 @@ func encodeMessage(messageID int64, operation *ber.Packet, controls []Control) [
 		"messageID",
 	))
 	message.AppendChild(operation)
-	if len(controls) > 0 {
+	if controlsPresent || len(controls) > 0 {
 		message.AppendChild(encodeControls(controls))
 	}
 	return message.Bytes()

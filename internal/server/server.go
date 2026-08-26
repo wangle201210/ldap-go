@@ -478,27 +478,43 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			server.config.MaxMessageSize,
 		)
 		if err != nil {
-			if server.draining.Load() {
+			_, recoverV2Bind := message.Request.(ldapwire.BindRequest)
+			recoverV2Bind = recoverV2Bind && ldapV2RequestHasControls(&state, message)
+			if !recoverV2Bind && message.Request != nil &&
+				ldapV2RequestHasControls(&state, message) {
+				server.monitor.observeRequest(state.monitor, message)
+				server.rejectLDAPv2Controls(
+					readConnection,
+					&state,
+					message,
+					writeMutex,
+				)
 				return
 			}
-			if errors.Is(err, io.EOF) ||
+			if recoverV2Bind {
+				// Preserve the parsed Bind envelope; dispatch performs the Bind
+				// barrier and anonymous identity demotion before responding.
+			} else if server.draining.Load() {
+				return
+			} else if errors.Is(err, io.EOF) ||
 				errors.Is(err, net.ErrClosed) ||
 				connectionContext.Err() != nil ||
 				channelClosed(workerDone) {
 				return
+			} else {
+				server.config.Logger.Debug("closing malformed LDAP connection", "error", err)
+				server.writeMalformedMessageAudit(&state)
+				responseConnection := &serializedResponseConnection{
+					Conn:              readConnection,
+					mu:                writeMutex,
+					monitor:           server.monitor,
+					monitorConnection: state.monitor,
+				}
+				_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
+					ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
+				))
+				return
 			}
-			server.config.Logger.Debug("closing malformed LDAP connection", "error", err)
-			server.writeMalformedMessageAudit(&state)
-			responseConnection := &serializedResponseConnection{
-				Conn:              readConnection,
-				mu:                writeMutex,
-				monitor:           server.monitor,
-				monitorConnection: state.monitor,
-			}
-			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
-				ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
-			))
-			return
 		}
 
 		server.monitor.observeRequest(state.monitor, message)
@@ -514,6 +530,19 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			)
 			server.monitor.completeImmediateOperation(state.monitor, message.Request)
 			return
+		}
+		if ldapV2RequestHasControls(&state, message) {
+			if _, bind := message.Request.(ldapwire.BindRequest); bind {
+				// Bind is a queue barrier and performs identity demotion in dispatch.
+			} else {
+				server.rejectLDAPv2Controls(
+					readConnection,
+					&state,
+					message,
+					writeMutex,
+				)
+				return
+			}
 		}
 		if operations.contains(message.ID) {
 			observation := server.newImmediateAuditObservation(&state, message)
@@ -629,6 +658,60 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			return
 		}
 	}
+}
+
+func ldapV2RequestHasControls(
+	state *connectionState,
+	message ldapwire.Message,
+) bool {
+	if !message.ControlsPresent && len(message.Controls) == 0 {
+		return false
+	}
+	if bind, ok := message.Request.(ldapwire.BindRequest); ok {
+		return bind.Version < 3
+	}
+	return state != nil && state.protocolVersion > 0 && state.protocolVersion < 3
+}
+
+func (server *Server) rejectLDAPv2Controls(
+	connection net.Conn,
+	state *connectionState,
+	message ldapwire.Message,
+	writeMutex *sync.Mutex,
+) {
+	observation := server.newImmediateAuditObservation(state, message)
+	if _, abandon := message.Request.(ldapwire.AbandonRequest); abandon {
+		server.finishOperationAudit(
+			observation,
+			state,
+			operationRunning,
+			nil,
+		)
+		server.monitor.completeImmediateOperation(state.monitor, message.Request)
+		return
+	}
+	observation.setResult(ldapwire.ResultProtocolError)
+	server.finishOperationAudit(
+		observation,
+		state,
+		operationRunning,
+		nil,
+	)
+	server.monitor.completeImmediateOperation(state.monitor, message.Request)
+	responseConnection := &serializedResponseConnection{
+		Conn:              connection,
+		mu:                writeMutex,
+		monitor:           server.monitor,
+		monitorConnection: state.monitor,
+	}
+	_ = writeResultForMessage(
+		responseConnection,
+		message,
+		ldapwire.ResultError(
+			ldapwire.ResultProtocolError,
+			"controls require LDAPv3",
+		),
+	)
 }
 
 func (server *Server) runConnectionOperations(
@@ -822,6 +905,27 @@ func (server *Server) dispatch(
 	}
 	state.runtime = runtime
 	refreshPasswordPolicyRestriction(state)
+	if bind, ok := message.Request.(ldapwire.BindRequest); ok &&
+		bind.Version < 3 &&
+		(message.ControlsPresent || len(message.Controls) != 0) {
+		clearLDAPTransaction(state.transaction)
+		state.transaction = nil
+		clearBindCredentials(state)
+		state.boundDN = ""
+		state.authMechanism = ""
+		state.passwordPolicyRestrictedDN = ""
+		clearSearchSessions(state)
+		clearSASLSession(state)
+		setAuditAuthorizationDN(connection, "")
+		return true, writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				"controls require LDAPv3",
+			),
+		)
+	}
 	sessionTracking, sessionTrackingFailure := parseSessionTrackingControls(
 		message.Request,
 		message.Controls,

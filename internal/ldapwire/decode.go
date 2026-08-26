@@ -132,9 +132,13 @@ func decodeMessage(packet *ber.Packet) (Message, error) {
 
 	message := Message{ID: id, Request: request}
 	if len(packet.Children) == 3 {
+		message.ControlsPresent = true
 		message.Controls, err = decodeControls(packet.Children[2])
 		if err != nil {
-			return Message{}, err
+			if _, unbind := request.(UnbindRequest); unbind {
+				return message, nil
+			}
+			return message, err
 		}
 	}
 	return message, nil
