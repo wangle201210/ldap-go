@@ -360,6 +360,15 @@ AttributeSelection requirement. Local tests cover ACL filtering and critical
 unknown-class rollback, strict selector syntax, SQL on-demand attribute
 loading, and fail-closed pCache attrset coverage.
 
+`TestOpenLDAPReferenceDomainScopeAndSearchOptions` compares both hidden
+Microsoft/OpenLDAP controls against pinned slapd. The 30-case matrix covers
+Domain Scope absent/empty/nonempty values, Search Options flags 0/1/2/3/-1,
+criticality, permissive tags and trailing bytes, malformed values, duplicate
+and mixed ordering, continuation references, and final referral conversion.
+Local tests additionally cover frontend control stripping, LDAP proxying,
+complete-response pCache hits, streaming sock responses, response controls,
+Root DSE hiding, and `ldapsearch -E domainScope`.
+
 Focused DN identity checks can be repeated without an external server:
 
 ```sh

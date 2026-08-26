@@ -552,6 +552,18 @@ func TestPcacheLDAPBackendIntegration(t *testing.T) {
 	providerStore := storage.NewMemory()
 	t.Cleanup(func() { _ = providerStore.Close() })
 	seedLDAPBackendProvider(t, providerStore)
+	if err := providerStore.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.Put(directory.Entry{
+			DN: "ou=pcache-referral," + ldapBackendTestPeopleDN,
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("referral", "extensibleObject")},
+				{Description: "ou", Values: stringValues("pcache-referral")},
+				{Description: "ref", Values: stringValues("ldap://remote.example/dc=remote,dc=test")},
+			},
+		}, false)
+	}); err != nil {
+		t.Fatalf("seed pcache referral: %v", err)
+	}
 	providerAddress, stopProvider := startServer(t, providerStore, Config{
 		RootDN:       ldapBackendTestAdminDN,
 		RootPassword: []byte(ldapBackendTestAdminSecret),
@@ -579,7 +591,7 @@ func TestPcacheLDAPBackendIntegration(t *testing.T) {
 	if err := client.Bind(ldapBackendTestLocalRootDN, ldapBackendTestLocalRootPW); err != nil {
 		t.Fatalf("Bind(proxy root): %v", err)
 	}
-	search := func(typesOnly bool) *ldap.SearchResult {
+	search := func(typesOnly bool, controls []ldap.Control) *ldap.SearchResult {
 		result, err := client.Search(ldap.NewSearchRequest(
 			ldapBackendTestPeopleDN,
 			ldap.ScopeWholeSubtree,
@@ -589,21 +601,27 @@ func TestPcacheLDAPBackendIntegration(t *testing.T) {
 			typesOnly,
 			"(sn=Proxy)",
 			[]string{"uid", "cn", "sn"},
-			nil,
+			controls,
 		))
 		if err != nil {
 			t.Fatalf("Search(typesOnly=%v): %v", typesOnly, err)
 		}
 		return result
 	}
-	if result := search(false); len(result.Entries) != 2 {
-		t.Fatalf("cache miss entries = %d, want 2", len(result.Entries))
+	if result := search(false, nil); len(result.Entries) != 2 || len(result.Referrals) != 1 {
+		t.Fatalf("cache miss response = %#v", result)
 	}
 	stopProvider()
 	providerRunning = false
-	result := search(true)
-	if len(result.Entries) != 2 {
-		t.Fatalf("cache hit entries = %d, want 2", len(result.Entries))
+	scoped := search(false, []ldap.Control{
+		ldap.NewControlString(domainScopeControlOID, true, ""),
+	})
+	if len(scoped.Entries) != 2 || len(scoped.Referrals) != 0 {
+		t.Fatalf("domain-scope cache hit = %#v", scoped)
+	}
+	result := search(true, nil)
+	if len(result.Entries) != 2 || len(result.Referrals) != 1 {
+		t.Fatalf("ordinary cache hit = %#v", result)
 	}
 	for _, entry := range result.Entries {
 		for _, attribute := range entry.Attributes {

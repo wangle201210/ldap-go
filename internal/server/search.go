@@ -147,6 +147,8 @@ func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 		supportsDontUseCopy |
 		supportsAccountUsability |
 		supportsMatchedValues |
+		supportsDomainScope |
+		supportsSearchOptions |
 		supportsNoOp
 	if runtime == nil {
 		return support

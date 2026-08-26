@@ -29,6 +29,8 @@ const (
 	syncDoneControlOID         = "1.3.6.1.4.1.4203.1.9.1.3"
 	syncInfoOID                = "1.3.6.1.4.1.4203.1.9.1.4"
 	valueSortControlOID        = "1.3.6.1.4.1.4203.666.5.14"
+	domainScopeControlOID      = ldapwire.DomainScopeControlOID
+	searchOptionsControlOID    = ldapwire.SearchOptionsControlOID
 )
 
 type requestControlSupport uint32
@@ -52,6 +54,8 @@ const (
 	supportsPermissiveModify
 	supportsDeref
 	supportsMatchedValues
+	supportsDomainScope
+	supportsSearchOptions
 )
 
 type requestControls struct {
@@ -74,6 +78,7 @@ type requestControls struct {
 	deref            *derefControlRequest
 	matchedValues    *matchedValuesControlRequest
 	chaining         *chainBehaviorRequest
+	domainScope      bool
 }
 
 type readControlRequest struct {
@@ -190,6 +195,70 @@ func parseRequestControlsWithDisallows(
 			parsed.matchedValues = &matchedValuesControlRequest{
 				filters:  filters,
 				critical: control.Critical,
+			}
+		case domainScopeControlOID:
+			if supported&supportsDomainScope == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.domainScope {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"domainScope control specified multiple times",
+				)
+			}
+			if len(control.Value) != 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"domainScope control value not absent",
+				)
+			}
+			parsed.domainScope = true
+		case searchOptionsControlOID:
+			if supported&supportsSearchOptions == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if !control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"searchOptions control value is absent",
+				)
+			}
+			if len(control.Value) == 0 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"searchOptions control value is empty",
+				)
+			}
+			flags, err := ldapwire.DecodeSearchOptionsValue(control.Value)
+			if err != nil {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"searchOptions control decoding error",
+				)
+			}
+			if flags & ^int32(1) != 0 {
+				if control.Critical {
+					return requestControls{}, controlResult(
+						ldapwire.ResultUnwillingToPerform,
+						"searchOptions contained unrecognized flag",
+					)
+				}
+				continue
+			}
+			if flags&1 != 0 {
+				if parsed.domainScope {
+					return requestControls{}, controlResult(
+						ldapwire.ResultProtocolError,
+						"searchOptions control specified multiple times or with domainScope control",
+					)
+				}
+				parsed.domainScope = true
 			}
 		case preReadControlOID:
 			if supported&supportsPreRead == 0 {

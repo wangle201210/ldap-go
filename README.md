@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,795 top-level tests against the pinned commit.
+The latest strict run passed 1,803 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -79,7 +79,10 @@ Values filters final SearchResultEntry values after ACL, projection,
 sorting/VLV, paging, and Sync state processing. OpenLDAP's
 hidden No-Op control atomically validates and rolls back Add, Modify, Delete,
 and ModifyDN, while permissiveModify ignores duplicate additions and missing
-deletions. Both controls pass direct MDB differentials. RFC 4511
+deletions. Microsoft/OpenLDAP Domain Scope and Search Options controls suppress
+continuation references and convert final referrals to `noSuchObject` across
+local, proxy, pCache, chain, and socket search paths. These controls pass direct
+MDB differentials. RFC 4511
 Abandon and RFC 3909 Cancel can interrupt active Search operations on the same
 LDAP connection. RFC 3296 named referrals and ManageDsaIT support base
 referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
@@ -695,7 +698,8 @@ strict server proof validation, and client certificates for EXTERNAL over
 LDAPS or StartTLS.
 `ldapsearch` supports bounded `-f` batch filters with `%s`, `-F` file-URL
 prefixes, secure `-t/-T` value files, and critical or noninteractive prompt
-paging. It accepts OpenLDAP-compatible `-E [!]mv=<filter>` for RFC 3876,
+paging. It accepts OpenLDAP-compatible `-E [!]domainScope` and
+`-E [!]mv=<filter>` for RFC 3876,
 including simple-filter lists. Critical/prompt paging with referral chasing is
 explicitly rejected because each referral requires an independent cookie stream.
 Its default output is OpenLDAP-style extended LDIF with query metadata, UFN

@@ -863,6 +863,7 @@ func (server *Server) dispatch(
 		}()
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
+	domainScope := false
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
 		request.Attributes = expandObjectClassAttributeSelection(
 			state.runtime.schema,
@@ -892,6 +893,16 @@ func (server *Server) dispatch(
 				typesOnly: request.TypesOnly,
 			}
 			message.Controls = withoutMatchedValuesControl(message.Controls)
+		}
+		if !privateSearch {
+			message.Controls = withoutDomainScopeControls(message.Controls)
+			if parsedControls.domainScope {
+				domainScope = true
+				connection = &domainScopeConnection{
+					Conn:      connection,
+					messageID: message.ID,
+				}
+			}
 		}
 		database := searchRequestDatabase(state.runtime, request)
 		if database != nil {
@@ -933,6 +944,12 @@ func (server *Server) dispatch(
 		return false, err
 	}
 	connection = overlayConnection
+	if domainScope {
+		connection = &domainScopeConnection{
+			Conn:      connection,
+			messageID: message.ID,
+		}
+	}
 	switch request := message.Request.(type) {
 	case ldapwire.SearchRequest:
 		if handled, err := server.tryPcachePrivateSearch(

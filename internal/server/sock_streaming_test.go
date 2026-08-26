@@ -79,6 +79,55 @@ func TestSockBackendSearchStreamsEntriesAndReferrals(t *testing.T) {
 	)
 }
 
+func TestSockBackendDomainScopeSuppressesStreamingReferral(t *testing.T) {
+	requireSockRuntimeUnix(t)
+	t.Parallel()
+
+	fixture := startSockRuntimeFixture(t, func(
+		connection net.Conn,
+		request sockRuntimeCapturedRequest,
+	) error {
+		if request.command == "UNBIND" {
+			return nil
+		}
+		if request.command != "SEARCH" {
+			return fmt.Errorf("unexpected socket command %q", request.command)
+		}
+		return writeAll(connection, []byte(
+			"REFERRAL\n"+
+				"uri: ldap://ref.example/dc=ref,dc=example\n\n"+
+				sockStreamingBareEntry("scoped")+
+				"RESULT\ncode: 0\nmatched:\ninfo:\n\n",
+		))
+	})
+	address, stop := startSockStreamingLDAPServer(t, fixture)
+	defer stop()
+	connection := dialAndBindRawLDAP(t, address, "", "")
+	defer connection.Close()
+
+	writeRawLDAPRequest(
+		t,
+		connection,
+		2,
+		rawCancellationSearch(t),
+		rawOIDControl(domainScopeControlOID, true),
+	)
+	assertSockRuntimeCommand(t, fixture.take(t), "SEARCH")
+	assertSockStreamingEntry(
+		t,
+		readRawLDAPPacket(t, connection),
+		2,
+		"uid=scoped,dc=example,dc=com",
+	)
+	assertRawLDAPEnvelope(
+		t,
+		readRawLDAPPacket(t, connection),
+		2,
+		ldapwire.ApplicationSearchResultDone,
+		int64(ldap.LDAPResultSuccess),
+	)
+}
+
 func TestSockBackendSearchPartialCancelAndAbandon(t *testing.T) {
 	requireSockRuntimeUnix(t)
 	t.Parallel()

@@ -1581,6 +1581,7 @@ func resolveLDAPSearchExtensions(
 ) (ldapSearchPagingOptions, []ldap.Control, error) {
 	pageExtension := ""
 	matchedValuesExtension := ""
+	domainScopeExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
 		name := strings.TrimLeft(extension, "!")
@@ -1601,6 +1602,15 @@ func resolveLDAPSearchExtensions(
 				)
 			}
 			matchedValuesExtension = extension
+			continue
+		}
+		if strings.EqualFold(name, "domainScope") {
+			if domainScopeExtension != "" {
+				return ldapSearchPagingOptions{}, nil, errors.New(
+					"ldapsearch domainScope extension was provided more than once",
+				)
+			}
+			domainScopeExtension = extension
 			continue
 		}
 		controlSpecs = append(controlSpecs, extension)
@@ -1632,6 +1642,23 @@ func resolveLDAPSearchExtensions(
 		}
 		controls = append(controls, control)
 	}
+	if domainScopeExtension != "" {
+		control, controlErr := parseLDAPSearchDomainScopeExtension(domainScopeExtension)
+		if controlErr != nil {
+			clearLDAPControls(controls)
+			return ldapSearchPagingOptions{}, nil, controlErr
+		}
+		for _, existing := range controls {
+			if existing.GetControlType() == ldapwire.DomainScopeControlOID {
+				clearLDAPControls(controls)
+				return ldapSearchPagingOptions{}, nil, fmt.Errorf(
+					"LDAP control %s was provided more than once",
+					ldapwire.DomainScopeControlOID,
+				)
+			}
+		}
+		controls = append(controls, control)
+	}
 	paging := ldapSearchPagingOptions{}
 	if pageExtension != "" {
 		paging, err = parseLDAPSearchPagingExtension(pageExtension)
@@ -1647,6 +1674,20 @@ func resolveLDAPSearchExtensions(
 		paging.size = uint32(pageSize)
 	}
 	return paging, controls, nil
+}
+
+func parseLDAPSearchDomainScopeExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	if critical {
+		value = value[1:]
+	}
+	if !strings.EqualFold(value, "domainScope") {
+		return nil, fmt.Errorf("invalid domainScope extension %q", value)
+	}
+	return &ldapRawControl{
+		oid:      ldapwire.DomainScopeControlOID,
+		critical: critical,
+	}, nil
 }
 
 func parseLDAPSearchMatchedValuesExtension(value string) (ldap.Control, error) {
