@@ -1023,6 +1023,9 @@ func databaseTypeName(database runtimeDatabase) string {
 
 func runtimeDatabaseOverlayNames(database runtimeDatabase) []string {
 	var names []string
+	if database.allOperationalAttrs {
+		names = append(names, "allop")
+	}
 	if database.explicitGlue {
 		names = append(names, "glue")
 	}

@@ -27,7 +27,8 @@ runtime implementation:
 `sssvlv`, `syncprov`, `translucent`, `unique`, and `valsort`.
 
 Additional accepted core configurations are `chain`, `pbind`, `sock`, explicit
-`glue`, and the `totp` password overlay. `syncrepl` is represented by the
+`glue`, the contrib `allop` default Root DSE mode, and the `totp` password
+overlay. `syncrepl` is represented by the
 consumer runtime rather than accepted as a user-created overlay. `distproc`
 and experimental `slapi` remain explicitly unsupported.
 
@@ -54,8 +55,9 @@ The pinned source contains these top-level contrib directories:
 `nops`, `nssov`, `passwd`, `ppm`, `proxyOld`, `rbac`, `samba4`, `smbk5pwd`,
 `trace`, `usn`, `variant`, and `vc`.
 
-Only the password implementations listed above are data/protocol compatible.
-The remaining contrib modules execute OpenLDAP C `Entry`, overlay, SLAPI,
+The password implementations listed above and the default Root DSE mode of
+`allop` are data/protocol compatible. The remaining contrib modules execute
+OpenLDAP C `Entry`, overlay, SLAPI,
 dynamic ACL, matching-rule, PAM/NSS, Kerberos, or extended-operation ABIs and
 are rejected. Loading them as `.so`/`.la` would require embedding slapd rather
 than reimplementing LDAP behavior in Go.

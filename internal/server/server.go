@@ -1170,6 +1170,7 @@ func (server *Server) dispatch(
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	domainScope := false
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
+		request = applyAllOperationalAttributesOverlay(state.runtime, request)
 		request.Attributes = expandObjectClassAttributeSelection(
 			state.runtime.schema,
 			request.Attributes,

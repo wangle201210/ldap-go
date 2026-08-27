@@ -17,6 +17,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 
 	supported := []string{
 		"accesslog",
+		"allop",
 		"auditlog",
 		"autoca",
 		"chain",

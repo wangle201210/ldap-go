@@ -83,6 +83,7 @@ type runtimeDatabase struct {
 	remoteAuth             *remoteAuthRuntimeConfiguration
 	homedir                *homedirRuntimeConfiguration
 	explicitGlue           bool
+	allOperationalAttrs    bool
 	chain                  *chainRuntimeConfiguration
 	translucent            *translucentRuntimeConfiguration
 	pcache                 *pcacheRuntimeConfiguration
@@ -2433,6 +2434,14 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		switch overlayType {
+		case "allop":
+			if database.allOperationalAttrs {
+				return fmt.Errorf("%s configures a duplicate allop overlay for %s", entry.DN, database.name)
+			}
+			if databaseType(database.name) != "frontend" {
+				return fmt.Errorf("%s allop overlay must be configured on the frontend database", entry.DN)
+			}
+			database.allOperationalAttrs = true
 		case "glue":
 			if database.explicitGlue {
 				return fmt.Errorf("%s configures a duplicate glue overlay for %s", entry.DN, database.name)
