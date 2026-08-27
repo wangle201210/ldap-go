@@ -149,6 +149,8 @@ type pcacheRemoteContext struct {
 	bindCredentials  []byte
 	secure           bool
 	externalSSF      uint32
+	transportSSF     uint32
+	tlsSSF           uint32
 	saslSSF          uint32
 	externalDN       string
 }
@@ -2564,6 +2566,8 @@ func capturePcacheRemoteContext(state *connectionState) pcacheRemoteContext {
 		bindCredentials:  bytes.Clone(state.bindCredentials),
 		secure:           state.secure,
 		externalSSF:      state.externalSSF,
+		transportSSF:     state.transportSSF,
+		tlsSSF:           state.tlsSSF,
 		saslSSF:          state.saslSSF,
 		externalDN:       state.externalDN,
 	}
@@ -2584,6 +2588,8 @@ func (remote pcacheRemoteContext) connectionState(current *connectionState) *con
 	state.bindCredentials = bytes.Clone(remote.bindCredentials)
 	state.secure = remote.secure
 	state.externalSSF = remote.externalSSF
+	state.transportSSF = remote.transportSSF
+	state.tlsSSF = remote.tlsSSF
 	state.saslSSF = remote.saslSSF
 	state.externalDN = remote.externalDN
 	state.saslSession = nil

@@ -107,6 +107,8 @@ type pcachePersistedRemote struct {
 	CredentialDN    string `json:"credentialDn,omitempty"`
 	Secure          bool   `json:"secure,omitempty"`
 	ExternalSSF     uint32 `json:"externalSsf,omitempty"`
+	TransportSSF    uint32 `json:"transportSsf,omitempty"`
+	TLSSSF          uint32 `json:"tlsSsf,omitempty"`
 	SASLSSF         uint32 `json:"saslSsf,omitempty"`
 	ExternalDN      string `json:"externalDn,omitempty"`
 }
@@ -1212,6 +1214,8 @@ func persistedPcacheRemote(remote pcacheRemoteContext) pcachePersistedRemote {
 		CredentialDN:    remote.bindCredentialDN,
 		Secure:          remote.secure,
 		ExternalSSF:     remote.externalSSF,
+		TransportSSF:    remote.transportSSF,
+		TLSSSF:          remote.tlsSSF,
 		SASLSSF:         remote.saslSSF,
 		ExternalDN:      remote.externalDN,
 	}
@@ -1226,6 +1230,8 @@ func (remote pcachePersistedRemote) runtimeRemote() pcacheRemoteContext {
 		bindCredentialDN: remote.CredentialDN,
 		secure:           remote.Secure,
 		externalSSF:      remote.ExternalSSF,
+		transportSSF:     remote.TransportSSF,
+		tlsSSF:           remote.TLSSSF,
 		saslSSF:          remote.SASLSSF,
 		externalDN:       remote.ExternalDN,
 	}

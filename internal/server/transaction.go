@@ -173,11 +173,19 @@ func (server *Server) handleTransactionStart(
 		result        ldapwire.Result
 		responseValue []byte
 	)
+	securityFailure := operationSecurityResult(state, nil, policyUpdate)
 	switch {
 	case request.HasValue:
 		result = ldapwire.ResultError(
 			ldapwire.ResultProtocolError,
 			"no request data expected",
+		)
+	case securityFailure != nil:
+		result = *securityFailure
+	case frontendRestricts(state.runtime, restrictExtended):
+		result = ldapwire.ResultError(
+			ldapwire.ResultUnwillingToPerform,
+			"operation restricted",
 		)
 	case state.transaction != nil:
 		result = ldapwire.ResultError(
@@ -234,6 +242,25 @@ func (server *Server) handleTransactionEnd(
 			ldapwire.TransactionEndResponseValue{},
 		)
 	}
+	if result := operationSecurityResult(state, nil, policyUpdate); result != nil {
+		return server.writeTransactionEndResult(
+			connection,
+			message.ID,
+			*result,
+			ldapwire.TransactionEndResponseValue{},
+		)
+	}
+	if frontendRestricts(state.runtime, restrictExtended) {
+		return server.writeTransactionEndResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+			ldapwire.TransactionEndResponseValue{},
+		)
+	}
 	endRequest, err := ldapwire.DecodeTransactionEndRequestValue(request.Value)
 	if err != nil {
 		return server.writeTransactionEndResult(
@@ -259,7 +286,6 @@ func (server *Server) handleTransactionEnd(
 			ldapwire.TransactionEndResponseValue{},
 		)
 	}
-
 	state.transaction = nil
 	defer clearLDAPTransaction(transaction)
 	if !endRequest.Commit {

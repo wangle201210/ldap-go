@@ -113,7 +113,7 @@ outside the compatibility claim.
 | OpenLDAP ACL grammar and evaluation | partial | filter/value/object-class targets; real/effective DN and level selectors; static/dynamic groups and set expressions; DN/value capture expansion; peer/domain/sockname/sockurl and IPv4/IPv6/path selectors; overall/transport/TLS/SASL SSF; `OpenLDAPaci`; and direct OpenLDAP target, expansion/group, connection/level, and ACI differentials pass; unlisted grammar and dynacl modules remain |
 | SASL server authentication | partial | EXTERNAL, PLAIN, CRAM-MD5, SCRAM-SHA-1/256/512 with RFC 5802/5929 `-PLUS`, DIGEST-MD5 `auth`/`auth-int`/`auth-conf` with RC4, DES, and two-key 3DES, and pure-Go GSSAPI layers pass local/vector/race/SSF and native-client tests. SCRAM covers GS2/authzid, server proof, downgrade and binding failures, replay, secret cleanup, verified TLS publication, TLCP refusal, and native OpenLDAP/Cyrus channel binding. CBC padding, IV chaining, MAC, sequence, frame truncation/replay, maxbuf, and secret cleanup are covered. GSSAPI preserves context sequence/subkey state and explicit channel binding. A repeatable temporary MIT KDC plus pinned OpenLDAP 2.6.13/Cyrus client verifies no-layer, integrity, confidentiality, canonical service principal, ccache, identity mapping, and Who Am I. Platform credential stores and delegation remain |
 | SASL client authentication | partial | syncrepl and built-in clients cover EXTERNAL/PLAIN/CRAM/DIGEST/SCRAM plus GSSAPI password, FILE keytab, and FILE ccache. DIGEST validates realm, host-bound `digest-uri`, Latin-1 credentials, `rspauth`, security-layer frames, and negotiated limits. GSSAPI AP-REQ/AP-REP and RFC 4121 tokens cover no-layer/integrity/confidentiality. The automated MIT realm verifies all three pure-Go credential sources; FILE ccache additionally covers live service-ticket acquisition and protected Who Am I through every layer. OpenLDAP-acceptor, proxy/replication, platform-store, and delegation matrices remain |
-| Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, negotiated DIGEST/GSSAPI layers, minimum SSF, PLAIN policy, and ACL `ssf`/`transport_ssf`/`tls_ssf`/`sasl_ssf` selectors pass |
+| Security strength factors | partial | TLS cipher, TLCP SM4, Unix-socket, negotiated DIGEST/GSSAPI layers, minimum SSF, PLAIN policy, and ACL `ssf`/`transport_ssf`/`tls_ssf`/`sasl_ssf` selectors pass. Global and database `olcSecurity` enforce all nine OpenLDAP factors (`ssf`, `transport`, `tls`, `sasl`, four `update_*` factors, and `simple_bind`) with field-wise database override, exact result ordering, and separate transport/TLS/SASL strengths. Global and database `olcRequires` enforce `strong`, `sasl`, `authc`, `bind`, and `LDAPv3` in slapd order across core, proxy, and built-in Extended operations; parser, online rollback, race, and pinned 2.6.13 differentials pass |
 | TLS and mutual TLS | partial | LDAPS/StartTLS/client cert, syncrepl policy, immutable reload/rollback, PEM/DER CRLs, RFC 1423 encrypted PEM, and bounded PBES1/PBES2 encrypted PKCS#8 pass. Semicolon CA directories are root-confined, bounded, DER-deduplicated, and require canonical OpenSSL subject-hash filenames. `olcTLSECName` accepts colon-separated Go-supported groups as an allowed set; `olcTLSDHParamFile` validates PKCS#3 and is accepted only when finite-field DHE cannot be required; `olcTLSRandFile` is inert under the OS CSPRNG model. OpenSSL ordering/provider behavior, unsupported groups/algorithms, indirect/delta CRLs, complete cipher expressions, TLS 1.3 suite selection, and the broader slapd TLS matrix remain |
 | National cryptography transport | partial | GB/T 38636 TLCP dual-server-cert, mutual-client-cert, and ECDHE syncrepl matrix |
 | Audit and security logging | partial | credential-free operation metadata, result codes, identities, transport SSF, malformed-message coverage, HMAC-SHA-256 chaining, verified restart append, CLI verification, concurrency/race, and tamper tests pass; OpenLDAP accesslog and flat-file auditlog records, rotation, proxy identities, frontend scope, and transaction behavior pass slapd differentials; broader cross-overlay and OS fault matrices remain |
@@ -1455,8 +1455,21 @@ rollback, restart, and a process-level slapd differential pass.
 slapd's protocol-error diagnostic. Proxy controls otherwise follow
 OpenLDAP's default acceptance of non-critical requests. Both proxy switches
 support online replacement, rollback, and restart.
-`olcRestrict`, `olcRequires`, listener permissions, and SSF-based update
-requirements also remain pending.
+Global-root `olcRestrict`/`olcReadOnly` aliases and listener filesystem
+permissions remain pending. `olcSecurity` and `olcRequires` now load from both
+global and database entries. Database non-zero SSF fields override the
+frontend field, while requirements combine by mask, matching slapd's runtime
+behavior. Checks preserve OpenLDAP's fixed order: transport, TLS, Simple Bind,
+SASL, overall SSF, update SSFs, anonymous-update policy, requirements, then
+operation restrictions. StartTLS, Bind session requirements, Cancel, Abandon,
+and Unbind retain their OpenLDAP exceptions. Existing connections observe
+valid online changes atomically, and invalid replacements roll back without
+changing the active policy. OpenLDAP 2.6.13 accidentally leaves deleted or
+unmentioned `olcSecurity` fields active until restart because its callback has
+no DELETE branch, and copied frontend values can similarly remain in an older
+database object. ldap-go intentionally does not reproduce those unsafe
+in-memory/stored-configuration divergences: each successful transaction
+publishes the policy represented by the committed `cn=config` snapshot.
 
 Every configured database now has an isolated storage partition, keyed by its
 imported configuration-entry UUID when available. Existing single-namespace

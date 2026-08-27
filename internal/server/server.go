@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -400,6 +401,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		connectionID:    server.nextConnectionID.Add(1),
 		connection:      connection,
 		externalSSF:     connectionSecurityStrength(connection, false),
+		transportSSF:    connectionSecurityStrength(connection, false),
 		auditIdentity:   &connectionAuditIdentityState{},
 		metaTransports:  newMetaTransportCache(time.Now),
 		gssapiAvailable: server.gssapiKeytab != nil,
@@ -437,7 +439,8 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		}
 		state.connection = secured
 		state.secure = true
-		state.externalSSF = connectionSecurityStrength(secured, true)
+		state.tlsSSF = connectionSecurityStrength(secured, true)
+		state.externalSSF = max(state.transportSSF, state.tlsSSF)
 		state.externalDN = externalIdentityDN(secured)
 		server.monitor.updateConnectionState(state.monitor, &state)
 	}
@@ -1174,6 +1177,9 @@ func (server *Server) dispatch(
 				}
 			}
 		}
+		if failure := requestSecurityResult(state, message.Request); failure != nil {
+			return false, writeResultForMessage(connection, message, *failure)
+		}
 		database := searchRequestDatabase(state.runtime, request)
 		if database != nil {
 			if databaseSearchCandidatesAreDelegated(state.runtime, *database) {
@@ -1201,6 +1207,44 @@ func (server *Server) dispatch(
 				if failure != nil {
 					return false, writeResultForMessage(connection, message, *failure)
 				}
+			}
+		}
+	}
+	if _, search := message.Request.(ldapwire.SearchRequest); !search {
+		switch request := message.Request.(type) {
+		case ldapwire.ExtendedRequest:
+			if failure := extendedRequestSecurityResult(state, request); failure != nil {
+				if controlFailure := requestControlFailureBeforeSecurity(
+					state,
+					message,
+				); controlFailure != nil {
+					return false, writeResultForMessage(connection, message, *controlFailure)
+				}
+				return false, writeResultForMessage(connection, message, *failure)
+			}
+		case ldapwire.BindRequest:
+			if failure, controlsFirst := bindPreDelegationResult(state, request); failure != nil {
+				clearSockOverlayBindState(state)
+				if controlsFirst {
+					if controlFailure := requestControlFailureBeforeSecurity(
+						state,
+						message,
+					); controlFailure != nil {
+						return false, writeResultForMessage(connection, message, *controlFailure)
+					}
+				}
+				return false, writeResultForMessage(connection, message, *failure)
+			}
+		case ldapwire.UnbindRequest, ldapwire.AbandonRequest:
+		default:
+			if failure := requestSecurityResult(state, message.Request); failure != nil {
+				if controlFailure := requestControlFailureBeforeSecurity(
+					state,
+					message,
+				); controlFailure != nil {
+					return false, writeResultForMessage(connection, message, *controlFailure)
+				}
+				return false, writeResultForMessage(connection, message, *failure)
 			}
 		}
 	}
@@ -1590,21 +1634,89 @@ func (server *Server) handleBind(
 		))
 	}
 	state.protocolVersion = request.Version
-	if handled, err := server.tryRetcodeOperation(
-		ctx,
-		connection,
-		state,
-		message,
-		requestDN,
-		retcodeOperationBind,
-		false,
-		nil,
-	); handled {
-		clearSASLSession(state)
-		return err
+	password := request.Authentication.Simple
+	anonymous := !request.Authentication.IsSASL &&
+		(requestDN.Depth() == 0 || len(password) == 0)
+	if anonymous {
+		var result *ldapwire.Result
+		switch {
+		case requestDN.Depth() == 0 && len(password) != 0 &&
+			!state.runtime.allows.bindAnonymousCredentials:
+			failure := ldapwire.ResultError(ldapwire.ResultInvalidCredentials, "")
+			result = &failure
+		case requestDN.Depth() != 0 && len(password) == 0 &&
+			!state.runtime.allows.bindAnonymousDN:
+			failure := ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unauthenticated bind (DN with no password) disallowed",
+			)
+			result = &failure
+		case state.runtime.disallows.anonymousBind:
+			failure := ldapwire.ResultError(
+				ldapwire.ResultInappropriateAuthentication,
+				"anonymous bind disallowed",
+			)
+			result = &failure
+		}
+		if result != nil {
+			clearSASLSession(state)
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				*result,
+				nil,
+			))
+		}
 	}
-	if database := databaseForDN(state.runtime, requestDN); database != nil &&
-		databaseRestricts(*database, restrictBind) {
+	if !request.Authentication.IsSASL && !anonymous &&
+		state.runtime.disallows.simpleBind {
+		clearSASLSession(state)
+		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"unwilling to perform simple authentication",
+			),
+			nil,
+		))
+	}
+	if request.Authentication.IsSASL &&
+		strings.TrimSpace(request.Authentication.SASLMechanism) == "" {
+		return server.handleSASLBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+		)
+	}
+
+	var policyDatabase *runtimeDatabase
+	policyKind := policySimpleBind
+	if anonymous {
+		policyKind = policyAnonymousBind
+	} else if request.Authentication.IsSASL {
+		policyKind = policySASLBind
+	} else if !anonymous {
+		policyDatabase = databaseForDN(state.runtime, requestDN)
+	}
+	if anonymous || request.Authentication.IsSASL || policyDatabase != nil {
+		if result := operationSecurityResult(state, policyDatabase, policyKind); result != nil {
+			clearSASLSession(state)
+			return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
+				message.ID,
+				*result,
+				nil,
+			))
+		}
+	}
+
+	bindRestricted := false
+	if anonymous || requestDN.Depth() == 0 {
+		bindRestricted = frontendRestricts(state.runtime, restrictBind)
+	} else if policyDatabase != nil {
+		bindRestricted = databaseRestricts(*policyDatabase, restrictBind)
+	}
+	if bindRestricted {
 		clearSASLSession(state)
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
@@ -1615,16 +1727,20 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
-	if requestDN.Depth() == 0 && frontendRestricts(state.runtime, restrictBind) {
-		clearSASLSession(state)
-		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
-			message.ID,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"operation restricted",
-			),
+	if !anonymous {
+		if handled, err := server.tryRetcodeOperation(
+			ctx,
+			connection,
+			state,
+			message,
+			requestDN,
+			retcodeOperationBind,
+			false,
 			nil,
-		))
+		); handled {
+			clearSASLSession(state)
+			return err
+		}
 	}
 	if request.Authentication.IsSASL {
 		return server.handleSASLBind(
@@ -1636,50 +1752,11 @@ func (server *Server) handleBind(
 		)
 	}
 	clearSASLSession(state)
-
-	password := request.Authentication.Simple
-	anonymous := requestDN.Depth() == 0 || len(password) == 0
 	if anonymous {
-		var result ldapwire.Result
-		switch {
-		case requestDN.Depth() == 0 &&
-			len(password) != 0 &&
-			!state.runtime.allows.bindAnonymousCredentials:
-			result = ldapwire.ResultError(
-				ldapwire.ResultInvalidCredentials,
-				"",
-			)
-		case requestDN.Depth() != 0 &&
-			len(password) == 0 &&
-			!state.runtime.allows.bindAnonymousDN:
-			result = ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"unauthenticated bind (DN with no password) disallowed",
-			)
-		case state.runtime.disallows.anonymousBind:
-			result = ldapwire.ResultError(
-				ldapwire.ResultInappropriateAuthentication,
-				"anonymous bind disallowed",
-			)
-		default:
-			result = ldapwire.Result{Code: ldapwire.ResultSuccess}
-		}
-		if result.Code == ldapwire.ResultSuccess {
-			state.authMechanism = "SIMPLE"
-		}
+		state.authMechanism = "SIMPLE"
 		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 			message.ID,
-			result,
-			nil,
-		))
-	}
-	if state.runtime.disallows.simpleBind {
-		return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
-			message.ID,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"unwilling to perform simple authentication",
-			),
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
 			nil,
 		))
 	}
@@ -2070,6 +2147,8 @@ type connectionState struct {
 	connection                 net.Conn
 	secure                     bool
 	externalSSF                uint32
+	transportSSF               uint32
+	tlsSSF                     uint32
 	saslSSF                    uint32
 	gssapiAvailable            bool
 	externalDN                 string

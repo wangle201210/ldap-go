@@ -56,19 +56,19 @@ func (server *Server) handleExtended(
 			nil,
 		))
 	}
-	if frontendRestricts(state.runtime, requestDatabaseRestriction(request)) {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
-			message.ID,
-			ldapwire.ApplicationExtendedResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"operation restricted",
-			),
-			nil,
-		))
-	}
 	switch request.Name {
 	case startTLSOID:
+		if frontendRestricts(state.runtime, restrictStartTLS) {
+			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+				message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"operation restricted",
+				),
+				nil,
+			))
+		}
 		return server.handleStartTLS(ctx, connection, state, message, request)
 	case transactionStartOID:
 		return server.handleTransactionStart(connection, state, message, request)
@@ -81,6 +81,17 @@ func (server *Server) handleExtended(
 	case whoAmIOID:
 		return server.handleWhoAmI(connection, state, message, request)
 	default:
+		if frontendRestricts(state.runtime, restrictExtended) {
+			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+				message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"operation restricted",
+				),
+				nil,
+			))
+		}
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
@@ -207,7 +218,8 @@ func (server *Server) handleStartTLS(
 	}
 	state.connection = secured
 	state.secure = true
-	state.externalSSF = connectionSecurityStrength(secured, true)
+	state.tlsSSF = connectionSecurityStrength(secured, true)
+	state.externalSSF = max(state.transportSSF, state.tlsSSF)
 	state.externalDN = externalIdentityDN(secured)
 	return nil
 }
@@ -296,13 +308,37 @@ func (server *Server) handleWhoAmI(
 			nil,
 		))
 	}
+	var database *runtimeDatabase
 	if state.boundDN != "" {
 		boundDN, err := parseConnectionDN(state, state.boundDN)
 		if err != nil {
 			return fmt.Errorf("normalize bound DN: %w", err)
 		}
-		if database := databaseForDN(state.runtime, boundDN); database != nil &&
-			databaseRestricts(*database, restrictWhoAmI) {
+		database = databaseForDN(state.runtime, boundDN)
+	}
+	if result := operationSecurityResult(state, database, policyRead); result != nil {
+		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+			message.ID,
+			*result,
+			"",
+			nil,
+			nil,
+		))
+	}
+	if database == nil && frontendRestricts(state.runtime, restrictWhoAmI) {
+		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"extended operation restricted",
+			),
+			"",
+			nil,
+			nil,
+		))
+	}
+	if state.boundDN != "" {
+		if database != nil && databaseRestricts(*database, restrictWhoAmI) {
 			return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
 				message.ID,
 				ldapwire.ResultError(

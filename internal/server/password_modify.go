@@ -137,6 +137,9 @@ func (server *Server) handlePasswordModify(
 	if err != nil {
 		return server.internalPasswordModifyError(connection, message.ID, err)
 	}
+	if result := operationSecurityResult(state, database, policyUpdate); result != nil {
+		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
+	}
 	authorizationDN := bound.NormalizedString()
 	accessSubject := server.connectionACLSubject(state)
 	accessSubject.DN = authorizationDN

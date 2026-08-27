@@ -102,12 +102,9 @@ func (server *Server) connectionACLSubject(state *connectionState) acl.Subject {
 		SockName: openLDAPConnectionName(localAddress(state.connection)),
 		SockURL:  monitorListenerURL(localAddress(state.connection), server.config.ImplicitTLS),
 	}
-	strength := int(state.externalSSF)
-	if state.secure {
-		subject.TLSSSF = strength
-	} else {
-		subject.TransportSSF = strength
-	}
+	transportSSF, tlsSSF := connectionTransportAndTLSSSF(state)
+	subject.TransportSSF = int(transportSSF)
+	subject.TLSSSF = int(tlsSSF)
 	subject.SASLSSF = int(state.saslSSF)
 	subject.SSF = max(subject.TransportSSF, subject.TLSSSF, subject.SASLSSF)
 	if subject.RealDN == "" {
@@ -121,6 +118,23 @@ func connectionOverallSSF(state *connectionState) uint32 {
 		return 0
 	}
 	return max(state.externalSSF, state.saslSSF)
+}
+
+func connectionTransportAndTLSSSF(state *connectionState) (uint32, uint32) {
+	if state == nil {
+		return 0, 0
+	}
+	transportSSF, tlsSSF := state.transportSSF, state.tlsSSF
+	// Preserve compatibility with embedded callers that construct connectionState
+	// values using the historical externalSSF field.
+	if transportSSF == 0 && tlsSSF == 0 && state.externalSSF != 0 {
+		if state.secure {
+			tlsSSF = state.externalSSF
+		} else {
+			transportSSF = state.externalSSF
+		}
+	}
+	return transportSSF, tlsSSF
 }
 
 func localAddress(connection net.Conn) net.Addr {

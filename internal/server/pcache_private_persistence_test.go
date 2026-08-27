@@ -2111,3 +2111,40 @@ func readPcacheTestSnapshot(
 	}
 	return snapshot
 }
+
+func TestPcachePersistedRemoteLegacyExternalSSFFallback(t *testing.T) {
+	for _, test := range []struct {
+		name                   string
+		legacyJSON             string
+		wantTransport, wantTLS uint32
+	}{
+		{
+			name:          "legacy Unix transport",
+			legacyJSON:    `{"externalSsf":71}`,
+			wantTransport: 71,
+		},
+		{
+			name:       "legacy TLS transport",
+			legacyJSON: `{"secure":true,"externalSsf":128}`,
+			wantTLS:    128,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var persisted pcachePersistedRemote
+			if err := json.Unmarshal([]byte(test.legacyJSON), &persisted); err != nil {
+				t.Fatalf("decode legacy remote: %v", err)
+			}
+			state := persisted.runtimeRemote().connectionState(&connectionState{})
+			transportSSF, tlsSSF := connectionTransportAndTLSSSF(state)
+			if transportSSF != test.wantTransport || tlsSSF != test.wantTLS {
+				t.Fatalf(
+					"restored SSF = transport %d TLS %d, want %d/%d",
+					transportSSF,
+					tlsSSF,
+					test.wantTransport,
+					test.wantTLS,
+				)
+			}
+		})
+	}
+}

@@ -47,6 +47,10 @@ type runtimeDatabase struct {
 	equalityIndexes       storage.EqualityIndexConfig
 	equalityIndexInit     *databaseEqualityIndexInitialization
 	restrictions          databaseRestrictions
+	security              securityStrengthRequirements
+	requires              operationRequirements
+	securityValues        [][]byte
+	requiresValues        [][]byte
 	shadow                bool
 	multiProvider         bool
 	updateDN              *directory.DN
@@ -335,6 +339,16 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 		)
 		if err != nil {
 			return fmt.Errorf("%s olcRestrict: %w", entry.DN, err)
+		}
+		database.securityValues = cloneByteValues(entry.Values("olcSecurity"))
+		database.security, err = parseSecurityStrengthRequirements(database.securityValues)
+		if err != nil {
+			return fmt.Errorf("%s olcSecurity: %w", entry.DN, err)
+		}
+		database.requiresValues = cloneByteValues(entry.Values("olcRequires"))
+		database.requires, err = parseOperationRequirements(database.requiresValues)
+		if err != nil {
+			return fmt.Errorf("%s olcRequires: %w", entry.DN, err)
 		}
 		if database.readOnly {
 			database.restrictions |= restrictWrites

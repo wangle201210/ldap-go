@@ -40,6 +40,8 @@ type runtimeState struct {
 	sasl                saslRuntimeConfiguration
 	connectionPending   connectionPendingRuntimeConfiguration
 	incomingLimits      incomingLimits
+	security            securityStrengthRequirements
+	requires            operationRequirements
 	idleTimeout         time.Duration
 	writeTimeout        time.Duration
 	syncContexts        map[string]syncCSNState
@@ -93,6 +95,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	}
 
 	databases, err := loadRuntimeDatabasesReaderWithNormalizer(reader, registry)
+	if err != nil {
+		return nil, err
+	}
+	security, requires, err := loadFrontendSecurityConfiguration(reader, databases)
 	if err != nil {
 		return nil, err
 	}
@@ -334,6 +340,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		sasl:                sasl,
 		connectionPending:   connectionPending,
 		incomingLimits:      incomingLimits,
+		security:            security,
+		requires:            requires,
 		idleTimeout:         idleTimeout,
 		writeTimeout:        writeTimeout,
 	}
@@ -686,6 +694,9 @@ func (server *Server) validateRuntimeConfiguration(
 			return nil, &operationFailure{result: result}
 		}
 		if result, ok := seqmodConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := securityConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
 		return nil, operationFailed(

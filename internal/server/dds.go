@@ -631,6 +631,14 @@ func (server *Server) handleDynamicRefresh(
 			0,
 		)
 	}
+	if result := operationSecurityResult(state, database, policyUpdate); result != nil {
+		return server.writeDynamicRefreshResult(
+			connection,
+			message.ID,
+			*result,
+			0,
+		)
+	}
 	if result := updateOperationPrecondition(
 		state.runtime,
 		state.boundDN,
