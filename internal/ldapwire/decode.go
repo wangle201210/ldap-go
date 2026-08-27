@@ -279,7 +279,7 @@ func decodeAddRequest(packet *ber.Packet) (AddRequest, error) {
 		return AddRequest{}, malformed("invalid AddRequest")
 	}
 	dn, err := packetString(packet.Children[0])
-	if err != nil || dn == "" {
+	if err != nil {
 		return AddRequest{}, malformed("invalid AddRequest DN")
 	}
 	attributes, err := decodeAttributeList(packet.Children[1], false)
@@ -294,7 +294,7 @@ func decodeModifyRequest(packet *ber.Packet) (ModifyRequest, error) {
 		return ModifyRequest{}, malformed("invalid ModifyRequest")
 	}
 	dn, err := packetString(packet.Children[0])
-	if err != nil || dn == "" {
+	if err != nil {
 		return ModifyRequest{}, malformed("invalid ModifyRequest DN")
 	}
 	changesPacket := packet.Children[1]
@@ -325,7 +325,7 @@ func decodeModifyRequest(packet *ber.Packet) (ModifyRequest, error) {
 }
 
 func decodeDeleteRequest(packet *ber.Packet) (DeleteRequest, error) {
-	if packet.TagType != ber.TypePrimitive || len(packet.Children) != 0 || packet.Data.Len() == 0 {
+	if packet.TagType != ber.TypePrimitive || len(packet.Children) != 0 {
 		return DeleteRequest{}, malformed("invalid DeleteRequest")
 	}
 	return DeleteRequest{DN: string(packet.Data.Bytes())}, nil
@@ -337,7 +337,7 @@ func decodeModifyDNRequest(packet *ber.Packet) (ModifyDNRequest, error) {
 		return ModifyDNRequest{}, malformed("invalid ModifyDNRequest")
 	}
 	dn, err := packetString(packet.Children[0])
-	if err != nil || dn == "" {
+	if err != nil {
 		return ModifyDNRequest{}, malformed("invalid ModifyDNRequest DN")
 	}
 	newRDN, err := packetString(packet.Children[1])
@@ -351,8 +351,7 @@ func decodeModifyDNRequest(packet *ber.Packet) (ModifyDNRequest, error) {
 	request := ModifyDNRequest{DN: dn, NewRDN: newRDN, DeleteOldRDN: deleteOldRDN}
 	if len(packet.Children) == 4 {
 		superior := packet.Children[3]
-		if !isPacket(superior, ber.ClassContext, ber.TypePrimitive, 0) ||
-			superior.Data.Len() == 0 {
+		if !isPacket(superior, ber.ClassContext, ber.TypePrimitive, 0) {
 			return ModifyDNRequest{}, malformed("invalid newSuperior")
 		}
 		request.NewSuperior = string(superior.Data.Bytes())
@@ -366,7 +365,7 @@ func decodeCompareRequest(packet *ber.Packet) (CompareRequest, error) {
 		return CompareRequest{}, malformed("invalid CompareRequest")
 	}
 	dn, err := packetString(packet.Children[0])
-	if err != nil || dn == "" {
+	if err != nil {
 		return CompareRequest{}, malformed("invalid CompareRequest DN")
 	}
 	assertionPacket := packet.Children[1]

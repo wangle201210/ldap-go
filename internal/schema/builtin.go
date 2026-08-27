@@ -194,7 +194,7 @@ var builtinAttributeTypes = []string{
 	"( 1.3.6.1.4.1.1466.101.119.3 NAME 'entryTtl' DESC 'RFC2589: remaining lifetime of a dynamic entry' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " SINGLE-VALUE NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.119.4 NAME 'dynamicSubtrees' DESC 'RFC2589: naming contexts supporting dynamic entries' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.1466.101.120.5 NAME 'namingContexts' EQUALITY distinguishedNameMatch SYNTAX " + SyntaxDistinguishedName + " USAGE dSAOperation )",
-	"( 1.3.6.1.4.1.1466.101.120.15 NAME 'supportedLDAPVersion' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.1466.101.120.15 NAME 'supportedLDAPVersion' SYNTAX " + SyntaxInteger + " USAGE dSAOperation )",
 	"( 1.3.6.1.1.4 NAME 'vendorName' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE USAGE dSAOperation )",
 	"( 1.3.6.1.1.5 NAME 'vendorVersion' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE USAGE dSAOperation )",
 }

@@ -628,7 +628,13 @@ func requestSecurityPolicy(
 	if err != nil {
 		return nil, kind, false
 	}
-	if dn.Depth() == 0 || isRuntimeSubschemaDN(state.runtime, dn) {
+	if dn.Depth() == 0 {
+		if kind == policyUpdate {
+			return nil, kind, false
+		}
+		return nil, kind, true
+	}
+	if isRuntimeSubschemaDN(state.runtime, dn) {
 		return nil, kind, true
 	}
 	database := databaseForDN(state.runtime, dn)

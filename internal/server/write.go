@@ -103,7 +103,7 @@ func (server *Server) handleAdd(
 	}
 
 	dn, err := parseCoreWriteDN(state.runtime, request.Entry.DN)
-	if err != nil || dn.Depth() == 0 {
+	if err != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -119,6 +119,17 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(
 				ldapwire.ResultProtocolError,
 				"no attributes provided",
+			),
+		)
+	}
+	if dn.Depth() == 0 {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultEntryAlreadyExists,
+				"root DSE already exists",
 			),
 		)
 	}
@@ -620,7 +631,7 @@ func (server *Server) handleModify(
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyResponse, *result)
 	}
 	dn, err := parseCoreWriteDN(state.runtime, request.DN)
-	if err != nil || dn.Depth() == 0 {
+	if err != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -643,6 +654,17 @@ func (server *Server) handleModify(
 				),
 			)
 		}
+	}
+	if dn.Depth() == 0 {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"modify upon the root DSE not supported",
+			),
+		)
 	}
 	frontendSeqmodRelease, err := acquireFrontendSeqmod(ctx, state.runtime, dn)
 	if err != nil {
@@ -1400,12 +1422,23 @@ func (server *Server) handleDelete(
 		)
 	}
 	dn, err := parseCoreWriteDN(state.runtime, request.DN)
-	if err != nil || dn.Depth() == 0 {
+	if err != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationDeleteResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if dn.Depth() == 0 {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationDeleteResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"cannot delete the root DSE",
+			),
 		)
 	}
 	if isSubschemaDN(dn) {
@@ -1780,12 +1813,42 @@ func (server *Server) handleModifyDN(
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationModifyDNResponse, *result)
 	}
 	oldDN, err := parseCoreWriteDN(state.runtime, request.DN)
-	if err != nil || oldDN.Depth() == 0 {
+	if err != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
 			ldapwire.ApplicationModifyDNResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+		)
+	}
+	if oldDN.Depth() == 0 {
+		if request.HasNewSuperior {
+			if _, err := parseCoreWriteDN(state.runtime, request.NewSuperior); err != nil {
+				return server.writeOperationResult(
+					connection,
+					message.ID,
+					ldapwire.ApplicationModifyDNResponse,
+					ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+				)
+			}
+		}
+		newRDN, err := parseRuntimeDN(request.NewRDN, state.runtime.schema)
+		if err != nil || newRDN.Depth() != 1 {
+			return server.writeOperationResult(
+				connection,
+				message.ID,
+				ldapwire.ApplicationModifyDNResponse,
+				ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+			)
+		}
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyDNResponse,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"cannot rename the root DSE",
+			),
 		)
 	}
 	if isSubschemaDN(oldDN) {
@@ -2551,7 +2614,7 @@ func (server *Server) handleCompare(
 		)
 	}
 	dn, err := parseCoreWriteDN(state.runtime, request.DN)
-	if err != nil || dn.Depth() == 0 {
+	if err != nil {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -2568,9 +2631,10 @@ func (server *Server) handleCompare(
 			*compareFailure,
 		)
 	}
+	rootDSETarget := dn.Depth() == 0
 	subschemaTarget := isRuntimeSubschemaDN(state.runtime, dn)
 	var database *runtimeDatabase
-	if !subschemaTarget {
+	if !rootDSETarget && !subschemaTarget {
 		database = databaseForDN(state.runtime, dn)
 		if database == nil {
 			return server.writeOperationResult(
@@ -2586,7 +2650,7 @@ func (server *Server) handleCompare(
 			)
 		}
 	}
-	if subschemaTarget && frontendRestricts(state.runtime, restrictCompare) {
+	if (rootDSETarget || subschemaTarget) && frontendRestricts(state.runtime, restrictCompare) {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -2608,17 +2672,19 @@ func (server *Server) handleCompare(
 			),
 		)
 	}
-	if handled, err := server.tryRetcodeOperation(
-		ctx,
-		connection,
-		state,
-		message,
-		dn,
-		retcodeOperationCompare,
-		controls.manageDsaIT,
-		nil,
-	); handled {
-		return err
+	if !rootDSETarget {
+		if handled, err := server.tryRetcodeOperation(
+			ctx,
+			connection,
+			state,
+			message,
+			dn,
+			retcodeOperationCompare,
+			controls.manageDsaIT,
+			nil,
+		); handled {
+			return err
+		}
 	}
 	if database != nil && databaseUsesNullBackend(state.runtime, *database) {
 		result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
@@ -2707,6 +2773,8 @@ func (server *Server) handleCompare(
 					"",
 				)
 			}
+		} else if rootDSETarget {
+			entry = server.rootDSE(state)
 		} else if subschemaTarget {
 			entry = server.subschemaEntry(state.runtime)
 		} else {
@@ -2774,15 +2842,6 @@ func (server *Server) handleCompare(
 		if err != nil {
 			return err
 		}
-		if err := server.checkAssertion(
-			state.runtime,
-			tx,
-			state.boundDN,
-			entry,
-			controls.assertion,
-		); err != nil {
-			return err
-		}
 		var dynlistPlans *dynlistProjectionCache
 		var dynlistCompareHandled bool
 		var dynlistCompareMatched bool
@@ -2834,6 +2893,15 @@ func (server *Server) handleCompare(
 			acl.Compare,
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
+		if err := server.checkAssertion(
+			state.runtime,
+			tx,
+			state.boundDN,
+			entry,
+			controls.assertion,
+		); err != nil {
+			return err
 		}
 		if dynlistCompareHandled {
 			if dynlistCompareMatched {
