@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/audit"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -193,6 +194,13 @@ func (operation *trackedOperation) finish() {
 	})
 }
 
+func (operation *trackedOperation) executing() bool {
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	return operation.phase >= operationExecuting &&
+		operation.phase < operationComplete
+}
+
 type operationRegistry struct {
 	mu         sync.Mutex
 	operations map[int64]*trackedOperation
@@ -289,6 +297,26 @@ func (registry *operationRegistry) abandonLongLived() {
 	for _, operation := range operations {
 		operation.requestAbandon()
 	}
+}
+
+func (registry *operationRegistry) closeIfIdle(
+	activity *connectionActivity,
+	timeout time.Duration,
+	now time.Time,
+	closeConnection func(),
+) bool {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, operation := range registry.operations {
+		if operation.executing() {
+			return false
+		}
+	}
+	if !activity.expired(timeout, now) {
+		return false
+	}
+	closeConnection()
+	return true
 }
 
 type queuedOperation struct {
@@ -427,6 +455,7 @@ type serializedResponseConnection struct {
 	mu                *sync.Mutex
 	monitor           *monitorState
 	monitorConnection *monitorConnection
+	writeTimeout      func() time.Duration
 }
 
 func (connection *serializedResponseConnection) Write(value []byte) (int, error) {
@@ -435,7 +464,28 @@ func (connection *serializedResponseConnection) Write(value []byte) (int, error)
 
 	written := 0
 	for written < len(value) {
+		timeout := time.Duration(0)
+		if connection.writeTimeout != nil {
+			timeout = connection.writeTimeout()
+		}
+		if timeout > 0 {
+			if err := connection.Conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+				return written, err
+			}
+		}
+		if connection.monitor != nil && connection.monitorConnection != nil {
+			connection.monitor.setWriteWaiter(connection.monitorConnection, true)
+		}
 		count, err := connection.Conn.Write(value[written:])
+		if connection.monitor != nil && connection.monitorConnection != nil {
+			connection.monitor.setWriteWaiter(connection.monitorConnection, false)
+		}
+		if timeout > 0 {
+			clearErr := connection.Conn.SetWriteDeadline(time.Time{})
+			if err == nil && clearErr != nil {
+				err = clearErr
+			}
+		}
 		written += count
 		if err != nil {
 			return written, err

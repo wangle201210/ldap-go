@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,857 top-level tests against the pinned commit.
+The latest strict run passed 1,872 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -82,6 +82,14 @@ queued operations with OpenLDAP's 100/1,000 defaults and current anonymous or
 authenticated identity. An overflow closes the connection without an LDAP
 response, while Abandon, Cancel, and Unbind retain their immediate paths;
 Abandon also removes a pending target and releases its queue slot immediately.
+Global `olcIdleTimeout` silently retires anonymous or authenticated idle
+connections while exempting executing and persistent operations; raw partial
+BER reads, StartTLS, and SASL layers retain activity tracking. Global
+`olcWriteTimeout` bounds each no-progress response write, resets after write
+progress, and closes slow-reader connections without an LDAP result. Both
+settings load from `cn=config`, update existing connections, and publish
+blocked writers through the Monitor write-waiter count and `w` connection
+mask.
 StartTLS returns `operationsError` immediately when another operation is
 outstanding instead of waiting behind a long-running Search. RFC 2696 requests
 whose page size is at least the request size limit are treated as a single

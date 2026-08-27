@@ -386,6 +386,12 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
+	networkConnection := connection
+	activity := newConnectionActivity()
+	connection = &activityTrackingConnection{
+		Conn:     networkConnection,
+		activity: activity,
+	}
 	state := connectionState{
 		connectionID:    server.nextConnectionID.Add(1),
 		connection:      connection,
@@ -409,13 +415,13 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	defer func() {
 		_ = state.connection.Close()
 		server.mu.Lock()
-		delete(server.connections, connection)
-		delete(server.connectionOperations, connection)
+		delete(server.connections, networkConnection)
+		delete(server.connectionOperations, networkConnection)
 		server.mu.Unlock()
 	}()
 
 	if server.config.ImplicitTLS {
-		secured, err := server.secureHandshake(ctx, connection)
+		secured, err := server.secureHandshake(ctx, state.connection)
 		if err != nil {
 			server.config.Logger.Debug("TLS handshake failed", "error", err)
 			return
@@ -433,7 +439,19 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 
 	connectionContext, cancelConnection := context.WithCancel(ctx)
 	operations := newOperationRegistry()
-	server.trackConnectionOperations(connection, operations)
+	server.trackConnectionOperations(networkConnection, operations)
+	idleContext, stopIdleWatcher := context.WithCancel(connectionContext)
+	idleWatcherDone := make(chan struct{})
+	go func() {
+		defer close(idleWatcherDone)
+		server.watchConnectionIdleTimeout(
+			idleContext,
+			cancelConnection,
+			networkConnection,
+			activity,
+			operations,
+		)
+	}()
 	queue := newOperationQueue()
 	state.operationQueue = queue
 	writeMutex := &sync.Mutex{}
@@ -467,6 +485,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		clearSearchSessions(&state)
 		clearLDAPTransaction(state.transaction)
 		clearBindCredentials(&state)
+	}()
+	defer func() {
+		stopIdleWatcher()
+		<-idleWatcherDone
 	}()
 
 	for {
@@ -509,6 +531,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					mu:                writeMutex,
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
+					writeTimeout:      server.currentConnectionWriteTimeout,
 				}
 				_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 					ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
@@ -559,6 +582,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				mu:                writeMutex,
 				monitor:           server.monitor,
 				monitorConnection: state.monitor,
+				writeTimeout:      server.currentConnectionWriteTimeout,
 			}
 			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 				ldapwire.ResultError(
@@ -616,6 +640,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					mu:                writeMutex,
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
+					writeTimeout:      server.currentConnectionWriteTimeout,
 				}
 				observation := server.newImmediateAuditObservation(&state, message)
 				observation.setResult(result.Code)
@@ -638,6 +663,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					mu:                writeMutex,
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
+					writeTimeout:      server.currentConnectionWriteTimeout,
 				}
 				observation := server.newImmediateAuditObservation(&state, message)
 				responseConnection := &auditResponseConnection{
@@ -757,6 +783,7 @@ func (server *Server) rejectLDAPv2Controls(
 		mu:                writeMutex,
 		monitor:           server.monitor,
 		monitorConnection: state.monitor,
+		writeTimeout:      server.currentConnectionWriteTimeout,
 	}
 	_ = writeResultForMessage(
 		responseConnection,
@@ -786,6 +813,7 @@ func (server *Server) runConnectionOperations(
 			mu:                writeMutex,
 			monitor:           server.monitor,
 			monitorConnection: state.monitor,
+			writeTimeout:      server.currentConnectionWriteTimeout,
 		}
 		responseConnection := &operationResponseConnection{
 			Conn:      baseConnection,

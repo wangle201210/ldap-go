@@ -56,11 +56,11 @@ func loadConnectionTimeoutRuntimeConfiguration(
 }
 
 // parseOpenLDAPConnectionTimeout mirrors lutil_atoix(..., base=0) for a
-// 32-bit int. OpenLDAP's generic numeric configuration rejects values below 0.
+// 32-bit int. Non-positive runtime values disable the corresponding timeout.
 func parseOpenLDAPConnectionTimeout(raw string) (int32, error) {
 	token := strings.TrimLeft(raw, " \t\n\v\f\r")
 	if token == "" {
-		return 0, errors.New("must be a non-negative 32-bit integer")
+		return 0, errors.New("must be a 32-bit integer")
 	}
 
 	negative := false
@@ -70,7 +70,7 @@ func parseOpenLDAPConnectionTimeout(raw string) (int32, error) {
 		body = body[1:]
 	}
 	if body == "" {
-		return 0, errors.New("must be a non-negative 32-bit integer")
+		return 0, errors.New("must be a 32-bit integer")
 	}
 
 	base := 10
@@ -82,7 +82,7 @@ func parseOpenLDAPConnectionTimeout(raw string) (int32, error) {
 		base = 8
 	}
 	if digits == "" {
-		return 0, errors.New("must be a non-negative 32-bit integer")
+		return 0, errors.New("must be a 32-bit integer")
 	}
 
 	parseToken := digits
@@ -91,10 +91,7 @@ func parseOpenLDAPConnectionTimeout(raw string) (int32, error) {
 	}
 	value, err := strconv.ParseInt(parseToken, base, 32)
 	if err != nil {
-		return 0, errors.New("must be a non-negative 32-bit integer")
-	}
-	if value < 0 {
-		return 0, errors.New("must not be negative")
+		return 0, errors.New("must be a 32-bit integer")
 	}
 	return int32(value), nil
 }
@@ -113,7 +110,7 @@ func validateConnectionTimeoutOnlineChanges(
 	if !touched {
 		return nil
 	}
-	if !isGlobalReferralConfigurationEntry(entry.DN) {
+	if !isGlobalConfigurationEntry(entry.DN) {
 		return operationFailed(
 			ldapwire.ResultObjectClassViolation,
 			"olcIdleTimeout and olcWriteTimeout are only allowed on cn=config",
@@ -193,11 +190,11 @@ func validateOnlineConnectionTimeout(value string) error {
 			"connection timeout value is not a valid LDAP integer",
 		)
 	}
-	parsed, err := strconv.ParseInt(value, 10, 32)
-	if err != nil || parsed < 0 {
+	_, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
 		return operationFailed(
 			ldapwire.ResultConstraintViolation,
-			"connection timeout must be a non-negative 32-bit integer",
+			"connection timeout must be a 32-bit integer",
 		)
 	}
 	return nil

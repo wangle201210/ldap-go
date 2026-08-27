@@ -1054,6 +1054,12 @@ func (server *Server) modifyEntry(
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		if configurationWrite {
+			if err := validateConnectionTimeoutOnlineChanges(
+				entry,
+				processedChanges,
+			); err != nil {
+				return err
+			}
 			if err := validateDefaultReferralOnlineChanges(
 				entry,
 				processedChanges,

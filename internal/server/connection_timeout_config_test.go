@@ -31,12 +31,12 @@ func TestLoadConnectionTimeoutRuntimeConfiguration(t *testing.T) {
 		{name: "int32 maximum", addGlobal: true, idle: []string{"2147483647"}, wantIdle: 2147483647 * time.Second},
 		{name: "hex int32 maximum", addGlobal: true, idle: []string{"0x7fffffff"}, wantIdle: 2147483647 * time.Second},
 		{name: "octal int32 maximum", addGlobal: true, write: []string{"017777777777"}, wantWrite: 2147483647 * time.Second},
-		{name: "negative idle", addGlobal: true, idle: []string{"-1"}, wantErrorText: "olcIdleTimeout: must not be negative"},
-		{name: "negative write", addGlobal: true, write: []string{"-2147483648"}, wantErrorText: "olcWriteTimeout: must not be negative"},
-		{name: "positive overflow", addGlobal: true, idle: []string{"2147483648"}, wantErrorText: "olcIdleTimeout: must be a non-negative 32-bit integer"},
-		{name: "binary prefix rejected", addGlobal: true, idle: []string{"0b10"}, wantErrorText: "olcIdleTimeout: must be a non-negative 32-bit integer"},
-		{name: "underscore rejected", addGlobal: true, write: []string{"1_0"}, wantErrorText: "olcWriteTimeout: must be a non-negative 32-bit integer"},
-		{name: "trailing whitespace rejected", addGlobal: true, idle: []string{"1 "}, wantErrorText: "olcIdleTimeout: must be a non-negative 32-bit integer"},
+		{name: "negative idle disables", addGlobal: true, idle: []string{"-1"}, wantIdle: -time.Second},
+		{name: "negative write disables", addGlobal: true, write: []string{"-2147483648"}, wantWrite: -2147483648 * time.Second},
+		{name: "positive overflow", addGlobal: true, idle: []string{"2147483648"}, wantErrorText: "olcIdleTimeout: must be a 32-bit integer"},
+		{name: "binary prefix rejected", addGlobal: true, idle: []string{"0b10"}, wantErrorText: "olcIdleTimeout: must be a 32-bit integer"},
+		{name: "underscore rejected", addGlobal: true, write: []string{"1_0"}, wantErrorText: "olcWriteTimeout: must be a 32-bit integer"},
+		{name: "trailing whitespace rejected", addGlobal: true, idle: []string{"1 "}, wantErrorText: "olcIdleTimeout: must be a 32-bit integer"},
 		{name: "multiple idle values", addGlobal: true, idle: []string{"1", "2"}, wantErrorText: "olcIdleTimeout must contain exactly one value"},
 		{name: "multiple write values", addGlobal: true, write: []string{"1", "2"}, wantErrorText: "olcWriteTimeout must contain exactly one value"},
 	}
@@ -87,7 +87,7 @@ func TestValidateConnectionTimeoutOnlineChanges(t *testing.T) {
 		{name: "different add", entry: global, changes: timeoutChanges(timeoutAdd(idleTimeoutAttribute, "7")), wantCode: ldapwire.ResultConstraintViolation},
 		{name: "multi add", entry: connectionTimeoutEntry("cn=config", nil, nil), changes: timeoutChanges(timeoutAdd(idleTimeoutAttribute, "1", "2")), wantCode: ldapwire.ResultConstraintViolation},
 		{name: "multi replace", entry: global, changes: timeoutChanges(timeoutReplace(writeTimeoutAttribute, "1", "2")), wantCode: ldapwire.ResultConstraintViolation},
-		{name: "negative", entry: global, changes: timeoutChanges(timeoutReplace(idleTimeoutAttribute, "-1")), wantCode: ldapwire.ResultConstraintViolation},
+		{name: "negative", entry: global, changes: timeoutChanges(timeoutReplace(idleTimeoutAttribute, "-1"))},
 		{name: "positive overflow", entry: global, changes: timeoutChanges(timeoutReplace(idleTimeoutAttribute, "2147483648")), wantCode: ldapwire.ResultConstraintViolation},
 		{name: "negative overflow", entry: global, changes: timeoutChanges(timeoutReplace(idleTimeoutAttribute, "-2147483649")), wantCode: ldapwire.ResultConstraintViolation},
 		{name: "leading zero", entry: global, changes: timeoutChanges(timeoutReplace(idleTimeoutAttribute, "01")), wantCode: ldapwire.ResultInvalidAttributeSyntax},
@@ -155,7 +155,7 @@ func TestConnectionTimeoutRuntimeRebuildAndRollback(t *testing.T) {
 	instance.activateRuntime(next)
 
 	err = store.Update(t.Context(), func(writer storage.Writer) error {
-		if err := replaceConnectionTimeoutValues(writer, []string{"-1"}, []string{"9"}); err != nil {
+		if err := replaceConnectionTimeoutValues(writer, []string{"2147483648"}, []string{"9"}); err != nil {
 			return err
 		}
 		_, err := instance.validateRuntimeConfiguration(writer)

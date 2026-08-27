@@ -77,6 +77,7 @@ type monitorConnection struct {
 	gets            uint64
 	reads           uint64
 	writes          uint64
+	writeWaiter     bool
 }
 
 type monitorConnectionSnapshot struct {
@@ -96,6 +97,7 @@ type monitorConnectionSnapshot struct {
 	gets            uint64
 	reads           uint64
 	writes          uint64
+	writeWaiter     bool
 }
 
 func newMonitorState() *monitorState {
@@ -236,6 +238,19 @@ func (monitor *monitorState) completeImmediateOperation(
 	monitor.completeOperation(connection, request, false)
 }
 
+func (monitor *monitorState) setWriteWaiter(
+	connection *monitorConnection,
+	value bool,
+) {
+	if monitor == nil || connection == nil {
+		return
+	}
+	connection.mu.Lock()
+	connection.writeWaiter = value
+	connection.activityAt = time.Now().UTC()
+	connection.mu.Unlock()
+}
+
 func (monitor *monitorState) updateConnectionState(
 	connection *monitorConnection,
 	state *connectionState,
@@ -298,6 +313,7 @@ func (monitor *monitorState) connectionSnapshots() []monitorConnectionSnapshot {
 			gets:            connection.gets,
 			reads:           connection.reads,
 			writes:          connection.writes,
+			writeWaiter:     connection.writeWaiter,
 		})
 		connection.mu.RUnlock()
 	}
@@ -470,7 +486,10 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 	entries = append(entries, server.monitorStatisticEntries(startedAt)...)
 	entries = append(entries, server.monitorThreadEntries(startedAt)...)
 	entries = append(entries, monitorTimeEntries(startedAt, now)...)
-	entries = append(entries, monitorWaiterEntries(startedAt)...)
+	entries = append(entries, monitorWaiterEntries(
+		startedAt,
+		server.monitor.connectionSnapshots(),
+	)...)
 	server.populateMonitorContainerAttributes(entries, runtime)
 	addMonitorSubordinateState(entries)
 	return entries
@@ -838,10 +857,19 @@ func monitorTimeEntries(startedAt, now time.Time) []directory.Entry {
 	return []directory.Entry{start, current, uptime}
 }
 
-func monitorWaiterEntries(startedAt time.Time) []directory.Entry {
+func monitorWaiterEntries(
+	startedAt time.Time,
+	connections []monitorConnectionSnapshot,
+) []directory.Entry {
+	writeWaiters := uint64(0)
+	for _, connection := range connections {
+		if connection.writeWaiter {
+			writeWaiters++
+		}
+	}
 	return []directory.Entry{
 		monitorCounterEntry("Read", "Waiters", 0, startedAt),
-		monitorCounterEntry("Write", "Waiters", 0, startedAt),
+		monitorCounterEntry("Write", "Waiters", writeWaiters, startedAt),
 	}
 }
 
@@ -1048,6 +1076,9 @@ func monitorConnectionMask(snapshot monitorConnectionSnapshot) string {
 	}
 	if snapshot.pending > 0 {
 		mask.WriteByte('p')
+	}
+	if snapshot.writeWaiter {
+		mask.WriteByte('w')
 	}
 	return mask.String()
 }

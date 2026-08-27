@@ -95,7 +95,7 @@ func validateDefaultReferralOnlineChanges(
 			current = append(current[:0], values...)
 		}
 	}
-	if touched && !isGlobalReferralConfigurationEntry(entry.DN) {
+	if touched && !isGlobalConfigurationEntry(entry.DN) {
 		return operationFailed(
 			ldapwire.ResultObjectClassViolation,
 			"olcReferral is only allowed on cn=config",
@@ -127,7 +127,7 @@ func containsCaseInsensitive(values []string, target string) bool {
 	return false
 }
 
-func isGlobalReferralConfigurationEntry(value string) bool {
+func isGlobalConfigurationEntry(value string) bool {
 	dn, err := directory.ParseDN(value)
 	if err != nil {
 		return false
