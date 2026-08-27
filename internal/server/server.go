@@ -1049,6 +1049,11 @@ func (server *Server) dispatch(
 			),
 		)
 	}
+	if search, ok := message.Request.(ldapwire.SearchRequest); ok {
+		if failure := invalidSearchParameterResult(search); failure != nil {
+			return false, writeResultForMessage(connection, message, *failure)
+		}
+	}
 	if failure := prevalidateLazyCommitControls(message.Request, message.Controls); failure != nil {
 		return false, writeResultForMessage(connection, message, *failure)
 	}

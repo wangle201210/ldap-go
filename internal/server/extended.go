@@ -296,6 +296,25 @@ func (server *Server) handleWhoAmI(
 			nil,
 		))
 	}
+	if state.boundDN != "" {
+		boundDN, err := parseConnectionDN(state, state.boundDN)
+		if err != nil {
+			return fmt.Errorf("normalize bound DN: %w", err)
+		}
+		if database := databaseForDN(state.runtime, boundDN); database != nil &&
+			databaseRestricts(*database, restrictWhoAmI) {
+			return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"extended operation restricted",
+				),
+				"",
+				nil,
+				nil,
+			))
+		}
+	}
 
 	authzID := []byte{}
 	if state.boundDN != "" {

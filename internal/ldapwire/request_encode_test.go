@@ -2,7 +2,6 @@ package ldapwire
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -216,7 +215,7 @@ func TestEncodeRequestMessagePreservesEmptyControlsWrapper(t *testing.T) {
 	}
 }
 
-func TestReadMessageRejectsSearchScopeAboveChildren(t *testing.T) {
+func TestReadMessagePreservesSearchScopeAboveChildren(t *testing.T) {
 	t.Parallel()
 
 	encoded, err := EncodeRequestMessage(Message{
@@ -233,8 +232,12 @@ func TestReadMessageRejectsSearchScopeAboveChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRequestMessage(): %v", err)
 	}
-	_, err = ReadMessage(bytes.NewReader(encoded), int64(len(encoded)))
-	if !errors.Is(err, ErrMalformedMessage) {
-		t.Fatalf("ReadMessage() error = %v, want ErrMalformedMessage", err)
+	decoded, err := ReadMessage(bytes.NewReader(encoded), int64(len(encoded)))
+	if err != nil {
+		t.Fatalf("ReadMessage(): %v", err)
+	}
+	request, ok := decoded.Request.(SearchRequest)
+	if !ok || request.Scope != directory.ScopeChildren+1 {
+		t.Fatalf("decoded Search request = %#v", decoded.Request)
 	}
 }

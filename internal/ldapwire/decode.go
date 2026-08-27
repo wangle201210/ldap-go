@@ -391,20 +391,20 @@ func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
 		return SearchRequest{}, malformed("invalid search base")
 	}
 	scope, err := packetInteger(packet.Children[1])
-	if err != nil || scope < 0 || scope > int64(directory.ScopeChildren) {
+	if err != nil || scope < math.MinInt32 || scope > math.MaxInt32 {
 		return SearchRequest{}, malformed("invalid search scope")
 	}
 	derefAliases, err := packetInteger(packet.Children[2])
-	if err != nil || derefAliases < 0 || derefAliases > 3 {
+	if err != nil || derefAliases < math.MinInt32 || derefAliases > math.MaxInt32 {
 		return SearchRequest{}, malformed("invalid alias dereference mode")
 	}
-	sizeLimit, err := nonNegativeInt(packet.Children[3], "size limit")
-	if err != nil {
-		return SearchRequest{}, err
+	sizeLimit, sizeLimitErr := packetInteger(packet.Children[3])
+	if sizeLimitErr != nil || sizeLimit < math.MinInt32 || sizeLimit > math.MaxInt32 {
+		return SearchRequest{}, malformed("invalid size limit")
 	}
-	timeLimit, err := nonNegativeInt(packet.Children[4], "time limit")
-	if err != nil {
-		return SearchRequest{}, err
+	timeLimit, timeLimitErr := packetInteger(packet.Children[4])
+	if timeLimitErr != nil || timeLimit < math.MinInt32 || timeLimit > math.MaxInt32 {
+		return SearchRequest{}, malformed("invalid time limit")
 	}
 	typesOnly, err := packetBoolean(packet.Children[5])
 	if err != nil {
@@ -432,8 +432,8 @@ func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
 		BaseDN:       baseDN,
 		Scope:        directory.Scope(scope),
 		DerefAliases: int(derefAliases),
-		SizeLimit:    sizeLimit,
-		TimeLimit:    timeLimit,
+		SizeLimit:    int(sizeLimit),
+		TimeLimit:    int(timeLimit),
 		TypesOnly:    typesOnly,
 		Filter:       filter,
 		Attributes:   attributes,

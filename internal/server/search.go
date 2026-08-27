@@ -2037,6 +2037,26 @@ func (server *Server) handleSearch(
 	return writeErr
 }
 
+func invalidSearchParameterResult(
+	request ldapwire.SearchRequest,
+) *ldapwire.Result {
+	diagnostic := ""
+	switch {
+	case request.TimeLimit < 0:
+		diagnostic = "invalid time limit"
+	case request.SizeLimit < 0:
+		diagnostic = "invalid size limit"
+	case request.Scope < directory.ScopeBase || request.Scope > directory.ScopeChildren:
+		diagnostic = "invalid scope"
+	case request.DerefAliases < 0 || request.DerefAliases > 3:
+		diagnostic = "invalid deref"
+	default:
+		return nil
+	}
+	result := ldapwire.ResultError(ldapwire.ResultProtocolError, diagnostic)
+	return &result
+}
+
 func (server *Server) ensureSearchEqualityIndexes(
 	ctx context.Context,
 	runtime *runtimeState,
