@@ -46,6 +46,7 @@ type runtimeState struct {
 	idleTimeout          time.Duration
 	writeTimeout         time.Duration
 	maxFilterDepth       int
+	localSSF             uint32
 	syncContexts         map[string]syncCSNState
 }
 
@@ -320,6 +321,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	localSSF, err := loadLocalSSF(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -352,6 +357,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		idleTimeout:          idleTimeout,
 		writeTimeout:         writeTimeout,
 		maxFilterDepth:       maxFilterDepth,
+		localSSF:             localSSF,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
@@ -708,6 +714,9 @@ func (server *Server) validateRuntimeConfiguration(
 			return nil, &operationFailure{result: result}
 		}
 		if result, ok := maxFilterDepthConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := localSSFConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
 		return nil, operationFailed(

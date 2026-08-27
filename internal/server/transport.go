@@ -14,7 +14,7 @@ import (
 )
 
 const defaultSecureHandshakeTimeout = 10 * time.Second
-const localSecurityStrengthFactor uint32 = 71
+const defaultLocalSecurityStrengthFactor uint32 = 71
 
 type SecureTransport interface {
 	ServerHandshake(context.Context, net.Conn) (net.Conn, error)
@@ -179,7 +179,7 @@ func connectionSecurityStrength(
 	}
 	if address := connection.LocalAddr(); address != nil &&
 		address.Network() == "unix" {
-		return localSecurityStrengthFactor
+		return defaultLocalSecurityStrengthFactor
 	}
 	return 0
 }

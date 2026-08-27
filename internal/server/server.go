@@ -392,6 +392,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
 	networkConnection := connection
+	transportSSF := server.connectionTransportSecurityStrength(networkConnection)
 	activity := newConnectionActivity()
 	connection = &activityTrackingConnection{
 		Conn:     networkConnection,
@@ -400,8 +401,8 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	state := connectionState{
 		connectionID:    server.nextConnectionID.Add(1),
 		connection:      connection,
-		externalSSF:     connectionSecurityStrength(connection, false),
-		transportSSF:    connectionSecurityStrength(connection, false),
+		externalSSF:     transportSSF,
+		transportSSF:    transportSSF,
 		auditIdentity:   &connectionAuditIdentityState{},
 		metaTransports:  newMetaTransportCache(time.Now),
 		gssapiAvailable: server.gssapiKeytab != nil,

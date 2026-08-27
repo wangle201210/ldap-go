@@ -20,7 +20,7 @@ import (
 const (
 	syncConsumerStartTLSOID       = "1.3.6.1.4.1.1466.20037"
 	syncConsumerMaxLDAPPacketSize = 16 << 20
-	syncConsumerLocalSSF          = localSecurityStrengthFactor
+	syncConsumerLocalSSF          = defaultLocalSecurityStrengthFactor
 )
 
 type syncConsumerTransport struct {
