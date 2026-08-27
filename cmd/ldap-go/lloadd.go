@@ -18,17 +18,18 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/lloadd"
 )
 
 func runLloadd(args []string, stdout, stderr io.Writer) error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), lloaddShutdownSignals()...)
 	defer cancel()
 	management := make(chan os.Signal, 2)
-	signal.Notify(management, syscall.SIGHUP, syscall.SIGUSR1)
+	if signals := lloaddManagementSignals(); len(signals) > 0 {
+		signal.Notify(management, signals...)
+	}
 	defer signal.Stop(management)
 	return runLloaddWithSignals(ctx, management, args, stdout, stderr)
 }
@@ -182,14 +183,14 @@ func runLloaddWithSignals(
 		case err := <-daemon.Errors():
 			return err
 		case received := <-management:
-			switch received {
-			case syscall.SIGHUP:
+			switch {
+			case lloaddIsShutdownSignal(received):
 				gentle := daemon.Snapshot().GentleHUP
 				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), *drainTimeout)
 				err := daemon.Shutdown(shutdownCtx, gentle)
 				shutdownCancel()
 				return err
-			case syscall.SIGUSR1:
+			case lloaddIsReloadSignal(received):
 				if !*hotReload {
 					logger.Warn("lloadd SIGUSR1 hot reload ignored; enable -hot-reload")
 					continue

@@ -22,6 +22,8 @@ func TestValidateOpenLDAPModuleConfigurationAcceptsImplementedDeclarations(t *te
 		"{4}pw-sha2.la",
 		`{5}/opt/openldap/pw-radius.so config="/etc/radius.conf"`,
 		"{6}pw-totp.la",
+		"{7}argon2.la",
+		"{8}glue.la",
 	}
 	store := moduleConfigurationStore(t, loads...)
 

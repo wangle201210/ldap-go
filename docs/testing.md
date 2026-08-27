@@ -2,6 +2,19 @@
 
 Compatibility claims require four layers of evidence.
 
+## Platform build matrix
+
+`make platform-builds` runs `CGO_ENABLED=0 go build ./...` for Linux amd64 and
+arm64, macOS amd64 and arm64, Windows amd64, and FreeBSD amd64 using isolated
+build caches. Windows excludes Unix-only HUP/USR1 lloadd management signals.
+FreeBSD retains SQL backends for registered `database/sql` drivers but reports
+the bundled pure-Go ODBC connector as unavailable because its upstream loader
+does not compile there without cgo-generated symbols.
+
+This matrix proves source-level portability for the listed targets. It does
+not claim runtime execution across every kernel, filesystem, TLS provider,
+ODBC driver, architecture revision, or external authentication service.
+
 ## Unit and property tests
 
 Pure components use table, fuzz, and property tests. BER, DN, filter, LDIF, and

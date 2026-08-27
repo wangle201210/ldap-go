@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/slingdata-io/godbc"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -1591,8 +1590,7 @@ func sqlBackendIgnorableProcedureExecutionError(
 		strings.HasPrefix(message, "sql: expected ") {
 		return false
 	}
-	var parameterError *godbc.ParameterError
-	if errors.As(err, &parameterError) {
+	if sqlBackendIsODBCParameterError(err) {
 		return false
 	}
 	if code, ok := sqlBackendSQLiteExecutionErrorCode(err); ok {
@@ -1604,21 +1602,8 @@ func sqlBackendIgnorableProcedureExecutionError(
 			return false
 		}
 	}
-	var odbcError *godbc.Error
-	if errors.As(err, &odbcError) {
-		return sqlBackendIgnorableODBCExecutionError(*odbcError)
-	}
-	var odbcErrors godbc.Errors
-	if errors.As(err, &odbcErrors) {
-		if len(odbcErrors) == 0 {
-			return false
-		}
-		for _, item := range odbcErrors {
-			if !sqlBackendIgnorableODBCExecutionError(item) {
-				return false
-			}
-		}
-		return true
+	if ignorable, found := sqlBackendODBCExecutionErrorDisposition(err); found {
+		return ignorable
 	}
 	return false
 }
@@ -1642,29 +1627,6 @@ func sqlBackendSQLiteExecutionErrorCode(err error) (int, bool) {
 		return codeError.Code(), true
 	}
 	return 0, false
-}
-
-func sqlBackendIgnorableODBCExecutionError(err godbc.Error) bool {
-	state := strings.ToUpper(strings.TrimSpace(err.SQLState))
-	if len(state) != 5 {
-		return false
-	}
-	switch state {
-	case "HY000":
-		// SQLite ODBC reports trigger and constraint failures as HY000 with the
-		// SQLite result code. Other native codes remain ambiguous with binding.
-		return err.NativeError&0xff == 4 || err.NativeError&0xff == 19
-	case "HY008", "HY009", "HY010", "HY013", "HY021", "HY090", "HY104", "HYC00":
-		return false
-	}
-	switch state[:2] {
-	case "07", "08": // parameter/descriptor and connection failures
-		return false
-	case "23", "27", "40", "42", "44":
-		return true
-	default:
-		return false
-	}
 }
 
 func (writer *sqlBackendWriter) procedureValue(

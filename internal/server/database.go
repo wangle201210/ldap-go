@@ -82,6 +82,7 @@ type runtimeDatabase struct {
 	pbind                  *pbindRuntimeConfiguration
 	remoteAuth             *remoteAuthRuntimeConfiguration
 	homedir                *homedirRuntimeConfiguration
+	explicitGlue           bool
 	chain                  *chainRuntimeConfiguration
 	translucent            *translucentRuntimeConfiguration
 	pcache                 *pcacheRuntimeConfiguration
@@ -2432,6 +2433,14 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		switch overlayType {
+		case "glue":
+			if database.explicitGlue {
+				return fmt.Errorf("%s configures a duplicate glue overlay for %s", entry.DN, database.name)
+			}
+			if databaseType(database.name) == "frontend" || len(database.suffixes) == 0 {
+				return fmt.Errorf("%s glue overlay requires a database naming context", entry.DN)
+			}
+			database.explicitGlue = true
 		case "sock":
 			configuration, err := loadSockOverlayRuntimeConfiguration(entry)
 			if err != nil {

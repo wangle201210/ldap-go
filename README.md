@@ -48,10 +48,14 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,912 top-level tests against the pinned commit.
+The latest strict run passed 1,917 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
+The pinned backend, overlay, password, contrib-module, and platform boundary is
+listed in [docs/openldap-module-coverage.md](docs/openldap-module-coverage.md).
+Native modules outside that ledger fail closed instead of being silently
+accepted.
 
 Content DNs use a schema-aware v2 identity derived from each naming
 attribute's equality rule. Attribute aliases and numeric OIDs converge,
@@ -523,6 +527,12 @@ remain readable. Salt formats require exactly one controlled `%s` conversion,
 and a process-wide admission controller bounds concurrent CPU and estimated
 memory use for high-cost hashes. Unsupported libxcrypt extensions and
 third-party internal buffers that Go cannot clear remain documented limits.
+OpenLDAP's core `{ARGON2}` password module is implemented in-process. New
+values use Argon2id with the 2.6.13 defaults (`m=7168,t=5,p=1`), a 16-byte
+salt, and a 32-byte key. Imported Argon2d/i/id v=16/19 PHC strings verify with
+bounded memory, iterations, parallelism, salt, and encoded length before any
+derivation. Password Modify, `olcPasswordHash`, import, and Bind use the same
+implementation.
 OpenLDAP's contrib `pw-sha2` module is data-compatible for `{SHA256}`,
 `{SSHA256}`, `{SHA384}`, `{SSHA384}`, `{SHA512}`, and `{SSHA512}`. Salted
 hashes use the module's eight-byte salt, and Password Modify,

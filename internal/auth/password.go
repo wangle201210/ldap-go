@@ -109,6 +109,8 @@ func VerifyPassword(stored, supplied []byte) bool {
 		return verifySMPBKDF2(payload, supplied)
 	case "PBKDF2", "PBKDF2-SHA1", "PBKDF2-SHA256", "PBKDF2-SHA512":
 		return verifyOpenLDAPPBKDF2(scheme, payload, supplied)
+	case "ARGON2":
+		return verifyOpenLDAPArgon2(payload, supplied)
 	case "APR1", "BSDMD5":
 		return verifyOpenLDAPPHK(scheme, payload, supplied)
 	case "CRYPT":
@@ -171,6 +173,7 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 		OpenLDAPCryptHashScheme,
 		OpenLDAPNetscapeMTAHashScheme,
 		OpenLDAPRADIUSHashScheme,
+		OpenLDAPArgon2HashScheme,
 		SMPBKDF2HashScheme:
 		return scheme, nil
 	default:
@@ -336,6 +339,8 @@ func HashPasswordWithCryptSaltFormat(
 		)
 	case OpenLDAPAPR1HashScheme, OpenLDAPBSDMD5HashScheme:
 		return hashPasswordOpenLDAPPHK(password, normalized, random)
+	case OpenLDAPArgon2HashScheme:
+		return HashPasswordOpenLDAPArgon2(password, random)
 	case OpenLDAPCryptHashScheme:
 		return HashPasswordOpenLDAPCrypt(
 			password,

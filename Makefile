@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: test script-test vet race fmt-check openldap openldap-strict openldap-full fuzz-smoke fuzz compat full
+.PHONY: test script-test vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz compat full
 
 test: script-test
 	go test ./... -count=1
@@ -22,6 +22,9 @@ fmt-check:
 		exit 1; \
 	fi
 
+platform-builds:
+	./scripts/test-platform-builds.sh
+
 openldap:
 	./scripts/test-openldap.sh
 
@@ -37,6 +40,6 @@ fuzz-smoke:
 fuzz:
 	./scripts/test-fuzz.sh
 
-compat: fmt-check vet test openldap fuzz-smoke
+compat: fmt-check vet platform-builds test openldap fuzz-smoke
 
-full: fmt-check vet test race openldap-full fuzz
+full: fmt-check vet platform-builds test race openldap-full fuzz

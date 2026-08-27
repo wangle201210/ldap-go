@@ -10,6 +10,7 @@ import (
 )
 
 var compatibleOpenLDAPPasswordModules = []string{
+	"argon2",
 	"pw-apr1",
 	"pw-netscape",
 	"pw-pbkdf2",

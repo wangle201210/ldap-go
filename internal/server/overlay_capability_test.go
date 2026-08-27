@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 		"deref",
 		"dyngroup",
 		"dynlist",
+		"glue",
 		"homedir",
 		"memberof",
 		"nestgroup",
@@ -57,6 +59,31 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 				t.Fatalf("supportedRuntimeOverlayType() = %q, want %q", got, overlayType)
 			}
 		})
+	}
+}
+
+func TestLoadRuntimeDatabasesAcceptsExplicitGlueOverlay(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedCapabilityConfiguration(
+		t,
+		store,
+		capabilityDatabaseEntry("{1}mdb", "dc=example,dc=test"),
+		capabilityOverlayEntry("{0}glue"),
+	)
+	databases, err := loadRuntimeDatabases(context.Background(), store)
+	if err != nil {
+		t.Fatalf("load explicit glue overlay: %v", err)
+	}
+	database := databaseForDN(
+		&runtimeState{databases: databases},
+		staticRuntimeDN("dc=example,dc=test"),
+	)
+	if database == nil || !database.explicitGlue {
+		t.Fatalf("explicit glue database = %#v", database)
+	}
+	if !slices.Contains(runtimeDatabaseOverlayNames(*database), "glue") {
+		t.Fatalf("Monitor overlay names = %q", runtimeDatabaseOverlayNames(*database))
 	}
 }
 
