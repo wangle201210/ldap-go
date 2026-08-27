@@ -327,6 +327,21 @@ func TestValidateSockBackendFrontendDontUseCopy(t *testing.T) {
 		t.Fatalf("shadow Search without update referral = %#v", failure)
 	}
 
+	runtime.defaultReferrals = []string{"ldap://fallback.example"}
+	_, failure = validateSockBackendFrontend(
+		runtime,
+		database,
+		search,
+		controls,
+	)
+	if failure == nil ||
+		failure.Code != ldapwire.ResultReferral ||
+		len(failure.Referrals) != 1 ||
+		failure.Referrals[0] !=
+			"ldap://fallback.example/ou=people,dc=sock,dc=example??sub" {
+		t.Fatalf("shadow Search with global referral = %#v", failure)
+	}
+
 	database.updateRefs = []string{"ldap://provider.example"}
 	_, failure = validateSockBackendFrontend(
 		runtime,

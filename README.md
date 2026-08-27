@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,840 top-level tests against the pinned commit.
+The latest strict run passed 1,857 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -105,6 +105,14 @@ referrals, subordinate SearchResultReference responses, LDAP URL DN/scope
 rewriting, and managed referral updates. RFC 4511/4512 aliases support all four
 `derefAliases` modes, recursive base and search-scope dereferencing, loop and
 broken-target handling, and OpenLDAP's database-level `olcMaxDerefDepth`.
+The global `olcReferral` value is loaded from imported `cn=config`, published
+as Root DSE `ref`, and applied to Search, Compare, Add, Modify, Delete,
+ModifyDN, StartTLS-without-TLS, transactional preflight, frontend chain,
+shadow fallback, retcode, and back-dnssrv's non-domain fallback. LDAP URLs
+receive the request DN and Search scope while non-LDAP values remain opaque;
+slapd.conf order and duplicates are preserved, and online `cn=config` retains
+OpenLDAP's single-value constraints and rollback behavior. With no configured
+URL, an otherwise empty Search/Compare referral is returned as `noSuchObject`.
 An imported OpenLDAP `chain` overlay chases named and continuation referrals
 for Search, Compare, Add, Modify, Delete, ModifyDN, Password Modify, and Dynamic
 Refresh. Child `olcDatabase=ldap` entries provide URI-specific StartTLS,

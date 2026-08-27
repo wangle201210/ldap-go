@@ -759,7 +759,7 @@ func TestLDAPClientFilterACLUsesAssertionAndUndefined(t *testing.T) {
 	}
 }
 
-func TestLDAPClientUnconfiguredConfigDITReturnsReferral(t *testing.T) {
+func TestLDAPClientUnconfiguredConfigDITReturnsNoSuchObject(t *testing.T) {
 	t.Parallel()
 
 	store := storage.NewMemory()
@@ -786,7 +786,7 @@ func TestLDAPClientUnconfiguredConfigDITReturnsReferral(t *testing.T) {
 		nil,
 	)
 	_, err = client.Search(request)
-	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
 }
 
 func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
@@ -893,7 +893,7 @@ func TestLDAPClientLoadsScopedHashedRootFromConfig(t *testing.T) {
 		[]string{"olcRootDN"},
 		nil,
 	))
-	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
 }
 
 func TestLDAPClientBindsWithSMPBKDF2Passwords(t *testing.T) {
@@ -1428,7 +1428,7 @@ func TestLDAPClientDisabledDatabaseReload(t *testing.T) {
 		t.Fatalf("enable olcDisabled Modify(): %v", err)
 	}
 	_, err = searchData(dataRoot)
-	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
 
 	newDataRoot, err := ldap.DialURL("ldap://" + address)
 	if err != nil {
@@ -1744,7 +1744,7 @@ func TestLDAPClientHiddenDatabaseRoutingReload(t *testing.T) {
 		t.Fatalf("hide visible database Modify(): %v", err)
 	}
 	_, err = searchVisible()
-	assertLDAPResultCode(t, err, ldap.LDAPResultReferral)
+	assertLDAPResultCode(t, err, ldap.LDAPResultNoSuchObject)
 
 	showVisible := ldap.NewModifyRequest(visibleConfigDN, nil)
 	showVisible.Replace("olcHidden", []string{"FALSE"})

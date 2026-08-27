@@ -136,9 +136,14 @@ func (server *Server) handleAdd(
 			connection,
 			message.ID,
 			ldapwire.ApplicationAddResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
+			globalReferralOrResult(
+				state.runtime,
+				&dn,
+				referralScopeDefault,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"no global superior knowledge",
+				),
 			),
 		)
 	}
@@ -658,9 +663,14 @@ func (server *Server) handleModify(
 			connection,
 			message.ID,
 			ldapwire.ApplicationModifyResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
+			globalReferralOrResult(
+				state.runtime,
+				&dn,
+				referralScopeDefault,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"no global superior knowledge",
+				),
 			),
 		)
 	}
@@ -957,6 +967,18 @@ func (server *Server) modifyEntry(
 			manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
+			referral, referralErr := globalReferralForMissingTarget(
+				runtime,
+				tx,
+				dn,
+				referralScopeDefault,
+			)
+			if referralErr != nil {
+				return referralErr
+			}
+			if referral != nil {
+				return &operationFailure{result: *referral}
+			}
 			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(runtime, tx, boundDN, dn),
@@ -1032,6 +1054,12 @@ func (server *Server) modifyEntry(
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		if configurationWrite {
+			if err := validateDefaultReferralOnlineChanges(
+				entry,
+				processedChanges,
+			); err != nil {
+				return err
+			}
 			if err := validateDefaultSearchBaseOnlineChanges(processedChanges); err != nil {
 				return err
 			}
@@ -1382,9 +1410,14 @@ func (server *Server) handleDelete(
 			connection,
 			message.ID,
 			ldapwire.ApplicationDeleteResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
+			globalReferralOrResult(
+				state.runtime,
+				&dn,
+				referralScopeDefault,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"no global superior knowledge",
+				),
 			),
 		)
 	}
@@ -1483,6 +1516,18 @@ func (server *Server) handleDelete(
 			controls.manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
+			referral, referralErr := globalReferralForMissingTarget(
+				state.runtime,
+				tx,
+				dn,
+				referralScopeDefault,
+			)
+			if referralErr != nil {
+				return referralErr
+			}
+			if referral != nil {
+				return &operationFailure{result: *referral}
+			}
 			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(state.runtime, tx, state.boundDN, dn),
@@ -1746,9 +1791,14 @@ func (server *Server) handleModifyDN(
 			connection,
 			message.ID,
 			ldapwire.ApplicationModifyDNResponse,
-			ldapwire.ResultError(
-				ldapwire.ResultUnwillingToPerform,
-				"no global superior knowledge",
+			globalReferralOrResult(
+				state.runtime,
+				&oldDN,
+				referralScopeDefault,
+				ldapwire.ResultError(
+					ldapwire.ResultUnwillingToPerform,
+					"no global superior knowledge",
+				),
 			),
 		)
 	}
@@ -1947,6 +1997,18 @@ func (server *Server) handleModifyDN(
 			controls.manageDsaIT,
 		)
 		if errors.Is(err, storage.ErrEntryNotFound) {
+			referral, referralErr := globalReferralForMissingTarget(
+				state.runtime,
+				tx,
+				oldDN,
+				referralScopeDefault,
+			)
+			if referralErr != nil {
+				return referralErr
+			}
+			if referral != nil {
+				return &operationFailure{result: *referral}
+			}
 			return operationFailedWithMatchedDN(
 				ldapwire.ResultNoSuchObject,
 				server.disclosedAncestor(state.runtime, tx, state.boundDN, oldDN),
@@ -2503,7 +2565,12 @@ func (server *Server) handleCompare(
 				connection,
 				message.ID,
 				ldapwire.ApplicationCompareResponse,
-				ldapwire.Result{Code: ldapwire.ResultReferral},
+				globalReferralOrResult(
+					state.runtime,
+					&dn,
+					referralScopeDefault,
+					ldapwire.Result{Code: ldapwire.ResultNoSuchObject},
+				),
 			)
 		}
 	}
@@ -2645,6 +2712,18 @@ func (server *Server) handleCompare(
 						ldapwire.ResultUnwillingToPerform,
 						"copy not used",
 					)
+				}
+				referral, referralErr := globalReferralForMissingTarget(
+					state.runtime,
+					tx,
+					dn,
+					referralScopeDefault,
+				)
+				if referralErr != nil {
+					return referralErr
+				}
+				if referral != nil {
+					return &operationFailure{result: *referral}
 				}
 				return operationFailedWithMatchedDN(
 					ldapwire.ResultNoSuchObject,

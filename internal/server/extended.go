@@ -166,6 +166,18 @@ func (server *Server) handleStartTLS(
 		))
 	}
 	if !server.secureTransportAvailable(state.runtime) {
+		if referral, ok := globalReferralResult(
+			state.runtime,
+			nil,
+			referralScopeDefault,
+		); ok {
+			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+				message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				referral,
+				nil,
+			))
+		}
 		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,

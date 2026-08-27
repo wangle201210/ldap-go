@@ -114,10 +114,18 @@ func validateShadowUpdateRef(raw string) (string, error) {
 }
 
 func shadowUpdateResult(
+	runtime *runtimeState,
 	database runtimeDatabase,
 	target directory.DN,
 ) ldapwire.Result {
 	if len(database.updateRefs) == 0 {
+		if result, ok := globalReferralResult(
+			runtime,
+			&target,
+			referralScopeDefault,
+		); ok {
+			return result
+		}
 		return ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
 			"shadow context; no update referral",
@@ -158,11 +166,19 @@ func shadowUpdateResult(
 }
 
 func shadowSearchResult(
+	runtime *runtimeState,
 	database runtimeDatabase,
 	target directory.DN,
 	scope directory.Scope,
 ) ldapwire.Result {
 	if len(database.updateRefs) == 0 {
+		if result, ok := globalReferralResult(
+			runtime,
+			&target,
+			referralScopeForSearch(scope),
+		); ok {
+			return result
+		}
 		return ldapwire.ResultError(
 			ldapwire.ResultUnwillingToPerform,
 			"copy not used; no referral information available",

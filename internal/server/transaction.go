@@ -634,6 +634,13 @@ func (server *Server) transactionOperationDatabase(
 		}
 		source := databaseForDN(runtime, oldDN)
 		if source == nil {
+			if referral, ok := globalReferralResult(
+				runtime,
+				&oldDN,
+				referralScopeDefault,
+			); ok {
+				return nil, &referral
+			}
 			return nil, transactionResult(
 				ldapwire.ResultUnwillingToPerform,
 				"no global superior knowledge",
@@ -728,6 +735,15 @@ func (server *Server) transactionOperationDatabase(
 
 	database := databaseForDN(runtime, target)
 	if database == nil {
+		if _, passwordModify := message.Request.(ldapwire.ExtendedRequest); !passwordModify {
+			if referral, ok := globalReferralResult(
+				runtime,
+				&target,
+				referralScopeDefault,
+			); ok {
+				return nil, &referral
+			}
+		}
 		return nil, transactionResult(
 			ldapwire.ResultUnwillingToPerform,
 			"no global superior knowledge",

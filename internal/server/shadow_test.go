@@ -6,6 +6,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 )
 
 func TestLoadRuntimeShadowSettings(t *testing.T) {
@@ -195,6 +196,10 @@ func TestValidateShadowUpdateRefMatchesOpenLDAPRules(t *testing.T) {
 func TestShadowUpdatePrecondition(t *testing.T) {
 	t.Parallel()
 
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("schema.NewBuiltinRegistry(): %v", err)
+	}
 	suffix := mustSyncConsumerDN(t, "dc=example,dc=com")
 	target := mustSyncConsumerDN(
 		t,
@@ -210,7 +215,10 @@ func TestShadowUpdatePrecondition(t *testing.T) {
 		updateDN:   &updateDN,
 		updateRefs: []string{"ldap://provider.example"},
 	}
-	runtime := &runtimeState{databases: []runtimeDatabase{database}}
+	runtime := &runtimeState{
+		schema:    registry,
+		databases: []runtimeDatabase{database},
+	}
 
 	if result := updateOperationPrecondition(
 		runtime,
@@ -231,6 +239,21 @@ func TestShadowUpdatePrecondition(t *testing.T) {
 
 	database.updateRefs = nil
 	runtime.databases[0] = database
+	runtime.defaultReferrals = []string{"ldap://fallback.example"}
+	result = updateOperationPrecondition(
+		runtime,
+		"cn=admin,dc=example,dc=com",
+		target,
+	)
+	if result == nil ||
+		result.Code != ldapwire.ResultReferral ||
+		len(result.Referrals) != 1 ||
+		result.Referrals[0] !=
+			"ldap://fallback.example/uid=alice,ou=people,dc=example,dc=com" {
+		t.Fatalf("shadow global referral result = %#v", result)
+	}
+
+	runtime.defaultReferrals = nil
 	result = updateOperationPrecondition(
 		runtime,
 		"cn=admin,dc=example,dc=com",
@@ -251,5 +274,75 @@ func TestShadowUpdatePrecondition(t *testing.T) {
 		target,
 	); result != nil {
 		t.Fatalf("multi-provider update was rejected: %#v", result)
+	}
+}
+
+func TestShadowResultsFallBackToGlobalReferral(t *testing.T) {
+	t.Parallel()
+
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("schema.NewBuiltinRegistry(): %v", err)
+	}
+	target := mustSyncConsumerDN(
+		t,
+		"uid=alice,ou=people,dc=example,dc=com",
+	)
+	database := runtimeDatabase{}
+	runtime := &runtimeState{
+		schema:           registry,
+		defaultReferrals: []string{"ldap://fallback.example"},
+	}
+
+	update := shadowUpdateResult(runtime, database, target)
+	if update.Code != ldapwire.ResultReferral ||
+		len(update.Referrals) != 1 ||
+		update.Referrals[0] !=
+			"ldap://fallback.example/uid=alice,ou=people,dc=example,dc=com" {
+		t.Fatalf("shadow update fallback = %#v", update)
+	}
+
+	search := shadowSearchResult(
+		runtime,
+		database,
+		target,
+		directory.ScopeWholeSubtree,
+	)
+	if search.Code != ldapwire.ResultReferral ||
+		len(search.Referrals) != 1 ||
+		search.Referrals[0] !=
+			"ldap://fallback.example/uid=alice,ou=people,dc=example,dc=com??sub" {
+		t.Fatalf("shadow search fallback = %#v", search)
+	}
+
+	database.updateRefs = []string{"ldap://update.example"}
+	explicit := shadowUpdateResult(runtime, database, target)
+	if len(explicit.Referrals) != 1 ||
+		explicit.Referrals[0] !=
+			"ldap://update.example/uid=alice,ou=people,dc=example,dc=com" {
+		t.Fatalf("explicit update referral precedence = %#v", explicit)
+	}
+}
+
+func TestShadowResultsKeepMissingReferralDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	target := mustSyncConsumerDN(t, "uid=alice,dc=example,dc=com")
+	update := shadowUpdateResult(&runtimeState{}, runtimeDatabase{}, target)
+	if update.Code != ldapwire.ResultUnwillingToPerform ||
+		update.DiagnosticMessage != "shadow context; no update referral" {
+		t.Fatalf("shadow update without referral = %#v", update)
+	}
+
+	search := shadowSearchResult(
+		&runtimeState{},
+		runtimeDatabase{},
+		target,
+		directory.ScopeSingleLevel,
+	)
+	if search.Code != ldapwire.ResultUnwillingToPerform ||
+		search.DiagnosticMessage !=
+			"copy not used; no referral information available" {
+		t.Fatalf("shadow search without referral = %#v", search)
 	}
 }

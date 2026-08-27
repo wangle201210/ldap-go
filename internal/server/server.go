@@ -873,7 +873,7 @@ func (server *Server) connectionMaxPending(state *connectionState) int {
 	if runtime := server.runtime.Load(); runtime != nil {
 		limits = runtime.connectionPending
 	}
-	if state != nil && state.boundDN != "" {
+	if state != nil && state.loadAuditIdentity().boundDN != "" {
 		return limits.maxPendingAuth
 	}
 	return limits.maxPending
@@ -999,6 +999,7 @@ func (server *Server) dispatch(
 	}
 	state.runtime = runtime
 	refreshPasswordPolicyRestriction(state)
+	message = withEffectiveDefaultSearchBase(runtime, message)
 	if bind, ok := message.Request.(ldapwire.BindRequest); ok &&
 		bind.Version < 3 &&
 		(message.ControlsPresent || len(message.Controls) != 0) {

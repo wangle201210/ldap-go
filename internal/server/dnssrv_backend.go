@@ -350,6 +350,18 @@ func (server *Server) tryDNSSRVBackendOperation(
 			"DNS SRV problem processing manageDSAit control",
 		))
 	}
+	if _, ok := dnssrvDomain(target); !ok {
+		if referral, configured := globalReferralResult(
+			state.runtime,
+			nil,
+			referralScopeDefault,
+		); configured {
+			return true, writeResultForMessage(connection, message, referral)
+		}
+		return true, writeResultForMessage(connection, message, ldapwire.Result{
+			Code: ldapwire.ResultNoSuchObject,
+		})
+	}
 	configuration, failure := database.dnssrvBackend.resolve(ctx, target)
 	if failure != nil {
 		return true, writeResultForMessage(connection, message, *failure)

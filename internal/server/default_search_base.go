@@ -16,6 +16,24 @@ type defaultSearchBaseConfiguration struct {
 	configured bool
 }
 
+func withEffectiveDefaultSearchBase(
+	runtime *runtimeState,
+	message ldapwire.Message,
+) ldapwire.Message {
+	request, ok := message.Request.(ldapwire.SearchRequest)
+	if !ok || runtime == nil || !runtime.defaultSearchBase.configured ||
+		request.Scope == directory.ScopeBase {
+		return message
+	}
+	base, err := parseRuntimeDN(request.BaseDN, runtime.schema)
+	if err != nil || base.Depth() != 0 {
+		return message
+	}
+	request.BaseDN = runtime.defaultSearchBase.dn.String()
+	message.Request = request
+	return message
+}
+
 func validateDefaultSearchBaseOnlineChanges(
 	changes []ldapwire.Modification,
 ) error {

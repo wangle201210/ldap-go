@@ -32,6 +32,7 @@ type runtimeState struct {
 	allows              allowsRuntimeConfiguration
 	disallows           disallowsRuntimeConfiguration
 	defaultSearchBase   defaultSearchBaseConfiguration
+	defaultReferrals    []string
 	passwordHashSchemes []string
 	passwordCryptSalt   string
 	externalPasswords   externalPasswordRuntimeConfiguration
@@ -268,6 +269,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	defaultReferrals, err := loadDefaultReferralConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	passwordHashSchemes, err := loadPasswordHashSchemes(reader)
 	if err != nil {
 		return nil, err
@@ -310,6 +315,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		allows:              allows,
 		disallows:           disallows,
 		defaultSearchBase:   defaultSearchBase,
+		defaultReferrals:    defaultReferrals,
 		passwordHashSchemes: passwordHashSchemes,
 		passwordCryptSalt:   passwordCryptSalt,
 		externalPasswords:   externalPasswords,
@@ -592,7 +598,7 @@ func updateOperationPrecondition(
 				return nil
 			}
 		}
-		result := shadowUpdateResult(*database, target)
+		result := shadowUpdateResult(runtime, *database, target)
 		return &result
 	}
 	return nil

@@ -480,6 +480,7 @@ func (server *Server) tryRetcodeOperation(
 			if target.Depth() != configuration.parent.Depth()+1 {
 				return true, server.writeRetcodeResult(
 					connection,
+					state.runtime,
 					message,
 					retcodeItem{
 						code:      ldapwire.ResultNoSuchObject,
@@ -497,6 +498,7 @@ func (server *Server) tryRetcodeOperation(
 			if selected == nil {
 				return true, server.writeRetcodeResult(
 					connection,
+					state.runtime,
 					message,
 					retcodeItem{
 						code:      ldapwire.ResultNoSuchObject,
@@ -509,7 +511,12 @@ func (server *Server) tryRetcodeOperation(
 				continue
 			}
 			applySuccessfulRetcodeBind(state, message.Request, *selected)
-			return true, server.writeRetcodeResult(connection, message, *selected)
+			return true, server.writeRetcodeResult(
+				connection,
+				state.runtime,
+				message,
+				*selected,
+			)
 		}
 
 		if !configuration.inDirectory || database == &placeholder {
@@ -572,7 +579,12 @@ func (server *Server) tryRetcodeOperation(
 			retcodeSleep(item.sleepSeconds)
 			continue
 		}
-		return true, server.writeRetcodeResult(connection, message, item)
+		return true, server.writeRetcodeResult(
+			connection,
+			state.runtime,
+			message,
+			item,
+		)
 	}
 	return false, nil
 }
@@ -845,11 +857,12 @@ func (server *Server) writeRetcodeInDirectorySearch(
 			return err
 		}
 	}
-	return server.writeRetcodeResult(connection, message, item)
+	return server.writeRetcodeResult(connection, state.runtime, message, item)
 }
 
 func (server *Server) writeRetcodeResult(
 	connection net.Conn,
+	runtime *runtimeState,
 	message ldapwire.Message,
 	item retcodeItem,
 ) error {
@@ -860,28 +873,7 @@ func (server *Server) writeRetcodeResult(
 		return connection.Close()
 	}
 	retcodeSleep(item.sleepSeconds)
-	result := ldapwire.Result{
-		Code:              item.code,
-		MatchedDN:         item.matchedDN,
-		DiagnosticMessage: item.text,
-	}
-	if result.Code == ldapwire.ResultReferral {
-		for _, raw := range item.referrals {
-			rewritten, ok := rewriteReferralURL(
-				raw,
-				nil,
-				&item.dn,
-				referralScopeDefault,
-			)
-			if ok {
-				result.Referrals = append(result.Referrals, rewritten)
-			}
-		}
-		if len(result.Referrals) == 0 {
-			result.Code = ldapwire.ResultOther
-			result.DiagnosticMessage = "bad referral object"
-		}
-	}
+	result := buildRetcodeResult(runtime, message.Request, item)
 
 	messageID := message.ID
 	responseTag, ok := retcodeResponseTag(message.Request)
@@ -937,6 +929,41 @@ func (server *Server) writeRetcodeResult(
 		}
 	}
 	return err
+}
+
+func buildRetcodeResult(
+	runtime *runtimeState,
+	_ ldapwire.Request,
+	item retcodeItem,
+) ldapwire.Result {
+	result := ldapwire.Result{
+		Code:              item.code,
+		MatchedDN:         item.matchedDN,
+		DiagnosticMessage: item.text,
+	}
+	if result.Code == ldapwire.ResultReferral {
+		scope := referralScopeDefault
+		for _, raw := range item.referrals {
+			rewritten, ok := rewriteReferralURL(
+				raw,
+				nil,
+				&item.dn,
+				scope,
+			)
+			if ok {
+				result.Referrals = append(result.Referrals, rewritten)
+			}
+		}
+		if len(result.Referrals) == 0 {
+			if fallback, ok := globalReferralResult(runtime, &item.dn, scope); ok {
+				result.Referrals = fallback.Referrals
+			} else {
+				result.Code = ldapwire.ResultOther
+				result.DiagnosticMessage = "bad referral object"
+			}
+		}
+	}
+	return result
 }
 
 func retcodeResponseTag(request ldapwire.Request) (uint64, bool) {

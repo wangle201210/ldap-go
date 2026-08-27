@@ -95,7 +95,7 @@ func TestDNIdentityRuntimeRoutingAndAuthentication(t *testing.T) {
 
 		t.Run("caseExact different case does not route", func(t *testing.T) {
 			_, err := client.Search(newDNIdentityRoutingBaseSearch("exactName=tenant"))
-			assertDNIdentityRoutingResultCode(t, err, ldap.LDAPResultReferral)
+			assertDNIdentityRoutingResultCode(t, err, ldap.LDAPResultNoSuchObject)
 		})
 
 		t.Run("caseIgnore case and space equivalent value routes", func(t *testing.T) {
@@ -282,7 +282,7 @@ func TestDNIdentityRuntimeRoutingAndAuthentication(t *testing.T) {
 				"Exact Tenant",
 			)
 			_, err := client.Search(newDNIdentityRoutingBaseSearch("exactName=virtual"))
-			assertDNIdentityRoutingResultCode(t, err, ldap.LDAPResultReferral)
+			assertDNIdentityRoutingResultCode(t, err, ldap.LDAPResultNoSuchObject)
 		})
 
 		t.Run("caseIgnore case and space equivalent value enters relay", func(t *testing.T) {

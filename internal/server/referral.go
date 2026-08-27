@@ -45,6 +45,113 @@ func referralScopeForReference(scope directory.Scope) referralURLScope {
 	return referralScopeSubtree
 }
 
+func globalReferralResult(
+	runtime *runtimeState,
+	target *directory.DN,
+	scope referralURLScope,
+) (ldapwire.Result, bool) {
+	if runtime == nil || len(runtime.defaultReferrals) == 0 {
+		return ldapwire.Result{}, false
+	}
+	referrals := make([]string, 0, len(runtime.defaultReferrals))
+	for _, raw := range runtime.defaultReferrals {
+		candidate, scheme, recognized, _ := openLDAPReferralURL(raw)
+		if !recognized {
+			referrals = append(referrals, raw)
+			continue
+		}
+		rewritten, ok := rewriteReferralURLWithNormalizer(
+			raw,
+			nil,
+			target,
+			scope,
+			runtime.schema,
+		)
+		if ok {
+			referrals = append(referrals, rewritten)
+		} else if scheme == "ldapi" {
+			referrals = append(referrals, rewriteGlobalLDAPIReferral(
+				candidate,
+				runtime,
+				target,
+				scope,
+			))
+		} else {
+			referrals = append(referrals, raw)
+		}
+	}
+	if len(referrals) == 0 {
+		// OpenLDAP falls back to the configured values if rewriting fails.
+		referrals = append(referrals, runtime.defaultReferrals...)
+	}
+	return ldapwire.Result{
+		Code:      ldapwire.ResultReferral,
+		Referrals: referrals,
+	}, true
+}
+
+func rewriteGlobalLDAPIReferral(
+	candidate string,
+	runtime *runtimeState,
+	target *directory.DN,
+	scope referralURLScope,
+) string {
+	const (
+		prefix      = "ldapi://"
+		placeholder = "ldapi://ldap-go.invalid"
+	)
+	authority := candidate[len(prefix):]
+	if slash := strings.IndexByte(authority, '/'); slash >= 0 {
+		authority = authority[:slash]
+	}
+	if _, err := url.PathUnescape(authority); err != nil {
+		authority = ""
+	}
+	rewritten, ok := rewriteReferralURLWithNormalizer(
+		placeholder,
+		nil,
+		target,
+		scope,
+		runtime.schema,
+	)
+	if !ok {
+		return candidate
+	}
+	return prefix + authority + strings.TrimPrefix(rewritten, placeholder)
+}
+
+func globalReferralOrResult(
+	runtime *runtimeState,
+	target *directory.DN,
+	scope referralURLScope,
+	fallback ldapwire.Result,
+) ldapwire.Result {
+	if result, ok := globalReferralResult(runtime, target, scope); ok {
+		return result
+	}
+	return fallback
+}
+
+func globalReferralForMissingTarget(
+	runtime *runtimeState,
+	reader storage.Reader,
+	target directory.DN,
+	scope referralURLScope,
+) (*ldapwire.Result, error) {
+	_, found, err := closestExistingAncestor(reader, target)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return nil, nil
+	}
+	result, ok := globalReferralResult(runtime, &target, scope)
+	if !ok {
+		return nil, nil
+	}
+	return &result, nil
+}
+
 func (server *Server) entryOrReferral(
 	runtime *runtimeState,
 	reader storage.Reader,
@@ -424,7 +531,13 @@ func rewriteReferralURLWithParser(
 			target,
 		)
 	}
-	parsed.Path = "/" + rewrittenDN
+	preserveAbsentPath := parsed.Path == "" && referralDN == nil &&
+		base == nil && target == nil && rewrittenDN == ""
+	if preserveAbsentPath {
+		parsed.Path = ""
+	} else {
+		parsed.Path = "/" + rewrittenDN
+	}
 	parsed.RawPath = ""
 
 	components, ok := referralURLQuery(parsed)

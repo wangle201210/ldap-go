@@ -81,10 +81,11 @@ func (server *Server) tryChainOperation(
 	if !ok {
 		return false, nil
 	}
-	database := databaseForDN(state.runtime, target)
-	if database == nil {
-		return false, nil
+	if searchOperation && target.Depth() == 0 &&
+		state.runtime.defaultSearchBase.configured {
+		target = state.runtime.defaultSearchBase.dn
 	}
+	database := databaseForDN(state.runtime, target)
 	chain := effectiveChainConfiguration(state.runtime, database)
 	behavior, _ := parseChainingBehaviorControls(message.Controls)
 	if chain == nil &&
@@ -94,7 +95,15 @@ func (server *Server) tryChainOperation(
 
 	manageDsaIT := hasLDAPControl(message.Controls, manageDsaITControlOID)
 	var referral *ldapwire.Result
-	if writeOperation {
+	if database == nil {
+		scope := referralScopeDefault
+		if search, ok := message.Request.(ldapwire.SearchRequest); ok {
+			scope = referralScopeForSearch(search.Scope)
+		}
+		if result, ok := globalReferralResult(state.runtime, &target, scope); ok {
+			referral = &result
+		}
+	} else if writeOperation {
 		if result := updateOperationPrecondition(
 			state.runtime,
 			state.boundDN,
@@ -116,6 +125,7 @@ func (server *Server) tryChainOperation(
 		hasLDAPControl(message.Controls, dontUseCopyControlOID) &&
 		database.shadow {
 		result := shadowSearchResult(
+			state.runtime,
 			*database,
 			target,
 			message.Request.(ldapwire.SearchRequest).Scope,
@@ -126,7 +136,7 @@ func (server *Server) tryChainOperation(
 	}
 	allowManagedReferral := behavior != nil &&
 		behavior.resolve <= chainBehaviorChainingRequired
-	if referral == nil && (!manageDsaIT || allowManagedReferral) {
+	if database != nil && referral == nil && (!manageDsaIT || allowManagedReferral) {
 		result, err := server.namedReferralForChain(
 			ctx,
 			state,

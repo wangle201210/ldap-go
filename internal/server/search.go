@@ -669,9 +669,13 @@ func (server *Server) handleSearch(
 	}
 	routes := databaseSearchRoutes(state.runtime.databases, base, request.Scope)
 	if len(routes) == 0 {
-		code := ldapwire.ResultReferral
-		if base.Depth() == 0 && request.Scope == directory.ScopeChildren {
-			code = ldapwire.ResultNoSuchObject
+		result := ldapwire.Result{Code: ldapwire.ResultNoSuchObject}
+		if referral, ok := globalReferralResult(
+			state.runtime,
+			&base,
+			referralScopeForSearch(request.Scope),
+		); ok {
+			result = referral
 		}
 		return server.writeSearchResult(
 			connection,
@@ -680,7 +684,7 @@ func (server *Server) handleSearch(
 			paging,
 			sorting,
 			nil,
-			ldapwire.Result{Code: code},
+			result,
 			pagedSearchCursor{},
 			false,
 		)
@@ -733,7 +737,7 @@ func (server *Server) handleSearch(
 				nil,
 				nil,
 				nil,
-				shadowSearchResult(primary, base, request.Scope),
+				shadowSearchResult(state.runtime, primary, base, request.Scope),
 				pagedSearchCursor{},
 				false,
 			)
@@ -1267,6 +1271,16 @@ func (server *Server) handleSearch(
 					}
 					result = referral
 					return nil
+				}
+				if !found {
+					if referral, ok := globalReferralResult(
+						state.runtime,
+						&primaryBase,
+						referralScopeForSearch(request.Scope),
+					); ok {
+						result = referral
+						return nil
+					}
 				}
 				result.Code = ldapwire.ResultNoSuchObject
 				result.MatchedDN = server.disclosedAncestor(
@@ -2665,6 +2679,12 @@ func (server *Server) rootDSE(
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "monitorContext",
 			Values:      stringValues(monitorContexts...),
+		})
+	}
+	if len(runtime.defaultReferrals) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "ref",
+			Values:      stringValues(runtime.defaultReferrals...),
 		})
 	}
 	supportedExtensions := []string{

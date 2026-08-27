@@ -119,7 +119,7 @@ func validateSockBackendFrontend(
 			return request, failure
 		}
 		if controls.dontUseCopy && database.shadow {
-			result := shadowSearchResult(database, target, request.Scope)
+			result := shadowSearchResult(runtime, database, target, request.Scope)
 			return request, &result
 		}
 		return request, nil

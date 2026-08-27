@@ -259,6 +259,97 @@ func TestRetcodeItemFromDirectoryEntryPreservesOpenLDAPValueSemantics(t *testing
 	}
 }
 
+func TestBuildRetcodeResultReferralFallback(t *testing.T) {
+	t.Parallel()
+
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("schema.NewBuiltinRegistry(): %v", err)
+	}
+	target, err := registry.NormalizeDN("cn=Referral,ou=RetCodes,dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("NormalizeDN(): %v", err)
+	}
+	runtime := &runtimeState{
+		schema:           registry,
+		defaultReferrals: []string{"ldap://fallback.example"},
+	}
+	item := retcodeItem{
+		dn:        target,
+		code:      ldapwire.ResultReferral,
+		matchedDN: "dc=example,dc=com",
+		text:      "configured diagnostic",
+		referrals: []string{"ldap:/invalid"},
+	}
+
+	search := buildRetcodeResult(
+		runtime,
+		ldapwire.SearchRequest{Scope: directory.ScopeSingleLevel},
+		item,
+	)
+	if search.Code != ldapwire.ResultReferral ||
+		search.MatchedDN != item.matchedDN ||
+		search.DiagnosticMessage != item.text ||
+		len(search.Referrals) != 1 ||
+		search.Referrals[0] !=
+			"ldap://fallback.example/cn=Referral,ou=RetCodes,dc=example,dc=com" {
+		t.Fatalf("Search retcode fallback = %#v", search)
+	}
+
+	modify := buildRetcodeResult(
+		runtime,
+		ldapwire.ModifyRequest{DN: target.String()},
+		retcodeItem{dn: target, code: ldapwire.ResultReferral},
+	)
+	if modify.Code != ldapwire.ResultReferral ||
+		len(modify.Referrals) != 1 ||
+		modify.Referrals[0] !=
+			"ldap://fallback.example/cn=Referral,ou=RetCodes,dc=example,dc=com" {
+		t.Fatalf("Modify retcode fallback = %#v", modify)
+	}
+}
+
+func TestBuildRetcodeResultReferralPrecedenceAndMissingFallback(t *testing.T) {
+	t.Parallel()
+
+	target, err := directory.ParseDN("cn=Referral,dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	runtime := &runtimeState{defaultReferrals: []string{"ldap://fallback.example"}}
+	withItemReferral := buildRetcodeResult(
+		runtime,
+		ldapwire.SearchRequest{Scope: directory.ScopeWholeSubtree},
+		retcodeItem{
+			dn:        target,
+			code:      ldapwire.ResultReferral,
+			referrals: []string{"ldap://item.example"},
+		},
+	)
+	if len(withItemReferral.Referrals) != 1 ||
+		withItemReferral.Referrals[0] !=
+			"ldap://item.example/cn=Referral,dc=example,dc=com" {
+		t.Fatalf("item referral precedence = %#v", withItemReferral)
+	}
+
+	withoutReferral := buildRetcodeResult(
+		&runtimeState{},
+		ldapwire.CompareRequest{DN: target.String()},
+		retcodeItem{
+			dn:        target,
+			code:      ldapwire.ResultReferral,
+			matchedDN: "dc=example,dc=com",
+			text:      "keep this diagnostic",
+		},
+	)
+	if withoutReferral.Code != ldapwire.ResultOther ||
+		withoutReferral.MatchedDN != "dc=example,dc=com" ||
+		withoutReferral.DiagnosticMessage != "bad referral object" ||
+		len(withoutReferral.Referrals) != 0 {
+		t.Fatalf("retcode without referral = %#v", withoutReferral)
+	}
+}
+
 func stringsFromBytes(values [][]byte) []string {
 	result := make([]string, len(values))
 	for index := range values {
