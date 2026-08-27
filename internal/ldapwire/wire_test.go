@@ -236,6 +236,22 @@ func TestReadMessageRejectsOversizedFrame(t *testing.T) {
 	if !errors.Is(err, ErrMalformedMessage) {
 		t.Fatalf("ReadMessage() error = %v, want ErrMalformedMessage", err)
 	}
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("ReadMessage() error = %v, want ErrMessageTooLarge", err)
+	}
+}
+
+func TestReadFrameContentLimitExcludesBERHeader(t *testing.T) {
+	t.Parallel()
+	frame := []byte{0x30, 0x03, 0x02, 0x01, 0x01}
+	got, err := readFrameWithContentLimit(bytes.NewReader(frame), int64(len(frame)), 3)
+	if err != nil || !bytes.Equal(got, frame) {
+		t.Fatalf("content boundary frame = %x, %v", got, err)
+	}
+	_, err = readFrameWithContentLimit(bytes.NewReader(frame), int64(len(frame)), 2)
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("content overflow error = %v", err)
+	}
 }
 
 func TestDecodeFilterRejectsTrailingPacket(t *testing.T) {

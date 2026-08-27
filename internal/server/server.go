@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -110,8 +111,11 @@ func New(config Config) (*Server, error) {
 	if config.Store == nil {
 		return nil, errors.New("store is required")
 	}
-	if config.MaxMessageSize <= 0 {
-		config.MaxMessageSize = ldapwire.DefaultMaxMessageSize
+	if config.MaxMessageSize < 0 {
+		return nil, errors.New("maximum message size cannot be negative")
+	}
+	if config.MaxMessageSize == 0 {
+		config.MaxMessageSize = math.MaxInt64
 	}
 	if config.MaxSearchEntries <= 0 {
 		config.MaxSearchEntries = defaultSearchLimit
@@ -400,6 +404,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		metaTransports:  newMetaTransportCache(time.Now),
 		gssapiAvailable: server.gssapiKeytab != nil,
 	}
+	state.maxIncoming = server.connectionIncomingLimit(false)
 	server.registerMetaTransportCache(state.metaTransports)
 	defer func() {
 		server.unregisterMetaTransportCache(state.metaTransports)
@@ -495,9 +500,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		if server.draining.Load() {
 			return
 		}
-		message, err := ldapwire.ReadMessage(
+		message, err := ldapwire.ReadMessageWithLimits(
 			readConnection,
 			server.config.MaxMessageSize,
+			state.maxIncoming,
 		)
 		if err != nil {
 			_, recoverV2Bind := message.Request.(ldapwire.BindRequest)
@@ -516,6 +522,8 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			if recoverV2Bind {
 				// Preserve the parsed Bind envelope; dispatch performs the Bind
 				// barrier and anonymous identity demotion before responding.
+			} else if errors.Is(err, ldapwire.ErrMessageTooLarge) {
+				return
 			} else if server.draining.Load() {
 				return
 			} else if errors.Is(err, io.EOF) ||
@@ -826,6 +834,7 @@ func (server *Server) runConnectionOperations(
 			err             error
 		)
 		searchSessions := snapshotSearchSessions(state, queued.message)
+		boundDNBeforeOperation := state.boundDN
 		started := queued.operation.start()
 		server.monitor.startOperation(state.monitor, started)
 		if started {
@@ -837,6 +846,12 @@ func (server *Server) runConnectionOperations(
 			)
 		}
 		state.publishAuditIdentity()
+		if operationRefreshesIncomingLimit(
+			queued.message.Request,
+			boundDNBeforeOperation != state.boundDN,
+		) {
+			state.maxIncoming = server.connectionIncomingLimit(state.boundDN != "")
+		}
 
 		stopMode := queued.operation.stopMode()
 		switch stopMode {
@@ -2068,6 +2083,35 @@ type connectionState struct {
 	accountUsabilityRequested  bool
 	monitor                    *monitorConnection
 	auditIdentity              *connectionAuditIdentityState
+	maxIncoming                uint64
+}
+
+func (server *Server) connectionIncomingLimit(authenticated bool) uint64 {
+	runtime := server.runtime.Load()
+	if runtime == nil {
+		if authenticated {
+			return defaultIncomingLimitAuthenticated
+		}
+		return defaultIncomingLimitAnonymous
+	}
+	if authenticated {
+		return runtime.incomingLimits.authenticated
+	}
+	return runtime.incomingLimits.anonymous
+}
+
+func operationRefreshesIncomingLimit(
+	request ldapwire.Request,
+	identityChanged bool,
+) bool {
+	switch value := request.(type) {
+	case ldapwire.BindRequest:
+		return true
+	case ldapwire.ExtendedRequest:
+		return value.Name == startTLSOID && identityChanged
+	default:
+		return false
+	}
 }
 
 type connectionAuditIdentity struct {

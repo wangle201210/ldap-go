@@ -12,9 +12,18 @@ import (
 )
 
 var ErrMalformedMessage = errors.New("malformed LDAP message")
+var ErrMessageTooLarge = errors.New("LDAP message exceeds incoming limit")
 
 func ReadMessage(reader io.Reader, maxSize int64) (Message, error) {
-	frame, err := readFrame(reader, maxSize)
+	return ReadMessageWithLimits(reader, maxSize, 0)
+}
+
+func ReadMessageWithLimits(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+) (Message, error) {
+	frame, err := readFrameWithContentLimit(reader, maxSize, maxContentSize)
 	if err != nil {
 		return Message{}, err
 	}
@@ -26,6 +35,14 @@ func ReadMessage(reader io.Reader, maxSize int64) (Message, error) {
 }
 
 func readFrame(reader io.Reader, maxSize int64) ([]byte, error) {
+	return readFrameWithContentLimit(reader, maxSize, 0)
+}
+
+func readFrameWithContentLimit(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+) ([]byte, error) {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxMessageSize
 	}
@@ -68,8 +85,22 @@ func readFrame(reader io.Reader, maxSize int64) ([]byte, error) {
 		}
 	}
 
+	if maxContentSize > 0 && contentLength > maxContentSize {
+		return nil, fmt.Errorf(
+			"%w: %w: content length %d exceeds %d-byte limit",
+			ErrMalformedMessage,
+			ErrMessageTooLarge,
+			contentLength,
+			maxContentSize,
+		)
+	}
 	if contentLength > uint64(maxSize) || uint64(len(header)) > uint64(maxSize)-contentLength {
-		return nil, malformed("message exceeds %d-byte limit", maxSize)
+		return nil, fmt.Errorf(
+			"%w: %w: message exceeds %d-byte limit",
+			ErrMalformedMessage,
+			ErrMessageTooLarge,
+			maxSize,
+		)
 	}
 	frame := make([]byte, len(header)+int(contentLength))
 	copy(frame, header)

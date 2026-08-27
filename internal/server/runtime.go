@@ -39,6 +39,7 @@ type runtimeState struct {
 	externalPasswords   externalPasswordRuntimeConfiguration
 	sasl                saslRuntimeConfiguration
 	connectionPending   connectionPendingRuntimeConfiguration
+	incomingLimits      incomingLimits
 	idleTimeout         time.Duration
 	writeTimeout        time.Duration
 	syncContexts        map[string]syncCSNState
@@ -299,6 +300,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	incomingLimits, err := loadIncomingLimitRuntimeConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	idleTimeout, writeTimeout, err := loadConnectionTimeoutRuntimeConfiguration(reader)
 	if err != nil {
 		return nil, err
@@ -328,6 +333,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		externalPasswords:   externalPasswords,
 		sasl:                sasl,
 		connectionPending:   connectionPending,
+		incomingLimits:      incomingLimits,
 		idleTimeout:         idleTimeout,
 		writeTimeout:        writeTimeout,
 	}

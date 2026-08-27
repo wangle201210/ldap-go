@@ -1398,7 +1398,11 @@ func runServe(
 	databasePath := flags.String("db", "data/ldap-go.db", "directory database path")
 	listenAddress := flags.String("listen", "127.0.0.1:1389", "LDAP listen address")
 	rootDN := flags.String("root-dn", "", "optional database root DN override")
-	maxMessageSize := flags.Int64("max-message-size", 16<<20, "maximum BER message size in bytes")
+	maxMessageSize := flags.Int64(
+		"max-message-size",
+		0,
+		"additional maximum BER frame size in bytes (0 uses OpenLDAP incoming limits)",
+	)
 	searchLimit := flags.Int("search-limit", 1000, "server-side maximum entries per search")
 	transactionMaxOperations := flags.Int(
 		"transaction-max-operations",
