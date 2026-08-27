@@ -24,27 +24,28 @@ const (
 )
 
 type runtimeState struct {
-	revision            uint64
-	schema              *schema.Registry
-	access              *acl.Policy
-	secureTransport     SecureTransport
-	databases           []runtimeDatabase
-	serverID            uint16
-	allows              allowsRuntimeConfiguration
-	disallows           disallowsRuntimeConfiguration
-	defaultSearchBase   defaultSearchBaseConfiguration
-	defaultReferrals    []string
-	passwordHashSchemes []string
-	passwordCryptSalt   string
-	externalPasswords   externalPasswordRuntimeConfiguration
-	sasl                saslRuntimeConfiguration
-	connectionPending   connectionPendingRuntimeConfiguration
-	incomingLimits      incomingLimits
-	security            securityStrengthRequirements
-	requires            operationRequirements
-	idleTimeout         time.Duration
-	writeTimeout        time.Duration
-	syncContexts        map[string]syncCSNState
+	revision             uint64
+	schema               *schema.Registry
+	access               *acl.Policy
+	secureTransport      SecureTransport
+	databases            []runtimeDatabase
+	frontendRestrictions databaseRestrictions
+	serverID             uint16
+	allows               allowsRuntimeConfiguration
+	disallows            disallowsRuntimeConfiguration
+	defaultSearchBase    defaultSearchBaseConfiguration
+	defaultReferrals     []string
+	passwordHashSchemes  []string
+	passwordCryptSalt    string
+	externalPasswords    externalPasswordRuntimeConfiguration
+	sasl                 saslRuntimeConfiguration
+	connectionPending    connectionPendingRuntimeConfiguration
+	incomingLimits       incomingLimits
+	security             securityStrengthRequirements
+	requires             operationRequirements
+	idleTimeout          time.Duration
+	writeTimeout         time.Duration
+	syncContexts         map[string]syncCSNState
 }
 
 type connectionPendingRuntimeConfiguration struct {
@@ -325,25 +326,26 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		}
 	}
 	runtime := &runtimeState{
-		schema:              registry,
-		access:              access,
-		secureTransport:     secureTransport,
-		databases:           databases,
-		serverID:            serverID,
-		allows:              allows,
-		disallows:           disallows,
-		defaultSearchBase:   defaultSearchBase,
-		defaultReferrals:    defaultReferrals,
-		passwordHashSchemes: passwordHashSchemes,
-		passwordCryptSalt:   passwordCryptSalt,
-		externalPasswords:   externalPasswords,
-		sasl:                sasl,
-		connectionPending:   connectionPending,
-		incomingLimits:      incomingLimits,
-		security:            security,
-		requires:            requires,
-		idleTimeout:         idleTimeout,
-		writeTimeout:        writeTimeout,
+		schema:               registry,
+		access:               access,
+		secureTransport:      secureTransport,
+		databases:            databases,
+		frontendRestrictions: inheritedFrontendRestrictions(databases),
+		serverID:             serverID,
+		allows:               allows,
+		disallows:            disallows,
+		defaultSearchBase:    defaultSearchBase,
+		defaultReferrals:     defaultReferrals,
+		passwordHashSchemes:  passwordHashSchemes,
+		passwordCryptSalt:    passwordCryptSalt,
+		externalPasswords:    externalPasswords,
+		sasl:                 sasl,
+		connectionPending:    connectionPending,
+		incomingLimits:       incomingLimits,
+		security:             security,
+		requires:             requires,
+		idleTimeout:          idleTimeout,
+		writeTimeout:         writeTimeout,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err

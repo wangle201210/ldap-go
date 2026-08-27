@@ -1004,10 +1004,13 @@ func monitorRuntimeDatabases(databases []runtimeDatabase) []monitorRuntimeDataba
 func monitorFrontendRestrictions(databases []runtimeDatabase) databaseRestrictions {
 	for _, database := range databases {
 		if databaseType(database.name) == "frontend" {
-			return effectiveDatabaseRestrictions(database)
+			if database.frontendRestrictions == 0 {
+				return effectiveDatabaseRestrictions(database)
+			}
+			return database.frontendRestrictions
 		}
 	}
-	return 0
+	return inheritedFrontendRestrictions(databases)
 }
 
 func databaseTypeName(database runtimeDatabase) string {

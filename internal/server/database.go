@@ -20,84 +20,88 @@ import (
 )
 
 type runtimeDatabase struct {
-	name                  string
-	partition             string
-	suffixes              []directory.DN
-	dnNormalizer          directory.DNAttributeNormalizer
-	ldapBackend           *ldapBackendRuntimeConfiguration
-	metaBackend           *metaBackendRuntimeConfiguration
-	asyncMetaBackend      *asyncMetaBackendRuntimeConfiguration
-	passwdBackend         *passwdBackendRuntimeConfiguration
-	dnssrvBackend         *dnssrvBackendRuntimeConfiguration
-	sockBackend           *sockBackendRuntimeConfiguration
-	sockOverlays          []sockOverlayRuntimeConfiguration
-	sqlBackend            *sqlBackendRuntimeConfiguration
-	metaTargetKey         string
-	relay                 *relayRuntimeConfiguration
-	rwm                   *rwmRuntimeConfiguration
-	rootDN                *directory.DN
-	rootPassword          []byte
-	rootPasswordSet       bool
-	disabled              bool
-	hidden                bool
-	subordinate           bool
-	advertise             bool
-	readOnly              bool
-	searchSizeLimits      []databaseSearchSizeLimit
-	equalityIndexes       storage.EqualityIndexConfig
-	equalityIndexInit     *databaseEqualityIndexInitialization
-	restrictions          databaseRestrictions
-	security              securityStrengthRequirements
-	requires              operationRequirements
-	securityValues        [][]byte
-	requiresValues        [][]byte
-	shadow                bool
-	multiProvider         bool
-	updateDN              *directory.DN
-	updateRefs            []string
-	lastMod               bool
-	lastBind              bool
-	lastBindPrecision     int
-	maxDerefDepth         int
-	nullBindAllowed       bool
-	nullDoSearch          bool
-	configDNKey           string
-	serverSideSort        bool
-	sortMaxKeys           int
-	sortLimiter           *serverSideSortLimiter
-	syncProvider          bool
-	syncCheckpointOps     int
-	syncCheckpointMinutes int
-	syncSessionLogSize    int
-	syncNoPresent         bool
-	syncReloadHint        bool
-	syncUseSubentry       bool
-	syncConsumers         []syncConsumerConfig
-	dds                   *ddsRuntimeConfiguration
-	ppolicy               *passwordPolicyRuntimeConfiguration
-	pbind                 *pbindRuntimeConfiguration
-	remoteAuth            *remoteAuthRuntimeConfiguration
-	homedir               *homedirRuntimeConfiguration
-	chain                 *chainRuntimeConfiguration
-	translucent           *translucentRuntimeConfiguration
-	pcache                *pcacheRuntimeConfiguration
-	otp                   *otpRuntimeConfiguration
-	totpPasswords         []totpPasswordRuntimeConfiguration
-	autoca                *autoCARuntimeConfiguration
-	constraint            *constraintRuntimeConfiguration
-	collect               *collectRuntimeConfiguration
-	seqmod                *seqmodRuntimeConfiguration
-	nestGroups            []nestGroupRuntimeConfiguration
-	deref                 bool
-	dynlist               *dynlistRuntimeConfiguration
-	dyngroup              *dynamicGroupRuntimeConfiguration
-	unique                *uniqueRuntimeConfiguration
-	valueSort             *valueSortRuntimeConfiguration
-	accesslog             *accesslogRuntimeConfiguration
-	auditlog              *auditlogRuntimeConfiguration
-	retcodes              []retcodeRuntimeConfiguration
-	memberOf              []memberOfRuntimeConfiguration
-	refint                []refintRuntimeConfiguration
+	name                   string
+	partition              string
+	suffixes               []directory.DN
+	dnNormalizer           directory.DNAttributeNormalizer
+	ldapBackend            *ldapBackendRuntimeConfiguration
+	metaBackend            *metaBackendRuntimeConfiguration
+	asyncMetaBackend       *asyncMetaBackendRuntimeConfiguration
+	passwdBackend          *passwdBackendRuntimeConfiguration
+	dnssrvBackend          *dnssrvBackendRuntimeConfiguration
+	sockBackend            *sockBackendRuntimeConfiguration
+	sockOverlays           []sockOverlayRuntimeConfiguration
+	sqlBackend             *sqlBackendRuntimeConfiguration
+	metaTargetKey          string
+	relay                  *relayRuntimeConfiguration
+	rwm                    *rwmRuntimeConfiguration
+	rootDN                 *directory.DN
+	rootPassword           []byte
+	rootPasswordSet        bool
+	disabled               bool
+	hidden                 bool
+	subordinate            bool
+	advertise              bool
+	readOnly               bool
+	readOnlyConfigured     bool
+	readOnlyValue          bool
+	searchSizeLimits       []databaseSearchSizeLimit
+	equalityIndexes        storage.EqualityIndexConfig
+	equalityIndexInit      *databaseEqualityIndexInitialization
+	restrictions           databaseRestrictions
+	configuredRestrictions databaseRestrictions
+	frontendRestrictions   databaseRestrictions
+	security               securityStrengthRequirements
+	requires               operationRequirements
+	securityValues         [][]byte
+	requiresValues         [][]byte
+	shadow                 bool
+	multiProvider          bool
+	updateDN               *directory.DN
+	updateRefs             []string
+	lastMod                bool
+	lastBind               bool
+	lastBindPrecision      int
+	maxDerefDepth          int
+	nullBindAllowed        bool
+	nullDoSearch           bool
+	configDNKey            string
+	serverSideSort         bool
+	sortMaxKeys            int
+	sortLimiter            *serverSideSortLimiter
+	syncProvider           bool
+	syncCheckpointOps      int
+	syncCheckpointMinutes  int
+	syncSessionLogSize     int
+	syncNoPresent          bool
+	syncReloadHint         bool
+	syncUseSubentry        bool
+	syncConsumers          []syncConsumerConfig
+	dds                    *ddsRuntimeConfiguration
+	ppolicy                *passwordPolicyRuntimeConfiguration
+	pbind                  *pbindRuntimeConfiguration
+	remoteAuth             *remoteAuthRuntimeConfiguration
+	homedir                *homedirRuntimeConfiguration
+	chain                  *chainRuntimeConfiguration
+	translucent            *translucentRuntimeConfiguration
+	pcache                 *pcacheRuntimeConfiguration
+	otp                    *otpRuntimeConfiguration
+	totpPasswords          []totpPasswordRuntimeConfiguration
+	autoca                 *autoCARuntimeConfiguration
+	constraint             *constraintRuntimeConfiguration
+	collect                *collectRuntimeConfiguration
+	seqmod                 *seqmodRuntimeConfiguration
+	nestGroups             []nestGroupRuntimeConfiguration
+	deref                  bool
+	dynlist                *dynlistRuntimeConfiguration
+	dyngroup               *dynamicGroupRuntimeConfiguration
+	unique                 *uniqueRuntimeConfiguration
+	valueSort              *valueSortRuntimeConfiguration
+	accesslog              *accesslogRuntimeConfiguration
+	auditlog               *auditlogRuntimeConfiguration
+	retcodes               []retcodeRuntimeConfiguration
+	memberOf               []memberOfRuntimeConfiguration
+	refint                 []refintRuntimeConfiguration
 }
 
 type databaseSearchSizeLimit struct {
@@ -327,19 +331,21 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			database.rootPasswordSet = true
 			database.rootPassword = bytes.Clone(rootPasswordValues[0])
 		}
-		database.readOnly, _, err = singleBoolean(
+		database.readOnly, database.readOnlyConfigured, err = singleBoolean(
 			entry,
 			"olcReadOnly",
 		)
 		if err != nil {
 			return err
 		}
+		database.readOnlyValue = database.readOnly
 		database.restrictions, err = parseDatabaseRestrictions(
 			entry.Values("olcRestrict"),
 		)
 		if err != nil {
 			return fmt.Errorf("%s olcRestrict: %w", entry.DN, err)
 		}
+		database.configuredRestrictions = database.restrictions
 		database.securityValues = cloneByteValues(entry.Values("olcSecurity"))
 		database.security, err = parseSecurityStrengthRequirements(database.securityValues)
 		if err != nil {
@@ -587,7 +593,17 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			maxDerefDepth: defaultAliasDerefDepth,
 		})
 	}
-	applyFrontendDatabaseDefaults(databases)
+	globalRestrictions, globalReadOnly, globalReadOnlyConfigured, err :=
+		loadGlobalDatabaseDefaults(reader)
+	if err != nil {
+		return nil, err
+	}
+	applyFrontendDatabaseDefaultsWithGlobal(
+		databases,
+		globalRestrictions,
+		globalReadOnly,
+		globalReadOnlyConfigured,
+	)
 	return databases, nil
 }
 
@@ -3082,11 +3098,32 @@ func subordinateSetting(
 }
 
 func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
-	var frontendRestrictions databaseRestrictions
+	applyFrontendDatabaseDefaultsWithGlobal(databases, 0, false, false)
+}
+
+func applyFrontendDatabaseDefaultsWithGlobal(
+	databases []runtimeDatabase,
+	globalRestrictions databaseRestrictions,
+	globalReadOnly bool,
+	globalReadOnlyConfigured bool,
+) {
+	frontendRestrictions := globalRestrictions
+	frontendReadOnly := globalReadOnly && globalReadOnlyConfigured
 	var frontendLimits []databaseSearchSizeLimit
-	for _, database := range databases {
+	for index := range databases {
+		database := &databases[index]
 		if databaseType(database.name) == "frontend" {
-			frontendRestrictions = effectiveDatabaseRestrictions(database)
+			localRestrictions := database.configuredRestrictions
+			if localRestrictions == 0 {
+				localRestrictions = database.restrictions
+				if database.readOnlyValue {
+					localRestrictions &^= restrictWrites
+				}
+			}
+			frontendRestrictions |= localRestrictions
+			if database.readOnlyConfigured {
+				frontendReadOnly = database.readOnlyValue
+			}
 			for _, limit := range database.searchSizeLimits {
 				if limit.databaseDefault {
 					frontendLimits = append(frontendLimits, limit)
@@ -3095,8 +3132,12 @@ func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 			break
 		}
 	}
+	if frontendReadOnly {
+		frontendRestrictions |= restrictWrites
+	}
 	for index := range databases {
 		databases[index].restrictions |= frontendRestrictions
+		databases[index].frontendRestrictions = frontendRestrictions
 		databases[index].readOnly = databaseIsReadOnly(databases[index])
 		if databaseType(databases[index].name) == "frontend" {
 			continue
@@ -3143,6 +3184,36 @@ func applyFrontendDatabaseDefaults(databases []runtimeDatabase) {
 	}
 }
 
+func loadGlobalDatabaseDefaults(
+	reader storage.Reader,
+) (databaseRestrictions, bool, bool, error) {
+	entry, err := reader.Get(configurationSuffix)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		return 0, false, false, nil
+	}
+	if err != nil {
+		return 0, false, false, fmt.Errorf("load global database defaults: %w", err)
+	}
+	restrictions, err := parseDatabaseRestrictions(entry.Values("olcRestrict"))
+	if err != nil {
+		return 0, false, false, fmt.Errorf("%s olcRestrict: %w", entry.DN, err)
+	}
+	readOnly, configured, err := singleBoolean(entry, "olcReadOnly")
+	if err != nil {
+		return 0, false, false, err
+	}
+	return restrictions, readOnly, configured, nil
+}
+
+func inheritedFrontendRestrictions(databases []runtimeDatabase) databaseRestrictions {
+	for _, database := range databases {
+		if databaseType(database.name) == "frontend" || database.frontendRestrictions != 0 {
+			return database.frontendRestrictions
+		}
+	}
+	return 0
+}
+
 func effectiveDatabaseRestrictions(database runtimeDatabase) databaseRestrictions {
 	restrictions := database.restrictions
 	if database.readOnly {
@@ -3164,8 +3235,12 @@ func databaseRestricts(database runtimeDatabase, operation databaseRestrictions)
 }
 
 func frontendRestricts(runtime *runtimeState, operation databaseRestrictions) bool {
+	restrictions := runtime.frontendRestrictions
+	if restrictions == 0 {
+		restrictions = monitorFrontendRestrictions(runtime.databases)
+	}
 	database := runtimeDatabase{
-		restrictions: monitorFrontendRestrictions(runtime.databases),
+		restrictions: restrictions,
 	}
 	return databaseRestricts(database, operation)
 }

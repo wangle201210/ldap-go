@@ -1455,8 +1455,12 @@ rollback, restart, and a process-level slapd differential pass.
 slapd's protocol-error diagnostic. Proxy controls otherwise follow
 OpenLDAP's default acceptance of non-critical requests. Both proxy switches
 support online replacement, rollback, and restart.
-Global-root `olcRestrict`/`olcReadOnly` aliases and listener filesystem
-permissions remain pending. `olcSecurity` and `olcRequires` now load from both
+Global-root `olcRestrict`/`olcReadOnly` aliases now merge with the frontend
+database and apply to Root DSE, configuration, monitor, local, and delegated
+operations; frontend `olcReadOnly: FALSE` clears a global read-only setting,
+while ordinary databases cannot weaken the effective frontend policy. Direct
+import, online replacement/deletion, and rollback tests pass. Listener
+filesystem permissions remain pending. `olcSecurity` and `olcRequires` load from both
 global and database entries. Database non-zero SSF fields override the
 frontend field, while requirements combine by mask, matching slapd's runtime
 behavior. Checks preserve OpenLDAP's fixed order: transport, TLS, Simple Bind,
