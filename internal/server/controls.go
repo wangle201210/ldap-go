@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -162,7 +163,7 @@ func parseRequestControlsWithDisallows(
 					"assert control value is empty",
 				)
 			}
-			filter, err := ldapwire.DecodeFilter(control.Value)
+			filter, err := ldapwire.DecodeFilterWithMaxDepth(control.Value, math.MaxInt32)
 			if err != nil {
 				return requestControls{}, controlResult(
 					ldapwire.ResultProtocolError,

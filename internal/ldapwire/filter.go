@@ -2,13 +2,14 @@ package ldapwire
 
 import (
 	"bytes"
+	"fmt"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
-const maxFilterDepth = 64
+const DefaultMaxFilterDepth = 1000
 
 // CompileFilter parses an RFC 4515 string filter into the directory filter
 // representation used by request decoding and configuration consumers.
@@ -21,6 +22,10 @@ func CompileFilter(value string) (directory.Filter, error) {
 }
 
 func DecodeFilter(value []byte) (directory.Filter, error) {
+	return DecodeFilterWithMaxDepth(value, DefaultMaxFilterDepth)
+}
+
+func DecodeFilterWithMaxDepth(value []byte, maxDepth int) (directory.Filter, error) {
 	if len(value) == 0 {
 		return directory.Filter{}, malformed("filter value is empty")
 	}
@@ -32,12 +37,24 @@ func DecodeFilter(value []byte) (directory.Filter, error) {
 	if reader.Len() != 0 {
 		return directory.Filter{}, malformed("filter has trailing data")
 	}
-	return decodeFilter(packet, 0)
+	return decodeFilterWithMaxDepth(packet, 0, maxDepth)
 }
 
 func decodeFilter(packet *ber.Packet, depth int) (directory.Filter, error) {
-	if depth > maxFilterDepth {
-		return directory.Filter{}, malformed("filter nesting exceeds %d", maxFilterDepth)
+	return decodeFilterWithMaxDepth(packet, depth, DefaultMaxFilterDepth)
+}
+
+func decodeFilterWithMaxDepth(
+	packet *ber.Packet,
+	depth,
+	maxDepth int,
+) (directory.Filter, error) {
+	if depth > maxDepth {
+		return directory.Filter{}, fmt.Errorf(
+			"%w: %w",
+			ErrMalformedMessage,
+			ErrFilterTooDeep,
+		)
 	}
 	if packet == nil || packet.ClassType != ber.ClassContext {
 		return directory.Filter{}, malformed("filter is not context-specific")
@@ -51,7 +68,7 @@ func decodeFilter(packet *ber.Packet, depth int) (directory.Filter, error) {
 		}
 		filter.Children = make([]directory.Filter, 0, len(packet.Children))
 		for _, child := range packet.Children {
-			decoded, err := decodeFilter(child, depth+1)
+			decoded, err := decodeFilterWithMaxDepth(child, depth+1, maxDepth)
 			if err != nil {
 				return directory.Filter{}, err
 			}
@@ -63,7 +80,7 @@ func decodeFilter(packet *ber.Packet, depth int) (directory.Filter, error) {
 		if packet.TagType != ber.TypeConstructed || len(packet.Children) != 1 {
 			return directory.Filter{}, malformed("not filter requires one child")
 		}
-		child, err := decodeFilter(packet.Children[0], depth+1)
+		child, err := decodeFilterWithMaxDepth(packet.Children[0], depth+1, maxDepth)
 		if err != nil {
 			return directory.Filter{}, err
 		}

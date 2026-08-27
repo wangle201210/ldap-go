@@ -279,8 +279,8 @@ func encodeAttribute(attribute directory.Attribute) *ber.Packet {
 }
 
 func encodeFilter(filter directory.Filter, depth int) (*ber.Packet, error) {
-	if depth > maxFilterDepth {
-		return nil, fmt.Errorf("filter nesting exceeds %d", maxFilterDepth)
+	if depth > DefaultMaxFilterDepth {
+		return nil, fmt.Errorf("filter nesting exceeds %d", DefaultMaxFilterDepth)
 	}
 	packet := ber.Encode(
 		ber.ClassContext,

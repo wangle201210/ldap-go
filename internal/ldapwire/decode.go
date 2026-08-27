@@ -13,6 +13,7 @@ import (
 
 var ErrMalformedMessage = errors.New("malformed LDAP message")
 var ErrMessageTooLarge = errors.New("LDAP message exceeds incoming limit")
+var ErrFilterTooDeep = errors.New("filter nested too deeply")
 
 func ReadMessage(reader io.Reader, maxSize int64) (Message, error) {
 	return ReadMessageWithLimits(reader, maxSize, 0)
@@ -23,6 +24,51 @@ func ReadMessageWithLimits(
 	maxSize int64,
 	maxContentSize uint64,
 ) (Message, error) {
+	return ReadMessageWithDecodingLimits(
+		reader,
+		maxSize,
+		maxContentSize,
+		DefaultMaxFilterDepth,
+	)
+}
+
+func ReadMessageWithDecodingLimits(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+	maxFilterDepth int,
+) (Message, error) {
+	return readMessageWithFilterDepthProvider(
+		reader,
+		maxSize,
+		maxContentSize,
+		func() int { return maxFilterDepth },
+	)
+}
+
+func ReadMessageWithDynamicFilterDepth(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+	maxFilterDepth func() int,
+) (Message, error) {
+	if maxFilterDepth == nil {
+		maxFilterDepth = func() int { return DefaultMaxFilterDepth }
+	}
+	return readMessageWithFilterDepthProvider(
+		reader,
+		maxSize,
+		maxContentSize,
+		maxFilterDepth,
+	)
+}
+
+func readMessageWithFilterDepthProvider(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+	maxFilterDepth func() int,
+) (Message, error) {
 	frame, err := readFrameWithContentLimit(reader, maxSize, maxContentSize)
 	if err != nil {
 		return Message{}, err
@@ -31,7 +77,7 @@ func ReadMessageWithLimits(
 	if err != nil {
 		return Message{}, malformed("decode BER: %v", err)
 	}
-	return decodeMessage(packet)
+	return decodeMessageWithFilterDepth(packet, maxFilterDepth())
 }
 
 func readFrame(reader io.Reader, maxSize int64) ([]byte, error) {
@@ -111,6 +157,10 @@ func readFrameWithContentLimit(
 }
 
 func decodeMessage(packet *ber.Packet) (Message, error) {
+	return decodeMessageWithFilterDepth(packet, DefaultMaxFilterDepth)
+}
+
+func decodeMessageWithFilterDepth(packet *ber.Packet, maxFilterDepth int) (Message, error) {
 	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
 		return Message{}, malformed("LDAPMessage is not a sequence")
 	}
@@ -133,7 +183,7 @@ func decodeMessage(packet *ber.Packet) (Message, error) {
 	case ApplicationBindRequest:
 		request, err = decodeBindRequest(opPacket)
 	case ApplicationSearchRequest:
-		request, err = decodeSearchRequest(opPacket)
+		request, err = decodeSearchRequestWithFilterDepth(opPacket, maxFilterDepth)
 	case ApplicationUnbindRequest:
 		if opPacket.TagType != ber.TypePrimitive || opPacket.Data.Len() != 0 {
 			err = malformed("invalid UnbindRequest")
@@ -413,6 +463,13 @@ func decodeAttributeListElement(packet *ber.Packet, allowEmptyValues bool) (dire
 }
 
 func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
+	return decodeSearchRequestWithFilterDepth(packet, DefaultMaxFilterDepth)
+}
+
+func decodeSearchRequestWithFilterDepth(
+	packet *ber.Packet,
+	maxFilterDepth int,
+) (SearchRequest, error) {
 	if packet.TagType != ber.TypeConstructed || len(packet.Children) != 8 {
 		return SearchRequest{}, malformed("invalid SearchRequest")
 	}
@@ -441,7 +498,7 @@ func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
 	if err != nil {
 		return SearchRequest{}, malformed("invalid typesOnly value")
 	}
-	filter, err := decodeFilter(packet.Children[6], 0)
+	filter, err := decodeFilterWithMaxDepth(packet.Children[6], 0, maxFilterDepth)
 	if err != nil {
 		return SearchRequest{}, err
 	}

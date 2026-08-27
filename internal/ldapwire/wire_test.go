@@ -196,6 +196,49 @@ func TestReadSearchRequestWithFilter(t *testing.T) {
 	}
 }
 
+func TestReadSearchRequestHonorsConfiguredFilterDepth(t *testing.T) {
+	present := ber.NewString(ber.ClassContext, ber.TypePrimitive, 7, "objectClass", "present")
+	filter := present
+	for range 3 {
+		not := ber.Encode(ber.ClassContext, ber.TypeConstructed, 2, nil, "not")
+		not.AppendChild(filter)
+		filter = not
+	}
+	operation := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationSearchRequest,
+		nil,
+		"SearchRequest",
+	)
+	operation.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", ""))
+	operation.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, 0, ""))
+	operation.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, 0, ""))
+	operation.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, 0, ""))
+	operation.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, 0, ""))
+	operation.AppendChild(ber.NewLDAPBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, false, ""))
+	operation.AppendChild(filter)
+	operation.AppendChild(ber.NewSequence("attributes"))
+	encoded := testMessage(9, operation).Bytes()
+
+	if _, err := ReadMessageWithDecodingLimits(
+		bytes.NewReader(encoded),
+		4096,
+		0,
+		2,
+	); !errors.Is(err, ErrFilterTooDeep) {
+		t.Fatalf("depth 3 with limit 2 error = %v", err)
+	}
+	if _, err := ReadMessageWithDecodingLimits(
+		bytes.NewReader(encoded),
+		4096,
+		0,
+		3,
+	); err != nil {
+		t.Fatalf("depth 3 with limit 3: %v", err)
+	}
+}
+
 func TestReadEmptyModifyRequest(t *testing.T) {
 	t.Parallel()
 

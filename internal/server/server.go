@@ -503,10 +503,11 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		if server.draining.Load() {
 			return
 		}
-		message, err := ldapwire.ReadMessageWithLimits(
+		message, err := ldapwire.ReadMessageWithDynamicFilterDepth(
 			readConnection,
 			server.config.MaxMessageSize,
 			state.maxIncoming,
+			server.currentMaxFilterDepth,
 		)
 		if err != nil {
 			_, recoverV2Bind := message.Request.(ldapwire.BindRequest)
@@ -526,6 +527,22 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				// Preserve the parsed Bind envelope; dispatch performs the Bind
 				// barrier and anonymous identity demotion before responding.
 			} else if errors.Is(err, ldapwire.ErrMessageTooLarge) {
+				return
+			} else if errors.Is(err, ldapwire.ErrFilterTooDeep) {
+				server.writeMalformedMessageAudit(&state)
+				responseConnection := &serializedResponseConnection{
+					Conn:              readConnection,
+					mu:                writeMutex,
+					monitor:           server.monitor,
+					monitorConnection: state.monitor,
+					writeTimeout:      server.currentConnectionWriteTimeout,
+				}
+				_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
+					ldapwire.ResultError(
+						ldapwire.ResultProtocolError,
+						ldapwire.ErrFilterTooDeep.Error(),
+					),
+				))
 				return
 			} else if server.draining.Load() {
 				return
@@ -1046,6 +1063,15 @@ func (server *Server) dispatch(
 	state.runtime = runtime
 	refreshPasswordPolicyRestriction(state)
 	message = withEffectiveDefaultSearchBase(runtime, message)
+	if assertionFilterExceedsRuntimeDepth(message.Controls, runtime.maxFilterDepth) {
+		return true, ldapwire.Write(
+			connection,
+			ldapwire.EncodeNoticeOfDisconnection(ldapwire.ResultError(
+				ldapwire.ResultProtocolError,
+				ldapwire.ErrFilterTooDeep.Error(),
+			)),
+		)
+	}
 	if bind, ok := message.Request.(ldapwire.BindRequest); ok &&
 		bind.Version < 3 &&
 		(message.ControlsPresent || len(message.Controls) != 0) {
