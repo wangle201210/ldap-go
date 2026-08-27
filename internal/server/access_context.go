@@ -99,6 +99,7 @@ func (server *Server) connectionACLSubject(state *connectionState) acl.Subject {
 		DN:       state.boundDN,
 		RealDN:   state.operationRealDN,
 		PeerName: openLDAPConnectionName(remoteAddress(state.connection)),
+		Domain:   state.domainName,
 		SockName: openLDAPConnectionName(localAddress(state.connection)),
 		SockURL:  monitorListenerURL(localAddress(state.connection), server.config.ImplicitTLS),
 	}

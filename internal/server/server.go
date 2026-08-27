@@ -67,6 +67,9 @@ type Config struct {
 	// DNSSRVResolver overrides the system resolver for back-dnssrv. It is
 	// primarily useful to embedded deployments and deterministic tests.
 	DNSSRVResolver DNSSRVResolver
+	// ReverseLookupResolver overrides reverse DNS for olcReverseLookup.
+	// The system resolver is used when this field is nil.
+	ReverseLookupResolver ReverseLookupResolver
 }
 
 type Server struct {
@@ -393,6 +396,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	defer server.wg.Done()
 	networkConnection := connection
 	transportSSF := server.connectionTransportSecurityStrength(networkConnection)
+	domainName := server.connectionDomainName(ctx, networkConnection.RemoteAddr())
 	activity := newConnectionActivity()
 	connection = &activityTrackingConnection{
 		Conn:     networkConnection,
@@ -403,6 +407,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		connection:      connection,
 		externalSSF:     transportSSF,
 		transportSSF:    transportSSF,
+		domainName:      domainName,
 		auditIdentity:   &connectionAuditIdentityState{},
 		metaTransports:  newMetaTransportCache(time.Now),
 		gssapiAvailable: server.gssapiKeytab != nil,
@@ -2177,6 +2182,7 @@ type connectionState struct {
 	transportSSF               uint32
 	tlsSSF                     uint32
 	saslSSF                    uint32
+	domainName                 string
 	gssapiAvailable            bool
 	externalDN                 string
 	saslSession                *serverSASLSession

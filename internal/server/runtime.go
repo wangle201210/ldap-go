@@ -49,6 +49,7 @@ type runtimeState struct {
 	localSSF             uint32
 	rootDSEFiles         []string
 	rootDSEAttributes    []directory.Attribute
+	reverseLookup        bool
 	syncContexts         map[string]syncCSNState
 }
 
@@ -335,6 +336,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	reverseLookup, err := loadReverseLookup(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -370,6 +375,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		localSSF:             localSSF,
 		rootDSEFiles:         rootDSEFiles,
 		rootDSEAttributes:    rootDSEAttributes,
+		reverseLookup:        reverseLookup,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
