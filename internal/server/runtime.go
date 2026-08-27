@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/auth"
@@ -38,6 +39,8 @@ type runtimeState struct {
 	externalPasswords   externalPasswordRuntimeConfiguration
 	sasl                saslRuntimeConfiguration
 	connectionPending   connectionPendingRuntimeConfiguration
+	idleTimeout         time.Duration
+	writeTimeout        time.Duration
 	syncContexts        map[string]syncCSNState
 }
 
@@ -296,6 +299,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	idleTimeout, writeTimeout, err := loadConnectionTimeoutRuntimeConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -321,6 +328,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		externalPasswords:   externalPasswords,
 		sasl:                sasl,
 		connectionPending:   connectionPending,
+		idleTimeout:         idleTimeout,
+		writeTimeout:        writeTimeout,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
