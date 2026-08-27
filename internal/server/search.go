@@ -2779,6 +2779,7 @@ func (server *Server) rootDSE(
 			Values:      stringValues(mechanisms...),
 		})
 	}
+	mergeRootDSEAttributes(&entry, runtime.rootDSEAttributes)
 	return entry
 }
 

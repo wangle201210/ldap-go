@@ -47,6 +47,8 @@ type runtimeState struct {
 	writeTimeout         time.Duration
 	maxFilterDepth       int
 	localSSF             uint32
+	rootDSEFiles         []string
+	rootDSEAttributes    []directory.Attribute
 	syncContexts         map[string]syncCSNState
 }
 
@@ -325,6 +327,14 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	rootDSEFiles, rootDSEAttributes, err := loadRootDSEConfiguration(
+		reader,
+		registry,
+		server.runtime.Load(),
+	)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -358,6 +368,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		writeTimeout:         writeTimeout,
 		maxFilterDepth:       maxFilterDepth,
 		localSSF:             localSSF,
+		rootDSEFiles:         rootDSEFiles,
+		rootDSEAttributes:    rootDSEAttributes,
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
@@ -717,6 +729,9 @@ func (server *Server) validateRuntimeConfiguration(
 			return nil, &operationFailure{result: result}
 		}
 		if result, ok := localSSFConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := rootDSEConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
 		return nil, operationFailed(
