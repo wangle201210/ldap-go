@@ -1390,7 +1390,18 @@ func (server *Server) dispatch(
 	case ldapwire.UnbindRequest:
 		return true, nil
 	case ldapwire.BindRequest:
-		return false, server.handleBind(ctx, connection, state, message, request)
+		return false, server.handleBind(
+			ctx,
+			&lastBindResponseConnection{
+				Conn:   connection,
+				ctx:    ctx,
+				server: server,
+				state:  state,
+			},
+			state,
+			message,
+			request,
+		)
 	case ldapwire.SearchRequest:
 		return false, server.handleSearch(ctx, connection, state, message, request)
 	case ldapwire.AddRequest:

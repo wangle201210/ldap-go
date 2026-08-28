@@ -25,6 +25,7 @@ func TestValidateOpenLDAPModuleConfigurationAcceptsImplementedDeclarations(t *te
 		"{7}argon2.la",
 		"{8}glue.la",
 		"{9}allop.la",
+		"{10}lastbind.la",
 	}
 	store := moduleConfigurationStore(t, loads...)
 
@@ -48,7 +49,6 @@ func TestValidateOpenLDAPModuleConfigurationAcceptsInertModulePath(t *testing.T)
 func TestValidateOpenLDAPModuleConfigurationRejectsNativeExternalModules(t *testing.T) {
 	tests := []string{
 		"custom-plugin.so",
-		"lastbind.la",
 		"back_perl.la",
 		"/opt/openldap/syncprov.so",
 		"/opt/openldap/back_mdb.la",

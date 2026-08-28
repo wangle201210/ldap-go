@@ -33,6 +33,7 @@ var supportedRuntimeOverlayTypes = map[string]struct{}{
 	"dyngroup":    {},
 	"dynlist":     {},
 	"homedir":     {},
+	"lastbind":    {},
 	"glue":        {},
 	"memberof":    {},
 	"nestgroup":   {},

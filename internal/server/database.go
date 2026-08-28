@@ -84,6 +84,8 @@ type runtimeDatabase struct {
 	homedir                *homedirRuntimeConfiguration
 	explicitGlue           bool
 	allOperationalAttrs    bool
+	lastBindOverlay        bool
+	lastBindForwardUpdates bool
 	chain                  *chainRuntimeConfiguration
 	translucent            *translucentRuntimeConfiguration
 	pcache                 *pcacheRuntimeConfiguration
@@ -2442,6 +2444,20 @@ func loadRuntimeDatabaseOverlays(
 				return fmt.Errorf("%s allop overlay must be configured on the frontend database", entry.DN)
 			}
 			database.allOperationalAttrs = true
+		case "lastbind":
+			if database.lastBindOverlay {
+				return fmt.Errorf("%s configures a duplicate lastbind overlay for %s", entry.DN, database.name)
+			}
+			if databaseType(database.name) == "frontend" || len(database.suffixes) == 0 ||
+				databaseUsesNullBackend(nil, *database) {
+				return fmt.Errorf("%s lastbind overlay requires a writable database naming context", entry.DN)
+			}
+			forward, _, err := singleBoolean(entry, "olcLastBindForwardUpdates")
+			if err != nil {
+				return err
+			}
+			database.lastBindOverlay = true
+			database.lastBindForwardUpdates = forward
 		case "glue":
 			if database.explicitGlue {
 				return fmt.Errorf("%s configures a duplicate glue overlay for %s", entry.DN, database.name)

@@ -957,6 +957,7 @@ func passwordPolicyBindStateChanges(
 		"pwdAccountLockedTime",
 		"pwdAccountTmpLockoutEnd",
 		"pwdGraceUseTime",
+		"authTimestamp",
 	}
 	changes := make([]ldapwire.Modification, 0, len(attributes))
 	for _, description := range attributes {

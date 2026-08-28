@@ -29,6 +29,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 		"dynlist",
 		"glue",
 		"homedir",
+		"lastbind",
 		"memberof",
 		"nestgroup",
 		"otp",

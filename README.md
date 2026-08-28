@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,919 top-level tests against the pinned commit.
+The latest strict run passed 1,922 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -591,6 +591,12 @@ but Password Modify and `ldap-go passwd` reject generation because the module
 has no hash function. RADIUS-enabled Modify and Password Modify operations are
 rejected inside LDAP transactions that use `translucent` or effective `chain`
 configuration, since those remote LDAP effects cannot be rollback-preflighted.
+The contrib `lastbind` overlay is available as a database singleton through
+`olcLastBindConfig`. Successful Simple and SASL Binds update the non-replicated
+`authTimestamp` using database `olcLastBindPrecision`; failures do not write.
+`olcLastBindForwardUpdates` uses the configured update referral and chain
+overlay on shadow databases, while forwarding failures do not change a
+successful Bind result.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple

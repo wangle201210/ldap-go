@@ -108,6 +108,9 @@ func NewBuiltinRegistry() (*Registry, error) {
 	if err := RegisterOpenLDAPPasswdDNSSRVSchema(registry); err != nil {
 		return nil, fmt.Errorf("register passwd and dnssrv schema: %w", err)
 	}
+	if err := RegisterOpenLDAPLastBindSchema(registry); err != nil {
+		return nil, fmt.Errorf("register OpenLDAP lastbind schema: %w", err)
+	}
 	return registry, nil
 }
 

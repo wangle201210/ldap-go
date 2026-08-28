@@ -1026,6 +1026,9 @@ func runtimeDatabaseOverlayNames(database runtimeDatabase) []string {
 	if database.allOperationalAttrs {
 		names = append(names, "allop")
 	}
+	if database.lastBindOverlay {
+		names = append(names, "lastbind")
+	}
 	if database.explicitGlue {
 		names = append(names, "glue")
 	}
