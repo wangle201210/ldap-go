@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,925 top-level tests against the pinned commit.
+The latest strict run passed 1,929 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -600,6 +600,12 @@ successful Bind result.
 The contrib `nops` overlay removes byte-identical non-empty Replace elements
 before backend execution. An all-no-op Modify succeeds without LastMod, Sync,
 or audit backend writes; mixed requests execute only their remaining changes.
+The contrib `noopsrch` overlay implements control
+`1.3.6.1.4.1.4203.666.5.18` for database and frontend Search paths. It returns
+no entries or references and reports the unrestricted entry/reference counts
+plus the original size-limit result in its response control. Request-value and
+duplicate-control validation and a dynamically built OpenLDAP module
+differential cover its wire behavior.
 OpenLDAP's contrib `pw-totp` module is implemented separately from the built-in
 OATH `otp` overlay. A database or frontend `olcOverlay=totp` activates
 `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and their `ANDPW` variants for Simple

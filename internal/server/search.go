@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sort"
 	"strings"
@@ -166,6 +167,9 @@ func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 	if runtimeSupportsValueSort(runtime.databases) {
 		support |= supportsValueSort
 	}
+	if runtimeSupportsNoOpSearch(runtime.databases) {
+		support |= supportsNoOpSearch
+	}
 	return support
 }
 
@@ -253,11 +257,17 @@ func (server *Server) handleSearch(
 		return err
 	}
 	limits := databaseSearchExecutionLimits{
-		size:      effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit),
+		size: effectiveSearchLimit(
+			server.config.MaxSearchEntries,
+			noOpSearchRequestedSize(ctx, request.SizeLimit),
+		),
 		time:      request.TimeLimit,
 		unchecked: -1,
 		pageSize:  -1,
-		pageTotal: effectiveSearchLimit(server.config.MaxSearchEntries, request.SizeLimit),
+		pageTotal: effectiveSearchLimit(
+			server.config.MaxSearchEntries,
+			noOpSearchRequestedSize(ctx, request.SizeLimit),
+		),
 	}
 	limitBase := base
 	if limitBase.Depth() == 0 &&
@@ -283,7 +293,7 @@ func (server *Server) handleSearch(
 				requestDN,
 				reader,
 				server.config.MaxSearchEntries,
-				request.SizeLimit,
+				noOpSearchRequestedSize(ctx, request.SizeLimit),
 				request.TimeLimit,
 			)
 			return err
@@ -291,6 +301,9 @@ func (server *Server) handleSearch(
 		if err != nil {
 			return fmt.Errorf("evaluate database search limits: %w", err)
 		}
+	}
+	if isNoOpSearch(ctx) {
+		limits.size = math.MaxInt32
 	}
 	request.TimeLimit = limits.time
 	limit := limits.size
@@ -2768,6 +2781,9 @@ func (server *Server) rootDSE(
 	}
 	if runtimeSupportsPcachePrivateDatabase(runtime.databases) {
 		supportedControls = append(supportedControls, pcachePrivateDBControl)
+	}
+	if runtimeSupportsNoOpSearch(runtime.databases) {
+		supportedControls = append(supportedControls, noOpSearchControlOID)
 	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedControl",

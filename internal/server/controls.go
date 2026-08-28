@@ -34,6 +34,7 @@ const (
 	searchOptionsControlOID    = ldapwire.SearchOptionsControlOID
 	treeDeleteControlOID       = "1.2.840.113556.1.4.805"
 	lazyCommitControlOID       = "1.2.840.113556.1.4.619"
+	noOpSearchControlOID       = "1.3.6.1.4.1.4203.666.5.18"
 )
 
 type requestControlSupport uint32
@@ -61,6 +62,7 @@ const (
 	supportsSearchOptions
 	supportsTreeDelete
 	supportsLazyCommit
+	supportsNoOpSearch
 )
 
 type requestControls struct {
@@ -86,6 +88,7 @@ type requestControls struct {
 	domainScope      bool
 	treeDelete       *treeDeleteControlRequest
 	lazyCommit       bool
+	noOpSearch       bool
 }
 
 type readControlRequest struct {
@@ -311,6 +314,26 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.lazyCommit = true
+		case noOpSearchControlOID:
+			if supported&supportsNoOpSearch == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.noOpSearch {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"No-op Search control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"No-op Search control value is present",
+				)
+			}
+			parsed.noOpSearch = true
 		case preReadControlOID:
 			if supported&supportsPreRead == 0 {
 				if control.Critical {

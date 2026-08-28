@@ -27,6 +27,7 @@ func TestValidateOpenLDAPModuleConfigurationAcceptsImplementedDeclarations(t *te
 		"{9}allop.la",
 		"{10}lastbind.la",
 		"{11}nops.la",
+		"{12}noopsrch.la",
 	}
 	store := moduleConfigurationStore(t, loads...)
 

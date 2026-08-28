@@ -1169,6 +1169,8 @@ func (server *Server) dispatch(
 	}
 	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	domainScope := false
+	noOpSearch := false
+	var noOpSearchResponse *noOpSearchResponseConnection
 	if request, ok := message.Request.(ldapwire.SearchRequest); ok {
 		request = applyAllOperationalAttributesOverlay(state.runtime, request)
 		request.Attributes = expandObjectClassAttributeSelection(
@@ -1189,6 +1191,18 @@ func (server *Server) dispatch(
 				)
 			}
 			return false, writeResultForMessage(connection, message, *failure)
+		}
+		if parsedControls.noOpSearch && noOpSearchEnabledForRequest(state.runtime, request) {
+			noOpSearch = true
+			noOpSearchResponse = newNoOpSearchResponseConnection(
+				connection,
+				message.ID,
+				request.SizeLimit,
+			)
+			connection = noOpSearchResponse
+			request.Attributes = []string{"1.1"}
+			message.Controls = withoutNoOpSearchControl(message.Controls)
+			message.Request = request
 		}
 		if !privateSearch && parsedControls.matchedValues != nil {
 			connection = &matchedValuesConnection{
@@ -1241,6 +1255,13 @@ func (server *Server) dispatch(
 					return false, writeResultForMessage(connection, message, *failure)
 				}
 			}
+		}
+		if noOpSearch {
+			request = message.Request.(ldapwire.SearchRequest)
+			noOpSearchResponse.sizeLimit = request.SizeLimit
+			request.SizeLimit = 0
+			message.Request = request
+			ctx = withNoOpSearch(ctx, noOpSearchResponse.sizeLimit)
 		}
 	}
 	if _, search := message.Request.(ldapwire.SearchRequest); !search {

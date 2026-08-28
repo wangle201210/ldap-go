@@ -33,6 +33,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 		"memberof",
 		"nestgroup",
 		"nops",
+		"noopsrch",
 		"otp",
 		"pbind",
 		"pcache",

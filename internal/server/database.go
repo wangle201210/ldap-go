@@ -87,6 +87,7 @@ type runtimeDatabase struct {
 	lastBindOverlay        bool
 	lastBindForwardUpdates bool
 	nopsOverlay            bool
+	noOpSearchOverlay      bool
 	chain                  *chainRuntimeConfiguration
 	translucent            *translucentRuntimeConfiguration
 	pcache                 *pcacheRuntimeConfiguration
@@ -2468,6 +2469,14 @@ func loadRuntimeDatabaseOverlays(
 				return fmt.Errorf("%s nops overlay requires a writable database naming context", entry.DN)
 			}
 			database.nopsOverlay = true
+		case "noopsrch":
+			if database.noOpSearchOverlay {
+				return fmt.Errorf("%s configures a duplicate noopsrch overlay for %s", entry.DN, database.name)
+			}
+			if len(database.suffixes) == 0 && databaseType(database.name) != "frontend" {
+				return fmt.Errorf("%s noopsrch overlay requires a database or frontend context", entry.DN)
+			}
+			database.noOpSearchOverlay = true
 		case "glue":
 			if database.explicitGlue {
 				return fmt.Errorf("%s configures a duplicate glue overlay for %s", entry.DN, database.name)
