@@ -32,6 +32,7 @@ func TestSupportedRuntimeOverlayType(t *testing.T) {
 		"lastbind",
 		"memberof",
 		"nestgroup",
+		"nops",
 		"otp",
 		"pbind",
 		"pcache",

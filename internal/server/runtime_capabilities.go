@@ -37,6 +37,7 @@ var supportedRuntimeOverlayTypes = map[string]struct{}{
 	"glue":        {},
 	"memberof":    {},
 	"nestgroup":   {},
+	"nops":        {},
 	"otp":         {},
 	"pbind":       {},
 	"pcache":      {},

@@ -701,6 +701,30 @@ func (server *Server) handleModify(
 		return err
 	}
 	defer databaseSeqmodRelease()
+	request, nopsOnly, err := server.applyNopsModify(
+		ctx,
+		state.runtime,
+		*database,
+		dn,
+		request,
+	)
+	if err != nil {
+		return server.internalOperationError(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			err,
+		)
+	}
+	if nopsOnly {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationModifyResponse,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+		)
+	}
+	message.Request = request
 	if handled, err := server.tryRetcodeOperation(
 		ctx,
 		connection,

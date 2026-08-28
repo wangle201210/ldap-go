@@ -1029,6 +1029,9 @@ func runtimeDatabaseOverlayNames(database runtimeDatabase) []string {
 	if database.lastBindOverlay {
 		names = append(names, "lastbind")
 	}
+	if database.nopsOverlay {
+		names = append(names, "nops")
+	}
 	if database.explicitGlue {
 		names = append(names, "glue")
 	}

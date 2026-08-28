@@ -27,8 +27,8 @@ runtime implementation:
 `sssvlv`, `syncprov`, `translucent`, `unique`, and `valsort`.
 
 Additional accepted core configurations are `chain`, `pbind`, `sock`, explicit
-`glue`, the contrib `allop` default Root DSE mode, contrib `lastbind`, and the
-`totp` password overlay. `syncrepl` is represented by the
+`glue`, the contrib `allop` default Root DSE mode, contrib `lastbind`, contrib
+`nops`, and the `totp` password overlay. `syncrepl` is represented by the
 consumer runtime rather than accepted as a user-created overlay. `distproc`
 and experimental `slapi` remain explicitly unsupported.
 
@@ -55,7 +55,7 @@ The pinned source contains these top-level contrib directories:
 `nops`, `nssov`, `passwd`, `ppm`, `proxyOld`, `rbac`, `samba4`, `smbk5pwd`,
 `trace`, `usn`, `variant`, and `vc`.
 
-The password implementations listed above, `allop`, and `lastbind` are
+The password implementations listed above, `allop`, `lastbind`, and `nops` are
 data/protocol compatible. The remaining contrib modules execute
 OpenLDAP C `Entry`, overlay, SLAPI,
 dynamic ACL, matching-rule, PAM/NSS, Kerberos, or extended-operation ABIs and
