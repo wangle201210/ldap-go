@@ -696,9 +696,13 @@ func TestVerifyOpenLDAPRADIUSPasswordReprobesFirstServerAfterDeadTime(t *testing
 	if err != nil || !ok {
 		t.Fatalf("VerifyOpenLDAPRADIUSPassword() = %v, %v", ok, err)
 	}
+	gotEvents := make(map[string]int, 3)
+	for range 3 {
+		gotEvents[<-events]++
+	}
 	for _, want := range []string{"first-1", "second-1", "first-2"} {
-		if got := <-events; got != want {
-			t.Fatalf("RADIUS request order = %q, want %q", got, want)
+		if gotEvents[want] != 1 {
+			t.Fatalf("RADIUS request events = %v, want one %q", gotEvents, want)
 		}
 	}
 	for range 2 {

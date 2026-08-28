@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -45,9 +44,18 @@ const (
 var version = "dev"
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	os.Exit(runMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+}
+
+func runMain(
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	getenv func(string) string,
+) int {
+	ctx, stop := signal.NotifyContext(context.Background(), mainShutdownSignals()...)
 	defer stop()
-	os.Exit(runWithContext(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	return runWithContext(ctx, args, stdin, stdout, stderr, getenv)
 }
 
 func run(
@@ -120,7 +128,7 @@ func runWithContext(
 	case "restore":
 		err = runRestore(ctx, args[1:], stdout, stderr)
 	case "serve":
-		err = runServe(args[1:], stdout, stderr, getenv)
+		err = runServe(ctx, args[1:], stdout, stderr, getenv)
 	case "version":
 		_, err = fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
@@ -1389,10 +1397,14 @@ func openLDAPBooleanAttribute(
 }
 
 func runServe(
+	ctx context.Context,
 	args []string,
 	stdout, stderr io.Writer,
 	getenv func(string) string,
 ) (runErr error) {
+	if ctx == nil {
+		return errors.New("serve context is required")
+	}
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "directory database path")
@@ -1626,8 +1638,6 @@ func runServe(
 	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	return instance.Serve(ctx, listener)
 }
 

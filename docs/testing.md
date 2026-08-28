@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,929 top-level tests against
+The latest pinned local strict run passed 1,931 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -760,7 +760,11 @@ the accepted write receives a successful response and is durable before the
 server returns. A second case holds the gate past the configured deadline and
 checks forced cancellation, rollback, and `ErrShutdownTimeout`; a persistent
 Sync case verifies long-lived searches do not consume the grace period. The
-same cases run under the race detector.
+same cases run under the race detector. On Unix, a subprocess test starts the
+real `serve` command, waits for its listener, sends SIGHUP, and verifies a clean
+zero exit plus listener closure. A pinned OpenLDAP source contract verifies
+that slapd registers SIGHUP with its shutdown handler and only selects the
+distinct gentle path when `olcGentleHUP` is enabled.
 
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. The other server-side cases invoke

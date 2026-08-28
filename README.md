@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,929 top-level tests against the pinned commit.
+The latest strict run passed 1,931 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -756,10 +756,12 @@ and operation restrictions are covered by an OpenLDAP 2.6.13 differential.
 `monitorLogLevel` names or numeric masks atomically update structured event
 routing; mapped events carry `openldap_category` while the downstream
 `slog.Handler` still controls final severity filtering.
-On SIGINT or SIGTERM, the daemon stops accepting connections, completes
-already accepted ordinary operations, abandons persistent Sync searches, and
-only force-cancels remaining work after `-shutdown-timeout`. The database and
-audit sink close after the connection drain completes.
+On SIGINT, SIGTERM, or Unix SIGHUP, the daemon stops accepting connections,
+completes already accepted ordinary operations, abandons persistent Sync
+searches, and only force-cancels remaining work after `-shutdown-timeout`. The
+database and audit sink close after the connection drain completes. Matching
+OpenLDAP 2.6, SIGHUP is a shutdown signal rather than a configuration-reload
+command.
 
 The built-in LDAP client commands accept generic `-e`/`-E` controls with
 critical, absent, empty, string, Base64, and file-backed values on applicable
