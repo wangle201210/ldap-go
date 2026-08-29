@@ -1,0 +1,129 @@
+name: Nightly production evidence
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: Bounded qualification soak duration (60-1800 seconds)
+        required: false
+        default: "300"
+        type: string
+      soak_connections:
+        description: Bounded qualification client streams (1-64)
+        required: false
+        default: "16"
+        type: string
+      scale_entries:
+        description: Deterministic large-directory entries (1,000-250,000)
+        required: false
+        default: "100000"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-production-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  strict-openldap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      BUILD: ${{ runner.temp }}/ldap-go-openldap-reference-2.6.13
+      OPENLDAP_SOURCE_CACHE: ${{ github.workspace }}/.cache/openldap-source-2.6.13
+      LDAP_GO_OPENLDAP_FAILURE_LOG: ${{ github.workspace }}/nightly-openldap-failure.log
+      JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned-reference build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git libevent-dev libltdl-dev \
+            krb5-admin-server krb5-kdc krb5-user \
+            libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit \
+            libsqliteodbc libssl-dev libtool pkg-config sqlite3 unixodbc-dev
+      - name: Cache pinned OpenLDAP source
+        uses: actions/cache@v4
+        with:
+          path: .cache/openldap-source-2.6.13
+          key: openldap-source-2.6.13-d172686d3d270bc961b78f3ff00d7019c8dfb094
+      - name: Run pinned strict OpenLDAP differential gate
+        run: |
+          set -o pipefail
+          ./scripts/test-openldap-full.sh 2>&1 | tee nightly-openldap.log
+      - name: Preserve strict OpenLDAP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-openldap-${{ github.sha }}
+          path: |
+            nightly-openldap.log
+            nightly-openldap-failure.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QUALIFICATION_NIGHTLY_SOAK_SECONDS: ${{ inputs.soak_seconds || '300' }}
+      QUALIFICATION_NIGHTLY_CONNECTIONS: ${{ inputs.soak_connections || '16' }}
+      QUALIFICATION_NIGHTLY_SCALE_ENTRIES: ${{ inputs.scale_entries || '100000' }}
+      QUALIFICATION_NIGHTLY_ARTIFACT_DIR: ${{ github.workspace }}/nightly-qualification
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate qualification contracts
+        run: make qualification-check
+      - name: Run smoke and bounded soak
+        run: ./scripts/qualification/nightly.sh
+      - name: Preserve qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-qualification-${{ github.sha }}
+          path: nightly-qualification
+          if-no-files-found: warn
+          retention-days: 14
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LDAP_GO_FUZZ_TIME: 10s
+      LDAP_GO_FUZZ_MINIMIZE_TIME: 100x
+      LDAP_GO_FUZZ_PARALLEL: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run bounded parser fuzz gate
+        run: ./scripts/test-fuzz.sh
+
+  platform-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build all supported platform targets
+        run: make platform-builds

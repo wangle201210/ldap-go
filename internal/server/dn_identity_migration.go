@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -24,6 +27,7 @@ func migrateRuntimeDNIdentitiesInWriter(
 	if runtime == nil || runtime.schema == nil {
 		return nil
 	}
+	fingerprint := runtime.schema.DNIdentityFingerprint()
 	normalizers := make(map[string]directory.DNAttributeNormalizer)
 	for _, database := range runtime.databases {
 		if !databaseUsesLocalContentStorage(database) ||
@@ -39,6 +43,18 @@ func migrateRuntimeDNIdentitiesInWriter(
 		}
 	}
 	for partition, normalizer := range normalizers {
+		metadataKey := runtimeDNIdentityFingerprintMetadataKey(partition)
+		stored, err := writer.Metadata(metadataKey)
+		switch {
+		case err == nil && bytes.Equal(stored, fingerprint[:]):
+			continue
+		case err != nil && !errors.Is(err, storage.ErrMetadataNotFound):
+			return fmt.Errorf(
+				"read DN identity schema fingerprint in partition %q: %w",
+				partition,
+				err,
+			)
+		}
 		if _, err := storage.MigrateSchemaAwareDNIdentities(
 			writer,
 			partition,
@@ -50,6 +66,18 @@ func migrateRuntimeDNIdentitiesInWriter(
 				err,
 			)
 		}
+		if err := writer.SetMetadata(metadataKey, fingerprint[:]); err != nil {
+			return fmt.Errorf(
+				"store DN identity schema fingerprint in partition %q: %w",
+				partition,
+				err,
+			)
+		}
 	}
 	return nil
+}
+
+func runtimeDNIdentityFingerprintMetadataKey(partition string) string {
+	return "server:dn-identity-schema:v1:" +
+		base64.RawURLEncoding.EncodeToString([]byte(partition))
 }

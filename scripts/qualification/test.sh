@@ -4,6 +4,8 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 runner=$root/scripts/qualification/run.sh
+nightly=$root/scripts/qualification/nightly.sh
+scale=$root/scripts/qualification/scale.sh
 
 for script in "$root"/scripts/qualification/*.sh; do
 	sh -n "$script"
@@ -50,6 +52,85 @@ fi
 if QUALIFICATION_DRY_RUN=1 QUALIFICATION_OPERATIONS=search,,modify \
 	"$runner" >/dev/null 2>&1; then
 	printf 'qualification-test: empty operation token was accepted\n' >&2
+	exit 1
+fi
+
+output=$(QUALIFICATION_NIGHTLY_DRY_RUN=1 "$nightly")
+case "$output" in
+*'nightly_profile=bounded'*'soak_seconds=300'*'soak_connections=16'*'scale_entries=100000'*'mode=smoke'*'mode=soak'*'scale_profile=nightly'*'entries=100000'*) ;;
+*)
+	printf 'qualification-test: unexpected nightly configuration: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+if QUALIFICATION_NIGHTLY_DRY_RUN=1 QUALIFICATION_NIGHTLY_SOAK_SECONDS=1801 \
+	"$nightly" >/dev/null 2>&1; then
+	printf 'qualification-test: unbounded nightly duration was accepted\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_NIGHTLY_DRY_RUN=1 QUALIFICATION_NIGHTLY_SCALE_ENTRIES=250001 \
+	"$nightly" >/dev/null 2>&1; then
+	printf 'qualification-test: unbounded nightly scale entry count was accepted\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_NIGHTLY_DRY_RUN=1 QUALIFICATION_NIGHTLY_CONNECTIONS=65 \
+	"$nightly" >/dev/null 2>&1; then
+	printf 'qualification-test: unbounded nightly connection count was accepted\n' >&2
+	exit 1
+fi
+
+output=$(QUALIFICATION_NIGHTLY_DRY_RUN=1 \
+	QUALIFICATION_NIGHTLY_SOAK_SECONDS=060 \
+	QUALIFICATION_NIGHTLY_CONNECTIONS=004 \
+	QUALIFICATION_NIGHTLY_RESTARTS=001 "$nightly")
+case "$output" in
+*'soak_seconds=60'*'soak_connections=4'*'soak_restarts=1'*) ;;
+*)
+	printf 'qualification-test: leading-zero inputs were not normalized: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+output=$(QUALIFICATION_SCALE_DRY_RUN=1 "$scale")
+case "$output" in
+*'scale_profile=smoke'*'entries=1000'*'max_entries=250000'*'page_size=200'*'acceptance_ceilings='*) ;;
+*)
+	printf 'qualification-test: unexpected scale smoke configuration: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+output=$(QUALIFICATION_SCALE_DRY_RUN=1 \
+	QUALIFICATION_SCALE_PROFILE=nightly \
+	QUALIFICATION_SCALE_ENTRIES=0100000 \
+	QUALIFICATION_SCALE_PAGE_SIZE=01000 \
+	QUALIFICATION_SCALE_MAX_RSS_BYTES=02147483648 "$scale")
+case "$output" in
+*'scale_profile=nightly'*'entries=100000'*'page_size=1000'*'rss_bytes:2147483648'*) ;;
+*)
+	printf 'qualification-test: scale leading-zero inputs were not normalized: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+if QUALIFICATION_SCALE_DRY_RUN=1 QUALIFICATION_SCALE_ENTRIES=1 \
+	"$scale" >/dev/null 2>&1; then
+	printf 'qualification-test: one-entry scale fixture was accepted\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_SCALE_DRY_RUN=1 QUALIFICATION_SCALE_ENTRIES=250001 \
+	"$scale" >/dev/null 2>&1; then
+	printf 'qualification-test: scale entry ceiling was not enforced\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_SCALE_DRY_RUN=1 QUALIFICATION_SCALE_ENTRIES=100 \
+	QUALIFICATION_SCALE_PAGE_SIZE=101 "$scale" >/dev/null 2>&1; then
+	printf 'qualification-test: oversized page was accepted\n' >&2
 	exit 1
 fi
 

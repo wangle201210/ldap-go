@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 2,061 top-level tests against the pinned commit.
+The latest strict run passed 2,081 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -904,6 +904,20 @@ go run ./cmd/ldap-go online-backup \
   -x -H ldapi://%2Frun%2Fldap-go%2Fldapi/ \
   -D cn=admin,dc=example,dc=com -W
 
+# Preview retention. No files are removed without -apply.
+go run ./cmd/ldap-go backup-prune \
+  -dir /var/backups/ldap-go \
+  -prefix ldap-go- \
+  -active-db /var/lib/ldap-go/ldap-go.db \
+  -keep-last 7 -max-age 30d -format json
+
+# Apply the same policy after reviewing the dry-run report.
+go run ./cmd/ldap-go backup-prune \
+  -dir /var/backups/ldap-go \
+  -prefix ldap-go- \
+  -active-db /var/lib/ldap-go/ldap-go.db \
+  -keep-last 7 -max-age 30d -apply
+
 # Machine-readable liveness and syncrepl readiness; unhealthy consumers exit 2.
 go run ./cmd/ldap-go health \
   -x -H ldapi://%2Frun%2Fldap-go%2Fldapi/ \
@@ -911,11 +925,34 @@ go run ./cmd/ldap-go health \
 
 # Offline deployment review; exits 3 for confirmed failures and 4 when unknown.
 go run ./cmd/ldap-go production-check \
-  -db ./data/ldap-go.db -strict \
-  -online-backup-dir /var/backups/ldap-go \
-  -audit-log /var/log/ldap-go/audit.jsonl \
-  -audit-key-file /etc/ldap-go/audit.key
+	  -db ./data/ldap-go.db -strict \
+	  -online-backup-dir /var/backups/ldap-go \
+	  -audit-log /var/log/ldap-go/audit.jsonl \
+	  -audit-key-file /etc/ldap-go/audit.key
+
+# Separate ACL-preserving Web administration process.
+go run ./cmd/ldap-go web-admin \
+	  -listen 127.0.0.1:8080 \
+	  -ldap-url ldap://127.0.0.1:1389
 ```
+
+The Web console opens at `http://127.0.0.1:8080/`. It covers directory tree and
+filter searches, Person/Group/OU/custom entry creation, generic attribute
+editing, rename/move, password modification, LDIF import/export, schema and
+Monitor views. Login performs a real LDAP Bind and retains only that bound LDAP
+connection in the in-memory session; it never opens bbolt or retains the
+plaintext password. Every operation remains subject to the bound identity's
+LDAP ACL, schema, overlays, audit, and runtime configuration. Mutations require
+same-origin CSRF tokens, and sessions use opaque HttpOnly SameSite cookies.
+Non-loopback HTTP requires `-tls-cert` and `-tls-key`; remote `ldap://`
+upstreams require `-ldap-starttls`, while `ldaps://` is supported directly.
+Non-loopback listeners also require a canonical `-public-url`, which pins Host,
+Origin, secure-cookie, and HSTS behavior against DNS rebinding. A loopback
+reverse proxy may set an HTTPS `-public-url` without trusting forwarded identity
+headers. Concurrent LDAP operations and retained Search responses have
+independent per-operation/process limits. `/livez` and `/readyz` expose process
+and LDAP readiness. `/metrics` exposes aggregate Prometheus state on loopback;
+publishing it on a non-loopback origin requires explicit `-public-metrics`.
 
 On Linux, macOS, and FreeBSD, LDAPI SASL EXTERNAL derives the OpenLDAP
 peer-credential identity
@@ -1009,6 +1046,25 @@ validates runtime configuration, full schema/RDN invariants, metadata,
 partitions, and every persisted index posting. Only the exact validated bytes
 may replace the destination; any semantic failure leaves an existing target
 byte-for-byte unchanged.
+
+`backup-prune` is suitable for an external cron or systemd timer and never
+opens the active database. It only enumerates direct children of the required
+absolute private directory and only manages names in the online-backup format
+`PREFIXYYYYMMDDTHHMMSS.NNNNNNNNNZ-<16 lowercase hex>.db`. The explicit prefix
+must end in `-` or `_`. A prefixed malformed name, symbolic link, non-regular
+file, path-component symbolic link, active-database hard link, or file-identity
+change aborts the run. Writable non-sticky ancestor directories are also
+rejected, and the opened directory identity is checked before enumeration. The
+active database must be supplied with `-active-db` and must reside outside the
+backup directory.
+
+The newest `-keep-last` files are always retained. When `-max-age` is also set,
+all files within that age are retained as well; a file is deleted only when
+neither protection applies. Age and ordering use the UTC creation timestamp in
+the generated filename rather than mutable filesystem timestamps. Output is
+stable newest-first text or structured JSON. The command defaults to dry-run
+and requires `-apply` to unlink anything. Windows builds fail closed because
+the command cannot verify private directory ACLs with the portable runtime.
 
 `production-check` uses metadata-only permission inspection. Unix rejects
 untrusted symlink/special path components, ownership mismatches,
@@ -1346,10 +1402,15 @@ direct key access instead of scanning a partition. Startup and writable offline
 tools atomically migrate legacy partitions after loading `cn=config` schema;
 legacy-compatible server routes and full iteration may scan only while no
 migration marker exists. Alias/case/multi-AVA collisions fail atomically, and
-check, backup, restore, rebuild, and reopen preserve or validate the marker.
-Migration size, lock time, and remaining scan paths must still be qualified
-before production use. These limits are part of why ldap-go is not yet a
-complete OpenLDAP drop-in replacement.
+check, backup, restore, rebuild, and reopen preserve or validate the marker. A
+per-partition fingerprint covers naming attribute OIDs, aliases, superiors, and
+equality rules: ordinary `cn=config` publication is O(1), while an actual DN
+normalization change performs one atomic migration. Indexed Search uses an O(1)
+read-only current-state check and enters a write transaction only for stale
+postings. The scale qualification records 1k/10k local evidence and runs 100k
+entries nightly. Custom matching-rule modules and deployment-specific larger
+datasets still require qualification; ldap-go is not a complete OpenLDAP
+drop-in replacement.
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit

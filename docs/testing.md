@@ -108,6 +108,38 @@ make compat
 make full
 ```
 
+The scheduled/manual production evidence workflow adds high-cost checks without
+putting them on the ordinary pull-request critical path:
+
+```sh
+./scripts/test-openldap-full.sh
+QUALIFICATION_NIGHTLY_DRY_RUN=1 ./scripts/qualification/nightly.sh
+./scripts/qualification/nightly.sh
+QUALIFICATION_SCALE_PROFILE=nightly ./scripts/qualification/scale.sh
+LDAP_GO_FUZZ_TIME=10s LDAP_GO_FUZZ_PARALLEL=2 ./scripts/test-fuzz.sh
+make platform-builds
+```
+
+`scripts/qualification/nightly.sh` always runs the ordinary 15-second smoke,
+then its soak, then the deterministic large-directory qualification. The soak
+defaults to 300 seconds, 16 client streams, and two forced restarts. The scale
+profile defaults to 100,000 entries and covers bbolt import/reindex, startup,
+indexed and unindexed Search, paging, Modify/Delete, sampled RSS, graceful
+restart, persistence, and database size. `QUALIFICATION_NIGHTLY_SOAK_SECONDS`
+is constrained to 60-1800, `QUALIFICATION_NIGHTLY_CONNECTIONS` to 1-64,
+`QUALIFICATION_NIGHTLY_RESTARTS` to 0-6, and
+`QUALIFICATION_NIGHTLY_SCALE_ENTRIES` to 1,000-250,000. This prevents a manual
+workflow input from turning a shared runner into an unbounded run. Set
+`QUALIFICATION_NIGHTLY_ARTIFACT_DIR` to retain all three reports locally.
+
+Scale performance and resource ceilings are opt-in because a universal timing,
+RSS, or database-size threshold would encode assumptions about CI hardware and
+storage. The script always enforces entry and command safety bounds, records
+machine-readable JSON evidence, and enforces any explicitly configured
+`QUALIFICATION_SCALE_MAX_*` ceilings. See
+`docs/production-qualification.md` for the complete contract and calibration
+procedure.
+
 `make compat` runs formatting, vet, all Go tests, the selected OpenLDAP
 reference suite, and a bounded fuzz smoke pass. `make full` additionally runs
 the complete suite with the race detector, builds the fixed OpenLDAP 2.6.13
@@ -144,7 +176,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 2,061 top-level tests against
+The latest pinned local strict run passed 2,081 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -748,6 +780,16 @@ restore, and exercise the built-in command. Separate cases reject TCP root,
 anonymous/non-root callers, request values, unsafe destination directories,
 incomplete embedded configuration, and concurrent invocation; the client
 never supplies a filesystem path.
+
+Backup-retention tests exercise newest-first `keep-last`, filename-time
+`max-age`, their union, default dry-run, explicit apply, deterministic text and
+JSON, ignored non-prefixed files, and CLI dispatch. Safety cases reject
+relative paths, broad or escaping prefixes, public directories, symbolic-link
+path components, malformed prefixed names, prefixed directories and links,
+active-database hard links, active database placement inside the backup
+directory, candidate inode replacement, active-database replacement, and
+cancellation before deletion. Link-replacement tests verify that an outside
+target is never followed or removed.
 
 The `slapadd` continuation tests import parent/child records out of order,
 isolate one invalid record, retain successful records, verify line/DN

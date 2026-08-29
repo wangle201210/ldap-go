@@ -3,11 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -1023,6 +1026,240 @@ func TestEnsureSearchEqualityIndexesFirstBuildAndReload(t *testing.T) {
 	assertServerIndexPlanned(t, store, runtime.databases[0], directory.Filter{
 		Kind: directory.FilterEquality, Attribute: "0.9.2342.19200300.100.1.1", Assertion: []byte("A1"),
 	})
+}
+
+func TestIndexedLDAPSearchDoesNotEnterUpdateWhenCurrent(t *testing.T) {
+	backends := []struct {
+		name string
+		open func(*testing.T) storage.Store
+	}{
+		{name: "memory", open: func(*testing.T) storage.Store { return storage.NewMemory() }},
+		{name: "bolt", open: func(t *testing.T) storage.Store {
+			store, err := storage.OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		}},
+	}
+	for _, backend := range backends {
+		backend := backend
+		t.Run(backend.name, func(t *testing.T) {
+			base := backend.open(t)
+			t.Cleanup(func() { _ = base.Close() })
+			store := &indexUpdateCountingStore{Store: base}
+			seedIndexedSearchDirectory(t, store)
+			address, stop := startServer(t, store, Config{
+				RootDN:       "cn=admin,dc=example,dc=com",
+				RootPassword: []byte("admin-secret"),
+			})
+			defer stop()
+			client, err := ldap.DialURL("ldap://" + address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+				t.Fatal(err)
+			}
+			searchIndexedAlice := func() {
+				t.Helper()
+				result, err := client.Search(indexedAliceSearchRequest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(result.Entries) != 1 {
+					t.Fatalf("indexed Search entries = %d, want 1", len(result.Entries))
+				}
+			}
+
+			searchIndexedAlice()
+			store.resetUpdates()
+			searchIndexedAlice()
+			if updates := store.updateCount(); updates != 0 {
+				t.Fatalf("second indexed Search entered Store.Update %d times", updates)
+			}
+		})
+	}
+}
+
+func TestIndexedLDAPSearchDoesNotWaitForHeldBoltWriteWhenCurrent(t *testing.T) {
+	base, err := storage.OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	store := &indexUpdateCountingStore{Store: base}
+	seedIndexedSearchDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "admin-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Search(indexedAliceSearchRequest()); err != nil {
+		t.Fatal(err)
+	}
+	store.resetUpdates()
+
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- base.Update(context.Background(), func(storage.Writer) error {
+			close(writeStarted)
+			<-releaseWrite
+			return nil
+		})
+	}()
+	<-writeStarted
+	released := false
+	release := func() {
+		if !released {
+			close(releaseWrite)
+			released = true
+		}
+	}
+	defer release()
+
+	searchDone := make(chan error, 1)
+	go func() {
+		result, err := client.Search(indexedAliceSearchRequest())
+		if err == nil && len(result.Entries) != 1 {
+			err = fmt.Errorf("indexed Search entries = %d, want 1", len(result.Entries))
+		}
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		release()
+		<-searchDone
+		t.Fatal("indexed Search waited for an unrelated Bolt write transaction")
+	}
+	if updates := store.updateCount(); updates != 0 {
+		t.Fatalf("current indexed Search entered Store.Update %d times", updates)
+	}
+	release()
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureSearchEqualityIndexesRebuildsAfterRawWrite(t *testing.T) {
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizer, config, err := loadDatabaseEqualityIndexes(directory.Entry{
+		DN: "olcDatabase={1}mdb,cn=config",
+		Attributes: []directory.Attribute{{
+			Description: "olcDbIndex",
+			Values:      [][]byte{[]byte("uid eq")},
+		}},
+	}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := storage.NewMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	store := &indexUpdateCountingStore{Store: base}
+	instance := &Server{config: Config{Store: store}}
+	runtime := &runtimeState{databases: []runtimeDatabase{{
+		name:              "{1}mdb",
+		partition:         "db",
+		dnNormalizer:      normalizer,
+		equalityIndexes:   config,
+		equalityIndexInit: &databaseEqualityIndexInitialization{},
+	}}}
+	routes := []databaseSearchRoute{{databaseIndex: 0}}
+	if err := instance.ensureSearchEqualityIndexes(context.Background(), runtime, routes); err != nil {
+		t.Fatal(err)
+	}
+	store.resetUpdates()
+	if err := base.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.PutIn("db", directory.Entry{
+			DN: "uid=raw,dc=example",
+			Attributes: []directory.Attribute{{
+				Description: "uid", Values: [][]byte{[]byte("raw")},
+			}},
+		}, false)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.ensureSearchEqualityIndexes(context.Background(), runtime, routes); err != nil {
+		t.Fatal(err)
+	}
+	if updates := store.updateCount(); updates != 1 {
+		t.Fatalf("stale indexed Search preparation updates = %d, want 1", updates)
+	}
+	assertServerIndexPlanned(t, base, runtime.databases[0], directory.Filter{
+		Kind: directory.FilterEquality, Attribute: "uid", Assertion: []byte("raw"),
+	})
+}
+
+type indexUpdateCountingStore struct {
+	storage.Store
+	updates atomic.Int64
+}
+
+func (store *indexUpdateCountingStore) Update(
+	ctx context.Context,
+	fn func(storage.Writer) error,
+) error {
+	store.updates.Add(1)
+	return store.Store.Update(ctx, fn)
+}
+
+func (store *indexUpdateCountingStore) resetUpdates() {
+	store.updates.Store(0)
+}
+
+func (store *indexUpdateCountingStore) updateCount() int64 {
+	return store.updates.Load()
+}
+
+func seedIndexedSearchDirectory(t *testing.T, store storage.Store) {
+	t.Helper()
+	seedDirectory(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.Get(dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcDbIndex", [][]byte{[]byte("uid eq")})
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func indexedAliceSearchRequest() *ldap.SearchRequest {
+	return ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(uid=alice)",
+		[]string{"uid"},
+		nil,
+	)
 }
 
 func assertServerIndexPlanned(

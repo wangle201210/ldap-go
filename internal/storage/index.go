@@ -231,6 +231,50 @@ func EnsureEqualityIndexes(
 	return indexed.rebuildEqualityIndexes(partition, schema)
 }
 
+// EqualityIndexesCurrent reports whether one partition's persisted DN identity
+// marker and equality-index configuration match the requested schema. It only
+// reads fixed-size metadata and index configuration; it never scans entries or
+// starts a write transaction.
+func EqualityIndexesCurrent(
+	reader Reader,
+	partition string,
+	schema EqualityIndexSchema,
+) (bool, error) {
+	reader = maintenanceReader(reader)
+	if normalizer, ok := schema.(directory.DNAttributeNormalizer); ok && normalizer != nil {
+		marker, err := reader.Metadata(schemaAwareDNMigrationMetadataKey(partition))
+		switch {
+		case errors.Is(err, ErrMetadataNotFound):
+			return false, nil
+		case err != nil:
+			return false, err
+		case len(marker) != 1 || int(marker[0]) != schemaAwareDNIdentityFormatVersion:
+			return false, fmt.Errorf(
+				"partition %q has unsupported DN identity format marker %x",
+				partition,
+				marker,
+			)
+		}
+	}
+	indexed, ok := reader.(equalityIndexStorageReader)
+	if !ok {
+		return false, nil
+	}
+	current, present, err := indexed.equalityIndexConfig(partition)
+	if err != nil || !present {
+		return false, err
+	}
+	want, err := normalizeEqualityIndexConfig(schema.EqualityIndexConfiguration())
+	if err != nil {
+		return false, err
+	}
+	current, err = normalizeEqualityIndexConfig(current)
+	if err != nil {
+		return false, nil
+	}
+	return equalityIndexConfigsEqual(current, want), nil
+}
+
 func putPartitionEntryWithEqualityIndexes(
 	writer Writer,
 	partition string,

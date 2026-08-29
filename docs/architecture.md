@@ -282,10 +282,14 @@ invalidated configurations fall back to the normal partition scan. Scope,
 complete filter evaluation, overlays, ACLs, sorting, paging, and VLV always run
 after candidate selection. Posting and entry changes share the write
 transaction for Add/replace/Delete/ModifyDN. Raw storage writes invalidate the
-configuration fingerprint, while startup/config changes and offline maintenance
-rebuild or validate the postings. These indexes are an internal bbolt format,
-not imported OpenLDAP MDB index pages, and their performance at production
-scale remains unqualified. Approximate filter evaluation uses OpenLDAP-style
+configuration fingerprint. Search checks the persisted DN marker and index
+configuration through a read-only O(1) metadata path; only stale state takes the
+per-database rebuild mutex and a write transaction, with a second read check
+inside that mutex. Startup/config changes and offline maintenance rebuild or
+validate postings. These indexes are an internal bbolt format, not imported
+OpenLDAP MDB index pages. A bounded qualification runs 1k/10k locally and 100k
+entries nightly while recording latency, RSS, restart, paging, mutation, and
+database-size evidence. Approximate filter evaluation uses OpenLDAP-style
 UTF-8 compatibility normalization, word ordering, and Metaphone for associated
 Directory String and IA5 rules, with equality fallback where no approximate
 rule is associated. Phonetic postings are not stored, so associated approximate
@@ -886,6 +890,31 @@ ldap-go extension `olcAutoCAProfile=sm2-sm3` selects SM2 keys and SM3
 signatures; it does not imply that an unmodified OpenLDAP server understands
 that configuration attribute. AutoCA currently stores material in LDAP but
 does not install `olcAutoCAlocalDN` material into the listener TLS context.
+
+## Web administration boundary
+
+`ldap-go web-admin` is a separate HTTP process and never receives a
+`storage.Store`. Login creates a fresh LDAP connection, performs a real Bind,
+and retains that bound connection under a random server-side session token;
+plaintext credentials are not retained. Directory browsing, CRUD, rename,
+Password Modify, schema and Monitor views, and bounded LDIF import/export all
+use the same bound connection, leaving LDAP ACL, schema, overlays, audit, and
+runtime reload behavior authoritative.
+
+Plain HTTP and LDAP upstreams are accepted only on loopback. Other HTTP
+listeners require HTTPS, while remote LDAP requires LDAPS or mandatory
+StartTLS. Sessions have idle and absolute expiry, maximum-count admission,
+background connection cleanup, opaque HttpOnly SameSite cookies, same-origin
+checks, and constant-time CSRF validation. Login attempts, request bodies,
+filters, attributes, Search results, LDIF records, export bytes, and Monitor
+responses are independently bounded, including global LDAP-operation admission
+and per-operation/process retained-response byte budgets. Web LDIF rejects controls and all URL
+values before parsing so it cannot read files from the administration host.
+Static assets are embedded with a restrictive CSP. Unauthenticated `/livez`,
+`/readyz`, and loopback `/metrics` expose only process/transport state and
+aggregate counters, never DNs or LDAP values. A canonical external URL pins
+Host, Origin, Secure-cookie, and HSTS behavior against DNS rebinding; public
+metrics require a separate explicit opt-in.
 
 ## Data migration contract
 

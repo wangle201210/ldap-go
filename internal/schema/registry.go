@@ -2,6 +2,8 @@ package schema
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -843,6 +845,37 @@ func (registry *Registry) AttributeTypeDescriptions() []string {
 		}
 		result = append(result, FormatAttributeType(attributes[i]))
 	}
+	return result
+}
+
+// DNIdentityFingerprint identifies every schema input that can affect a
+// naming attribute's canonical type or equality normalization. It deliberately
+// includes hidden attribute types and a format label so an implementation
+// change can force one explicit storage migration.
+func (registry *Registry) DNIdentityFingerprint() [sha256.Size]byte {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("ldap-go:dn-identity:v2\x00"))
+	var length [8]byte
+	writeString := func(value string) {
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = hash.Write(length[:])
+		_, _ = hash.Write([]byte(value))
+	}
+	for _, attribute := range uniqueAttributeTypes(registry.attributes) {
+		writeString(attribute.OID)
+		binary.BigEndian.PutUint64(length[:], uint64(len(attribute.Names)))
+		_, _ = hash.Write(length[:])
+		for _, name := range attribute.Names {
+			writeString(name)
+		}
+		writeString(attribute.Superior)
+		writeString(attribute.Equality)
+	}
+	var result [sha256.Size]byte
+	copy(result[:], hash.Sum(nil))
 	return result
 }
 

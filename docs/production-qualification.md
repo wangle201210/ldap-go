@@ -25,6 +25,15 @@ one forced server restart:
 make qualification-smoke
 ```
 
+Run the deterministic large-directory smoke profile. This is a separate
+qualification because it measures import, index construction, startup, query,
+resident memory, durable writes, and database size rather than sustained
+concurrent throughput:
+
+```sh
+./scripts/qualification/scale.sh
+```
+
 Run the one-hour soak profile with 128 client streams, batches of 100 Search or
 Modify operations per connection, and 12 forced restarts:
 
@@ -39,6 +48,100 @@ so each batch stays on one authenticated LDAP connection. Compare, Bind, and
 Add/Delete use shorter connections. A client stream is therefore a concurrent
 workload source; it is not a guarantee that every configured stream is inside
 an LDAP operation at the same instant.
+
+## Large-directory qualification
+
+`scripts/qualification/scale.sh` generates deterministic LDIF and exercises a
+real `ldap-go` binary with a bbolt database. The smoke profile defaults to 1,000
+people. The bounded nightly profile defaults to 100,000 people:
+
+```sh
+QUALIFICATION_SCALE_PROFILE=nightly \
+QUALIFICATION_SCALE_ARTIFACT_DIR=/var/tmp/ldap-go-scale-100k \
+./scripts/qualification/scale.sh
+```
+
+The test performs and validates this ordered lifecycle:
+
+1. Generate a stable `cn=config` plus content LDIF. `uid` has an equality
+   index; `description` deliberately has no index.
+2. Atomically import the LDIF, then run offline `slapindex` for `uid`.
+3. Start a real loopback LDAP process on an ephemeral port and require an
+   authenticated Who Am I readiness probe.
+4. Measure an indexed equality Search, a bounded negative Search over the
+   unindexed `description`, and RFC 2696 paging over the complete population.
+5. Modify one entry, delete a different entry, and sample RSS before and after
+   the workload.
+6. Stop gracefully, measure bbolt size, restart the same database, verify the
+   durable Modify/Delete results, sample RSS again, stop gracefully, and run an
+   offline database check.
+
+The generated LDIF is deterministic for a given entry count. Server ports,
+timestamps, generated bbolt pages, and measured resource values are naturally
+host-specific. The unindexed query has a client timeout, an LDAP time limit,
+and the script-wide command deadline; it must return no entries successfully.
+
+### Scale parameters
+
+| Variable | Smoke default | Nightly default | Meaning |
+| --- | ---: | ---: | --- |
+| `QUALIFICATION_SCALE_PROFILE` | `smoke` | `nightly` | Select profile defaults |
+| `QUALIFICATION_SCALE_ENTRIES` | `1000` | `100000` | Generated `inetOrgPerson` entries |
+| `QUALIFICATION_SCALE_MAX_ENTRIES` | `250000` | `250000` | Run-local and absolute entry safety cap |
+| `QUALIFICATION_SCALE_PAGE_SIZE` | `200` | `10000` | RFC 2696 page size; nightly keeps the default run near ten pages |
+| `QUALIFICATION_SCALE_SEARCH_CANDIDATE_BYTES` | derived | derived | Per-Search retained-candidate budget: max(64 MiB, entries x 8 KiB), capped at 2 GiB |
+| `QUALIFICATION_SCALE_SEARCH_MEMORY_BYTES` | derived | derived | Process retained-Search budget: twice the candidate budget, capped at 4 GiB |
+| `QUALIFICATION_SCALE_SAFETY_TIMEOUT_SECONDS` | `1800` | `1800` | Hard deadline for each build/import/query/check command |
+| `QUALIFICATION_SCALE_STARTUP_TIMEOUT_SECONDS` | `180` | `180` | Per-generation readiness deadline |
+| `QUALIFICATION_SCALE_SHUTDOWN_TIMEOUT_SECONDS` | `60` | `60` | Graceful-stop deadline before forced cleanup |
+| `QUALIFICATION_SCALE_UNINDEXED_TIME_LIMIT_SECONDS` | `60` | `60` | Server-side bound for the negative unindexed Search |
+| `QUALIFICATION_SCALE_CLIENT_TIMEOUT` | `120s` | `120s` | LDAP client network/request timeout |
+| `QUALIFICATION_SCALE_BINARY` | built locally | built locally | Existing executable to test |
+| `QUALIFICATION_SCALE_ARTIFACT_DIR` | temporary path | temporary path | New evidence directory |
+| `QUALIFICATION_SCALE_DRY_RUN` | `0` | `0` | Validate and print the effective profile without generating data |
+
+`QUALIFICATION_SCALE_MAX_ENTRIES`, the retained-Search budgets, and the timeout
+variables are safety bounds and always apply. The derived Search budgets allow
+the test to page over its configured population without silently inheriting a
+small-directory default, while preserving finite process admission. Performance
+acceptance ceilings are independently configurable and default to `0`, meaning
+record but do not reject:
+
+- `QUALIFICATION_SCALE_MAX_GENERATE_MS`
+- `QUALIFICATION_SCALE_MAX_IMPORT_MS`
+- `QUALIFICATION_SCALE_MAX_REINDEX_MS`
+- `QUALIFICATION_SCALE_MAX_STARTUP_MS`
+- `QUALIFICATION_SCALE_MAX_INDEXED_SEARCH_MS`
+- `QUALIFICATION_SCALE_MAX_UNINDEXED_SEARCH_MS`
+- `QUALIFICATION_SCALE_MAX_PAGING_MS`
+- `QUALIFICATION_SCALE_MAX_MUTATION_MS`
+- `QUALIFICATION_SCALE_MAX_SHUTDOWN_MS`
+- `QUALIFICATION_SCALE_MAX_RSS_BYTES`
+- `QUALIFICATION_SCALE_MAX_RSS_GROWTH_BYTES`
+- `QUALIFICATION_SCALE_MAX_DATABASE_BYTES`
+
+This split is intentional. Repository-wide timing or RSS constants would be
+flaky across developer laptops, shared CI runners, production storage classes,
+and cold versus warm filesystem caches. Establish ceilings from repeated runs
+on the target host class, retain the median and high-percentile evidence, then
+set release thresholds with explicit headroom. For example:
+
+```sh
+QUALIFICATION_SCALE_PROFILE=nightly \
+QUALIFICATION_SCALE_MAX_STARTUP_MS=45000 \
+QUALIFICATION_SCALE_MAX_INDEXED_SEARCH_MS=1000 \
+QUALIFICATION_SCALE_MAX_UNINDEXED_SEARCH_MS=30000 \
+QUALIFICATION_SCALE_MAX_PAGING_MS=120000 \
+QUALIFICATION_SCALE_MAX_RSS_BYTES=2147483648 \
+QUALIFICATION_SCALE_MAX_DATABASE_BYTES=3221225472 \
+./scripts/qualification/scale.sh
+```
+
+If an RSS ceiling is configured on a platform where neither `/proc` nor
+`ps -o rss` provides a measurement, the qualification fails rather than
+silently accepting an unverified ceiling. RSS is sampled once per second plus
+at workload boundaries, so `rss_peak_sampled_bytes` is not a profiler-grade
+instantaneous peak.
 
 ## Parameters
 
@@ -148,6 +251,14 @@ files are:
 | `final-online.ldif` | Final online query evidence |
 | `final.ldif` | Full offline export used for semantic validation |
 
+The scale qualification writes its own `report.json`, `effective-config.env`,
+`seed.ldif`, `rss-samples.tsv`, operation LDIF/log files, per-generation server
+stdout, `server.log`, and `check.log`. Its JSON report contains every observed
+duration, initial/post-workload/post-restart RSS, sampled peak RSS, RSS growth,
+bbolt size, applied ceilings, safety bounds, validated page count, and binary
+and seed-LDIF SHA-256 values. A runtime failure still emits a JSON report with
+`result: "fail"` and the last phase before cleanup.
+
 The temporary `-y` password file is mode `0600` while the run is active and is
 removed on normal success, failure, or interruption. The password value is not
 included in the configuration snapshot or report.
@@ -159,8 +270,10 @@ minimum throughput, maximum failure percentage, maximum restart recovery time,
 and required soak duration before running the test. The repository defaults are
 intended to catch functional regressions quickly; they are not production SLOs.
 
-The runner currently reports operation throughput and whole-second restart
-recovery intervals. Use external host telemetry for CPU, RSS, disk latency,
-fsync behavior, open descriptors, and subsecond latency percentiles. Those
-measurements are environment-specific and should be correlated by timestamps
-with `crash-events.tsv` and the worker event logs.
+The concurrent runner currently reports operation throughput and whole-second
+restart recovery intervals. The scale runner adds millisecond timings where
+the host `date` supports nanoseconds and records its clock resolution otherwise.
+It also samples server RSS. Continue to use external host telemetry for CPU,
+instantaneous peak RSS, disk latency, fsync behavior, open descriptors, and
+latency percentiles. Those measurements are environment-specific and should be
+correlated with `crash-events.tsv`, worker events, and `rss-samples.tsv`.

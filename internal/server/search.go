@@ -2166,29 +2166,69 @@ func (server *Server) ensureSearchEqualityIndexes(
 		if !ok {
 			continue
 		}
+		current, err := server.searchEqualityIndexesCurrent(
+			ctx,
+			database.partition,
+			schema,
+		)
+		if err != nil {
+			server.logSearchEqualityIndexError(database, err)
+			return err
+		}
+		if current {
+			continue
+		}
 		initialization.mu.Lock()
-		err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
-			return storage.EnsureEqualityIndexes(
-				writer,
-				database.partition,
-				schema,
-			)
-		})
+		current, err = server.searchEqualityIndexesCurrent(
+			ctx,
+			database.partition,
+			schema,
+		)
+		if err == nil && !current {
+			err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+				return storage.EnsureEqualityIndexes(
+					writer,
+					database.partition,
+					schema,
+				)
+			})
+		}
 		if err == nil {
 			initialization.ready = true
 		}
 		initialization.mu.Unlock()
 		if err != nil {
-			server.config.Logger.Error(
-				"prepare LDAP equality indexes",
-				"database", database.name,
-				"partition", database.partition,
-				"error", err,
-			)
+			server.logSearchEqualityIndexError(database, err)
 			return err
 		}
 	}
 	return nil
+}
+
+func (server *Server) searchEqualityIndexesCurrent(
+	ctx context.Context,
+	partition string,
+	schema storage.EqualityIndexSchema,
+) (bool, error) {
+	var current bool
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		current, err = storage.EqualityIndexesCurrent(reader, partition, schema)
+		return err
+	})
+	return current, err
+}
+
+func (server *Server) logSearchEqualityIndexError(
+	database *runtimeDatabase,
+	err error,
+) {
+	server.config.Logger.Error(
+		"prepare LDAP equality indexes",
+		"database", database.name,
+		"partition", database.partition,
+		"error", err,
+	)
 }
 
 func selectedSearchEntries(candidates []searchCandidate) []directory.Entry {

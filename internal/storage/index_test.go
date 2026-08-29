@@ -281,6 +281,66 @@ func TestEqualityIndexMemoryAndBoltLifecycle(t *testing.T) {
 	}
 }
 
+func TestEqualityIndexesCurrentThroughMaintenanceReader(t *testing.T) {
+	for _, backend := range []string{"memory", "bolt"} {
+		backend := backend
+		t.Run(backend, func(t *testing.T) {
+			store := openIndexTestStore(t, backend)
+			defer store.Close()
+			ctx := context.Background()
+			schema := indexTestSchema{config: indexTestCNConfig()}
+			assertCurrent := func(want bool) {
+				t.Helper()
+				if err := store.View(ctx, func(reader Reader) error {
+					current, err := EqualityIndexesCurrent(
+						indexMaintenanceReader{Reader: reader},
+						"db",
+						schema,
+					)
+					if err != nil {
+						return err
+					}
+					if current != want {
+						t.Fatalf("EqualityIndexesCurrent() = %v, want %v", current, want)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			assertCurrent(false)
+			if err := store.Update(ctx, func(writer Writer) error {
+				return WriterInPartitionWithNormalizer(writer, "db", schema).Put(
+					indexTestEntry("cn=Alice,dc=example", "Alice", "a1"),
+					false,
+				)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertCurrent(true)
+			if err := store.Update(ctx, func(writer Writer) error {
+				return writer.PutIn(
+					"db",
+					indexTestEntry("cn=Raw,dc=example", "Raw", "r1"),
+					false,
+				)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertCurrent(false)
+		})
+	}
+}
+
+type indexMaintenanceReader struct {
+	Reader
+}
+
+func (reader indexMaintenanceReader) MaintenanceStorageReader() Reader {
+	return reader.Reader
+}
+
 func testEqualityIndexLifecycle(t *testing.T, store Store) {
 	t.Helper()
 	ctx := context.Background()

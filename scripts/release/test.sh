@@ -54,4 +54,35 @@ grep -F 'release-gate:' "$root/Makefile" >/dev/null
 grep -F 'release-build:' "$root/Makefile" >/dev/null
 grep -F 'release-upgrade-gate:' "$root/Makefile" >/dev/null
 
+nightly=$root/.github/workflows/nightly-production.yml
+[ -r "$nightly" ] || {
+	printf 'release-test: nightly production workflow is missing\n' >&2
+	exit 1
+}
+for contract in \
+	'schedule:' \
+	'workflow_dispatch:' \
+	'./scripts/test-openldap-full.sh' \
+	'./scripts/qualification/nightly.sh' \
+	'./scripts/test-fuzz.sh' \
+	'make platform-builds'; do
+	grep -F -- "$contract" "$nightly" >/dev/null || {
+		printf 'release-test: nightly workflow is missing %s\n' "$contract" >&2
+		exit 1
+	}
+done
+
+upgrade=$root/scripts/release/upgrade-gate.sh
+for contract in \
+	'fixture_profile=enhanced' \
+	'olcDbIndex: releaseExactName eq,sub' \
+	'releaseExactName=Alice+releaseFoldName=Engineering' \
+	'dn: olcDatabase={2}mdb,cn=config' \
+	'verify_live_semantics'; do
+	grep -F -- "$contract" "$upgrade" >/dev/null || {
+		printf 'release-test: enhanced upgrade fixture is missing %s\n' "$contract" >&2
+		exit 1
+	}
+done
+
 printf 'Release script checks passed: 6 targets; previous ref %s.\n' "$previous_ref"

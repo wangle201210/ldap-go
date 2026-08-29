@@ -118,6 +118,8 @@ func runWithContextAndSignals(
 		err = runAuditVerify(args[1:], stdout, stderr, getenv)
 	case "backup":
 		err = runBackup(ctx, args[1:], stdout, stderr)
+	case "backup-prune":
+		err = runBackupPrune(ctx, args[1:], stdout, stderr)
 	case "online-backup":
 		err = runOnlineBackup(args[1:], stdin, stdout, stderr)
 	case "production-check":
@@ -166,6 +168,8 @@ func runWithContextAndSignals(
 		err = runRestore(ctx, args[1:], stdout, stderr)
 	case "serve":
 		err = runServe(ctx, management, args[1:], stdout, stderr, getenv)
+	case "web-admin":
+		err = runWebAdmin(ctx, args[1:], stdout, stderr)
 	case "version":
 		_, err = fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
@@ -2257,6 +2261,7 @@ func printUsage(writer io.Writer) {
 commands:
   audit-verify  verify an HMAC-chained audit log
   backup   create and validate an atomic bbolt backup (offline)
+  backup-prune  safely apply retention to generated backups (dry-run by default)
   online-backup  request a root-authorized backup from a running LDAPI server
   production-check  validate offline production readiness and emit a report
   check    check bbolt pages, buckets, keys, entries, and metadata (offline)
@@ -2287,7 +2292,8 @@ commands:
   rebuild  compact and atomically rebuild the bbolt database (offline)
   reindex  alias for rebuild
   slapindex  whole-database bbolt rebuild alias
-  restore  validate and atomically restore a bbolt backup (offline)
-  serve    serve the persistent directory over LDAP
-  version  print the build version`)
+	  restore  validate and atomically restore a bbolt backup (offline)
+	  serve    serve the persistent directory over LDAP
+	  web-admin  serve the ACL-preserving LDAP Web administration console
+	  version  print the build version`)
 }
