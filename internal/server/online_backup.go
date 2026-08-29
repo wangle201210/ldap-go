@@ -33,13 +33,15 @@ func (server *Server) handleOnlineBackup(
 		if report != nil {
 			value, _ = json.Marshal(report)
 		}
-		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
+			ldapwire.ApplicationExtendedResponse,
 			result,
 			onlineBackupOID,
 			value,
 			nil,
-		))
+		)
 	}
 	if request.HasValue {
 		return writeResult(

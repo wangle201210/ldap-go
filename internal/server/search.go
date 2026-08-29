@@ -315,7 +315,7 @@ func (server *Server) handleSearch(
 			ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, ""),
 		)
 	}
-	paging, pagingFailure := preparePagedSearch(
+	paging, pagingFailure := server.preparePagedSearch(
 		state,
 		request,
 		message.Controls,
@@ -328,6 +328,9 @@ func (server *Server) handleSearch(
 			message.ID,
 			*pagingFailure,
 		)
+	}
+	if paging != nil {
+		defer paging.releaseRetainedMemory()
 	}
 	if paging != nil && paging.abandoned {
 		return server.writeSearchDone(
@@ -517,13 +520,20 @@ func (server *Server) handleSearch(
 			}
 			sortLease = lease
 			var err error
-			view, err = startVirtualListView(
+			view, err = server.startVirtualListView(
 				state,
 				virtualListView,
 				nil,
 				sortLease,
 			)
 			if err != nil {
+				if errors.Is(err, errVirtualListViewMemoryLimit) {
+					return server.writeSearchDone(
+						connection,
+						message.ID,
+						ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, err.Error()),
+					)
+				}
 				return fmt.Errorf("create special-entry VLV context: %w", err)
 			}
 			sortLease = nil
@@ -1154,6 +1164,12 @@ func (server *Server) handleSearch(
 
 	candidates := make([]searchCandidate, 0)
 	var candidateBytes int64
+	var processSearchBytes int64
+	defer func() {
+		if processSearchBytes > 0 {
+			server.searchMemoryLimiter.release(processSearchBytes)
+		}
+	}()
 	references := make([][]string, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	entryLimit := limit
@@ -1172,7 +1188,16 @@ func (server *Server) handleSearch(
 	)
 
 	server.prepareAutoCASearch(ctx, state, request, routes)
-	server.ensureSearchEqualityIndexes(ctx, state.runtime, routes)
+	if err := server.ensureSearchEqualityIndexes(ctx, state.runtime, routes); err != nil {
+		return server.writeSearchDone(
+			connection,
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultOperationsError,
+				"cannot prepare configured search indexes",
+			),
+		)
+	}
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		if syncSearch != nil {
 			if err := syncSearch.captureSnapshot(reader); err != nil {
@@ -1750,8 +1775,11 @@ func (server *Server) handleSearch(
 					cursorKey: candidateOrderKey,
 					syncUUID:  syncUUID,
 				}
-				candidateBytes += searchCandidateRetainedBytes(retainedCandidate)
-				if candidateBytes > server.config.MaxSearchCandidateBytes ||
+				candidateSize := searchCandidateRetainedBytes(retainedCandidate)
+				if candidateSize <= 0 {
+					candidateSize = 1
+				}
+				if candidateSize > server.config.MaxSearchCandidateBytes-candidateBytes ||
 					(sorting.active() && len(candidates) >= server.config.MaxSearchCandidates) {
 					candidates = nil
 					result = ldapwire.ResultError(
@@ -1760,6 +1788,16 @@ func (server *Server) handleSearch(
 					)
 					return errStopSearch
 				}
+				if !server.searchMemoryLimiter.tryAcquire(candidateSize) {
+					candidates = nil
+					result = ldapwire.ResultError(
+						ldapwire.ResultAdminLimitExceeded,
+						"process search memory budget exceeded",
+					)
+					return errStopSearch
+				}
+				candidateBytes += candidateSize
+				processSearchBytes += candidateSize
 				candidates = append(candidates, retainedCandidate)
 				if !sorting.active() {
 					lastCursor = pagedSearchCursor{
@@ -1799,11 +1837,12 @@ func (server *Server) handleSearch(
 			clearPagedSearch(state)
 		}
 		if failure := asOperationFailure(err); failure != nil {
-			return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
+			return server.writeSearchDoneWithControls(
+				connection,
 				message.ID,
 				failure.result,
 				failure.controls,
-			))
+			)
 		}
 		return fmt.Errorf("search directory: %w", err)
 	}
@@ -1827,6 +1866,21 @@ func (server *Server) handleSearch(
 	}
 
 	if sorting.active() {
+		additionalReservation := candidateBytes +
+			int64(len(candidates)*len(sorting.keys)*32)
+		if additionalReservation > 0 &&
+			!server.searchMemoryLimiter.tryAcquire(additionalReservation) {
+			candidates = nil
+			result = ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				"process search sort memory budget exceeded",
+			)
+			sorting.fail(ldapwire.ResultAdminLimitExceeded, "")
+		} else {
+			processSearchBytes += additionalReservation
+		}
+	}
+	if sorting.active() && result.Code == ldapwire.ResultSuccess {
 		if err := sortSearchCandidates(
 			state.runtime.schema,
 			sorting,
@@ -1874,13 +1928,20 @@ func (server *Server) handleSearch(
 		view := virtualListView.state
 		if view == nil {
 			var err error
-			view, err = startVirtualListView(
+			view, err = server.startVirtualListView(
 				state,
 				virtualListView,
 				candidates,
 				sortLease,
 			)
 			if err != nil {
+				if errors.Is(err, errVirtualListViewMemoryLimit) {
+					return server.writeSearchDone(
+						connection,
+						message.ID,
+						ldapwire.ResultError(ldapwire.ResultAdminLimitExceeded, err.Error()),
+					)
+				}
 				return fmt.Errorf("create VLV context: %w", err)
 			}
 			sortLease = nil
@@ -2086,7 +2147,7 @@ func (server *Server) ensureSearchEqualityIndexes(
 	ctx context.Context,
 	runtime *runtimeState,
 	routes []databaseSearchRoute,
-) {
+) error {
 	seen := make(map[int]struct{}, len(routes))
 	for _, route := range routes {
 		if _, duplicate := seen[route.databaseIndex]; duplicate {
@@ -2106,10 +2167,6 @@ func (server *Server) ensureSearchEqualityIndexes(
 			continue
 		}
 		initialization.mu.Lock()
-		if initialization.ready {
-			initialization.mu.Unlock()
-			continue
-		}
 		err := server.config.Store.Update(ctx, func(writer storage.Writer) error {
 			return storage.EnsureEqualityIndexes(
 				writer,
@@ -2121,7 +2178,17 @@ func (server *Server) ensureSearchEqualityIndexes(
 			initialization.ready = true
 		}
 		initialization.mu.Unlock()
+		if err != nil {
+			server.config.Logger.Error(
+				"prepare LDAP equality indexes",
+				"database", database.name,
+				"partition", database.partition,
+				"error", err,
+			)
+			return err
+		}
 	}
+	return nil
 }
 
 func selectedSearchEntries(candidates []searchCandidate) []directory.Entry {
@@ -3237,7 +3304,7 @@ func (server *Server) writeSearchResultResponse(
 		len(entries),
 	)
 	responseControls = append(responseControls, additionalControls...)
-	pagingControls, err := completePagedSearch(
+	pagingControls, err := server.completePagedSearch(
 		state,
 		paging,
 		result,
@@ -3246,6 +3313,16 @@ func (server *Server) writeSearchResultResponse(
 		hasMore,
 	)
 	if err != nil {
+		if errors.Is(err, errPagedSearchMemoryLimit) {
+			return server.writeSearchDone(
+				connection,
+				messageID,
+				ldapwire.ResultError(
+					ldapwire.ResultAdminLimitExceeded,
+					err.Error(),
+				),
+			)
+		}
 		return fmt.Errorf("complete paged search: %w", err)
 	}
 	responseControls = append(responseControls, pagingControls...)
@@ -3255,13 +3332,11 @@ func (server *Server) writeSearchResultResponse(
 			state,
 			entry,
 		)
-		if err := ldapwire.Write(
+		if err := server.writeSearchEntry(
 			connection,
-			ldapwire.EncodeSearchResultEntry(
-				messageID,
-				entry,
-				entryControls,
-			),
+			messageID,
+			entry,
+			entryControls,
 		); err != nil {
 			return err
 		}
@@ -3291,6 +3366,27 @@ func (server *Server) writeSearchResultResponse(
 		result,
 		responseControls,
 	)
+}
+
+func (server *Server) writeSearchEntry(
+	connection net.Conn,
+	messageID int64,
+	entry directory.Entry,
+	controls []ldapwire.Control,
+) error {
+	size := ldapwire.SearchResultEntryEncodedSize(messageID, entry, controls)
+	if server.config.MaxResponsePDUBytes > 0 && size > server.config.MaxResponsePDUBytes {
+		return errSearchResponseLimit
+	}
+	reserved := server.responseByteLimiter.limit() > 0
+	if reserved && !server.responseByteLimiter.tryAcquire(size) {
+		return errSearchResponseLimit
+	}
+	encoded := ldapwire.EncodeSearchResultEntry(messageID, entry, controls)
+	if reserved {
+		server.responseByteLimiter.release(size)
+	}
+	return ldapwire.Write(connection, encoded)
 }
 
 var (

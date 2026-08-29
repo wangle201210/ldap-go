@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -49,6 +51,24 @@ func TestLDAPTransactionQueueLimitDefaultsAndValidation(t *testing.T) {
 				t.Fatalf("New() error = %v, want %q", err, test.text)
 			}
 		})
+	}
+}
+
+func TestLDAPTransactionRetainedBytesReleaseExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	limiter := newResourceByteLimiter(16)
+	if !limiter.tryAcquire(7) {
+		t.Fatal("acquire transaction bytes failed")
+	}
+	transaction := &ldapTransaction{
+		retainedBytes:   7,
+		releaseRetained: limiter.release,
+	}
+	clearLDAPTransaction(transaction)
+	clearLDAPTransaction(transaction)
+	if limiter.active.Load() != 0 {
+		t.Fatalf("transaction retained bytes = %d, want 0", limiter.active.Load())
 	}
 }
 
@@ -141,6 +161,91 @@ func TestLDAPTransactionQueueLimitsSendAbortedNotice(t *testing.T) {
 			assertRawLDAPResult(t, abortResponse, int64(ldapwire.ResultSuccess))
 		})
 	}
+}
+
+func TestLDAPTransactionRespectsProcessPendingByteLimit(t *testing.T) {
+	t.Parallel()
+
+	entry := transactionTestPerson("process-byte-limit")
+	requestSize := rawLDAPRequestRetainedSizeWithControls(
+		t,
+		3,
+		rawAddRequest(entry),
+		rawTransactionSpecificationControl(nil, true, true),
+	)
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:                   "cn=admin,dc=example,dc=com",
+		RootPassword:             []byte("admin-secret"),
+		MaxPendingOperationBytes: requestSize,
+	})
+	defer stop()
+	connection := dialAndBindRawLDAP(
+		t, address, "cn=admin,dc=example,dc=com", "admin-secret",
+	)
+	defer connection.Close()
+	identifier := startRawLDAPTransaction(t, connection, 2)
+	if len(identifier) != 0 {
+		t.Fatalf("transaction identifier = %x, want empty", identifier)
+	}
+	notice := sendRawLDAPOperation(
+		t,
+		connection,
+		3,
+		rawAddRequest(entry),
+		rawTransactionSpecificationControl(identifier, true, true),
+	)
+	assertAbortedTransactionNotice(t, notice, identifier)
+	if transactionEntryExists(t, store, entry.DN) {
+		t.Fatal("process-byte-limited transaction retained its Add")
+	}
+	newIdentifier := startRawLDAPTransaction(t, connection, 4)
+	abortResponse := endRawLDAPTransaction(t, connection, 5, false, newIdentifier)
+	assertRawLDAPResult(t, abortResponse, int64(ldapwire.ResultSuccess))
+}
+
+func rawLDAPRequestRetainedSizeWithControls(
+	t *testing.T,
+	messageID int64,
+	operation *ber.Packet,
+	controls ...*ber.Packet,
+) int64 {
+	t.Helper()
+	message := ber.NewSequence("LDAPMessage")
+	message.AppendChild(ber.NewInteger(
+		ber.ClassUniversal,
+		ber.TypePrimitive,
+		ber.TagInteger,
+		messageID,
+		"messageID",
+	))
+	message.AppendChild(operation)
+	if len(controls) != 0 {
+		wrapper := ber.Encode(
+			ber.ClassContext,
+			ber.TypeConstructed,
+			0,
+			nil,
+			"controls",
+		)
+		for _, control := range controls {
+			wrapper.AppendChild(control)
+		}
+		message.AppendChild(wrapper)
+	}
+	encoded := message.Bytes()
+	decoded, encodedSize, err := ldapwire.ReadMessageWithDynamicFilterDepthAndSize(
+		bytes.NewReader(encoded),
+		int64(len(encoded)),
+		math.MaxUint64,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("decode retained-size LDAP request: %v", err)
+	}
+	return ldapMessageRetainedBytes(decoded, int64(encodedSize))
 }
 
 func TestLDAPUnbindAbortsTransactionWithoutNotice(t *testing.T) {

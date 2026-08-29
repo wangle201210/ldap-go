@@ -499,6 +499,64 @@ func TestSeqmodOperationBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("RFC 3909 Cancel removes active update waiter", func(t *testing.T) {
+		connection := dialAndBindRawLDAP(
+			t,
+			address,
+			syncTestRootDN,
+			syncTestRootPassword,
+		)
+		defer connection.Close()
+		release, _ := data.coordinator.acquire(context.Background(), alice.Key())
+		writeRawLDAPRequest(
+			t,
+			connection,
+			2,
+			rawModifyReplaceRequest(
+				alice.String(),
+				"description",
+				"RFC 3909 canceled update",
+			),
+			nil,
+		)
+		waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 2)
+		writeRawLDAPRequest(
+			t,
+			connection,
+			3,
+			rawExtendedRequest(
+				cancelOID,
+				ldapwire.EncodeCancelRequestValue(2),
+				true,
+			),
+			nil,
+		)
+		updateResponse := readRawLDAPPacket(t, connection)
+		assertRawLDAPEnvelope(
+			t,
+			updateResponse,
+			2,
+			ldapwire.ApplicationModifyResponse,
+			int64(ldap.LDAPResultCanceled),
+		)
+		cancelResponse := readRawLDAPPacket(t, connection)
+		assertRawLDAPEnvelope(
+			t,
+			cancelResponse,
+			3,
+			ldapwire.ApplicationExtendedResponse,
+			int64(ldap.LDAPResultSuccess),
+		)
+		waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 1)
+		release()
+		entry := readStoredEntry(t, store, alice.String())
+		for _, value := range entry.Values("description") {
+			if string(value) == "RFC 3909 canceled update" {
+				t.Fatal("canceled Modify was committed")
+			}
+		}
+	})
+
 	t.Run("downstream failure releases both instances", func(t *testing.T) {
 		client := dialLDAPRoot(t, address)
 		defer client.Close()

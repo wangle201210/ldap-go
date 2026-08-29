@@ -991,6 +991,12 @@ func (server *Server) executeChainTarget(
 		}
 		defer unregister()
 	}
+	if chainDelegatedRequestMayCommit(message.Request) {
+		if err := disableTrackedOperationCancellationForRemoteCommit(operationCtx); err != nil {
+			attempt.transportErr = err
+			return attempt
+		}
+	}
 	connection := transport.currentConnection()
 	if pool != nil {
 		writeContext := operationCtx
@@ -1261,6 +1267,18 @@ func (server *Server) executeChainTarget(
 		attempt.result = result
 		attempt.hasResult = true
 		return attempt
+	}
+}
+
+func chainDelegatedRequestMayCommit(request ldapwire.Request) bool {
+	switch request := request.(type) {
+	case ldapwire.AddRequest, ldapwire.ModifyRequest, ldapwire.DeleteRequest,
+		ldapwire.ModifyDNRequest:
+		return true
+	case ldapwire.ExtendedRequest:
+		return request.Name == passwordModifyOID || request.Name == dynamicRefreshOID
+	default:
+		return false
 	}
 }
 

@@ -111,7 +111,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	}
 	for index := range databases {
 		if databaseUsesLocalContentStorage(databases[index]) {
-			databases[index].dnNormalizer = registry
+			databases[index].dnNormalizer = &databaseEqualityIndexNormalizer{
+				registry: registry,
+				config:   databases[index].equalityIndexes,
+			}
 		}
 		if databases[index].sqlBackend != nil {
 			databases[index].sqlBackend.setRuntime(registry, server.config.SQLDriver, server)
@@ -749,6 +752,12 @@ func (server *Server) validateRuntimeConfiguration(
 		return nil, operationFailed(
 			ldapwire.ResultConstraintViolation,
 			"invalid cn=config: "+err.Error(),
+		)
+	}
+	if err := migrateRuntimeDNIdentitiesInWriter(writer, runtime); err != nil {
+		return nil, operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"cannot migrate DN identities: "+err.Error(),
 		)
 	}
 	previous := server.runtime.Load()

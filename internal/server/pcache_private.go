@@ -193,9 +193,11 @@ func (server *Server) tryPcachePrivateSearch(
 			request.Attributes,
 			request.TypesOnly,
 		)
-		if err := ldapwire.Write(
+		if err := server.writeSearchEntry(
 			connection,
-			ldapwire.EncodeSearchResultEntry(message.ID, selected, nil),
+			message.ID,
+			selected,
+			nil,
 		); err != nil {
 			return true, err
 		}

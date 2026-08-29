@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"time"
+	"unsafe"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -39,11 +40,13 @@ type virtualListViewItem struct {
 }
 
 type virtualListViewState struct {
-	contextID   []byte
-	fingerprint [sha256.Size]byte
-	runtime     *runtimeState
-	items       []virtualListViewItem
-	sortLease   *serverSideSortLease
+	contextID       []byte
+	fingerprint     [sha256.Size]byte
+	runtime         *runtimeState
+	items           []virtualListViewItem
+	sortLease       *serverSideSortLease
+	retainedBytes   int64
+	releaseRetained func()
 }
 
 type virtualListViewContext struct {
@@ -144,12 +147,28 @@ func newVirtualListViewFailure(
 	}
 }
 
-func startVirtualListView(
+func (server *Server) startVirtualListView(
 	state *connectionState,
 	context *virtualListViewContext,
 	candidates []searchCandidate,
 	sortLease *serverSideSortLease,
 ) (*virtualListViewState, error) {
+	retainedBytes := virtualListViewRetainedBytes(candidates)
+	if retainedBytes > 0 && !server.searchMemoryLimiter.tryAcquire(retainedBytes) {
+		return nil, errVirtualListViewMemoryLimit
+	}
+	releaseRetained := func() {}
+	if retainedBytes > 0 {
+		releaseRetained = func() {
+			server.searchMemoryLimiter.release(retainedBytes)
+		}
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			releaseRetained()
+		}
+	}()
 	var contextID []byte
 	for {
 		contextID = make([]byte, virtualListViewContextLength)
@@ -177,17 +196,20 @@ func startVirtualListView(
 		}
 	}
 	view := &virtualListViewState{
-		contextID:   contextID,
-		fingerprint: context.fingerprint,
-		runtime:     context.runtime,
-		items:       items,
-		sortLease:   sortLease,
+		contextID:       contextID,
+		fingerprint:     context.fingerprint,
+		runtime:         context.runtime,
+		items:           items,
+		sortLease:       sortLease,
+		retainedBytes:   retainedBytes,
+		releaseRetained: releaseRetained,
 	}
 	if state.virtualListViews == nil {
 		state.virtualListViews = make(map[string]*virtualListViewState)
 	}
 	state.virtualListViews[string(contextID)] = view
 	context.state = view
+	retained = true
 	return view, nil
 }
 
@@ -204,6 +226,7 @@ func discardVirtualListView(
 	}
 	delete(state.virtualListViews, key)
 	releaseServerSideSortLease(state, view.sortLease)
+	view.releaseRetainedMemory()
 	if len(state.virtualListViews) == 0 {
 		state.virtualListViews = nil
 	}
@@ -212,8 +235,33 @@ func discardVirtualListView(
 func clearVirtualListViews(state *connectionState) {
 	for _, view := range state.virtualListViews {
 		releaseServerSideSortLease(state, view.sortLease)
+		view.releaseRetainedMemory()
 	}
 	state.virtualListViews = nil
+}
+
+var errVirtualListViewMemoryLimit = errors.New("VLV state memory budget exceeded")
+
+func (view *virtualListViewState) releaseRetainedMemory() {
+	if view == nil || view.releaseRetained == nil {
+		return
+	}
+	view.releaseRetained()
+	view.releaseRetained = nil
+	view.retainedBytes = 0
+}
+
+func virtualListViewRetainedBytes(candidates []searchCandidate) int64 {
+	size := int64(unsafe.Sizeof(virtualListViewState{})) +
+		virtualListViewContextLength +
+		int64(len(candidates))*int64(unsafe.Sizeof(virtualListViewItem{}))
+	for _, candidate := range candidates {
+		size += int64(len(candidate.dn) + len(candidate.cursorKey) + len(candidate.identityKey))
+		if len(candidate.values) > 0 {
+			size += int64(len(candidate.values[0].value))
+		}
+	}
+	return size
 }
 
 func virtualListViewWindow(

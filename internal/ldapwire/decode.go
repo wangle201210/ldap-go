@@ -52,10 +52,25 @@ func ReadMessageWithDynamicFilterDepth(
 	maxContentSize uint64,
 	maxFilterDepth func() int,
 ) (Message, error) {
+	message, _, err := ReadMessageWithDynamicFilterDepthAndSize(
+		reader,
+		maxSize,
+		maxContentSize,
+		maxFilterDepth,
+	)
+	return message, err
+}
+
+func ReadMessageWithDynamicFilterDepthAndSize(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+	maxFilterDepth func() int,
+) (Message, int, error) {
 	if maxFilterDepth == nil {
 		maxFilterDepth = func() int { return DefaultMaxFilterDepth }
 	}
-	return readMessageWithFilterDepthProvider(
+	return readMessageWithFilterDepthProviderAndSize(
 		reader,
 		maxSize,
 		maxContentSize,
@@ -69,15 +84,34 @@ func readMessageWithFilterDepthProvider(
 	maxContentSize uint64,
 	maxFilterDepth func() int,
 ) (Message, error) {
+	message, _, err := readMessageWithFilterDepthProviderAndSize(
+		reader,
+		maxSize,
+		maxContentSize,
+		maxFilterDepth,
+	)
+	return message, err
+}
+
+func readMessageWithFilterDepthProviderAndSize(
+	reader io.Reader,
+	maxSize int64,
+	maxContentSize uint64,
+	maxFilterDepth func() int,
+) (Message, int, error) {
 	frame, err := readFrameWithContentLimit(reader, maxSize, maxContentSize)
 	if err != nil {
-		return Message{}, err
+		return Message{}, 0, err
 	}
 	packet, err := ber.DecodePacketErr(frame)
 	if err != nil {
-		return Message{}, malformed("decode BER: %v", err)
+		return Message{}, len(frame), malformed("decode BER: %v", err)
 	}
-	return decodeMessageWithFilterDepth(packet, maxFilterDepth())
+	message, err := decodeMessageWithFilterDepth(packet, maxFilterDepth())
+	if err != nil {
+		return message, len(frame), err
+	}
+	return message, len(frame), nil
 }
 
 func readFrame(reader io.Reader, maxSize int64) ([]byte, error) {

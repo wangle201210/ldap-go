@@ -450,7 +450,7 @@ func runSchemaAwareDNIdentityContract(t *testing.T, store Store) {
 	}
 }
 
-func TestPutInWithDNMigratesLegacyKeyOnReplace(t *testing.T) {
+func TestExplicitDNIdentityMigrationReplacesLegacyKey(t *testing.T) {
 	t.Parallel()
 
 	store := NewMemory()
@@ -462,7 +462,15 @@ func TestPutInWithDNMigratesLegacyKeyOnReplace(t *testing.T) {
 		if err := writer.PutIn("db", entry, false); err != nil {
 			return err
 		}
-		return PutInWithDN(writer, "db", entry, identityDN, true)
+		report, err := MigrateSchemaAwareDNIdentities(
+			writer,
+			"db",
+			testDNNormalizer{},
+		)
+		if err == nil && (report.Entries != 1 || report.Migrated != 1) {
+			t.Fatalf("migration report = %+v", report)
+		}
+		return err
 	}); err != nil {
 		t.Fatalf("migrate legacy entry: %v", err)
 	}

@@ -377,36 +377,18 @@ func (tx *boltTx) schemaAwareEntryKeys(
 	dn directory.DN,
 	schema EqualityIndexSchema,
 ) ([]string, error) {
-	normalizer, ok := schema.(directory.DNAttributeNormalizer)
-	if !ok {
+	if _, ok := schema.(directory.DNAttributeNormalizer); !ok {
 		return nil, errors.New("equality index schema cannot normalize DNs")
 	}
-	var keys []string
-	err := tx.entries.ForEach(func(key, value []byte) error {
-		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
-		if entryPartition != partition {
-			return nil
-		}
-		entry, err := decodeAndValidateEntry(entryKey, value)
-		if err != nil {
-			return err
-		}
-		candidate, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
-		if err != nil {
-			return err
-		}
-		if candidate.Equal(dn) {
-			keys = append(keys, string(key))
-		}
-		return nil
-	})
-	if err != nil {
+	key := partitionedEntryKey(partition, dn.Key())
+	value := tx.entries.Get([]byte(key))
+	if value == nil {
+		return nil, nil
+	}
+	if _, err := decodeAndValidateEntry(dn.Key(), value); err != nil {
 		return nil, err
 	}
-	if len(keys) > 1 {
-		return nil, ErrEntryAmbiguous
-	}
-	return keys, nil
+	return []string{key}, nil
 }
 
 func (tx *boltTx) addEqualityIndexEntry(

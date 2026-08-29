@@ -96,6 +96,57 @@ func TestLDAPConnectionPendingLimitUsesAuthenticationState(t *testing.T) {
 	}
 }
 
+func TestLDAPConnectionPendingByteLimits(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		connection bool
+	}{
+		{name: "per connection", connection: true},
+		{name: "process"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			searchSize := rawLDAPRequestRetainedSizeWithControls(t, 1, rawCancellationSearch(t))
+			extendedSize := rawLDAPRequestRetainedSizeWithControls(
+				t,
+				2,
+				rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
+			)
+			limit := searchSize + extendedSize - 1
+			store := newCancelBlockingStore(storage.NewMemory())
+			t.Cleanup(func() { _ = store.Close() })
+			seedDirectory(t, store)
+			config := Config{
+				MaxOperationsPerConnection:   1,
+				MaxPendingBytesPerConnection: 1 << 20,
+				MaxPendingOperationBytes:     1 << 20,
+			}
+			if test.connection {
+				config.MaxPendingBytesPerConnection = limit
+			} else {
+				config.MaxPendingOperationBytes = limit
+			}
+			address, stop := startServer(t, store, config)
+			defer stop()
+			connection, err := net.DialTimeout("tcp", address, 2*time.Second)
+			if err != nil {
+				t.Fatalf("Dial(): %v", err)
+			}
+			defer connection.Close()
+			gate := store.blockNextSearch()
+			writeRawLDAPRequest(t, connection, 1, rawCancellationSearch(t), nil)
+			gate.waitUntilBlocked(t)
+			writeRawLDAPRequest(
+				t,
+				connection,
+				2,
+				rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
+				nil,
+			)
+			assertLDAPConnectionClosedWithoutResponse(t, connection)
+		})
+	}
+}
+
 func TestLDAPAbandonBypassesZeroPendingLimit(t *testing.T) {
 	t.Parallel()
 

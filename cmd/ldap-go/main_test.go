@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,11 +135,28 @@ func TestMaintenanceCommands(t *testing.T) {
 	entry := directory.Entry{
 		DN: "dc=example,dc=com",
 		Attributes: []directory.Attribute{
+			{
+				Description: "objectClass",
+				Values:      [][]byte{[]byte("top"), []byte("domain")},
+			},
+			{
+				Description: "structuralObjectClass",
+				Values:      [][]byte{[]byte("domain")},
+			},
 			{Description: "dc", Values: [][]byte{[]byte("example")}},
 		},
 	}
+	entryDN, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
+	entryPartition := storage.OpenLDAPBootstrapPartition(entryDN)
 	err = store.Update(context.Background(), func(writer storage.Writer) error {
-		if err := writer.PutIn("database-one", entry, false); err != nil {
+		if err := writer.PutIn(
+			entryPartition,
+			entry,
+			false,
+		); err != nil {
 			return err
 		}
 		if err := writer.SetNamingContexts([]string{"dc=example,dc=com"}); err != nil {
@@ -155,9 +173,10 @@ func TestMaintenanceCommands(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		args   []string
-		action string
+		name     string
+		args     []string
+		action   string
+		metadata int
 	}{
 		{
 			name:   "check",
@@ -176,17 +195,20 @@ func TestMaintenanceCommands(t *testing.T) {
 			args: []string{
 				"restore", "-backup", backupPath, "-db", restoredPath,
 			},
-			action: "restored",
+			action:   "restored",
+			metadata: 3,
 		},
 		{
-			name:   "rebuild",
-			args:   []string{"rebuild", "-db", restoredPath},
-			action: "rebuilt",
+			name:     "rebuild",
+			args:     []string{"rebuild", "-db", restoredPath},
+			action:   "rebuilt",
+			metadata: 3,
 		},
 		{
-			name:   "reindex alias",
-			args:   []string{"reindex", "-db", restoredPath},
-			action: "rebuilt",
+			name:     "reindex alias",
+			args:     []string{"reindex", "-db", restoredPath},
+			action:   "rebuilt",
+			metadata: 3,
 		},
 	}
 	for _, test := range tests {
@@ -208,8 +230,12 @@ func TestMaintenanceCommands(t *testing.T) {
 					stderr.String(),
 				)
 			}
+			metadata := test.metadata
+			if metadata == 0 {
+				metadata = 2
+			}
 			if !strings.Contains(stdout.String(), test.action+" 1 entries in 1 partitions") ||
-				!strings.Contains(stdout.String(), "with 2 metadata records") {
+				!strings.Contains(stdout.String(), fmt.Sprintf("with %d metadata records", metadata)) {
 				t.Fatalf("stdout = %q", stdout.String())
 			}
 		})
@@ -240,7 +266,7 @@ func TestMaintenanceCommands(t *testing.T) {
 		t.Fatalf("ParseDN(): %v", err)
 	}
 	err = restored.View(context.Background(), func(reader storage.Reader) error {
-		got, err := reader.GetIn("database-one", dn)
+		got, err := reader.GetIn(entryPartition, dn)
 		if err != nil {
 			return err
 		}

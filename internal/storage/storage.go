@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -15,10 +16,13 @@ import (
 )
 
 var (
-	ErrEntryNotFound    = errors.New("entry not found")
-	ErrEntryExists      = errors.New("entry already exists")
-	ErrEntryAmbiguous   = errors.New("entry exists in multiple storage partitions")
-	ErrMetadataNotFound = errors.New("metadata not found")
+	ErrEntryNotFound               = errors.New("entry not found")
+	ErrEntryExists                 = errors.New("entry already exists")
+	ErrEntryAmbiguous              = errors.New("entry exists in multiple storage partitions")
+	ErrMetadataNotFound            = errors.New("metadata not found")
+	ErrDNIdentityMigrationRequired = errors.New(
+		"schema-aware DN identity migration is required",
+	)
 )
 
 type Reader interface {
@@ -49,6 +53,94 @@ type Store interface {
 	Close() error
 }
 
+// MaintenanceReaderProvider exposes the backend reader hidden by a contextual
+// decorator. Storage maintenance uses it for backend-specific identity and
+// index capabilities; normal directory reads continue through the decorator.
+type MaintenanceReaderProvider interface {
+	MaintenanceStorageReader() Reader
+}
+
+// MaintenanceWriterProvider exposes the backend writer hidden by a contextual
+// or side-effect decorator. Identity migration and index rebuilds operate on
+// the same transaction through this writer without synthesizing user changes.
+type MaintenanceWriterProvider interface {
+	MaintenanceStorageWriter() Writer
+}
+
+// MaintenanceMutationObserver preserves decorator side effects when storage
+// performs an atomic backend-specific indexed mutation through an underlying
+// writer in the same transaction.
+type MaintenanceMutationObserver interface {
+	ObserveMaintenanceMutation(
+		partition string,
+		before *directory.Entry,
+		after *directory.Entry,
+	) error
+}
+
+func maintenanceReader(reader Reader) Reader {
+	for depth := 0; depth < 32; depth++ {
+		provider, ok := reader.(MaintenanceReaderProvider)
+		if !ok {
+			return reader
+		}
+		next := provider.MaintenanceStorageReader()
+		if next == nil {
+			return reader
+		}
+		reader = next
+	}
+	return reader
+}
+
+func maintenanceWriter(writer Writer) Writer {
+	for depth := 0; depth < 32; depth++ {
+		provider, ok := writer.(MaintenanceWriterProvider)
+		if !ok {
+			return writer
+		}
+		next := provider.MaintenanceStorageWriter()
+		if next == nil {
+			return writer
+		}
+		writer = next
+	}
+	return writer
+}
+
+func maintenanceMutationObservers(writer Writer) []MaintenanceMutationObserver {
+	var observers []MaintenanceMutationObserver
+	for depth := 0; depth < 32; depth++ {
+		if observer, ok := writer.(MaintenanceMutationObserver); ok {
+			observers = append(observers, observer)
+		}
+		provider, ok := writer.(MaintenanceWriterProvider)
+		if !ok {
+			break
+		}
+		next := provider.MaintenanceStorageWriter()
+		if next == nil {
+			break
+		}
+		writer = next
+	}
+	return observers
+}
+
+func observeMaintenanceMutation(
+	observers []MaintenanceMutationObserver,
+	partition string,
+	before *directory.Entry,
+	after *directory.Entry,
+) error {
+	for _, observer := range observers {
+		if err := observer.ObserveMaintenanceMutation(partition, before, after); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type schemaAwareDNBindingValidator interface {
 	validateSchemaAwareDNBindingsIn(
 		partition string,
@@ -56,11 +148,145 @@ type schemaAwareDNBindingValidator interface {
 	) error
 }
 
+type schemaAwareDNIdentityStorage interface {
+	schemaAwareDNIdentityReady(partition string) (bool, error)
+	migrateSchemaAwareDNIdentitiesIn(
+		partition string,
+		normalizer directory.DNAttributeNormalizer,
+	) (DNIdentityMigrationReport, error)
+}
+
+// DNIdentityMigrationReport describes one atomic legacy-to-v2 physical-key
+// migration. AlreadyCurrent includes entries whose persisted v2 identity was
+// validated but did not need to move.
+type DNIdentityMigrationReport struct {
+	Entries        int
+	Migrated       int
+	AlreadyCurrent int
+}
+
+// MigrateSchemaAwareDNIdentities rewrites every entry in one partition under
+// its schema-normalized v2 DN key. The backend validates the complete mapping
+// before changing data, so aliases, caseExact values, and multi-AVA identities
+// either migrate atomically or fail closed on a collision.
+func MigrateSchemaAwareDNIdentities(
+	writer Writer,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) (DNIdentityMigrationReport, error) {
+	if normalizer == nil {
+		return DNIdentityMigrationReport{}, errors.New("DN attribute normalizer is required")
+	}
+	backend := maintenanceWriter(writer)
+	migrator, ok := backend.(schemaAwareDNIdentityStorage)
+	if ok {
+		return migrator.migrateSchemaAwareDNIdentitiesIn(partition, normalizer)
+	}
+	return migrateSchemaAwareDNIdentitiesWithWriter(writer, partition, normalizer)
+}
+
+func migrateSchemaAwareDNIdentitiesWithWriter(
+	writer Writer,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) (DNIdentityMigrationReport, error) {
+	type migrationEntry struct {
+		entry    directory.Entry
+		storedDN directory.DN
+		identity directory.DN
+	}
+	var report DNIdentityMigrationReport
+	var entries []migrationEntry
+	identities := make(map[string]string)
+	if err := writer.ForEachIn(partition, func(entry directory.Entry) error {
+		storedDN, err := directory.ParseDN(entry.DN)
+		if err != nil {
+			return err
+		}
+		identity, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
+		if err != nil {
+			return err
+		}
+		if previous, exists := identities[identity.Key()]; exists {
+			return fmt.Errorf(
+				"entry DNs %q and %q normalize to the same identity: %w",
+				previous,
+				entry.DN,
+				ErrEntryAmbiguous,
+			)
+		}
+		identities[identity.Key()] = entry.DN
+		entries = append(entries, migrationEntry{
+			entry: entry.Clone(), storedDN: storedDN, identity: identity,
+		})
+		report.Entries++
+		return nil
+	}); err != nil {
+		return DNIdentityMigrationReport{}, err
+	}
+	for _, candidate := range entries {
+		if err := writer.DeleteIn(partition, candidate.storedDN); err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+	}
+	for _, candidate := range entries {
+		if err := PutInWithDN(
+			writer,
+			partition,
+			candidate.entry,
+			candidate.identity,
+			false,
+		); err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+		report.Migrated++
+	}
+	return report, nil
+}
+
+func requireSchemaAwareDNIdentities(
+	reader Reader,
+	partition string,
+) error {
+	reader = maintenanceReader(reader)
+	storage, ok := reader.(schemaAwareDNIdentityStorage)
+	if !ok {
+		return nil
+	}
+	ready, err := storage.schemaAwareDNIdentityReady(partition)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("partition %q: %w", partition, ErrDNIdentityMigrationRequired)
+	}
+	return nil
+}
+
+func ensureSchemaAwareDNIdentities(
+	writer Writer,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) error {
+	writer = maintenanceWriter(writer)
+	storage, ok := writer.(schemaAwareDNIdentityStorage)
+	if !ok {
+		return nil
+	}
+	ready, err := storage.schemaAwareDNIdentityReady(partition)
+	if err != nil || ready {
+		return err
+	}
+	_, err = storage.migrateSchemaAwareDNIdentitiesIn(partition, normalizer)
+	return err
+}
+
 func validateSchemaAwareDNBindingsIn(
 	reader Reader,
 	partition string,
 	normalizer directory.DNAttributeNormalizer,
 ) error {
+	reader = maintenanceReader(reader)
 	validator, ok := reader.(schemaAwareDNBindingValidator)
 	if !ok {
 		return nil
@@ -98,7 +324,16 @@ func PutInWithDN(
 	return writer.PutIn(partition, entry.WithDNIdentity(dn), replace)
 }
 
-const schemaAwareDNKeyPrefix = "dn:v2:"
+const (
+	schemaAwareDNKeyPrefix               = "dn:v2:"
+	schemaAwareDNIdentityFormatVersion   = 2
+	schemaAwareDNMigrationMetadataPrefix = "storage:dn-identity:v2:"
+)
+
+func schemaAwareDNMigrationMetadataKey(partition string) string {
+	return schemaAwareDNMigrationMetadataPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(partition))
+}
 
 var trustedDNIdentityWrites = struct {
 	sync.Mutex

@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 2,020 top-level tests against the pinned commit.
+The latest strict run passed 2,061 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -968,8 +968,18 @@ The daemon applies process-wide admission bounds before expensive work:
 `-max-connections 4096`, `-max-concurrent-operations 256`, and
 `-max-concurrent-handshakes 64` are the defaults. Every search may retain at
 most 64 MiB, and sorted/VLV searches additionally retain at most 100,000
-candidates per operation by default, configurable
-with `-search-candidate-limit` and `-search-candidate-bytes`. Excess connections close
+candidates per operation by default; all concurrent searches share a 512 MiB
+process retention ceiling. Decoded requests are bounded to 64 MiB per
+connection and 256 MiB process-wide even when authenticated pending-count
+limits are high. Finite searches may encode at most 128 MiB, each Search PDU is
+limited to 16 MiB, and all in-flight Search writes share 256 MiB. Persistent
+Sync is exempt only from the finite total because its stream is intentionally
+unbounded in time. These limits are configurable with
+`-search-candidate-limit`, `-search-candidate-bytes`, and
+`-search-response-bytes`; pending/search process ceilings use
+`-max-pending-bytes-per-connection`, `-max-pending-operation-bytes`, and
+`-search-memory-bytes`, `-response-pdu-bytes`, and
+`-in-flight-response-bytes`. Excess connections close
 before a connection goroutine is started; operations wait in their already
 bounded per-connection queues, and TLS/TLCP handshake waiting time consumes the
 configured handshake timeout. `cn=Connections,cn=Monitor` and
@@ -980,6 +990,31 @@ default (`-max-operations-per-connection`). They execute from immutable
 authentication snapshots and serialize complete BER writes. Bind abandons
 active work and discards pending work before changing identity; StartTLS,
 transactions, writes, paging, VLV, and SASL transitions remain ordered fences.
+RFC 4511 Abandon suppresses and cancels active Search, Compare, update, and
+Extended operations. RFC 3909 Cancel additionally returns the canceled result
+on the target operation and waits for its completion before acknowledging the
+Cancel request; Bind, Unbind, Abandon, StartTLS, Who Am I, and transaction
+boundary extensions remain non-cancelable. A remotely delegated write becomes
+non-cancelable immediately before upstream dispatch: Cancel wins before that
+boundary and no request is sent, or dispatch wins and Cancel returns
+`cannotCancel`, so the frontend never reports `canceled` for a write that may
+already commit upstream.
+Transaction Start raises an admission fence as soon as the reader receives it;
+all pipelined operations remain ordered until Start/End/Bind publishes the
+actual transaction state, without preventing the reader from detecting EOF or
+Cancel.
+
+Offline restore first snapshots the backup into a private staging database and
+validates runtime configuration, full schema/RDN invariants, metadata,
+partitions, and every persisted index posting. Only the exact validated bytes
+may replace the destination; any semantic failure leaves an existing target
+byte-for-byte unchanged.
+
+`production-check` uses metadata-only permission inspection. Unix rejects
+untrusted symlink/special path components, ownership mismatches,
+group/other-accessible files, and writable non-sticky ancestors. Windows
+reports ACL verification as `unknown` instead of misinterpreting synthetic
+POSIX mode bits.
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:
@@ -1305,6 +1340,13 @@ while `nosubtypes` controls whether a parent attribute index can serve subtype
 filters. The index format is versioned and legacy/configuration mismatches
 rebuild or scan rather than produce false negatives. Requested rules without a
 proven equivalent normalization still fall back or reject explicitly.
+Schema-normalized DNs are persisted under versioned `dn:v2:` physical keys, so
+normal Base Search, Bind, Modify, Delete, and equality-index maintenance perform
+direct key access instead of scanning a partition. Startup and writable offline
+tools atomically migrate legacy partitions after loading `cn=config` schema;
+legacy-compatible server routes and full iteration may scan only while no
+migration marker exists. Alias/case/multi-AVA collisions fail atomically, and
+check, backup, restore, rebuild, and reopen preserve or validate the marker.
 Migration size, lock time, and remaining scan paths must still be qualified
 before production use. These limits are part of why ldap-go is not yet a
 complete OpenLDAP drop-in replacement.

@@ -578,13 +578,11 @@ func (server *Server) writeSyncSearch(
 				candidate.selected,
 			)...,
 		)
-		if err := ldapwire.Write(
+		if err := server.writeSearchEntry(
 			connection,
-			ldapwire.EncodeSearchResultEntry(
-				messageID,
-				candidate.selected,
-				entryControls,
-			),
+			messageID,
+			candidate.selected,
+			entryControls,
 		); err != nil {
 			return err
 		}
@@ -839,13 +837,11 @@ func (server *Server) persistSyncSearch(
 					entry,
 				)...,
 			)
-			if err := ldapwire.Write(
+			if err := server.writeSearchEntry(
 				connection,
-				ldapwire.EncodeSearchResultEntry(
-					messageID,
-					entry,
-					entryControls,
-				),
+				messageID,
+				entry,
+				entryControls,
 			); err != nil {
 				return err
 			}

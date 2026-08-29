@@ -50,6 +50,12 @@ func TestLegacyV1SchemaAwareUpgrade(t *testing.T) {
 			seedLegacyV1Entry(t, fixture, legacyUpgradePartition, caseIgnore, false)
 			seedLegacyV1Entry(t, fixture, legacyUpgradePartition, multiAVA, false)
 
+			migrateLegacyFixturePartition(
+				t,
+				fixture.store,
+				legacyUpgradePartition,
+				3,
+			)
 			assertLegacyEntriesReadable(t, fixture.store)
 
 			ctx := context.Background()
@@ -149,28 +155,15 @@ func TestLegacyV1SchemaAwareAmbiguityIsFailClosed(t *testing.T) {
 				lookup := mustLegacyUpgradeDN(t,
 					"0.9.2342.19200300.100.1.1=alice,dc=example,dc=com",
 				)
-				if err := fixture.store.View(ctx, func(reader Reader) error {
-					scoped := ReaderInPartitionWithNormalizer(
-						reader,
+				if err := fixture.store.Update(ctx, func(writer Writer) error {
+					_, err := MigrateSchemaAwareDNIdentities(
+						writer,
 						legacyUpgradePartition,
 						normalizer,
 					)
-					if _, err := scoped.Get(lookup); !errors.Is(err, ErrEntryAmbiguous) {
-						t.Fatalf("Get() error = %v, want ErrEntryAmbiguous", err)
-					}
-					count := 0
-					if err := scoped.ForEach(func(directory.Entry) error {
-						count++
-						return nil
-					}); err != nil {
-						return err
-					}
-					if count != 2 {
-						t.Fatalf("ForEach() count = %d, want 2", count)
-					}
-					return nil
-				}); err != nil {
-					t.Fatalf("inspect ambiguous entries: %v", err)
+					return err
+				}); !errors.Is(err, ErrEntryAmbiguous) {
+					t.Fatalf("migration error = %v, want ErrEntryAmbiguous", err)
 				}
 
 				replacement := legacyUpgradeEntry(duplicate.DN, "replacement")
@@ -226,6 +219,12 @@ func TestLegacyV1SchemaAwareAmbiguityIsFailClosed(t *testing.T) {
 				}
 				seedLegacyV1Entry(t, fixture, legacyUpgradePartition, upper, false)
 				putSchemaAwareDirect(t, fixture.store, legacyUpgradePartition, lower)
+				migrateLegacyFixturePartition(
+					t,
+					fixture.store,
+					legacyUpgradePartition,
+					1,
+				)
 
 				ctx := context.Background()
 				normalizer := testCanonicalDNNormalizer{}
@@ -332,6 +331,20 @@ func TestLegacyV1BoltMaintenancePreservesSchemaIdentity(t *testing.T) {
 		"exact-lower-v2",
 	))
 	if err := fixture.store.Update(ctx, func(writer Writer) error {
+		if _, err := MigrateSchemaAwareDNIdentities(
+			writer,
+			"",
+			testCanonicalDNNormalizer{},
+		); err != nil {
+			return err
+		}
+		if _, err := MigrateSchemaAwareDNIdentities(
+			writer,
+			legacyUpgradePartition,
+			testCanonicalDNNormalizer{},
+		); err != nil {
+			return err
+		}
 		if err := writer.SetNamingContexts([]string{"dc=example,dc=com"}); err != nil {
 			return err
 		}
@@ -449,10 +462,54 @@ func putSchemaAwareDirect(
 	if err != nil {
 		t.Fatalf("normalize %q: %v", entry.DN, err)
 	}
+	key := partitionedEntryKey(partition, dn.Key())
+	switch backend := store.(type) {
+	case *Memory:
+		backend.mu.Lock()
+		backend.entries[key] = entry.Clone()
+		backend.dnIdentities[key] = dn.Key()
+		backend.dnSources[key] = entry.DN
+		delete(backend.metadata, schemaAwareDNMigrationMetadataKey(partition))
+		backend.mu.Unlock()
+	case *Bolt:
+		value, encodeErr := encodeEntry(entry, dn.Key(), entry.DN)
+		if encodeErr != nil {
+			t.Fatalf("encode schema-aware fixture: %v", encodeErr)
+		}
+		if err := backend.db.Update(func(tx *bolt.Tx) error {
+			if err := tx.Bucket(metaBucket).Delete(genericMetadataKey(
+				schemaAwareDNMigrationMetadataKey(partition),
+			)); err != nil {
+				return err
+			}
+			return tx.Bucket(entriesBucket).Put([]byte(key), value)
+		}); err != nil {
+			t.Fatalf("inject schema-aware fixture %q: %v", entry.DN, err)
+		}
+	default:
+		t.Fatalf("unsupported fixture store %T", store)
+	}
+}
+
+func migrateLegacyFixturePartition(
+	t *testing.T,
+	store Store,
+	partition string,
+	wantMigrated int,
+) {
+	t.Helper()
 	if err := store.Update(context.Background(), func(writer Writer) error {
-		return PutInWithDN(writer, partition, entry, dn, false)
+		report, err := MigrateSchemaAwareDNIdentities(
+			writer,
+			partition,
+			testCanonicalDNNormalizer{},
+		)
+		if err == nil && report.Migrated != wantMigrated {
+			t.Fatalf("migration report = %+v, want migrated=%d", report, wantMigrated)
+		}
+		return err
 	}); err != nil {
-		t.Fatalf("PutInWithDN(%q): %v", entry.DN, err)
+		t.Fatalf("migrate partition %q: %v", partition, err)
 	}
 }
 

@@ -6,11 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"unsafe"
 
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 const pagedResultsCookieLength = 16
+
+var errPagedSearchMemoryLimit = errors.New("paged search state memory budget exceeded")
 
 type pagedResultsRequest struct {
 	size   int
@@ -35,33 +38,37 @@ type pagedSortedSearch struct {
 }
 
 type pagedSearchState struct {
-	cookie      []byte
-	fingerprint [sha256.Size]byte
-	runtime     *runtimeState
-	cursor      pagedSearchCursor
-	sorted      *pagedSortedSearch
-	count       int
-	totalLimit  int
-	estimate    int
-	noEstimate  bool
-	sortLease   *serverSideSortLease
+	cookie          []byte
+	fingerprint     [sha256.Size]byte
+	runtime         *runtimeState
+	cursor          pagedSearchCursor
+	sorted          *pagedSortedSearch
+	count           int
+	totalLimit      int
+	estimate        int
+	noEstimate      bool
+	sortLease       *serverSideSortLease
+	retainedBytes   int64
+	releaseRetained func()
 }
 
 type pagedSearchContext struct {
-	size        int
-	fingerprint [sha256.Size]byte
-	runtime     *runtimeState
-	cursor      pagedSearchCursor
-	sorted      *pagedSortedSearch
-	count       int
-	totalLimit  int
-	estimate    int
-	noEstimate  bool
-	abandoned   bool
-	sortLease   *serverSideSortLease
+	size            int
+	fingerprint     [sha256.Size]byte
+	runtime         *runtimeState
+	cursor          pagedSearchCursor
+	sorted          *pagedSortedSearch
+	count           int
+	totalLimit      int
+	estimate        int
+	noEstimate      bool
+	abandoned       bool
+	sortLease       *serverSideSortLease
+	retainedBytes   int64
+	releaseRetained func()
 }
 
-func preparePagedSearch(
+func (server *Server) preparePagedSearch(
 	state *connectionState,
 	request ldapwire.SearchRequest,
 	controls []ldapwire.Control,
@@ -136,7 +143,22 @@ func preparePagedSearch(
 			"",
 		)
 	}
+	if paging.size == 0 {
+		clearPagedSearch(state)
+		return &pagedSearchContext{
+			size: paging.size, fingerprint: fingerprint, runtime: state.runtime,
+			abandoned: true,
+		}, nil
+	}
 
+	retainedBytes := pagedSortedSearchRetainedBytes(current.sorted)
+	if retainedBytes > 0 && !server.searchMemoryLimiter.tryAcquire(retainedBytes) {
+		clearPagedSearch(state)
+		return nil, pagingResult(
+			ldapwire.ResultAdminLimitExceeded,
+			"paged search state memory budget exceeded",
+		)
+	}
 	context := &pagedSearchContext{
 		size:        paging.size,
 		fingerprint: fingerprint,
@@ -149,14 +171,16 @@ func preparePagedSearch(
 		noEstimate:  current.noEstimate,
 		sortLease:   current.sortLease,
 	}
-	if paging.size == 0 {
-		clearPagedSearch(state)
-		context.abandoned = true
+	if retainedBytes > 0 {
+		context.retainedBytes = retainedBytes
+		context.releaseRetained = func() {
+			server.searchMemoryLimiter.release(retainedBytes)
+		}
 	}
 	return context, nil
 }
 
-func completePagedSearch(
+func (server *Server) completePagedSearch(
 	state *connectionState,
 	paging *pagedSearchContext,
 	result ldapwire.Result,
@@ -184,18 +208,38 @@ func completePagedSearch(
 			clearPagedSearch(state)
 			return nil, err
 		}
-		state.pagedSearch = &pagedSearchState{
-			cookie:      bytes.Clone(cookie),
-			fingerprint: paging.fingerprint,
-			runtime:     paging.runtime,
-			cursor:      cursor,
-			sorted:      clonePagedSortedSearch(paging.sorted),
-			count:       paging.count + entryCount,
-			totalLimit:  paging.totalLimit,
-			estimate:    paging.estimate,
-			noEstimate:  paging.noEstimate,
-			sortLease:   paging.sortLease,
+		if paging.retainedBytes == 0 {
+			retainedBytes := pagedSortedSearchRetainedBytes(paging.sorted)
+			if retainedBytes > 0 && !server.searchMemoryLimiter.tryAcquire(retainedBytes) {
+				clearPagedSearch(state)
+				return nil, errPagedSearchMemoryLimit
+			}
+			if retainedBytes > 0 {
+				paging.retainedBytes = retainedBytes
+				paging.releaseRetained = func() {
+					server.searchMemoryLimiter.release(retainedBytes)
+				}
+			}
 		}
+		previous := state.pagedSearch
+		state.pagedSearch = &pagedSearchState{
+			cookie:          bytes.Clone(cookie),
+			fingerprint:     paging.fingerprint,
+			runtime:         paging.runtime,
+			cursor:          cursor,
+			sorted:          paging.sorted,
+			count:           paging.count + entryCount,
+			totalLimit:      paging.totalLimit,
+			estimate:        paging.estimate,
+			noEstimate:      paging.noEstimate,
+			sortLease:       paging.sortLease,
+			retainedBytes:   paging.retainedBytes,
+			releaseRetained: paging.releaseRetained,
+		}
+		paging.sorted = nil
+		paging.retainedBytes = 0
+		paging.releaseRetained = nil
+		releasePagedSearchState(state, previous, state.pagedSearch.sortLease)
 	} else {
 		clearPagedSearch(state)
 	}
@@ -210,10 +254,47 @@ func completePagedSearch(
 }
 
 func clearPagedSearch(state *connectionState) {
-	if state.pagedSearch != nil {
-		releaseServerSideSortLease(state, state.pagedSearch.sortLease)
-	}
+	releasePagedSearchState(state, state.pagedSearch, nil)
 	state.pagedSearch = nil
+}
+
+func releasePagedSearchState(
+	connection *connectionState,
+	state *pagedSearchState,
+	preservedSortLease *serverSideSortLease,
+) {
+	if state == nil {
+		return
+	}
+	if state.sortLease != preservedSortLease {
+		releaseServerSideSortLease(connection, state.sortLease)
+	}
+	if state.releaseRetained != nil {
+		state.releaseRetained()
+		state.releaseRetained = nil
+	}
+	state.retainedBytes = 0
+}
+
+func (context *pagedSearchContext) releaseRetainedMemory() {
+	if context == nil || context.releaseRetained == nil {
+		return
+	}
+	context.releaseRetained()
+	context.releaseRetained = nil
+	context.retainedBytes = 0
+}
+
+func pagedSortedSearchRetainedBytes(sorted *pagedSortedSearch) int64 {
+	size := int64(unsafe.Sizeof(pagedSearchState{})) + pagedResultsCookieLength
+	if sorted == nil {
+		return size
+	}
+	size += int64(cap(sorted.items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
+	for _, item := range sorted.items {
+		size += int64(len(item.dn))
+	}
+	return size
 }
 
 func clonePagedSortedSearch(source *pagedSortedSearch) *pagedSortedSearch {

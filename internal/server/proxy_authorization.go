@@ -187,6 +187,9 @@ func writeResultForMessage(
 	message ldapwire.Message,
 	result ldapwire.Result,
 ) error {
+	if err := beginOperationFinalResponse(connection); err != nil {
+		return err
+	}
 	switch message.Request.(type) {
 	case ldapwire.SearchRequest:
 		return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
@@ -215,4 +218,13 @@ func writeResultForMessage(
 			nil,
 		))
 	}
+}
+
+func beginOperationFinalResponse(connection net.Conn) error {
+	if finalizer, ok := connection.(interface {
+		beginFinalResponse() error
+	}); ok {
+		return finalizer.beginFinalResponse()
+	}
+	return nil
 }

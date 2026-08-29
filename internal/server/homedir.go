@@ -982,6 +982,52 @@ func (writer *homedirTrackingWriter) StorageContext() context.Context {
 	return nil
 }
 
+func (writer *homedirTrackingWriter) MaintenanceStorageReader() storage.Reader {
+	return writer.Writer
+}
+
+func (writer *homedirTrackingWriter) MaintenanceStorageWriter() storage.Writer {
+	return writer.Writer
+}
+
+func (writer *homedirTrackingWriter) ObserveMaintenanceMutation(
+	partition string,
+	before *directory.Entry,
+	after *directory.Entry,
+) error {
+	identity := after
+	if identity == nil {
+		identity = before
+	}
+	if identity == nil {
+		return nil
+	}
+	dn, err := directory.ParseDN(identity.DN)
+	if err != nil {
+		return err
+	}
+	normalizedDN, err := homedirNormalizeDN(writer.runtime, partition, dn)
+	if err != nil {
+		return err
+	}
+	key := partition + "\x00" + normalizedDN.Key()
+	tracked := writer.tracked[key]
+	if tracked == nil {
+		tracked = &homedirTrackedEntry{partition: partition, dn: normalizedDN}
+		if before != nil {
+			cloned := before.Clone()
+			tracked.before = &cloned
+		}
+		writer.tracked[key] = tracked
+	}
+	tracked.after = nil
+	if after != nil {
+		cloned := after.Clone()
+		tracked.after = &cloned
+	}
+	return nil
+}
+
 func (writer *homedirTrackingWriter) Put(entry directory.Entry, replace bool) error {
 	return writer.putIn("", entry, replace, false)
 }

@@ -57,6 +57,33 @@ waits for cleanup, and then changes identity as a hard fence. A connection-wide
 writer lock keeps every BER PDU intact when responses race. The registry establishes an atomic
 final-response boundary for `tooLate` and limits cancellation to the LDAP
 association that created the target operation.
+Finite Search responses are counted at the operation response wrapper using the
+actual encoded BER PDU lengths. Crossing the configured total replaces the
+remaining stream with `adminLimitExceeded` and leaves the connection reusable;
+refresh-and-persist Sync streams are exempt only from the finite total. Every
+Search still has a single-PDU ceiling and reserves actual encoded bytes against
+a process-wide in-flight writer budget until transport completion.
+Active cancellable operations retain their native application response tag:
+for example, canceling Modify returns a canceled ModifyResponse rather than a
+SearchResultDone. Cancel acknowledgment waits for this target response and
+operation cleanup.
+Native storage updates enter an atomic commit point inside the transaction
+callback: Cancel wins before it and forces rollback, or the commit point wins
+and later Cancel returns `tooLate`. The final-response boundary is rechecked
+inside the serialized connection write lock.
+Decoded request accounting includes the exact wire length plus Go object and
+slice backing storage for controls, filter trees, attributes, modifications,
+and values. Queue admission reserves that conservative amount against both
+connection-local and process-wide byte controllers;
+the reservation follows the operation through global-worker waiting and is
+released exactly once on completion, removal, Bind discard, connection close,
+or admission failure. Search candidate memory has an independent process-wide
+controller, including a conservative pre-reservation for sort keys and
+normalized identities. Sorted paging snapshots and VLV contexts take separate
+leases for their complete cross-request lifetime, including continuation-clone
+peak memory. SearchResultEntry BER size is calculated before allocation so PDU
+and process response limits reject oversized entries before constructing their
+encoded buffers.
 
 Shutdown closes the listener first and interrupts each connection's read side
 so no new request is admitted. Queued and executing ordinary operations retain

@@ -479,6 +479,9 @@ func updateOfflineContextCSN(
 		if err != nil {
 			return err
 		}
+		if err := migrateRuntimeDNIdentitiesInWriter(writer, runtime); err != nil {
+			return err
+		}
 		indexes, err := selectOfflineDatabases(
 			runtime,
 			options.Database,
@@ -669,6 +672,9 @@ func applyOfflineChangeTransaction(
 	if err != nil {
 		return err
 	}
+	if err := migrateRuntimeDNIdentitiesInWriter(writer, runtime); err != nil {
+		return err
+	}
 	indexes, err := selectOfflineDatabases(
 		runtime, options.Database, options.IncludeSubordinates,
 	)
@@ -698,6 +704,9 @@ func applyOfflineChangeTransaction(
 		runtime, err = buildOfflineRuntimeWithServer(instance, writer)
 		if err != nil {
 			return fmt.Errorf("validate modified cn=config: %w", err)
+		}
+		if err := migrateRuntimeDNIdentitiesInWriter(writer, runtime); err != nil {
+			return fmt.Errorf("migrate modified cn=config identities: %w", err)
 		}
 	}
 	return refreshRuntimeNamingContexts(writer, runtime)
@@ -1324,6 +1333,31 @@ func buildOfflineRuntimeWithServer(
 		}
 	}
 	return runtime, nil
+}
+
+func PrepareOfflineDNIdentities(
+	ctx context.Context,
+	store storage.Store,
+) error {
+	if ctx == nil {
+		return errors.New("offline preparation context is required")
+	}
+	instance, err := newOfflineServer(store)
+	if err != nil {
+		return err
+	}
+	var runtime *runtimeState
+	if err := store.View(ctx, func(reader storage.Reader) error {
+		var buildErr error
+		runtime, buildErr = buildOfflineRuntimeWithServer(instance, reader)
+		return buildErr
+	}); err != nil {
+		return err
+	}
+	if err := instance.partitionDefaultEntries(ctx, runtime); err != nil {
+		return err
+	}
+	return instance.migrateRuntimeDNIdentities(ctx, runtime)
 }
 
 func selectOfflineDatabases(

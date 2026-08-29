@@ -814,9 +814,11 @@ func (server *Server) writeRetcodeSyntheticSearch(
 				request.Attributes,
 				request.TypesOnly,
 			)
-			if err := ldapwire.Write(
+			if err := server.writeSearchEntry(
 				connection,
-				ldapwire.EncodeSearchResultEntry(messageID, selected, nil),
+				messageID,
+				selected,
+				nil,
 			); err != nil {
 				return err
 			}
@@ -827,9 +829,14 @@ func (server *Server) writeRetcodeSyntheticSearch(
 	if err != nil {
 		return err
 	}
-	return ldapwire.Write(
+	return server.writeLDAPResultResponse(
 		connection,
-		ldapwire.EncodeSearchResultDone(messageID, result, nil),
+		messageID,
+		ldapwire.ApplicationSearchResultDone,
+		result,
+		"",
+		nil,
+		nil,
 	)
 }
 
@@ -846,13 +853,11 @@ func (server *Server) writeRetcodeInDirectorySearch(
 			state,
 			candidate.selected,
 		)
-		if err := ldapwire.Write(
+		if err := server.writeSearchEntry(
 			connection,
-			ldapwire.EncodeSearchResultEntry(
-				message.ID,
-				candidate.selected,
-				entryControls,
-			),
+			message.ID,
+			candidate.selected,
+			entryControls,
 		); err != nil {
 			return err
 		}

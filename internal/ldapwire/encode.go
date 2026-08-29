@@ -126,6 +126,77 @@ func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []
 	return encodeMessage(messageID, encodeSearchResultEntry(entry), controls)
 }
 
+// SearchResultEntryEncodedSize returns the exact BER size without allocating
+// the encoded entry value. It is used to reserve response memory before BER
+// construction.
+func SearchResultEntryEncodedSize(
+	messageID int64,
+	entry directory.Entry,
+	controls []Control,
+) int64 {
+	attributesContent := int64(0)
+	for _, attribute := range entry.Attributes {
+		valuesContent := int64(0)
+		for _, value := range attribute.Values {
+			valuesContent += berTLVSize(int64(len(value)))
+		}
+		partialContent := berTLVSize(int64(len(attribute.Description))) +
+			berTLVSize(valuesContent)
+		attributesContent += berTLVSize(partialContent)
+	}
+	entryContent := berTLVSize(int64(len(entry.DN))) + berTLVSize(attributesContent)
+	messageContent := berTLVSize(integerContentSize(messageID)) + berTLVSize(entryContent)
+	if len(controls) > 0 {
+		controlsContent := int64(0)
+		for _, control := range controls {
+			controlContent := berTLVSize(int64(len(control.OID)))
+			if control.Critical {
+				controlContent += berTLVSize(1)
+			}
+			if control.HasValue || control.Value != nil {
+				controlContent += berTLVSize(int64(len(control.Value)))
+			}
+			controlsContent += berTLVSize(controlContent)
+		}
+		messageContent += berTLVSize(controlsContent)
+	}
+	return berTLVSize(messageContent)
+}
+
+func berTLVSize(content int64) int64 {
+	return 1 + berLengthSize(content) + content
+}
+
+func berLengthSize(content int64) int64 {
+	if content <= 127 {
+		return 1
+	}
+	bytes := int64(0)
+	for value := content; value > 0; value >>= 8 {
+		bytes++
+	}
+	return 1 + bytes
+}
+
+func integerContentSize(value int64) int64 {
+	if value == 0 {
+		return 1
+	}
+	if value < 0 {
+		// LDAP message IDs are positive; retain a safe width for malformed
+		// internal callers rather than underestimating their BER encoding.
+		return 8
+	}
+	bytes := int64(0)
+	for current := uint64(value); current > 0; current >>= 8 {
+		bytes++
+	}
+	if uint64(value)>>(uint(bytes-1)*8)&0x80 != 0 {
+		bytes++
+	}
+	return bytes
+}
+
 func EncodeSearchResultReference(
 	messageID int64,
 	referrals []string,

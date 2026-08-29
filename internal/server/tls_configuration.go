@@ -616,7 +616,10 @@ func parseGlobalTLSCRLs(data []byte) ([]*x509.RevocationList, error) {
 		}
 		return crls, nil
 	}
-	crl, err := x509.ParseRevocationList(remaining)
+	// DER is binary: trimming bytes classified as text whitespace can truncate
+	// a valid signature when its final octet happens to be 0x09, 0x0a, 0x0d,
+	// or 0x20. Only the PEM branch accepts surrounding textual whitespace.
+	crl, err := x509.ParseRevocationList(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse DER CRL: %w", err)
 	}

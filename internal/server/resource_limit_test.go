@@ -13,6 +13,7 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -42,6 +43,26 @@ func TestResourceLimiterBoundsAndCancelsWaiters(t *testing.T) {
 	limiter.release()
 	if limiter.active.Load() != 0 || limiter.waiting.Load() != 0 {
 		t.Fatalf("limiter leaked state: active=%d waiting=%d", limiter.active.Load(), limiter.waiting.Load())
+	}
+}
+
+func TestResourceByteLimiterBoundsAndRecovers(t *testing.T) {
+	t.Parallel()
+
+	limiter := newResourceByteLimiter(10)
+	if !limiter.tryAcquire(6) || limiter.tryAcquire(5) {
+		t.Fatal("byte limiter did not enforce its maximum")
+	}
+	if limiter.active.Load() != 6 || limiter.rejected.Load() != 1 {
+		t.Fatalf("byte limiter active=%d rejected=%d", limiter.active.Load(), limiter.rejected.Load())
+	}
+	limiter.release(6)
+	if !limiter.tryAcquire(10) {
+		t.Fatal("byte limiter did not recover capacity")
+	}
+	limiter.release(10)
+	if limiter.active.Load() != 0 || limiter.limit() != 10 {
+		t.Fatalf("byte limiter final active=%d limit=%d", limiter.active.Load(), limiter.limit())
 	}
 }
 
@@ -331,6 +352,151 @@ func TestServerPerConnectionOperationLimit(t *testing.T) {
 	}
 }
 
+func TestFiniteSearchResponseByteLimit(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:                 "cn=admin,dc=example,dc=com",
+		RootPassword:           []byte("secret"),
+		MaxSearchResponseBytes: 32,
+	})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"*", "+"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultAdminLimitExceeded)
+	who, err := client.WhoAmI(nil)
+	if err != nil || who.AuthzID != "dn:cn=admin,dc=example,dc=com" {
+		t.Fatalf("Who Am I after response limit = %#v, %v", who, err)
+	}
+}
+
+func TestSearchResponsePDULimit(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:                 "cn=admin,dc=example,dc=com",
+		RootPassword:           []byte("secret"),
+		MaxResponsePDUBytes:    32,
+		MaxSearchResponseBytes: 1 << 20,
+	})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"*", "+"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultAdminLimitExceeded)
+	if _, err := client.WhoAmI(nil); err != nil {
+		t.Fatalf("Who Am I after PDU limit: %v", err)
+	}
+}
+
+func TestProcessSearchMemoryLimit(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{
+		RootDN:               "cn=admin,dc=example,dc=com",
+		RootPassword:         []byte("secret"),
+		MaxSearchMemoryBytes: 1,
+	})
+	defer stop()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Search(ldap.NewSearchRequest(
+		"dc=example,dc=com",
+		ldap.ScopeBaseObject,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(objectClass=*)",
+		[]string{"dc"},
+		nil,
+	))
+	assertLDAPResultCode(t, err, ldap.LDAPResultAdminLimitExceeded)
+	who, err := client.WhoAmI(nil)
+	if err != nil || who.AuthzID != "dn:cn=admin,dc=example,dc=com" {
+		t.Fatalf("Who Am I after search memory limit = %#v, %v", who, err)
+	}
+}
+
+func TestPersistentSyncIsExemptFromFiniteResponseByteLimit(t *testing.T) {
+	t.Parallel()
+
+	message := ldapwire.Message{
+		ID:      1,
+		Request: ldapwire.SearchRequest{},
+		Controls: []ldapwire.Control{{
+			OID:      syncRequestControlOID,
+			HasValue: true,
+			Value: ldapwire.EncodeSyncRequestValue(ldapwire.SyncRequestValue{
+				Mode: ldapwire.SyncRefreshAndPersist,
+			}),
+		}},
+	}
+	operation := newTrackedOperation(context.Background(), message)
+	server := &Server{config: Config{MaxSearchResponseBytes: 32}}
+	if got := server.searchResponseByteLimit(&queuedOperation{
+		message:   message,
+		operation: operation,
+	}); got != 0 {
+		t.Fatalf("persistent Sync response limit = %d, want unlimited", got)
+	}
+	server.config.MaxResponsePDUBytes = 16
+	if got := server.searchResponsePDULimit(&queuedOperation{
+		message:   message,
+		operation: operation,
+	}); got != 16 {
+		t.Fatalf("persistent Sync PDU limit = %d, want 16", got)
+	}
+}
+
 func TestWhoAmIRunsBesideBlockedSameConnectionSearch(t *testing.T) {
 	base := storage.NewMemory()
 	t.Cleanup(func() { _ = base.Close() })
@@ -499,7 +665,13 @@ func TestNewResourceLimitDefaultsAndValidation(t *testing.T) {
 		func(config *Config) { config.MaxConcurrentHandshakes = -1 },
 		func(config *Config) { config.MaxSearchCandidates = -1 },
 		func(config *Config) { config.MaxSearchCandidateBytes = -1 },
+		func(config *Config) { config.MaxSearchResponseBytes = -1 },
 		func(config *Config) { config.MaxOperationsPerConnection = -1 },
+		func(config *Config) { config.MaxPendingBytesPerConnection = -1 },
+		func(config *Config) { config.MaxPendingOperationBytes = -1 },
+		func(config *Config) { config.MaxSearchMemoryBytes = -1 },
+		func(config *Config) { config.MaxResponsePDUBytes = -1 },
+		func(config *Config) { config.MaxInFlightResponseBytes = -1 },
 	} {
 		store := storage.NewMemory()
 		config := Config{Store: store}
@@ -521,7 +693,13 @@ func TestNewResourceLimitDefaultsAndValidation(t *testing.T) {
 		instance.handshakeLimiter.limit() != defaultMaxConcurrentHandshakes ||
 		instance.config.MaxSearchCandidates != defaultMaxSearchCandidates ||
 		instance.config.MaxSearchCandidateBytes != defaultMaxSearchCandidateBytes ||
-		instance.config.MaxOperationsPerConnection != defaultMaxOperationsPerConnection {
+		instance.config.MaxSearchResponseBytes != defaultMaxSearchResponseBytes ||
+		instance.config.MaxOperationsPerConnection != defaultMaxOperationsPerConnection ||
+		instance.config.MaxPendingBytesPerConnection != defaultMaxPendingBytesPerConnection ||
+		instance.pendingByteLimiter.limit() != defaultMaxPendingOperationBytes ||
+		instance.searchMemoryLimiter.limit() != defaultMaxSearchMemoryBytes ||
+		instance.config.MaxResponsePDUBytes != defaultMaxResponsePDUBytes ||
+		instance.responseByteLimiter.limit() != defaultMaxInFlightResponseBytes {
 		t.Fatalf("resource defaults = %#v", instance.config)
 	}
 	entries := instance.monitorEntries(instance.runtime.Load())
@@ -530,7 +708,16 @@ func TestNewResourceLimitDefaultsAndValidation(t *testing.T) {
 		"cn=Threads,cn=Monitor": {
 			"maxConcurrentOperations=256", "activeOperations=0",
 			"maxOperationsPerConnection=8",
+			"maxPendingBytesPerConnection=67108864",
+			"maxPendingOperationBytes=268435456",
+			"activePendingOperationBytes=0",
 			"maxSearchCandidates=100000", "maxSearchCandidateBytes=67108864",
+			"maxSearchResponseBytes=134217728",
+			"maxSearchMemoryBytes=536870912",
+			"activeSearchMemoryBytes=0",
+			"maxResponsePDUBytes=16777216",
+			"maxInFlightResponseBytes=268435456",
+			"activeInFlightResponseBytes=0",
 		},
 	} {
 		entry := monitorEntryByDN(entries, dn)

@@ -14,6 +14,7 @@ import (
 )
 
 var errOperationStopped = errors.New("LDAP operation stopped")
+var errSearchResponseLimit = errors.New("LDAP search response byte budget exceeded")
 
 type operationStopMode uint8
 
@@ -31,6 +32,8 @@ const (
 	operationFinalizing
 	operationComplete
 )
+
+type trackedOperationContextKey struct{}
 
 type trackedOperation struct {
 	id          int64
@@ -55,7 +58,7 @@ func newTrackedOperation(
 	message ldapwire.Message,
 ) *trackedOperation {
 	ctx, cancel := context.WithCancel(parent)
-	_, isSearch := message.Request.(ldapwire.SearchRequest)
+	cancelable := operationRequestCancelable(message.Request)
 	abandonable := true
 	switch message.Request.(type) {
 	case ldapwire.BindRequest, ldapwire.UnbindRequest, ldapwire.AbandonRequest:
@@ -63,12 +66,30 @@ func newTrackedOperation(
 	}
 	return &trackedOperation{
 		id:          message.ID,
-		cancelable:  isSearch,
+		cancelable:  cancelable,
 		abandonable: abandonable,
 		longLived:   isLongLivedOperation(message),
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
+	}
+}
+
+func operationRequestCancelable(request ldapwire.Request) bool {
+	switch typed := request.(type) {
+	case ldapwire.SearchRequest, ldapwire.CompareRequest, ldapwire.AddRequest,
+		ldapwire.ModifyRequest, ldapwire.DeleteRequest, ldapwire.ModifyDNRequest:
+		return true
+	case ldapwire.ExtendedRequest:
+		switch typed.Name {
+		case cancelOID, startTLSOID, transactionStartOID, transactionEndOID,
+			whoAmIOID:
+			return false
+		default:
+			return true
+		}
+	default:
+		return false
 	}
 }
 
@@ -187,6 +208,53 @@ func (operation *trackedOperation) beginFinalResponse() error {
 	}
 	operation.phase = operationFinalizing
 	return nil
+}
+
+func (operation *trackedOperation) markCommitPoint() error {
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	if operation.stop != operationRunning {
+		return errOperationStopped
+	}
+	if operation.phase < operationFinalizing {
+		operation.phase = operationFinalizing
+	}
+	return nil
+}
+
+func withTrackedOperation(
+	ctx context.Context,
+	operation *trackedOperation,
+) context.Context {
+	return context.WithValue(ctx, trackedOperationContextKey{}, operation)
+}
+
+func markTrackedOperationCommitPoint(ctx context.Context) error {
+	operation, _ := ctx.Value(trackedOperationContextKey{}).(*trackedOperation)
+	if operation == nil {
+		return nil
+	}
+	return operation.markCommitPoint()
+}
+
+func (operation *trackedOperation) disableCancellationForRemoteCommit() error {
+	operation.mu.Lock()
+	defer operation.mu.Unlock()
+	if operation.stop != operationRunning {
+		return errOperationStopped
+	}
+	operation.cancelable = false
+	return nil
+}
+
+func disableTrackedOperationCancellationForRemoteCommit(
+	ctx context.Context,
+) error {
+	operation, _ := ctx.Value(trackedOperationContextKey{}).(*trackedOperation)
+	if operation == nil {
+		return ctx.Err()
+	}
+	return operation.disableCancellationForRemoteCommit()
 }
 
 func (operation *trackedOperation) responseAllowed() bool {
@@ -349,11 +417,28 @@ func (registry *operationRegistry) closeIfIdle(
 }
 
 type queuedOperation struct {
-	message    ldapwire.Message
-	operation  *trackedOperation
-	completion chan operationCompletion
-	state      *connectionState
-	concurrent bool
+	message             ldapwire.Message
+	operation           *trackedOperation
+	completion          chan operationCompletion
+	state               *connectionState
+	concurrent          bool
+	retainedBytes       int64
+	releaseRetained     func()
+	releaseRetainedOnce sync.Once
+}
+
+func (operation *queuedOperation) releaseRetainedBytes() bool {
+	if operation == nil {
+		return false
+	}
+	released := false
+	operation.releaseRetainedOnce.Do(func() {
+		released = true
+		if operation.releaseRetained != nil {
+			operation.releaseRetained()
+		}
+	})
+	return released
 }
 
 type operationCompletion struct {
@@ -363,14 +448,16 @@ type operationCompletion struct {
 }
 
 type operationQueue struct {
-	mu      sync.Mutex
-	ready   *sync.Cond
-	items   []*queuedOperation
-	active  int
-	maximum int
-	fence   bool
-	closed  bool
-	drain   bool
+	mu                   sync.Mutex
+	ready                *sync.Cond
+	items                []*queuedOperation
+	active               int
+	maximum              int
+	fence                bool
+	retainedBytes        int64
+	maximumRetainedBytes int64
+	closed               bool
+	drain                bool
 }
 
 type operationQueuePushResult uint8
@@ -400,11 +487,16 @@ func (queue *operationQueue) push(
 	if queue.closed {
 		return operationQueueClosed
 	}
+	if queue.maximumRetainedBytes > 0 &&
+		operation.retainedBytes > queue.maximumRetainedBytes-queue.retainedBytes {
+		return operationQueueLimitExceeded
+	}
 	pending := queue.pendingAfterPushLocked(operation)
 	if pending > 0 && pending > maxPending {
 		return operationQueueLimitExceeded
 	}
 	queue.items = append(queue.items, operation)
+	queue.retainedBytes += operation.retainedBytes
 	queue.ready.Signal()
 	return operationQueuePushed
 }
@@ -469,13 +561,21 @@ func (queue *operationQueue) pop() (*queuedOperation, bool) {
 	return operation, true
 }
 
-func (queue *operationQueue) complete() {
+func (queue *operationQueue) complete(operations ...*queuedOperation) {
 	queue.mu.Lock()
 	if queue.active > 0 {
 		queue.active--
 	}
 	if queue.fence {
 		queue.fence = false
+	}
+	for _, operation := range operations {
+		if operation == nil {
+			continue
+		}
+		if operation.releaseRetainedBytes() {
+			queue.retainedBytes -= operation.retainedBytes
+		}
 	}
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
@@ -497,6 +597,9 @@ func (queue *operationQueue) remove(messageID int64) *queuedOperation {
 		} else {
 			queue.ready.Signal()
 		}
+		if queued.releaseRetainedBytes() {
+			queue.retainedBytes -= queued.retainedBytes
+		}
 		return queued
 	}
 	return nil
@@ -506,6 +609,13 @@ func (queue *operationQueue) discardPending() []*queuedOperation {
 	queue.mu.Lock()
 	discarded := queue.items
 	queue.items = nil
+	for _, operation := range discarded {
+		if operation != nil {
+			if operation.releaseRetainedBytes() {
+				queue.retainedBytes -= operation.retainedBytes
+			}
+		}
+	}
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
 	return discarded
@@ -524,6 +634,13 @@ func (queue *operationQueue) close() {
 	queue.mu.Lock()
 	queue.closed = true
 	queue.drain = false
+	for _, operation := range queue.items {
+		if operation != nil {
+			if operation.releaseRetainedBytes() {
+				queue.retainedBytes -= operation.retainedBytes
+			}
+		}
+	}
 	queue.items = nil
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
@@ -549,6 +666,22 @@ type serializedResponseConnection struct {
 func (connection *serializedResponseConnection) Write(value []byte) (int, error) {
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
+	return connection.writeLocked(value)
+}
+
+func (connection *serializedResponseConnection) writeOperationResponse(
+	operation *trackedOperation,
+	value []byte,
+) (int, error) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	if operation == nil || !operation.responseAllowed() {
+		return 0, errOperationStopped
+	}
+	return connection.writeLocked(value)
+}
+
+func (connection *serializedResponseConnection) writeLocked(value []byte) (int, error) {
 	if connection.terminal != nil && connection.terminal.Load() {
 		return 0, net.ErrClosed
 	}
@@ -600,8 +733,13 @@ func (connection *serializedResponseConnection) Write(value []byte) (int, error)
 
 type operationResponseConnection struct {
 	net.Conn
-	operation *trackedOperation
-	audit     *operationAuditObservation
+	operation            *trackedOperation
+	audit                *operationAuditObservation
+	maximumResponseBytes int64
+	maximumPDUBytes      int64
+	responseBytes        int64
+	budgetMu             sync.Mutex
+	reserveResponseBytes func(int64) (func(), bool)
 }
 
 func (connection *operationResponseConnection) enableMetaBackendSearch() {
@@ -617,10 +755,37 @@ func (connection *operationResponseConnection) metaBackendCancelCompletesNormall
 }
 
 func (connection *operationResponseConnection) Write(value []byte) (int, error) {
-	if !connection.operation.responseAllowed() {
-		return 0, errOperationStopped
+	connection.budgetMu.Lock()
+	defer connection.budgetMu.Unlock()
+	if connection.maximumPDUBytes > 0 && int64(len(value)) > connection.maximumPDUBytes {
+		return 0, errSearchResponseLimit
 	}
-	written, err := connection.Conn.Write(value)
+	releaseResponseBytes := func() {}
+	if connection.reserveResponseBytes != nil {
+		var acquired bool
+		releaseResponseBytes, acquired = connection.reserveResponseBytes(int64(len(value)))
+		if !acquired {
+			return 0, errSearchResponseLimit
+		}
+	}
+	defer releaseResponseBytes()
+	if connection.maximumResponseBytes > 0 &&
+		int64(len(value)) > connection.maximumResponseBytes-connection.responseBytes {
+		return 0, errSearchResponseLimit
+	}
+	var written int
+	var err error
+	if writer, ok := connection.Conn.(interface {
+		writeOperationResponse(*trackedOperation, []byte) (int, error)
+	}); ok {
+		written, err = writer.writeOperationResponse(connection.operation, value)
+	} else {
+		if !connection.operation.responseAllowed() {
+			return 0, errOperationStopped
+		}
+		written, err = connection.Conn.Write(value)
+	}
+	connection.responseBytes += int64(written)
 	if written == len(value) {
 		connection.audit.observeResponse(value)
 	}

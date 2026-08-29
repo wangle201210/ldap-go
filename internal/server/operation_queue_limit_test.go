@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,25 @@ func TestConnectionReadBarrierClassification(t *testing.T) {
 	}
 }
 
+func TestTransactionAdmissionDisablesConcurrentClassification(t *testing.T) {
+	t.Parallel()
+
+	admission := &atomic.Bool{}
+	state := &connectionState{transactionAdmission: admission}
+	message := ldapwire.Message{Request: ldapwire.SearchRequest{}}
+	if !connectionOperationCanRunConcurrent(state, message) {
+		t.Fatal("ordinary Search was not concurrent before transaction admission")
+	}
+	admission.Store(true)
+	if connectionOperationCanRunConcurrent(state, message) {
+		t.Fatal("Search remained concurrent during transaction admission")
+	}
+	admission.Store(false)
+	if !connectionOperationCanRunConcurrent(state, message) {
+		t.Fatal("ordinary Search did not recover after transaction admission")
+	}
+}
+
 func TestOperationQueueConcurrentSlotsAndFence(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +164,53 @@ func TestOperationQueueConcurrentSlotsAndFence(t *testing.T) {
 	}
 	queue.complete()
 	queue.close()
+}
+
+func TestOperationQueueRetainedByteLimitAndRelease(t *testing.T) {
+	t.Parallel()
+
+	queue := newOperationQueue(1)
+	queue.maximumRetainedBytes = 10
+	releases := 0
+	newQueued := func(size int64) *queuedOperation {
+		return &queuedOperation{
+			retainedBytes: size,
+			releaseRetained: func() {
+				releases++
+			},
+		}
+	}
+	first := newQueued(6)
+	if result := queue.push(first, 10); result != operationQueuePushed {
+		t.Fatalf("first push = %d", result)
+	}
+	if result := queue.push(newQueued(6), 10); result != operationQueueLimitExceeded {
+		t.Fatalf("byte overflow push = %d", result)
+	}
+	if operation, ok := queue.pop(); !ok || operation != first {
+		t.Fatalf("pop = %#v, %v", operation, ok)
+	}
+	queue.complete(first)
+	if queue.retainedBytes != 0 || releases != 1 {
+		t.Fatalf("complete retained=%d releases=%d", queue.retainedBytes, releases)
+	}
+
+	removed := newQueued(4)
+	if queue.push(removed, 10) != operationQueuePushed || queue.remove(0) != removed {
+		t.Fatal("remove did not return the retained operation")
+	}
+	discarded := newQueued(4)
+	if queue.push(discarded, 10) != operationQueuePushed || len(queue.discardPending()) != 1 {
+		t.Fatal("discard did not return the retained operation")
+	}
+	closed := newQueued(4)
+	if queue.push(closed, 10) != operationQueuePushed {
+		t.Fatal("close fixture push failed")
+	}
+	queue.close()
+	if queue.retainedBytes != 0 || releases != 4 {
+		t.Fatalf("final retained=%d releases=%d", queue.retainedBytes, releases)
+	}
 }
 
 func TestOperationQueueNegativePendingLimitAllowsOnlyExecutingOperation(t *testing.T) {

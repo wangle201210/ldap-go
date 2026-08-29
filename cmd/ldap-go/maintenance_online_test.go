@@ -101,13 +101,28 @@ func seedMaintenanceCommandDatabase(t *testing.T, path, state string) {
 	if err != nil {
 		t.Fatalf("OpenBolt(%q): %v", path, err)
 	}
+	contextDN, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(): %v", err)
+	}
 	err = store.Update(context.Background(), func(writer storage.Writer) error {
-		if err := writer.Put(directory.Entry{
+		if err := writer.PutIn(storage.OpenLDAPBootstrapPartition(contextDN), directory.Entry{
 			DN: "dc=example,dc=com",
 			Attributes: []directory.Attribute{
+				{
+					Description: "objectClass",
+					Values:      [][]byte{[]byte("top"), []byte("domain")},
+				},
+				{
+					Description: "structuralObjectClass",
+					Values:      [][]byte{[]byte("domain")},
+				},
 				{Description: "dc", Values: [][]byte{[]byte("example")}},
 			},
 		}, false); err != nil {
+			return err
+		}
+		if err := writer.SetNamingContexts([]string{"dc=example,dc=com"}); err != nil {
 			return err
 		}
 		return writer.SetMetadata("command-state", []byte(state))

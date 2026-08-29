@@ -802,8 +802,20 @@ func (server *Server) populateMonitorContainerAttributes(
 			"activeOperations="+strconv.FormatInt(server.operationLimiter.active.Load(), 10),
 			"waitingOperations="+strconv.FormatInt(server.operationLimiter.waiting.Load(), 10),
 			"maxOperationsPerConnection="+strconv.Itoa(server.config.MaxOperationsPerConnection),
+			"maxPendingBytesPerConnection="+strconv.FormatInt(server.config.MaxPendingBytesPerConnection, 10),
+			"maxPendingOperationBytes="+strconv.FormatInt(server.pendingByteLimiter.limit(), 10),
+			"activePendingOperationBytes="+strconv.FormatInt(server.pendingByteLimiter.active.Load(), 10),
+			"rejectedPendingOperationBytes="+strconv.FormatUint(server.pendingByteLimiter.rejected.Load(), 10),
 			"maxSearchCandidates="+strconv.Itoa(server.config.MaxSearchCandidates),
 			"maxSearchCandidateBytes="+strconv.FormatInt(server.config.MaxSearchCandidateBytes, 10),
+			"maxSearchResponseBytes="+strconv.FormatInt(server.config.MaxSearchResponseBytes, 10),
+			"maxSearchMemoryBytes="+strconv.FormatInt(server.searchMemoryLimiter.limit(), 10),
+			"activeSearchMemoryBytes="+strconv.FormatInt(server.searchMemoryLimiter.active.Load(), 10),
+			"rejectedSearchMemoryBytes="+strconv.FormatUint(server.searchMemoryLimiter.rejected.Load(), 10),
+			"maxResponsePDUBytes="+strconv.FormatInt(server.config.MaxResponsePDUBytes, 10),
+			"maxInFlightResponseBytes="+strconv.FormatInt(server.responseByteLimiter.limit(), 10),
+			"activeInFlightResponseBytes="+strconv.FormatInt(server.responseByteLimiter.active.Load(), 10),
+			"rejectedInFlightResponseBytes="+strconv.FormatUint(server.responseByteLimiter.rejected.Load(), 10),
 		)
 	}
 

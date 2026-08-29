@@ -3,6 +3,7 @@ package server
 import (
 	"sort"
 	"sync"
+	"unsafe"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -58,16 +59,20 @@ type searchCandidate struct {
 }
 
 func searchCandidateRetainedBytes(candidate searchCandidate) int64 {
-	total := int64(len(candidate.dn) + len(candidate.cursorKey) + len(candidate.identityKey))
+	total := int64(unsafe.Sizeof(candidate)) +
+		int64(len(candidate.dn)+len(candidate.cursorKey)+len(candidate.identityKey))
 	for _, entry := range []directory.Entry{candidate.selected, candidate.readable} {
 		total += int64(len(entry.DN))
+		total += int64(cap(entry.Attributes)) * int64(unsafe.Sizeof(directory.Attribute{}))
 		for _, attribute := range entry.Attributes {
 			total += int64(len(attribute.Description))
+			total += int64(cap(attribute.Values)) * int64(unsafe.Sizeof([]byte(nil)))
 			for _, value := range attribute.Values {
 				total += int64(len(value))
 			}
 		}
 	}
+	total += int64(cap(candidate.values)) * int64(unsafe.Sizeof(sortValue{}))
 	for _, value := range candidate.values {
 		total += int64(len(value.value))
 	}

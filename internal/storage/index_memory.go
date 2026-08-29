@@ -346,28 +346,18 @@ func (tx *memoryTx) schemaAwareEntryKeys(
 	dn directory.DN,
 	schema EqualityIndexSchema,
 ) ([]string, error) {
-	normalizer, ok := schema.(directory.DNAttributeNormalizer)
-	if !ok {
+	if _, ok := schema.(directory.DNAttributeNormalizer); !ok {
 		return nil, errors.New("equality index schema cannot normalize DNs")
 	}
-	var keys []string
-	for key, entry := range tx.entries {
-		entryPartition, _ := splitPartitionedEntryKey(key)
-		if entryPartition != partition {
-			continue
-		}
-		candidate, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
-		if err != nil {
-			return nil, err
-		}
-		if candidate.Equal(dn) {
-			keys = append(keys, key)
-		}
+	key := partitionedEntryKey(partition, dn.Key())
+	entry, ok := tx.entries[key]
+	if !ok {
+		return nil, nil
 	}
-	if len(keys) > 1 {
-		return nil, ErrEntryAmbiguous
+	if err := tx.validateEntry(key, entry); err != nil {
+		return nil, err
 	}
-	return keys, nil
+	return []string{key}, nil
 }
 
 func (tx *memoryTx) addEqualityIndexEntry(

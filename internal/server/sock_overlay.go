@@ -498,11 +498,12 @@ func (server *Server) writeSockOverlayShortCircuitResponse(
 			if selected == nil {
 				continue
 			}
-			if err := ldapwire.Write(connection, ldapwire.EncodeSearchResultEntry(
+			if err := server.writeSearchEntry(
+				connection,
 				message.ID,
 				*selected,
 				nil,
-			)); err != nil {
+			); err != nil {
 				return err
 			}
 		}

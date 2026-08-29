@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -253,6 +255,226 @@ func TestProductionDiagnosticRedaction(t *testing.T) {
 	if strings.Count(redacted, "<redacted>") < 4 {
 		t.Fatalf("redacted diagnostic = %q", redacted)
 	}
+}
+
+func TestProductionDatabasePermissionFinding(t *testing.T) {
+	t.Run("private regular file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		want := productionCheckPass
+		if runtime.GOOS == "windows" {
+			want = productionCheckUnknown
+		}
+		if finding.Status != want {
+			t.Fatalf("finding = %#v, want status %s", finding, want)
+		}
+	})
+
+	t.Run("missing file is unknown", func(t *testing.T) {
+		finding := productionDatabasePermissionFinding(filepath.Join(t.TempDir(), "missing.db"))
+		if finding.Status != productionCheckUnknown {
+			t.Fatalf("finding = %#v, want unknown", finding)
+		}
+	})
+
+	t.Run("directory is rejected", func(t *testing.T) {
+		finding := productionDatabasePermissionFinding(t.TempDir())
+		if finding.Status != productionCheckFail || !strings.Contains(finding.Summary, "regular file") {
+			t.Fatalf("finding = %#v, want regular-file failure", finding)
+		}
+	})
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+
+	t.Run("symbolic link is rejected", func(t *testing.T) {
+		directory := t.TempDir()
+		target := filepath.Join(directory, "target.db")
+		link := filepath.Join(directory, "directory.db")
+		if err := os.WriteFile(target, nil, 0o600); err != nil {
+			t.Fatalf("write target: %v", err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(link)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "symbolic-link") {
+			t.Fatalf("finding = %#v, want symbolic-link failure", finding)
+		}
+	})
+
+	t.Run("group access is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "directory.db")
+		if err := os.WriteFile(path, nil, 0o640); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		if err := os.Chmod(path, 0o640); err != nil {
+			t.Fatalf("chmod database: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0640") {
+			t.Fatalf("finding = %#v, want mode failure", finding)
+		}
+	})
+
+	t.Run("owner must be able to read and write", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		if err := os.Chmod(path, 0o400); err != nil {
+			t.Fatalf("chmod database: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0400") {
+			t.Fatalf("finding = %#v, want owner-mode failure", finding)
+		}
+	})
+
+	t.Run("writable parent is rejected without exposing its path", func(t *testing.T) {
+		secret := "credential=do-not-report"
+		parent := filepath.Join(t.TempDir(), secret)
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatalf("mkdir parent: %v", err)
+		}
+		path := filepath.Join(parent, "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		if err := os.Chmod(parent, 0o770); err != nil {
+			t.Fatalf("chmod parent: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0770") {
+			t.Fatalf("finding = %#v, want parent-mode failure", finding)
+		}
+		if strings.Contains(fmt.Sprint(finding), secret) {
+			t.Fatalf("finding leaked inspected path: %#v", finding)
+		}
+	})
+
+	t.Run("writable grandparent is rejected", func(t *testing.T) {
+		grandparent := filepath.Join(t.TempDir(), "shared")
+		parent := filepath.Join(grandparent, "private")
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			t.Fatalf("mkdir ancestry: %v", err)
+		}
+		path := filepath.Join(parent, "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		if err := os.Chmod(grandparent, 0o777); err != nil {
+			t.Fatalf("chmod grandparent: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0777") {
+			t.Fatalf("finding = %#v, want ancestor-mode failure", finding)
+		}
+	})
+
+	t.Run("intermediate symbolic link is rejected", func(t *testing.T) {
+		root := t.TempDir()
+		realParent := filepath.Join(root, "real")
+		if err := os.Mkdir(realParent, 0o700); err != nil {
+			t.Fatalf("mkdir real parent: %v", err)
+		}
+		link := filepath.Join(root, "linked")
+		if err := os.Symlink(realParent, link); err != nil {
+			t.Fatalf("symlink parent: %v", err)
+		}
+		path := filepath.Join(link, "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write database: %v", err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "symbolic-link") {
+			t.Fatalf("finding = %#v, want intermediate symlink failure", finding)
+		}
+	})
+}
+
+func TestProductionBackupDirectoryPermissionFinding(t *testing.T) {
+	t.Run("private directory", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "backups")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("mkdir backup: %v", err)
+		}
+		finding := productionBackupDirectoryPermissionFinding(path)
+		want := productionCheckPass
+		if runtime.GOOS == "windows" {
+			want = productionCheckUnknown
+		}
+		if finding.Status != want {
+			t.Fatalf("finding = %#v, want status %s", finding, want)
+		}
+	})
+
+	t.Run("missing directory is rejected", func(t *testing.T) {
+		finding := productionBackupDirectoryPermissionFinding(filepath.Join(t.TempDir(), "missing"))
+		if finding.Status != productionCheckFail {
+			t.Fatalf("finding = %#v, want failure", finding)
+		}
+	})
+
+	t.Run("regular file is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "backups")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write backup path: %v", err)
+		}
+		finding := productionBackupDirectoryPermissionFinding(path)
+		if finding.Status != productionCheckFail || !strings.Contains(finding.Summary, "directory") {
+			t.Fatalf("finding = %#v, want directory failure", finding)
+		}
+	})
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+
+	t.Run("group access is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "backups")
+		if err := os.Mkdir(path, 0o750); err != nil {
+			t.Fatalf("mkdir backup: %v", err)
+		}
+		if err := os.Chmod(path, 0o750); err != nil {
+			t.Fatalf("chmod backup: %v", err)
+		}
+		finding := productionBackupDirectoryPermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0750") {
+			t.Fatalf("finding = %#v, want mode failure", finding)
+		}
+	})
+
+	t.Run("writable parent is rejected", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatalf("mkdir parent: %v", err)
+		}
+		path := filepath.Join(parent, "backups")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("mkdir backup: %v", err)
+		}
+		if err := os.Chmod(parent, 0o707); err != nil {
+			t.Fatalf("chmod parent: %v", err)
+		}
+		finding := productionBackupDirectoryPermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0707") {
+			t.Fatalf("finding = %#v, want parent-mode failure", finding)
+		}
+	})
+}
+
+func productionFindingHasEvidence(finding productionCheckFinding, substring string) bool {
+	for _, evidence := range finding.Evidence {
+		if strings.Contains(evidence, substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func productionCheckErrorCode(err error) int {

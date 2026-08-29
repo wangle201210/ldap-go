@@ -23,12 +23,15 @@ const (
 )
 
 type ldapTransaction struct {
-	identifier  []byte
-	runtime     *runtimeState
-	partition   string
-	operations  []ldapTransactionOperation
-	messageIDs  map[int64]struct{}
-	queuedBytes int64
+	identifier          []byte
+	runtime             *runtimeState
+	partition           string
+	operations          []ldapTransactionOperation
+	messageIDs          map[int64]struct{}
+	queuedBytes         int64
+	retainedBytes       int64
+	releaseRetained     func(int64)
+	releaseRetainedOnce sync.Once
 }
 
 type ldapTransactionOperation struct {
@@ -126,7 +129,12 @@ func (server *Server) updateStorage(
 	if execution, ok := ctx.Value(transactionExecutionContextKey{}).(*transactionExecution); ok {
 		return update(accessWriterFromContext(ctx, execution.writer))
 	}
-	return server.config.Store.Update(ctx, update)
+	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		if err := update(writer); err != nil {
+			return err
+		}
+		return markTrackedOperationCommitPoint(ctx)
+	})
 }
 
 func (server *Server) viewStorage(
@@ -470,6 +478,19 @@ func (server *Server) handleTransactionSpecification(
 			),
 		)
 	}
+	if !server.pendingByteLimiter.tryAcquire(queuedBytes) {
+		clearLDAPTransactionOperation(&ldapTransactionOperation{message: queuedMessage})
+		return true, server.abortLDAPTransactionWithNotice(
+			connection,
+			state,
+			ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				"process pending operation byte budget exceeded",
+			),
+		)
+	}
+	transaction.retainedBytes += queuedBytes
+	transaction.releaseRetained = server.pendingByteLimiter.release
 
 	if state.transaction.partition == "" {
 		state.transaction.partition = database.partition
@@ -890,7 +911,7 @@ func transactionOperationQueuedBytes(message ldapwire.Message) (int64, error) {
 		return 0, err
 	}
 	defer clear(encoded)
-	return int64(len(encoded)), nil
+	return ldapMessageRetainedBytes(message, int64(len(encoded))), nil
 }
 
 func (server *Server) abortLDAPTransactionWithNotice(
@@ -1521,6 +1542,13 @@ func clearLDAPTransaction(transaction *ldapTransaction) {
 	transaction.operations = nil
 	transaction.messageIDs = nil
 	transaction.queuedBytes = 0
+	transaction.releaseRetainedOnce.Do(func() {
+		if transaction.retainedBytes > 0 && transaction.releaseRetained != nil {
+			transaction.releaseRetained(transaction.retainedBytes)
+		}
+	})
+	transaction.retainedBytes = 0
+	transaction.releaseRetained = nil
 }
 
 func clearLDAPTransactionOperation(operation *ldapTransactionOperation) {

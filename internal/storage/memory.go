@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -160,6 +161,25 @@ func (tx *memoryTx) GetIn(partition string, dn directory.DN) (directory.Entry, e
 	}
 	key := partitionedEntryKey(partition, dn.Key())
 	entry, ok := tx.entries[key]
+	if isSchemaAwareDNKey(dn.Key()) {
+		if !ok {
+			ready, err := tx.schemaAwareDNIdentityReady(partition)
+			if err != nil {
+				return directory.Entry{}, err
+			}
+			if ready {
+				return directory.Entry{}, ErrEntryNotFound
+			}
+		} else {
+			if err := tx.validateEntry(key, entry); err != nil {
+				return directory.Entry{}, err
+			}
+			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
+				return directory.Entry{}, err
+			}
+			return entry.Clone(), nil
+		}
+	}
 	var directKey string
 	var directEntry directory.Entry
 	if ok {
@@ -328,6 +348,9 @@ func (tx *memoryTx) PutIn(
 	); err != nil {
 		return err
 	}
+	if !isSchemaAwareDNKey(identity) {
+		delete(tx.metadata, schemaAwareDNMigrationMetadataKey(partition))
+	}
 	tx.invalidateEqualityIndexes(partition)
 	return nil
 }
@@ -346,6 +369,24 @@ func (tx *memoryTx) putInWithDN(
 		return err
 	}
 	key := partitionedEntryKey(partition, identity)
+	if isSchemaAwareDNKey(identity) {
+		ready, err := tx.schemaAwareDNIdentityReady(partition)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			if err := tx.markSchemaAwareDNIdentityReadyIfNoLegacy(partition); err != nil {
+				return err
+			}
+		}
+		if _, exists := tx.entries[key]; exists && !replace {
+			return ErrEntryExists
+		}
+		tx.entries[key] = entry.Clone()
+		tx.dnIdentities[key] = identity
+		tx.dnSources[key] = entry.DN
+		return nil
+	}
 	existingKeys := make(map[string]struct{})
 	if _, exists := tx.entries[key]; exists {
 		existingKeys[key] = struct{}{}
@@ -417,6 +458,30 @@ func (tx *memoryTx) DeleteIn(partition string, dn directory.DN) error {
 		return errorsReadOnly()
 	}
 	key := partitionedEntryKey(partition, dn.Key())
+	if isSchemaAwareDNKey(dn.Key()) {
+		entry, exists := tx.entries[key]
+		if !exists {
+			ready, err := tx.schemaAwareDNIdentityReady(partition)
+			if err != nil {
+				return err
+			}
+			if ready {
+				return ErrEntryNotFound
+			}
+		} else {
+			if err := tx.validateEntry(key, entry); err != nil {
+				return err
+			}
+			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
+				return err
+			}
+			delete(tx.entries, key)
+			delete(tx.dnIdentities, key)
+			delete(tx.dnSources, key)
+			tx.invalidateEqualityIndexes(partition)
+			return nil
+		}
+	}
 	selectedKey := ""
 	if entry, exists := tx.entries[key]; exists {
 		if err := tx.validateEntry(key, entry); err != nil {
@@ -506,6 +571,154 @@ func (tx *memoryTx) validateSchemaAwareDNBindingsIn(
 		}
 	}
 	return nil
+}
+
+func (tx *memoryTx) schemaAwareDNIdentityReady(partition string) (bool, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return false, err
+	}
+	value, ok := tx.metadata[schemaAwareDNMigrationMetadataKey(partition)]
+	if !ok {
+		ready := false
+		for key, entry := range tx.entries {
+			entryPartition, physicalKey := splitPartitionedEntryKey(key)
+			if entryPartition != partition {
+				continue
+			}
+			if !isSchemaAwareDNKey(physicalKey) {
+				return false, nil
+			}
+			ready = true
+			if err := tx.validateEntry(key, entry); err != nil {
+				return false, err
+			}
+		}
+		return ready, nil
+	}
+	if len(value) != 1 || int(value[0]) != schemaAwareDNIdentityFormatVersion {
+		return false, fmt.Errorf(
+			"partition %q has unsupported DN identity format marker %x",
+			partition,
+			value,
+		)
+	}
+	return true, nil
+}
+
+func (tx *memoryTx) setSchemaAwareDNIdentityReady(partition string) {
+	tx.metadata[schemaAwareDNMigrationMetadataKey(partition)] = []byte{
+		schemaAwareDNIdentityFormatVersion,
+	}
+}
+
+func (tx *memoryTx) markSchemaAwareDNIdentityReadyIfNoLegacy(
+	partition string,
+) error {
+	for key, entry := range tx.entries {
+		entryPartition, physicalKey := splitPartitionedEntryKey(key)
+		if entryPartition != partition {
+			continue
+		}
+		if !isSchemaAwareDNKey(physicalKey) {
+			return fmt.Errorf("partition %q: %w", partition, ErrDNIdentityMigrationRequired)
+		}
+		if err := tx.validateEntry(key, entry); err != nil {
+			return err
+		}
+	}
+	tx.setSchemaAwareDNIdentityReady(partition)
+	return nil
+}
+
+func (tx *memoryTx) migrateSchemaAwareDNIdentitiesIn(
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) (DNIdentityMigrationReport, error) {
+	if tx.readOnly {
+		return DNIdentityMigrationReport{}, errorsReadOnly()
+	}
+	if err := tx.ctx.Err(); err != nil {
+		return DNIdentityMigrationReport{}, err
+	}
+	type migrationEntry struct {
+		oldKey   string
+		newKey   string
+		entry    directory.Entry
+		identity string
+	}
+	var report DNIdentityMigrationReport
+	var entries []migrationEntry
+	identities := make(map[string]string)
+	for key, entry := range tx.entries {
+		entryPartition, _ := splitPartitionedEntryKey(key)
+		if entryPartition != partition {
+			continue
+		}
+		if err := tx.validateEntry(key, entry); err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+		normalized, err := directory.ParseDNWithNormalizer(entry.DN, normalizer)
+		if err != nil {
+			return DNIdentityMigrationReport{}, fmt.Errorf(
+				"normalize entry DN %q: %w",
+				entry.DN,
+				err,
+			)
+		}
+		identity := normalized.Key()
+		newKey := partitionedEntryKey(partition, identity)
+		if previous, duplicate := identities[newKey]; duplicate {
+			return DNIdentityMigrationReport{}, fmt.Errorf(
+				"entry DNs %q and %q normalize to the same identity: %w",
+				previous,
+				entry.DN,
+				ErrEntryAmbiguous,
+			)
+		}
+		identities[newKey] = entry.DN
+		entries = append(entries, migrationEntry{
+			oldKey:   key,
+			newKey:   newKey,
+			entry:    entry.Clone(),
+			identity: identity,
+		})
+		report.Entries++
+		if key == newKey {
+			report.AlreadyCurrent++
+		} else {
+			report.Migrated++
+		}
+	}
+	_, indexed := tx.equalityIndexConfigs[partition]
+	indexSchema, canRebuildIndexes := normalizer.(EqualityIndexSchema)
+	if indexed && !canRebuildIndexes {
+		return DNIdentityMigrationReport{}, errors.New(
+			"schema-aware DN migration requires equality index schema for indexed partition",
+		)
+	}
+	for _, entry := range entries {
+		if entry.oldKey != entry.newKey {
+			delete(tx.entries, entry.oldKey)
+			delete(tx.dnIdentities, entry.oldKey)
+			delete(tx.dnSources, entry.oldKey)
+		}
+	}
+	for _, entry := range entries {
+		tx.entries[entry.newKey] = entry.entry
+		tx.dnIdentities[entry.newKey] = entry.identity
+		tx.dnSources[entry.newKey] = entry.entry.DN
+	}
+	tx.setSchemaAwareDNIdentityReady(partition)
+	if indexed {
+		config, err := normalizeEqualityIndexConfig(indexSchema.EqualityIndexConfiguration())
+		if err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+		if err := tx.buildEqualityIndexes(partition, indexSchema, config); err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+	}
+	return report, nil
 }
 
 func (tx *memoryTx) SetNamingContexts(contexts []string) error {

@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,18 +102,24 @@ type productionCheckOptions struct {
 	auditKeyFile          string
 	auditKeyEnvironment   bool
 
-	maxMessageSize             int64
-	searchLimit                int
-	transactionOperations      int
-	transactionQueuedBytes     int64
-	maxConnections             int
-	maxOperations              int
-	maxOperationsPerConnection int
-	maxHandshakes              int
-	maxSearchCandidates        int
-	maxSearchCandidateBytes    int64
-	handshakeTimeout           time.Duration
-	shutdownTimeout            time.Duration
+	maxMessageSize               int64
+	searchLimit                  int
+	transactionOperations        int
+	transactionQueuedBytes       int64
+	maxConnections               int
+	maxOperations                int
+	maxOperationsPerConnection   int
+	maxPendingBytesPerConnection int64
+	maxPendingOperationBytes     int64
+	maxHandshakes                int
+	maxSearchCandidates          int
+	maxSearchCandidateBytes      int64
+	maxSearchResponseBytes       int64
+	maxSearchMemoryBytes         int64
+	maxResponsePDUBytes          int64
+	maxInFlightResponseBytes     int64
+	handshakeTimeout             time.Duration
+	shutdownTimeout              time.Duration
 }
 
 type productionConfigSnapshot struct {
@@ -225,9 +230,15 @@ func parseProductionCheckOptions(
 	flags.IntVar(&options.maxConnections, "max-connections", 4096, "serve connection limit")
 	flags.IntVar(&options.maxOperations, "max-concurrent-operations", 256, "serve concurrent operation limit")
 	flags.IntVar(&options.maxOperationsPerConnection, "max-operations-per-connection", 8, "serve per-connection operation limit")
+	flags.Int64Var(&options.maxPendingBytesPerConnection, "max-pending-bytes-per-connection", 64<<20, "serve per-connection decoded operation byte limit")
+	flags.Int64Var(&options.maxPendingOperationBytes, "max-pending-operation-bytes", 256<<20, "serve process decoded operation byte limit")
 	flags.IntVar(&options.maxHandshakes, "max-concurrent-handshakes", 64, "serve concurrent handshake limit")
 	flags.IntVar(&options.maxSearchCandidates, "search-candidate-limit", 100000, "serve sorted-search candidate limit")
 	flags.Int64Var(&options.maxSearchCandidateBytes, "search-candidate-bytes", 64<<20, "serve sorted-search retained byte limit")
+	flags.Int64Var(&options.maxSearchResponseBytes, "search-response-bytes", 128<<20, "serve finite-search encoded response limit")
+	flags.Int64Var(&options.maxSearchMemoryBytes, "search-memory-bytes", 512<<20, "serve process retained search memory limit")
+	flags.Int64Var(&options.maxResponsePDUBytes, "response-pdu-bytes", 16<<20, "serve maximum encoded Search response PDU")
+	flags.Int64Var(&options.maxInFlightResponseBytes, "in-flight-response-bytes", 256<<20, "serve process in-flight Search response limit")
 	flags.DurationVar(&options.handshakeTimeout, "secure-handshake-timeout", 10*time.Second, "serve secure handshake timeout")
 	flags.DurationVar(&options.shutdownTimeout, "shutdown-timeout", 30*time.Second, "serve graceful shutdown timeout")
 
@@ -656,9 +667,13 @@ func productionResourceFinding(
 		options.transactionOperations > 0 && options.transactionQueuedBytes > 0 &&
 		options.maxConnections > 0 && options.maxOperations > 0 &&
 		options.maxOperationsPerConnection > 0 &&
+		options.maxPendingBytesPerConnection > 0 && options.maxPendingOperationBytes > 0 &&
 		options.maxHandshakes > 0 && snapshot.incomingAnonymous > 0 &&
 		snapshot.incomingAuthenticated > 0 && options.maxSearchCandidates > 0 &&
-		options.maxSearchCandidateBytes > 0
+		options.maxSearchCandidateBytes > 0 && options.maxSearchResponseBytes > 0 &&
+		options.maxSearchMemoryBytes > 0
+	bounded = bounded && options.maxResponsePDUBytes > 0
+	bounded = bounded && options.maxInFlightResponseBytes > 0
 	if !bounded {
 		return productionCheckFinding{
 			ID: "resource.global_limits", Category: "resource", Status: productionCheckFail,
@@ -670,10 +685,15 @@ func productionResourceFinding(
 		ID: "resource.global_limits", Category: "resource", Status: productionCheckPass,
 		Summary: "global connection, operation, transaction, search, and PDU resources are bounded",
 		Evidence: []string{fmt.Sprintf(
-			"connections=%d operations=%d perConnection=%d handshakes=%d search=%d candidates=%d candidateBytes=%d transactionOps=%d transactionBytes=%d incomingAnon=%d incomingAuth=%d",
+			"connections=%d operations=%d perConnection=%d pendingPerConnectionBytes=%d pendingProcessBytes=%d handshakes=%d search=%d candidates=%d candidateBytes=%d responseBytes=%d processSearchMemoryBytes=%d responsePDUBytes=%d inFlightResponseBytes=%d transactionOps=%d transactionBytes=%d incomingAnon=%d incomingAuth=%d",
 			options.maxConnections, options.maxOperations, options.maxOperationsPerConnection,
+			options.maxPendingBytesPerConnection, options.maxPendingOperationBytes,
 			options.maxHandshakes, options.searchLimit, options.maxSearchCandidates,
-			options.maxSearchCandidateBytes, options.transactionOperations,
+			options.maxSearchCandidateBytes, options.maxSearchResponseBytes,
+			options.maxSearchMemoryBytes,
+			options.maxResponsePDUBytes,
+			options.maxInFlightResponseBytes,
+			options.transactionOperations,
 			options.transactionQueuedBytes, snapshot.incomingAnonymous,
 			snapshot.incomingAuthenticated,
 		)},
@@ -694,31 +714,7 @@ func productionBackupFinding(options productionCheckOptions) productionCheckFind
 			Remediation: "configure -online-backup-dir or attest tested external backups",
 		}
 	}
-	info, err := os.Stat(options.onlineBackupDirectory)
-	if err == nil && info.IsDir() && runtime.GOOS == "windows" {
-		return productionCheckFinding{
-			ID: "backup.recovery", Category: "backup", Status: productionCheckUnknown,
-			Summary:     "online backup directory ACLs require Windows-specific verification",
-			Remediation: "verify that only the service identity and backup operators can access the directory",
-		}
-	}
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		evidence := "backup directory is unavailable"
-		if err == nil && !info.IsDir() {
-			evidence = "backup path is not a directory"
-		} else if err == nil {
-			evidence = fmt.Sprintf("backup directory permissions=%04o", info.Mode().Perm())
-		}
-		return productionCheckFinding{
-			ID: "backup.recovery", Category: "backup", Status: productionCheckFail,
-			Summary: "online backup directory is not private and ready", Evidence: []string{evidence},
-			Remediation: "create the directory with owner-only permissions before starting serve",
-		}
-	}
-	return productionCheckFinding{
-		ID: "backup.recovery", Category: "backup", Status: productionCheckPass,
-		Summary: "a private online backup directory is configured",
-	}
+	return productionBackupDirectoryPermissionFinding(options.onlineBackupDirectory)
 }
 
 func productionAuditFinding(options productionCheckOptions) productionCheckFinding {
@@ -840,37 +836,6 @@ func productionTLCPCertificateIssue(path string, signing bool) string {
 		}
 	}
 	return ""
-}
-
-func productionDatabasePermissionFinding(path string) productionCheckFinding {
-	info, err := os.Stat(path)
-	if err != nil {
-		return productionCheckFinding{
-			ID: "storage.permissions", Category: "storage", Status: productionCheckUnknown,
-			Summary: "database file permissions could not be inspected",
-		}
-	}
-	if runtime.GOOS == "windows" {
-		return productionCheckFinding{
-			ID: "storage.permissions", Category: "storage", Status: productionCheckUnknown,
-			Summary:     "database ACLs require Windows-specific verification",
-			Remediation: "verify that only the service identity and backup operators can access the database",
-		}
-	}
-	permissions := info.Mode().Perm()
-	if permissions&0o077 != 0 {
-		return productionCheckFinding{
-			ID: "storage.permissions", Category: "storage", Status: productionCheckFail,
-			Summary:     "database file is accessible by group or other users",
-			Evidence:    []string{fmt.Sprintf("permissions=%04o", permissions)},
-			Remediation: "restrict the database file to its service account, normally mode 0600",
-		}
-	}
-	return productionCheckFinding{
-		ID: "storage.permissions", Category: "storage", Status: productionCheckPass,
-		Summary:  "database file permissions are owner-only",
-		Evidence: []string{fmt.Sprintf("permissions=%04o", permissions)},
-	}
 }
 
 func redactProductionDiagnostic(value string) string {

@@ -168,6 +168,7 @@ func RebuildEqualityIndexes(
 	partition string,
 	schema EqualityIndexSchema,
 ) error {
+	writer = maintenanceWriter(writer)
 	indexed, ok := writer.(equalityIndexStorageWriter)
 	if !ok {
 		return errors.New("writer does not support equality indexes")
@@ -188,6 +189,7 @@ func RebuildSelectedEqualityIndexes(
 	if len(attributes) == 0 {
 		return RebuildEqualityIndexes(writer, partition, schema)
 	}
+	writer = maintenanceWriter(writer)
 	indexed, ok := writer.(selectiveEqualityIndexStorageWriter)
 	if !ok {
 		return errors.New("writer does not support selective equality index rebuilds")
@@ -202,6 +204,12 @@ func EnsureEqualityIndexes(
 	partition string,
 	schema EqualityIndexSchema,
 ) error {
+	if normalizer, ok := schema.(directory.DNAttributeNormalizer); ok {
+		if err := ensureSchemaAwareDNIdentities(writer, partition, normalizer); err != nil {
+			return err
+		}
+	}
+	writer = maintenanceWriter(writer)
 	indexed, ok := writer.(equalityIndexStorageWriter)
 	if !ok {
 		return errors.New("writer does not support equality indexes")
@@ -235,17 +243,30 @@ func putPartitionEntryWithEqualityIndexes(
 	if !ok {
 		return false, nil
 	}
-	indexed, ok := writer.(equalityIndexStorageWriter)
+	observers := maintenanceMutationObservers(writer)
+	backend := maintenanceWriter(writer)
+	indexed, ok := backend.(equalityIndexStorageWriter)
 	if !ok {
 		return false, nil
 	}
-	return true, indexed.putInWithEqualityIndexes(
+	var before *directory.Entry
+	existing, err := backend.GetIn(partition, dn)
+	if err == nil {
+		before = &existing
+	} else if !errors.Is(err, ErrEntryNotFound) {
+		return true, err
+	}
+	if err := indexed.putInWithEqualityIndexes(
 		partition,
 		entry,
 		dn,
 		replace,
 		schema,
-	)
+	); err != nil {
+		return true, err
+	}
+	after := entry.Clone()
+	return true, observeMaintenanceMutation(observers, partition, before, &after)
 }
 
 func deletePartitionEntryWithEqualityIndexes(
@@ -258,11 +279,20 @@ func deletePartitionEntryWithEqualityIndexes(
 	if !ok {
 		return false, nil
 	}
-	indexed, ok := writer.(equalityIndexStorageWriter)
+	observers := maintenanceMutationObservers(writer)
+	backend := maintenanceWriter(writer)
+	indexed, ok := backend.(equalityIndexStorageWriter)
 	if !ok {
 		return false, nil
 	}
-	return true, indexed.deleteInWithEqualityIndexes(partition, dn, schema)
+	before, err := backend.GetIn(partition, dn)
+	if err != nil {
+		return true, err
+	}
+	if err := indexed.deleteInWithEqualityIndexes(partition, dn, schema); err != nil {
+		return true, err
+	}
+	return true, observeMaintenanceMutation(observers, partition, &before, nil)
 }
 
 func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
@@ -272,7 +302,7 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	if !ok {
 		return nil, false, nil
 	}
-	indexed, ok := reader.Reader.(equalityIndexStorageReader)
+	indexed, ok := maintenanceReader(reader.Reader).(equalityIndexStorageReader)
 	if !ok {
 		return nil, false, nil
 	}

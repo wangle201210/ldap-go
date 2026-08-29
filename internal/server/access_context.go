@@ -49,6 +49,10 @@ func (reader accessContextReader) StorageContext() context.Context {
 	return reader.ctx
 }
 
+func (reader accessContextReader) MaintenanceStorageReader() storage.Reader {
+	return reader.Reader
+}
+
 type accessContextWriter struct {
 	storage.Writer
 	subject acl.Subject
@@ -61,6 +65,14 @@ func (writer accessContextWriter) AccessContext() any {
 
 func (writer accessContextWriter) StorageContext() context.Context {
 	return writer.ctx
+}
+
+func (writer accessContextWriter) MaintenanceStorageReader() storage.Reader {
+	return writer.Writer
+}
+
+func (writer accessContextWriter) MaintenanceStorageWriter() storage.Writer {
+	return writer.Writer
 }
 
 func withACLSubject(ctx context.Context, subject acl.Subject) context.Context {

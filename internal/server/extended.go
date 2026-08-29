@@ -26,15 +26,18 @@ func (server *Server) handleExtended(
 ) error {
 	if request.Name == pcacheQueryDeleteOID {
 		if hasUnsupportedCriticalControl(message.Controls) {
-			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			return server.writeLDAPResultResponse(
+				connection,
 				message.ID,
 				ldapwire.ApplicationExtendedResponse,
 				ldapwire.ResultError(
 					ldapwire.ResultUnavailableCriticalExtension,
 					"unsupported critical control",
 				),
+				"",
 				nil,
-			))
+				nil,
+			)
 		}
 		return server.handlePcacheQueryDelete(
 			ctx,
@@ -46,28 +49,34 @@ func (server *Server) handleExtended(
 	}
 	if request.Name != passwordModifyOID &&
 		hasUnsupportedCriticalControl(message.Controls) {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultUnavailableCriticalExtension,
 				"unsupported critical control",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 	switch request.Name {
 	case startTLSOID:
 		if frontendRestricts(state.runtime, restrictStartTLS) {
-			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			return server.writeLDAPResultResponse(
+				connection,
 				message.ID,
 				ldapwire.ApplicationExtendedResponse,
 				ldapwire.ResultError(
 					ldapwire.ResultUnwillingToPerform,
 					"operation restricted",
 				),
+				"",
 				nil,
-			))
+				nil,
+			)
 		}
 		return server.handleStartTLS(ctx, connection, state, message, request)
 	case transactionStartOID:
@@ -95,25 +104,31 @@ func (server *Server) handleExtended(
 		return server.handleOnlineBackup(ctx, connection, state, message, request)
 	default:
 		if frontendRestricts(state.runtime, restrictExtended) {
-			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			return server.writeLDAPResultResponse(
+				connection,
 				message.ID,
 				ldapwire.ApplicationExtendedResponse,
 				ldapwire.ResultError(
 					ldapwire.ResultUnwillingToPerform,
 					"operation restricted",
 				),
+				"",
 				nil,
-			))
+				nil,
+			)
 		}
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultProtocolError,
 				"unsupported extended operation",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 }
 
@@ -139,37 +154,46 @@ func (server *Server) handleStartTLS(
 		)
 	}
 	if request.HasValue {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultProtocolError,
 				"no request data expected",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 	if state.secure {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultOperationsError,
 				"TLS already started",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 	if state.saslSSF > 0 {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultOperationsError,
 				"cannot start TLS after a SASL security layer is installed",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 	if !state.runtime.disallows.tlsToAnonymous && state.boundDN != "" {
 		state.boundDN = ""
@@ -179,15 +203,18 @@ func (server *Server) handleStartTLS(
 		clearSearchSessions(state)
 	}
 	if state.runtime.disallows.tlsAuthenticated && state.boundDN != "" {
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultOperationsError,
 				"cannot start TLS after authentication",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
 	if !server.secureTransportAvailable(state.runtime) {
 		if referral, ok := globalReferralResult(
@@ -195,29 +222,38 @@ func (server *Server) handleStartTLS(
 			nil,
 			referralScopeDefault,
 		); ok {
-			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+			return server.writeLDAPResultResponse(
+				connection,
 				message.ID,
 				ldapwire.ApplicationExtendedResponse,
 				referral,
+				"",
 				nil,
-			))
+				nil,
+			)
 		}
-		return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
 			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultUnavailable,
 				"TLS is not configured",
 			),
+			"",
 			nil,
-		))
+			nil,
+		)
 	}
-	if err := ldapwire.Write(connection, ldapwire.EncodeResultResponse(
+	if err := server.writeLDAPResultResponse(
+		connection,
 		message.ID,
 		ldapwire.ApplicationExtendedResponse,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		"",
 		nil,
-	)); err != nil {
+		nil,
+	); err != nil {
 		return err
 	}
 
@@ -296,13 +332,15 @@ func (server *Server) handleCancel(
 			return ctx.Err()
 		}
 	}
-	return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+	return server.writeLDAPResultResponse(
+		connection,
 		message.ID,
+		ldapwire.ApplicationExtendedResponse,
 		result,
 		"",
 		nil,
 		nil,
-	))
+	)
 }
 
 func (server *Server) handleWhoAmI(
@@ -312,8 +350,10 @@ func (server *Server) handleWhoAmI(
 	request ldapwire.ExtendedRequest,
 ) error {
 	if request.HasValue {
-		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
+			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultProtocolError,
 				"no request data expected",
@@ -321,7 +361,7 @@ func (server *Server) handleWhoAmI(
 			"",
 			nil,
 			nil,
-		))
+		)
 	}
 	var database *runtimeDatabase
 	if state.boundDN != "" {
@@ -332,17 +372,21 @@ func (server *Server) handleWhoAmI(
 		database = databaseForDN(state.runtime, boundDN)
 	}
 	if result := operationSecurityResult(state, database, policyRead); result != nil {
-		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
+			ldapwire.ApplicationExtendedResponse,
 			*result,
 			"",
 			nil,
 			nil,
-		))
+		)
 	}
 	if database == nil && frontendRestricts(state.runtime, restrictWhoAmI) {
-		return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+		return server.writeLDAPResultResponse(
+			connection,
 			message.ID,
+			ldapwire.ApplicationExtendedResponse,
 			ldapwire.ResultError(
 				ldapwire.ResultUnwillingToPerform,
 				"extended operation restricted",
@@ -350,12 +394,14 @@ func (server *Server) handleWhoAmI(
 			"",
 			nil,
 			nil,
-		))
+		)
 	}
 	if state.boundDN != "" {
 		if database != nil && databaseRestricts(*database, restrictWhoAmI) {
-			return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+			return server.writeLDAPResultResponse(
+				connection,
 				message.ID,
+				ldapwire.ApplicationExtendedResponse,
 				ldapwire.ResultError(
 					ldapwire.ResultUnwillingToPerform,
 					"extended operation restricted",
@@ -363,7 +409,7 @@ func (server *Server) handleWhoAmI(
 				"",
 				nil,
 				nil,
-			))
+			)
 		}
 	}
 
@@ -375,11 +421,13 @@ func (server *Server) handleWhoAmI(
 		}
 		authzID = []byte("dn:" + dn.String())
 	}
-	return ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
+	return server.writeLDAPResultResponse(
+		connection,
 		message.ID,
+		ldapwire.ApplicationExtendedResponse,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
 		"",
 		authzID,
 		nil,
-	))
+	)
 }

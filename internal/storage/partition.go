@@ -57,6 +57,18 @@ func ReaderInPartitionWithNormalizer(
 	}
 }
 
+func ReaderInPartitionWithNormalizerLegacy(
+	reader Reader,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) Reader {
+	return schemaAwarePartitionReader{
+		partitionReader: partitionReader{Reader: reader, partition: partition},
+		normalizer:      normalizer,
+		allowLegacy:     true,
+	}
+}
+
 // WriterInPartitionWithNormalizer scopes a writer to one partition and uses
 // schema-aware DN identities for Get, Put, and Delete.
 func WriterInPartitionWithNormalizer(
@@ -67,6 +79,18 @@ func WriterInPartitionWithNormalizer(
 	return schemaAwarePartitionWriter{
 		partitionWriter: partitionWriter{Writer: writer, partition: partition},
 		normalizer:      normalizer,
+	}
+}
+
+func WriterInPartitionWithNormalizerLegacy(
+	writer Writer,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) Writer {
+	return schemaAwarePartitionWriter{
+		partitionWriter: partitionWriter{Writer: writer, partition: partition},
+		normalizer:      normalizer,
+		allowLegacy:     true,
 	}
 }
 
@@ -122,7 +146,8 @@ type partitionWriter struct {
 
 type schemaAwarePartitionReader struct {
 	partitionReader
-	normalizer directory.DNAttributeNormalizer
+	normalizer  directory.DNAttributeNormalizer
+	allowLegacy bool
 }
 
 func (reader schemaAwarePartitionReader) NormalizeDNIdentity(
@@ -144,12 +169,17 @@ func (reader schemaAwarePartitionReader) Get(
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	return schemaAwareGetIn(
+	entry, err := schemaAwareGetIn(
 		reader.Reader,
 		reader.partition,
 		normalized,
-		reader.normalizer,
 	)
+	if err != nil && reader.allowLegacy && errors.Is(err, ErrDNIdentityMigrationRequired) {
+		return legacySchemaAwareGetIn(
+			reader.Reader, reader.partition, normalized, reader.normalizer,
+		)
+	}
+	return entry, err
 }
 
 func (reader schemaAwarePartitionReader) ForEach(
@@ -159,13 +189,15 @@ func (reader schemaAwarePartitionReader) ForEach(
 		reader.Reader,
 		reader.partition,
 		reader.normalizer,
+		reader.allowLegacy,
 		fn,
 	)
 }
 
 type schemaAwarePartitionWriter struct {
 	partitionWriter
-	normalizer directory.DNAttributeNormalizer
+	normalizer  directory.DNAttributeNormalizer
+	allowLegacy bool
 }
 
 func (writer schemaAwarePartitionWriter) NormalizeDNIdentity(
@@ -187,12 +219,17 @@ func (writer schemaAwarePartitionWriter) Get(
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	return schemaAwareGetIn(
+	entry, err := schemaAwareGetIn(
 		writer.Writer,
 		writer.partition,
 		normalized,
-		writer.normalizer,
 	)
+	if err != nil && writer.allowLegacy && errors.Is(err, ErrDNIdentityMigrationRequired) {
+		return legacySchemaAwareGetIn(
+			writer.Writer, writer.partition, normalized, writer.normalizer,
+		)
+	}
+	return entry, err
 }
 
 func (writer schemaAwarePartitionWriter) ForEach(
@@ -202,6 +239,7 @@ func (writer schemaAwarePartitionWriter) ForEach(
 		writer.Writer,
 		writer.partition,
 		writer.normalizer,
+		writer.allowLegacy,
 		fn,
 	)
 }
@@ -221,6 +259,13 @@ func (writer schemaAwarePartitionWriter) Put(
 			return err
 		}
 	}
+	if err := ensureSchemaAwareDNIdentities(
+		writer.Writer,
+		writer.partition,
+		writer.normalizer,
+	); err != nil {
+		return err
+	}
 	if handled, err := putPartitionEntryWithEqualityIndexes(
 		writer.Writer,
 		writer.partition,
@@ -231,36 +276,19 @@ func (writer schemaAwarePartitionWriter) Put(
 	); handled {
 		return err
 	}
-	existing, err := schemaAwareGetIn(
-		writer.Writer,
-		writer.partition,
-		dn,
-		writer.normalizer,
-	)
-	switch {
-	case err == nil && !replace:
-		return ErrEntryExists
-	case err == nil:
-		existingDisplay, parseErr := directory.ParseDN(existing.DN)
-		if parseErr != nil {
-			return parseErr
-		}
-		if deleteErr := writer.Writer.DeleteIn(
-			writer.partition,
-			existingDisplay,
-		); deleteErr != nil {
-			return deleteErr
-		}
-	case errors.Is(err, ErrEntryNotFound):
-	case err != nil:
-		return err
-	}
-	return PutInWithDN(writer.Writer, writer.partition, entry, dn, false)
+	return PutInWithDN(writer.Writer, writer.partition, entry, dn, replace)
 }
 
 func (writer schemaAwarePartitionWriter) Delete(dn directory.DN) error {
 	normalized, err := writer.NormalizeDNIdentity(dn)
 	if err != nil {
+		return err
+	}
+	if err := ensureSchemaAwareDNIdentities(
+		writer.Writer,
+		writer.partition,
+		writer.normalizer,
+	); err != nil {
 		return err
 	}
 	if handled, err := deletePartitionEntryWithEqualityIndexes(
@@ -271,15 +299,7 @@ func (writer schemaAwarePartitionWriter) Delete(dn directory.DN) error {
 	); handled {
 		return err
 	}
-	entry, err := writer.Get(dn)
-	if err != nil {
-		return err
-	}
-	storedDN, err := directory.ParseDN(entry.DN)
-	if err != nil {
-		return err
-	}
-	return writer.Writer.DeleteIn(writer.partition, storedDN)
+	return writer.Writer.DeleteIn(writer.partition, normalized)
 }
 
 func (writer schemaAwarePartitionWriter) Clear() error {
@@ -291,7 +311,11 @@ func (writer schemaAwarePartitionWriter) Clear() error {
 			if err != nil {
 				return err
 			}
-			dns = append(dns, dn)
+			normalized, err := writer.NormalizeDNIdentity(dn)
+			if err != nil {
+				return err
+			}
+			dns = append(dns, normalized)
 			return nil
 		},
 	); err != nil {
@@ -309,11 +333,19 @@ func schemaAwareGetIn(
 	reader Reader,
 	partition string,
 	dn directory.DN,
-	normalizer directory.DNAttributeNormalizer,
 ) (directory.Entry, error) {
-	if err := validateSchemaAwareDNBindingsIn(reader, partition, normalizer); err != nil {
+	if err := requireSchemaAwareDNIdentities(reader, partition); err != nil {
 		return directory.Entry{}, err
 	}
+	return reader.GetIn(partition, dn)
+}
+
+func legacySchemaAwareGetIn(
+	reader Reader,
+	partition string,
+	dn directory.DN,
+	normalizer directory.DNAttributeNormalizer,
+) (directory.Entry, error) {
 	var match directory.Entry
 	found := false
 	err := reader.ForEachIn(partition, func(candidate directory.Entry) error {
@@ -347,8 +379,13 @@ func schemaAwareForEachIn(
 	reader Reader,
 	partition string,
 	normalizer directory.DNAttributeNormalizer,
+	allowLegacy bool,
 	fn func(directory.Entry) error,
 ) error {
+	if err := requireSchemaAwareDNIdentities(reader, partition); err != nil &&
+		!errors.Is(err, ErrDNIdentityMigrationRequired) {
+		return err
+	}
 	if err := validateSchemaAwareDNBindingsIn(reader, partition, normalizer); err != nil {
 		return err
 	}

@@ -27,49 +27,61 @@ import (
 )
 
 const (
-	defaultSearchLimit                = 1000
-	defaultTransactionMaxOperations   = 1000
-	defaultTransactionMaxQueuedBytes  = int64(16 << 20)
-	defaultShutdownTimeout            = 30 * time.Second
-	defaultMaxConnections             = 4096
-	defaultMaxConcurrentOperations    = 256
-	defaultMaxConcurrentHandshakes    = 64
-	defaultMaxSearchCandidates        = 100000
-	defaultMaxSearchCandidateBytes    = 64 << 20
-	defaultMaxOperationsPerConnection = 8
+	defaultSearchLimit                  = 1000
+	defaultTransactionMaxOperations     = 1000
+	defaultTransactionMaxQueuedBytes    = int64(16 << 20)
+	defaultShutdownTimeout              = 30 * time.Second
+	defaultMaxConnections               = 4096
+	defaultMaxConcurrentOperations      = 256
+	defaultMaxConcurrentHandshakes      = 64
+	defaultMaxSearchCandidates          = 100000
+	defaultMaxSearchCandidateBytes      = 64 << 20
+	defaultMaxSearchResponseBytes       = 128 << 20
+	defaultMaxOperationsPerConnection   = 8
+	defaultMaxPendingBytesPerConnection = 64 << 20
+	defaultMaxPendingOperationBytes     = 256 << 20
+	defaultMaxSearchMemoryBytes         = 512 << 20
+	defaultMaxResponsePDUBytes          = 16 << 20
+	defaultMaxInFlightResponseBytes     = 256 << 20
 )
 
 var ErrShutdownTimeout = errors.New("graceful shutdown timed out")
 
 type Config struct {
-	Store                       storage.Store
-	ListenerURLs                []string
-	MaxMessageSize              int64
-	MaxSearchEntries            int
-	MaxTransactionOperations    int
-	MaxTransactionQueuedBytes   int64
-	MaxConnections              int
-	MaxConcurrentOperations     int
-	MaxConcurrentHandshakes     int
-	MaxSearchCandidates         int
-	MaxSearchCandidateBytes     int64
-	MaxOperationsPerConnection  int
-	RootDN                      string
-	RootPassword                []byte
-	Logger                      *slog.Logger
-	AuditSink                   audit.Sink
-	Schema                      *schema.Registry
-	AccessPolicy                *acl.Policy
-	TLSConfig                   *tls.Config
-	SecureTransport             SecureTransport
-	ImplicitTLS                 bool
-	ImplicitTLSForConnection    func(net.Conn) bool
-	ListenerSchemeForConnection func(net.Conn) string
-	SecureHandshakeTimeout      time.Duration
-	ShutdownTimeout             time.Duration
-	Clock                       func() time.Time
-	RADIUSConfigPath            string
-	RADIUSNASIdentifier         string
+	Store                        storage.Store
+	ListenerURLs                 []string
+	MaxMessageSize               int64
+	MaxSearchEntries             int
+	MaxTransactionOperations     int
+	MaxTransactionQueuedBytes    int64
+	MaxConnections               int
+	MaxConcurrentOperations      int
+	MaxConcurrentHandshakes      int
+	MaxSearchCandidates          int
+	MaxSearchCandidateBytes      int64
+	MaxSearchResponseBytes       int64
+	MaxOperationsPerConnection   int
+	MaxPendingBytesPerConnection int64
+	MaxPendingOperationBytes     int64
+	MaxSearchMemoryBytes         int64
+	MaxResponsePDUBytes          int64
+	MaxInFlightResponseBytes     int64
+	RootDN                       string
+	RootPassword                 []byte
+	Logger                       *slog.Logger
+	AuditSink                    audit.Sink
+	Schema                       *schema.Registry
+	AccessPolicy                 *acl.Policy
+	TLSConfig                    *tls.Config
+	SecureTransport              SecureTransport
+	ImplicitTLS                  bool
+	ImplicitTLSForConnection     func(net.Conn) bool
+	ListenerSchemeForConnection  func(net.Conn) string
+	SecureHandshakeTimeout       time.Duration
+	ShutdownTimeout              time.Duration
+	Clock                        func() time.Time
+	RADIUSConfigPath             string
+	RADIUSNASIdentifier          string
 	// GSSAPIKeytabPath enables the SASL GSSAPI acceptor. FILE: paths are
 	// accepted for parity with KRB5_KTNAME.
 	GSSAPIKeytabPath string
@@ -133,6 +145,9 @@ type Server struct {
 	gssapiKeytab          *keytab.Keytab
 	operationLimiter      resourceLimiter
 	handshakeLimiter      resourceLimiter
+	pendingByteLimiter    resourceByteLimiter
+	searchMemoryLimiter   resourceByteLimiter
+	responseByteLimiter   resourceByteLimiter
 	rejectedConnections   atomic.Uint64
 	onlineBackupMu        sync.Mutex
 }
@@ -198,11 +213,47 @@ func New(config Config) (*Server, error) {
 	if config.MaxSearchCandidateBytes == 0 {
 		config.MaxSearchCandidateBytes = defaultMaxSearchCandidateBytes
 	}
+	if config.MaxSearchResponseBytes < 0 {
+		return nil, errors.New("maximum search response bytes cannot be negative")
+	}
+	if config.MaxSearchResponseBytes == 0 {
+		config.MaxSearchResponseBytes = defaultMaxSearchResponseBytes
+	}
 	if config.MaxOperationsPerConnection < 0 {
 		return nil, errors.New("maximum operations per connection cannot be negative")
 	}
 	if config.MaxOperationsPerConnection == 0 {
 		config.MaxOperationsPerConnection = defaultMaxOperationsPerConnection
+	}
+	if config.MaxPendingBytesPerConnection < 0 {
+		return nil, errors.New("maximum pending bytes per connection cannot be negative")
+	}
+	if config.MaxPendingBytesPerConnection == 0 {
+		config.MaxPendingBytesPerConnection = defaultMaxPendingBytesPerConnection
+	}
+	if config.MaxPendingOperationBytes < 0 {
+		return nil, errors.New("maximum process pending operation bytes cannot be negative")
+	}
+	if config.MaxPendingOperationBytes == 0 {
+		config.MaxPendingOperationBytes = defaultMaxPendingOperationBytes
+	}
+	if config.MaxSearchMemoryBytes < 0 {
+		return nil, errors.New("maximum process search memory bytes cannot be negative")
+	}
+	if config.MaxSearchMemoryBytes == 0 {
+		config.MaxSearchMemoryBytes = defaultMaxSearchMemoryBytes
+	}
+	if config.MaxResponsePDUBytes < 0 {
+		return nil, errors.New("maximum response PDU bytes cannot be negative")
+	}
+	if config.MaxResponsePDUBytes == 0 {
+		config.MaxResponsePDUBytes = defaultMaxResponsePDUBytes
+	}
+	if config.MaxInFlightResponseBytes < 0 {
+		return nil, errors.New("maximum in-flight response bytes cannot be negative")
+	}
+	if config.MaxInFlightResponseBytes == 0 {
+		config.MaxInFlightResponseBytes = defaultMaxInFlightResponseBytes
 	}
 	if config.ShutdownTimeout < 0 {
 		return nil, errors.New("shutdown timeout cannot be negative")
@@ -288,6 +339,9 @@ func New(config Config) (*Server, error) {
 		gssapiKeytab:         gssapiKeytab,
 		operationLimiter:     newResourceLimiter(config.MaxConcurrentOperations),
 		handshakeLimiter:     newResourceLimiter(config.MaxConcurrentHandshakes),
+		pendingByteLimiter:   newResourceByteLimiter(config.MaxPendingOperationBytes),
+		searchMemoryLimiter:  newResourceByteLimiter(config.MaxSearchMemoryBytes),
+		responseByteLimiter:  newResourceByteLimiter(config.MaxInFlightResponseBytes),
 	}
 	started := false
 	defer func() {
@@ -333,6 +387,9 @@ func New(config Config) (*Server, error) {
 		return nil, fmt.Errorf("normalize default search base: %w", err)
 	}
 	if err := server.partitionDefaultEntries(context.Background(), runtime); err != nil {
+		return nil, err
+	}
+	if err := server.migrateRuntimeDNIdentities(context.Background(), runtime); err != nil {
 		return nil, err
 	}
 	if err := config.Store.Update(
@@ -491,18 +548,19 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		activity: activity,
 	}
 	state := connectionState{
-		connectionID:    server.nextConnectionID.Add(1),
-		connection:      connection,
-		externalSSF:     transportSSF,
-		externalDN:      externalDN,
-		transportSSF:    transportSSF,
-		domainName:      domainName,
-		auditIdentity:   &connectionAuditIdentityState{},
-		metaTransports:  newMetaTransportCache(time.Now),
-		gssapiAvailable: server.gssapiKeytab != nil,
-		implicitTLS:     implicitTLS,
-		listenerScheme:  listenerScheme,
-		writeFailed:     &atomic.Bool{},
+		connectionID:         server.nextConnectionID.Add(1),
+		connection:           connection,
+		externalSSF:          transportSSF,
+		externalDN:           externalDN,
+		transportSSF:         transportSSF,
+		domainName:           domainName,
+		auditIdentity:        &connectionAuditIdentityState{},
+		metaTransports:       newMetaTransportCache(time.Now),
+		gssapiAvailable:      server.gssapiKeytab != nil,
+		implicitTLS:          implicitTLS,
+		listenerScheme:       listenerScheme,
+		writeFailed:          &atomic.Bool{},
+		transactionAdmission: &atomic.Bool{},
 	}
 	state.maxIncoming = server.connectionIncomingLimit(false)
 	server.registerMetaTransportCache(state.metaTransports)
@@ -561,6 +619,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		)
 	}()
 	queue := newOperationQueue(server.config.MaxOperationsPerConnection)
+	queue.maximumRetainedBytes = server.config.MaxPendingBytesPerConnection
 	state.operationQueue = queue
 	writeMutex := &sync.Mutex{}
 	workerDone := make(chan struct{})
@@ -611,7 +670,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		if server.draining.Load() {
 			return
 		}
-		message, err := ldapwire.ReadMessageWithDynamicFilterDepth(
+		message, messageEncodedSize, err := ldapwire.ReadMessageWithDynamicFilterDepthAndSize(
 			readConnection,
 			server.config.MaxMessageSize,
 			state.maxIncoming,
@@ -873,18 +932,34 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				)
 			}
 		}
+		if request, extended := message.Request.(ldapwire.ExtendedRequest); extended &&
+			request.Name == transactionStartOID {
+			state.transactionAdmission.Store(true)
+		}
 
 		operation, registered := operations.register(connectionContext, message)
 		if !registered {
 			return
 		}
 		concurrent := connectionOperationCanRunConcurrent(&state, message)
+		retainedBytes := ldapMessageRetainedBytes(message, int64(messageEncodedSize))
 		queued := &queuedOperation{
-			message:    message,
-			operation:  operation,
-			completion: make(chan operationCompletion, 1),
-			state:      &state,
-			concurrent: concurrent,
+			message:       message,
+			operation:     operation,
+			completion:    make(chan operationCompletion, 1),
+			state:         &state,
+			concurrent:    concurrent,
+			retainedBytes: retainedBytes,
+		}
+		if !server.pendingByteLimiter.tryAcquire(retainedBytes) {
+			server.monitor.queueOperation(state.monitor)
+			server.monitor.startOperation(state.monitor, false)
+			server.monitor.completeOperation(state.monitor, message.Request, false)
+			operations.finish(operation)
+			return
+		}
+		queued.releaseRetained = func() {
+			server.pendingByteLimiter.release(retainedBytes)
 		}
 		server.monitor.queueOperation(state.monitor)
 		pushResult := queue.push(
@@ -892,6 +967,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			server.connectionMaxPending(&state),
 		)
 		if pushResult != operationQueuePushed {
+			queued.releaseRetainedBytes()
 			server.monitor.startOperation(state.monitor, false)
 			operations.finish(operation)
 			if pushResult == operationQueueClosed {
@@ -1003,9 +1079,12 @@ func (server *Server) runConnectionOperations(
 			terminal:          state.writeFailed,
 		}
 		responseConnection := &operationResponseConnection{
-			Conn:      baseConnection,
-			operation: queued.operation,
-			audit:     server.newOperationAuditObservation(state, queued.message),
+			Conn:                 baseConnection,
+			operation:            queued.operation,
+			audit:                server.newOperationAuditObservation(state, queued.message),
+			maximumResponseBytes: server.searchResponseByteLimit(queued),
+			maximumPDUBytes:      server.searchResponsePDULimit(queued),
+			reserveResponseBytes: server.reserveSearchResponseBytes(queued),
 		}
 
 		var (
@@ -1021,13 +1100,31 @@ func (server *Server) runConnectionOperations(
 			server.monitor.startOperation(state.monitor, started)
 			if started {
 				closeConnection, err = server.dispatch(
-					queued.operation.ctx,
+					withTrackedOperation(queued.operation.ctx, queued.operation),
 					responseConnection,
 					state,
 					queued.message,
 				)
 			}
 			server.operationLimiter.release()
+		}
+		if !queued.concurrent && state.transactionAdmission != nil {
+			state.transactionAdmission.Store(state.transaction != nil)
+		}
+		if errors.Is(err, errSearchResponseLimit) {
+			server.clearStoppedSearchState(state, queued.message, searchSessions)
+			responseConnection.maximumResponseBytes = 0
+			responseConnection.maximumPDUBytes = 0
+			responseConnection.reserveResponseBytes = nil
+			closeConnection = false
+			err = server.writeSearchDone(
+				responseConnection,
+				queued.message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultAdminLimitExceeded,
+					"search response byte budget exceeded",
+				),
+			)
 		}
 		state.publishAuditIdentity()
 		if operationRefreshesIncomingLimit(
@@ -1046,13 +1143,10 @@ func (server *Server) runConnectionOperations(
 		case operationCanceled:
 			server.clearStoppedSearchState(state, queued.message, searchSessions)
 			closeConnection = false
-			err = ldapwire.Write(
+			err = writeResultForMessage(
 				baseConnection,
-				ldapwire.EncodeSearchResultDone(
-					queued.message.ID,
-					ldapwire.Result{Code: ldapwire.ResultCanceled},
-					nil,
-				),
+				queued.message,
+				ldapwire.Result{Code: ldapwire.ResultCanceled},
 			)
 		}
 		server.finishOperationAudit(responseConnection.audit, state, stopMode, err)
@@ -1064,7 +1158,7 @@ func (server *Server) runConnectionOperations(
 		)
 
 		operations.finish(queued.operation)
-		queue.complete()
+		queue.complete(queued)
 		queued.completion <- operationCompletion{
 			closeConnection: closeConnection,
 			connection:      sharedState.connection,
@@ -1095,11 +1189,50 @@ func (server *Server) runConnectionOperations(
 	}
 }
 
+func (server *Server) searchResponseByteLimit(queued *queuedOperation) int64 {
+	if server == nil || queued == nil || queued.operation == nil ||
+		queued.operation.longLived {
+		return 0
+	}
+	if _, search := queued.message.Request.(ldapwire.SearchRequest); !search {
+		return 0
+	}
+	return server.config.MaxSearchResponseBytes
+}
+
+func (server *Server) searchResponsePDULimit(queued *queuedOperation) int64 {
+	if server == nil || queued == nil {
+		return 0
+	}
+	if _, search := queued.message.Request.(ldapwire.SearchRequest); !search {
+		return 0
+	}
+	return server.config.MaxResponsePDUBytes
+}
+
+func (server *Server) reserveSearchResponseBytes(
+	queued *queuedOperation,
+) func(int64) (func(), bool) {
+	if server == nil || queued == nil {
+		return nil
+	}
+	if _, search := queued.message.Request.(ldapwire.SearchRequest); !search {
+		return nil
+	}
+	return func(size int64) (func(), bool) {
+		if !server.responseByteLimiter.tryAcquire(size) {
+			return nil, false
+		}
+		return func() { server.responseByteLimiter.release(size) }, true
+	}
+}
+
 func connectionOperationCanRunConcurrent(
 	state *connectionState,
 	message ldapwire.Message,
 ) bool {
-	if state == nil || state.transaction != nil || state.saslSession != nil {
+	if state == nil || state.transaction != nil || state.saslSession != nil ||
+		(state.transactionAdmission != nil && state.transactionAdmission.Load()) {
 		return false
 	}
 	for _, control := range message.Controls {
@@ -2430,6 +2563,7 @@ type connectionState struct {
 	implicitTLS                bool
 	listenerScheme             string
 	writeFailed                *atomic.Bool
+	transactionAdmission       *atomic.Bool
 	externalSSF                uint32
 	transportSSF               uint32
 	tlsSSF                     uint32

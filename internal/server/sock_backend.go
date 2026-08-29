@@ -706,13 +706,11 @@ func (server *Server) executeSockBackendSearch(
 					return emitFailure
 				}
 				controls := server.passwordPolicySearchEntryControls(ctx, state, *selected)
-				writeErr := ldapwire.Write(
+				writeErr := server.writeSearchEntry(
 					clientConnection,
-					ldapwire.EncodeSearchResultEntry(
-						request.MessageID,
-						*selected,
-						controls,
-					),
+					request.MessageID,
+					*selected,
+					controls,
 				)
 				if writeErr != nil {
 					emitFailure = writeErr

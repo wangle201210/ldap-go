@@ -429,7 +429,7 @@ func runRestore(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	if *backupPath == "" {
 		return errors.New("-backup is required")
 	}
-	report, err := storage.RestoreBolt(
+	report, err := restoreBoltValidated(
 		ctx,
 		*backupPath,
 		*databasePath,
@@ -1496,6 +1496,26 @@ func runServe(
 		64<<20,
 		"maximum retained bytes for a sorted search",
 	)
+	searchResponseBytes := flags.Int64(
+		"search-response-bytes",
+		128<<20,
+		"maximum encoded response bytes for a finite search",
+	)
+	searchMemoryBytes := flags.Int64(
+		"search-memory-bytes",
+		512<<20,
+		"maximum retained search memory across the process",
+	)
+	responsePDUBytes := flags.Int64(
+		"response-pdu-bytes",
+		16<<20,
+		"maximum encoded bytes in one Search response PDU",
+	)
+	inFlightResponseBytes := flags.Int64(
+		"in-flight-response-bytes",
+		256<<20,
+		"maximum Search response bytes being written across the process",
+	)
 	transactionMaxOperations := flags.Int(
 		"transaction-max-operations",
 		1000,
@@ -1516,6 +1536,16 @@ func runServe(
 		"max-operations-per-connection",
 		8,
 		"maximum operations executing concurrently on one connection",
+	)
+	maxPendingBytesPerConnection := flags.Int64(
+		"max-pending-bytes-per-connection",
+		64<<20,
+		"maximum decoded operation bytes retained by one connection",
+	)
+	maxPendingOperationBytes := flags.Int64(
+		"max-pending-operation-bytes",
+		256<<20,
+		"maximum decoded operation bytes retained across the process",
 	)
 	maxConcurrentHandshakes := flags.Int(
 		"max-concurrent-handshakes",
@@ -1694,6 +1724,12 @@ func runServe(
 	if *maxOperationsPerConnection <= 0 {
 		return errors.New("-max-operations-per-connection must be positive")
 	}
+	if *maxPendingBytesPerConnection <= 0 {
+		return errors.New("-max-pending-bytes-per-connection must be positive")
+	}
+	if *maxPendingOperationBytes <= 0 {
+		return errors.New("-max-pending-operation-bytes must be positive")
+	}
 	if *maxConcurrentHandshakes <= 0 {
 		return errors.New("-max-concurrent-handshakes must be positive")
 	}
@@ -1702,6 +1738,18 @@ func runServe(
 	}
 	if *searchCandidateBytes <= 0 {
 		return errors.New("-search-candidate-bytes must be positive")
+	}
+	if *searchResponseBytes <= 0 {
+		return errors.New("-search-response-bytes must be positive")
+	}
+	if *searchMemoryBytes <= 0 {
+		return errors.New("-search-memory-bytes must be positive")
+	}
+	if *responsePDUBytes <= 0 {
+		return errors.New("-response-pdu-bytes must be positive")
+	}
+	if *inFlightResponseBytes <= 0 {
+		return errors.New("-in-flight-response-bytes must be positive")
 	}
 	privileges, err := resolveServePrivileges(*serveUser, *serveGroup, *serveChroot)
 	if err != nil {
@@ -1868,34 +1916,40 @@ func runServe(
 	}
 	ready := make(chan struct{})
 	instance, err := server.New(server.Config{
-		Store:                       store,
-		ListenerURLs:                listenerURLs,
-		MaxMessageSize:              *maxMessageSize,
-		MaxSearchEntries:            *searchLimit,
-		MaxTransactionOperations:    *transactionMaxOperations,
-		MaxTransactionQueuedBytes:   *transactionMaxQueuedBytes,
-		MaxConnections:              *maxConnections,
-		MaxConcurrentOperations:     *maxConcurrentOperations,
-		MaxOperationsPerConnection:  *maxOperationsPerConnection,
-		MaxConcurrentHandshakes:     *maxConcurrentHandshakes,
-		MaxSearchCandidates:         *searchCandidateLimit,
-		MaxSearchCandidateBytes:     *searchCandidateBytes,
-		RootDN:                      *rootDN,
-		RootPassword:                []byte(getenv(rootPasswordEnvironment)),
-		Logger:                      logger,
-		AuditSink:                   configuredAuditSink,
-		TLSConfig:                   tlsConfig,
-		SecureTransport:             configuredSecureTransport,
-		ListenerSchemeForConnection: listenerSchemeForConnection,
-		SecureHandshakeTimeout:      secureHandshakeTimeout,
-		ShutdownTimeout:             shutdownTimeout,
-		RADIUSConfigPath:            *radiusConfigPath,
-		RADIUSNASIdentifier:         *radiusNASIdentifier,
-		GSSAPIKeytabPath:            *gssapiKeytab,
-		GSSAPIChannelBinding:        *gssapiChannelBinding,
-		Ready:                       func() { close(ready) },
-		OnlineBackupDir:             preparedBackupDirectory,
-		OnlineBackup:                onlineBackup,
+		Store:                        store,
+		ListenerURLs:                 listenerURLs,
+		MaxMessageSize:               *maxMessageSize,
+		MaxSearchEntries:             *searchLimit,
+		MaxTransactionOperations:     *transactionMaxOperations,
+		MaxTransactionQueuedBytes:    *transactionMaxQueuedBytes,
+		MaxConnections:               *maxConnections,
+		MaxConcurrentOperations:      *maxConcurrentOperations,
+		MaxOperationsPerConnection:   *maxOperationsPerConnection,
+		MaxPendingBytesPerConnection: *maxPendingBytesPerConnection,
+		MaxPendingOperationBytes:     *maxPendingOperationBytes,
+		MaxConcurrentHandshakes:      *maxConcurrentHandshakes,
+		MaxSearchCandidates:          *searchCandidateLimit,
+		MaxSearchCandidateBytes:      *searchCandidateBytes,
+		MaxSearchResponseBytes:       *searchResponseBytes,
+		MaxSearchMemoryBytes:         *searchMemoryBytes,
+		MaxResponsePDUBytes:          *responsePDUBytes,
+		MaxInFlightResponseBytes:     *inFlightResponseBytes,
+		RootDN:                       *rootDN,
+		RootPassword:                 []byte(getenv(rootPasswordEnvironment)),
+		Logger:                       logger,
+		AuditSink:                    configuredAuditSink,
+		TLSConfig:                    tlsConfig,
+		SecureTransport:              configuredSecureTransport,
+		ListenerSchemeForConnection:  listenerSchemeForConnection,
+		SecureHandshakeTimeout:       secureHandshakeTimeout,
+		ShutdownTimeout:              shutdownTimeout,
+		RADIUSConfigPath:             *radiusConfigPath,
+		RADIUSNASIdentifier:          *radiusNASIdentifier,
+		GSSAPIKeytabPath:             *gssapiKeytab,
+		GSSAPIChannelBinding:         *gssapiChannelBinding,
+		Ready:                        func() { close(ready) },
+		OnlineBackupDir:              preparedBackupDirectory,
+		OnlineBackup:                 onlineBackup,
 	})
 	if err != nil {
 		return err

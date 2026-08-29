@@ -22,6 +22,22 @@ type maintenanceSnapshot struct {
 	metadata []byte
 }
 
+type replaceRestoreSourceOnCreateTempFileSystem struct {
+	osFileSystem
+	sourcePath  string
+	replacement []byte
+}
+
+func (filesystem replaceRestoreSourceOnCreateTempFileSystem) createTemp(
+	directory,
+	pattern string,
+) (*os.File, error) {
+	if err := os.WriteFile(filesystem.sourcePath, filesystem.replacement, 0o600); err != nil {
+		return nil, err
+	}
+	return filesystem.osFileSystem.createTemp(directory, pattern)
+}
+
 func TestBoltMaintenanceRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +144,106 @@ func TestRestoreRejectsInvalidBackupWithoutChangingDestination(t *testing.T) {
 		t.Fatalf("RestoreBolt() error = %v, want invalid backup", err)
 	}
 	assertMaintenanceSnapshot(t, destinationPath, want)
+}
+
+func TestRestoreValidationRejectsSourceReplacementBeforeCopy(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	backupPath := filepath.Join(directoryPath, "backup.db")
+	destinationPath := filepath.Join(directoryPath, "destination.db")
+	seedMaintenanceDatabase(t, backupPath)
+	seedMaintenanceDatabase(t, destinationPath)
+	mutateMaintenanceDatabase(t, destinationPath)
+	wantDestination := readMaintenanceSnapshot(t, destinationPath)
+	wantBytes, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatalf("ReadFile(destination): %v", err)
+	}
+
+	validatorCalled := false
+	_, err = restoreBoltWithValidationAndFS(
+		context.Background(),
+		backupPath,
+		destinationPath,
+		true,
+		func(ctx context.Context, temporaryPath string) (CheckReport, error) {
+			validatorCalled = true
+			if filepath.Dir(temporaryPath) != filepath.Dir(destinationPath) {
+				t.Fatalf(
+					"validation temporary directory = %q, want %q",
+					filepath.Dir(temporaryPath),
+					filepath.Dir(destinationPath),
+				)
+			}
+			return CheckBolt(ctx, temporaryPath)
+		},
+		replaceRestoreSourceOnCreateTempFileSystem{
+			sourcePath:  backupPath,
+			replacement: []byte("source replaced after preliminary validation"),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "validate temporary database") {
+		t.Fatalf("restore error = %v, want final temporary validation failure", err)
+	}
+	if !validatorCalled {
+		t.Fatal("final temporary validator was not called")
+	}
+	gotBytes, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatalf("ReadFile(destination after refusal): %v", err)
+	}
+	if !bytes.Equal(gotBytes, wantBytes) {
+		t.Fatal("failed validated restore changed destination bytes")
+	}
+	assertMaintenanceSnapshot(t, destinationPath, wantDestination)
+}
+
+func TestRestoreValidationRejectsTemporaryReplacementAfterValidation(t *testing.T) {
+	t.Parallel()
+
+	directoryPath := t.TempDir()
+	backupPath := filepath.Join(directoryPath, "backup.db")
+	destinationPath := filepath.Join(directoryPath, "destination.db")
+	replacementPath := filepath.Join(directoryPath, "replacement.db")
+	seedMaintenanceDatabase(t, backupPath)
+	seedMaintenanceDatabase(t, destinationPath)
+	mutateMaintenanceDatabase(t, destinationPath)
+	seedMaintenanceDatabase(t, replacementPath)
+	mutateMaintenanceDatabase(t, replacementPath)
+	wantDestination := readMaintenanceSnapshot(t, destinationPath)
+	wantBytes, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatalf("ReadFile(destination): %v", err)
+	}
+
+	_, err = RestoreBoltWithValidation(
+		context.Background(),
+		backupPath,
+		destinationPath,
+		true,
+		func(ctx context.Context, temporaryPath string) (CheckReport, error) {
+			report, err := CheckBolt(ctx, temporaryPath)
+			if err != nil {
+				return CheckReport{}, err
+			}
+			if err := os.Rename(replacementPath, temporaryPath); err != nil {
+				return CheckReport{}, err
+			}
+			return report, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "temporary path was replaced") {
+		t.Fatalf("restore error = %v, want temporary identity failure", err)
+	}
+	gotBytes, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatalf("ReadFile(destination after refusal): %v", err)
+	}
+	if !bytes.Equal(gotBytes, wantBytes) {
+		t.Fatal("temporary replacement changed destination bytes")
+	}
+	assertMaintenanceSnapshot(t, destinationPath, wantDestination)
 }
 
 func TestBoltMaintenanceHonorsCanceledContext(t *testing.T) {

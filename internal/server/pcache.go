@@ -1953,9 +1953,11 @@ func (server *Server) writePcacheResponse(
 				request.Attributes,
 				request.TypesOnly,
 			)
-			if err := ldapwire.Write(
+			if err := server.writeSearchEntry(
 				connection,
-				ldapwire.EncodeSearchResultEntry(messageID, selected, item.controls),
+				messageID,
+				selected,
+				item.controls,
 			); err != nil {
 				return err
 			}

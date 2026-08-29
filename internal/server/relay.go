@@ -568,7 +568,7 @@ func readerForDatabase(
 	}
 	partitioned := storage.ReaderInPartition(reader, database.partition)
 	if database.dnNormalizer != nil && databaseUsesSchemaAwareContentStorage(database) {
-		partitioned = storage.ReaderInPartitionWithNormalizer(
+		partitioned = storage.ReaderInPartitionWithNormalizerLegacy(
 			reader,
 			database.partition,
 			database.dnNormalizer,
@@ -619,7 +619,7 @@ func writerForDatabase(
 	}
 	partitioned := storage.WriterInPartition(writer, database.partition)
 	if database.dnNormalizer != nil && databaseUsesSchemaAwareContentStorage(database) {
-		partitioned = storage.WriterInPartitionWithNormalizer(
+		partitioned = storage.WriterInPartitionWithNormalizerLegacy(
 			writer,
 			database.partition,
 			database.dnNormalizer,

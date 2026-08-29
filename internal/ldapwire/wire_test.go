@@ -18,7 +18,12 @@ func TestReadBindRequest(t *testing.T) {
 	operation.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimitive, 0, "secret", ""))
 
 	message := testMessage(7, operation)
-	decoded, err := ReadMessage(bytes.NewReader(message.Bytes()), 1024)
+	decoded, encodedSize, err := ReadMessageWithDynamicFilterDepthAndSize(
+		bytes.NewReader(message.Bytes()),
+		1024,
+		0,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("ReadMessage(): %v", err)
 	}
@@ -27,7 +32,7 @@ func TestReadBindRequest(t *testing.T) {
 		t.Fatalf("request type = %T", decoded.Request)
 	}
 	if decoded.ID != 7 || request.Version != 3 || request.Name != "cn=admin" ||
-		string(request.Authentication.Simple) != "secret" {
+		string(request.Authentication.Simple) != "secret" || encodedSize != len(message.Bytes()) {
 		t.Fatalf("decoded request = %#v, message ID = %d", request, decoded.ID)
 	}
 }
@@ -484,6 +489,27 @@ func TestEncodeSearchResultEntryPreservesBinaryValues(t *testing.T) {
 	got := packet.Children[1].Children[1].Children[0].Children[1].Children[0].Data.Bytes()
 	if !bytes.Equal(got, entry.Attributes[0].Values[0]) {
 		t.Fatalf("encoded value = %v, want %v", got, entry.Attributes[0].Values[0])
+	}
+}
+
+func TestSearchResultEntryEncodedSize(t *testing.T) {
+	entry := directory.Entry{
+		DN: "uid=alice,ou=people,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "uid", Values: [][]byte{[]byte("alice")}},
+			{Description: "description", Values: [][]byte{
+				make([]byte, 127), make([]byte, 128), make([]byte, 65536),
+			}},
+		},
+	}
+	controls := []Control{{
+		OID: "1.2.3.4", Critical: true, HasValue: true, Value: make([]byte, 256),
+	}}
+	for _, messageID := range []int64{0, 1, 127, 128, 32767, 32768, 1<<31 - 1} {
+		encoded := EncodeSearchResultEntry(messageID, entry, controls)
+		if got := SearchResultEntryEncodedSize(messageID, entry, controls); got != int64(len(encoded)) {
+			t.Fatalf("message ID %d size = %d, want %d", messageID, got, len(encoded))
+		}
 	}
 }
 

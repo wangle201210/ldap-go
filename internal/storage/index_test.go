@@ -545,7 +545,11 @@ func TestSubstringAndOrderingIndexMemoryAndBoltNeverMissCandidates(t *testing.T)
 			}, true)
 
 			if err := store.Update(context.Background(), func(writer Writer) error {
-				return writer.PutIn("db", indexTestEntry("cn=Raw Phase2,dc=example", "Raw Phase2", "raw"), false)
+				if err := writer.PutIn("db", indexTestEntry("cn=Raw Phase2,dc=example", "Raw Phase2", "raw"), false); err != nil {
+					return err
+				}
+				_, err := MigrateSchemaAwareDNIdentities(writer, "db", schema)
+				return err
 			}); err != nil {
 				t.Fatal(err)
 			}

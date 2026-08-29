@@ -456,6 +456,7 @@ type syncreplHAGate struct {
 	mu          sync.Mutex
 	paused      bool
 	stopped     bool
+	attempts    int
 	connections map[net.Conn]struct{}
 	wait        sync.WaitGroup
 	stopOnce    sync.Once
@@ -488,6 +489,9 @@ func (gate *syncreplHAGate) serve() {
 		if err != nil {
 			return
 		}
+		gate.mu.Lock()
+		gate.attempts++
+		gate.mu.Unlock()
 		if !gate.register(connection) {
 			_ = connection.Close()
 			continue
@@ -561,6 +565,12 @@ func (gate *syncreplHAGate) resume() {
 	gate.mu.Lock()
 	gate.paused = false
 	gate.mu.Unlock()
+}
+
+func (gate *syncreplHAGate) attemptCount() int {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	return gate.attempts
 }
 
 func (gate *syncreplHAGate) stop() {

@@ -2313,6 +2313,17 @@ func (server *Server) handleModifyDN(
 				}
 			}
 		}
+		if configurationWrite &&
+			localDatabaseConfigurationWithoutEntryUUID(
+				state.runtime,
+				oldDN,
+				sourceEntry,
+			) {
+			return operationFailed(
+				ldapwire.ResultUnwillingToPerform,
+				"cannot rename a local database configuration without entryUUID",
+			)
+		}
 		preRead, err := server.readResponseControl(
 			state.runtime,
 			tx,
@@ -2605,6 +2616,22 @@ func (server *Server) handleModifyDN(
 		err,
 		responseControls,
 	)
+}
+
+func localDatabaseConfigurationWithoutEntryUUID(
+	runtime *runtimeState,
+	dn directory.DN,
+	entry directory.Entry,
+) bool {
+	for _, database := range runtime.databases {
+		if database.configDNKey != dn.Key() ||
+			!databaseUsesLocalContentStorage(database) {
+			continue
+		}
+		values := entry.Values("entryUUID")
+		return len(values) != 1 || strings.TrimSpace(string(values[0])) == ""
+	}
+	return false
 }
 
 func (server *Server) handleCompare(
@@ -3768,6 +3795,9 @@ func (server *Server) writeLDAPResultResponse(
 	responseValue []byte,
 	controls []ldapwire.Control,
 ) error {
+	if err := beginOperationFinalResponse(connection); err != nil {
+		return err
+	}
 	if writer, ok := connection.(ldapResultResponseWriter); ok {
 		return writer.writeLDAPResultResponse(
 			messageID,

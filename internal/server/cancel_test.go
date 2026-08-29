@@ -287,8 +287,9 @@ func TestLDAPCancelRejectsPendingSearch(t *testing.T) {
 	seedDirectory(t, store)
 
 	address, stop := startServer(t, store, Config{
-		RootDN:       "cn=admin,dc=example,dc=com",
-		RootPassword: []byte("admin-secret"),
+		RootDN:                     "cn=admin,dc=example,dc=com",
+		RootPassword:               []byte("admin-secret"),
+		MaxOperationsPerConnection: 1,
 	})
 	defer stop()
 	connection := dialAndBindRawLDAP(
@@ -379,8 +380,11 @@ func TestTrackedOperationCancelBoundaries(t *testing.T) {
 	if !ok {
 		t.Fatal("register Add operation failed")
 	}
-	if _, result := operations.cancel(4); result.Code != ldapwire.ResultCannotCancel {
-		t.Fatalf("Add Cancel result = %d, want cannotCancel", result.Code)
+	if !add.start() {
+		t.Fatal("start Add operation failed")
+	}
+	if _, result := operations.cancel(4); result.Code != ldapwire.ResultSuccess {
+		t.Fatalf("Add Cancel result = %d, want success", result.Code)
 	}
 	operations.finish(add)
 }
@@ -436,6 +440,52 @@ func TestAbandonSuppressesResponsesAfterInFlightPDU(t *testing.T) {
 	}
 	if err := connection.beginFinalResponse(); !errors.Is(err, errOperationStopped) {
 		t.Fatalf("beginFinalResponse() error = %v, want errOperationStopped", err)
+	}
+	operation.finish()
+}
+
+func TestAbandonSuppressesPDUWaitingForConnectionWriteLock(t *testing.T) {
+	t.Parallel()
+
+	client, serverConnection := net.Pipe()
+	defer client.Close()
+	defer serverConnection.Close()
+	writeMutex := &sync.Mutex{}
+	writeMutex.Lock()
+	operation := newTrackedOperation(context.Background(), ldapwire.Message{
+		ID:      2,
+		Request: ldapwire.SearchRequest{},
+	})
+	if !operation.start() {
+		t.Fatal("start Search operation failed")
+	}
+	connection := &operationResponseConnection{
+		Conn: &serializedResponseConnection{
+			Conn: serverConnection,
+			mu:   writeMutex,
+		},
+		operation: operation,
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := connection.Write([]byte("must not be written"))
+		done <- err
+	}()
+	<-started
+	time.Sleep(10 * time.Millisecond)
+	operation.requestAbandon()
+	writeMutex.Unlock()
+	if err := <-done; !errors.Is(err, errOperationStopped) {
+		t.Fatalf("waiting Write() error = %v, want errOperationStopped", err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 1)
+	if _, err := client.Read(buffer); err == nil {
+		t.Fatal("PDU waiting on the write lock leaked after Abandon")
 	}
 	operation.finish()
 }

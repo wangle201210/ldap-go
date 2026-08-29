@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -217,11 +219,53 @@ func RestoreBolt(
 	return restoreBoltWithFS(ctx, backupPath, databasePath, replace, osFileSystem{})
 }
 
+// RestoreBoltWithValidation copies a backup into a private temporary file in
+// the destination directory and validates that exact file immediately before
+// atomically publishing it. The validator may migrate the temporary database;
+// successful validator changes are synced before publication.
+func RestoreBoltWithValidation(
+	ctx context.Context,
+	backupPath,
+	databasePath string,
+	replace bool,
+	validate func(context.Context, string) (CheckReport, error),
+) (CheckReport, error) {
+	if validate == nil {
+		return CheckReport{}, errors.New("restore validator is required")
+	}
+	return restoreBoltWithValidationAndFS(
+		ctx,
+		backupPath,
+		databasePath,
+		replace,
+		validate,
+		osFileSystem{},
+	)
+}
+
 func restoreBoltWithFS(
 	ctx context.Context,
 	backupPath,
 	databasePath string,
 	replace bool,
+	filesystem atomicDatabaseFileSystem,
+) (CheckReport, error) {
+	return restoreBoltWithValidationAndFS(
+		ctx,
+		backupPath,
+		databasePath,
+		replace,
+		nil,
+		filesystem,
+	)
+}
+
+func restoreBoltWithValidationAndFS(
+	ctx context.Context,
+	backupPath,
+	databasePath string,
+	replace bool,
+	validate func(context.Context, string) (CheckReport, error),
 	filesystem atomicDatabaseFileSystem,
 ) (CheckReport, error) {
 	if err := ctx.Err(); err != nil {
@@ -259,7 +303,11 @@ func restoreBoltWithFS(
 		return nil
 	}, func(path string) error {
 		var err error
-		verified, err = CheckBolt(ctx, path)
+		if validate != nil {
+			verified, err = validate(ctx, path)
+		} else {
+			verified, err = CheckBolt(ctx, path)
+		}
 		return err
 	}, filesystem)
 	if err != nil {
@@ -431,6 +479,7 @@ func checkBoltDatabase(
 			return errors.New("required entries or metadata bucket is missing")
 		}
 		logicalEntries := make(map[string]string)
+		legacyPartitions := make(map[string]struct{})
 		if err := entries.ForEach(func(key, value []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -459,6 +508,9 @@ func checkBoltDatabase(
 					entry.DN,
 					err,
 				)
+			}
+			if !isSchemaAwareDNKey(keyDN) {
+				legacyPartitions[partition] = struct{}{}
 			}
 			logicalIdentity := keyDN
 			if normalizer != nil && partition != OpenLDAPConfigPartition {
@@ -496,6 +548,7 @@ func checkBoltDatabase(
 			return err
 		}
 		namingContexts := make(map[string]string)
+		readyPartitions := make(map[string]struct{})
 		if err := metadata.ForEach(func(key, value []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -528,9 +581,35 @@ func checkBoltDatabase(
 			if !bytes.HasPrefix(key, metadataPrefix) {
 				return fmt.Errorf("unknown metadata key %q", key)
 			}
+			metadataName := string(bytes.TrimPrefix(key, metadataPrefix))
+			if strings.HasPrefix(metadataName, schemaAwareDNMigrationMetadataPrefix) {
+				encodedPartition := strings.TrimPrefix(
+					metadataName,
+					schemaAwareDNMigrationMetadataPrefix,
+				)
+				partition, err := base64.RawURLEncoding.DecodeString(encodedPartition)
+				if err != nil || base64.RawURLEncoding.EncodeToString(partition) != encodedPartition {
+					return fmt.Errorf("invalid schema-aware DN migration marker %q", key)
+				}
+				if len(value) != 1 || int(value[0]) != schemaAwareDNIdentityFormatVersion {
+					return fmt.Errorf(
+						"unsupported schema-aware DN identity format marker %x",
+						value,
+					)
+				}
+				readyPartitions[string(partition)] = struct{}{}
+			}
 			return nil
 		}); err != nil {
 			return err
+		}
+		for partition := range readyPartitions {
+			if _, hasLegacy := legacyPartitions[partition]; hasLegacy {
+				return fmt.Errorf(
+					"partition %q is marked schema-aware but contains legacy DN keys",
+					partition,
+				)
+			}
 		}
 		return checkBoltEqualityIndexes(
 			ctx,
@@ -712,20 +791,34 @@ func writeAtomicDatabaseFileWithFS(
 	if writeErr == nil {
 		syncErr = filesystem.syncFile(temporary)
 	}
-	closeErr := filesystem.closeFile(temporary)
 	if writeErr != nil {
+		_ = filesystem.closeFile(temporary)
 		return writeErr
 	}
 	if syncErr != nil {
+		_ = filesystem.closeFile(temporary)
 		return fmt.Errorf("sync temporary database: %w", syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close temporary database: %w", closeErr)
 	}
 	if validate != nil {
 		if err := validate(temporaryPath); err != nil {
+			_ = filesystem.closeFile(temporary)
 			return fmt.Errorf("validate temporary database: %w", err)
 		}
+		if err := ctx.Err(); err != nil {
+			_ = filesystem.closeFile(temporary)
+			return err
+		}
+		if err := filesystem.syncFile(temporary); err != nil {
+			_ = filesystem.closeFile(temporary)
+			return fmt.Errorf("sync validated temporary database: %w", err)
+		}
+		if err := verifyTemporaryFileIdentity(temporary, temporaryPath); err != nil {
+			_ = filesystem.closeFile(temporary)
+			return fmt.Errorf("verify validated temporary database: %w", err)
+		}
+	}
+	if err := filesystem.closeFile(temporary); err != nil {
+		return fmt.Errorf("close temporary database: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -747,6 +840,21 @@ func writeAtomicDatabaseFileWithFS(
 	}
 	if err := filesystem.syncDirectory(directoryPath); err != nil {
 		return &PublicationDurabilityError{Path: path, Err: err}
+	}
+	return nil
+}
+
+func verifyTemporaryFileIdentity(file *os.File, path string) error {
+	openInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect open temporary file: %w", err)
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect temporary path: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openInfo, pathInfo) {
+		return errors.New("temporary path was replaced during validation")
 	}
 	return nil
 }
