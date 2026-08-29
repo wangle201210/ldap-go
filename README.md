@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 2,019 top-level tests against the pinned commit.
+The latest strict run passed 2,020 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -966,8 +966,9 @@ process. Under chroot the pidfile path is relative to the jail root.
 
 The daemon applies process-wide admission bounds before expensive work:
 `-max-connections 4096`, `-max-concurrent-operations 256`, and
-`-max-concurrent-handshakes 64` are the defaults. Sorted/VLV searches may retain
-at most 100,000 candidates and 64 MiB per operation by default, configurable
+`-max-concurrent-handshakes 64` are the defaults. Every search may retain at
+most 64 MiB, and sorted/VLV searches additionally retain at most 100,000
+candidates per operation by default, configurable
 with `-search-candidate-limit` and `-search-candidate-bytes`. Excess connections close
 before a connection goroutine is started; operations wait in their already
 bounded per-connection queues, and TLS/TLCP handshake waiting time consumes the

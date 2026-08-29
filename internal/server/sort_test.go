@@ -183,9 +183,11 @@ func TestServerSideSortingHonorsGlobalCandidateBudgets(t *testing.T) {
 		name       string
 		candidates int
 		bytes      int64
+		sorted     bool
 	}{
-		{name: "count", candidates: 2, bytes: 1 << 20},
-		{name: "bytes", candidates: 100, bytes: 1},
+		{name: "sorted count", candidates: 2, bytes: 1 << 20, sorted: true},
+		{name: "sorted bytes", candidates: 100, bytes: 1, sorted: true},
+		{name: "unsorted bytes", candidates: 100, bytes: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -202,12 +204,14 @@ func TestServerSideSortingHonorsGlobalCandidateBudgets(t *testing.T) {
 			defer stop()
 			client := bindPagedRootClient(t, address)
 			defer client.Close()
-			request := newSortablePeopleSearch([]ldap.Control{
-				newSortControl(ldap.SortKey{
+			var controls []ldap.Control
+			if test.sorted {
+				controls = []ldap.Control{newSortControl(ldap.SortKey{
 					AttributeType: "cn",
 					MatchingRule:  "caseIgnoreOrderingMatch",
-				}),
-			})
+				})}
+			}
+			request := newSortablePeopleSearch(controls)
 			_, err := client.Search(request)
 			assertLDAPResultCode(t, err, ldap.LDAPResultAdminLimitExceeded)
 		})

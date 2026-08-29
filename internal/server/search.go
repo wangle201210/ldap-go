@@ -1750,17 +1750,15 @@ func (server *Server) handleSearch(
 					cursorKey: candidateOrderKey,
 					syncUUID:  syncUUID,
 				}
-				if sorting.active() {
-					candidateBytes += searchCandidateRetainedBytes(retainedCandidate)
-					if len(candidates) >= server.config.MaxSearchCandidates ||
-						candidateBytes > server.config.MaxSearchCandidateBytes {
-						candidates = nil
-						result = ldapwire.ResultError(
-							ldapwire.ResultAdminLimitExceeded,
-							"sorted search candidate budget exceeded",
-						)
-						return errStopSearch
-					}
+				candidateBytes += searchCandidateRetainedBytes(retainedCandidate)
+				if candidateBytes > server.config.MaxSearchCandidateBytes ||
+					(sorting.active() && len(candidates) >= server.config.MaxSearchCandidates) {
+					candidates = nil
+					result = ldapwire.ResultError(
+						ldapwire.ResultAdminLimitExceeded,
+						"search candidate budget exceeded",
+					)
+					return errStopSearch
 				}
 				candidates = append(candidates, retainedCandidate)
 				if !sorting.active() {

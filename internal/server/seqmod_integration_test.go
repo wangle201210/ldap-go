@@ -466,6 +466,39 @@ func TestSeqmodOperationBoundaries(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit Abandon removes active update waiter", func(t *testing.T) {
+		connection := dialAndBindRawLDAP(
+			t,
+			address,
+			syncTestRootDN,
+			syncTestRootPassword,
+		)
+		defer connection.Close()
+		release, _ := data.coordinator.acquire(context.Background(), alice.Key())
+		writeRawLDAPRequest(
+			t,
+			connection,
+			2,
+			rawModifyReplaceRequest(
+				alice.String(),
+				"description",
+				"explicitly abandoned update",
+			),
+			nil,
+		)
+		waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 2)
+		writeRawLDAPRequest(t, connection, 3, rawAbandonRequest(2), nil)
+		waitForSeqmodQueueLength(t, data.coordinator, alice.Key(), 1)
+		assertLDAPConnectionHasNoResponse(t, connection)
+		release()
+		entry := readStoredEntry(t, store, alice.String())
+		for _, value := range entry.Values("description") {
+			if string(value) == "explicitly abandoned update" {
+				t.Fatal("abandoned Modify was committed")
+			}
+		}
+	})
+
 	t.Run("downstream failure releases both instances", func(t *testing.T) {
 		client := dialLDAPRoot(t, address)
 		defer client.Close()

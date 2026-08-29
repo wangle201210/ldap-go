@@ -56,10 +56,15 @@ func newTrackedOperation(
 ) *trackedOperation {
 	ctx, cancel := context.WithCancel(parent)
 	_, isSearch := message.Request.(ldapwire.SearchRequest)
+	abandonable := true
+	switch message.Request.(type) {
+	case ldapwire.BindRequest, ldapwire.UnbindRequest, ldapwire.AbandonRequest:
+		abandonable = false
+	}
 	return &trackedOperation{
 		id:          message.ID,
 		cancelable:  isSearch,
-		abandonable: isSearch,
+		abandonable: abandonable,
 		longLived:   isLongLivedOperation(message),
 		ctx:         ctx,
 		cancel:      cancel,

@@ -51,7 +51,7 @@ One reader accepts and registers requests while a bounded connection-local
 worker set executes Search, Compare, and Who Am I from immutable authentication snapshots.
 Operations that change or retain association state, including writes, paging,
 VLV, transactions, SASL, and StartTLS, are ordered fences. Abandon and RFC 3909
-Cancel are handled by the reader so they can cancel active Search contexts
+Cancel are handled by the reader so they can cancel active operation contexts
 without waiting behind them. Bind abandons active work, discards pending work,
 waits for cleanup, and then changes identity as a hard fence. A connection-wide
 writer lock keeps every BER PDU intact when responses race. The registry establishes an atomic

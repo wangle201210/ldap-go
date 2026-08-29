@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -37,6 +38,37 @@ func TestOperationQueuePendingLimitExcludesExecutingCandidate(t *testing.T) {
 	queue.complete()
 	if result := queue.push(&queuedOperation{}, 2); result != operationQueuePushed {
 		t.Fatalf("push after completion = %d, want pushed", result)
+	}
+}
+
+func TestTrackedOperationAbandonability(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		request   ldapwire.Request
+		abandoned bool
+	}{
+		{name: "Search", request: ldapwire.SearchRequest{}, abandoned: true},
+		{name: "Modify", request: ldapwire.ModifyRequest{}, abandoned: true},
+		{name: "Extended", request: ldapwire.ExtendedRequest{Name: passwordModifyOID}, abandoned: true},
+		{name: "Bind", request: ldapwire.BindRequest{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := newTrackedOperation(context.Background(), ldapwire.Message{
+				ID:      1,
+				Request: test.request,
+			})
+			if !operation.start() {
+				t.Fatal("operation did not start")
+			}
+			operation.requestAbandon()
+			if got := operation.stopMode() == operationAbandoned; got != test.abandoned {
+				t.Fatalf("abandoned = %v, want %v", got, test.abandoned)
+			}
+			operation.finish()
+		})
 	}
 }
 
