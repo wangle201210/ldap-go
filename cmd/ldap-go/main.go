@@ -1439,7 +1439,13 @@ func runServe(
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	databasePath := flags.String("db", "data/ldap-go.db", "directory database path")
-	listenAddress := flags.String("listen", "127.0.0.1:1389", "LDAP listen address")
+	listenAddress := flags.String(
+		"listen",
+		"127.0.0.1:1389",
+		"LDAP listen address (empty disables TCP when -ldapi is set)",
+	)
+	ldapiPath := flags.String("ldapi", "", "additional LDAPI Unix socket path")
+	ldapiMode := flags.Uint("ldapi-mode", 0o660, "LDAPI Unix socket permission mode")
 	rootDN := flags.String("root-dn", "", "optional database root DN override")
 	maxMessageSize := flags.Int64(
 		"max-message-size",
@@ -1585,6 +1591,18 @@ func runServe(
 			return errors.New("-ldaps requires -tls-cert and -tls-key")
 		}
 	}
+	if *ldapiPath == "" && flagWasSet(flags, "ldapi-mode") {
+		return errors.New("-ldapi-mode requires -ldapi")
+	}
+	if *listenAddress == "" && *ldapiPath == "" {
+		return errors.New("at least one of -listen or -ldapi is required")
+	}
+	if *ldapiMode > 0o777 {
+		return errors.New("-ldapi-mode must be between 0000 and 0777")
+	}
+	if *ldapiPath != "" && (*implicitTLS || *implicitTLCP) {
+		return errors.New("-ldapi cannot be combined with implicit TLS or TLCP listeners")
+	}
 	if (tlsConfig != nil || tlcpTransport != nil) && secureHandshakeTimeout <= 0 {
 		return errors.New("-secure-handshake-timeout must be positive")
 	}
@@ -1620,34 +1638,56 @@ func runServe(
 	}
 	defer store.Close()
 
-	listener, err := net.Listen("tcp", *listenAddress)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", *listenAddress, err)
-	}
-	defer listener.Close()
+	listeners := make([]net.Listener, 0, 2)
+	listenerURLs := make([]string, 0, 2)
+	defer func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	}()
 
-	scheme := "ldap"
-	if *implicitTLS {
-		scheme = "ldaps"
-	} else if *implicitTLCP {
-		scheme = "ldap+tlcp"
+	if *listenAddress != "" {
+		tcpListener, err := net.Listen("tcp", *listenAddress)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", *listenAddress, err)
+		}
+		listeners = append(listeners, tcpListener)
+		scheme := "ldap"
+		if *implicitTLS {
+			scheme = "ldaps"
+		} else if *implicitTLCP {
+			scheme = "ldap+tlcp"
+		}
+		listenerHost, _, err := net.SplitHostPort(*listenAddress)
+		if err != nil {
+			return fmt.Errorf("parse listen address %s: %w", *listenAddress, err)
+		}
+		_, listenerPort, err := net.SplitHostPort(tcpListener.Addr().String())
+		if err != nil {
+			return fmt.Errorf("parse bound listen address %s: %w", tcpListener.Addr(), err)
+		}
+		listenerURLs = append(listenerURLs, fmt.Sprintf(
+			"%s://%s/",
+			scheme,
+			net.JoinHostPort(listenerHost, listenerPort),
+		))
 	}
-	listenerHost, _, err := net.SplitHostPort(*listenAddress)
-	if err != nil {
-		return fmt.Errorf("parse listen address %s: %w", *listenAddress, err)
+	if *ldapiPath != "" {
+		ldapiListener, ldapiURL, err := listenServeLDAPI(
+			*ldapiPath,
+			os.FileMode(*ldapiMode),
+		)
+		if err != nil {
+			return err
+		}
+		listeners = append(listeners, ldapiListener)
+		listenerURLs = append(listenerURLs, ldapiURL)
 	}
-	_, listenerPort, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		return fmt.Errorf("parse bound listen address %s: %w", listener.Addr(), err)
-	}
-	listenerURL := fmt.Sprintf(
-		"%s://%s/",
-		scheme,
-		net.JoinHostPort(listenerHost, listenerPort),
-	)
+	listener := newServeListener(listeners)
+	defer listener.Close()
 	instance, err := server.New(server.Config{
 		Store:                     store,
-		ListenerURLs:              []string{listenerURL},
+		ListenerURLs:              listenerURLs,
 		MaxMessageSize:            *maxMessageSize,
 		MaxSearchEntries:          *searchLimit,
 		MaxTransactionOperations:  *transactionMaxOperations,
@@ -1670,8 +1710,14 @@ func runServe(
 		return err
 	}
 
-	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
-		return err
+	for _, listenerURL := range listenerURLs {
+		displayURL := listenerURL
+		if !strings.HasPrefix(strings.ToLower(displayURL), "ldapi://") {
+			displayURL = strings.TrimSuffix(displayURL, "/")
+		}
+		if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s\n", displayURL); err != nil {
+			return err
+		}
 	}
 	serveContext, stopServe := context.WithCancel(ctx)
 	defer stopServe()

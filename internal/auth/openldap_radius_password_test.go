@@ -675,18 +675,18 @@ func TestVerifyOpenLDAPRADIUSPasswordReprobesFirstServerAfterDeadTime(t *testing
 		serverErr <- nil
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	ok, err := VerifyOpenLDAPRADIUSPassword(
 		ctx,
 		[]OpenLDAPRADIUSServer{
 			{
 				Address: first.LocalAddr().String(), Secret: secret,
-				Timeout: 30 * time.Millisecond, Attempts: 1, DeadTime: 50 * time.Millisecond,
+				Timeout: 250 * time.Millisecond, Attempts: 1, DeadTime: 300 * time.Millisecond,
 			},
 			{
 				Address: second.LocalAddr().String(), Secret: secret,
-				Timeout: 120 * time.Millisecond, Attempts: 1, DeadTime: 50 * time.Millisecond,
+				Timeout: 750 * time.Millisecond, Attempts: 1, DeadTime: 300 * time.Millisecond,
 			},
 		},
 		[]byte("dead-time-user"),

@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,941 top-level tests against
+The latest pinned local strict run passed 1,949 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -770,6 +770,15 @@ closure, verifies Search plus update rejection, and sends a second SIGHUP to
 force bounded termination. Server tests cover imported and online TRUE/FALSE
 configuration, invalid-value/location rollback, Password Modify rejection,
 last-client exit, and SIGTERM/context escalation.
+
+LDAPI command tests create short-path Unix sockets, verify socket type and
+explicit `0600` permissions, reject relative and pre-existing paths, accept
+TCP and LDAPI through one combined listener, and confirm unlink on shutdown.
+Real `serve` cases cover TCP+LDAPI and LDAPI-only operation; the built-in
+observing `ldapsearch` performs Simple Bind/Search, `ldapwhoami -Y PLAIN`
+proves local-SSF SASL transport, and the pinned OpenLDAP `ldapsearch` client
+performs the same base search. URI tests cover escaped-authority and
+three-slash forms plus TLS/StartTLS rejection.
 
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. The other server-side cases invoke

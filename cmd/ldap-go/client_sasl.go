@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -1129,8 +1130,17 @@ func (options *ldapClientOptions) connectAndBindSASL(
 	hasPassword bool,
 	stderr io.Writer,
 ) (*ldap.Conn, error) {
+	network := "tcp"
 	address := parsedURI.Host
-	if parsedURI.Port() == "" {
+	serverName := parsedURI.Hostname()
+	if parsedURI.Scheme == "ldapi" {
+		network = "unix"
+		address = parsedURI.Path
+		if address == "" || address == "/" {
+			address = "/var/run/slapd/ldapi"
+		}
+		serverName, _ = os.Hostname()
+	} else if parsedURI.Port() == "" {
 		port := "389"
 		if parsedURI.Scheme == "ldaps" {
 			port = "636"
@@ -1151,7 +1161,7 @@ func (options *ldapClientOptions) connectAndBindSASL(
 			}
 			return connection, nil
 		}
-		return dialer.Dial("tcp", address)
+		return dialer.Dial(network, address)
 	}
 
 	connection, err := dial(parsedURI.Scheme == "ldaps")
@@ -1210,7 +1220,7 @@ func (options *ldapClientOptions) connectAndBindSASL(
 	}
 	if err := options.bindSASL(
 		connection,
-		parsedURI.Hostname(),
+		serverName,
 		password,
 		hasPassword,
 		&messageID,

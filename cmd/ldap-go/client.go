@@ -27,6 +27,7 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/lloadd"
 	"golang.org/x/term"
 )
 
@@ -583,6 +584,26 @@ func (options *ldapClientOptions) connectAndBind(
 func (options *ldapClientOptions) connectionConfiguration(
 	flags *flag.FlagSet,
 ) (*url.URL, string, *tls.Config, error) {
+	if len(options.uri) >= len("ldapi://") &&
+		strings.EqualFold(options.uri[:len("ldapi://")], "ldapi://") {
+		path, err := lloadd.ParseLDAPIAddress(options.uri)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("parse LDAPI URI: %w", err)
+		}
+		if path == "" || path == "/" {
+			path = "/var/run/slapd/ldapi"
+		}
+		if options.tryStartTLS || options.requireStartTLS {
+			return nil, "", nil, errors.New("-Z and -ZZ cannot be used with an ldapi:// URI")
+		}
+		if flagWasSet(flags, "tls-ca") || flagWasSet(flags, "tls-cert") ||
+			flagWasSet(flags, "tls-key") || flagWasSet(flags, "tls-server-name") {
+			return nil, "", nil, errors.New("TLS options cannot be used with an ldapi:// URI")
+		}
+		return &url.URL{Scheme: "ldapi", Path: path}, options.uri, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}, nil
+	}
 	parsed, err := url.Parse(options.uri)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("parse LDAP URI: %w", err)
@@ -710,6 +731,33 @@ func dialObservedLDAPConnection(
 	tlsConfig *tls.Config,
 	timeout time.Duration,
 ) (*ldap.Conn, *ldapSearchResponseObserver, error) {
+	if len(rawURI) >= len("ldapi://") &&
+		strings.EqualFold(rawURI[:len("ldapi://")], "ldapi://") {
+		if directTLS || startTLS {
+			return nil, nil, errors.New("TLS cannot be used with an ldapi:// URI")
+		}
+		path, err := lloadd.ParseLDAPIAddress(rawURI)
+		if err != nil {
+			return nil, nil, err
+		}
+		if path == "" || path == "/" {
+			path = "/var/run/slapd/ldapi"
+		}
+		raw, err := (&net.Dialer{Timeout: timeout}).Dial("unix", path)
+		if err != nil {
+			return nil, nil, err
+		}
+		observer := &ldapSearchResponseObserver{
+			responses: make(map[int64][]ldapSearchWireResponse),
+		}
+		connection := ldap.NewConn(
+			&ldapSearchObservedConn{Conn: raw, observer: observer},
+			false,
+		)
+		connection.SetTimeout(timeout)
+		connection.Start()
+		return connection, observer, nil
+	}
 	parsed, err := url.Parse(rawURI)
 	if err != nil {
 		return nil, nil, err
@@ -1338,6 +1386,13 @@ type ldapSearchDirectURL struct {
 }
 
 func parseLDAPSearchDirectURL(rawURI string) (ldapSearchDirectURL, error) {
+	if len(rawURI) >= len("ldapi://") &&
+		strings.EqualFold(rawURI[:len("ldapi://")], "ldapi://") {
+		if _, err := lloadd.ParseLDAPIAddress(rawURI); err != nil {
+			return ldapSearchDirectURL{}, fmt.Errorf("parse LDAPI search URL: %w", err)
+		}
+		return ldapSearchDirectURL{}, nil
+	}
 	parsed, err := url.Parse(rawURI)
 	if err != nil {
 		return ldapSearchDirectURL{}, fmt.Errorf("parse LDAP search URL: %w", err)
