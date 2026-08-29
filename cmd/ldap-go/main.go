@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -344,7 +345,6 @@ func runConfigurationTest(
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-
 	store, err := storage.OpenBoltReadOnly(*databasePath)
 	if err != nil {
 		return err
@@ -1451,6 +1451,13 @@ func runServe(
 		false,
 		"adopt systemd LISTEN_FDS instead of creating listeners",
 	)
+	serveUser := flags.String("user", "", "Unix user name or ID to switch to after listening")
+	serveGroup := flags.String("group", "", "Unix group name or ID to switch to after listening")
+	serveChroot := flags.String("chroot", "", "Unix directory to chroot into after listening")
+	pidFilePath := flags.String("pidfile", "", "absolute process ID file path")
+	flags.StringVar(serveUser, "u", "", "alias for -user")
+	flags.StringVar(serveGroup, "g", "", "alias for -group")
+	flags.StringVar(serveChroot, "r", "", "alias for -chroot")
 	rootDN := flags.String("root-dn", "", "optional database root DN override")
 	maxMessageSize := flags.Int64(
 		"max-message-size",
@@ -1553,6 +1560,11 @@ func runServe(
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	for _, aliases := range [][2]string{{"user", "u"}, {"group", "g"}, {"chroot", "r"}} {
+		if flagWasSet(flags, aliases[0]) && flagWasSet(flags, aliases[1]) {
+			return fmt.Errorf("-%s and -%s are aliases and cannot both be set", aliases[0], aliases[1])
+		}
+	}
 	if *gssapiKeytab == "" {
 		*gssapiKeytab = getenv("KRB5_KTNAME")
 	}
@@ -1562,37 +1574,23 @@ func runServe(
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
-	tlsConfig, err := loadServerTLSConfigWithClientAuth(
-		*tlsCertificate,
-		*tlsPrivateKey,
-		*tlsClientCA,
-		*tlsRequireClientCertificate,
-	)
-	if err != nil {
-		return err
-	}
-	tlcpTransport, err := loadServerTLCPWithClientAuth(
-		*tlcpSignCertificate,
-		*tlcpSignPrivateKey,
-		*tlcpEncryptionCertificate,
-		*tlcpEncryptionPrivateKey,
-		*tlcpClientCA,
-		*tlcpRequireClientCertificate,
-	)
-	if err != nil {
-		return err
-	}
-	if tlsConfig != nil && tlcpTransport != nil {
+	standardTLSRequested := *tlsCertificate != "" || *tlsPrivateKey != "" ||
+		*tlsClientCA != "" || *tlsRequireClientCertificate
+	tlcpRequested := *tlcpSignCertificate != "" || *tlcpSignPrivateKey != "" ||
+		*tlcpEncryptionCertificate != "" || *tlcpEncryptionPrivateKey != "" ||
+		*tlcpClientCA != "" || *tlcpRequireClientCertificate
+	if standardTLSRequested && tlcpRequested {
 		return errors.New("standard TLS and TLCP certificate options are mutually exclusive")
 	}
-	if *implicitTLCP && tlcpTransport == nil {
+	if *implicitTLCP && (*tlcpSignCertificate == "" || *tlcpSignPrivateKey == "" ||
+		*tlcpEncryptionCertificate == "" || *tlcpEncryptionPrivateKey == "") {
 		return errors.New("-tlcp-implicit requires all four TLCP certificate/key options")
 	}
 	if *implicitTLS {
-		if tlcpTransport != nil {
+		if tlcpRequested {
 			return errors.New("use -tlcp-implicit instead of -ldaps with TLCP")
 		}
-		if tlsConfig == nil {
+		if *tlsCertificate == "" || *tlsPrivateKey == "" {
 			return errors.New("-ldaps requires -tls-cert and -tls-key")
 		}
 	}
@@ -1612,7 +1610,7 @@ func runServe(
 	if *ldapiPath != "" && (*implicitTLS || *implicitTLCP) {
 		return errors.New("-ldapi cannot be combined with implicit TLS or TLCP listeners")
 	}
-	if (tlsConfig != nil || tlcpTransport != nil) && secureHandshakeTimeout <= 0 {
+	if (standardTLSRequested || tlcpRequested) && secureHandshakeTimeout <= 0 {
 		return errors.New("-secure-handshake-timeout must be positive")
 	}
 	if shutdownTimeout <= 0 {
@@ -1624,28 +1622,14 @@ func runServe(
 	if *transactionMaxQueuedBytes <= 0 {
 		return errors.New("-transaction-max-queued-bytes must be positive")
 	}
-	if samePath(*auditLogPath, *databasePath) {
-		return errors.New("audit log and directory database must use different paths")
-	}
-	auditSink, err := openAuditSink(*auditLogPath, *auditKeyFile, getenv)
+	privileges, err := resolveServePrivileges(*serveUser, *serveGroup, *serveChroot)
 	if err != nil {
 		return err
 	}
-	if auditSink != nil {
-		defer func() {
-			runErr = errors.Join(runErr, auditSink.Close())
-		}()
+	defer privileges.Close()
+	if *serveChroot != "" && *ldapiPath != "" && !*systemdActivation {
+		return errors.New("-chroot with LDAPI requires -systemd-activation to preserve socket ownership")
 	}
-	var configuredAuditSink audit.Sink
-	if auditSink != nil {
-		configuredAuditSink = auditSink
-	}
-
-	store, err := storage.OpenBolt(*databasePath)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
 
 	listeners := make([]net.Listener, 0, 2)
 	listenerURLs := make([]string, 0, 2)
@@ -1699,6 +1683,69 @@ func runServe(
 	}
 	listener := newServeListener(listeners)
 	defer listener.Close()
+	notifier, notifyConfigured, notifyErr := openSystemdNotifier(getenv)
+	if notifyErr != nil {
+		logger.Warn("systemd notification setup failed", "error", notifyErr)
+		notifier = nil
+		notifyErr = nil
+	}
+	if notifier != nil {
+		defer notifier.Close()
+	}
+	if err := applyServePrivileges(privileges); err != nil {
+		return err
+	}
+	if samePath(*auditLogPath, *databasePath) {
+		return errors.New("audit log and directory database must use different paths")
+	}
+	var pidfile *servePIDFile
+	if *pidFilePath != "" {
+		pidfile, err = acquireServePIDFile(*pidFilePath)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			runErr = errors.Join(runErr, pidfile.Close())
+		}()
+	}
+	tlsConfig, err := loadServerTLSConfigWithClientAuth(
+		*tlsCertificate,
+		*tlsPrivateKey,
+		*tlsClientCA,
+		*tlsRequireClientCertificate,
+	)
+	if err != nil {
+		return err
+	}
+	tlcpTransport, err := loadServerTLCPWithClientAuth(
+		*tlcpSignCertificate,
+		*tlcpSignPrivateKey,
+		*tlcpEncryptionCertificate,
+		*tlcpEncryptionPrivateKey,
+		*tlcpClientCA,
+		*tlcpRequireClientCertificate,
+	)
+	if err != nil {
+		return err
+	}
+	auditSink, err := openAuditSink(*auditLogPath, *auditKeyFile, getenv)
+	if err != nil {
+		return err
+	}
+	if auditSink != nil {
+		defer func() {
+			runErr = errors.Join(runErr, auditSink.Close())
+		}()
+	}
+	var configuredAuditSink audit.Sink
+	if auditSink != nil {
+		configuredAuditSink = auditSink
+	}
+	store, err := storage.OpenBolt(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
 	ready := make(chan struct{})
 	instance, err := server.New(server.Config{
 		Store:                     store,
@@ -1725,6 +1772,20 @@ func runServe(
 	if err != nil {
 		return err
 	}
+	var stoppingOnce sync.Once
+	notifyStopping := func() {
+		stoppingOnce.Do(func() {
+			if notifier == nil {
+				return
+			}
+			if err := notifier.Notify("STOPPING=1\nSTATUS=ldap-go shutting down"); err != nil {
+				logger.Warn("systemd STOPPING notification failed", "error", err)
+			}
+		})
+	}
+	if notifyConfigured {
+		defer notifyStopping()
+	}
 
 	serveContext, stopServe := context.WithCancel(ctx)
 	defer stopServe()
@@ -1735,8 +1796,10 @@ func runServe(
 	select {
 	case <-ready:
 	case err := <-serveDone:
+		notifyStopping()
 		return err
 	case <-ctx.Done():
+		notifyStopping()
 		stopServe()
 		return <-serveDone
 	}
@@ -1749,25 +1812,21 @@ func runServe(
 			return err
 		}
 	}
-	if configured, err := notifySystemd(
-		getenv,
-		"READY=1\nSTATUS=ldap-go accepting connections",
-	); err != nil {
-		logger.Warn("systemd READY notification failed", "error", err)
-	} else if configured {
-		defer func() {
-			if _, err := notifySystemd(getenv, "STOPPING=1\nSTATUS=ldap-go shutting down"); err != nil {
-				logger.Warn("systemd STOPPING notification failed", "error", err)
-			}
-		}()
+	if notifier != nil {
+		notifyErr = notifier.Notify("READY=1\nSTATUS=ldap-go accepting connections")
+	}
+	if notifyErr != nil {
+		logger.Warn("systemd READY notification failed", "error", notifyErr)
 	}
 	contextDone := ctx.Done()
 	gentle := false
 	for {
 		select {
 		case err := <-serveDone:
+			notifyStopping()
 			return err
 		case <-contextDone:
+			notifyStopping()
 			stopServe()
 			contextDone = nil
 		case received, ok := <-management:
@@ -1779,12 +1838,14 @@ func runServe(
 				continue
 			}
 			if gentle || !instance.BeginGentleShutdown(listener) {
+				notifyStopping()
 				logger.Info("SIGHUP shutdown requested", "gentle", false)
 				stopServe()
 				contextDone = nil
 				continue
 			}
 			gentle = true
+			notifyStopping()
 			logger.Info("SIGHUP shutdown requested", "gentle", true)
 		}
 	}

@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,959 top-level tests against
+The latest pinned local strict run passed 1,973 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -795,6 +795,20 @@ signal shutdown, and that closing ldap-go does not unlink the manager-owned
 Unix path. Filesystem Unix datagram tests cover `NOTIFY_SOCKET` READY/STOPPING
 ordering, payload validation, missing endpoints, and unconfigured no-op
 behavior.
+
+Privilege tests resolve user/group names and numeric IDs, reject aliases and
+invalid jail paths, and run all credential-changing calls in subprocesses.
+Root-capable runners switch to `nobody` and prove UID 0 cannot be recovered;
+ordinary runners execute the same-ID kernel calls. A separate subprocess
+enters a descriptor-pinned chroot (or verifies explicit non-root rejection),
+and pinned OpenLDAP source anchors enforce listener, chroot, identity, and
+configuration order. CLI tests reject manual LDAPI with chroot and confirm all
+runtime files are opened only after sandbox entry.
+
+Pidfile tests cover absolute-path policy, exclusive `0600` creation, PID write
+and fsync, stale/symlink refusal, changed-content and path-replacement safety,
+64-way acquisition, concurrent Close, duplicate running servers, and cleanup
+after graceful shutdown.
 
 When the OpenLDAP runner fails, it preserves the complete Go test output at
 `${TMPDIR}/ldap-go-openldap.failure.log` instead of flooding the terminal;

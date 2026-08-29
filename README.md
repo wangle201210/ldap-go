@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,959 top-level tests against the pinned commit.
+The latest strict run passed 1,973 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -908,6 +908,21 @@ WantedBy=sockets.target
 Type=notify
 ExecStart=/usr/local/bin/ldap-go serve -systemd-activation -db /var/lib/ldap-go/directory.db
 ```
+
+On Linux, macOS, and FreeBSD, `serve -u <user> -g <group> -r <jail>` (or the
+long `-user/-group/-chroot` aliases) opens or adopts listeners first, enters
+the jail through a pinned directory descriptor, resolves passwd/group records
+inside the jail, installs supplementary groups, and irreversibly switches GID
+then UID before loading certificates, audit keys, the database, keytabs, or
+runtime configuration. All file arguments except listener paths and the jail
+itself therefore name paths inside the jail. Manual `-ldapi` is rejected with
+`-chroot`; use systemd socket activation so the service manager owns that
+socket. A non-root process may only select its current identity.
+
+`serve -pidfile /run/ldap-go/ldap-go.pid` creates a `0600` file with exclusive
+creation, refuses existing or stale paths, fsyncs the PID, and removes it on
+shutdown only if both file identity and contents still belong to the running
+process. Under chroot the pidfile path is relative to the jail root.
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:
