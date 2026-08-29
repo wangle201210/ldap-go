@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/xdg-go/stringprep"
 )
@@ -244,9 +243,13 @@ func (server *Server) handleSASLExternalBind(
 		))
 	}
 
-	authenticationDN, err := directory.ParseDN(state.externalDN)
+	authenticationDN, err := server.saslExternalAuthenticationDN(
+		ctx,
+		runtime,
+		state.externalDN,
+	)
 	if err != nil {
-		return fmt.Errorf("parse external identity DN: %w", err)
+		return fmt.Errorf("resolve external identity DN: %w", err)
 	}
 	authorizationDN, err := server.resolveSASLAuthorizationDN(
 		ctx,

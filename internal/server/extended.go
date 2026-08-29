@@ -220,7 +220,9 @@ func (server *Server) handleStartTLS(
 	state.secure = true
 	state.tlsSSF = connectionSecurityStrength(secured, true)
 	state.externalSSF = max(state.transportSSF, state.tlsSSF)
-	state.externalDN = externalIdentityDN(secured)
+	if tlsIdentity := externalIdentityDN(secured); tlsIdentity != "" {
+		state.externalDN = tlsIdentity
+	}
 	return nil
 }
 

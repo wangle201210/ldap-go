@@ -44,6 +44,11 @@ const (
 	maxLDAPSearchPromptLine  = 32
 )
 
+func ldapClientURIUsesLDAPI(raw string) bool {
+	return len(raw) >= len("ldapi://") &&
+		strings.EqualFold(raw[:len("ldapi://")], "ldapi://")
+}
+
 type ldapClientOptions struct {
 	uri                  string
 	simple               bool
@@ -584,8 +589,10 @@ func (options *ldapClientOptions) connectAndBind(
 func (options *ldapClientOptions) connectionConfiguration(
 	flags *flag.FlagSet,
 ) (*url.URL, string, *tls.Config, error) {
-	if len(options.uri) >= len("ldapi://") &&
-		strings.EqualFold(options.uri[:len("ldapi://")], "ldapi://") {
+	if ldapClientURIUsesLDAPI(options.uri) {
+		if !platformSupportsLDAPI() {
+			return nil, "", nil, errors.New("ldapi:// Unix sockets are not supported on this platform")
+		}
 		path, err := lloadd.ParseLDAPIAddress(options.uri)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("parse LDAPI URI: %w", err)
@@ -731,8 +738,10 @@ func dialObservedLDAPConnection(
 	tlsConfig *tls.Config,
 	timeout time.Duration,
 ) (*ldap.Conn, *ldapSearchResponseObserver, error) {
-	if len(rawURI) >= len("ldapi://") &&
-		strings.EqualFold(rawURI[:len("ldapi://")], "ldapi://") {
+	if ldapClientURIUsesLDAPI(rawURI) {
+		if !platformSupportsLDAPI() {
+			return nil, nil, errors.New("ldapi:// Unix sockets are not supported on this platform")
+		}
 		if directTLS || startTLS {
 			return nil, nil, errors.New("TLS cannot be used with an ldapi:// URI")
 		}
@@ -1386,8 +1395,7 @@ type ldapSearchDirectURL struct {
 }
 
 func parseLDAPSearchDirectURL(rawURI string) (ldapSearchDirectURL, error) {
-	if len(rawURI) >= len("ldapi://") &&
-		strings.EqualFold(rawURI[:len("ldapi://")], "ldapi://") {
+	if ldapClientURIUsesLDAPI(rawURI) {
 		if _, err := lloadd.ParseLDAPIAddress(rawURI); err != nil {
 			return ldapSearchDirectURL{}, fmt.Errorf("parse LDAPI search URL: %w", err)
 		}

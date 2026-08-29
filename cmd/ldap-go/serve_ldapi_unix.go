@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+func platformSupportsLDAPI() bool {
+	return true
+}
+
 func listenServeLDAPI(path string, mode os.FileMode) (net.Listener, string, error) {
 	if strings.TrimSpace(path) != path || path == "" {
 		return nil, "", fmt.Errorf("LDAPI socket path is empty or contains surrounding whitespace")

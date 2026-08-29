@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,949 top-level tests against
+The latest pinned local strict run passed 1,953 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -779,6 +779,13 @@ observing `ldapsearch` performs Simple Bind/Search, `ldapwhoami -Y PLAIN`
 proves local-SSF SASL transport, and the pinned OpenLDAP `ldapsearch` client
 performs the same base search. URI tests cover escaped-authority and
 three-slash forms plus TLS/StartTLS rejection.
+
+Peercred tests read effective UID/GID from accepted kernel Unix sockets using
+Linux `SO_PEERCRED` or macOS/FreeBSD `LOCAL_PEERCRED`, assert OpenLDAP's exact
+`gidNumber+uidNumber` authentication identity, and pin the server/client source
+format. An ordered `olcAuthzRegexp` maps only the current pair to a database
+root for built-in and native `ldapwhoami -Y EXTERNAL`; a separate no-mapping
+case binds as the peercred DN and proves it cannot perform a root write.
 
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. The other server-side cases invoke

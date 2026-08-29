@@ -8,6 +8,10 @@ import (
 	"os"
 )
 
+func platformSupportsLDAPI() bool {
+	return false
+}
+
 func listenServeLDAPI(string, os.FileMode) (net.Listener, string, error) {
 	return nil, "", errors.New("LDAPI Unix sockets are not supported on Windows")
 }

@@ -402,6 +402,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 	networkConnection := connection
 	transportSSF := server.connectionTransportSecurityStrength(networkConnection)
 	domainName := server.connectionDomainName(ctx, networkConnection.RemoteAddr())
+	externalDN, peercredErr := peercredExternalIdentity(networkConnection)
+	if peercredErr != nil {
+		server.config.Logger.Debug("LDAPI peer credential lookup failed", "error", peercredErr)
+	}
 	activity := newConnectionActivity()
 	connection = &activityTrackingConnection{
 		Conn:     networkConnection,
@@ -411,6 +415,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		connectionID:    server.nextConnectionID.Add(1),
 		connection:      connection,
 		externalSSF:     transportSSF,
+		externalDN:      externalDN,
 		transportSSF:    transportSSF,
 		domainName:      domainName,
 		auditIdentity:   &connectionAuditIdentityState{},
@@ -452,7 +457,9 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		state.secure = true
 		state.tlsSSF = connectionSecurityStrength(secured, true)
 		state.externalSSF = max(state.transportSSF, state.tlsSSF)
-		state.externalDN = externalIdentityDN(secured)
+		if tlsIdentity := externalIdentityDN(secured); tlsIdentity != "" {
+			state.externalDN = tlsIdentity
+		}
 		server.monitor.updateConnectionState(state.monitor, &state)
 	}
 

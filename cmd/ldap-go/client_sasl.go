@@ -1082,8 +1082,9 @@ func (options *ldapClientOptions) validateSASL(
 		if passwordSources != 0 {
 			return errors.New("SASL EXTERNAL does not use -w, -W, or -y")
 		}
-		if options.tlsCertificateFile == "" || options.tlsPrivateKeyFile == "" {
-			return errors.New("SASL EXTERNAL requires -tls-cert and -tls-key")
+		if !ldapClientURIUsesLDAPI(options.uri) &&
+			(options.tlsCertificateFile == "" || options.tlsPrivateKeyFile == "") {
+			return errors.New("SASL EXTERNAL requires -tls-cert and -tls-key or an ldapi:// URI")
 		}
 	case "GSSAPI":
 		if passwordSources > 0 && options.saslAuthentication == "" {

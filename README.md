@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,949 top-level tests against the pinned commit.
+The latest strict run passed 1,953 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -854,6 +854,9 @@ ldapsearch -x -H ldapi://%2Fvar%2Frun%2Fldap-go%2Fldapi/ \
   -D cn=admin,dc=example,dc=com -W \
   -b dc=example,dc=com '(objectClass=*)'
 
+ldapwhoami -Y EXTERNAL \
+  -H ldapi://%2Fvar%2Frun%2Fldap-go%2Fldapi/
+
 ldapsearch -x -H ldap://127.0.0.1:1389 \
   -b dc=example,dc=com '(objectClass=*)'
 
@@ -875,6 +878,14 @@ go run ./cmd/ldap-go restore \
   -db ./data/restored.db
 go run ./cmd/ldap-go rebuild -db ./data/restored.db
 ```
+
+On Linux, macOS, and FreeBSD, LDAPI SASL EXTERNAL derives the OpenLDAP
+peer-credential identity
+`gidNumber=<gid>+uidNumber=<uid>,cn=peercred,cn=external,cn=auth` from the
+accepted kernel socket. It does not grant directory privileges by itself;
+configure an explicit `olcAuthzRegexp` to map selected UID/GID pairs to LDAP
+authorization DNs. Unmapped peers bind as their peercred DN and remain subject
+to ordinary ACLs.
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:

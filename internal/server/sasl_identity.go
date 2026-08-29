@@ -34,6 +34,55 @@ func (server *Server) saslAuthenticationDN(
 	)
 }
 
+func (server *Server) saslExternalAuthenticationDN(
+	ctx context.Context,
+	runtime *runtimeState,
+	identity string,
+) (directory.DN, error) {
+	requestDN, err := normalizeSASLIdentityDN(runtime, identity)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	value := requestDN.String()
+	normalized := requestDN.NormalizedString()
+	for _, rule := range runtime.sasl.authzRegexps {
+		candidate := identity
+		submatches := rule.expression.FindStringSubmatchIndex(candidate)
+		if submatches == nil && normalized != candidate {
+			candidate = normalized
+			submatches = rule.expression.FindStringSubmatchIndex(candidate)
+		}
+		if submatches == nil {
+			continue
+		}
+		value = string(rule.expression.ExpandString(
+			nil,
+			rule.replacement,
+			candidate,
+			submatches,
+		))
+		break
+	}
+	if strings.HasPrefix(strings.ToLower(value), "ldap:") {
+		return server.searchSASLAuthzLDAPURL(
+			ctx,
+			runtime,
+			requestDN,
+			value,
+			"",
+		)
+	}
+	mapped, err := normalizeSASLIdentityDN(runtime, value)
+	if err != nil {
+		return directory.DN{}, fmt.Errorf(
+			"authz-regexp produced invalid DN %q: %w",
+			value,
+			err,
+		)
+	}
+	return mapped, nil
+}
+
 func (server *Server) saslUserDN(
 	ctx context.Context,
 	runtime *runtimeState,

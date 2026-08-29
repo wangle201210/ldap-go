@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -213,6 +214,30 @@ func TestRunServeAndBuiltInLDAPSearchOverLDAPI(t *testing.T) {
 			whoErr.String(),
 		)
 	}
+	whoOut.Reset()
+	whoErr.Reset()
+	exitCode = run(
+		[]string{
+			"ldapwhoami",
+			"-H", uri,
+			"-Y", "EXTERNAL",
+		},
+		strings.NewReader(""),
+		&whoOut,
+		&whoErr,
+		func(string) string { return "" },
+	)
+	if exitCode != 0 || !strings.Contains(
+		whoOut.String(),
+		"dn:cn=admin,dc=example,dc=com",
+	) {
+		t.Fatalf(
+			"ldapwhoami LDAPI EXTERNAL exit=%d stdout=%q stderr=%q",
+			exitCode,
+			whoOut.String(),
+			whoErr.String(),
+		)
+	}
 
 	cancel()
 	select {
@@ -346,6 +371,15 @@ func TestOpenLDAPClientSearchesLDAPGoLDAPI(t *testing.T) {
 	if err != nil || !bytes.Contains(output, []byte("dn: dc=example,dc=com")) {
 		t.Fatalf("OpenLDAP ldapsearch LDAPI: %v\n%s", err, output)
 	}
+	ldapwhoami, err := exec.LookPath("ldapwhoami")
+	if err != nil {
+		t.Fatal("OpenLDAP ldapwhoami is not available in PATH")
+	}
+	command = exec.Command(ldapwhoami, "-Y", "EXTERNAL", "-H", uri)
+	output, err = command.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte("dn:cn=admin,dc=example,dc=com")) {
+		t.Fatalf("OpenLDAP ldapwhoami LDAPI EXTERNAL: %v\n%s", err, output)
+	}
 }
 
 func TestServeLDAPIFlagValidation(t *testing.T) {
@@ -440,9 +474,14 @@ func seedServeLDAPIEntries(t *testing.T, store storage.Store) {
 				DN: "cn=config",
 				Attributes: []directory.Attribute{{
 					Description: "olcAuthzRegexp",
-					Values: [][]byte{[]byte(
-						`{0}^uid=([^,]+),cn=plain,cn=auth$ uid=$1,dc=example,dc=com`,
-					)},
+					Values: [][]byte{
+						[]byte(`{0}^uid=([^,]+),cn=plain,cn=auth$ uid=$1,dc=example,dc=com`),
+						[]byte(fmt.Sprintf(
+							`{1}^gidNumber=%d\+uidNumber=%d,cn=peercred,cn=external,cn=auth$ cn=admin,dc=example,dc=com`,
+							os.Getegid(),
+							os.Geteuid(),
+						)),
+					},
 				}},
 			},
 			{
