@@ -79,7 +79,7 @@ func TestLDAPConnectionPendingLimitUsesAuthenticationState(t *testing.T) {
 				t,
 				connection,
 				messageID+1,
-				rawExtendedRequest(whoAmIOID, nil, false),
+				rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
 				nil,
 			)
 			assertLDAPConnectionHasNoResponse(t, connection)
@@ -88,7 +88,7 @@ func TestLDAPConnectionPendingLimitUsesAuthenticationState(t *testing.T) {
 				t,
 				connection,
 				messageID+2,
-				rawExtendedRequest(whoAmIOID, nil, false),
+				rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
 				nil,
 			)
 			assertLDAPConnectionClosedWithoutResponse(t, connection)
@@ -215,7 +215,7 @@ func TestLDAPConnectionPendingOnlineConfigurationAppliesToExistingConnection(t *
 		t,
 		connection,
 		2,
-		rawExtendedRequest(whoAmIOID, nil, false),
+		rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
 		nil,
 	)
 	assertLDAPConnectionHasNoResponse(t, connection)
@@ -223,7 +223,7 @@ func TestLDAPConnectionPendingOnlineConfigurationAppliesToExistingConnection(t *
 		t,
 		connection,
 		3,
-		rawExtendedRequest(whoAmIOID, nil, false),
+		rawExtendedRequest("1.3.6.1.4.1.4203.666.999", nil, false),
 		nil,
 	)
 	assertLDAPConnectionClosedWithoutResponse(t, connection)

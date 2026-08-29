@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 2,018 top-level tests against the pinned commit.
+The latest strict run passed 2,019 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -974,7 +974,7 @@ bounded per-connection queues, and TLS/TLCP handshake waiting time consumes the
 configured handshake timeout. `cn=Connections,cn=Monitor` and
 `cn=Threads,cn=Monitor` publish the configured, active, waiting, and rejected
 values plus the sorted-search budgets through `monitoredInfo`.
-Each connection admits up to eight stateless Search/Compare operations by
+Each connection admits up to eight stateless Search/Compare/Who Am I operations by
 default (`-max-operations-per-connection`). They execute from immutable
 authentication snapshots and serialize complete BER writes. Bind abandons
 active work and discards pending work before changing identity; StartTLS,

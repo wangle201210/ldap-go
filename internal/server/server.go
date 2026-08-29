@@ -1109,9 +1109,11 @@ func connectionOperationCanRunConcurrent(
 			return false
 		}
 	}
-	switch message.Request.(type) {
+	switch request := message.Request.(type) {
 	case ldapwire.SearchRequest, ldapwire.CompareRequest:
 		return true
+	case ldapwire.ExtendedRequest:
+		return request.Name == whoAmIOID
 	default:
 		return false
 	}

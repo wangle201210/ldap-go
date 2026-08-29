@@ -48,7 +48,7 @@ bypass subject-specific rules. This keeps ordinary, sorted, paged, VLV, and
 overlay-expanded candidates under one cumulative Search limit.
 
 One reader accepts and registers requests while a bounded connection-local
-worker set executes Search and Compare from immutable authentication snapshots.
+worker set executes Search, Compare, and Who Am I from immutable authentication snapshots.
 Operations that change or retain association state, including writes, paging,
 VLV, transactions, SASL, and StartTLS, are ordered fences. Abandon and RFC 3909
 Cancel are handled by the reader so they can cancel active Search contexts

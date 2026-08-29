@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strings"
@@ -327,6 +328,84 @@ func TestServerPerConnectionOperationLimit(t *testing.T) {
 	}
 	if store.maximum.Load() != 2 {
 		t.Fatalf("same-connection maximum = %d, want 2", store.maximum.Load())
+	}
+}
+
+func TestWhoAmIRunsBesideBlockedSameConnectionSearch(t *testing.T) {
+	base := storage.NewMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	seedDirectory(t, base)
+	store := newResourceLimitStore(base)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := New(Config{
+		Store:                      store,
+		MaxOperationsPerConnection: 2,
+		RootDN:                     "cn=admin,dc=example,dc=com",
+		RootPassword:               []byte("secret"),
+	})
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- instance.Serve(ctx, listener) }()
+	t.Cleanup(func() {
+		cancel()
+		store.unblock()
+		<-done
+	})
+	client, err := ldap.DialURL("ldap://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	store.enable()
+	searchDone := make(chan error, 1)
+	go func() {
+		_, err := client.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		))
+		searchDone <- err
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Search did not enter storage")
+	}
+	whoDone := make(chan error, 1)
+	go func() {
+		response, err := client.WhoAmI(nil)
+		if err == nil && response.AuthzID != "dn:cn=admin,dc=example,dc=com" {
+			err = errors.New("Who Am I returned the wrong authorization identity")
+		}
+		whoDone <- err
+	}()
+	select {
+	case err := <-whoDone:
+		if err != nil {
+			t.Fatalf("Who Am I: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Who Am I was blocked behind Search")
+	}
+	store.unblock()
+	if err := <-searchDone; err != nil {
+		t.Fatalf("Search(): %v", err)
 	}
 }
 
