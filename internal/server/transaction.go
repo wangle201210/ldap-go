@@ -286,6 +286,17 @@ func (server *Server) handleTransactionEnd(
 			ldapwire.TransactionEndResponseValue{},
 		)
 	}
+	if endRequest.Commit && server.gentleDraining.Load() {
+		return server.writeTransactionEndResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnwillingToPerform,
+				"operation restricted",
+			),
+			ldapwire.TransactionEndResponseValue{},
+		)
+	}
 	state.transaction = nil
 	defer clearLDAPTransaction(transaction)
 	if !endRequest.Commit {

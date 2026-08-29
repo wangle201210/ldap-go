@@ -53,9 +53,27 @@ func runMain(
 	stdout, stderr io.Writer,
 	getenv func(string) string,
 ) int {
-	ctx, stop := signal.NotifyContext(context.Background(), mainShutdownSignals()...)
+	shutdownSignals := mainShutdownSignals()
+	var management chan os.Signal
+	if len(args) != 0 && args[0] == "serve" {
+		shutdownSignals = serveShutdownSignals()
+		if signals := serveManagementSignals(); len(signals) != 0 {
+			management = make(chan os.Signal, 2)
+			signal.Notify(management, signals...)
+			defer signal.Stop(management)
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals...)
 	defer stop()
-	return runWithContext(ctx, args, stdin, stdout, stderr, getenv)
+	return runWithContextAndSignals(
+		ctx,
+		management,
+		args,
+		stdin,
+		stdout,
+		stderr,
+		getenv,
+	)
 }
 
 func run(
@@ -70,6 +88,18 @@ func run(
 
 func runWithContext(
 	ctx context.Context,
+	args []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	getenv func(string) string,
+) int {
+	return runWithContextAndSignals(ctx, nil, args, stdin, stdout, stderr, getenv)
+}
+
+func runWithContextAndSignals(
+	ctx context.Context,
+	management <-chan os.Signal,
 	args []string,
 	stdin io.Reader,
 	stdout io.Writer,
@@ -128,7 +158,7 @@ func runWithContext(
 	case "restore":
 		err = runRestore(ctx, args[1:], stdout, stderr)
 	case "serve":
-		err = runServe(ctx, args[1:], stdout, stderr, getenv)
+		err = runServe(ctx, management, args[1:], stdout, stderr, getenv)
 	case "version":
 		_, err = fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
@@ -1398,6 +1428,7 @@ func openLDAPBooleanAttribute(
 
 func runServe(
 	ctx context.Context,
+	management <-chan os.Signal,
 	args []string,
 	stdout, stderr io.Writer,
 	getenv func(string) string,
@@ -1578,6 +1609,10 @@ func runServe(
 			runErr = errors.Join(runErr, auditSink.Close())
 		}()
 	}
+	var configuredAuditSink audit.Sink
+	if auditSink != nil {
+		configuredAuditSink = auditSink
+	}
 
 	store, err := storage.OpenBolt(*databasePath)
 	if err != nil {
@@ -1620,7 +1655,7 @@ func runServe(
 		RootDN:                    *rootDN,
 		RootPassword:              []byte(getenv(rootPasswordEnvironment)),
 		Logger:                    logger,
-		AuditSink:                 auditSink,
+		AuditSink:                 configuredAuditSink,
 		TLSConfig:                 tlsConfig,
 		SecureTransport:           tlcpTransport,
 		ImplicitTLS:               *implicitTLS || *implicitTLCP,
@@ -1638,7 +1673,39 @@ func runServe(
 	if _, err := fmt.Fprintf(stdout, "ldap-go listening on %s://%s\n", scheme, listener.Addr()); err != nil {
 		return err
 	}
-	return instance.Serve(ctx, listener)
+	serveContext, stopServe := context.WithCancel(ctx)
+	defer stopServe()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- instance.Serve(serveContext, listener)
+	}()
+	contextDone := ctx.Done()
+	gentle := false
+	for {
+		select {
+		case err := <-serveDone:
+			return err
+		case <-contextDone:
+			stopServe()
+			contextDone = nil
+		case received, ok := <-management:
+			if !ok {
+				management = nil
+				continue
+			}
+			if !serveIsGentleSignal(received) {
+				continue
+			}
+			if gentle || !instance.BeginGentleShutdown(listener) {
+				logger.Info("SIGHUP shutdown requested", "gentle", false)
+				stopServe()
+				contextDone = nil
+				continue
+			}
+			gentle = true
+			logger.Info("SIGHUP shutdown requested", "gentle", true)
+		}
+	}
 }
 
 func runAuditVerify(

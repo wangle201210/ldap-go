@@ -86,6 +86,7 @@ type Server struct {
 	configMu             sync.Mutex
 	runtimeActivationMu  sync.Mutex
 	draining             atomic.Bool
+	gentleDraining       atomic.Bool
 
 	csnMu                 sync.Mutex
 	lastCSN               time.Time
@@ -322,6 +323,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	server.draining.Store(false)
+	defer server.gentleDraining.Store(false)
 	defer server.closeSQLBackends()
 	defer server.metaTransports.close()
 	defer server.syncConsumers.stop()
@@ -368,6 +370,9 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
+			if server.gentleDraining.Load() && ctx.Err() == nil && errors.Is(err, net.ErrClosed) {
+				return server.waitForGentleConnectionClose(ctx, forceOperations)
+			}
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				server.draining.Store(true)
 				server.beginConnectionDrain()
@@ -380,7 +385,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 
 		server.mu.Lock()
-		if server.draining.Load() {
+		if server.draining.Load() || server.gentleDraining.Load() {
 			server.mu.Unlock()
 			_ = connection.Close()
 			continue
@@ -1301,6 +1306,15 @@ func (server *Server) dispatch(
 				return false, writeResultForMessage(connection, message, *failure)
 			}
 		}
+	}
+	if failure := server.gentleShutdownRequestResult(message.Request); failure != nil {
+		if controlFailure := requestControlFailureBeforeSecurity(
+			state,
+			message,
+		); controlFailure != nil {
+			return false, writeResultForMessage(connection, message, *controlFailure)
+		}
+		return false, writeResultForMessage(connection, message, *failure)
 	}
 	overlayMessage := message
 	overlayMessage.Controls = withoutSessionTrackingControls(message.Controls)

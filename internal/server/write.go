@@ -1100,6 +1100,12 @@ func (server *Server) modifyEntry(
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
 		}
 		if configurationWrite {
+			if err := validateGentleHUPOnlineChanges(
+				entry,
+				processedChanges,
+			); err != nil {
+				return err
+			}
 			if err := validateIncomingLimitOnlineChanges(
 				entry,
 				processedChanges,
