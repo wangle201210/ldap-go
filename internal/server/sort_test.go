@@ -176,6 +176,44 @@ func TestLDAPClientServerSideSorting(t *testing.T) {
 	}
 }
 
+func TestServerSideSortingHonorsGlobalCandidateBudgets(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		candidates int
+		bytes      int64
+	}{
+		{name: "count", candidates: 2, bytes: 1 << 20},
+		{name: "bytes", candidates: 100, bytes: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedDirectory(t, store)
+			seedSortablePeople(t, store)
+			address, stop := startServer(t, store, Config{
+				RootDN:                  "cn=admin,dc=example,dc=com",
+				RootPassword:            []byte("admin-secret"),
+				MaxSearchCandidates:     test.candidates,
+				MaxSearchCandidateBytes: test.bytes,
+			})
+			defer stop()
+			client := bindPagedRootClient(t, address)
+			defer client.Close()
+			request := newSortablePeopleSearch([]ldap.Control{
+				newSortControl(ldap.SortKey{
+					AttributeType: "cn",
+					MatchingRule:  "caseIgnoreOrderingMatch",
+				}),
+			})
+			_, err := client.Search(request)
+			assertLDAPResultCode(t, err, ldap.LDAPResultAdminLimitExceeded)
+		})
+	}
+}
+
 func TestLDAPClientServerSideSortingFailures(t *testing.T) {
 	t.Parallel()
 

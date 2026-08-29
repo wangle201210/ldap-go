@@ -1,0 +1,61 @@
+name: Release gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      previous_ref:
+        description: Previous release tag or commit (optional)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_PREVIOUS_REF: ${{ inputs.previous_ref }}
+      RELEASE_ARTIFACT_DIR: ${{ github.workspace }}/release-gate-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release scripts
+        run: make release-check
+      - name: Run core and race gates
+        run: make fmt-check vet platform-builds test race
+      - name: Run N-1 database and data portability gate
+        run: make release-upgrade-gate
+      - name: Preserve upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-gate-${{ github.sha }}
+          path: release-gate-artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build and checksum release archives
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ github.workspace }}/release-build-artifacts
+          RELEASE_VERSION: ${{ github.sha }}
+        run: make release-build
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ github.sha }}
+          path: release-build-artifacts
+          if-no-files-found: error
+          retention-days: 14

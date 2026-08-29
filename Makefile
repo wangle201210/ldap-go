@@ -1,12 +1,13 @@
 SHELL := /bin/sh
 
-.PHONY: test script-test vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz compat full
+.PHONY: test script-test vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak release-check release-upgrade-gate release-build release-gate compat full
 
 test: script-test
 	go test ./... -count=1
 
 script-test:
 	./scripts/test-build-openldap-reference.sh
+	./scripts/qualification/test.sh
 
 vet:
 	go vet ./...
@@ -39,6 +40,26 @@ fuzz-smoke:
 
 fuzz:
 	./scripts/test-fuzz.sh
+
+qualification-check:
+	./scripts/qualification/test.sh
+
+qualification-smoke:
+	QUALIFICATION_MODE=smoke ./scripts/qualification/run.sh
+
+qualification-soak:
+	QUALIFICATION_MODE=soak ./scripts/qualification/run.sh
+
+release-check:
+	./scripts/release/test.sh
+
+release-upgrade-gate:
+	./scripts/release/upgrade-gate.sh
+
+release-build:
+	./scripts/release/build-artifacts.sh
+
+release-gate: release-check release-upgrade-gate release-build
 
 compat: fmt-check vet platform-builds test openldap fuzz-smoke
 

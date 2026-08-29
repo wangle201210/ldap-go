@@ -1,0 +1,53 @@
+name: Tagged release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_REQUIRE_PREVIOUS_TAG: '1'
+      RELEASE_ARTIFACT_DIR: ${{ github.workspace }}/release-upgrade-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release scripts
+        run: make release-check
+      - name: Run core and race gates
+        run: make fmt-check vet platform-builds test race
+      - name: Gate tagged release against N-1
+        run: make release-upgrade-gate
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-upgrade-${{ github.ref_name }}
+          path: release-upgrade-artifacts
+          if-no-files-found: error
+          retention-days: 90
+      - name: Build release archives and SHA256 manifest
+        env:
+          RELEASE_ARTIFACT_DIR: ${{ github.workspace }}/release-build-artifacts
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: make release-build
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release-build-artifacts/*
+          --verify-tag
+          --generate-notes
+          --title "$GITHUB_REF_NAME"

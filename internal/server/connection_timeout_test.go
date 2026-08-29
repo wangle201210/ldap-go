@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,6 +76,25 @@ func TestSerializedResponseConnectionWriteTimeoutAndDeadlineClear(t *testing.T) 
 			t.Fatalf("read direct value: %v", err)
 		}
 	})
+}
+
+func TestSerializedResponseConnectionLatchesTerminalWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	serverSide, clientSide := net.Pipe()
+	terminal := &atomic.Bool{}
+	connection := &serializedResponseConnection{
+		Conn:     serverSide,
+		mu:       &sync.Mutex{},
+		terminal: terminal,
+	}
+	_ = clientSide.Close()
+	if _, err := connection.Write([]byte("first")); err == nil || !terminal.Load() {
+		t.Fatalf("first Write() error=%v terminal=%v", err, terminal.Load())
+	}
+	if _, err := connection.Write([]byte("second")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Write() error=%v, want net.ErrClosed", err)
+	}
 }
 
 func TestSerializedResponseConnectionPublishesWriteWaiter(t *testing.T) {

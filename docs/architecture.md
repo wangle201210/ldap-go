@@ -47,12 +47,14 @@ client limit, the hard value clamps a larger request, and database-root searches
 bypass subject-specific rules. This keeps ordinary, sorted, paged, VLV, and
 overlay-expanded candidates under one cumulative Search limit.
 
-One reader accepts and registers requests while one worker serializes ordinary
-operations that share authentication, paging, VLV, and runtime state. Abandon
-and RFC 3909 Cancel are handled by the reader so they can cancel the active
-Search context without waiting behind it. Bind and StartTLS are read barriers,
-and a connection-wide writer lock keeps every BER PDU intact when a Cancel
-response races with Search output. The registry establishes an atomic
+One reader accepts and registers requests while a bounded connection-local
+worker set executes Search and Compare from immutable authentication snapshots.
+Operations that change or retain association state, including writes, paging,
+VLV, transactions, SASL, and StartTLS, are ordered fences. Abandon and RFC 3909
+Cancel are handled by the reader so they can cancel active Search contexts
+without waiting behind them. Bind abandons active work, discards pending work,
+waits for cleanup, and then changes identity as a hard fence. A connection-wide
+writer lock keeps every BER PDU intact when responses race. The registry establishes an atomic
 final-response boundary for `tooLate` and limits cancellation to the LDAP
 association that created the target operation.
 

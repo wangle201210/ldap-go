@@ -120,8 +120,12 @@ func runWithContextAndSignals(
 		err = runBackup(ctx, args[1:], stdout, stderr)
 	case "online-backup":
 		err = runOnlineBackup(args[1:], stdin, stdout, stderr)
+	case "production-check":
+		err = runProductionCheck(args[1:], stdout, stderr)
 	case "check":
 		err = runCheck(args[1:], stdout, stderr)
+	case "health":
+		err = runHealth(args[1:], stdin, stdout, stderr)
 	case "config-test", "slaptest":
 		err = runConfigurationTest(args[0], args[1:], stdout, stderr)
 	case "dn", "slapdn":
@@ -1446,6 +1450,16 @@ func runServe(
 		"127.0.0.1:1389",
 		"LDAP listen address (empty disables TCP when -ldapi is set)",
 	)
+	ldapsListenAddress := flags.String(
+		"ldaps-listen",
+		"",
+		"additional implicit TLS listen address",
+	)
+	tlcpListenAddress := flags.String(
+		"tlcp-listen",
+		"",
+		"additional implicit TLCP listen address",
+	)
 	ldapiPath := flags.String("ldapi", "", "additional LDAPI Unix socket path")
 	ldapiMode := flags.Uint("ldapi-mode", 0o660, "LDAPI Unix socket permission mode")
 	systemdActivation := flags.Bool(
@@ -1472,6 +1486,16 @@ func runServe(
 		"additional maximum BER frame size in bytes (0 uses OpenLDAP incoming limits)",
 	)
 	searchLimit := flags.Int("search-limit", 1000, "server-side maximum entries per search")
+	searchCandidateLimit := flags.Int(
+		"search-candidate-limit",
+		100000,
+		"maximum retained candidates for a sorted search",
+	)
+	searchCandidateBytes := flags.Int64(
+		"search-candidate-bytes",
+		64<<20,
+		"maximum retained bytes for a sorted search",
+	)
 	transactionMaxOperations := flags.Int(
 		"transaction-max-operations",
 		1000,
@@ -1487,6 +1511,11 @@ func runServe(
 		"max-concurrent-operations",
 		256,
 		"maximum operations executing across all connections",
+	)
+	maxOperationsPerConnection := flags.Int(
+		"max-operations-per-connection",
+		8,
+		"maximum operations executing concurrently on one connection",
 	)
 	maxConcurrentHandshakes := flags.Int(
 		"max-concurrent-handshakes",
@@ -1612,21 +1641,37 @@ func runServe(
 			return errors.New("-ldaps requires -tls-cert and -tls-key")
 		}
 	}
+	if *ldapsListenAddress != "" {
+		if tlcpRequested {
+			return errors.New("-ldaps-listen cannot use TLCP certificate options")
+		}
+		if *tlsCertificate == "" || *tlsPrivateKey == "" {
+			return errors.New("-ldaps-listen requires -tls-cert and -tls-key")
+		}
+	}
+	if *tlcpListenAddress != "" {
+		if standardTLSRequested {
+			return errors.New("-tlcp-listen cannot use standard TLS certificate options")
+		}
+		if *tlcpSignCertificate == "" || *tlcpSignPrivateKey == "" ||
+			*tlcpEncryptionCertificate == "" || *tlcpEncryptionPrivateKey == "" {
+			return errors.New("-tlcp-listen requires all four TLCP certificate/key options")
+		}
+	}
 	if *systemdActivation && (flagWasSet(flags, "listen") ||
+		flagWasSet(flags, "ldaps-listen") || flagWasSet(flags, "tlcp-listen") ||
 		flagWasSet(flags, "ldapi") || flagWasSet(flags, "ldapi-mode")) {
-		return errors.New("-systemd-activation cannot be combined with -listen, -ldapi, or -ldapi-mode")
+		return errors.New("-systemd-activation cannot be combined with manual listener options")
 	}
 	if *ldapiPath == "" && flagWasSet(flags, "ldapi-mode") {
 		return errors.New("-ldapi-mode requires -ldapi")
 	}
-	if !*systemdActivation && *listenAddress == "" && *ldapiPath == "" {
-		return errors.New("at least one of -listen or -ldapi is required")
+	if !*systemdActivation && *listenAddress == "" && *ldapsListenAddress == "" &&
+		*tlcpListenAddress == "" && *ldapiPath == "" {
+		return errors.New("at least one listener is required")
 	}
 	if *ldapiMode > 0o777 {
 		return errors.New("-ldapi-mode must be between 0000 and 0777")
-	}
-	if *ldapiPath != "" && (*implicitTLS || *implicitTLCP) {
-		return errors.New("-ldapi cannot be combined with implicit TLS or TLCP listeners")
 	}
 	if (standardTLSRequested || tlcpRequested) && secureHandshakeTimeout <= 0 {
 		return errors.New("-secure-handshake-timeout must be positive")
@@ -1646,8 +1691,17 @@ func runServe(
 	if *maxConcurrentOperations <= 0 {
 		return errors.New("-max-concurrent-operations must be positive")
 	}
+	if *maxOperationsPerConnection <= 0 {
+		return errors.New("-max-operations-per-connection must be positive")
+	}
 	if *maxConcurrentHandshakes <= 0 {
 		return errors.New("-max-concurrent-handshakes must be positive")
+	}
+	if *searchCandidateLimit <= 0 {
+		return errors.New("-search-candidate-limit must be positive")
+	}
+	if *searchCandidateBytes <= 0 {
+		return errors.New("-search-candidate-bytes must be positive")
 	}
 	privileges, err := resolveServePrivileges(*serveUser, *serveGroup, *serveChroot)
 	if err != nil {
@@ -1658,8 +1712,9 @@ func runServe(
 		return errors.New("-chroot with LDAPI requires -systemd-activation to preserve socket ownership")
 	}
 
-	listeners := make([]net.Listener, 0, 2)
-	listenerURLs := make([]string, 0, 2)
+	listeners := make([]net.Listener, 0, 4)
+	listenerURLs := make([]string, 0, 4)
+	listenerImplicitTLS := make([]bool, 0, 4)
 	defer func() {
 		for _, listener := range listeners {
 			_ = listener.Close()
@@ -1673,29 +1728,45 @@ func runServe(
 		tcpScheme = "ldap+tlcp"
 	}
 	if *systemdActivation {
-		listeners, listenerURLs, err = listenServeSystemd(getenv, tcpScheme)
+		listeners, listenerURLs, listenerImplicitTLS, err = listenServeSystemd(getenv, tcpScheme)
 		if err != nil {
 			return err
 		}
-	} else if *listenAddress != "" {
-		tcpListener, err := net.Listen("tcp", *listenAddress)
-		if err != nil {
-			return fmt.Errorf("listen on %s: %w", *listenAddress, err)
+	} else {
+		listenTCP := func(address, scheme string, implicit bool) error {
+			if address == "" {
+				return nil
+			}
+			tcpListener, listenErr := net.Listen("tcp", address)
+			if listenErr != nil {
+				return fmt.Errorf("listen on %s: %w", address, listenErr)
+			}
+			listeners = append(listeners, tcpListener)
+			listenerImplicitTLS = append(listenerImplicitTLS, implicit)
+			listenerHost, _, splitErr := net.SplitHostPort(address)
+			if splitErr != nil {
+				return fmt.Errorf("parse listen address %s: %w", address, splitErr)
+			}
+			_, listenerPort, splitErr := net.SplitHostPort(tcpListener.Addr().String())
+			if splitErr != nil {
+				return fmt.Errorf("parse bound listen address %s: %w", tcpListener.Addr(), splitErr)
+			}
+			listenerURLs = append(listenerURLs, fmt.Sprintf(
+				"%s://%s/",
+				scheme,
+				net.JoinHostPort(listenerHost, listenerPort),
+			))
+			return nil
 		}
-		listeners = append(listeners, tcpListener)
-		listenerHost, _, err := net.SplitHostPort(*listenAddress)
-		if err != nil {
-			return fmt.Errorf("parse listen address %s: %w", *listenAddress, err)
+		if err := listenTCP(*listenAddress, tcpScheme, *implicitTLS || *implicitTLCP); err != nil {
+			return err
 		}
-		_, listenerPort, err := net.SplitHostPort(tcpListener.Addr().String())
-		if err != nil {
-			return fmt.Errorf("parse bound listen address %s: %w", tcpListener.Addr(), err)
+		if err := listenTCP(*ldapsListenAddress, "ldaps", true); err != nil {
+			return err
 		}
-		listenerURLs = append(listenerURLs, fmt.Sprintf(
-			"%s://%s/",
-			tcpScheme,
-			net.JoinHostPort(listenerHost, listenerPort),
-		))
+		if err := listenTCP(*tlcpListenAddress, "ldap+tlcp", true); err != nil {
+			return err
+		}
 	}
 	if !*systemdActivation && *ldapiPath != "" {
 		ldapiListener, ldapiURL, err := listenServeLDAPI(
@@ -1707,7 +1778,15 @@ func runServe(
 		}
 		listeners = append(listeners, ldapiListener)
 		listenerURLs = append(listenerURLs, ldapiURL)
+		listenerImplicitTLS = append(listenerImplicitTLS, false)
 	}
+	if err := validateServeListenerTransportMix(listenerURLs, tlcpRequested); err != nil {
+		return err
+	}
+	listenerSchemeForConnection := serveListenerSchemeResolver(
+		listeners,
+		listenerURLs,
+	)
 	listener := newServeListener(listeners)
 	defer listener.Close()
 	notifier, notifyConfigured, notifyErr := openSystemdNotifier(getenv)
@@ -1759,6 +1838,10 @@ func runServe(
 	if err != nil {
 		return err
 	}
+	var configuredSecureTransport server.SecureTransport
+	if tlcpTransport != nil {
+		configuredSecureTransport = tlcpTransport
+	}
 	auditSink, err := openAuditSink(*auditLogPath, *auditKeyFile, getenv)
 	if err != nil {
 		return err
@@ -1785,31 +1868,34 @@ func runServe(
 	}
 	ready := make(chan struct{})
 	instance, err := server.New(server.Config{
-		Store:                     store,
-		ListenerURLs:              listenerURLs,
-		MaxMessageSize:            *maxMessageSize,
-		MaxSearchEntries:          *searchLimit,
-		MaxTransactionOperations:  *transactionMaxOperations,
-		MaxTransactionQueuedBytes: *transactionMaxQueuedBytes,
-		MaxConnections:            *maxConnections,
-		MaxConcurrentOperations:   *maxConcurrentOperations,
-		MaxConcurrentHandshakes:   *maxConcurrentHandshakes,
-		RootDN:                    *rootDN,
-		RootPassword:              []byte(getenv(rootPasswordEnvironment)),
-		Logger:                    logger,
-		AuditSink:                 configuredAuditSink,
-		TLSConfig:                 tlsConfig,
-		SecureTransport:           tlcpTransport,
-		ImplicitTLS:               *implicitTLS || *implicitTLCP,
-		SecureHandshakeTimeout:    secureHandshakeTimeout,
-		ShutdownTimeout:           shutdownTimeout,
-		RADIUSConfigPath:          *radiusConfigPath,
-		RADIUSNASIdentifier:       *radiusNASIdentifier,
-		GSSAPIKeytabPath:          *gssapiKeytab,
-		GSSAPIChannelBinding:      *gssapiChannelBinding,
-		Ready:                     func() { close(ready) },
-		OnlineBackupDir:           preparedBackupDirectory,
-		OnlineBackup:              onlineBackup,
+		Store:                       store,
+		ListenerURLs:                listenerURLs,
+		MaxMessageSize:              *maxMessageSize,
+		MaxSearchEntries:            *searchLimit,
+		MaxTransactionOperations:    *transactionMaxOperations,
+		MaxTransactionQueuedBytes:   *transactionMaxQueuedBytes,
+		MaxConnections:              *maxConnections,
+		MaxConcurrentOperations:     *maxConcurrentOperations,
+		MaxOperationsPerConnection:  *maxOperationsPerConnection,
+		MaxConcurrentHandshakes:     *maxConcurrentHandshakes,
+		MaxSearchCandidates:         *searchCandidateLimit,
+		MaxSearchCandidateBytes:     *searchCandidateBytes,
+		RootDN:                      *rootDN,
+		RootPassword:                []byte(getenv(rootPasswordEnvironment)),
+		Logger:                      logger,
+		AuditSink:                   configuredAuditSink,
+		TLSConfig:                   tlsConfig,
+		SecureTransport:             configuredSecureTransport,
+		ListenerSchemeForConnection: listenerSchemeForConnection,
+		SecureHandshakeTimeout:      secureHandshakeTimeout,
+		ShutdownTimeout:             shutdownTimeout,
+		RADIUSConfigPath:            *radiusConfigPath,
+		RADIUSNASIdentifier:         *radiusNASIdentifier,
+		GSSAPIKeytabPath:            *gssapiKeytab,
+		GSSAPIChannelBinding:        *gssapiChannelBinding,
+		Ready:                       func() { close(ready) },
+		OnlineBackupDir:             preparedBackupDirectory,
+		OnlineBackup:                onlineBackup,
 	})
 	if err != nil {
 		return err
@@ -2118,7 +2204,9 @@ commands:
   audit-verify  verify an HMAC-chained audit log
   backup   create and validate an atomic bbolt backup (offline)
   online-backup  request a root-authorized backup from a running LDAPI server
+  production-check  validate offline production readiness and emit a report
   check    check bbolt pages, buckets, keys, entries, and metadata (offline)
+  health   check LDAP liveness and syncrepl consumer health
   config-test  validate runtime configuration without modifying the database
   slaptest alias for config-test
   dn       validate, normalize, or pretty-print DNs using database schema

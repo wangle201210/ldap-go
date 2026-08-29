@@ -17,16 +17,21 @@ type syncConsumerManager struct {
 	cancel  context.CancelFunc
 	wake    chan struct{}
 	done    chan struct{}
+	health  map[string]*syncConsumerHealth
 }
 
 type syncConsumerWorker struct {
 	config syncConsumerConfig
 	cancel context.CancelFunc
 	done   chan struct{}
+	health *syncConsumerHealth
 }
 
 func newSyncConsumerManager(server *Server) *syncConsumerManager {
-	return &syncConsumerManager{server: server}
+	return &syncConsumerManager{
+		server: server,
+		health: make(map[string]*syncConsumerHealth),
+	}
 }
 
 func (manager *syncConsumerManager) configure(runtime *runtimeState) {
@@ -127,6 +132,7 @@ func (manager *syncConsumerManager) reconcile(
 		select {
 		case <-worker.done:
 			delete(workers, key)
+			manager.deleteHealth(key)
 		case <-ctx.Done():
 			return false
 		}
@@ -138,11 +144,12 @@ func (manager *syncConsumerManager) reconcile(
 			config: config,
 			cancel: cancel,
 			done:   make(chan struct{}),
+			health: manager.healthFor(key, config),
 		}
 		workers[key] = worker
 		go func() {
 			defer close(worker.done)
-			manager.server.runSyncConsumer(workerContext, worker.config)
+			manager.server.runSyncConsumer(workerContext, worker.config, worker.health)
 		}()
 	}
 	return true
@@ -157,6 +164,81 @@ func (manager *syncConsumerManager) stopWorkers(
 	for key, worker := range workers {
 		<-worker.done
 		delete(workers, key)
+		manager.deleteHealth(key)
+	}
+}
+
+func (manager *syncConsumerManager) healthFor(
+	key string,
+	config syncConsumerConfig,
+) *syncConsumerHealth {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	health := manager.health[key]
+	if health == nil {
+		health = newSyncConsumerHealth(config)
+		manager.health[key] = health
+	}
+	return health
+}
+
+func (manager *syncConsumerManager) deleteHealth(key string) {
+	manager.mu.Lock()
+	delete(manager.health, key)
+	manager.mu.Unlock()
+}
+
+func (manager *syncConsumerManager) healthSnapshots() []syncConsumerHealthSnapshot {
+	manager.mu.Lock()
+	health := make([]*syncConsumerHealth, 0, len(manager.health))
+	known := make(map[string]struct{}, len(manager.health))
+	for key, value := range manager.health {
+		health = append(health, value)
+		known[key] = struct{}{}
+	}
+	configured := make([]syncConsumerConfig, 0, len(manager.desired))
+	for _, config := range manager.desired {
+		if _, exists := known[syncConsumerWorkerKey(config)]; !exists {
+			configured = append(configured, config)
+		}
+	}
+	manager.mu.Unlock()
+	snapshots := make([]syncConsumerHealthSnapshot, 0, len(health)+len(configured))
+	for index := range health {
+		snapshots = append(snapshots, health[index].snapshot())
+	}
+	for _, config := range configured {
+		snapshot := newSyncConsumerHealth(config).snapshot()
+		snapshot.state = "configured"
+		snapshots = append(snapshots, snapshot)
+	}
+	sortSyncConsumerHealthSnapshots(snapshots)
+	return snapshots
+}
+
+func (manager *syncConsumerManager) observeSuccess(
+	config syncConsumerConfig,
+	cookie []byte,
+) {
+	key := syncConsumerWorkerKey(config)
+	manager.mu.Lock()
+	health := manager.health[key]
+	manager.mu.Unlock()
+	if health != nil {
+		health.succeeded(cookie, manager.server.clock())
+	}
+}
+
+func (manager *syncConsumerManager) observeProgress(
+	config syncConsumerConfig,
+	cookie []byte,
+) {
+	key := syncConsumerWorkerKey(config)
+	manager.mu.Lock()
+	health := manager.health[key]
+	manager.mu.Unlock()
+	if health != nil && len(cookie) != 0 {
+		health.loadedCookie(cookie)
 	}
 }
 

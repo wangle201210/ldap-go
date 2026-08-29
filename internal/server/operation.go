@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/audit"
@@ -95,6 +96,17 @@ func (operation *trackedOperation) requestAbandon() {
 	if !operation.abandonable ||
 		operation.phase >= operationFinalizing ||
 		operation.stop != operationRunning {
+		operation.mu.Unlock()
+		return
+	}
+	operation.stop = operationAbandoned
+	operation.mu.Unlock()
+	operation.cancel()
+}
+
+func (operation *trackedOperation) requestBindAbandon() {
+	operation.mu.Lock()
+	if operation.phase >= operationFinalizing || operation.stop != operationRunning {
 		operation.mu.Unlock()
 		return
 	}
@@ -299,6 +311,18 @@ func (registry *operationRegistry) abandonLongLived() {
 	}
 }
 
+func (registry *operationRegistry) abandonForBind() {
+	registry.mu.Lock()
+	operations := make([]*trackedOperation, 0, len(registry.operations))
+	for _, operation := range registry.operations {
+		operations = append(operations, operation)
+	}
+	registry.mu.Unlock()
+	for _, operation := range operations {
+		operation.requestBindAbandon()
+	}
+}
+
 func (registry *operationRegistry) closeIfIdle(
 	activity *connectionActivity,
 	timeout time.Duration,
@@ -323,6 +347,8 @@ type queuedOperation struct {
 	message    ldapwire.Message
 	operation  *trackedOperation
 	completion chan operationCompletion
+	state      *connectionState
+	concurrent bool
 }
 
 type operationCompletion struct {
@@ -332,12 +358,14 @@ type operationCompletion struct {
 }
 
 type operationQueue struct {
-	mu        sync.Mutex
-	ready     *sync.Cond
-	items     []*queuedOperation
-	executing bool
-	closed    bool
-	drain     bool
+	mu      sync.Mutex
+	ready   *sync.Cond
+	items   []*queuedOperation
+	active  int
+	maximum int
+	fence   bool
+	closed  bool
+	drain   bool
 }
 
 type operationQueuePushResult uint8
@@ -348,8 +376,12 @@ const (
 	operationQueueLimitExceeded
 )
 
-func newOperationQueue() *operationQueue {
-	queue := &operationQueue{}
+func newOperationQueue(maximum ...int) *operationQueue {
+	limit := 1
+	if len(maximum) != 0 && maximum[0] > 0 {
+		limit = maximum[0]
+	}
+	queue := &operationQueue{maximum: limit}
 	queue.ready = sync.NewCond(&queue.mu)
 	return queue
 }
@@ -363,12 +395,7 @@ func (queue *operationQueue) push(
 	if queue.closed {
 		return operationQueueClosed
 	}
-	pending := len(queue.items) + 1
-	if !queue.executing {
-		// The first queued item can be activated immediately and is not an
-		// OpenLDAP pending operation.
-		pending--
-	}
+	pending := queue.pendingAfterPushLocked(operation)
 	if pending > 0 && pending > maxPending {
 		return operationQueueLimitExceeded
 	}
@@ -377,19 +404,60 @@ func (queue *operationQueue) push(
 	return operationQueuePushed
 }
 
+func (queue *operationQueue) pendingAfterPushLocked(next *queuedOperation) int {
+	items := make([]*queuedOperation, 0, len(queue.items)+1)
+	items = append(items, queue.items...)
+	items = append(items, next)
+	pending := len(items)
+	available := queue.maximum - queue.active
+	if queue.fence || available < 0 {
+		available = 0
+	}
+	for _, item := range items {
+		if available == 0 {
+			break
+		}
+		if !item.concurrent {
+			if queue.active == 0 && pending == len(items) {
+				pending--
+			}
+			break
+		}
+		pending--
+		available--
+	}
+	return pending
+}
+
 func (queue *operationQueue) pop() (*queuedOperation, bool) {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
-	for len(queue.items) == 0 && !queue.closed {
-		queue.ready.Wait()
-	}
-	if len(queue.items) == 0 || (queue.closed && !queue.drain) {
-		return nil, false
+	for {
+		if len(queue.items) == 0 {
+			if queue.closed {
+				return nil, false
+			}
+			queue.ready.Wait()
+			continue
+		}
+		if queue.closed && !queue.drain {
+			return nil, false
+		}
+		next := queue.items[0]
+		if queue.fence || queue.active >= queue.maximum ||
+			(!next.concurrent && queue.active != 0) {
+			queue.ready.Wait()
+			continue
+		}
+		break
 	}
 	operation := queue.items[0]
 	queue.items[0] = nil
 	queue.items = queue.items[1:]
-	queue.executing = true
+	queue.active++
+	if !operation.concurrent {
+		queue.fence = true
+	}
 	if len(queue.items) == 0 {
 		queue.items = nil
 	}
@@ -398,7 +466,13 @@ func (queue *operationQueue) pop() (*queuedOperation, bool) {
 
 func (queue *operationQueue) complete() {
 	queue.mu.Lock()
-	queue.executing = false
+	if queue.active > 0 {
+		queue.active--
+	}
+	if queue.fence {
+		queue.fence = false
+	}
+	queue.ready.Broadcast()
 	queue.mu.Unlock()
 }
 
@@ -423,6 +497,15 @@ func (queue *operationQueue) remove(messageID int64) *queuedOperation {
 	return nil
 }
 
+func (queue *operationQueue) discardPending() []*queuedOperation {
+	queue.mu.Lock()
+	discarded := queue.items
+	queue.items = nil
+	queue.ready.Broadcast()
+	queue.mu.Unlock()
+	return discarded
+}
+
 func (queue *operationQueue) pending() int {
 	if queue == nil {
 		return 0
@@ -437,7 +520,6 @@ func (queue *operationQueue) close() {
 	queue.closed = true
 	queue.drain = false
 	queue.items = nil
-	queue.executing = false
 	queue.ready.Broadcast()
 	queue.mu.Unlock()
 }
@@ -456,11 +538,22 @@ type serializedResponseConnection struct {
 	monitor           *monitorState
 	monitorConnection *monitorConnection
 	writeTimeout      func() time.Duration
+	terminal          *atomic.Bool
 }
 
 func (connection *serializedResponseConnection) Write(value []byte) (int, error) {
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
+	if connection.terminal != nil && connection.terminal.Load() {
+		return 0, net.ErrClosed
+	}
+	fail := func(written int, err error) (int, error) {
+		if connection.terminal != nil {
+			connection.terminal.Store(true)
+		}
+		_ = connection.Conn.Close()
+		return written, err
+	}
 
 	written := 0
 	for written < len(value) {
@@ -470,7 +563,7 @@ func (connection *serializedResponseConnection) Write(value []byte) (int, error)
 		}
 		if timeout > 0 {
 			if err := connection.Conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-				return written, err
+				return fail(written, err)
 			}
 		}
 		if connection.monitor != nil && connection.monitorConnection != nil {
@@ -488,10 +581,10 @@ func (connection *serializedResponseConnection) Write(value []byte) (int, error)
 		}
 		written += count
 		if err != nil {
-			return written, err
+			return fail(written, err)
 		}
 		if count == 0 {
-			return written, io.ErrShortWrite
+			return fail(written, io.ErrShortWrite)
 		}
 	}
 	if connection.monitor != nil && connection.monitorConnection != nil {

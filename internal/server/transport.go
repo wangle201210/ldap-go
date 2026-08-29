@@ -28,6 +28,46 @@ type runtimeTLSTransport struct {
 	server *Server
 }
 
+func (server *Server) requiresImplicitTLS() bool {
+	return server != nil &&
+		(server.config.ImplicitTLS || server.config.ImplicitTLSForConnection != nil ||
+			server.config.ListenerSchemeForConnection != nil)
+}
+
+func (server *Server) implicitTLSForConnection(connection net.Conn) bool {
+	scheme := server.listenerSchemeForConnection(connection)
+	return scheme == "ldaps" || scheme == "ldap+tlcp"
+}
+
+func (server *Server) listenerSchemeForConnection(connection net.Conn) string {
+	if server == nil {
+		return "ldap"
+	}
+	if server.config.ListenerSchemeForConnection != nil {
+		if scheme := strings.ToLower(strings.TrimSpace(
+			server.config.ListenerSchemeForConnection(connection),
+		)); scheme != "" {
+			return scheme
+		}
+	}
+	if server.config.ImplicitTLSForConnection != nil {
+		if server.config.ImplicitTLSForConnection(connection) {
+			return "ldaps"
+		}
+		return "ldap"
+	}
+	if connection != nil && connection.LocalAddr() != nil {
+		network := connection.LocalAddr().Network()
+		if network == "unix" || network == "unixpacket" {
+			return "ldapi"
+		}
+	}
+	if server.config.ImplicitTLS {
+		return "ldaps"
+	}
+	return "ldap"
+}
+
 func (server *Server) secureTransportAvailable(runtime *runtimeState) bool {
 	if server == nil || server.secureTransport == nil {
 		return false

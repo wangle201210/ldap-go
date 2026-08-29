@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/url"
@@ -143,9 +144,21 @@ func (monitor *monitorState) registerConnection(
 	connection net.Conn,
 	implicitTLS bool,
 ) *monitorConnection {
+	scheme := "ldap"
+	if implicitTLS {
+		scheme = "ldaps"
+	}
+	return monitor.registerConnectionWithScheme(id, connection, scheme)
+}
+
+func (monitor *monitorState) registerConnectionWithScheme(
+	id uint64,
+	connection net.Conn,
+	scheme string,
+) *monitorConnection {
 	now := time.Now().UTC()
 	localAddress := monitorAddress(connection.LocalAddr())
-	listener := monitorListenerURL(connection.LocalAddr(), implicitTLS)
+	listener := monitorListenerURLWithScheme(connection.LocalAddr(), scheme)
 	tracked := &monitorConnection{
 		id:           id,
 		protocol:     3,
@@ -397,15 +410,22 @@ func monitorAddress(address net.Addr) string {
 }
 
 func monitorListenerURL(address net.Addr, implicitTLS bool) string {
+	scheme := "ldap"
+	if implicitTLS {
+		scheme = "ldaps"
+	}
+	return monitorListenerURLWithScheme(address, scheme)
+}
+
+func monitorListenerURLWithScheme(address net.Addr, scheme string) string {
 	if address == nil {
 		return ""
 	}
 	if address.Network() == "unix" || address.Network() == "unixpacket" {
 		return "ldapi://" + url.PathEscape(address.String()) + "/"
 	}
-	scheme := "ldap"
-	if implicitTLS {
-		scheme = "ldaps"
+	if scheme == "" || scheme == "ldapi" {
+		scheme = "ldap"
 	}
 	return scheme + "://" + address.String() + "/"
 }
@@ -427,6 +447,7 @@ func monitorURLAddress(parsed *url.URL) string {
 func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 	now := time.Now().UTC()
 	startedAt := server.monitor.startedAt
+	replication := server.syncConsumers.healthSnapshots()
 	entries := []directory.Entry{
 		newMonitorEntry("cn=Monitor", "Monitor", "monitorServer", startedAt),
 	}
@@ -436,7 +457,12 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 		"This object contains information about this server.",
 		"Most of the information is held in operational attributes, which must be explicitly requested.",
 	)
-	addMonitorAttribute(root, "monitoredInfo", "ldap-go 0.1-dev")
+	addMonitorAttribute(
+		root,
+		"monitoredInfo",
+		"ldap-go 0.1-dev",
+		"replicationConsumers="+strconv.Itoa(len(replication)),
+	)
 
 	containers := []struct {
 		name        string
@@ -456,6 +482,12 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 		{"TLS", "This subsystem contains information about TLS."},
 		{"Waiters", "This subsystem contains information about read/write waiters."},
 	}
+	if len(replication) != 0 {
+		containers = append(containers, struct {
+			name        string
+			description string
+		}{"Replication", "This subsystem contains syncrepl consumer health."})
+	}
 	for _, container := range containers {
 		entry := newMonitorEntry(
 			"cn="+container.name+",cn=Monitor",
@@ -474,6 +506,13 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 			addMonitorAttribute(&entry, "monitorDebugLevel", debugLevels...)
 			addMonitorAttribute(&entry, "monitorLogLevel", logLevels...)
 		}
+		if container.name == "Replication" {
+			addMonitorAttribute(
+				&entry,
+				"monitoredInfo",
+				"configuredConsumers="+strconv.Itoa(len(replication)),
+			)
+		}
 		entries = append(entries, entry)
 	}
 
@@ -483,6 +522,7 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 	entries = append(entries, server.monitorListenerEntries(startedAt)...)
 	entries = append(entries, server.monitorOperationEntries(startedAt)...)
 	entries = append(entries, server.monitorOverlayEntries(runtime, startedAt)...)
+	entries = append(entries, monitorReplicationEntries(replication, startedAt)...)
 	entries = append(entries, server.monitorStatisticEntries(startedAt)...)
 	entries = append(entries, server.monitorThreadEntries(startedAt)...)
 	entries = append(entries, monitorTimeEntries(startedAt, now)...)
@@ -492,6 +532,31 @@ func (server *Server) monitorEntries(runtime *runtimeState) []directory.Entry {
 	)...)
 	server.populateMonitorContainerAttributes(entries, runtime)
 	addMonitorSubordinateState(entries)
+	return entries
+}
+
+func monitorReplicationEntries(
+	snapshots []syncConsumerHealthSnapshot,
+	startedAt time.Time,
+) []directory.Entry {
+	entries := make([]directory.Entry, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		partitionDigest := sha256.Sum256([]byte(snapshot.partition))
+		name := fmt.Sprintf(
+			"Consumer RID %03d %x",
+			snapshot.rid,
+			partitionDigest[:4],
+		)
+		entry := newMonitorEntry(
+			"cn="+name+",cn=Replication,cn=Monitor",
+			name,
+			"monitoredObject",
+			startedAt,
+		)
+		addMonitorAttribute(&entry, "monitoredInfo", snapshot.monitorValues()...)
+		addMonitorAttribute(&entry, "monitorRuntimeConfig", "TRUE")
+		entries = append(entries, entry)
+	}
 	return entries
 }
 
@@ -736,6 +801,9 @@ func (server *Server) populateMonitorContainerAttributes(
 			"maxConcurrentOperations="+strconv.Itoa(server.operationLimiter.limit()),
 			"activeOperations="+strconv.FormatInt(server.operationLimiter.active.Load(), 10),
 			"waitingOperations="+strconv.FormatInt(server.operationLimiter.waiting.Load(), 10),
+			"maxOperationsPerConnection="+strconv.Itoa(server.config.MaxOperationsPerConnection),
+			"maxSearchCandidates="+strconv.Itoa(server.config.MaxSearchCandidates),
+			"maxSearchCandidateBytes="+strconv.FormatInt(server.config.MaxSearchCandidateBytes, 10),
 		)
 	}
 

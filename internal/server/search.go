@@ -1153,6 +1153,7 @@ func (server *Server) handleSearch(
 	}
 
 	candidates := make([]searchCandidate, 0)
+	var candidateBytes int64
 	references := make([][]string, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	entryLimit := limit
@@ -1741,14 +1742,27 @@ func (server *Server) handleSearch(
 					}
 					return errStopSearch
 				}
-				candidates = append(candidates, searchCandidate{
+				retainedCandidate := searchCandidate{
 					selected:  selected,
 					readable:  sortReadable,
 					route:     routeIndex,
 					dn:        entry.DN,
 					cursorKey: candidateOrderKey,
 					syncUUID:  syncUUID,
-				})
+				}
+				if sorting.active() {
+					candidateBytes += searchCandidateRetainedBytes(retainedCandidate)
+					if len(candidates) >= server.config.MaxSearchCandidates ||
+						candidateBytes > server.config.MaxSearchCandidateBytes {
+						candidates = nil
+						result = ldapwire.ResultError(
+							ldapwire.ResultAdminLimitExceeded,
+							"sorted search candidate budget exceeded",
+						)
+						return errStopSearch
+					}
+				}
+				candidates = append(candidates, retainedCandidate)
 				if !sorting.active() {
 					lastCursor = pagedSearchCursor{
 						route: routeIndex,

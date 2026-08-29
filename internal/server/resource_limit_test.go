@@ -253,11 +253,174 @@ func TestServerGlobalOperationLimit(t *testing.T) {
 	}
 }
 
+func TestServerPerConnectionOperationLimit(t *testing.T) {
+	base := storage.NewMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	seedDirectory(t, base)
+	store := newResourceLimitStore(base)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := New(Config{
+		Store:                      store,
+		MaxConcurrentOperations:    16,
+		MaxOperationsPerConnection: 2,
+		RootDN:                     "cn=admin,dc=example,dc=com",
+		RootPassword:               []byte("secret"),
+	})
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- instance.Serve(ctx, listener) }()
+	t.Cleanup(func() {
+		cancel()
+		store.unblock()
+		<-done
+	})
+	client, err := ldap.DialURL("ldap://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	store.enable()
+	results := make(chan error, 3)
+	for range 3 {
+		go func() {
+			_, err := client.Search(ldap.NewSearchRequest(
+				"dc=example,dc=com",
+				ldap.ScopeBaseObject,
+				ldap.NeverDerefAliases,
+				0,
+				0,
+				false,
+				"(objectClass=*)",
+				[]string{"dc"},
+				nil,
+			))
+			results <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-store.entered:
+		case <-time.After(time.Second):
+			t.Fatal("same-connection Search did not enter an available slot")
+		}
+	}
+	select {
+	case <-store.entered:
+		t.Fatal("third same-connection Search exceeded its connection limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.unblock()
+	for range 3 {
+		if err := <-results; err != nil {
+			t.Fatalf("same-connection Search: %v", err)
+		}
+	}
+	if store.maximum.Load() != 2 {
+		t.Fatalf("same-connection maximum = %d, want 2", store.maximum.Load())
+	}
+}
+
+func TestBindAbandonsActiveSameConnectionSearch(t *testing.T) {
+	base := storage.NewMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	seedDirectory(t, base)
+	store := newResourceLimitStore(base)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := New(Config{
+		Store:                      store,
+		MaxOperationsPerConnection: 2,
+	})
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- instance.Serve(ctx, listener) }()
+	t.Cleanup(func() {
+		cancel()
+		store.unblock()
+		<-done
+	})
+	client, err := ldap.DialURL("ldap://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.enable()
+	searchDone := make(chan error, 1)
+	go func() {
+		_, err := client.Search(ldap.NewSearchRequest(
+			"dc=example,dc=com",
+			ldap.ScopeBaseObject,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			"(objectClass=*)",
+			[]string{"dc"},
+			nil,
+		))
+		searchDone <- err
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		client.Close()
+		t.Fatal("Search did not enter storage")
+	}
+	bindDone := make(chan error, 1)
+	go func() {
+		bindDone <- client.Bind(
+			"uid=alice,ou=people,dc=example,dc=com",
+			"secret",
+		)
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		client.Close()
+		t.Fatal("Bind remained queued behind the abandoned Search")
+	}
+	store.unblock()
+	select {
+	case err := <-bindDone:
+		if err != nil {
+			client.Close()
+			t.Fatalf("Bind(): %v", err)
+		}
+	case <-time.After(time.Second):
+		client.Close()
+		t.Fatal("Bind did not complete after Search cancellation")
+	}
+	client.Close()
+	select {
+	case <-searchDone:
+	case <-time.After(time.Second):
+		t.Fatal("abandoned Search did not terminate when the connection closed")
+	}
+}
+
 func TestNewResourceLimitDefaultsAndValidation(t *testing.T) {
 	for _, mutate := range []func(*Config){
 		func(config *Config) { config.MaxConnections = -1 },
 		func(config *Config) { config.MaxConcurrentOperations = -1 },
 		func(config *Config) { config.MaxConcurrentHandshakes = -1 },
+		func(config *Config) { config.MaxSearchCandidates = -1 },
+		func(config *Config) { config.MaxSearchCandidateBytes = -1 },
+		func(config *Config) { config.MaxOperationsPerConnection = -1 },
 	} {
 		store := storage.NewMemory()
 		config := Config{Store: store}
@@ -276,13 +439,20 @@ func TestNewResourceLimitDefaultsAndValidation(t *testing.T) {
 	}
 	if instance.config.MaxConnections != defaultMaxConnections ||
 		instance.operationLimiter.limit() != defaultMaxConcurrentOperations ||
-		instance.handshakeLimiter.limit() != defaultMaxConcurrentHandshakes {
+		instance.handshakeLimiter.limit() != defaultMaxConcurrentHandshakes ||
+		instance.config.MaxSearchCandidates != defaultMaxSearchCandidates ||
+		instance.config.MaxSearchCandidateBytes != defaultMaxSearchCandidateBytes ||
+		instance.config.MaxOperationsPerConnection != defaultMaxOperationsPerConnection {
 		t.Fatalf("resource defaults = %#v", instance.config)
 	}
 	entries := instance.monitorEntries(instance.runtime.Load())
 	for dn, want := range map[string][]string{
 		"cn=Connections,cn=Monitor": {"maxConnections=4096", "rejectedConnections=0"},
-		"cn=Threads,cn=Monitor":     {"maxConcurrentOperations=256", "activeOperations=0"},
+		"cn=Threads,cn=Monitor": {
+			"maxConcurrentOperations=256", "activeOperations=0",
+			"maxOperationsPerConnection=8",
+			"maxSearchCandidates=100000", "maxSearchCandidateBytes=67108864",
+		},
 	} {
 		entry := monitorEntryByDN(entries, dn)
 		if entry == nil {

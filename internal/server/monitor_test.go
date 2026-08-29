@@ -230,6 +230,15 @@ func TestLDAPMonitorBackendCoreBehavior(t *testing.T) {
 	assertMonitorWriteResultCodes(t, client, ldap.LDAPResultUnwillingToPerform)
 }
 
+func TestMonitorListenerURLPreservesTLCPListenerScheme(t *testing.T) {
+	t.Parallel()
+
+	address := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1636}
+	if got := monitorListenerURLWithScheme(address, "ldap+tlcp"); got != "ldap+tlcp://127.0.0.1:1636/" {
+		t.Fatalf("TLCP listener URL = %q", got)
+	}
+}
+
 func TestMonitorStateConcurrentSnapshots(t *testing.T) {
 	t.Parallel()
 

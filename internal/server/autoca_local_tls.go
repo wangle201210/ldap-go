@@ -496,7 +496,7 @@ func (server *Server) configureAutoCALocalTLS(
 		return err
 	}
 	if selection == nil {
-		if !allowPending && server.config.ImplicitTLS {
+		if !allowPending && server.requiresImplicitTLS() {
 			return errors.New("implicit TLS requires TLS configuration or olcAutoCAlocalDN")
 		}
 		return nil

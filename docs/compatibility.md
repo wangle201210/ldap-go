@@ -135,7 +135,7 @@ remaining compatible with other registered `database/sql` drivers.
 | `slapcat` content LDIF import/export | partial | semantic round trips, atomic rollback including API dry-run, default/explicit database selection and no-database rejection, glue-subordinate import/export/replacement and `-g`, `config`/`mdb`/`ldif`/`wt`/`null` callback policy, proxy-backend rejection, built-in and supported imported schema validation, ordered `olcLdapSyntaxes`/`X-SUBST`, AttributeDescription/options/`;binary` checks, selected default equality normalizers, RDN-value completion, `structuralObjectClass`, selected-database LastMod, `-S`, root/subentry/config `contextCSN`, selected-database suffix/final-parent checks, and supplied operational metadata pass; complete slapd parser/normalizer behavior, executable custom syntax and matching-rule modules, diagnostics, native backend file layouts, and every OpenLDAP data shape remain unverified |
 | `slapcat` `cn=config` import | partial | real OpenLDAP 2.6.13 `slapcat -n 0` schema/config import and same-transaction hierarchy/schema/runtime validation pass; unsupported configuration modules and values still reject or lack equivalent runtime behavior |
 | Backup, restore, database rebuild, check | partial | bbolt page/bucket/key/JSON/DN validation, multi-partition metadata-preserving snapshots, consistent online backup through an already-open handle, cancellation, atomic publication, overwrite protection, file/directory fsync and rename fault injection, private permissions, and rebuild round trips pass. `serve -online-backup-dir` conditionally publishes extension `1.3.6.1.4.1.4203.666.11.21`; only an authenticated database root over LDAPI can invoke its absent-value request, filenames are server-generated, concurrent calls return busy, TCP/non-root requests fail, and the built-in `online-backup` command decodes the report. Restore remains offline under a stable cross-process sidecar lock. Retention scheduling, remote object storage, and complete filesystem/provider fault matrices remain |
-| Monitor backend | partial | Root DSE discovery, all 13 standard monitor branches, dynamic connection/operation/statistics/time/database/overlay state, Search/Compare/ACL/paging/limits, matched DN, runtime read-only/restriction changes, and OpenLDAP 2.6.13 differentials pass; complete backend/overlay inventories and worker/runtime internals remain |
+| Monitor backend | partial | Root DSE discovery, all 13 standard monitor branches, dynamic connection/operation/statistics/time/database/overlay state, and an ldap-go replication branch with stable RID/partition identities plus provider/state/retry/degraded-time/error/cookie-digest health pass Search/Compare/ACL/paging/limits and OpenLDAP 2.6.13 differentials; complete backend/overlay inventories and exact OpenLDAP worker internals remain |
 | Null backend | partial | `olcDbBindAllowed`/`olcDbDoSearch`, synthetic Search, Bind/root Bind, discarded writes, Compare, Assertion, paging, typesOnly, read controls, No-Op, and a null-enabled OpenLDAP differential pass |
 | Relay backend | partial | explicit and suffix-massage-selected local targets, bidirectional storage views, Bind/Search/Compare/writes/transactions, ACL translation, inherited sort and sync-provider configuration, direct attribute/objectClass/DN-value mappings, and an OpenLDAP differential pass; arbitrary rewrites, relay chains, and broader overlay combinations remain |
 | LDAP and meta proxy backends | partial | `ldap` forwards Bind/Search/Compare/writes/Password Modify/Dynamic Refresh/Who Am I with failover, reconnect, identity assertion, proxy authorization, cancellation, diagnostics, referrals, and online rollback; `meta` adds multi-target routing/union, suffix/maps/rules, namespace rewriting, client-pr/onerr/quarantine/DN cache, pooled connection categories, controls, and dynamic target isolation. GSSAPI proxy Bind now performs AP-REQ/AP-REP plus RFC 4752 no-layer/integrity/confidentiality on the reused transport, subtracts external TLS SSF exactly as Cyrus SASL does, bounds non-cancellable credential initialization to 16 workers, and isolates pools by resolved credential source. Channel binding defaults to NULL and supports explicit `tls-server-end-point` on verified TLS; fixed Kerberos vectors pass, while repeatable real-KDC automation remains external. Complete referral rebind, full librewrite, every connection category, unsafe active topology mutation, target deletion/reordering, local/frontend overlay execution, and transactions remain |
@@ -154,8 +154,11 @@ index pages. Atomic imports parse and validate all pending content inside one
 write transaction, retaining the pending entry set until database routing is
 known; `slapadd -c` is the documented exception and commits independent
 successful content records. Large-import memory use, write-lock duration,
-index selectivity, and crash/fault behavior at scale do
-not yet have a production qualification gate.
+index selectivity, and crash/fault behavior at scale require deployment-specific
+qualification. The parameterized `scripts/qualification/run.sh` gate now drives
+a real daemon through concurrent LDAP work, forced restart, integrity checking,
+export comparison, and JSON artifact capture; no universal million-entry SLO or
+published hardware baseline is claimed.
 
 ## Overlays
 
@@ -203,7 +206,7 @@ not yet have a production qualification gate.
 | Fractional and sparse replication | partial | attrs/exattrs, filter exit/reentry, mandatory UUID/CSN, and suffix-massage convergence pass; broader schema/topology cases remain |
 | Connection and operation monitoring | partial | concurrent connection lifecycle, operation/response counters, Search/Compare/ACL/paging, blocked-write `w` masks and Write Waiters, and OpenLDAP 2.6.13 `cn=Monitor` differential tests pass; partial-BER Read Waiters, OS descriptors, and exact worker-pool internals remain |
 | Dynamic logging and runtime limits | partial | `cn=Log,cn=Monitor` supports OpenLDAP names/numeric masks including ANY/NONE and atomically routes mapped structured events across ACL/BER/CONFIG/CONNS/STATS/SHELL/SYNC with an `openldap_category` field; online changes, rollback, concurrent routing, and pinned source/network differentials pass. Database `readOnly`, restrictions, inherited `olcSizeLimit`/`olcTimeLimit`, identity-specific soft/hard, unchecked candidates, page/page-total/noEstimate, root behavior, delegated fail-closed handling, and control error ordering pass. Global `olcConnMaxPending`/`olcConnMaxPendingAuth` retain the 100/1,000 defaults, signed base-0 `ARG_INT` parsing, independent fallback, runtime rebuild/rollback, existing-connection publication, identity-specific selection, pending-Abandon quota release, and silent overflow disconnect. `olcSockbufMaxIncoming`/`olcSockbufMaxIncomingAuth` enforce the source 262143/16777215 BER-content defaults before body allocation, unsigned base-0 startup and canonical online values, zero-as-unlimited, exact boundaries, silent overflow, and connection-local anonymous/authenticated snapshots across Bind and online changes. Global `olcIdleTimeout`/`olcWriteTimeout` cover signed base-0 startup values, canonical online Integer rules, atomic rollback, live enable/disable, anonymous/authenticated idle closure, partial BER activity, executing-operation and StartTLS behavior, progress-reset write deadlines, silent slow-reader closure, and Monitor writer state. `olcMaxFilterDepth` defaults to 1,000, preserves signed-int and N/N+1 semantics including negative values, applies online to existing connections after each complete BER frame, covers Search and Assertion controls but not Matched Values, and emits the exact protocolError Notice of Disconnection before closing. Live OpenLDAP 2.6.13 differentials pin pending overflow, PDU limits/identity transitions, filter-depth disconnects, idle timing, 2 MiB blocked responses, and online result codes. Unmapped OpenLDAP debug internals remain |
-| Global resource admission | partial | Process-wide defaults bound accepted connections (4,096), executing LDAP operations (256), and simultaneous TLS/TLCP handshakes (64), with positive CLI overrides. Connections above capacity close before goroutine registration and capacity recovers on disconnect; operation waiters remain inside bounded per-connection queues and honor cancellation/shutdown; handshake waiters consume the handshake deadline. Monitor connection/thread containers expose max, active, waiting, and rejected values. Race tests enforce exact 2-slot handshake and cross-connection operation peaks. Search candidate/result memory and response-byte budgets, dynamic online admission limits, and large-scale RSS qualification remain |
+| Global resource admission | partial | Process-wide defaults bound accepted connections (4,096), executing LDAP operations (256), simultaneous TLS/TLCP handshakes (64), per-connection stateless Search/Compare execution (8), and each sorted/VLV search's retained candidates (100,000/64 MiB), with positive CLI overrides. Candidate overflow returns `adminLimitExceeded`; count and byte boundary tests cover the sorted path. Immutable identity snapshots prevent ProxyAuthz/authentication crossover; Bind abandons active and pending work before its ordered transition, while StartTLS, transactions, writes, SASL, paging, and VLV remain fences. Connections above capacity close before goroutine registration and capacity recovers on disconnect; operation waiters remain inside bounded per-connection queues and honor cancellation/shutdown. Monitor connection/thread containers expose limits and live admission values. Race tests enforce exact handshake, cross-connection, and same-connection peaks. Unsorted response-byte budgets, update Abandon/Cancel, dynamic online admission limits, and large-scale RSS qualification remain |
 | Graceful restart and zero-loss shutdown | partial | SIGINT/SIGTERM and Unix SIGHUP stop admission, drain accepted queued operations, preserve and durably commit in-flight writes, abandon persistent Sync, bound the drain with configurable forced cancellation, and pass timeout/race/real-process tests. Global `olcGentleHUP` supports import and atomic online lifecycle: first SIGHUP closes admission, preserves existing read sessions, rejects Add/Modify/Delete/ModifyDN, Password Modify, Dynamic Refresh, and transaction commit, and exits after the final client; repeated SIGHUP or SIGINT/SIGTERM upgrades to bounded drain. A pinned OpenLDAP 2.6 source contract covers signal registration, listener closure, and `SLAP_RESTRICT_OP_WRITES`; listener inheritance and zero-downtime process handoff remain |
 | `lloadd` behavior | partial | Bounded BER, pools/scheduling/limits, ProxyAuthz, affinity, Abandon/Cancel, LDAPI, recovery, backpressure, Verify Credentials, TLS, keepalive, and TCP user timeout pass. Service SASL includes PLAIN/CRAM/DIGEST/SCRAM plus GSSAPI password/FILE keytab/FILE ccache with RFC 4752 layers and a 16-worker credential-initialization bound; a blocked non-cancellable Kerberos call retains one slot until return. OpenLDAP/Cyrus source plus a temporary-KDC experiment confirms its TLS `critical=0` channel-binding input is wire-inert, matching the Go client's NULL binding. Monitor atomically enforces `received = completed + failed + rejected + pending` with abandoned as a completed subset, exposes schema-valid abandon/generation/uptime operational attributes, and preserves ACL/paging/Sort/VLV without retaining retired schema registries; bytes/PDU and OS worker internals are not fabricated. Trusted listeners require physical-source allowlists and accept strict PROXY v1/v2 stream headers. V2 UNIX dispatch is an extension; DGRAM/UDP, embedded ABI, and exact scheduling remain |
 
@@ -211,7 +214,7 @@ not yet have a production qualification gate.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |
-| Server daemon and config validation | partial | TCP, StartTLS, implicit TLS/TLCP, and Unix LDAPI listeners share one lifecycle. `serve -ldapi` requires an absolute non-existing socket path, applies an explicit default `0660` mode, unlinks on close, supports TCP+LDAPI or `-listen ''` LDAPI-only operation, publishes all listener URLs to Monitor/runtime selection, and participates in normal/gentle signal shutdown. Built-in simple/PLAIN/EXTERNAL clients and pinned OpenLDAP `ldapsearch`/`ldapwhoami` interoperate over escaped-authority LDAPI. Linux `SO_PEERCRED` and macOS/FreeBSD `LOCAL_PEERCRED` generate OpenLDAP's exact GID+UID EXTERNAL identity and feed ordered `olcAuthzRegexp`; unmapped peers receive no implicit root privilege. Explicit `-systemd-activation` strictly validates PID/fd/name metadata, adopts TCP/Unix stream descriptors from fd 3, preserves manager-owned socket paths, supports multi-listener Monitor/runtime publication, and rejects manual listener conflicts; a pre-opened `NOTIFY_SOCKET` emits READY after Server initialization and STOPPING when drain begins, including inside chroot. Unix `-u/-g/-r` opens listeners first, pins and enters the jail, resolves its passwd/group database, applies groups/GID/UID, then loads every runtime file; manual chrooted LDAPI requires socket activation. Optional exclusive/fsynced `-pidfile` has replacement-safe cleanup and duplicate-instance rejection. Complete slapd diagnostics and privileged root CI on every Unix platform remain |
+| Server daemon and config validation | partial | TCP, StartTLS, implicit TLS/TLCP, and Unix LDAPI listeners share one lifecycle. Per-listener transport selection supports plain/StartTLS LDAP plus LDAPS plus LDAPI in one process, or plain LDAP plus TLCP plus LDAPI; a real three-listener test verifies independent handshakes and Bind. Standard TLS and TLCP still require separate processes. `serve -ldapi` requires an absolute non-existing socket path, applies an explicit default `0660` mode, unlinks on close, publishes all listener URLs to Monitor/runtime selection, and participates in normal/gentle signal shutdown. Built-in simple/PLAIN/EXTERNAL clients and pinned OpenLDAP `ldapsearch`/`ldapwhoami` interoperate over escaped-authority LDAPI. Linux `SO_PEERCRED` and macOS/FreeBSD `LOCAL_PEERCRED` generate OpenLDAP's exact GID+UID EXTERNAL identity and feed ordered `olcAuthzRegexp`; unmapped peers receive no implicit root privilege. Explicit `-systemd-activation` strictly validates PID/fd/name metadata, adopts TCP/Unix stream descriptors from fd 3, uses exact fd names to select per-listener transport, preserves manager-owned socket paths, supports multi-listener Monitor/runtime publication, and rejects manual listener conflicts; a pre-opened `NOTIFY_SOCKET` emits READY after Server initialization and STOPPING when drain begins, including inside chroot. Unix `-u/-g/-r` opens listeners first, pins and enters the jail, resolves its passwd/group database, applies groups/GID/UID, then loads every runtime file; manual chrooted LDAPI requires socket activation. Optional exclusive/fsynced `-pidfile` has replacement-safe cleanup and duplicate-instance rejection. Complete slapd diagnostics and privileged root CI on every Unix platform remain |
 | `slapadd` / `slapcat` equivalents | partial | `slapadd` supports `-l/-b/-n/-c/-g/-q/-s/-u/-S/-w` and `-o schema-check=yes\|no` / `value-check=yes\|no`; `slapcat` supports `-l/-b/-n/-g/-s` for the tested subset. Default-primary and explicit selection, glue-subordinate import/export, backend callback policy, schema/options/normalizer, LastMod/CSN, root and `olcSyncUseSubentry` context, atomic `cn=config`, dry-run, round-trip, and exit-code cases pass. Without `-c`, import and the direct API remain atomic. Content `-c` depth-batches records, retries a failed batch individually, retains successes, reports record failures, exits nonzero on partial failure, supports disposable `-c -u`, and rejects `cn=config`. `-q` disables value checking only; schema checking remains independently controlled by `-s` / `schema-check=no`, and `objectClass` remains required. Parsing, routing, hierarchy, and storage consistency still run, and quick mode warns and disables explicit `value-check=yes`. Exact OpenLDAP batching/diagnostics, native backend-file behavior, broader `-c` dependency cases, and historical-option parity remain unsupported |
 | `slapmodify` equivalent | partial | Atomic offline Add/Modify/Delete/ModifyDN supports `-j`, `-w`, dry-run/continue, and independently executable `-o schema-check=yes\|no` / `value-check=yes\|no`; `-s/-q` precedence, quick warnings, Add/Modify/RDN/value validation, config-database rejection, diagnostics, multi-SID delete CSNs, and commit-failure rollback pass Memory/bbolt and pinned CLI differentials. Exact formatting and every historical option remain |
 | Offline database check/rebuild equivalents | partial | validated atomic bbolt check/compact commands, aliases, round trips, corruption rejection, and exit-code tests pass; OpenLDAP tool output parity and secondary-index formats are inapplicable to bbolt |
@@ -804,6 +807,12 @@ online configuration replacement cancels the previous partition/RID worker
 before starting its replacement. Online tests add a consumer to a running
 database, reject and roll back an invalid replacement while the old worker
 continues, stop it by deleting `olcSyncrepl`, and re-enable it to catch up.
+The consumer manager retains race-safe live health for each partition/RID and
+publishes configured, connecting, synchronizing, healthy, retrying, and stopped
+states under `cn=Replication,cn=Monitor`. Provider selection, attempts, retry
+count, first degraded time, last success, a bounded error, and cookie length/digest
+are available to `ldap-go health`; the command supports JSON and a configurable
+degraded grace period for automation.
 
 Standard RFC 4533 consumption supports refresh-only and
 refresh-and-persist, provider URI failover, simple bind, StartTLS/LDAPS, SASL
@@ -831,6 +840,12 @@ the same store, cookie catch-up, and stale-entry removal. Gated reverse process
 topologies use real OpenLDAP 2.6.13 syncprov/MDB providers for both simple bind
 and SCRAM-SHA-256, with the SCRAM case enabled when its Cyrus SASL plugin is
 available.
+A separate two-node single-writer HA matrix interrupts the provider transport,
+accumulates ordered modifications/additions/deletions, verifies no premature
+consumer visibility, restores transport, and checks convergence. It then
+restarts the consumer from its durable cookie and deliberately restores an old
+cookie to verify duplicate replay is idempotent. Consumer writes remain
+referrals, making the supported topology's writer ownership explicit.
 
 GSSAPI uses the provider hostname as `ldap/<host>`. An explicitly present
 `credentials` field supplies a password, including an intentionally empty
@@ -1302,13 +1317,14 @@ applicability, and rollback after a critical post-read failure. OpenLDAP
 differential fixtures remain pending.
 
 RFC 4511 Abandon and RFC 3909 Cancel use a connection-local operation registry.
-The connection reader can accept either request while the serial operation
-worker is scanning or transmitting an active Search. Abandon cancels the
+The connection reader can accept either request while bounded operation workers
+scan or transmit active Searches. Abandon cancels the
 Search context, immediately suppresses further entries, and sends no
 SearchResultDone. A successful Cancel waits for the target Search to return
 `canceled` (118), then sends an ExtendedResponse success with no responseName
-or responseValue. Message IDs cannot cross LDAP associations. Bind and
-StartTLS remain read barriers, and complete BER PDUs share one write lock.
+or responseValue. Message IDs cannot cross LDAP associations. Bind is an
+abandon-and-discard fence, StartTLS rejects outstanding operations, and
+complete BER PDUs share one write lock.
 
 Request values use strict BER for `SEQUENCE { cancelID MessageID }`; absent,
 empty, malformed, unknown, finalizing, pending, and non-cancelable targets map
@@ -1322,11 +1338,12 @@ Cancel targets its own message ID; OpenLDAP 2.6.13 accepts the trailing data
 and returns success for self-cancel despite RFC 3909 declaring Cancel
 non-cancelable.
 
-Cancel and Abandon currently interrupt Search only. Running update operations
-return `cannotCancel`, pending Search follows OpenLDAP's `cannotCancel`
-behavior, and ordinary operations on one connection execute serially. Update
-cancellation, discretionary update Abandon, and OpenLDAP-style parallel
-operation execution remain before these rows can become `compatible`.
+Cancel and explicit Abandon currently interrupt Search only. Running update
+operations return `cannotCancel`, and pending Search follows OpenLDAP's
+`cannotCancel` behavior. Stateless Search/Compare operations execute concurrently
+up to a configurable per-connection bound; stateful requests remain ordered.
+Update cancellation and discretionary update Abandon remain before these rows
+can become `compatible`.
 
 RFC 2696 simple paged results are published through Root DSE
 `supportedControl`. Request and response values use strict BER decoding and an
@@ -1369,9 +1386,10 @@ without sort, paging, or VLV response controls.
 One known differential remains for sort plus paging plus a total size limit:
 OpenLDAP's overlay can report `sizeLimitExceeded` on an earlier page, while
 `ldap-go` reports it when the cumulative limit is reached; both return the same
-globally sorted top-N entries. Same-connection request intake and Abandon now
-work, but ordinary operations still execute serially instead of using
-OpenLDAP's worker-level concurrency, so the `sssvlv` row remains partial.
+globally sorted top-N entries. Same-connection Search/Compare execution is
+bounded and concurrent, while paged/VLV session transitions remain ordered
+fences, so the `sssvlv` row remains partial pending broader concurrency
+differentials.
 
 Virtual list views from `draft-ietf-ldapext-ldapv3-vlv-09` use strict BER and
 are advertised with the `sssvlv` overlay. They require an RFC 2891 sort control

@@ -177,13 +177,30 @@ func TestSystemdActivationEnvironmentValidation(t *testing.T) {
 		{name: "name count", values: map[string]string{"LISTEN_PID": strconv.Itoa(os.Getpid()), "LISTEN_FDS": "2", "LISTEN_FDNAMES": "one"}, want: "contains 1 names"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := listenServeSystemd(func(name string) string {
+			_, _, _, err := listenServeSystemd(func(name string) string {
 				return test.values[name]
 			}, "ldap")
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("activation error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestSystemdTCPListenerScheme(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, fallback, want string
+	}{
+		{name: "ldap", fallback: "ldaps", want: "ldap"},
+		{name: "ldaps", fallback: "ldap", want: "ldaps"},
+		{name: "tlcp", fallback: "ldap", want: "ldap+tlcp"},
+		{name: "ldap+tlcp", fallback: "ldap", want: "ldap+tlcp"},
+		{name: "public", fallback: "ldaps", want: "ldaps"},
+	} {
+		if got := systemdTCPListenerScheme(test.name, test.fallback); got != test.want {
+			t.Errorf("systemdTCPListenerScheme(%q, %q) = %q, want %q", test.name, test.fallback, got, test.want)
+		}
 	}
 }
 

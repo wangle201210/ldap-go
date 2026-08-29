@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,985 top-level tests against the pinned commit.
+The latest strict run passed 2,018 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -653,7 +653,11 @@ changes and cookies atomically, applies Present/Delete UUID sets, and resumes
 from its durable cookie after restart. A ldap-go provider-to-consumer topology
 covers initial, persistent, and offline catch-up paths, and the same reverse
 topology passes against an OpenLDAP 2.6.13 provider. Broader provider variants
-remain pending milestones. The consumer also supports OpenLDAP accesslog
+remain pending milestones. A two-node single-writer failure matrix additionally
+pauses the provider path, accumulates modifications and deletions, resumes the
+consumer, restarts it from its durable cookie, deliberately replays an older
+cookie, and verifies convergence, idempotency, and consumer write referrals.
+The consumer also supports OpenLDAP accesslog
 delta-syncrepl, including atomic `reqMod` replay, initial full-refresh
 fallback, durable restart, and automatic full recovery when the retained log
 cannot be replayed safely. The local accesslog provider supports successful
@@ -686,6 +690,11 @@ Linux TCP user timeouts, and implicit `ldap+tlcp://` replication with mutual
 SM2 authentication. For refresh-and-persist, `timeout=` bounds the initial
 refresh without imposing a lifetime on the persistent stream. Legal RFC 4533
 Sync Info variants are normalized by ASN.1 tag before `go-ldap` decoding.
+Each consumer publishes its RID, partition, selected/configured providers,
+state, attempts, retries, degraded/last-success times, bounded last error, and
+cookie length/SHA-256 digest under `cn=Replication,cn=Monitor`. `ldap-go health` checks the
+Root DSE and Monitor backend, applies a configurable degraded grace period,
+supports JSON output, and exits with status 2 for an unhealthy consumer.
 Syncrepl authentication supports simple bind,
 SASL EXTERNAL, PLAIN, CRAM-MD5, DIGEST-MD5, GSSAPI, and
 SCRAM-SHA-1/256/512; a real OpenLDAP SCRAM-SHA-256 provider topology is
@@ -750,7 +759,9 @@ configuration, and differential cases pass.
 An imported `olcDatabase=monitor` publishes `monitorContext` and exposes the
 standard OpenLDAP `cn=Monitor` subtree hierarchy. Connection, operation,
 statistics, time, listener, database, overlay, TLS, SASL, thread, and waiter
-entries are generated from runtime state. Search, Compare, ACLs, paging,
+entries are generated from runtime state. A `Replication` branch is added when
+syncrepl consumers are configured and exposes their live worker state. Search,
+Compare, ACLs, paging,
 limits, matched-DN behavior, monitor Log changes, database read-only changes,
 and operation restrictions are covered by an OpenLDAP 2.6.13 differential.
 `monitorLogLevel` names or numeric masks atomically update structured event
@@ -892,6 +903,18 @@ go run ./cmd/ldap-go serve \
 go run ./cmd/ldap-go online-backup \
   -x -H ldapi://%2Frun%2Fldap-go%2Fldapi/ \
   -D cn=admin,dc=example,dc=com -W
+
+# Machine-readable liveness and syncrepl readiness; unhealthy consumers exit 2.
+go run ./cmd/ldap-go health \
+  -x -H ldapi://%2Frun%2Fldap-go%2Fldapi/ \
+  -D cn=admin,dc=example,dc=com -W -json
+
+# Offline deployment review; exits 3 for confirmed failures and 4 when unknown.
+go run ./cmd/ldap-go production-check \
+  -db ./data/ldap-go.db -strict \
+  -online-backup-dir /var/backups/ldap-go \
+  -audit-log /var/log/ldap-go/audit.jsonl \
+  -audit-key-file /etc/ldap-go/audit.key
 ```
 
 On Linux, macOS, and FreeBSD, LDAPI SASL EXTERNAL derives the OpenLDAP
@@ -905,7 +928,9 @@ to ordinary ACLs.
 For systemd socket activation, use `serve -systemd-activation`. The command
 strictly validates `LISTEN_PID`, adopts stream listeners from fd 3 through
 `LISTEN_FDS`, preserves systemd-owned Unix socket paths, and rejects manual
-`-listen`/`-ldapi` options in that mode. `NOTIFY_SOCKET` is supported with
+listener options in that mode. Exact `LISTEN_FDNAMES` values `ldap`, `ldaps`,
+`tlcp`/`ldap+tlcp`, and `ldapi` select each descriptor's transport mode;
+unrecognized TCP names use the command's default mode. `NOTIFY_SOCKET` is supported with
 `READY=1` after server initialization and `STOPPING=1` during shutdown.
 
 ```ini
@@ -941,12 +966,19 @@ process. Under chroot the pidfile path is relative to the jail root.
 
 The daemon applies process-wide admission bounds before expensive work:
 `-max-connections 4096`, `-max-concurrent-operations 256`, and
-`-max-concurrent-handshakes 64` are the defaults. Excess connections close
+`-max-concurrent-handshakes 64` are the defaults. Sorted/VLV searches may retain
+at most 100,000 candidates and 64 MiB per operation by default, configurable
+with `-search-candidate-limit` and `-search-candidate-bytes`. Excess connections close
 before a connection goroutine is started; operations wait in their already
 bounded per-connection queues, and TLS/TLCP handshake waiting time consumes the
 configured handshake timeout. `cn=Connections,cn=Monitor` and
 `cn=Threads,cn=Monitor` publish the configured, active, waiting, and rejected
-values through `monitoredInfo`.
+values plus the sorted-search budgets through `monitoredInfo`.
+Each connection admits up to eight stateless Search/Compare operations by
+default (`-max-operations-per-connection`). They execute from immutable
+authentication snapshots and serialize complete BER writes. Bind abandons
+active work and discards pending work before changing identity; StartTLS,
+transactions, writes, paging, VLV, and SASL transitions remain ordered fences.
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:
@@ -988,13 +1020,26 @@ ldapsearch -x -ZZ -H ldap://127.0.0.1:1389 \
 ```
 
 Add `-ldaps` to negotiate TLS immediately and advertise an `ldaps://` endpoint
-instead. TLS 1.2 is the minimum accepted version. `-tls-client-ca` enables
+instead. To serve StartTLS/plain LDAP, LDAPS, and LDAPI concurrently in one
+process, retain `-listen`, add `-ldaps-listen <address>`, and add `-ldapi
+<path>`. `-tlcp-listen` provides the equivalent plain LDAP plus implicit TLCP
+combination; standard TLS and TLCP listeners require separate processes because
+they use different server handshake engines. TLS 1.2 is the minimum accepted
+version. `-tls-client-ca` enables
 verification of optional client certificates; `-tls-require-client-cert`
 makes a verified certificate mandatory. For example, append:
 
 ```sh
 -tls-client-ca ./client-ca.crt -tls-require-client-cert
 ```
+
+The repeatable production gate in `scripts/qualification/run.sh` drives
+concurrent Search/Compare/Modify/Bind/Add/Delete work through forced process
+restarts, verifies each worker's last acknowledged write, runs bbolt integrity
+checks, and validates online plus offline LDIF state. Use `make
+qualification-smoke` for a short functional gate and `make qualification-soak`
+for the parameterized release/deployment run described in
+`docs/production-qualification.md`.
 
 When transport TLS is not supplied explicitly on the command line/API, an
 imported global `cn=config` entry can provide certificate, private-key, CA,

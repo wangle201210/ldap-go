@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -26,41 +27,49 @@ import (
 )
 
 const (
-	defaultSearchLimit               = 1000
-	defaultTransactionMaxOperations  = 1000
-	defaultTransactionMaxQueuedBytes = int64(16 << 20)
-	defaultShutdownTimeout           = 30 * time.Second
-	defaultMaxConnections            = 4096
-	defaultMaxConcurrentOperations   = 256
-	defaultMaxConcurrentHandshakes   = 64
+	defaultSearchLimit                = 1000
+	defaultTransactionMaxOperations   = 1000
+	defaultTransactionMaxQueuedBytes  = int64(16 << 20)
+	defaultShutdownTimeout            = 30 * time.Second
+	defaultMaxConnections             = 4096
+	defaultMaxConcurrentOperations    = 256
+	defaultMaxConcurrentHandshakes    = 64
+	defaultMaxSearchCandidates        = 100000
+	defaultMaxSearchCandidateBytes    = 64 << 20
+	defaultMaxOperationsPerConnection = 8
 )
 
 var ErrShutdownTimeout = errors.New("graceful shutdown timed out")
 
 type Config struct {
-	Store                     storage.Store
-	ListenerURLs              []string
-	MaxMessageSize            int64
-	MaxSearchEntries          int
-	MaxTransactionOperations  int
-	MaxTransactionQueuedBytes int64
-	MaxConnections            int
-	MaxConcurrentOperations   int
-	MaxConcurrentHandshakes   int
-	RootDN                    string
-	RootPassword              []byte
-	Logger                    *slog.Logger
-	AuditSink                 audit.Sink
-	Schema                    *schema.Registry
-	AccessPolicy              *acl.Policy
-	TLSConfig                 *tls.Config
-	SecureTransport           SecureTransport
-	ImplicitTLS               bool
-	SecureHandshakeTimeout    time.Duration
-	ShutdownTimeout           time.Duration
-	Clock                     func() time.Time
-	RADIUSConfigPath          string
-	RADIUSNASIdentifier       string
+	Store                       storage.Store
+	ListenerURLs                []string
+	MaxMessageSize              int64
+	MaxSearchEntries            int
+	MaxTransactionOperations    int
+	MaxTransactionQueuedBytes   int64
+	MaxConnections              int
+	MaxConcurrentOperations     int
+	MaxConcurrentHandshakes     int
+	MaxSearchCandidates         int
+	MaxSearchCandidateBytes     int64
+	MaxOperationsPerConnection  int
+	RootDN                      string
+	RootPassword                []byte
+	Logger                      *slog.Logger
+	AuditSink                   audit.Sink
+	Schema                      *schema.Registry
+	AccessPolicy                *acl.Policy
+	TLSConfig                   *tls.Config
+	SecureTransport             SecureTransport
+	ImplicitTLS                 bool
+	ImplicitTLSForConnection    func(net.Conn) bool
+	ListenerSchemeForConnection func(net.Conn) string
+	SecureHandshakeTimeout      time.Duration
+	ShutdownTimeout             time.Duration
+	Clock                       func() time.Time
+	RADIUSConfigPath            string
+	RADIUSNASIdentifier         string
 	// GSSAPIKeytabPath enables the SASL GSSAPI acceptor. FILE: paths are
 	// accepted for parity with KRB5_KTNAME.
 	GSSAPIKeytabPath string
@@ -177,6 +186,24 @@ func New(config Config) (*Server, error) {
 	if config.MaxConcurrentHandshakes == 0 {
 		config.MaxConcurrentHandshakes = defaultMaxConcurrentHandshakes
 	}
+	if config.MaxSearchCandidates < 0 {
+		return nil, errors.New("maximum search candidates cannot be negative")
+	}
+	if config.MaxSearchCandidates == 0 {
+		config.MaxSearchCandidates = defaultMaxSearchCandidates
+	}
+	if config.MaxSearchCandidateBytes < 0 {
+		return nil, errors.New("maximum search candidate bytes cannot be negative")
+	}
+	if config.MaxSearchCandidateBytes == 0 {
+		config.MaxSearchCandidateBytes = defaultMaxSearchCandidateBytes
+	}
+	if config.MaxOperationsPerConnection < 0 {
+		return nil, errors.New("maximum operations per connection cannot be negative")
+	}
+	if config.MaxOperationsPerConnection == 0 {
+		config.MaxOperationsPerConnection = defaultMaxOperationsPerConnection
+	}
 	if config.ShutdownTimeout < 0 {
 		return nil, errors.New("shutdown timeout cannot be negative")
 	}
@@ -286,7 +313,7 @@ func New(config Config) (*Server, error) {
 	if server.secureTransport == nil {
 		server.secureTransport = runtimeTLSTransport{server: server}
 	}
-	if server.config.ImplicitTLS &&
+	if server.requiresImplicitTLS() &&
 		!staticSecureTransport &&
 		runtime.secureTransport == nil {
 		return nil, errors.New("implicit TLS requires a secure transport")
@@ -450,6 +477,8 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 func (server *Server) serveConnection(ctx context.Context, connection net.Conn) {
 	defer server.wg.Done()
 	networkConnection := connection
+	listenerScheme := server.listenerSchemeForConnection(networkConnection)
+	implicitTLS := listenerScheme == "ldaps" || listenerScheme == "ldap+tlcp"
 	transportSSF := server.connectionTransportSecurityStrength(networkConnection)
 	domainName := server.connectionDomainName(ctx, networkConnection.RemoteAddr())
 	externalDN, peercredErr := peercredExternalIdentity(networkConnection)
@@ -471,6 +500,9 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		auditIdentity:   &connectionAuditIdentityState{},
 		metaTransports:  newMetaTransportCache(time.Now),
 		gssapiAvailable: server.gssapiKeytab != nil,
+		implicitTLS:     implicitTLS,
+		listenerScheme:  listenerScheme,
+		writeFailed:     &atomic.Bool{},
 	}
 	state.maxIncoming = server.connectionIncomingLimit(false)
 	server.registerMetaTransportCache(state.metaTransports)
@@ -479,10 +511,10 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		state.metaTransports.close()
 	}()
 	state.publishAuditIdentity()
-	state.monitor = server.monitor.registerConnection(
+	state.monitor = server.monitor.registerConnectionWithScheme(
 		state.connectionID,
 		connection,
-		server.config.ImplicitTLS,
+		listenerScheme,
 	)
 	defer server.monitor.unregisterConnection(state.connectionID)
 	defer func() {
@@ -493,7 +525,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		server.mu.Unlock()
 	}()
 
-	if server.config.ImplicitTLS {
+	if implicitTLS {
 		secured, err := server.secureHandshake(ctx, state.connection)
 		if err != nil {
 			server.config.Logger.Debug("TLS handshake failed", "error", err)
@@ -528,19 +560,27 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			operations,
 		)
 	}()
-	queue := newOperationQueue()
+	queue := newOperationQueue(server.config.MaxOperationsPerConnection)
 	state.operationQueue = queue
 	writeMutex := &sync.Mutex{}
 	workerDone := make(chan struct{})
+	var operationWorkers sync.WaitGroup
+	for range server.config.MaxOperationsPerConnection {
+		operationWorkers.Add(1)
+		go func() {
+			defer operationWorkers.Done()
+			server.runConnectionOperations(
+				connectionContext,
+				&state,
+				operations,
+				queue,
+				writeMutex,
+			)
+		}()
+	}
 	go func() {
-		defer close(workerDone)
-		server.runConnectionOperations(
-			connectionContext,
-			&state,
-			operations,
-			queue,
-			writeMutex,
-		)
+		operationWorkers.Wait()
+		close(workerDone)
 	}()
 
 	readConnection := state.connection
@@ -604,6 +644,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
 					writeTimeout:      server.currentConnectionWriteTimeout,
+					terminal:          state.writeFailed,
 				}
 				_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 					ldapwire.ResultError(
@@ -628,6 +669,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
 					writeTimeout:      server.currentConnectionWriteTimeout,
+					terminal:          state.writeFailed,
 				}
 				_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 					ldapwire.ResultError(ldapwire.ResultProtocolError, "malformed LDAP message"),
@@ -679,6 +721,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				monitor:           server.monitor,
 				monitorConnection: state.monitor,
 				writeTimeout:      server.currentConnectionWriteTimeout,
+				terminal:          state.writeFailed,
 			}
 			_ = ldapwire.Write(responseConnection, ldapwire.EncodeNoticeOfDisconnection(
 				ldapwire.ResultError(
@@ -695,13 +738,17 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				if discarded := queue.remove(request.MessageID); discarded != nil {
 					discarded.operation.requestAbandon()
 					operations.finish(discarded.operation)
+					discardedState := discarded.state
+					if discardedState == nil {
+						discardedState = &state
+					}
 					discardedAudit := server.newOperationAuditObservation(
-						&state,
+						discardedState,
 						discarded.message,
 					)
 					server.finishOperationAudit(
 						discardedAudit,
-						&state,
+						discardedState,
 						operationAbandoned,
 						nil,
 					)
@@ -737,6 +784,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
 					writeTimeout:      server.currentConnectionWriteTimeout,
+					terminal:          state.writeFailed,
 				}
 				observation := server.newImmediateAuditObservation(&state, message)
 				observation.setResult(result.Code)
@@ -760,6 +808,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 					monitor:           server.monitor,
 					monitorConnection: state.monitor,
 					writeTimeout:      server.currentConnectionWriteTimeout,
+					terminal:          state.writeFailed,
 				}
 				observation := server.newImmediateAuditObservation(&state, message)
 				responseConnection := &auditResponseConnection{
@@ -795,15 +844,47 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 				continue
 			}
 		}
+		if _, bind := message.Request.(ldapwire.BindRequest); bind {
+			operations.abandonForBind()
+			for _, discarded := range queue.discardPending() {
+				if discarded == nil {
+					continue
+				}
+				operations.finish(discarded.operation)
+				discardedState := discarded.state
+				if discardedState == nil {
+					discardedState = &state
+				}
+				discardedAudit := server.newOperationAuditObservation(
+					discardedState,
+					discarded.message,
+				)
+				server.finishOperationAudit(
+					discardedAudit,
+					discardedState,
+					operationAbandoned,
+					nil,
+				)
+				server.monitor.startOperation(state.monitor, false)
+				server.monitor.completeOperation(
+					state.monitor,
+					discarded.message.Request,
+					false,
+				)
+			}
+		}
 
 		operation, registered := operations.register(connectionContext, message)
 		if !registered {
 			return
 		}
+		concurrent := connectionOperationCanRunConcurrent(&state, message)
 		queued := &queuedOperation{
 			message:    message,
 			operation:  operation,
 			completion: make(chan operationCompletion, 1),
+			state:      &state,
+			concurrent: concurrent,
 		}
 		server.monitor.queueOperation(state.monitor)
 		pushResult := queue.push(
@@ -818,7 +899,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			}
 			return
 		}
-		if !connectionBarrier(message) {
+		if !connectionReadBarrier(message) {
 			continue
 		}
 
@@ -880,6 +961,7 @@ func (server *Server) rejectLDAPv2Controls(
 		monitor:           server.monitor,
 		monitorConnection: state.monitor,
 		writeTimeout:      server.currentConnectionWriteTimeout,
+		terminal:          state.writeFailed,
 	}
 	_ = writeResultForMessage(
 		responseConnection,
@@ -893,7 +975,7 @@ func (server *Server) rejectLDAPv2Controls(
 
 func (server *Server) runConnectionOperations(
 	ctx context.Context,
-	state *connectionState,
+	sharedState *connectionState,
 	operations *operationRegistry,
 	queue *operationQueue,
 	writeMutex *sync.Mutex,
@@ -903,6 +985,14 @@ func (server *Server) runConnectionOperations(
 		if !ok {
 			return
 		}
+		state := sharedState
+		var concurrentState connectionState
+		if queued.concurrent {
+			concurrentState = cloneConcurrentConnectionState(sharedState)
+			state = &concurrentState
+		} else if queued.state != nil {
+			state = queued.state
+		}
 
 		baseConnection := &serializedResponseConnection{
 			Conn:              state.connection,
@@ -910,6 +1000,7 @@ func (server *Server) runConnectionOperations(
 			monitor:           server.monitor,
 			monitorConnection: state.monitor,
 			writeTimeout:      server.currentConnectionWriteTimeout,
+			terminal:          state.writeFailed,
 		}
 		responseConnection := &operationResponseConnection{
 			Conn:      baseConnection,
@@ -976,8 +1067,11 @@ func (server *Server) runConnectionOperations(
 		queue.complete()
 		queued.completion <- operationCompletion{
 			closeConnection: closeConnection,
-			connection:      state.connection,
+			connection:      sharedState.connection,
 			err:             err,
+		}
+		if queued.concurrent {
+			clearConcurrentConnectionState(state)
 		}
 
 		if ctx.Err() != nil {
@@ -991,14 +1085,58 @@ func (server *Server) runConnectionOperations(
 				"error",
 				err,
 			)
-			_ = state.connection.Close()
+			_ = sharedState.connection.Close()
 			return
 		}
 		if closeConnection {
-			_ = state.connection.Close()
+			_ = sharedState.connection.Close()
 			return
 		}
 	}
+}
+
+func connectionOperationCanRunConcurrent(
+	state *connectionState,
+	message ldapwire.Message,
+) bool {
+	if state == nil || state.transaction != nil || state.saslSession != nil {
+		return false
+	}
+	for _, control := range message.Controls {
+		switch control.OID {
+		case pagedResultsControlOID, vlvRequestControlOID,
+			transactionSpecificationControlOID:
+			return false
+		}
+	}
+	switch message.Request.(type) {
+	case ldapwire.SearchRequest, ldapwire.CompareRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneConcurrentConnectionState(state *connectionState) connectionState {
+	cloned := *state
+	cloned.bindCredentials = bytes.Clone(state.bindCredentials)
+	cloned.pagedSearch = nil
+	cloned.virtualListViews = nil
+	cloned.sortSessionCounts = nil
+	cloned.transaction = nil
+	cloned.saslSession = nil
+	cloned.auditIdentity = &connectionAuditIdentityState{}
+	cloned.publishAuditIdentity()
+	return cloned
+}
+
+func clearConcurrentConnectionState(state *connectionState) {
+	if state == nil {
+		return
+	}
+	clearSearchSessions(state)
+	clearBindCredentials(state)
+	state.auditIdentity = nil
 }
 
 func (server *Server) connectionMaxPending(state *connectionState) int {
@@ -1065,7 +1203,7 @@ func (server *Server) clearStoppedSearchState(
 	}
 }
 
-func connectionBarrier(message ldapwire.Message) bool {
+func connectionReadBarrier(message ldapwire.Message) bool {
 	switch request := message.Request.(type) {
 	case ldapwire.BindRequest:
 		return true
@@ -1513,7 +1651,7 @@ func (server *Server) dispatch(
 		return false, server.handleCompare(ctx, connection, state, message, request)
 	case ldapwire.AbandonRequest:
 		// Abandon is handled by the connection reader so it can interrupt
-		// the serial operation worker.
+		// an active operation worker.
 		return false, nil
 	case ldapwire.ExtendedRequest:
 		return false, server.handleExtended(
@@ -2287,6 +2425,9 @@ type connectionState struct {
 	runtime                    *runtimeState
 	connection                 net.Conn
 	secure                     bool
+	implicitTLS                bool
+	listenerScheme             string
+	writeFailed                *atomic.Bool
 	externalSSF                uint32
 	transportSSF               uint32
 	tlsSSF                     uint32

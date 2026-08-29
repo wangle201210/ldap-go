@@ -57,6 +57,23 @@ type searchCandidate struct {
 	syncUUID    ldapwire.SyncUUID
 }
 
+func searchCandidateRetainedBytes(candidate searchCandidate) int64 {
+	total := int64(len(candidate.dn) + len(candidate.cursorKey) + len(candidate.identityKey))
+	for _, entry := range []directory.Entry{candidate.selected, candidate.readable} {
+		total += int64(len(entry.DN))
+		for _, attribute := range entry.Attributes {
+			total += int64(len(attribute.Description))
+			for _, value := range attribute.Values {
+				total += int64(len(value))
+			}
+		}
+	}
+	for _, value := range candidate.values {
+		total += int64(len(value.value))
+	}
+	return total
+}
+
 type sortValue struct {
 	value   []byte
 	present bool

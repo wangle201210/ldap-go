@@ -101,7 +101,7 @@ func (server *Server) connectionACLSubject(state *connectionState) acl.Subject {
 		PeerName: openLDAPConnectionName(remoteAddress(state.connection)),
 		Domain:   state.domainName,
 		SockName: openLDAPConnectionName(localAddress(state.connection)),
-		SockURL:  monitorListenerURL(localAddress(state.connection), server.config.ImplicitTLS),
+		SockURL:  monitorListenerURLWithScheme(localAddress(state.connection), state.listenerScheme),
 	}
 	transportSSF, tlsSSF := connectionTransportAndTLSSSF(state)
 	subject.TransportSSF = int(transportSSF)

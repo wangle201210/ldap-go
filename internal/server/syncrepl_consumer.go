@@ -98,6 +98,7 @@ func (watchdog *syncConsumerRefreshWatchdog) timeoutError() error {
 func (server *Server) runSyncConsumer(
 	ctx context.Context,
 	config syncConsumerConfig,
+	health *syncConsumerHealth,
 ) {
 	retry := syncConsumerRetryCursor{policy: config.retry}
 	providerIndex := 0
@@ -107,11 +108,13 @@ func (server *Server) runSyncConsumer(
 		}
 		provider := config.providerURLs[providerIndex%len(config.providerURLs)]
 		providerIndex++
-		err := server.runSyncConsumerCycle(ctx, config, provider)
+		health.beginAttempt(provider, server.clock())
+		err := server.runSyncConsumerCycle(ctx, config, provider, health)
 		if ctx.Err() != nil {
 			return
 		}
 		if err == nil && config.mode == syncConsumerRefreshOnly {
+			health.succeeded(nil, server.clock())
 			retry = syncConsumerRetryCursor{policy: config.retry}
 			if !waitSyncConsumer(ctx, config.interval) {
 				return
@@ -124,6 +127,7 @@ func (server *Server) runSyncConsumer(
 
 		delay, retryable := retry.next()
 		if !retryable {
+			health.stopped(err, server.clock())
 			server.config.Logger.Error(
 				"syncrepl consumer stopped after retry policy was exhausted",
 				"rid",
@@ -135,6 +139,7 @@ func (server *Server) runSyncConsumer(
 			)
 			return
 		}
+		health.waiting(err, server.clock())
 		server.config.Logger.Debug(
 			"syncrepl consumer will retry",
 			"rid",
@@ -156,15 +161,24 @@ func (server *Server) runSyncConsumerCycle(
 	ctx context.Context,
 	config syncConsumerConfig,
 	provider string,
+	healthValues ...*syncConsumerHealth,
 ) error {
+	health := newSyncConsumerHealth(config)
+	if len(healthValues) != 0 && healthValues[0] != nil {
+		health = healthValues[0]
+	}
 	cookie, err := server.loadSyncConsumerCookie(ctx, config)
 	if err != nil {
 		return err
+	}
+	if len(cookie) != 0 {
+		health.loadedCookie(cookie)
 	}
 	transport, err := dialSyncConsumer(ctx, config, provider)
 	if err != nil {
 		return err
 	}
+	health.connected()
 	var connection *ldap.Conn
 	defer func() {
 		if connection != nil {
@@ -405,6 +419,11 @@ func (server *Server) processSyncConsumerResponse(
 		if state.State != ldap.SyncStateDelete {
 			refresh.seen[state.EntryUUID.String()] = struct{}{}
 		}
+		if refresh.complete {
+			server.syncConsumers.observeSuccess(config, state.Cookie)
+		} else {
+			server.syncConsumers.observeProgress(config, state.Cookie)
+		}
 	}
 
 	for _, control := range controls {
@@ -476,10 +495,15 @@ func (server *Server) processSyncConsumerInfo(
 		if info.NewCookie == nil {
 			return errors.New("newCookie Sync Info has no value")
 		}
-		return server.storeSyncConsumerCookie(
-			ctx,
+		return server.observeSyncConsumerCookie(
 			config,
+			refresh,
 			info.NewCookie.Cookie,
+			server.storeSyncConsumerCookie(
+				ctx,
+				config,
+				info.NewCookie.Cookie,
+			),
 		)
 	case ldap.SyncInfoRefreshDelete:
 		if info.RefreshDelete == nil {
@@ -494,10 +518,11 @@ func (server *Server) processSyncConsumerInfo(
 				info.RefreshDelete.Cookie,
 			)
 		}
-		return server.storeSyncConsumerCookie(
-			ctx,
-			config,
-			info.RefreshDelete.Cookie,
+		return server.observeSyncConsumerCookie(
+			config, refresh, info.RefreshDelete.Cookie,
+			server.storeSyncConsumerCookie(
+				ctx, config, info.RefreshDelete.Cookie,
+			),
 		)
 	case ldap.SyncInfoRefreshPresent:
 		if info.RefreshPresent == nil {
@@ -512,10 +537,11 @@ func (server *Server) processSyncConsumerInfo(
 				info.RefreshPresent.Cookie,
 			)
 		}
-		return server.storeSyncConsumerCookie(
-			ctx,
-			config,
-			info.RefreshPresent.Cookie,
+		return server.observeSyncConsumerCookie(
+			config, refresh, info.RefreshPresent.Cookie,
+			server.storeSyncConsumerCookie(
+				ctx, config, info.RefreshPresent.Cookie,
+			),
 		)
 	case ldap.SyncInfoSyncIdSet:
 		if info.SyncIdSet == nil {
@@ -526,24 +552,42 @@ func (server *Server) processSyncConsumerInfo(
 			for _, identifier := range info.SyncIdSet.SyncUUIDs {
 				identifiers = append(identifiers, identifier.String())
 			}
-			return server.deleteSyncConsumerUUIDs(
-				ctx,
-				config,
-				identifiers,
-				info.SyncIdSet.Cookie,
+			return server.observeSyncConsumerCookie(
+				config, refresh, info.SyncIdSet.Cookie,
+				server.deleteSyncConsumerUUIDs(
+					ctx, config, identifiers, info.SyncIdSet.Cookie,
+				),
 			)
 		}
 		for _, identifier := range info.SyncIdSet.SyncUUIDs {
 			refresh.seen[identifier.String()] = struct{}{}
 		}
-		return server.storeSyncConsumerCookie(
-			ctx,
-			config,
-			info.SyncIdSet.Cookie,
+		return server.observeSyncConsumerCookie(
+			config, refresh, info.SyncIdSet.Cookie,
+			server.storeSyncConsumerCookie(
+				ctx, config, info.SyncIdSet.Cookie,
+			),
 		)
 	default:
 		return fmt.Errorf("unknown Sync Info value %d", info.Value)
 	}
+}
+
+func (server *Server) observeSyncConsumerCookie(
+	config syncConsumerConfig,
+	refresh *syncConsumerRefreshState,
+	cookie []byte,
+	err error,
+) error {
+	if err != nil {
+		return err
+	}
+	if refresh.complete {
+		server.syncConsumers.observeSuccess(config, cookie)
+	} else {
+		server.syncConsumers.observeProgress(config, cookie)
+	}
+	return nil
 }
 
 func (server *Server) applySyncConsumerEntry(
@@ -1270,6 +1314,7 @@ func (server *Server) finishSyncConsumerRefresh(
 		server.publishSyncChange(&changes[index])
 	}
 	refresh.complete = true
+	server.syncConsumers.observeSuccess(config, cookie)
 	return nil
 }
 

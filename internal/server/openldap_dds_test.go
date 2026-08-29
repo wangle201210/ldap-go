@@ -335,7 +335,7 @@ func TestOpenLDAPReferenceDDSExpirationHierarchy(t *testing.T) {
 		nil,
 		"",
 		"overlay dds\n"+
-			"dds-default-ttl 1s\n"+
+			"dds-default-ttl 3s\n"+
 			"dds-interval 1s",
 		"",
 	)
@@ -364,17 +364,17 @@ func TestOpenLDAPReferenceDDSExpirationHierarchy(t *testing.T) {
 	); err != nil {
 		t.Fatalf("OpenLDAP Add(dynamic child): %v", err)
 	}
-	if _, err := requestDynamicRefresh(client, childDN, 3); err != nil {
+	if _, err := requestDynamicRefresh(client, childDN, 8); err != nil {
 		t.Fatalf("OpenLDAP Refresh(dynamic child): %v", err)
 	}
 
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(4 * time.Second)
 	if !ldapEntryExists(t, client, parentDN) ||
 		!ldapEntryExists(t, client, childDN) {
 		t.Fatal("OpenLDAP removed an expired parent with a live dynamic child")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for ldapEntryExists(t, client, parentDN) {
 		if time.Now().After(deadline) {
 			t.Fatal("OpenLDAP did not remove expired dynamic hierarchy")
