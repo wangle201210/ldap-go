@@ -1475,6 +1475,17 @@ func runServe(
 		16<<20,
 		"maximum encoded queued bytes per LDAP transaction",
 	)
+	maxConnections := flags.Int("max-connections", 4096, "maximum simultaneous client connections")
+	maxConcurrentOperations := flags.Int(
+		"max-concurrent-operations",
+		256,
+		"maximum operations executing across all connections",
+	)
+	maxConcurrentHandshakes := flags.Int(
+		"max-concurrent-handshakes",
+		64,
+		"maximum simultaneous TLS or TLCP handshakes",
+	)
 	logLevel := flags.String("log-level", "info", "debug, info, warn, or error")
 	auditLogPath := flags.String("audit-log", "", "append-only JSON audit log path")
 	auditKeyFile := flags.String("audit-key-file", "", "file containing the audit HMAC key")
@@ -1622,6 +1633,15 @@ func runServe(
 	if *transactionMaxQueuedBytes <= 0 {
 		return errors.New("-transaction-max-queued-bytes must be positive")
 	}
+	if *maxConnections <= 0 {
+		return errors.New("-max-connections must be positive")
+	}
+	if *maxConcurrentOperations <= 0 {
+		return errors.New("-max-concurrent-operations must be positive")
+	}
+	if *maxConcurrentHandshakes <= 0 {
+		return errors.New("-max-concurrent-handshakes must be positive")
+	}
 	privileges, err := resolveServePrivileges(*serveUser, *serveGroup, *serveChroot)
 	if err != nil {
 		return err
@@ -1754,6 +1774,9 @@ func runServe(
 		MaxSearchEntries:          *searchLimit,
 		MaxTransactionOperations:  *transactionMaxOperations,
 		MaxTransactionQueuedBytes: *transactionMaxQueuedBytes,
+		MaxConnections:            *maxConnections,
+		MaxConcurrentOperations:   *maxConcurrentOperations,
+		MaxConcurrentHandshakes:   *maxConcurrentHandshakes,
 		RootDN:                    *rootDN,
 		RootPassword:              []byte(getenv(rootPasswordEnvironment)),
 		Logger:                    logger,

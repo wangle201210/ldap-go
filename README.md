@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,973 top-level tests against the pinned commit.
+The latest strict run passed 1,979 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -923,6 +923,15 @@ socket. A non-root process may only select its current identity.
 creation, refuses existing or stale paths, fsyncs the PID, and removes it on
 shutdown only if both file identity and contents still belong to the running
 process. Under chroot the pidfile path is relative to the jail root.
+
+The daemon applies process-wide admission bounds before expensive work:
+`-max-connections 4096`, `-max-concurrent-operations 256`, and
+`-max-concurrent-handshakes 64` are the defaults. Excess connections close
+before a connection goroutine is started; operations wait in their already
+bounded per-connection queues, and TLS/TLCP handshake waiting time consumes the
+configured handshake timeout. `cn=Connections,cn=Monitor` and
+`cn=Threads,cn=Monitor` publish the configured, active, waiting, and rejected
+values through `monitoredInfo`.
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:

@@ -140,14 +140,19 @@ func (server *Server) secureHandshake(
 	ctx context.Context,
 	connection net.Conn,
 ) (net.Conn, error) {
-	if server.config.SecureHandshakeTimeout <= 0 {
-		return server.secureTransport.ServerHandshake(ctx, connection)
+	handshakeContext := ctx
+	cancel := func() {}
+	if server.config.SecureHandshakeTimeout > 0 {
+		handshakeContext, cancel = context.WithTimeout(
+			ctx,
+			server.config.SecureHandshakeTimeout,
+		)
 	}
-	handshakeContext, cancel := context.WithTimeout(
-		ctx,
-		server.config.SecureHandshakeTimeout,
-	)
 	defer cancel()
+	if !server.handshakeLimiter.acquire(handshakeContext) {
+		return nil, handshakeContext.Err()
+	}
+	defer server.handshakeLimiter.release()
 	return server.secureTransport.ServerHandshake(handshakeContext, connection)
 }
 

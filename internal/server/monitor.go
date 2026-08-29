@@ -719,6 +719,25 @@ func (server *Server) populateMonitorContainerAttributes(
 		addMonitorAttribute(operations, "monitorOpInitiated", strconv.FormatUint(initiated, 10))
 		addMonitorAttribute(operations, "monitorOpCompleted", strconv.FormatUint(completed, 10))
 	}
+	if connections := byDN["cn=connections,cn=monitor"]; connections != nil {
+		addMonitorAttribute(
+			connections,
+			"monitoredInfo",
+			"maxConnections="+strconv.Itoa(server.config.MaxConnections),
+			"rejectedConnections="+strconv.FormatUint(server.rejectedConnections.Load(), 10),
+			"activeHandshakes="+strconv.FormatInt(server.handshakeLimiter.active.Load(), 10),
+			"waitingHandshakes="+strconv.FormatInt(server.handshakeLimiter.waiting.Load(), 10),
+		)
+	}
+	if threads := byDN["cn=threads,cn=monitor"]; threads != nil {
+		addMonitorAttribute(
+			threads,
+			"monitoredInfo",
+			"maxConcurrentOperations="+strconv.Itoa(server.operationLimiter.limit()),
+			"activeOperations="+strconv.FormatInt(server.operationLimiter.active.Load(), 10),
+			"waitingOperations="+strconv.FormatInt(server.operationLimiter.waiting.Load(), 10),
+		)
+	}
 
 	if backends := byDN["cn=backends,cn=monitor"]; backends != nil {
 		addMonitorAttribute(backends, "monitoredInfo", monitorDatabaseTypes(runtime.databases)...)

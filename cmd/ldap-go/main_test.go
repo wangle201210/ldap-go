@@ -786,6 +786,38 @@ func TestServeRejectsNonPositiveTransactionLimits(t *testing.T) {
 	}
 }
 
+func TestServeRejectsNonPositiveGlobalResourceLimits(t *testing.T) {
+	t.Parallel()
+	for _, flagName := range []string{
+		"max-connections",
+		"max-concurrent-operations",
+		"max-concurrent-handshakes",
+	} {
+		for _, value := range []string{"0", "-1"} {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(
+				[]string{"serve", "-" + flagName, value},
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				func(string) string { return "" },
+			)
+			if exitCode != 1 || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), "-"+flagName+" must be positive") {
+				t.Fatalf(
+					"serve %s %q: exit=%d stdout=%q stderr=%q",
+					flagName,
+					value,
+					exitCode,
+					stdout.String(),
+					stderr.String(),
+				)
+			}
+		}
+	}
+}
+
 func TestPasswordCommandRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 

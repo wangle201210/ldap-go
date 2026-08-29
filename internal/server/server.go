@@ -29,6 +29,9 @@ const (
 	defaultTransactionMaxOperations  = 1000
 	defaultTransactionMaxQueuedBytes = int64(16 << 20)
 	defaultShutdownTimeout           = 30 * time.Second
+	defaultMaxConnections            = 4096
+	defaultMaxConcurrentOperations   = 256
+	defaultMaxConcurrentHandshakes   = 64
 )
 
 var ErrShutdownTimeout = errors.New("graceful shutdown timed out")
@@ -40,6 +43,9 @@ type Config struct {
 	MaxSearchEntries          int
 	MaxTransactionOperations  int
 	MaxTransactionQueuedBytes int64
+	MaxConnections            int
+	MaxConcurrentOperations   int
+	MaxConcurrentHandshakes   int
 	RootDN                    string
 	RootPassword              []byte
 	Logger                    *slog.Logger
@@ -113,6 +119,9 @@ type Server struct {
 	runtimeSequence       atomic.Uint64
 	metaTransportSequence atomic.Uint64
 	gssapiKeytab          *keytab.Keytab
+	operationLimiter      resourceLimiter
+	handshakeLimiter      resourceLimiter
+	rejectedConnections   atomic.Uint64
 }
 
 func New(config Config) (*Server, error) {
@@ -139,6 +148,24 @@ func New(config Config) (*Server, error) {
 	}
 	if config.MaxTransactionQueuedBytes == 0 {
 		config.MaxTransactionQueuedBytes = defaultTransactionMaxQueuedBytes
+	}
+	if config.MaxConnections < 0 {
+		return nil, errors.New("maximum connections cannot be negative")
+	}
+	if config.MaxConnections == 0 {
+		config.MaxConnections = defaultMaxConnections
+	}
+	if config.MaxConcurrentOperations < 0 {
+		return nil, errors.New("maximum concurrent operations cannot be negative")
+	}
+	if config.MaxConcurrentOperations == 0 {
+		config.MaxConcurrentOperations = defaultMaxConcurrentOperations
+	}
+	if config.MaxConcurrentHandshakes < 0 {
+		return nil, errors.New("maximum concurrent handshakes cannot be negative")
+	}
+	if config.MaxConcurrentHandshakes == 0 {
+		config.MaxConcurrentHandshakes = defaultMaxConcurrentHandshakes
 	}
 	if config.ShutdownTimeout < 0 {
 		return nil, errors.New("shutdown timeout cannot be negative")
@@ -222,6 +249,8 @@ func New(config Config) (*Server, error) {
 		accesslogWake:        make(chan struct{}, 1),
 		monitor:              monitor,
 		gssapiKeytab:         gssapiKeytab,
+		operationLimiter:     newResourceLimiter(config.MaxConcurrentOperations),
+		handshakeLimiter:     newResourceLimiter(config.MaxConcurrentHandshakes),
 	}
 	started := false
 	defer func() {
@@ -391,8 +420,13 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 
 		server.mu.Lock()
-		if server.draining.Load() || server.gentleDraining.Load() {
+		if server.draining.Load() || server.gentleDraining.Load() ||
+			len(server.connections) >= server.config.MaxConnections {
+			rejected := !server.draining.Load() && !server.gentleDraining.Load()
 			server.mu.Unlock()
+			if rejected {
+				server.rejectedConnections.Add(1)
+			}
 			_ = connection.Close()
 			continue
 		}
@@ -879,15 +913,20 @@ func (server *Server) runConnectionOperations(
 		)
 		searchSessions := snapshotSearchSessions(state, queued.message)
 		boundDNBeforeOperation := state.boundDN
-		started := queued.operation.start()
-		server.monitor.startOperation(state.monitor, started)
-		if started {
-			closeConnection, err = server.dispatch(
-				queued.operation.ctx,
-				responseConnection,
-				state,
-				queued.message,
-			)
+		acquired := server.operationLimiter.acquire(queued.operation.ctx)
+		started := false
+		if acquired {
+			started = queued.operation.start()
+			server.monitor.startOperation(state.monitor, started)
+			if started {
+				closeConnection, err = server.dispatch(
+					queued.operation.ctx,
+					responseConnection,
+					state,
+					queued.message,
+				)
+			}
+			server.operationLimiter.release()
 		}
 		state.publishAuditIdentity()
 		if operationRefreshesIncomingLimit(
