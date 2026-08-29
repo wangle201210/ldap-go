@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
+	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_OPENLDAP_FAILURE_LOG, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -329,9 +329,15 @@ go test -p=1 \
 		-parallel="$test_parallel" \
 		-v >"$log" 2>&1 || test_status=$?
 if [ "$test_status" -ne 0 ]; then
-	printf 'OpenLDAP suite failed (go test exit %s); complete output follows:\n' \
-		"$test_status" >&2
-	cat "$log"
+	failure_log=${LDAP_GO_OPENLDAP_FAILURE_LOG:-${TMPDIR:-/tmp}/ldap-go-openldap.failure.log}
+	if ! cp "$log" "$failure_log"; then
+		printf 'OpenLDAP suite failed (go test exit %s); could not preserve %s\n' \
+			"$test_status" "$failure_log" >&2
+		exit "$test_status"
+	fi
+	printf 'OpenLDAP suite failed (go test exit %s); full log: %s\n' \
+		"$test_status" "$failure_log" >&2
+	grep -n -B 8 -A 12 -- '^--- FAIL:\|^panic:\|^FAIL[[:space:]]' "$failure_log" >&2 || true
 	exit "$test_status"
 fi
 

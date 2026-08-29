@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,953 top-level tests against
+The latest pinned local strict run passed 1,959 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -786,6 +786,20 @@ Linux `SO_PEERCRED` or macOS/FreeBSD `LOCAL_PEERCRED`, assert OpenLDAP's exact
 format. An ordered `olcAuthzRegexp` maps only the current pair to a database
 root for built-in and native `ldapwhoami -Y EXTERNAL`; a separate no-mapping
 case binds as the peercred DN and proves it cannot perform a root write.
+
+Systemd activation tests pass real TCP and Unix listener descriptors to a
+subprocess as fd 3/4 with `LISTEN_FDS`, close the parent listener copies, then
+perform Bind/Search over both inherited endpoints. They verify strict
+PID/count/name and flag-conflict validation, multi-listener publication, clean
+signal shutdown, and that closing ldap-go does not unlink the manager-owned
+Unix path. Filesystem Unix datagram tests cover `NOTIFY_SOCKET` READY/STOPPING
+ordering, payload validation, missing endpoints, and unconfigured no-op
+behavior.
+
+When the OpenLDAP runner fails, it preserves the complete Go test output at
+`${TMPDIR}/ldap-go-openldap.failure.log` instead of flooding the terminal;
+`LDAP_GO_OPENLDAP_FAILURE_LOG` selects another path. The terminal still shows
+the failing test context and exit status.
 
 The PLAIN case invokes OpenLDAP `ldapwhoami` against ldap-go with
 `olcSaslSecProps: none`. The other server-side cases invoke

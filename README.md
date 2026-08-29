@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,953 top-level tests against the pinned commit.
+The latest strict run passed 1,959 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -886,6 +886,28 @@ accepted kernel socket. It does not grant directory privileges by itself;
 configure an explicit `olcAuthzRegexp` to map selected UID/GID pairs to LDAP
 authorization DNs. Unmapped peers bind as their peercred DN and remain subject
 to ordinary ACLs.
+
+For systemd socket activation, use `serve -systemd-activation`. The command
+strictly validates `LISTEN_PID`, adopts stream listeners from fd 3 through
+`LISTEN_FDS`, preserves systemd-owned Unix socket paths, and rejects manual
+`-listen`/`-ldapi` options in that mode. `NOTIFY_SOCKET` is supported with
+`READY=1` after server initialization and `STOPPING=1` during shutdown.
+
+```ini
+# ldap-go.socket
+[Socket]
+ListenStream=127.0.0.1:389
+ListenStream=/run/ldap-go/ldapi
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target
+
+# ldap-go.service
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/ldap-go serve -systemd-activation -db /var/lib/ldap-go/directory.db
+```
 
 To enable credential-redacted security auditing, create a private HMAC key and
 configure an append-only JSON Lines file:

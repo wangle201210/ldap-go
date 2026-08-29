@@ -1446,6 +1446,11 @@ func runServe(
 	)
 	ldapiPath := flags.String("ldapi", "", "additional LDAPI Unix socket path")
 	ldapiMode := flags.Uint("ldapi-mode", 0o660, "LDAPI Unix socket permission mode")
+	systemdActivation := flags.Bool(
+		"systemd-activation",
+		false,
+		"adopt systemd LISTEN_FDS instead of creating listeners",
+	)
 	rootDN := flags.String("root-dn", "", "optional database root DN override")
 	maxMessageSize := flags.Int64(
 		"max-message-size",
@@ -1591,10 +1596,14 @@ func runServe(
 			return errors.New("-ldaps requires -tls-cert and -tls-key")
 		}
 	}
+	if *systemdActivation && (flagWasSet(flags, "listen") ||
+		flagWasSet(flags, "ldapi") || flagWasSet(flags, "ldapi-mode")) {
+		return errors.New("-systemd-activation cannot be combined with -listen, -ldapi, or -ldapi-mode")
+	}
 	if *ldapiPath == "" && flagWasSet(flags, "ldapi-mode") {
 		return errors.New("-ldapi-mode requires -ldapi")
 	}
-	if *listenAddress == "" && *ldapiPath == "" {
+	if !*systemdActivation && *listenAddress == "" && *ldapiPath == "" {
 		return errors.New("at least one of -listen or -ldapi is required")
 	}
 	if *ldapiMode > 0o777 {
@@ -1646,18 +1655,23 @@ func runServe(
 		}
 	}()
 
-	if *listenAddress != "" {
+	tcpScheme := "ldap"
+	if *implicitTLS {
+		tcpScheme = "ldaps"
+	} else if *implicitTLCP {
+		tcpScheme = "ldap+tlcp"
+	}
+	if *systemdActivation {
+		listeners, listenerURLs, err = listenServeSystemd(getenv, tcpScheme)
+		if err != nil {
+			return err
+		}
+	} else if *listenAddress != "" {
 		tcpListener, err := net.Listen("tcp", *listenAddress)
 		if err != nil {
 			return fmt.Errorf("listen on %s: %w", *listenAddress, err)
 		}
 		listeners = append(listeners, tcpListener)
-		scheme := "ldap"
-		if *implicitTLS {
-			scheme = "ldaps"
-		} else if *implicitTLCP {
-			scheme = "ldap+tlcp"
-		}
 		listenerHost, _, err := net.SplitHostPort(*listenAddress)
 		if err != nil {
 			return fmt.Errorf("parse listen address %s: %w", *listenAddress, err)
@@ -1668,11 +1682,11 @@ func runServe(
 		}
 		listenerURLs = append(listenerURLs, fmt.Sprintf(
 			"%s://%s/",
-			scheme,
+			tcpScheme,
 			net.JoinHostPort(listenerHost, listenerPort),
 		))
 	}
-	if *ldapiPath != "" {
+	if !*systemdActivation && *ldapiPath != "" {
 		ldapiListener, ldapiURL, err := listenServeLDAPI(
 			*ldapiPath,
 			os.FileMode(*ldapiMode),
@@ -1685,6 +1699,7 @@ func runServe(
 	}
 	listener := newServeListener(listeners)
 	defer listener.Close()
+	ready := make(chan struct{})
 	instance, err := server.New(server.Config{
 		Store:                     store,
 		ListenerURLs:              listenerURLs,
@@ -1705,11 +1720,26 @@ func runServe(
 		RADIUSNASIdentifier:       *radiusNASIdentifier,
 		GSSAPIKeytabPath:          *gssapiKeytab,
 		GSSAPIChannelBinding:      *gssapiChannelBinding,
+		Ready:                     func() { close(ready) },
 	})
 	if err != nil {
 		return err
 	}
 
+	serveContext, stopServe := context.WithCancel(ctx)
+	defer stopServe()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- instance.Serve(serveContext, listener)
+	}()
+	select {
+	case <-ready:
+	case err := <-serveDone:
+		return err
+	case <-ctx.Done():
+		stopServe()
+		return <-serveDone
+	}
 	for _, listenerURL := range listenerURLs {
 		displayURL := listenerURL
 		if !strings.HasPrefix(strings.ToLower(displayURL), "ldapi://") {
@@ -1719,12 +1749,18 @@ func runServe(
 			return err
 		}
 	}
-	serveContext, stopServe := context.WithCancel(ctx)
-	defer stopServe()
-	serveDone := make(chan error, 1)
-	go func() {
-		serveDone <- instance.Serve(serveContext, listener)
-	}()
+	if configured, err := notifySystemd(
+		getenv,
+		"READY=1\nSTATUS=ldap-go accepting connections",
+	); err != nil {
+		logger.Warn("systemd READY notification failed", "error", err)
+	} else if configured {
+		defer func() {
+			if _, err := notifySystemd(getenv, "STOPPING=1\nSTATUS=ldap-go shutting down"); err != nil {
+				logger.Warn("systemd STOPPING notification failed", "error", err)
+			}
+		}()
+	}
 	contextDone := ctx.Done()
 	gentle := false
 	for {

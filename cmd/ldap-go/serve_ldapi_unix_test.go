@@ -438,7 +438,11 @@ func TestLDAPClientLDAPIURIValidation(t *testing.T) {
 	}
 }
 
-func waitForServeLDAPISocket(t *testing.T, path string, stderr *lloaddReloadBuffer) {
+func waitForServeLDAPISocket(
+	t *testing.T,
+	path string,
+	stderr interface{ String() string },
+) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

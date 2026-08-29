@@ -70,6 +70,9 @@ type Config struct {
 	// ReverseLookupResolver overrides reverse DNS for olcReverseLookup.
 	// The system resolver is used when this field is nil.
 	ReverseLookupResolver ReverseLookupResolver
+	// Ready is called once Serve has initialized background consumers and is
+	// ready to accept LDAP connections.
+	Ready func()
 }
 
 type Server struct {
@@ -366,6 +369,9 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 	}()
 	defer close(stop)
+	if server.config.Ready != nil {
+		server.config.Ready()
+	}
 
 	for {
 		connection, err := listener.Accept()
