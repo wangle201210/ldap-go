@@ -118,6 +118,8 @@ func runWithContextAndSignals(
 		err = runAuditVerify(args[1:], stdout, stderr, getenv)
 	case "backup":
 		err = runBackup(ctx, args[1:], stdout, stderr)
+	case "online-backup":
+		err = runOnlineBackup(args[1:], stdin, stdout, stderr)
 	case "check":
 		err = runCheck(args[1:], stdout, stderr)
 	case "config-test", "slaptest":
@@ -1455,6 +1457,11 @@ func runServe(
 	serveGroup := flags.String("group", "", "Unix group name or ID to switch to after listening")
 	serveChroot := flags.String("chroot", "", "Unix directory to chroot into after listening")
 	pidFilePath := flags.String("pidfile", "", "absolute process ID file path")
+	onlineBackupDirectory := flags.String(
+		"online-backup-dir",
+		"",
+		"private directory for root-authorized LDAPI online backups",
+	)
 	flags.StringVar(serveUser, "u", "", "alias for -user")
 	flags.StringVar(serveGroup, "g", "", "alias for -group")
 	flags.StringVar(serveChroot, "r", "", "alias for -chroot")
@@ -1718,6 +1725,10 @@ func runServe(
 	if samePath(*auditLogPath, *databasePath) {
 		return errors.New("audit log and directory database must use different paths")
 	}
+	preparedBackupDirectory, err := prepareServeOnlineBackupDirectory(*onlineBackupDirectory)
+	if err != nil {
+		return err
+	}
 	var pidfile *servePIDFile
 	if *pidFilePath != "" {
 		pidfile, err = acquireServePIDFile(*pidFilePath)
@@ -1766,6 +1777,12 @@ func runServe(
 		return err
 	}
 	defer store.Close()
+	var onlineBackup server.OnlineBackupFunc
+	if preparedBackupDirectory != "" {
+		onlineBackup = func(ctx context.Context, path string) (storage.CheckReport, error) {
+			return store.Backup(ctx, path, false)
+		}
+	}
 	ready := make(chan struct{})
 	instance, err := server.New(server.Config{
 		Store:                     store,
@@ -1791,6 +1808,8 @@ func runServe(
 		GSSAPIKeytabPath:          *gssapiKeytab,
 		GSSAPIChannelBinding:      *gssapiChannelBinding,
 		Ready:                     func() { close(ready) },
+		OnlineBackupDir:           preparedBackupDirectory,
+		OnlineBackup:              onlineBackup,
 	})
 	if err != nil {
 		return err
@@ -2098,6 +2117,7 @@ func printUsage(writer io.Writer) {
 commands:
   audit-verify  verify an HMAC-chained audit log
   backup   create and validate an atomic bbolt backup (offline)
+  online-backup  request a root-authorized backup from a running LDAPI server
   check    check bbolt pages, buckets, keys, entries, and metadata (offline)
   config-test  validate runtime configuration without modifying the database
   slaptest alias for config-test

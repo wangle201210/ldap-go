@@ -816,6 +816,8 @@ func extendedRequestSecurityResult(
 	switch request.Name {
 	case startTLSOID, cancelOID:
 		return nil
+	case onlineBackupOID:
+		return configuredOperationSecurityResult(state, nil, policyUpdate)
 	case whoAmIOID:
 		if request.HasValue {
 			return nil

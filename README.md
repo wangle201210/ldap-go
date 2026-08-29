@@ -48,7 +48,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 1,979 top-level tests against the pinned commit.
+The latest strict run passed 1,985 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -867,8 +867,7 @@ go run ./cmd/ldap-go export \
   -db ./data/ldap-go.db \
   -ldif ./data/export.ldif
 
-# Stop the server before direct CLI maintenance. Online backup is available
-# through the already-open storage handle, not by reopening the bbolt path.
+# Stop the server before direct path-based CLI maintenance.
 go run ./cmd/ldap-go check -db ./data/ldap-go.db
 go run ./cmd/ldap-go backup \
   -db ./data/ldap-go.db \
@@ -877,6 +876,22 @@ go run ./cmd/ldap-go restore \
   -backup ./data/ldap-go.backup.db \
   -db ./data/restored.db
 go run ./cmd/ldap-go rebuild -db ./data/restored.db
+```
+
+For a running server, preconfigure a private destination directory and request
+the snapshot through an authenticated LDAPI connection. The client cannot
+provide a path; the server generates a unique filename and returns its entry
+count and byte size. Restore remains an offline operation.
+
+```sh
+go run ./cmd/ldap-go serve \
+  -db ./data/ldap-go.db \
+  -ldapi /run/ldap-go/ldapi \
+  -online-backup-dir /var/backups/ldap-go
+
+go run ./cmd/ldap-go online-backup \
+  -x -H ldapi://%2Frun%2Fldap-go%2Fldapi/ \
+  -D cn=admin,dc=example,dc=com -W
 ```
 
 On Linux, macOS, and FreeBSD, LDAPI SASL EXTERNAL derives the OpenLDAP

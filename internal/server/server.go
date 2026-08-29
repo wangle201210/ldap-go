@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,7 +79,9 @@ type Config struct {
 	ReverseLookupResolver ReverseLookupResolver
 	// Ready is called once Serve has initialized background consumers and is
 	// ready to accept LDAP connections.
-	Ready func()
+	Ready           func()
+	OnlineBackupDir string
+	OnlineBackup    OnlineBackupFunc
 }
 
 type Server struct {
@@ -122,11 +125,18 @@ type Server struct {
 	operationLimiter      resourceLimiter
 	handshakeLimiter      resourceLimiter
 	rejectedConnections   atomic.Uint64
+	onlineBackupMu        sync.Mutex
 }
 
 func New(config Config) (*Server, error) {
 	if config.Store == nil {
 		return nil, errors.New("store is required")
+	}
+	if (config.OnlineBackupDir == "") != (config.OnlineBackup == nil) {
+		return nil, errors.New("online backup directory and callback must be configured together")
+	}
+	if config.OnlineBackupDir != "" && !filepath.IsAbs(config.OnlineBackupDir) {
+		return nil, errors.New("online backup directory must be absolute")
 	}
 	if config.MaxMessageSize < 0 {
 		return nil, errors.New("maximum message size cannot be negative")

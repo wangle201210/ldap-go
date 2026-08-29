@@ -144,7 +144,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 1,979 top-level tests against
+The latest pinned local strict run passed 1,985 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -741,6 +741,13 @@ invalid-backup isolation, cancellation, malformed logical records, and missing
 bucket detection. CLI tests exercise `backup`, `restore`, `check`, `rebuild`,
 and the `reindex` alias. These commands are intentionally offline because a
 separate process cannot safely bypass bbolt's database lock.
+
+Online-backup tests run a real bbolt server over LDAPI, discover the conditional
+extension, create a root-authorized snapshot, verify `0600`, `CheckBolt`, and
+restore, and exercise the built-in command. Separate cases reject TCP root,
+anonymous/non-root callers, request values, unsafe destination directories,
+incomplete embedded configuration, and concurrent invocation; the client
+never supplies a filesystem path.
 
 The `slapadd` continuation tests import parent/child records out of order,
 isolate one invalid record, retain successful records, verify line/DN

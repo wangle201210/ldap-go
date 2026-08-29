@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,9 +29,65 @@ const (
 	ldapManageDsaITOID        = "2.16.840.1.113730.3.4.2"
 	ldapPasswordModifyOID     = "1.3.6.1.4.1.4203.1.11.1"
 	ldapWhoAmIOID             = "1.3.6.1.4.1.4203.1.11.3"
+	ldapOnlineBackupOID       = "1.3.6.1.4.1.4203.666.11.21"
 	maxLDAPExtendedValueSize  = 8 << 20
 	defaultLDAPRefreshSeconds = 3600
 )
+
+func runOnlineBackup(
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
+	flags := flag.NewFlagSet("online-backup", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var client ldapClientOptions
+	client.register(flags)
+	defer client.clear()
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := client.validate(flags); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if !ldapClientURIUsesLDAPI(client.uri) {
+		return errors.New("online-backup requires an ldapi:// URI")
+	}
+	connection, err := client.connectAndBind(flags, stdin, stderr)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	response, err := connection.Extended(ldap.NewExtendedRequest(ldapOnlineBackupOID, nil))
+	if err != nil {
+		return fmt.Errorf("online backup operation: %w", err)
+	}
+	var report struct {
+		Filename string `json:"filename"`
+		Entries  int    `json:"entries"`
+		FileSize int64  `json:"file_size"`
+	}
+	if response.Value == nil {
+		return errors.New("online backup response value is missing")
+	}
+	if err := json.Unmarshal(response.Value.Data.Bytes(), &report); err != nil {
+		return fmt.Errorf("decode online backup response: %w", err)
+	}
+	if report.Filename == "" || strings.ContainsAny(report.Filename, `/\\`) {
+		return errors.New("online backup response contains an invalid filename")
+	}
+	_, err = fmt.Fprintf(
+		stdout,
+		"backup %s: %d entries, %d bytes\n",
+		report.Filename,
+		report.Entries,
+		report.FileSize,
+	)
+	return err
+}
 
 type ldapClientExitError struct {
 	code  int

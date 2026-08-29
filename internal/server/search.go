@@ -2733,6 +2733,9 @@ func (server *Server) rootDSE(
 	if runtimeSupportsPcachePrivateDatabase(runtime.databases) {
 		supportedExtensions = append(supportedExtensions, pcacheQueryDeleteOID)
 	}
+	if onlineBackupConfigured(server.config) {
+		supportedExtensions = append(supportedExtensions, onlineBackupOID)
+	}
 	entry.Attributes = append(entry.Attributes, directory.Attribute{
 		Description: "supportedExtension",
 		Values:      stringValues(supportedExtensions...),

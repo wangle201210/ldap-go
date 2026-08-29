@@ -80,6 +80,19 @@ func (server *Server) handleExtended(
 		return server.handleDynamicRefresh(ctx, connection, state, message, request)
 	case whoAmIOID:
 		return server.handleWhoAmI(connection, state, message, request)
+	case onlineBackupOID:
+		if frontendRestricts(state.runtime, restrictExtended) {
+			return server.writeLDAPResultResponse(
+				connection,
+				message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "operation restricted"),
+				"",
+				nil,
+				nil,
+			)
+		}
+		return server.handleOnlineBackup(ctx, connection, state, message, request)
 	default:
 		if frontendRestricts(state.runtime, restrictExtended) {
 			return ldapwire.Write(connection, ldapwire.EncodeResultResponse(
