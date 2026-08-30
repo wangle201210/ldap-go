@@ -407,6 +407,9 @@ func (tx *memoryTx) PutIn(
 	if !isSchemaAwareDNKey(identity) {
 		delete(tx.metadata, schemaAwareDNMigrationMetadataKey(partition))
 	}
+	if partition == "" {
+		delete(tx.metadata, partitionedEntryKeysMetadataKey)
+	}
 	tx.invalidateEqualityIndexes(partition)
 	return nil
 }

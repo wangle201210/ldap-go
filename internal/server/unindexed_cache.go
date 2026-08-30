@@ -69,7 +69,7 @@ func (cache *unindexedValueCache) definitelyAbsent(
 	values := make(map[string]struct{})
 	var retained int64
 	hasReferral := false
-	err = reader.ForEach(func(entry directory.Entry) error {
+	visit := func(entry directory.Entry) error {
 		if registry.EntryHasObjectClass(entry, "referral") {
 			hasReferral = true
 		}
@@ -89,7 +89,11 @@ func (cache *unindexedValueCache) definitelyAbsent(
 			values[term] = struct{}{}
 		}
 		return nil
-	})
+	}
+	streamed, err := storage.ForEachStablePhysicalEntry(reader, visit)
+	if err == nil && !streamed {
+		err = reader.ForEach(visit)
+	}
 	if err != nil {
 		if err == errUnindexedValueCacheLimit || err == errUnindexedValueCacheUnsupported {
 			return false, false, nil

@@ -57,6 +57,7 @@ type runtimeState struct {
 	searchControlSupport requestControlSupport
 	unindexedValues      *unindexedValueCache
 	pagedSnapshots       *pagedSnapshotCache
+	searchResults        *searchResultCache
 }
 
 type runtimeOperationFeatures struct {
@@ -414,7 +415,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		features:             runtimeFeaturesForDatabases(databases),
 		searchControlSupport: searchControlSupportForDatabases(databases),
 		unindexedValues:      newUnindexedValueCache(16 << 20),
-		pagedSnapshots:       newPagedSnapshotCache(16 << 20),
+		pagedSnapshots:       newPagedSnapshotCache(64 << 20),
+		searchResults:        newSearchResultCache(32 << 20),
 	}
 	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err

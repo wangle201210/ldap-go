@@ -170,7 +170,10 @@ func (server *Server) autoCANow() time.Time {
 }
 
 func autoCAExplicitGlobalServerMaterial(reader storage.Reader) (bool, error) {
-	entry, err := reader.Get(configurationSuffix)
+	entry, err := reader.GetIn(configurationStoragePartition, configurationSuffix)
+	if errors.Is(err, storage.ErrEntryNotFound) {
+		entry, err = reader.Get(configurationSuffix)
+	}
 	if errors.Is(err, storage.ErrEntryNotFound) {
 		return false, nil
 	}

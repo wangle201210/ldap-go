@@ -26,6 +26,29 @@ var (
 	)
 )
 
+const partitionedEntryKeysMetadataKey = "storage:partitioned-entry-keys:v1"
+
+func PartitionedEntryKeysCurrent(reader Reader) (bool, error) {
+	if reader == nil {
+		return false, errors.New("reader is required")
+	}
+	value, err := reader.Metadata(partitionedEntryKeysMetadataKey)
+	if errors.Is(err, ErrMetadataNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return len(value) == 1 && value[0] == 1, nil
+}
+
+func MarkPartitionedEntryKeys(writer Writer) error {
+	if writer == nil {
+		return errors.New("writer is required")
+	}
+	return writer.SetMetadata(partitionedEntryKeysMetadataKey, []byte{1})
+}
+
 type Reader interface {
 	Get(dn directory.DN) (directory.Entry, error)
 	GetIn(partition string, dn directory.DN) (directory.Entry, error)

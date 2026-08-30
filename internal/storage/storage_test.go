@@ -253,6 +253,47 @@ func TestBoltReadsAndNormalizesLegacyEntryKeys(t *testing.T) {
 	}
 }
 
+func TestUnpartitionedWriteInvalidatesPartitionedEntryMarker(t *testing.T) {
+	t.Parallel()
+
+	stores := []Store{NewMemory()}
+	boltStore, err := OpenBolt(filepath.Join(t.TempDir(), "partitioned-marker.db"))
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	stores = append(stores, boltStore)
+	for _, store := range stores {
+		store := store
+		t.Run(fmt.Sprintf("%T", store), func(t *testing.T) {
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				return MarkPartitionedEntryKeys(writer)
+			}); err != nil {
+				t.Fatalf("mark partitioned keys: %v", err)
+			}
+			if err := store.Update(context.Background(), func(writer Writer) error {
+				return writer.Put(directory.Entry{DN: "dc=example,dc=com"}, false)
+			}); err != nil {
+				t.Fatalf("unpartitioned Put(): %v", err)
+			}
+			if err := store.View(context.Background(), func(reader Reader) error {
+				current, err := PartitionedEntryKeysCurrent(reader)
+				if err != nil {
+					return err
+				}
+				if current {
+					return errors.New("partitioned entry marker survived an unpartitioned write")
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("verify marker: %v", err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatalf("Close(): %v", err)
+			}
+		})
+	}
+}
+
 func mustDN(t *testing.T, value string) directory.DN {
 	t.Helper()
 	dn, err := directory.ParseDN(value)

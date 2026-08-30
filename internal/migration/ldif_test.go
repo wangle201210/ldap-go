@@ -64,6 +64,76 @@ jpegPhoto:: AP8Q
 	}
 }
 
+func TestReplaceImportRoutesBootstrapNamingContextsBeforeStartup(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	input := `dn: dc=example,dc=com
+objectClass: top
+objectClass: domain
+dc: example
+
+dn: ou=people,dc=example,dc=com
+objectClass: top
+objectClass: organizationalUnit
+ou: people
+
+dn: dc=other,dc=org
+objectClass: top
+objectClass: domain
+dc: other
+
+`
+	result, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(input),
+		ImportOptions{Replace: true},
+	)
+	if err != nil {
+		t.Fatalf("ImportLDIF(): %v", err)
+	}
+	if result.Entries != 3 || len(result.NamingContexts) != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		for _, rawDN := range []string{
+			"dc=example,dc=com",
+			"ou=people,dc=example,dc=com",
+			"dc=other,dc=org",
+		} {
+			dn := mustDN(t, rawDN)
+			contextDN := mustDN(t, "dc=example,dc=com")
+			if rawDN == "dc=other,dc=org" {
+				contextDN = dn
+			}
+			partition := storage.OpenLDAPBootstrapPartition(contextDN)
+			if _, err := reader.GetIn(partition, dn); err != nil {
+				return fmt.Errorf("bootstrap lookup %q: %w", rawDN, err)
+			}
+			if _, err := reader.GetIn("", dn); !errors.Is(err, storage.ErrEntryNotFound) {
+				return fmt.Errorf(
+					"unpartitioned lookup %q error = %v, want ErrEntryNotFound",
+					rawDN,
+					err,
+				)
+			}
+		}
+		current, err := storage.PartitionedEntryKeysCurrent(reader)
+		if err != nil {
+			return err
+		}
+		if !current {
+			return errors.New("partitioned entry key marker is not current")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestImportLDIFRollsBackOnDuplicate(t *testing.T) {
 	t.Parallel()
 

@@ -122,14 +122,32 @@ func (tx *memoryTx) equalityIndexOrderingPostings(
 }
 
 func (tx *memoryTx) equalityIndexEntries(
-	keys []string,
+	partition string,
+	references []string,
+	schema EqualityIndexSchema,
 ) ([]directory.Entry, error) {
-	entries := make([]directory.Entry, 0, len(keys))
-	for _, key := range keys {
+	entries := make([]directory.Entry, 0, len(references))
+	for _, reference := range references {
 		if err := tx.ctx.Err(); err != nil {
 			return nil, err
 		}
+		dn, err := resolveEqualityIndexDNReference(schema, reference)
+		if err != nil {
+			return nil, fmt.Errorf("resolve equality index DN reference %q: %w", reference, err)
+		}
+		key := partitionedEntryKey(partition, dn.Key())
 		entry, ok := tx.entries[key]
+		if !ok {
+			legacy, legacyErr := directory.ParseDN(reference)
+			if legacyErr != nil {
+				return nil, legacyErr
+			}
+			legacyKey := partitionedEntryKey(partition, legacy.Key())
+			if legacyKey != key {
+				key = legacyKey
+				entry, ok = tx.entries[key]
+			}
+		}
 		if !ok {
 			return nil, fmt.Errorf(
 				"equality index references missing entry key %q",
@@ -139,7 +157,10 @@ func (tx *memoryTx) equalityIndexEntries(
 		if err := tx.validateEntry(key, entry); err != nil {
 			return nil, err
 		}
-		entries = append(entries, entry.Clone())
+		entries = append(entries, entry.Clone().WithNormalizedDNHint(
+			dn,
+			dn.LegacyKey()+"\x00"+dn.Key(),
+		))
 	}
 	return entries, nil
 }
@@ -362,7 +383,7 @@ func (tx *memoryTx) schemaAwareEntryKeys(
 
 func (tx *memoryTx) addEqualityIndexEntry(
 	partition,
-	entryKey string,
+	_ string,
 	entry directory.Entry,
 	schema EqualityIndexSchema,
 	config EqualityIndexConfig,
@@ -375,7 +396,7 @@ func (tx *memoryTx) addEqualityIndexEntry(
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
 		for _, term := range equalityIndexTermsForAttribute(definition, values) {
-			addMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entryKey)
+			addMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entry.DN)
 		}
 	}
 	return nil
@@ -383,7 +404,7 @@ func (tx *memoryTx) addEqualityIndexEntry(
 
 func (tx *memoryTx) removeEqualityIndexEntry(
 	partition,
-	entryKey string,
+	_ string,
 	entry directory.Entry,
 	schema EqualityIndexSchema,
 	config EqualityIndexConfig,
@@ -396,7 +417,7 @@ func (tx *memoryTx) removeEqualityIndexEntry(
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
 		for _, term := range equalityIndexTermsForAttribute(definition, values) {
-			deleteMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entryKey)
+			deleteMemoryEqualityPosting(postings, partition, attribute, term.kind, term.value, entry.DN)
 		}
 	}
 	return nil

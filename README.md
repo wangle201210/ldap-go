@@ -1470,6 +1470,9 @@ while `nosubtypes` controls whether a parent attribute index can serve subtype
 filters. The index format is versioned and legacy/configuration mismatches
 rebuild or scan rather than produce false negatives. Requested rules without a
 proven equivalent normalization still fall back or reject explicitly.
+The bbolt v4 posting format uses fixed partition/attribute tokens and checked
+entry IDs with one DN reference per entry, keeping multi-valued indexes bounded
+at 100k scale without accepting hash collisions.
 Schema-normalized DNs are persisted under versioned `dn:v2:` physical keys, so
 normal Base Search, Bind, Modify, Delete, and equality-index maintenance perform
 direct key access instead of scanning a partition. Startup and writable offline
@@ -1495,8 +1498,11 @@ OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
 ```
 
 The comparison uses identical generated data, indexes, OpenLDAP client tools,
-and ordered workloads for both servers. It writes machine-readable JSON and
-TSV evidence; configuration and interpretation are documented in
+and ordered workloads for both servers. After timing, it applies the same
+write/error/Compare sequence and byte-compares canonical ordinary-attribute
+LDIF for full paged data and representative queries. It writes machine-readable
+JSON and TSV evidence; the bounded 100,000-entry command, configuration, and
+interpretation are documented in
 [Production qualification](docs/production-qualification.md#openldap-performance-comparison).
 
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`

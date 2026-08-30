@@ -57,6 +57,7 @@ concurrency=${QUALIFICATION_COMPARE_CONCURRENCY:-8}
 searches_per_connection=${QUALIFICATION_COMPARE_SEARCHES_PER_CONNECTION:-250}
 startup_timeout=${QUALIFICATION_COMPARE_STARTUP_TIMEOUT_SECONDS:-30}
 dry_run=${QUALIFICATION_COMPARE_DRY_RUN:-0}
+data_parity=${QUALIFICATION_COMPARE_DATA_PARITY:-1}
 ldap_go_port=${QUALIFICATION_COMPARE_LDAP_GO_PORT:-$((20000 + ($$ % 10000)))}
 openldap_port=${QUALIFICATION_COMPARE_OPENLDAP_PORT:-$((ldap_go_port + 1))}
 
@@ -98,8 +99,12 @@ search_memory_bytes=$((search_candidate_bytes * 2))
 
 require_uint QUALIFICATION_COMPARE_DRY_RUN "$dry_run"
 case "$dry_run" in 0|1) ;; *) die "QUALIFICATION_COMPARE_DRY_RUN must be 0 or 1" ;; esac
+require_uint QUALIFICATION_COMPARE_DATA_PARITY "$data_parity"
+case "$data_parity" in 0|1) ;; *) die "QUALIFICATION_COMPARE_DATA_PARITY must be 0 or 1" ;; esac
 [ "$max_entries" -le 250000 ] || die "QUALIFICATION_COMPARE_MAX_ENTRIES must not exceed 250000"
 [ "$entries" -le "$max_entries" ] || die "entry count $entries exceeds maximum $max_entries"
+[ "$data_parity" = 0 ] || [ "$entries" -ge 4 ] ||
+	die "data parity requires at least 4 entries"
 [ "$page_size" -le "$entries" ] || die "page size must not exceed entry count"
 [ "$modifications" -le "$entries" ] || die "modification count must not exceed entry count"
 [ "$concurrency" -le 256 ] || die "concurrency must not exceed 256"
@@ -115,9 +120,9 @@ case "${QUALIFICATION_COMPARE_ROOT_PASSWORD:-scale-qualification-local-secret}" 
 esac
 
 if [ "$dry_run" = 1 ]; then
-	printf 'entries=%s max_entries=%s page_size=%s indexed_searches=%s unindexed_searches=%s paged_traversals=%s modifications=%s concurrency=%s searches_per_connection=%s\n' \
+	printf 'entries=%s max_entries=%s page_size=%s indexed_searches=%s unindexed_searches=%s paged_traversals=%s modifications=%s concurrency=%s searches_per_connection=%s data_parity=%s\n' \
 		"$entries" "$max_entries" "$page_size" "$indexed_searches" "$unindexed_searches" \
-		"$paged_traversals" "$modifications" "$concurrency" "$searches_per_connection"
+		"$paged_traversals" "$modifications" "$concurrency" "$searches_per_connection" "$data_parity"
 	exit 0
 fi
 
@@ -136,6 +141,11 @@ slapadd=$(find_tool slapadd \
 	"${OPENLDAP_SLAPADD:-}" \
 	/opt/homebrew/opt/openldap/sbin/slapadd \
 	/usr/sbin/slapadd)
+slapindex=$(find_tool slapindex \
+	"${OPENLDAP_SLAPINDEX:-}" \
+	"${OPENLDAP_BUILD:-}/servers/slapd/slapindex" \
+	/opt/homebrew/opt/openldap/sbin/slapindex \
+	/usr/sbin/slapindex)
 ldapsearch=$(find_tool ldapsearch \
 	"${OPENLDAP_BUILD:-}/clients/tools/ldapsearch" \
 	/opt/homebrew/opt/openldap/bin/ldapsearch \
@@ -144,6 +154,13 @@ ldapmodify=$(find_tool ldapmodify \
 	"${OPENLDAP_BUILD:-}/clients/tools/ldapmodify" \
 	/opt/homebrew/opt/openldap/bin/ldapmodify \
 	/usr/bin/ldapmodify)
+ldapcompare=
+if [ "$data_parity" = 1 ]; then
+	ldapcompare=$(find_tool ldapcompare \
+		"${OPENLDAP_BUILD:-}/clients/tools/ldapcompare" \
+		/opt/homebrew/opt/openldap/bin/ldapcompare \
+		/usr/bin/ldapcompare)
+fi
 ldapwhoami=$(find_tool ldapwhoami \
 	"${OPENLDAP_BUILD:-}/clients/tools/ldapwhoami" \
 	/opt/homebrew/opt/openldap/bin/ldapwhoami \
@@ -188,10 +205,24 @@ else
 	(cd "$root" && go build -o "$binary" ./cmd/ldap-go)
 fi
 
+canonicalizer=
+if [ "$data_parity" = 1 ]; then
+	canonicalizer=${QUALIFICATION_COMPARE_LDIF_CANONICALIZER:-$artifact_dir/ldifcanonical}
+	if [ -n "${QUALIFICATION_COMPARE_LDIF_CANONICALIZER:-}" ]; then
+		case "$canonicalizer" in /*) ;; *) canonicalizer=$root/$canonicalizer ;; esac
+		[ -x "$canonicalizer" ] ||
+			die "QUALIFICATION_COMPARE_LDIF_CANONICALIZER is not executable: $canonicalizer"
+	else
+		command -v go >/dev/null 2>&1 || die "go is required for data parity canonicalization"
+		(cd "$root" && go build -o "$canonicalizer" ./scripts/qualification/ldifcanonical)
+	fi
+fi
+
 root_dn=cn=admin,dc=scale,dc=qualification
 people_dn=ou=people,dc=scale,dc=qualification
 password=${QUALIFICATION_COMPARE_ROOT_PASSWORD:-scale-qualification-local-secret}
 password_file=$artifact_dir/password
+wrong_password_file=$artifact_dir/wrong-password
 seed_ldif=$artifact_dir/seed.ldif
 content_ldif=$artifact_dir/content.ldif
 ldap_go_db=$artifact_dir/ldap-go.db
@@ -205,6 +236,7 @@ ldap_go_pid=
 openldap_pid=
 
 (umask 077 && printf '%s' "$password" >"$password_file")
+(umask 077 && printf '%s' 'parity-invalid-password' >"$wrong_password_file")
 
 process_running() {
 	pid=$1
@@ -235,7 +267,7 @@ cleanup() {
 	trap - EXIT HUP INT TERM
 	stop_process "$ldap_go_pid"
 	stop_process "$openldap_pid"
-	rm -f "$password_file"
+	rm -f "$password_file" "$wrong_password_file"
 	if [ "$status" -ne 0 ]; then
 		printf 'Comparison failed; artifacts retained at %s\n' "$artifact_dir" >&2
 	fi
@@ -296,6 +328,7 @@ olcDatabase: {1}mdb
 olcSuffix: dc=scale,dc=qualification
 olcRootDN: cn=admin,dc=scale,dc=qualification
 olcDbIndex: uid eq
+olcDbIndex: objectClass eq
 entryUUID: 31111111-1111-4111-8111-111111111111
 
 dn: dc=scale,dc=qualification
@@ -345,6 +378,68 @@ awk -v count="$modifications" 'BEGIN {
 	}
 }' >"$artifact_dir/modify.ldif"
 
+cat >"$artifact_dir/parity-operations.ldif" <<EOF
+dn: uid=scale-000001,$people_dn
+changetype: modify
+replace: cn
+cn: Parity User One
+-
+add: telephoneNumber
+telephoneNumber: 15550100
+-
+add: description
+description: parity-alpha
+description: parity-beta
+
+dn: uid=scale-000002,$people_dn
+changetype: modrdn
+newrdn: uid=parity-renamed
+deleteoldrdn: 1
+
+dn: uid=scale-000003,$people_dn
+changetype: delete
+
+dn: uid=parity-added,$people_dn
+changetype: add
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: parity-added
+cn: Parity Added User
+sn: Added
+mail: parity-added@example.test
+description: parity-created
+
+EOF
+
+cat >"$artifact_dir/parity-duplicate-add.ldif" <<EOF
+dn: uid=parity-added,$people_dn
+changetype: add
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: parity-added
+cn: Duplicate
+sn: Duplicate
+
+EOF
+
+cat >"$artifact_dir/parity-missing-modify.ldif" <<EOF
+dn: uid=parity-missing,$people_dn
+changetype: modify
+replace: description
+description: must-not-exist
+
+EOF
+
+cat >"$artifact_dir/parity-nonleaf-delete.ldif" <<EOF
+dn: $people_dn
+changetype: delete
+
+EOF
+
 cat >"$slapd_conf" <<EOF
 include $schema_dir/core.schema
 include $schema_dir/cosine.schema
@@ -360,6 +455,7 @@ rootdn "$root_dn"
 rootpw $password
 directory $openldap_data
 index uid eq
+index objectClass eq
 EOF
 
 cat >"$artifact_dir/effective-config.env" <<EOF
@@ -371,16 +467,19 @@ paged_traversals=$paged_traversals
 modifications=$modifications
 concurrency=$concurrency
 searches_per_connection=$searches_per_connection
+data_parity=$data_parity
 openldap_version=$openldap_version
 EOF
 
 printf 'Importing %s entries into both servers...\n' "$entries"
 measure ldap_go_import_ms "$binary" import -db "$ldap_go_db" -ldif "$seed_ldif" -replace \
 	>"$artifact_dir/ldap-go-import.log" 2>"$artifact_dir/ldap-go-import.err"
-measure ldap_go_reindex_ms "$binary" slapindex -db "$ldap_go_db" -n 1 uid \
+measure ldap_go_reindex_ms "$binary" slapindex -db "$ldap_go_db" -n 1 uid objectClass \
 	>"$artifact_dir/ldap-go-reindex.log" 2>"$artifact_dir/ldap-go-reindex.err"
 measure openldap_import_ms "$slapadd" -f "$slapd_conf" -l "$content_ldif" \
 	>"$artifact_dir/openldap-import.log" 2>"$artifact_dir/openldap-import.err"
+measure openldap_reindex_ms "$slapindex" -f "$slapd_conf" -n 1 uid objectClass \
+	>"$artifact_dir/openldap-reindex.log" 2>"$artifact_dir/openldap-reindex.err"
 
 wait_ready() {
 	uri=$1
@@ -434,6 +533,12 @@ search_paged() {
 	done
 }
 
+search_paged_once() {
+	uri=$1
+	"$ldapsearch" -H "$uri" -x -D "$root_dn" -y "$password_file" \
+		-LLL -E "pr=$page_size/noprompt" -b "$people_dn" '(uid=scale-*)' uid >/dev/null
+}
+
 search_concurrent() {
 	uri=$1
 	worker=0
@@ -455,9 +560,192 @@ modify_batch() {
 		-f "$artifact_dir/modify.ldif" >/dev/null
 }
 
+canonical_search() {
+	side=$1
+	uri=$2
+	label=$3
+	scope=$4
+	base=$5
+	filter=$6
+	raw=$artifact_dir/$side-$label.ldif
+	unsorted=$artifact_dir/$side-$label.unsorted
+	canonical=$artifact_dir/$side-$label.canonical
+	"$ldapsearch" -H "$uri" -x -D "$root_dn" -y "$password_file" \
+		-LLL -o ldif-wrap=no -E "pr=$page_size/noprompt" -s "$scope" \
+		-b "$base" "$filter" '*' >"$raw"
+	"$canonicalizer" -in "$raw" >"$unsorted"
+	LC_ALL=C sort "$unsorted" >"$canonical"
+	rm -f "$unsorted"
+	duplicate=$(cut -f 1 "$canonical" | uniq -d | sed -n '1p')
+	[ -z "$duplicate" ] || die "$side query $label returned duplicate DN key $duplicate"
+}
+
+compare_canonical_search() {
+	label=$1
+	scope=$2
+	base=$3
+	filter=$4
+	expected=$5
+	canonical_search ldap-go "$ldap_go_uri" "$label" "$scope" "$base" "$filter"
+	canonical_search openldap "$openldap_uri" "$label" "$scope" "$base" "$filter"
+	ldap_go_canonical=$artifact_dir/ldap-go-$label.canonical
+	openldap_canonical=$artifact_dir/openldap-$label.canonical
+	if ! cmp -s "$ldap_go_canonical" "$openldap_canonical"; then
+		set +e
+		diff -u "$openldap_canonical" "$ldap_go_canonical" |
+			sed -n '1,200p' >"$artifact_dir/$label.diff"
+		set -e
+		die "canonical data differs for query $label; see $artifact_dir/$label.diff"
+	fi
+	count=$(wc -l <"$ldap_go_canonical" | tr -d ' ')
+	if [ "$expected" -ge 0 ] && [ "$count" -ne "$expected" ]; then
+		die "query $label returned $count canonical entries, expected $expected"
+	fi
+	data_parity_checks=$((data_parity_checks + 1))
+}
+
+ldapmodify_status() {
+	uri=$1
+	ldif_file=$2
+	log_file=$3
+	set +e
+	"$ldapmodify" -H "$uri" -x -D "$root_dn" -y "$password_file" \
+		-f "$ldif_file" >/dev/null 2>"$log_file"
+	status=$?
+	set -e
+	printf '%s\n' "$status"
+}
+
+ldapcompare_status() {
+	uri=$1
+	dn=$2
+	assertion=$3
+	log_file=$4
+	set +e
+	"$ldapcompare" -H "$uri" -x -D "$root_dn" -y "$password_file" \
+		"$dn" "$assertion" >/dev/null 2>"$log_file"
+	status=$?
+	set -e
+	printf '%s\n' "$status"
+}
+
+ldapwhoami_status() {
+	uri=$1
+	credential_file=$2
+	log_file=$3
+	set +e
+	"$ldapwhoami" -H "$uri" -x -D "$root_dn" -y "$credential_file" \
+		-o nettimeout=5 >/dev/null 2>"$log_file"
+	status=$?
+	set -e
+	printf '%s\n' "$status"
+}
+
+compare_operation_status() {
+	label=$1
+	ldap_go_status=$2
+	openldap_status=$3
+	require_failure=$4
+	[ "$ldap_go_status" -eq "$openldap_status" ] ||
+		die "$label status differs: ldap-go=$ldap_go_status OpenLDAP=$openldap_status"
+	if [ "$require_failure" = 1 ] && [ "$ldap_go_status" -eq 0 ]; then
+		die "$label unexpectedly succeeded"
+	fi
+	printf '%s\t%s\t%s\n' "$label" "$ldap_go_status" "$openldap_status" \
+		>>"$artifact_dir/data-parity-results.tsv"
+	data_parity_checks=$((data_parity_checks + 1))
+}
+
+run_data_parity() {
+	printf 'check\tldap_go_status\topenldap_status\n' >"$artifact_dir/data-parity-results.tsv"
+	expected_subtree_entries=$((entries + 2))
+	compare_canonical_search initial-data sub "dc=scale,dc=qualification" \
+		'(objectClass=*)' "$expected_subtree_entries"
+
+	"$ldapmodify" -H "$ldap_go_uri" -x -D "$root_dn" -y "$password_file" \
+		-f "$artifact_dir/parity-operations.ldif" \
+		>"$artifact_dir/ldap-go-parity-operations.out" \
+		2>"$artifact_dir/ldap-go-parity-operations.err"
+	"$ldapmodify" -H "$openldap_uri" -x -D "$root_dn" -y "$password_file" \
+		-f "$artifact_dir/parity-operations.ldif" \
+		>"$artifact_dir/openldap-parity-operations.out" \
+		2>"$artifact_dir/openldap-parity-operations.err"
+	compare_operation_status successful-change-sequence 0 0 0
+
+	ldap_go_status=$(ldapwhoami_status "$ldap_go_uri" "$password_file" \
+		"$artifact_dir/ldap-go-bind-success.err")
+	openldap_status=$(ldapwhoami_status "$openldap_uri" "$password_file" \
+		"$artifact_dir/openldap-bind-success.err")
+	compare_operation_status bind-success "$ldap_go_status" "$openldap_status" 0
+	[ "$ldap_go_status" -eq 0 ] || die "valid Bind/WhoAmI failed with status $ldap_go_status"
+	ldap_go_status=$(ldapwhoami_status "$ldap_go_uri" "$wrong_password_file" \
+		"$artifact_dir/ldap-go-bind-invalid.err")
+	openldap_status=$(ldapwhoami_status "$openldap_uri" "$wrong_password_file" \
+		"$artifact_dir/openldap-bind-invalid.err")
+	compare_operation_status bind-invalid "$ldap_go_status" "$openldap_status" 1
+
+	ldap_go_status=$(ldapmodify_status "$ldap_go_uri" \
+		"$artifact_dir/parity-duplicate-add.ldif" \
+		"$artifact_dir/ldap-go-duplicate-add.err")
+	openldap_status=$(ldapmodify_status "$openldap_uri" \
+		"$artifact_dir/parity-duplicate-add.ldif" \
+		"$artifact_dir/openldap-duplicate-add.err")
+	compare_operation_status duplicate-add "$ldap_go_status" "$openldap_status" 1
+
+	ldap_go_status=$(ldapmodify_status "$ldap_go_uri" \
+		"$artifact_dir/parity-missing-modify.ldif" \
+		"$artifact_dir/ldap-go-missing-modify.err")
+	openldap_status=$(ldapmodify_status "$openldap_uri" \
+		"$artifact_dir/parity-missing-modify.ldif" \
+		"$artifact_dir/openldap-missing-modify.err")
+	compare_operation_status missing-modify "$ldap_go_status" "$openldap_status" 1
+
+	ldap_go_status=$(ldapmodify_status "$ldap_go_uri" \
+		"$artifact_dir/parity-nonleaf-delete.ldif" \
+		"$artifact_dir/ldap-go-nonleaf-delete.err")
+	openldap_status=$(ldapmodify_status "$openldap_uri" \
+		"$artifact_dir/parity-nonleaf-delete.ldif" \
+		"$artifact_dir/openldap-nonleaf-delete.err")
+	compare_operation_status nonleaf-delete "$ldap_go_status" "$openldap_status" 1
+
+	parity_renamed_dn="uid=parity-renamed,$people_dn"
+	ldap_go_true=$(ldapcompare_status "$ldap_go_uri" "$parity_renamed_dn" \
+		'uid:parity-renamed' "$artifact_dir/ldap-go-compare-true.err")
+	openldap_true=$(ldapcompare_status "$openldap_uri" "$parity_renamed_dn" \
+		'uid:parity-renamed' "$artifact_dir/openldap-compare-true.err")
+	compare_operation_status compare-true "$ldap_go_true" "$openldap_true" 1
+	ldap_go_false=$(ldapcompare_status "$ldap_go_uri" "$parity_renamed_dn" \
+		'uid:not-the-value' "$artifact_dir/ldap-go-compare-false.err")
+	openldap_false=$(ldapcompare_status "$openldap_uri" "$parity_renamed_dn" \
+		'uid:not-the-value' "$artifact_dir/openldap-compare-false.err")
+	compare_operation_status compare-false "$ldap_go_false" "$openldap_false" 1
+	[ "$ldap_go_true" -ne "$ldap_go_false" ] ||
+		die "Compare TRUE and FALSE returned the same client status $ldap_go_true"
+
+	compare_canonical_search final-data sub "dc=scale,dc=qualification" \
+		'(objectClass=*)' "$expected_subtree_entries"
+	data_parity_entries=$(wc -l <"$artifact_dir/ldap-go-final-data.canonical" | tr -d ' ')
+	compare_canonical_search renamed-indexed sub "$people_dn" \
+		'(uid=parity-renamed)' 1
+	compare_canonical_search compound-filter sub "$people_dn" \
+		'(|(uid=parity-renamed)(telephoneNumber=15550100))' 2
+	compare_canonical_search added-base base "uid=parity-added,$people_dn" \
+		'(objectClass=*)' 1
+	compare_canonical_search missing-filter sub "$people_dn" \
+		'(uid=parity-missing)' 0
+	compare_canonical_search substring-filter one "$people_dn" \
+		'(uid=scale-0000*)' -1
+
+	set -- $(cksum "$artifact_dir/ldap-go-final-data.canonical")
+	data_parity_checksum=$1
+	data_parity_bytes=$2
+}
+
 printf 'Validating equal request and result counts...\n'
-search_indexed "$ldap_go_uri" "$artifact_dir/ldap-go-indexed-validation.ldif"
-search_indexed "$openldap_uri" "$artifact_dir/openldap-indexed-validation.ldif"
+measure ldap_go_indexed_cold_ms search_indexed \
+	"$ldap_go_uri" "$artifact_dir/ldap-go-indexed-validation.ldif"
+measure openldap_indexed_cold_ms search_indexed \
+	"$openldap_uri" "$artifact_dir/openldap-indexed-validation.ldif"
 ldap_go_indexed_count=$(awk '/^dn: uid=scale-[0-9]+,ou=people,dc=scale,dc=qualification$/ {count++} END {print count+0}' \
 	"$artifact_dir/ldap-go-indexed-validation.ldif")
 openldap_indexed_count=$(awk '/^dn: uid=scale-[0-9]+,ou=people,dc=scale,dc=qualification$/ {count++} END {print count+0}' \
@@ -478,12 +766,16 @@ measure openldap_indexed_1_ms search_indexed "$openldap_uri" /dev/null
 measure ldap_go_indexed_1_ms search_indexed "$ldap_go_uri" /dev/null
 measure ldap_go_indexed_2_ms search_indexed "$ldap_go_uri" /dev/null
 measure openldap_indexed_2_ms search_indexed "$openldap_uri" /dev/null
+measure openldap_unindexed_cold_ms search_unindexed "$openldap_uri"
+measure ldap_go_unindexed_cold_ms search_unindexed "$ldap_go_uri"
 measure openldap_unindexed_1_ms search_unindexed "$openldap_uri"
 measure ldap_go_unindexed_1_ms search_unindexed "$ldap_go_uri"
 measure ldap_go_unindexed_2_ms search_unindexed "$ldap_go_uri"
 measure openldap_unindexed_2_ms search_unindexed "$openldap_uri"
 
 printf 'Measuring paging and concurrent Search...\n'
+measure openldap_paged_cold_ms search_paged_once "$openldap_uri"
+measure ldap_go_paged_cold_ms search_paged_once "$ldap_go_uri"
 measure openldap_paged_1_ms search_paged "$openldap_uri"
 measure ldap_go_paged_1_ms search_paged "$ldap_go_uri"
 measure ldap_go_paged_2_ms search_paged "$ldap_go_uri"
@@ -527,6 +819,22 @@ ldap_go_db_bytes=$(wc -c <"$ldap_go_db" | tr -d ' ')
 openldap_db_bytes=$(find "$openldap_data" -type f -exec wc -c {} \; |
 	awk '{total += $1} END {print total+0}')
 
+sleep 10
+ldap_go_rss_quiescent_bytes=$(rss_bytes_for_pid "$ldap_go_pid")
+openldap_rss_quiescent_bytes=$(rss_bytes_for_pid "$openldap_pid")
+case "$ldap_go_rss_quiescent_bytes:$openldap_rss_quiescent_bytes" in
+	*[!0-9:]*|:*|*:) ldap_go_rss_quiescent_bytes=0; openldap_rss_quiescent_bytes=0 ;;
+esac
+
+data_parity_checks=0
+data_parity_entries=0
+data_parity_checksum=0
+data_parity_bytes=0
+if [ "$data_parity" = 1 ]; then
+	printf 'Comparing canonical data and operation results...\n'
+	run_data_parity
+fi
+
 ldap_go_indexed_ms=$(( (ldap_go_indexed_1_ms + ldap_go_indexed_2_ms) / 2 ))
 openldap_indexed_ms=$(( (openldap_indexed_1_ms + openldap_indexed_2_ms) / 2 ))
 ldap_go_unindexed_ms=$(( (ldap_go_unindexed_1_ms + ldap_go_unindexed_2_ms) / 2 ))
@@ -536,6 +844,7 @@ openldap_paged_ms=$(( (openldap_paged_1_ms + openldap_paged_2_ms) / 2 ))
 ldap_go_concurrent_ms=$(( (ldap_go_concurrent_1_ms + ldap_go_concurrent_2_ms) / 2 ))
 openldap_concurrent_ms=$(( (openldap_concurrent_1_ms + openldap_concurrent_2_ms) / 2 ))
 ldap_go_import_index_ms=$((ldap_go_import_ms + ldap_go_reindex_ms))
+openldap_import_index_ms=$((openldap_import_ms + openldap_reindex_ms))
 
 ratio() {
 	awk -v numerator="$1" -v denominator="$2" 'BEGIN {
@@ -545,26 +854,41 @@ ratio() {
 
 {
 	printf 'metric\tldap_go\topenldap\tldap_go_over_openldap\tworkload\n'
-	printf 'offline_import_plus_index_ms\t%s\t%s\t%s\t%s entries with uid equality index\n' \
-		"$ldap_go_import_index_ms" "$openldap_import_ms" "$(ratio "$ldap_go_import_index_ms" "$openldap_import_ms")" "$entries"
+	printf 'offline_import_plus_index_ms\t%s\t%s\t%s\t%s entries with uid/objectClass equality indexes\n' \
+		"$ldap_go_import_index_ms" "$openldap_import_index_ms" "$(ratio "$ldap_go_import_index_ms" "$openldap_import_index_ms")" "$entries"
 	printf 'startup_ready_ms\t%s\t%s\t%s\tauthenticated WhoAmI readiness\n' \
 		"$ldap_go_startup_ms" "$openldap_startup_ms" "$(ratio "$ldap_go_startup_ms" "$openldap_startup_ms")"
 	printf 'indexed_search_ms\t%s\t%s\t%s\t%s sequential searches per round\n' \
 		"$ldap_go_indexed_ms" "$openldap_indexed_ms" "$(ratio "$ldap_go_indexed_ms" "$openldap_indexed_ms")" "$indexed_searches"
+	printf 'indexed_cold_ms\t%s\t%s\t%s\tfirst %s sequential searches with LDIF output\n' \
+		"$ldap_go_indexed_cold_ms" "$openldap_indexed_cold_ms" \
+		"$(ratio "$ldap_go_indexed_cold_ms" "$openldap_indexed_cold_ms")" "$indexed_searches"
 	printf 'unindexed_negative_ms\t%s\t%s\t%s\t%s full negative scans per round\n' \
 		"$ldap_go_unindexed_ms" "$openldap_unindexed_ms" "$(ratio "$ldap_go_unindexed_ms" "$openldap_unindexed_ms")" "$unindexed_searches"
+	printf 'unindexed_cold_ms\t%s\t%s\t%s\tfirst %s full negative scans\n' \
+		"$ldap_go_unindexed_cold_ms" "$openldap_unindexed_cold_ms" \
+		"$(ratio "$ldap_go_unindexed_cold_ms" "$openldap_unindexed_cold_ms")" "$unindexed_searches"
 	printf 'paged_search_ms\t%s\t%s\t%s\t%s full traversals per round, page size %s\n' \
 		"$ldap_go_paged_ms" "$openldap_paged_ms" "$(ratio "$ldap_go_paged_ms" "$openldap_paged_ms")" "$paged_traversals" "$page_size"
+	printf 'paged_cold_ms\t%s\t%s\t%s\tone uncached full traversal, page size %s\n' \
+		"$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms" "$(ratio "$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms")" "$page_size"
 	printf 'concurrent_indexed_ms\t%s\t%s\t%s\t%s connections x %s searches per round\n' \
 		"$ldap_go_concurrent_ms" "$openldap_concurrent_ms" "$(ratio "$ldap_go_concurrent_ms" "$openldap_concurrent_ms")" "$concurrency" "$searches_per_connection"
 	printf 'modify_ms\t%s\t%s\t%s\t%s replaces\n' \
 		"$ldap_go_modify_ms" "$openldap_modify_ms" "$(ratio "$ldap_go_modify_ms" "$openldap_modify_ms")" "$modifications"
 	printf 'rss_bytes\t%s\t%s\t%s\tafter workload\n' \
 		"$ldap_go_rss_bytes" "$openldap_rss_bytes" "$(ratio "$ldap_go_rss_bytes" "$openldap_rss_bytes")"
+	printf 'rss_quiescent_bytes\t%s\t%s\t%s\tafter 10 seconds idle\n' \
+		"$ldap_go_rss_quiescent_bytes" "$openldap_rss_quiescent_bytes" \
+		"$(ratio "$ldap_go_rss_quiescent_bytes" "$openldap_rss_quiescent_bytes")"
 	printf 'database_bytes\t%s\t%s\t%s\tlogical file size\n' \
 		"$ldap_go_db_bytes" "$openldap_db_bytes" "$(ratio "$ldap_go_db_bytes" "$openldap_db_bytes")"
 	printf 'unique_entries\t%s\t%s\t1.00\tpaged correctness\n' "$ldap_go_unique" "$openldap_unique"
 	printf 'modified_entries\t%s\t%s\t1.00\tpost-write correctness\n' "$ldap_go_modified" "$openldap_modified"
+	printf 'canonical_data_entries\t%s\t%s\t1.00\tpost-operation ordinary attribute parity\n' \
+		"$data_parity_entries" "$data_parity_entries"
+	printf 'data_parity_checks\t%s\t%s\t1.00\tcanonical query and result-code checks\n' \
+		"$data_parity_checks" "$data_parity_checks"
 } >"$results"
 
 finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -583,19 +907,21 @@ cat >"$report" <<EOF
     "paged_traversals": $paged_traversals,
     "modifications": $modifications,
     "concurrency": $concurrency,
-    "searches_per_connection": $searches_per_connection
+    "searches_per_connection": $searches_per_connection,
+    "data_parity": $data_parity
   },
   "timings_ms": {
-    "ldap_go": {"import": $ldap_go_import_ms, "reindex": $ldap_go_reindex_ms, "import_plus_index": $ldap_go_import_index_ms, "startup": $ldap_go_startup_ms, "indexed": $ldap_go_indexed_ms, "unindexed": $ldap_go_unindexed_ms, "paged": $ldap_go_paged_ms, "concurrent": $ldap_go_concurrent_ms, "modify": $ldap_go_modify_ms},
-    "openldap": {"import_plus_index": $openldap_import_ms, "startup": $openldap_startup_ms, "indexed": $openldap_indexed_ms, "unindexed": $openldap_unindexed_ms, "paged": $openldap_paged_ms, "concurrent": $openldap_concurrent_ms, "modify": $openldap_modify_ms}
+    "ldap_go": {"import": $ldap_go_import_ms, "reindex": $ldap_go_reindex_ms, "import_plus_index": $ldap_go_import_index_ms, "startup": $ldap_go_startup_ms, "indexed": $ldap_go_indexed_ms, "indexed_cold": $ldap_go_indexed_cold_ms, "unindexed": $ldap_go_unindexed_ms, "unindexed_cold": $ldap_go_unindexed_cold_ms, "paged": $ldap_go_paged_ms, "paged_cold": $ldap_go_paged_cold_ms, "concurrent": $ldap_go_concurrent_ms, "modify": $ldap_go_modify_ms},
+    "openldap": {"import": $openldap_import_ms, "reindex": $openldap_reindex_ms, "import_plus_index": $openldap_import_index_ms, "startup": $openldap_startup_ms, "indexed": $openldap_indexed_ms, "indexed_cold": $openldap_indexed_cold_ms, "unindexed": $openldap_unindexed_ms, "unindexed_cold": $openldap_unindexed_cold_ms, "paged": $openldap_paged_ms, "paged_cold": $openldap_paged_cold_ms, "concurrent": $openldap_concurrent_ms, "modify": $openldap_modify_ms}
   },
   "resources": {
-    "ldap_go": {"rss_bytes": $ldap_go_rss_bytes, "database_bytes": $ldap_go_db_bytes},
-    "openldap": {"rss_bytes": $openldap_rss_bytes, "database_bytes": $openldap_db_bytes}
+    "ldap_go": {"rss_bytes": $ldap_go_rss_bytes, "rss_quiescent_bytes": $ldap_go_rss_quiescent_bytes, "database_bytes": $ldap_go_db_bytes},
+    "openldap": {"rss_bytes": $openldap_rss_bytes, "rss_quiescent_bytes": $openldap_rss_quiescent_bytes, "database_bytes": $openldap_db_bytes}
   },
   "correctness": {
     "ldap_go": {"indexed_results": $ldap_go_indexed_count, "unique_entries": $ldap_go_unique, "modified_entries": $ldap_go_modified},
-    "openldap": {"indexed_results": $openldap_indexed_count, "unique_entries": $openldap_unique, "modified_entries": $openldap_modified}
+    "openldap": {"indexed_results": $openldap_indexed_count, "unique_entries": $openldap_unique, "modified_entries": $openldap_modified},
+    "data_parity": {"enabled": $data_parity, "canonical_entries": $data_parity_entries, "checks": $data_parity_checks, "checksum": "$data_parity_checksum", "canonical_bytes": $data_parity_bytes}
   }
 }
 EOF
@@ -604,7 +930,7 @@ stop_process "$ldap_go_pid"
 ldap_go_pid=
 stop_process "$openldap_pid"
 openldap_pid=
-rm -f "$password_file"
+rm -f "$password_file" "$wrong_password_file"
 trap - EXIT HUP INT TERM
 
 printf 'OpenLDAP comparison passed.\n'

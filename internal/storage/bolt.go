@@ -23,6 +23,7 @@ var (
 	metaBucket                = []byte("metadata")
 	equalityIndexBucket       = []byte("indexes:eq")
 	equalityIndexConfigBucket = []byte("indexes:eq:config")
+	equalityIndexRefBucket    = []byte("indexes:eq:refs")
 	contextsKey               = []byte("naming-contexts")
 	metadataPrefix            = []byte("value:")
 )
@@ -89,6 +90,7 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 			metaBucket,
 			equalityIndexBucket,
 			equalityIndexConfigBucket,
+			equalityIndexRefBucket,
 		} {
 			if tx.Bucket(name) == nil {
 				needsBuckets = true
@@ -112,7 +114,10 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 			if _, err := tx.CreateBucketIfNotExists(equalityIndexBucket); err != nil {
 				return err
 			}
-			_, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket)
+			if _, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket); err != nil {
+				return err
+			}
+			_, err := tx.CreateBucketIfNotExists(equalityIndexRefBucket)
 			return err
 		}); err != nil {
 			_ = store.Close()
@@ -344,6 +349,7 @@ type boltTx struct {
 	meta                 *bolt.Bucket
 	equalityIndexes      *bolt.Bucket
 	equalityIndexConfigs *bolt.Bucket
+	equalityIndexRefs    *bolt.Bucket
 }
 
 func (tx *boltTx) StorageSnapshotRevision() (uint64, bool) {
@@ -361,6 +367,7 @@ func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
 		meta:                 tx.Bucket(metaBucket),
 		equalityIndexes:      tx.Bucket(equalityIndexBucket),
 		equalityIndexConfigs: tx.Bucket(equalityIndexConfigBucket),
+		equalityIndexRefs:    tx.Bucket(equalityIndexRefBucket),
 	}
 }
 
@@ -381,6 +388,7 @@ func (tx *boltTx) applyFillPercent() {
 		tx.meta,
 		tx.equalityIndexes,
 		tx.equalityIndexConfigs,
+		tx.equalityIndexRefs,
 	} {
 		if bucket != nil {
 			bucket.FillPercent = tx.fillPercent
@@ -609,6 +617,8 @@ func (tx *boltTx) forEachSchemaAwarePhysicalIn(
 	}
 	return false, nil
 }
+
+func (*boltTx) schemaAwarePhysicalIterationStable() bool { return true }
 
 func (tx *boltTx) ForEachPartition(
 	fn func(string, directory.Entry) error,
@@ -898,6 +908,11 @@ func (tx *boltTx) PutIn(
 			return err
 		}
 	}
+	if partition == "" {
+		if err := tx.meta.Delete(genericMetadataKey(partitionedEntryKeysMetadataKey)); err != nil {
+			return err
+		}
+	}
 	return tx.invalidateEqualityIndexes(partition)
 }
 
@@ -1116,6 +1131,7 @@ func (tx *boltTx) Clear() error {
 	for _, bucketName := range [][]byte{
 		equalityIndexBucket,
 		equalityIndexConfigBucket,
+		equalityIndexRefBucket,
 	} {
 		if tx.tx.Bucket(bucketName) != nil {
 			if err := tx.tx.DeleteBucket(bucketName); err != nil {
@@ -1133,6 +1149,11 @@ func (tx *boltTx) Clear() error {
 	}
 	tx.equalityIndexes = indexes
 	tx.equalityIndexConfigs = configs
+	references, err := tx.tx.CreateBucket(equalityIndexRefBucket)
+	if err != nil {
+		return err
+	}
+	tx.equalityIndexRefs = references
 	tx.applyFillPercent()
 	return nil
 }

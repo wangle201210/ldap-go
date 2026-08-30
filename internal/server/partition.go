@@ -10,6 +10,10 @@ import (
 )
 
 func (server *Server) partitionLegacyConfigurationEntries(ctx context.Context) error {
+	current, err := partitionedEntryKeysCurrent(ctx, server.config.Store)
+	if err != nil || current {
+		return err
+	}
 	var entries []directory.Entry
 	if err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		return reader.ForEachIn("", func(entry directory.Entry) error {
@@ -65,6 +69,10 @@ func (server *Server) partitionDefaultEntries(
 	ctx context.Context,
 	runtime *runtimeState,
 ) error {
+	current, err := partitionedEntryKeysCurrent(ctx, server.config.Store)
+	if err != nil || current {
+		return err
+	}
 	hasEntries := false
 	if err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		return reader.ForEachIn("", func(directory.Entry) error {
@@ -75,7 +83,9 @@ func (server *Server) partitionDefaultEntries(
 		return fmt.Errorf("scan unpartitioned entries: %w", err)
 	}
 	if !hasEntries {
-		return nil
+		return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+			return storage.MarkPartitionedEntryKeys(writer)
+		})
 	}
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		var entries []directory.Entry
@@ -123,8 +133,21 @@ func (server *Server) partitionDefaultEntries(
 				return fmt.Errorf("remove unpartitioned entry %q: %w", entry.DN, err)
 			}
 		}
-		return nil
+		return storage.MarkPartitionedEntryKeys(writer)
 	})
+}
+
+func partitionedEntryKeysCurrent(
+	ctx context.Context,
+	store storage.Store,
+) (bool, error) {
+	current := false
+	err := store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		current, err = storage.PartitionedEntryKeysCurrent(reader)
+		return err
+	})
+	return current, err
 }
 
 func partitionForLegacyDN(

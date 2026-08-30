@@ -51,6 +51,11 @@ type pendingContentEntry struct {
 	entry directory.Entry
 }
 
+type bootstrapImportContext struct {
+	identity directory.DN
+	legacy   directory.DN
+}
+
 var errImportDryRun = errors.New("rollback validated LDIF import")
 
 // ImportLDIF atomically imports slapcat LDIF, including operational attributes.
@@ -249,6 +254,17 @@ func importLDIF(
 				return err
 			}
 		}
+		var bootstrapContexts map[string]bootstrapImportContext
+		if options.Replace && !targetSelected &&
+			!databaseTargetsOwnNamingContexts(configuredTargets) {
+			bootstrapContexts, err = inferBootstrapImportContexts(
+				pendingContent,
+				identitySchema,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		var gluedSubordinates map[string]struct{}
 		if targetSelected && !options.DisableSubordinateGlue {
 			subordinates, err := glueSubordinateTargets(tx, target, configuredTargets)
@@ -283,6 +299,21 @@ func importLDIF(
 						"import %q: no configured OpenLDAP database owns this DN",
 						pending.entry.DN,
 					)
+				} else if options.Replace {
+					context, found := bootstrapContexts[identityDN.Key()]
+					if !found {
+						return fmt.Errorf(
+							"import %q: cannot determine bootstrap naming context",
+							pending.entry.DN,
+						)
+					}
+					effectiveTarget = databaseTarget{
+						name:      "bootstrap",
+						partition: storage.OpenLDAPBootstrapPartition(context.legacy),
+						suffixes:  []directory.DN{context.identity},
+						lastMod:   true,
+					}
+					toolTarget = effectiveTarget
 				}
 			} else {
 				writeTarget, owned, moreSpecific := selectedDatabaseWriteTarget(
@@ -411,6 +442,20 @@ func importLDIF(
 		if err := tx.SetNamingContexts(contexts); err != nil {
 			return fmt.Errorf("store naming contexts: %w", err)
 		}
+		if options.Replace {
+			hasUnpartitionedEntries := false
+			if err := tx.ForEachIn("", func(directory.Entry) error {
+				hasUnpartitionedEntries = true
+				return nil
+			}); err != nil {
+				return fmt.Errorf("verify partitioned entry keys: %w", err)
+			}
+			if !hasUnpartitionedEntries {
+				if err := storage.MarkPartitionedEntryKeys(tx); err != nil {
+					return fmt.Errorf("mark partitioned entry keys: %w", err)
+				}
+			}
+		}
 		result.NamingContexts = contexts
 		if options.DryRun {
 			return errImportDryRun
@@ -424,6 +469,52 @@ func importLDIF(
 		return ImportResult{}, err
 	}
 	return result, nil
+}
+
+func inferBootstrapImportContexts(
+	entries []pendingContentEntry,
+	normalizer directory.DNAttributeNormalizer,
+) (map[string]bootstrapImportContext, error) {
+	candidates := make(map[string]bootstrapImportContext, len(entries))
+	for _, pending := range entries {
+		legacy, err := directory.ParseDN(pending.entry.DN)
+		if err != nil {
+			return nil, fmt.Errorf("import %q: parse bootstrap DN: %w", pending.entry.DN, err)
+		}
+		identity, err := directory.ParseDNWithNormalizer(pending.entry.DN, normalizer)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"import %q: normalize bootstrap DN identity: %w",
+				pending.entry.DN,
+				err,
+			)
+		}
+		if identity.Depth() == 0 {
+			return nil, fmt.Errorf("import %q: content DN must not be empty", pending.entry.DN)
+		}
+		candidates[identity.Key()] = bootstrapImportContext{
+			identity: identity,
+			legacy:   legacy,
+		}
+	}
+
+	contexts := make(map[string]bootstrapImportContext, len(candidates))
+	for key, candidate := range candidates {
+		context := candidate
+		for {
+			parent, hasParent := context.identity.Parent()
+			if !hasParent || parent.Depth() == 0 {
+				break
+			}
+			ancestor, exists := candidates[parent.Key()]
+			if !exists {
+				break
+			}
+			context = ancestor
+		}
+		contexts[key] = context
+	}
+	return contexts, nil
 }
 
 type importCSNGenerator struct {

@@ -89,7 +89,7 @@ func (tx *boltTx) equalityIndexOrderingPostings(
 		if err := tx.ctx.Err(); err != nil {
 			return nil, err
 		}
-		_, _, kind, value, entryKey, err := decodeEqualityIndexPostingKey(key)
+		_, _, kind, value, entryReference, err := decodeEqualityIndexPostingKey(key)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +104,7 @@ func (tx *boltTx) equalityIndexOrderingPostings(
 		} else if comparison > 0 {
 			break
 		}
-		keys[entryKey] = struct{}{}
+		keys[entryReference] = struct{}{}
 	}
 	result := make([]string, 0, len(keys))
 	for key := range keys {
@@ -115,21 +115,58 @@ func (tx *boltTx) equalityIndexOrderingPostings(
 }
 
 func (tx *boltTx) equalityIndexEntries(
-	keys []string,
+	partition string,
+	references []string,
+	schema EqualityIndexSchema,
 ) ([]directory.Entry, error) {
-	entries := make([]directory.Entry, 0, len(keys))
-	for _, key := range keys {
+	entries := make([]directory.Entry, 0, len(references))
+	for _, entryID := range references {
 		if err := tx.ctx.Err(); err != nil {
 			return nil, err
 		}
+		if len(entryID) != equalityIndexEntryIDSize || tx.equalityIndexRefs == nil {
+			return nil, errors.New("equality index entry reference is invalid")
+		}
+		encodedReference := tx.equalityIndexRefs.Get([]byte(entryID))
+		if encodedReference == nil {
+			return nil, fmt.Errorf("equality index references missing entry ID %x", entryID)
+		}
+		referencePartition, reference, err := decodeEqualityIndexEntryReference(encodedReference)
+		if err != nil {
+			return nil, err
+		}
+		if referencePartition != partition {
+			return nil, fmt.Errorf(
+				"equality index entry ID %x crosses partitions %q and %q",
+				entryID,
+				referencePartition,
+				partition,
+			)
+		}
+		dn, err := resolveEqualityIndexDNReference(schema, reference)
+		if err != nil {
+			return nil, fmt.Errorf("resolve equality index DN reference %q: %w", reference, err)
+		}
+		key := partitionedEntryKey(partition, dn.Key())
 		value := tx.entries.Get([]byte(key))
+		if value == nil {
+			legacy, legacyErr := directory.ParseDN(reference)
+			if legacyErr != nil {
+				return nil, legacyErr
+			}
+			legacyKey := partitionedEntryKey(partition, legacy.Key())
+			if legacyKey != key {
+				key = legacyKey
+				value = tx.entries.Get([]byte(key))
+			}
+		}
 		if value == nil {
 			return nil, fmt.Errorf(
 				"equality index references missing entry key %q",
 				key,
 			)
 		}
-		partition, entryKey := splitPartitionedEntryKey(key)
+		_, entryKey := splitPartitionedEntryKey(key)
 		ready, readyErr := tx.schemaAwareDNIdentityReady(partition)
 		if readyErr != nil {
 			return nil, readyErr
@@ -148,9 +185,10 @@ func (tx *boltTx) equalityIndexEntries(
 				return nil, decodeErr
 			}
 		}
-		if isSchemaAwareDNKey(entryKey) {
-			entry = entry.WithDNIdentityKey(entryKey)
-		}
+		entry = entry.WithNormalizedDNHint(
+			dn,
+			dn.LegacyKey()+"\x00"+dn.Key(),
+		)
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -378,6 +416,9 @@ func (tx *boltTx) buildEqualityIndexes(
 	if err := tx.ensureEqualityIndexBuckets(); err != nil {
 		return err
 	}
+	if err := tx.validateEqualityIndexTokens(partition, config); err != nil {
+		return err
+	}
 	if err := tx.clearEqualityIndexPostings(partition); err != nil {
 		return err
 	}
@@ -410,6 +451,67 @@ func (tx *boltTx) buildEqualityIndexes(
 	})
 }
 
+func (tx *boltTx) validateEqualityIndexTokens(
+	partition string,
+	config EqualityIndexConfig,
+) error {
+	partitionTokens := make(map[string]string)
+	attributeTokens := make(map[string]string)
+	register := func(candidatePartition string, candidate EqualityIndexConfig) error {
+		partitionToken := string(appendEqualityIndexToken(
+			nil,
+			"partition",
+			candidatePartition,
+			equalityIndexTokenSize,
+		))
+		if previous, found := partitionTokens[partitionToken]; found && previous != candidatePartition {
+			return fmt.Errorf(
+				"equality index partition token collision between %q and %q",
+				previous,
+				candidatePartition,
+			)
+		}
+		partitionTokens[partitionToken] = candidatePartition
+		for _, definition := range candidate.Attributes {
+			attributeToken := string(appendEqualityIndexToken(
+				nil,
+				"attribute",
+				definition.Attribute,
+				equalityIndexTokenSize,
+			))
+			if previous, found := attributeTokens[attributeToken]; found &&
+				previous != definition.Attribute {
+				return fmt.Errorf(
+					"equality index attribute token collision between %q and %q",
+					previous,
+					definition.Attribute,
+				)
+			}
+			attributeTokens[attributeToken] = definition.Attribute
+		}
+		return nil
+	}
+	if tx.equalityIndexConfigs != nil {
+		if err := tx.equalityIndexConfigs.ForEach(func(key, value []byte) error {
+			if string(key) == partition {
+				return nil
+			}
+			var existing EqualityIndexConfig
+			if err := json.Unmarshal(value, &existing); err != nil {
+				return err
+			}
+			existing, err := normalizeEqualityIndexConfig(existing)
+			if err != nil {
+				return err
+			}
+			return register(string(key), existing)
+		}); err != nil {
+			return err
+		}
+	}
+	return register(partition, config)
+}
+
 func (tx *boltTx) schemaAwareEntryKeys(
 	partition string,
 	dn directory.DN,
@@ -440,11 +542,18 @@ func (tx *boltTx) addEqualityIndexEntry(
 	if err != nil {
 		return err
 	}
+	entryID := ""
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
 		for _, term := range equalityIndexTermsForAttribute(definition, values) {
+			if entryID == "" {
+				entryID, err = tx.putEqualityIndexEntryReference(partition, entryKey, entry.DN)
+				if err != nil {
+					return err
+				}
+			}
 			if err := tx.equalityIndexes.Put(
-				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryKey),
+				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryID),
 				[]byte{1},
 			); err != nil {
 				return err
@@ -465,17 +574,72 @@ func (tx *boltTx) removeEqualityIndexEntry(
 	if err != nil {
 		return err
 	}
+	entryID := string(equalityIndexEntryID(partition, entryKey))
+	hadPosting := false
 	for attribute, values := range terms {
 		definition, _ := equalityIndexAttributeDefinition(config, attribute)
 		for _, term := range equalityIndexTermsForAttribute(definition, values) {
+			hadPosting = true
 			if err := tx.equalityIndexes.Delete(
-				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryKey),
+				equalityIndexPostingKey(partition, attribute, term.kind, term.value, entryID),
 			); err != nil {
 				return err
 			}
 		}
 	}
+	if hadPosting && tx.equalityIndexRefs != nil {
+		return tx.equalityIndexRefs.Delete([]byte(entryID))
+	}
 	return nil
+}
+
+func (tx *boltTx) putEqualityIndexEntryReference(
+	partition,
+	entryKey,
+	reference string,
+) (string, error) {
+	if tx.equalityIndexRefs == nil {
+		return "", errors.New("equality index reference bucket is missing")
+	}
+	entryID := equalityIndexEntryID(partition, entryKey)
+	encoded := encodeEqualityIndexEntryReference(partition, reference)
+	if existing := tx.equalityIndexRefs.Get(entryID); existing != nil &&
+		!bytes.Equal(existing, encoded) {
+		return "", fmt.Errorf(
+			"equality index entry ID collision %x between %q and %q",
+			entryID,
+			existing,
+			encoded,
+		)
+	}
+	if err := tx.equalityIndexRefs.Put(entryID, encoded); err != nil {
+		return "", err
+	}
+	return string(entryID), nil
+}
+
+func equalityIndexEntryID(partition, entryKey string) []byte {
+	return appendEqualityIndexToken(nil, "entry\x00"+partition, entryKey, equalityIndexEntryIDSize)
+}
+
+func encodeEqualityIndexEntryReference(partition, reference string) []byte {
+	encoded := appendLengthPrefixed(nil, []byte(partition))
+	return appendLengthPrefixed(encoded, []byte(reference))
+}
+
+func decodeEqualityIndexEntryReference(encoded []byte) (string, string, error) {
+	partition, position, err := readLengthPrefixed(encoded, 0)
+	if err != nil {
+		return "", "", err
+	}
+	reference, position, err := readLengthPrefixed(encoded, position)
+	if err != nil {
+		return "", "", err
+	}
+	if position != len(encoded) {
+		return "", "", errors.New("equality index entry reference has trailing data")
+	}
+	return string(partition), string(reference), nil
 }
 
 func (tx *boltTx) invalidateEqualityIndexes(partition string) error {
@@ -503,6 +667,27 @@ func (tx *boltTx) clearEqualityIndexPostings(partition string) error {
 			return err
 		}
 	}
+	if tx.equalityIndexRefs == nil {
+		return nil
+	}
+	keys = keys[:0]
+	if err := tx.equalityIndexRefs.ForEach(func(key, value []byte) error {
+		referencePartition, _, err := decodeEqualityIndexEntryReference(value)
+		if err != nil {
+			return err
+		}
+		if referencePartition == partition {
+			keys = append(keys, bytes.Clone(key))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := tx.equalityIndexRefs.Delete(key); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -521,13 +706,20 @@ func (tx *boltTx) ensureEqualityIndexBuckets() error {
 		}
 		tx.equalityIndexConfigs = bucket
 	}
+	if tx.equalityIndexRefs == nil {
+		bucket, err := tx.tx.CreateBucketIfNotExists(equalityIndexRefBucket)
+		if err != nil {
+			return err
+		}
+		tx.equalityIndexRefs = bucket
+	}
 	tx.applyFillPercent()
 	return nil
 }
 
 func equalityIndexPartitionPrefix(partition string) []byte {
 	result := []byte{equalityIndexFormatVersion}
-	return appendLengthPrefixed(result, []byte(partition))
+	return appendEqualityIndexToken(result, "partition", partition, equalityIndexTokenSize)
 }
 
 var _ equalityIndexStorageWriter = (*boltTx)(nil)

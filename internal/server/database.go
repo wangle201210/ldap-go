@@ -643,6 +643,8 @@ type databaseEqualityIndexValidation struct {
 	current  bool
 }
 
+const databaseEqualityIndexDNCacheMaximum = 16384
+
 func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexValidation(
 	partition string,
 	revision uint64,
@@ -690,7 +692,7 @@ func (normalizer *databaseEqualityIndexNormalizer) ResolveDNIdentityHint(
 			return directory.Entry{}, err
 		}
 		normalizer.dnCacheMu.Lock()
-		if len(normalizer.dnCache) >= 8192 {
+		if len(normalizer.dnCache) >= databaseEqualityIndexDNCacheMaximum {
 			clear(normalizer.dnCache)
 		}
 		if normalizer.dnCache == nil {
@@ -703,6 +705,32 @@ func (normalizer *databaseEqualityIndexNormalizer) ResolveDNIdentityHint(
 		dn,
 		dn.LegacyKey()+"\x00"+identity,
 	), nil
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ResolveEqualityIndexDNReference(
+	reference string,
+) (directory.DN, error) {
+	key := "reference\x00" + reference
+	normalizer.dnCacheMu.Lock()
+	dn, found := normalizer.dnCache[key]
+	normalizer.dnCacheMu.Unlock()
+	if found {
+		return dn, nil
+	}
+	dn, err := directory.ParseDNWithNormalizer(reference, normalizer)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	normalizer.dnCacheMu.Lock()
+	if len(normalizer.dnCache) >= databaseEqualityIndexDNCacheMaximum {
+		clear(normalizer.dnCache)
+	}
+	if normalizer.dnCache == nil {
+		normalizer.dnCache = make(map[string]directory.DN)
+	}
+	normalizer.dnCache[key] = dn
+	normalizer.dnCacheMu.Unlock()
+	return dn, nil
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeDNAttribute(

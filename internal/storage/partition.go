@@ -119,6 +119,38 @@ func ReaderDNOrderKey(reader Reader, dn directory.DN) (string, error) {
 	return orderer.DNIdentityOrderKey(dn)
 }
 
+// ForEachStablePhysicalEntry streams a schema-aware partition in a backend's
+// stable physical order. It is intended for unsorted paged searches, whose LDAP
+// result order is unspecified, and avoids materializing the whole partition.
+func ForEachStablePhysicalEntry(
+	reader Reader,
+	fn func(directory.Entry) error,
+) (bool, error) {
+	scoped, ok := reader.(schemaAwarePartitionReader)
+	if !ok {
+		return false, nil
+	}
+	if err := requireSchemaAwareDNIdentities(scoped.Reader, scoped.partition); err != nil {
+		return false, err
+	}
+	backend := maintenanceReader(scoped.Reader)
+	iterator, ok := backend.(stableSchemaAwarePhysicalIterator)
+	if !ok || !iterator.schemaAwarePhysicalIterationStable() {
+		return false, nil
+	}
+	_, err := iterator.forEachSchemaAwarePhysicalIn(
+		scoped.partition,
+		func(entry directory.Entry, physicalKey string) error {
+			dn, err := directory.ParseDNWithIdentityKey(entry.DN, physicalKey)
+			if err != nil {
+				return err
+			}
+			return fn(entry.WithNormalizedDNHint(dn, physicalKey))
+		},
+	)
+	return true, err
+}
+
 type partitionReader struct {
 	Reader
 	partition string
@@ -473,6 +505,11 @@ type schemaAwarePhysicalIterator interface {
 		partition string,
 		visit func(directory.Entry, string) error,
 	) (bool, error)
+}
+
+type stableSchemaAwarePhysicalIterator interface {
+	schemaAwarePhysicalIterator
+	schemaAwarePhysicalIterationStable() bool
 }
 
 func schemaAwareDNOrderKey(

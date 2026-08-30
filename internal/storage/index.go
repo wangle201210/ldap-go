@@ -14,7 +14,12 @@ import (
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
-const equalityIndexFormatVersion = 2
+const equalityIndexFormatVersion = 4
+
+const (
+	equalityIndexTokenSize   = 16
+	equalityIndexEntryIDSize = 8
+)
 
 // EqualityIndexFormatVersion is persisted with each index configuration. It is
 // exported so database-specific schema adapters can request the current term
@@ -103,7 +108,11 @@ type equalityIndexStorageReader interface {
 		value []byte,
 	) ([]string, error)
 	equalityIndexOrderingPostings(partition, attribute string, assertion []byte, greaterOrEqual bool) ([]string, error)
-	equalityIndexEntries(keys []string) ([]directory.Entry, error)
+	equalityIndexEntries(
+		partition string,
+		references []string,
+		schema EqualityIndexSchema,
+	) ([]directory.Entry, error)
 }
 
 type equalityIndexStorageWriter interface {
@@ -147,6 +156,26 @@ type EqualityIndexValidationCache interface {
 // runtime-owned bounded cache.
 type DNIdentityHintResolver interface {
 	ResolveDNIdentityHint(entry directory.Entry, identity string) (directory.Entry, error)
+}
+
+// EqualityIndexDNReferenceResolver provides a bounded runtime cache for the
+// display-DN references stored by index format v3.
+type EqualityIndexDNReferenceResolver interface {
+	ResolveEqualityIndexDNReference(string) (directory.DN, error)
+}
+
+func resolveEqualityIndexDNReference(
+	schema EqualityIndexSchema,
+	reference string,
+) (directory.DN, error) {
+	if resolver, ok := schema.(EqualityIndexDNReferenceResolver); ok {
+		return resolver.ResolveEqualityIndexDNReference(reference)
+	}
+	normalizer, ok := schema.(directory.DNAttributeNormalizer)
+	if !ok {
+		return directory.DN{}, errors.New("equality index schema cannot normalize DN references")
+	}
+	return directory.ParseDNWithNormalizer(reference, normalizer)
 }
 
 // ForEachFilterCandidate visits an index-reduced candidate set when the reader
@@ -423,10 +452,13 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 		ordered = append(ordered, key)
 	}
 	sort.Strings(ordered)
-	entries, err := indexed.equalityIndexEntries(ordered)
+	entries, err := indexed.equalityIndexEntries(reader.partition, ordered, schema)
 	if err == nil {
 		if resolver, ok := schema.(DNIdentityHintResolver); ok {
 			for index := range entries {
+				if _, normalized := entries[index].NormalizedDNHint(); normalized {
+					continue
+				}
 				identity, present := entries[index].DNIdentity()
 				if !present {
 					continue
@@ -831,8 +863,8 @@ func selectedEqualityIndexConfig(
 
 func equalityIndexAttributePrefix(partition, attribute string) []byte {
 	result := []byte{equalityIndexFormatVersion}
-	result = appendLengthPrefixed(result, []byte(partition))
-	return appendLengthPrefixed(result, []byte(attribute))
+	result = appendEqualityIndexToken(result, "partition", partition, equalityIndexTokenSize)
+	return appendEqualityIndexToken(result, "attribute", attribute, equalityIndexTokenSize)
 }
 
 func rulesConflict(left, right string) bool {
@@ -1098,9 +1130,7 @@ func equalityIndexPostingPrefix(
 }
 
 func equalityIndexAttributeKindPrefix(partition, attribute string, kind byte) []byte {
-	result := []byte{equalityIndexFormatVersion}
-	result = appendLengthPrefixed(result, []byte(partition))
-	result = appendLengthPrefixed(result, []byte(attribute))
+	result := equalityIndexAttributePrefix(partition, attribute)
 	return append(result, kind)
 }
 
@@ -1109,34 +1139,29 @@ func equalityIndexPostingKey(
 	attribute string,
 	kind byte,
 	value []byte,
-	entryKey string,
+	entryReference string,
 ) []byte {
 	return append(
 		equalityIndexPostingPrefix(partition, attribute, kind, value),
-		[]byte(entryKey)...,
+		[]byte(entryReference)...,
 	)
 }
 
 func decodeEqualityIndexPostingKey(
 	key []byte,
-) (partition, attribute string, kind byte, value []byte, entryKey string, err error) {
+) (partition, attribute string, kind byte, value []byte, entryReference string, err error) {
 	if len(key) == 0 || key[0] != equalityIndexFormatVersion {
 		return "", "", 0, nil, "", errors.New("invalid equality index key version")
 	}
 	position := 1
-	partitionBytes, next, err := readLengthPrefixed(key, position)
-	if err != nil {
-		return "", "", 0, nil, "", err
-	}
-	position = next
-	attributeBytes, next, err := readLengthPrefixed(key, position)
-	if err != nil {
-		return "", "", 0, nil, "", err
-	}
-	position = next
-	if position >= len(key) {
+	minimum := position + equalityIndexTokenSize*2 + 1
+	if len(key) < minimum {
 		return "", "", 0, nil, "", errors.New("truncated equality index key")
 	}
+	partitionBytes := key[position : position+equalityIndexTokenSize]
+	position += equalityIndexTokenSize
+	attributeBytes := key[position : position+equalityIndexTokenSize]
+	position += equalityIndexTokenSize
 	kind = key[position]
 	position++
 	switch kind {
@@ -1157,9 +1182,23 @@ func decodeEqualityIndexPostingKey(
 		return "", "", 0, nil, "", fmt.Errorf("invalid equality index key kind %d", kind)
 	}
 	if position >= len(key) {
-		return "", "", 0, nil, "", errors.New("equality index key has no entry key")
+		return "", "", 0, nil, "", errors.New("equality index key has no entry reference")
 	}
 	return string(partitionBytes), string(attributeBytes), kind, bytes.Clone(value), string(key[position:]), nil
+}
+
+func appendEqualityIndexToken(
+	destination []byte,
+	domain,
+	value string,
+	size int,
+) []byte {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(domain))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(value))
+	digest := hash.Sum(nil)
+	return append(destination, digest[:size]...)
 }
 
 func appendOrderPreservingValue(destination, value []byte) []byte {

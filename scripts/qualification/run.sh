@@ -278,7 +278,12 @@ start_server() {
 		if "$binary" ldapwhoami \
 			-H "$server_uri" -x -D "$root_dn" -y "$password_file" \
 			-timeout "$client_timeout" \
-			>"$artifact_dir/readiness-probe.out" 2>>"$server_log"; then
+			>"$artifact_dir/readiness-probe.out" 2>>"$server_log" &&
+			"$binary" ldapsearch \
+				-H "$server_uri" -x -D "$root_dn" -y "$password_file" \
+				-timeout "$client_timeout" -LLL -b "$base_dn" -s base \
+				'(objectClass=*)' dn \
+				>>"$artifact_dir/readiness-probe.out" 2>>"$server_log"; then
 			return 0
 		fi
 		if ! kill -0 "$server_pid" 2>/dev/null; then

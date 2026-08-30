@@ -267,6 +267,13 @@ with a sign/length/digit encoding for arbitrary-precision LDAP INTEGER.
 GeneralizedTime keys remove the terminal `Z` after equality normalization so
 their byte order matches the schema comparator for whole and fractional
 seconds.
+The bbolt v4 layout hashes partition and canonical-attribute identities into
+fixed 128-bit tokens and stores a checked 64-bit entry ID in each posting. A
+separate reference bucket maps each entry ID to its display DN, avoiding a full
+partition name and schema-normalized DN in every posting. Token and entry-ID
+collisions are detected while building, writing, and checking indexes and fail
+the transaction rather than producing ambiguous candidates. Earlier index
+versions are configuration-incompatible and rebuild atomically.
 Only matching-rule pairs whose equality normalization is proven equivalent to
 the requested substring or ordering semantics are admitted. Ordered
 `olcDbIndex` declarations accumulate `default` modes for later omitted mode
@@ -298,7 +305,10 @@ queries intentionally retain the full scan candidate set.
 OpenLDAP-style databases map to isolated storage partitions selected by the
 longest matching naming context. Imported database-entry UUIDs provide stable
 partition identities across ordered configuration changes; legacy stores are
-partitioned atomically at startup. Hidden databases retain their data partition
+partitioned atomically at startup. Full replacement imports without
+`cn=config` infer bootstrap naming contexts and write directly to their final
+partitions; an O(1) metadata marker skips the legacy scan only after the empty
+partition is verified unused. Hidden databases retain their data partition
 but do not participate in operation routing or Root DSE publication. Disabled
 databases also retain their partition and leave operation routing, but remain
 published in Root DSE to match slapd. Subordinate databases form glue

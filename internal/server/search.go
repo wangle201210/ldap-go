@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -263,6 +264,42 @@ func (server *Server) handleSearch(
 		controls.manageDsaIT,
 	); handled {
 		return err
+	}
+	var (
+		resultCacheFingerprint [sha256.Size]byte
+		resultCacheRevision    uint64
+		hasResultCacheRevision bool
+		resultCacheable        bool
+	)
+	if base.Depth() > 0 {
+		if database := databaseForNormalizedDN(state.runtime, base); database != nil {
+			cacheRequest := request
+			cacheRequest.BaseDN = base.String()
+			if fingerprint, cacheable := server.rootEqualitySearchCacheFingerprint(
+				state,
+				*database,
+				cacheRequest,
+				message.Controls,
+			); cacheable {
+				if revision, available := server.currentStorageSnapshotRevision(ctx); available {
+					if cached, found := state.runtime.searchResults.get(fingerprint, revision); found {
+						return server.writeSearchResult(
+							connection,
+							message.ID,
+							state,
+							nil,
+							nil,
+							cached,
+							ldapwire.Result{Code: ldapwire.ResultSuccess},
+							pagedSearchCursor{},
+							false,
+						)
+					}
+					resultCacheFingerprint = fingerprint
+					resultCacheable = true
+				}
+			}
+		}
 	}
 	limits := databaseSearchExecutionLimits{
 		size: effectiveSearchLimit(
@@ -1189,6 +1226,18 @@ func (server *Server) handleSearch(
 			false,
 		)
 	}
+
+	translucent := false
+	for _, route := range translucentRoutes {
+		if route != nil {
+			translucent = true
+			break
+		}
+	}
+	if resultCacheable && (syncSearch != nil || virtualListView != nil ||
+		len(routes) != 1 || translucent) {
+		resultCacheable = false
+	}
 	snapshotPaging := paging != nil && !sorting.active() && syncSearch == nil &&
 		!state.runtime.features.chain
 	snapshotCacheable := snapshotPaging && controls.assertion == nil &&
@@ -1242,6 +1291,22 @@ func (server *Server) handleSearch(
 		sortTruncated            bool
 		inDirectoryRetcodeResult *retcodeItem
 	)
+	projectSubschemaReference := searchRequestsSubschemaReference(
+		state.runtime.schema,
+		request,
+		controls.assertion,
+	)
+	if sorting.active() {
+		for _, key := range sorting.keys {
+			if state.runtime.schema.AttributeDescriptionSubtype(
+				key.attribute,
+				"subschemaSubentry",
+			) {
+				projectSubschemaReference = true
+				break
+			}
+		}
+	}
 
 	server.prepareAutoCASearch(ctx, state, request, routes)
 	if err := server.ensureSearchEqualityIndexes(ctx, state.runtime, routes); err != nil {
@@ -1255,6 +1320,10 @@ func (server *Server) handleSearch(
 		)
 	}
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		if resultCacheable {
+			resultCacheRevision, hasResultCacheRevision =
+				storage.ReaderSnapshotRevision(reader)
+		}
 		if snapshotPaging {
 			paging.storageRevision, paging.hasStorageRevision =
 				storage.ReaderSnapshotRevision(reader)
@@ -1400,7 +1469,9 @@ func (server *Server) handleSearch(
 			}
 			return err
 		}
-		baseEntry = withSubschemaReference(baseEntry)
+		if projectSubschemaReference {
+			baseEntry = withSubschemaReference(baseEntry)
+		}
 		baseEntry, err = collectivePlans.apply(
 			primaryDatabase.partition,
 			primaryReader,
@@ -1517,7 +1588,9 @@ func (server *Server) handleSearch(
 				if err != nil {
 					return err
 				}
-				routeBaseEntry = withSubschemaReference(routeBaseEntry)
+				if projectSubschemaReference {
+					routeBaseEntry = withSubschemaReference(routeBaseEntry)
+				}
 				routeBaseEntry, err = collectivePlans.apply(
 					database.partition,
 					tx,
@@ -1593,7 +1666,10 @@ func (server *Server) handleSearch(
 						return mergeErr
 					}
 				}
-				storedEntry := entry.Clone()
+				var storedEntry directory.Entry
+				if syncSearch != nil {
+					storedEntry = entry.Clone()
+				}
 				candidate, normalized := entry.NormalizedDNHint()
 				if !normalized {
 					candidate, err = directory.ParseDN(entry.DN)
@@ -1626,7 +1702,9 @@ func (server *Server) handleSearch(
 				if !directory.InScope(scopeBase, candidate, route.scope) {
 					return nil
 				}
-				entry = withSubschemaReference(entry)
+				if projectSubschemaReference {
+					entry = withSubschemaReference(entry)
+				}
 				entry, err = collectivePlans.apply(database.partition, tx, entry)
 				if err != nil {
 					return err
@@ -1880,13 +1958,23 @@ func (server *Server) handleSearch(
 					request.TypesOnly,
 				)
 				if snapshotEntriesCacheable {
-					if len(snapshotItems) > 8192 {
+					item := &snapshotItems[len(snapshotItems)-1]
+					previousBytes := pagedSortedItemBytes(*item)
+					previousDN := item.dn
+					previousNormalizedDN := item.normalizedDN
+					item.dn = ""
+					item.normalizedDN = directory.DN{}
+					item.selected = selected
+					item.hasSelected = true
+					delta := pagedSortedItemBytes(*item) - previousBytes
+					if delta > server.config.MaxSearchCandidateBytes-snapshotBytes {
+						item.dn = previousDN
+						item.normalizedDN = previousNormalizedDN
+						item.selected = directory.Entry{}
+						item.hasSelected = false
 						snapshotEntriesCacheable = false
-						snapshotCacheable = false
 					} else {
-						item := &snapshotItems[len(snapshotItems)-1]
-						item.selected = selected
-						item.hasSelected = true
+						snapshotBytes += delta
 					}
 				}
 				if syncSearch == nil &&
@@ -1899,6 +1987,9 @@ func (server *Server) handleSearch(
 						),
 						&selected,
 					)
+				}
+				if snapshotPaging && len(candidates) >= entryLimit {
+					return nil
 				}
 				if !sorting.active() && !snapshotPaging && len(candidates) >= entryLimit {
 					if paging != nil && entryLimit == paging.size {
@@ -1968,7 +2059,13 @@ func (server *Server) handleSearch(
 					if cacheErr != nil {
 						err = cacheErr
 					} else if !cached || !absent {
-						err = tx.ForEach(visitEntry)
+						streamed := false
+						if snapshotPaging {
+							streamed, err = storage.ForEachStablePhysicalEntry(tx, visitEntry)
+						}
+						if err == nil && !streamed {
+							err = tx.ForEach(visitEntry)
+						}
 					}
 				}
 			} else {
@@ -2284,6 +2381,15 @@ func (server *Server) handleSearch(
 			candidates,
 			result,
 			responseControls,
+		)
+	}
+	if resultCacheable && hasResultCacheRevision &&
+		result.Code == ldapwire.ResultSuccess && !hasMore &&
+		len(entries) <= 4 && len(references) == 0 && len(chainedPackets) == 0 {
+		state.runtime.searchResults.put(
+			resultCacheFingerprint,
+			resultCacheRevision,
+			entries,
 		)
 	}
 	writeErr := server.writeSearchResultWithChainedReferences(
@@ -3343,6 +3449,46 @@ func withSubschemaReference(entry directory.Entry) directory.Entry {
 	entry = entry.Clone()
 	entry.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
 	return entry
+}
+
+func searchRequestsSubschemaReference(
+	registry *schema.Registry,
+	request ldapwire.SearchRequest,
+	assertion *directory.Filter,
+) bool {
+	if registry == nil {
+		return true
+	}
+	for _, attribute := range request.Attributes {
+		if attribute == "+" || registry.AttributeDescriptionSubtype(
+			attribute,
+			"subschemaSubentry",
+		) {
+			return true
+		}
+	}
+	if filterReferencesSubschema(registry, request.Filter) {
+		return true
+	}
+	return assertion != nil && filterReferencesSubschema(registry, *assertion)
+}
+
+func filterReferencesSubschema(
+	registry *schema.Registry,
+	filter directory.Filter,
+) bool {
+	if filter.Attribute != "" && registry.AttributeDescriptionSubtype(
+		filter.Attribute,
+		"subschemaSubentry",
+	) {
+		return true
+	}
+	for _, child := range filter.Children {
+		if filterReferencesSubschema(registry, child) {
+			return true
+		}
+	}
+	return false
 }
 
 func stringValues(values ...string) [][]byte {

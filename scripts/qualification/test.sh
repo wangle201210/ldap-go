@@ -137,7 +137,7 @@ fi
 
 output=$(QUALIFICATION_COMPARE_DRY_RUN=1 "$compare_openldap")
 case "$output" in
-*'entries=1000'*'page_size=200'*'indexed_searches=1000'*'unindexed_searches=100'*'paged_traversals=10'*'modifications=200'*'concurrency=8'*'searches_per_connection=250'*) ;;
+*'entries=1000'*'page_size=200'*'indexed_searches=1000'*'unindexed_searches=100'*'paged_traversals=10'*'modifications=200'*'concurrency=8'*'searches_per_connection=250'*'data_parity=1'*) ;;
 *)
 	printf 'qualification-test: unexpected OpenLDAP comparison configuration: %s\n' "$output" >&2
 	exit 1
@@ -165,6 +165,12 @@ fi
 if QUALIFICATION_COMPARE_DRY_RUN=1 QUALIFICATION_COMPARE_LDAP_GO_PORT=23000 \
 	QUALIFICATION_COMPARE_OPENLDAP_PORT=23000 "$compare_openldap" >/dev/null 2>&1; then
 	printf 'qualification-test: duplicate OpenLDAP comparison ports were accepted\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_COMPARE_DRY_RUN=1 QUALIFICATION_COMPARE_DATA_PARITY=2 \
+	"$compare_openldap" >/dev/null 2>&1; then
+	printf 'qualification-test: invalid OpenLDAP data parity mode was accepted\n' >&2
 	exit 1
 fi
 

@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: test script-test webadmin-e2e vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak qualification-compare-openldap release-check release-upgrade-gate release-build release-gate compat full
+.PHONY: test script-test webadmin-e2e vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak qualification-compare-openldap qualification-compare-openldap-100k release-check release-upgrade-gate release-build release-gate compat full
 
 test: script-test
 	go test ./... -count=1
@@ -54,6 +54,18 @@ qualification-soak:
 	QUALIFICATION_MODE=soak ./scripts/qualification/run.sh
 
 qualification-compare-openldap:
+	./scripts/qualification/compare-openldap.sh
+
+qualification-compare-openldap-100k:
+	QUALIFICATION_COMPARE_ENTRIES=100000 \
+	QUALIFICATION_COMPARE_PAGE_SIZE=10000 \
+	QUALIFICATION_COMPARE_INDEXED_SEARCHES=10000 \
+	QUALIFICATION_COMPARE_UNINDEXED_SEARCHES=10 \
+	QUALIFICATION_COMPARE_PAGED_TRAVERSALS=2 \
+	QUALIFICATION_COMPARE_MODIFICATIONS=1000 \
+	QUALIFICATION_COMPARE_CONCURRENCY=8 \
+	QUALIFICATION_COMPARE_SEARCHES_PER_CONNECTION=1000 \
+	QUALIFICATION_COMPARE_STARTUP_TIMEOUT_SECONDS=180 \
 	./scripts/qualification/compare-openldap.sh
 
 release-check:
