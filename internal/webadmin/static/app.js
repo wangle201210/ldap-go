@@ -256,6 +256,42 @@
       "group.nested": "Nested",
       "group.loadFailed": "Group members could not be loaded",
       "group.updated": "Group membership updated",
+	  "group.browse": "Browse members",
+	  "membership.title": "Group memberships",
+	  "membership.includeNested": "Include nested groups",
+	  "membership.load": "Load memberships",
+	  "membership.refresh": "Refresh memberships",
+	  "membership.notLoaded": "Memberships are loaded on demand",
+	  "membership.loading": "Loading group memberships",
+	  "membership.none": "No visible group memberships",
+	  "membership.groups.one": "{count} group",
+	  "membership.groups.other": "{count} groups",
+	  "membership.direct": "Direct membership",
+	  "membership.indirect": "Nested membership",
+	  "membership.via": "via {dn}",
+	  "membership.cycles": "The directory contains {count} visible membership cycles",
+	  "membership.loadFailed": "Group memberships could not be loaded",
+	  "membership.list": "Groups containing this entry",
+	  "picker.title": "Select group members",
+	  "picker.description": "Search the current directory and add selected entries to this group.",
+	  "picker.base": "Search base",
+	  "picker.filter": "LDAP filter",
+	  "picker.search": "Search",
+	  "picker.results": "Member search results",
+	  "picker.target": "Target group distinguished name",
+	  "picker.pages": "Member search result pages",
+	  "picker.previous": "Previous",
+	  "picker.next": "Next",
+	  "picker.loading": "Searching directory entries",
+	  "picker.none": "No matching entries",
+	  "picker.results.one": "{count} result",
+	  "picker.results.other": "{count} results",
+	  "picker.existing": "Already a direct member",
+	  "picker.noUID": "Entry has no uid",
+	  "picker.selected.one": "{count} selected",
+	  "picker.selected.other": "{count} selected",
+	  "picker.add": "Add selected",
+	  "picker.loadFailed": "Member search failed",
       "binary.download": "Download",
       "binary.replace": "Replace file",
       "binary.remove": "Delete attribute",
@@ -634,6 +670,42 @@
       "group.nested": "嵌套成员",
       "group.loadFailed": "无法加载组成员",
       "group.updated": "组成员关系已更新",
+	  "group.browse": "浏览成员",
+	  "membership.title": "所属组",
+	  "membership.includeNested": "包含嵌套所属组",
+	  "membership.load": "加载所属组",
+	  "membership.refresh": "刷新所属组",
+	  "membership.notLoaded": "所属组按需加载",
+	  "membership.loading": "正在加载所属组",
+	  "membership.none": "没有可见的所属组",
+	  "membership.groups.one": "{count} 个组",
+	  "membership.groups.other": "{count} 个组",
+	  "membership.direct": "直接所属",
+	  "membership.indirect": "嵌套所属",
+	  "membership.via": "经由 {dn}",
+	  "membership.cycles": "目录中存在 {count} 个可见的组关系循环",
+	  "membership.loadFailed": "无法加载所属组",
+	  "membership.list": "包含此条目的组",
+	  "picker.title": "选择组成员",
+	  "picker.description": "搜索当前目录，并将所选条目加入此组。",
+	  "picker.base": "搜索基础 DN",
+	  "picker.filter": "LDAP 过滤器",
+	  "picker.search": "搜索",
+	  "picker.results": "成员搜索结果",
+	  "picker.target": "目标组可分辨名称",
+	  "picker.pages": "成员搜索结果分页",
+	  "picker.previous": "上一页",
+	  "picker.next": "下一页",
+	  "picker.loading": "正在搜索目录条目",
+	  "picker.none": "没有匹配条目",
+	  "picker.results.one": "{count} 个结果",
+	  "picker.results.other": "{count} 个结果",
+	  "picker.existing": "已经是直接成员",
+	  "picker.noUID": "条目没有 uid",
+	  "picker.selected.one": "已选择 {count} 项",
+	  "picker.selected.other": "已选择 {count} 项",
+	  "picker.add": "添加所选成员",
+	  "picker.loadFailed": "成员搜索失败",
       "binary.download": "下载",
       "binary.replace": "替换文件",
       "binary.remove": "删除属性",
@@ -879,6 +951,17 @@
 		groupAttribute: "member",
 		groupMembers: [],
 		groupUpdating: false,
+		membershipSequence: 0,
+		memberPickerSequence: 0,
+		memberPickerTargetDN: "",
+		memberPickerAttribute: "",
+		memberPickerEntries: [],
+		memberPickerSelected: new Map(),
+		memberPickerPageHistory: [],
+		memberPickerCurrentCookie: "",
+		memberPickerNextCookie: "",
+		memberPickerQuery: null,
+		memberPickerLoading: false,
 		csvRetryFingerprints: new Set(),
 		csvFileLoading: false,
 		ldifRetryFingerprints: new Set(),
@@ -948,12 +1031,16 @@
     renameDialog: $("#rename-dialog"),
     passwordDialog: $("#password-dialog"),
     importDialog: $("#import-dialog"),
-    csvImportDialog: $("#csv-import-dialog"),
-    bulkModifyDialog: $("#bulk-modify-dialog"),
-    confirmDialog: $("#confirm-dialog"),
+	    csvImportDialog: $("#csv-import-dialog"),
+	    bulkModifyDialog: $("#bulk-modify-dialog"),
+	    memberPickerDialog: $("#member-picker-dialog"),
+	    confirmDialog: $("#confirm-dialog"),
 	groupMembers: $("#group-members"),
 	groupMemberList: $("#group-member-list"),
 	groupMemberCount: $("#group-member-count"),
+	entryMemberships: $("#entry-memberships"),
+	entryMembershipList: $("#entry-membership-list"),
+	entryMembershipCount: $("#entry-membership-count"),
     toastRegion: $("#toast-region")
   };
 
@@ -1004,6 +1091,17 @@
 	state.groupMembers = [];
 	state.groupUpdating = false;
 	state.groupAttribute = "member";
+	state.membershipSequence++;
+	state.memberPickerSequence++;
+	state.memberPickerTargetDN = "";
+	state.memberPickerAttribute = "";
+	state.memberPickerEntries = [];
+	state.memberPickerSelected.clear();
+	state.memberPickerPageHistory = [];
+	state.memberPickerCurrentCookie = "";
+	state.memberPickerNextCookie = "";
+	state.memberPickerQuery = null;
+	state.memberPickerLoading = false;
 	state.entryDialogMode = "create";
 	state.csvRetryFingerprints.clear();
 	state.csvFileLoading = false;
@@ -1027,13 +1125,14 @@
 	elements.monitorList.replaceChildren();
 	elements.breadcrumb.replaceChildren();
 	elements.groupMemberList.replaceChildren();
+	elements.entryMembershipList.replaceChildren();
 	elements.toastRegion.replaceChildren();
 	elements.searchForm.reset();
 	$("#schema-search").value = "";
 	$("#filter-condition-list").replaceChildren();
 	addFilterCondition("objectClass", "present", "");
 	[elements.entryDialog, elements.renameDialog, elements.passwordDialog, elements.importDialog,
-	  elements.csvImportDialog, elements.bulkModifyDialog].forEach((dialog) => {
+	  elements.csvImportDialog, elements.bulkModifyDialog, elements.memberPickerDialog].forEach((dialog) => {
 	  const form = $("form", dialog);
 	  if (form) { setFormSubmitting(form, false); form.reset(); }
 	});
@@ -1045,6 +1144,7 @@
 	localize($("#import-file-name"), "import.choose");
 	localize($("#csv-import-file-name"), "csv.choose");
 	elements.groupMembers.hidden = true;
+	elements.entryMemberships.hidden = true;
 	elements.tableWrap.hidden = true;
 	elements.detailButton.disabled = true;
 	closeAccountMenu();
@@ -1181,9 +1281,16 @@
     ["#group-members h3", "group.title"],
     ["#group-member-count", "group.members.other", "text", { count: 0 }],
     ["label[for='include-nested-members'] span", "group.includeNested"],
-    ["label[for='group-member-value']", "group.memberInput"],
-    ["#group-member-form button[type='submit']", "group.add"],
-    ["#remove-group-members", "group.remove"],
+	["label[for='group-member-value']", "group.memberInput"],
+	["#group-member-form button[type='submit']", "group.add"],
+	["#browse-group-members", "group.browse"],
+	["#remove-group-members", "group.remove"],
+	["#entry-memberships h3", "membership.title"],
+	["#entry-membership-count", "membership.notLoaded"],
+	["label[for='include-nested-memberships'] span", "membership.includeNested"],
+	["#entry-membership-list", "membership.list", "attr:aria-label"],
+	["#refresh-entry-memberships", "membership.load", "attr:aria-label"],
+	["#refresh-entry-memberships", "membership.load", "attr:title"],
     ["#entry-editor .editor-heading h3", "actions.attributes"],
     ["#attribute-count", "entry.attributeCount.other", "text", { count: 0 }],
     ["#add-attribute", "actions.attribute", "direct"],
@@ -1300,8 +1407,27 @@
     ["label[for='bulk-attribute']", "bulk.attribute"],
     ["label[for='bulk-values']", "bulk.values"],
     ["label[for='bulk-continue'] span", "bulk.continue"],
-    ["#bulk-modify-form .modal-actions .close-dialog", "actions.cancel"],
-    ["#bulk-modify-form .modal-actions button[type='submit']", "bulk.apply"],
+	["#bulk-modify-form .modal-actions .close-dialog", "actions.cancel"],
+	["#bulk-modify-form .modal-actions button[type='submit']", "bulk.apply"],
+	["#member-picker-title", "picker.title"],
+	["#member-picker-description", "picker.description"],
+	["#member-picker-target", "picker.target", "attr:aria-label"],
+	["#member-picker-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
+	["#member-picker-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
+	["label[for='member-picker-base']", "picker.base"],
+	["label[for='member-picker-filter']", "picker.filter"],
+	["#member-picker-search", "picker.search"],
+	["#member-picker-results-title", "picker.results"],
+	["#member-picker-results", "picker.results", "attr:aria-label"],
+	[".member-picker-pagination", "picker.pages", "attr:aria-label"],
+	["#member-picker-previous", "picker.previous", "direct"],
+	["#member-picker-previous", "search.previous", "attr:aria-label"],
+	["#member-picker-previous", "search.previousTitle", "attr:title"],
+	["#member-picker-next", "picker.next", "direct"],
+	["#member-picker-next", "search.next", "attr:aria-label"],
+	["#member-picker-next", "search.nextTitle", "attr:title"],
+	["#member-picker-form .modal-actions .close-dialog", "actions.cancel"],
+	["#member-picker-add", "picker.add"],
     ["#confirm-title", "confirm.title"],
     ["#confirm-cancel", "actions.cancel"],
     ["#confirm-submit", "actions.confirm"]
@@ -1764,8 +1890,18 @@
     elements.tableWrap.hidden = true;
   }
 
-  function toast(titleKey, message = "", kind = "success") {
-    const item = document.createElement("div");
+	  function toast(titleKey, message = "", kind = "success") {
+	if (kind !== "error") {
+	  $$(".toast:not(.error)", elements.toastRegion).forEach((existing) => {
+		if (!existing.contains(document.activeElement)) existing.remove();
+	  });
+	}
+	while (elements.toastRegion.children.length >= 3) {
+	  const oldest = elements.toastRegion.firstElementChild;
+	  if (!oldest || oldest.contains(document.activeElement)) break;
+	  oldest.remove();
+	}
+	    const item = document.createElement("div");
     item.className = `toast ${kind}`;
     item.setAttribute("role", kind === "error" ? "alert" : "status");
     const icon = document.createElement("strong");
@@ -2495,6 +2631,9 @@
 	state.selectedEntry = null;
 	elements.groupMembers.hidden = true;
 	elements.groupMemberList.replaceChildren();
+	elements.entryMemberships.hidden = true;
+	elements.entryMembershipList.replaceChildren();
+	state.membershipSequence++;
 	    updateEntryActions(false);
     $$("tr[data-dn]", elements.tableBody).forEach((row) => row.classList.toggle("selected", row.dataset.dn === dn));
     elements.detailButton.disabled = false;
@@ -2561,9 +2700,11 @@
 	    setEditorStatus(false);
 	    renderAttributeSuggestions();
 	    renderSchema();
-    $("#include-nested-members").checked = false;
-    renderGroupMembers(entry, false);
-  }
+	    $("#include-nested-members").checked = false;
+	    renderGroupMembers(entry, false);
+	$("#include-nested-memberships").checked = false;
+	renderEntryMembershipPlaceholder(entry);
+	  }
 
   function groupAttribute(entry) {
     const classes = attributeValues(entry, "objectClass").map((value) => value.toLowerCase());
@@ -2631,7 +2772,116 @@
     $("#remove-group-members").disabled = true;
   }
 
-  function namingContextForDN(dn) {
+	  function renderEntryMembershipPlaceholder(entry) {
+		state.membershipSequence++;
+		elements.entryMemberships.hidden = !entry || !entry.dn;
+		elements.entryMembershipList.replaceChildren();
+		elements.entryMembershipList.hidden = true;
+		elements.entryMembershipList.setAttribute("aria-busy", "false");
+		setFieldError($("#entry-membership-error"), "");
+		localize(elements.entryMembershipCount, "membership.notLoaded");
+		localize($("#entry-membership-status"), "membership.notLoaded");
+		$("#entry-membership-status").hidden = false;
+		const refresh = $("#refresh-entry-memberships");
+		localize(refresh, "membership.load", {}, "attr:aria-label");
+		localize(refresh, "membership.load", {}, "attr:title");
+		refresh.disabled = false;
+	  }
+
+	  function membershipGroups(data) {
+		const source = unwrap(data, ["result"]);
+		const memberships = source && source.memberships;
+		return memberships && Array.isArray(memberships.groups) ? memberships.groups : [];
+	  }
+
+	  function renderEntryMemberships(data, entry) {
+		const source = unwrap(data, ["result"]);
+		const memberships = source && source.memberships || {};
+		const groups = membershipGroups(data);
+		elements.entryMembershipList.replaceChildren();
+		groups.forEach((membership) => {
+		  const row = document.createElement("button");
+		  row.type = "button";
+		  row.className = "entry-membership-row";
+		  const copy = document.createElement("span");
+		  copy.className = "entry-membership-copy";
+		  const name = document.createElement("strong");
+		  const dn = String(membership.dn || "");
+		  name.textContent = rdnValue(dn) || dn;
+		  const detail = document.createElement("small");
+		  detail.textContent = dn;
+		  const path = document.createElement("small");
+		  const direct = membership.direct === true;
+		  if (direct) localize(path, "membership.direct");
+		  else if (membership.via_dn || membership.viaDN) {
+			localize(path, "membership.via", { dn: membership.via_dn || membership.viaDN });
+		  } else localize(path, "membership.indirect");
+		  copy.append(name, detail, path);
+		  const badge = document.createElement("span");
+		  badge.className = `membership-badge ${direct ? "direct" : "nested"}`;
+		  localize(badge, direct ? "group.direct" : "group.nested");
+		  row.append(copy, badge);
+		  row.addEventListener("click", () => {
+			if (dn && state.selectedDN === entry.dn) openEntry(dn);
+		  });
+		  elements.entryMembershipList.append(row);
+		});
+		localize(elements.entryMembershipCount, groups.length === 1 ? "membership.groups.one" : "membership.groups.other", { count: groups.length });
+		const status = $("#entry-membership-status");
+		if (groups.length) status.hidden = true;
+		else { localize(status, "membership.none"); status.hidden = false; }
+		const cycles = toValues(memberships.cycles);
+		if (cycles.length) {
+		  const note = document.createElement("p");
+		  note.className = "membership-cycle-note";
+		  localize(note, "membership.cycles", { count: cycles.length });
+		  elements.entryMembershipList.append(note);
+		}
+		elements.entryMembershipList.hidden = !groups.length && !cycles.length;
+		elements.entryMembershipList.setAttribute("aria-busy", "false");
+	  }
+
+	  async function loadEntryMemberships() {
+		const entry = state.selectedEntry;
+		if (!entry || !entry.dn) return;
+		const targetDN = entry.dn;
+		const sequence = ++state.membershipSequence;
+		const nested = $("#include-nested-memberships").checked;
+		const params = new URLSearchParams({
+		  base_dn: namingContextForDN(targetDN), member_dn: targetDN,
+		  nested: String(nested)
+		});
+		const uid = attributeValues(entry, "uid")[0];
+		if (uid) params.set("member_uid", uid);
+		const refresh = $("#refresh-entry-memberships");
+		refresh.disabled = true;
+		refresh.setAttribute("aria-busy", "true");
+		setFieldError($("#entry-membership-error"), "");
+		const status = $("#entry-membership-status");
+		localize(status, "membership.loading");
+		status.hidden = false;
+		elements.entryMembershipList.setAttribute("aria-busy", "true");
+		try {
+		  const { data } = await api(`/api/groups?${params}`);
+		  if (sequence !== state.membershipSequence || state.selectedDN !== targetDN) return;
+		  renderEntryMemberships(data, entry);
+		  localize(refresh, "membership.refresh", {}, "attr:aria-label");
+		  localize(refresh, "membership.refresh", {}, "attr:title");
+		} catch (error) {
+		  if (sequence !== state.membershipSequence || state.selectedDN !== targetDN || error instanceof SupersededRequestError) return;
+		  localize(elements.entryMembershipCount, "membership.loadFailed");
+		  setFieldError($("#entry-membership-error"), error.message);
+		  localize(status, "membership.loadFailed");
+		  status.hidden = false;
+		} finally {
+		  if (sequence === state.membershipSequence && state.selectedDN === targetDN) {
+			refresh.disabled = false;
+			refresh.setAttribute("aria-busy", "false");
+		  }
+		}
+	  }
+
+	  function namingContextForDN(dn) {
 	const parts = splitDN(dn).map((part) => part.toLowerCase());
 	return state.namingContexts.find((context) => {
 	  const suffix = splitDN(context).map((part) => part.toLowerCase());
@@ -2639,8 +2889,157 @@
 	}) || state.rootDN;
   }
 
-	  async function updateGroupMembers(add, remove) {
-	    if (state.groupUpdating || !state.selectedEntry || !state.groupAttribute) return;
+	  function memberPickerDefaultFilter(attribute) {
+		if (attribute === "memberUid") return "(&(objectClass=posixAccount)(uid=*))";
+		return "(|(objectClass=person)(objectClass=organizationalPerson)(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))";
+	  }
+
+	  function memberPickerValue(entry, attribute) {
+		if (attribute === "memberUid") return attributeValues(entry, "uid")[0] || "";
+		return entry.dn;
+	  }
+
+	  function groupMemberComparisonKey(value, attribute) {
+		const text = String(value || "");
+		if (attribute === "memberUid") return text;
+		const dn = attribute === "uniqueMember" && text.includes("#'") ? text.slice(0, text.lastIndexOf("#'")) : text;
+		return dn.toLowerCase();
+	  }
+
+	  function updateMemberPickerSelection() {
+		const count = state.memberPickerSelected.size;
+		localize($("#member-picker-status"), count ? (count === 1 ? "picker.selected.one" : "picker.selected.other") :
+		  (state.memberPickerEntries.length === 1 ? "picker.results.one" : "picker.results.other"),
+		  { count: count || state.memberPickerEntries.length });
+		$("#member-picker-add").disabled = count === 0 || state.memberPickerLoading;
+	  }
+
+	  function renderMemberPickerEntries(entries) {
+		state.memberPickerEntries = entries;
+		const container = $("#member-picker-results");
+		container.replaceChildren();
+		const attribute = state.memberPickerAttribute;
+		const direct = new Set(attributeValues(state.selectedEntry, attribute).map((value) => groupMemberComparisonKey(value, attribute)));
+		entries.forEach((entry) => {
+		  const candidate = memberPickerValue(entry, attribute);
+		  const existing = candidate && direct.has(groupMemberComparisonKey(candidate, attribute));
+		  const unavailable = !candidate;
+		  const row = document.createElement("label");
+		  row.className = "member-picker-result";
+		  const checkbox = document.createElement("input");
+		  checkbox.type = "checkbox";
+		  checkbox.value = candidate;
+		  checkbox.disabled = existing || unavailable;
+		  checkbox.checked = !checkbox.disabled && state.memberPickerSelected.has(candidate);
+		  checkbox.addEventListener("change", () => {
+			if (checkbox.checked) state.memberPickerSelected.set(candidate, entry);
+			else state.memberPickerSelected.delete(candidate);
+			updateMemberPickerSelection();
+		  });
+		  const copy = document.createElement("span");
+		  const name = document.createElement("strong");
+		  name.textContent = attributeValues(entry, "displayName")[0] || attributeValues(entry, "cn")[0] || attributeValues(entry, "uid")[0] || rdnValue(entry.dn);
+		  const dn = document.createElement("small");
+		  dn.textContent = entry.dn;
+		  copy.append(name, dn);
+		  if (existing || unavailable) {
+			const reason = document.createElement("small");
+			localize(reason, existing ? "picker.existing" : "picker.noUID");
+			copy.append(reason);
+		  }
+		  row.append(checkbox, copy);
+		  container.append(row);
+		});
+		if (!entries.length) {
+		  const empty = document.createElement("div");
+		  empty.className = "section-status";
+		  localize(empty, "picker.none");
+		  container.append(empty);
+		}
+		container.setAttribute("aria-busy", "false");
+		updateMemberPickerSelection();
+	  }
+
+	  function updateMemberPickerPagination() {
+		$("#member-picker-previous").disabled = state.memberPickerLoading || !state.memberPickerPageHistory.length;
+		$("#member-picker-next").disabled = state.memberPickerLoading || !state.memberPickerNextCookie;
+	  }
+
+	  async function searchMemberPicker(cookie = null, transition = null) {
+		if (!elements.memberPickerDialog.open || !state.memberPickerTargetDN) return;
+		const sequence = ++state.memberPickerSequence;
+		if (cookie === null) {
+		  state.memberPickerQuery = {
+			base: $("#member-picker-base").value.trim(), scope: "sub",
+			filter: $("#member-picker-filter").value.trim(),
+			attributes: "objectClass,uid,cn,displayName", size: Math.min(500, searchMaximumSize())
+		  };
+		  state.memberPickerPageHistory = [];
+		  state.memberPickerCurrentCookie = "";
+		  state.memberPickerNextCookie = "";
+		  cookie = "";
+		}
+		state.memberPickerLoading = true;
+		updateMemberPickerPagination();
+		$("#member-picker-add").disabled = true;
+		const container = $("#member-picker-results");
+		container.setAttribute("aria-busy", "true");
+		setFieldError($("#member-picker-error"), "");
+		localize($("#member-picker-status"), "picker.loading");
+		try {
+		  const { data } = await api("/api/search", {
+			method: "POST",
+			body: searchRequest(state.memberPickerQuery, cookie, Math.min(50, recommendedPageSize()))
+		  });
+		  if (sequence !== state.memberPickerSequence || !elements.memberPickerDialog.open) return;
+		  if (transition) {
+			const history = transition.history.slice();
+			state.memberPickerPageHistory = transition.type === "next" ? [...history, transition.from] : history.slice(0, -1);
+		  }
+		  state.memberPickerCurrentCookie = cookie;
+		  state.memberPickerNextCookie = data && (data.page_cookie || data.pageCookie) || "";
+		  renderMemberPickerEntries(normalizeEntries(data));
+		} catch (error) {
+		  if (sequence !== state.memberPickerSequence || !elements.memberPickerDialog.open || error instanceof SupersededRequestError) return;
+		  state.memberPickerEntries = [];
+		  container.replaceChildren();
+		  container.setAttribute("aria-busy", "false");
+		  setFieldError($("#member-picker-error"), error.message, $("#member-picker-filter"));
+		  localize($("#member-picker-status"), "picker.loadFailed");
+		} finally {
+		  if (sequence === state.memberPickerSequence) {
+			state.memberPickerLoading = false;
+			updateMemberPickerPagination();
+			updateMemberPickerSelection();
+		  }
+		}
+	  }
+
+	  function openMemberPicker() {
+		if (!state.selectedEntry || !state.groupAttribute) return;
+		state.memberPickerSequence++;
+		state.memberPickerTargetDN = state.selectedEntry.dn;
+		state.memberPickerAttribute = state.groupAttribute;
+		state.memberPickerEntries = [];
+		state.memberPickerSelected.clear();
+		state.memberPickerPageHistory = [];
+		state.memberPickerCurrentCookie = "";
+		state.memberPickerNextCookie = "";
+		state.memberPickerQuery = null;
+		$("#member-picker-target").textContent = state.memberPickerTargetDN;
+		$("#member-picker-base").value = namingContextForDN(state.memberPickerTargetDN);
+		$("#member-picker-filter").value = memberPickerDefaultFilter(state.memberPickerAttribute);
+		$("#member-picker-results").replaceChildren();
+		$("#member-picker-results").setAttribute("aria-busy", "false");
+		localize($("#member-picker-status"), "picker.none");
+		$("#member-picker-add").disabled = true;
+		updateMemberPickerPagination();
+		openDialog(elements.memberPickerDialog);
+		searchMemberPicker();
+	  }
+
+		  async function updateGroupMembers(add, remove) {
+		    if (state.groupUpdating || !state.selectedEntry || !state.groupAttribute) return false;
 		const dn = state.selectedEntry.dn;
 		const attribute = state.groupAttribute;
 		state.groupUpdating = true;
@@ -2652,12 +3051,13 @@
       if (add.length) changes.push({ operation: "add", attribute, values: add });
       if (remove.length) changes.push({ operation: "remove", attribute, values: remove });
       await api("/api/groups", { method: "PATCH", body: { dn, changes } });
-	  if (state.selectedDN !== dn) return;
-      toast("group.updated", dn);
-	  await refreshAfterMutation([dn]);
-	  if (state.selectedDN !== dn) return;
-      await openEntry(dn);
-	    } catch (error) { if (state.selectedDN === dn) setFieldError($("#group-member-error"), error.message); }
+		  if (state.selectedDN !== dn) return false;
+	      toast("group.updated", dn);
+		  await refreshAfterMutation([dn]);
+		  if (state.selectedDN !== dn) return false;
+	      await openEntry(dn);
+		  return true;
+		    } catch (error) { if (state.selectedDN === dn) setFieldError($("#group-member-error"), error.message); return false; }
 		finally {
 		  state.groupUpdating = false;
 		  setFormSubmitting($("#group-member-form"), false);
@@ -3496,7 +3896,8 @@
 	requestAnimationFrame(() => {
 	  if (!dialog.open) return;
 	  const target = dialog === elements.confirmDialog ? $("#confirm-cancel") :
-		$("[autofocus], [data-initial-focus], input:not([type='hidden']), select, textarea, button", dialog);
+		$("[autofocus], [data-initial-focus]", dialog) ||
+		$("input:not([type='hidden']), select, textarea, button", dialog);
 	  target?.focus();
 	});
   }
@@ -4235,6 +4636,11 @@
 	$("#include-nested-members").addEventListener("change", () => {
 	  if (state.selectedEntry) renderGroupMembers(state.selectedEntry, $("#include-nested-members").checked);
 	});
+	$("#refresh-entry-memberships").addEventListener("click", loadEntryMemberships);
+	$("#include-nested-memberships").addEventListener("change", () => {
+	  if (state.selectedEntry) loadEntryMemberships();
+	});
+	$("#browse-group-members").addEventListener("click", openMemberPicker);
 	$("#group-member-form").addEventListener("submit", async (event) => {
 	  event.preventDefault();
 	  const value = $("#group-member-value").value.trim();
@@ -4245,6 +4651,37 @@
 	$("#remove-group-members").addEventListener("click", () => {
 	  const values = $$("input:checked", elements.groupMemberList).map((input) => input.value);
 	  if (values.length) updateGroupMembers([], values);
+	});
+	$("#member-picker-form").addEventListener("submit", (event) => {
+	  event.preventDefault();
+	  searchMemberPicker();
+	});
+	$("#member-picker-previous").addEventListener("click", () => {
+	  if (state.memberPickerLoading || !state.memberPickerPageHistory.length) return;
+	  const cookie = state.memberPickerPageHistory[state.memberPickerPageHistory.length - 1];
+	  searchMemberPicker(cookie, { type: "previous", history: state.memberPickerPageHistory.slice() });
+	});
+	$("#member-picker-next").addEventListener("click", () => {
+	  if (state.memberPickerLoading || !state.memberPickerNextCookie) return;
+	  searchMemberPicker(state.memberPickerNextCookie, {
+		type: "next", from: state.memberPickerCurrentCookie, history: state.memberPickerPageHistory.slice()
+	  });
+	});
+	$("#member-picker-add").addEventListener("click", async () => {
+	  const targetDN = state.memberPickerTargetDN;
+	  const attribute = state.memberPickerAttribute;
+	  const values = Array.from(state.memberPickerSelected.keys());
+	  if (!targetDN || !attribute || !values.length || state.selectedDN !== targetDN) return;
+	  setFormSubmitting($("#member-picker-form"), true);
+	  try {
+		const updated = await updateGroupMembers(values, []);
+		if (updated && elements.memberPickerDialog.open) closeDialog(elements.memberPickerDialog);
+		else if (!updated && elements.memberPickerDialog.open) {
+		  setFieldError($("#member-picker-error"), $("#group-member-error").textContent || t("group.loadFailed"));
+		}
+	  } finally {
+		setFormSubmitting($("#member-picker-form"), false);
+	  }
 	});
 	$("#bulk-modify-form").addEventListener("submit", async (event) => {
 	  event.preventDefault();
@@ -4459,6 +4896,14 @@
     elements.confirmDialog.addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirm(false); });
     elements.loginDialog.addEventListener("cancel", (event) => event.preventDefault());
 	elements.passwordDialog.addEventListener("close", () => resetPasswordVerification());
+	elements.memberPickerDialog.addEventListener("close", () => {
+	  state.memberPickerSequence++;
+	  state.memberPickerTargetDN = "";
+	  state.memberPickerAttribute = "";
+	  state.memberPickerEntries = [];
+	  state.memberPickerSelected.clear();
+	  state.memberPickerLoading = false;
+	});
     $$(".close-dialog").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
     window.addEventListener("beforeunload", (event) => { if (state.editorDirty) { event.preventDefault(); event.returnValue = ""; } });
   }

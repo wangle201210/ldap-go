@@ -1198,3 +1198,6 @@ quality and history enforcement plus explicit transaction/translucent
 rejection. The browser suite also covers resource-limit discovery, responsive
 keyboard operation, entry lifecycle, groups and bulk operations, and LDIF
 import/export against the real server.
+Group coverage includes member search selection, exact DN/NameAndOptionalUID/UID
+references, reverse direct and nested memberships, shortest-path attribution,
+cycle detection, resource bounds, and mobile dialog screenshots.

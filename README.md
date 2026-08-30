@@ -944,6 +944,7 @@ Bind, password modification with optional old-password verification,
 per-change server-side password hashing with a curated algorithm selection when
 the connected server advertises ldap-go's critical Password Modify hash control,
 explicit-selection bulk modify and delete, direct/nested group membership,
+member search selection and reverse direct/nested group memberships,
 bounded LDIF/CSV import, LDIF/CSV/JSON export, binary download/upload and safe
 image preview, schema and Monitor views.
 Batch responses report each applied, failed, unknown, or unattempted DN, stop

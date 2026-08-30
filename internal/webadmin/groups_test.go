@@ -72,7 +72,7 @@ func TestHandleGroupsExpandsNestedMembersWithCyclesAndDeduplication(t *testing.T
 					childDN,
 					sharedDN,
 					"UID=Alice,ou=people,dc=example,dc=com",
-					"uid=alice,ou=people,dc=example,dc=com",
+					"uid=Alice,OU=people,DC=example,DC=com",
 				},
 				"memberUid": {"LocalUser", "localuser", "LocalUser"},
 			}),
@@ -93,7 +93,7 @@ func TestHandleGroupsExpandsNestedMembersWithCyclesAndDeduplication(t *testing.T
 	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
 	authenticated := loginTestSession(t, application, "dn")
 	path := "/api/groups?base_dn=" + url.QueryEscape("ou=groups,dc=example,dc=com") +
-		"&dn=" + url.QueryEscape(strings.ToLower(rootDN)) + "&nested=true"
+		"&dn=" + url.QueryEscape("CN=Root,OU=groups,DC=example,DC=com") + "&nested=true"
 
 	response := performGroupsRequest(t, application, http.MethodGet, path, nil, authenticated.cookie, "")
 	if response.Code != http.StatusOK {
@@ -124,6 +124,299 @@ func TestHandleGroupsExpandsNestedMembersWithCyclesAndDeduplication(t *testing.T
 	}
 	if len(nested.Cycles) != 1 || nested.Cycles[0] != rootDN {
 		t.Fatalf("nested cycles = %#v", nested.Cycles)
+	}
+}
+
+func TestHandleGroupsFindsDirectDNAndUIDMemberships(t *testing.T) {
+	t.Parallel()
+	targetDN := "uid=Alice,ou=people,dc=example,dc=com"
+	typedTargetDN := "UID=Alice,OU=people,DC=example,DC=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{
+			ldap.NewEntry("cn=unique,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass":  {"groupOfUniqueNames"},
+				"uniqueMember": {targetDN + "#'101'B"},
+			}),
+			ldap.NewEntry("cn=none,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames"},
+				"member":      {"uid=bob,ou=people,dc=example,dc=com"},
+			}),
+			ldap.NewEntry("cn=posix,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"posixGroup"}, "memberUid": {"Alice"},
+			}),
+			ldap.NewEntry("cn=names,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {targetDN},
+			}),
+			ldap.NewEntry("cn=hybrid,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames", "posixGroup"},
+				"member":      {typedTargetDN},
+				"memberUid":   {"Alice"},
+			}),
+		}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	requestedDN := typedTargetDN
+	path := "/api/groups?base_dn=" + url.QueryEscape("ou=groups,dc=example,dc=com") +
+		"&member_dn=" + url.QueryEscape(requestedDN) + "&member_uid=Alice"
+
+	response := performGroupsRequest(t, application, http.MethodGet, path, nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("membership GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode membership response: %v", err)
+	}
+	if body.Memberships == nil || body.Nested != nil {
+		t.Fatalf("membership response = %#v", body)
+	}
+	memberships := body.Memberships
+	if memberships.MemberDN != requestedDN || memberships.MemberUID != "Alice" || memberships.Cycles == nil || len(memberships.Cycles) != 0 {
+		t.Fatalf("membership selector or cycles = %#v", memberships)
+	}
+	wantDNs := []string{
+		"cn=hybrid,ou=groups,dc=example,dc=com",
+		"cn=names,ou=groups,dc=example,dc=com",
+		"cn=posix,ou=groups,dc=example,dc=com",
+		"cn=unique,ou=groups,dc=example,dc=com",
+	}
+	if len(memberships.Groups) != len(wantDNs) || len(body.Groups) != len(wantDNs) {
+		t.Fatalf("matched groups = %#v, outer = %#v", memberships.Groups, body.Groups)
+	}
+	for index, wantDN := range wantDNs {
+		if memberships.Groups[index].DN != wantDN || body.Groups[index].DN != wantDN ||
+			!memberships.Groups[index].Direct || memberships.Groups[index].Depth != 0 ||
+			memberships.Groups[index].ViaDN != "" {
+			t.Fatalf("membership group %d = %#v, outer = %#v", index, memberships.Groups[index], body.Groups[index])
+		}
+	}
+	assertGroupMembershipReferences(t, memberships.Groups[0], []groupMembershipReference{
+		{Attribute: "member", Value: typedTargetDN},
+		{Attribute: "memberUid", Value: "Alice"},
+	})
+	assertGroupMembershipReferences(t, memberships.Groups[1], []groupMembershipReference{{Attribute: "member", Value: targetDN}})
+	assertGroupMembershipReferences(t, memberships.Groups[2], []groupMembershipReference{{Attribute: "memberUid", Value: "Alice"}})
+	assertGroupMembershipReferences(t, memberships.Groups[3], []groupMembershipReference{{Attribute: "uniqueMember", Value: targetDN + "#'101'B"}})
+}
+
+func TestHandleGroupsMembershipPreservesCaseExactDNValues(t *testing.T) {
+	t.Parallel()
+	requestedDN := "CASEEXACTNAME=alice+UID=100,OU=people,DC=example,DC=com"
+	storedMatch := "uid=100+caseExactName=alice,ou=people,dc=example,dc=com"
+	storedDifferent := "uid=100+caseExactName=Alice,ou=people,dc=example,dc=com"
+	matchingGroupDN := "cn=matching,ou=groups,dc=example,dc=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{
+			ldap.NewEntry("cn=different,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {storedDifferent},
+			}),
+			ldap.NewEntry(matchingGroupDN, map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {storedMatch},
+			}),
+		}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn="+url.QueryEscape("ou=groups,dc=example,dc=com")+
+			"&member_dn="+url.QueryEscape(requestedDN), nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("case-exact membership GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode case-exact membership response: %v", err)
+	}
+	if body.Memberships == nil || len(body.Memberships.Groups) != 1 || len(body.Groups) != 1 ||
+		body.Memberships.Groups[0].DN != matchingGroupDN || body.Groups[0].DN != matchingGroupDN {
+		t.Fatalf("case-exact membership response = %#v", body)
+	}
+	assertGroupMembershipReferences(t, body.Memberships.Groups[0], []groupMembershipReference{{
+		Attribute: "member", Value: storedMatch,
+	}})
+}
+
+func TestHandleGroupsMembershipTreatsInvalidUniqueMemberBitSuffixAsDN(t *testing.T) {
+	t.Parallel()
+	storedDN := "uid=alice,dc=example,dc=com#'102'B"
+	groupDN := "cn=fallback,dc=example,dc=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry(groupDN, map[string][]string{
+			"objectClass": {"groupOfUniqueNames"}, "uniqueMember": {storedDN},
+		})}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn="+url.QueryEscape("dc=example,dc=com")+
+			"&member_dn="+url.QueryEscape(storedDN), nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("uniqueMember fallback GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode uniqueMember fallback response: %v", err)
+	}
+	if body.Memberships == nil || len(body.Memberships.Groups) != 1 || body.Memberships.Groups[0].DN != groupDN {
+		t.Fatalf("uniqueMember fallback response = %#v", body)
+	}
+	assertGroupMembershipReferences(t, body.Memberships.Groups[0], []groupMembershipReference{{
+		Attribute: "uniqueMember", Value: storedDN,
+	}})
+}
+
+func TestHandleGroupsMembershipAcceptsUniqueMemberEmptyDNWithUID(t *testing.T) {
+	t.Parallel()
+	parsed, identity, err := parseGroupMember("#'1'B", true)
+	if err != nil {
+		t.Fatalf("parse empty-DN uniqueMember: %v", err)
+	}
+	if parsed == nil || len(parsed.RDNs) != 0 || identity != "#'1'B" || groupDNKey(parsed) != "" ||
+		groupDNKey(parsed) != groupDNKey(&ldap.DN{}) {
+		t.Fatalf("empty-DN uniqueMember = %#v, identity = %q, key = %q", parsed, identity, groupDNKey(parsed))
+	}
+
+	targetDN := "uid=alice,dc=example,dc=com"
+	directGroupDN := "cn=direct,dc=example,dc=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{
+			ldap.NewEntry("cn=empty-dn,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfUniqueNames"}, "uniqueMember": {"#'1'B"},
+			}),
+			ldap.NewEntry(directGroupDN, map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {targetDN},
+			}),
+		}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn="+url.QueryEscape("dc=example,dc=com")+
+			"&member_dn="+url.QueryEscape(targetDN)+"&nested=true", nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("empty-DN uniqueMember GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode empty-DN uniqueMember response: %v", err)
+	}
+	if body.Memberships == nil || len(body.Memberships.Groups) != 1 ||
+		body.Memberships.Groups[0].DN != directGroupDN {
+		t.Fatalf("empty-DN uniqueMember response = %#v", body)
+	}
+}
+
+func TestHandleGroupsFindsNestedParentMembershipsByShortestPath(t *testing.T) {
+	t.Parallel()
+	targetDN := "uid=alice,ou=people,dc=example,dc=com"
+	alphaDN := "cn=alpha,ou=groups,dc=example,dc=com"
+	bravoDN := "cn=bravo,ou=groups,dc=example,dc=com"
+	charlieDN := "cn=charlie,ou=groups,dc=example,dc=com"
+	deltaDN := "cn=delta,ou=groups,dc=example,dc=com"
+	echoDN := "cn=echo,ou=groups,dc=example,dc=com"
+	typedTargetDN := "UID=alice,OU=people,DC=example,DC=com"
+	typedAlphaDN := "CN=alpha,OU=groups,DC=example,DC=com"
+	bravoReference := "CN=bravo,OU=groups,DC=example,DC=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{
+			ldap.NewEntry(echoDN, map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {deltaDN},
+			}),
+			ldap.NewEntry(deltaDN, map[string][]string{
+				"objectClass":  {"groupOfNames", "groupOfUniqueNames"},
+				"member":       {bravoReference, charlieDN},
+				"uniqueMember": {bravoDN + "#'01'B"},
+			}),
+			ldap.NewEntry(charlieDN, map[string][]string{
+				"objectClass":  {"groupOfUniqueNames"},
+				"uniqueMember": {typedAlphaDN + "#'11'B"},
+			}),
+			ldap.NewEntry(alphaDN, map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {targetDN, echoDN},
+			}),
+			ldap.NewEntry(bravoDN, map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {typedAlphaDN},
+			}),
+			ldap.NewEntry("cn=unrelated,ou=groups,dc=example,dc=com", map[string][]string{
+				"objectClass": {"posixGroup"}, "memberUid": {"other"},
+			}),
+		}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	path := "/api/groups?base_dn=" + url.QueryEscape("ou=groups,dc=example,dc=com") +
+		"&member_dn=" + url.QueryEscape(typedTargetDN) + "&nested=true"
+
+	response := performGroupsRequest(t, application, http.MethodGet, path, nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("nested membership GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode nested membership response: %v", err)
+	}
+	if body.Memberships == nil {
+		t.Fatalf("nested memberships missing: %#v", body)
+	}
+	want := []struct {
+		dn, via string
+		depth   int
+		direct  bool
+	}{
+		{dn: alphaDN, depth: 0, direct: true},
+		{dn: bravoDN, via: alphaDN, depth: 1},
+		{dn: charlieDN, via: alphaDN, depth: 1},
+		{dn: deltaDN, via: bravoDN, depth: 2},
+		{dn: echoDN, via: deltaDN, depth: 3},
+	}
+	if len(body.Memberships.Groups) != len(want) || len(body.Groups) != len(want) {
+		t.Fatalf("nested memberships = %#v, outer = %#v", body.Memberships.Groups, body.Groups)
+	}
+	for index, expected := range want {
+		actual := body.Memberships.Groups[index]
+		if actual.DN != expected.dn || actual.ViaDN != expected.via || actual.Depth != expected.depth ||
+			actual.Direct != expected.direct || body.Groups[index].DN != expected.dn {
+			t.Fatalf("nested membership %d = %#v, want %#v", index, actual, expected)
+		}
+	}
+	assertGroupMembershipReferences(t, body.Memberships.Groups[0], []groupMembershipReference{{Attribute: "member", Value: targetDN}})
+	assertGroupMembershipReferences(t, body.Memberships.Groups[1], []groupMembershipReference{{Attribute: "member", Value: typedAlphaDN}})
+	assertGroupMembershipReferences(t, body.Memberships.Groups[2], []groupMembershipReference{{Attribute: "uniqueMember", Value: typedAlphaDN + "#'11'B"}})
+	assertGroupMembershipReferences(t, body.Memberships.Groups[3], []groupMembershipReference{
+		{Attribute: "member", Value: bravoReference},
+		{Attribute: "uniqueMember", Value: bravoDN + "#'01'B"},
+	})
+	assertGroupMembershipReferences(t, body.Memberships.Groups[4], []groupMembershipReference{{Attribute: "member", Value: deltaDN}})
+	if strings.Join(body.Memberships.Cycles, "|") != alphaDN {
+		t.Fatalf("membership cycles = %#v", body.Memberships.Cycles)
+	}
+}
+
+func TestHandleGroupsMemberUIDMatchingIsExactAndReturnsEmptyArrays(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry(
+			"cn=posix,dc=example,dc=com",
+			map[string][]string{"objectClass": {"posixGroup"}, "memberUid": {"Alice"}},
+		)}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_uid=alice&nested=true",
+		nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("memberUid GET status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode memberUid response: %v", err)
+	}
+	if body.Memberships == nil || body.Memberships.MemberDN != "" || body.Memberships.MemberUID != "alice" ||
+		body.Groups == nil || len(body.Groups) != 0 || body.Memberships.Groups == nil || len(body.Memberships.Groups) != 0 ||
+		body.Memberships.Cycles == nil || len(body.Memberships.Cycles) != 0 {
+		t.Fatalf("empty memberships response = %#v", body)
 	}
 }
 
@@ -213,7 +506,14 @@ func TestHandleGroupsSecurityAndValidationErrorsAvoidModify(t *testing.T) {
 		{name: "method", method: http.MethodPost, path: "/api/groups", cookie: authenticated.cookie, status: http.StatusMethodNotAllowed},
 		{name: "unknown query", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&limit=1", cookie: authenticated.cookie, status: http.StatusBadRequest},
 		{name: "duplicate query", method: http.MethodGet, path: "/api/groups?base_dn=a&base_dn=b", cookie: authenticated.cookie, status: http.StatusBadRequest},
-		{name: "nested without dn", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&nested=true", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "nested without selector", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&nested=true", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "empty nested", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&nested=", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "empty member DN", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_dn=", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "empty member UID", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_uid=", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "invalid member DN", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_dn=not-a-dn", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "invalid member UID", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_uid=%20", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "dn and member DN", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&dn=cn%3Dx%2Cdc%3Dexample%2Cdc%3Dcom&member_dn=uid%3Da%2Cdc%3Dexample%2Cdc%3Dcom", cookie: authenticated.cookie, status: http.StatusBadRequest},
+		{name: "dn and member UID", method: http.MethodGet, path: "/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&dn=cn%3Dx%2Cdc%3Dexample%2Cdc%3Dcom&member_uid=alice", cookie: authenticated.cookie, status: http.StatusBadRequest},
 		{name: "dn outside base", method: http.MethodGet, path: "/api/groups?base_dn=ou%3Dgroups%2Cdc%3Dexample%2Cdc%3Dcom&dn=cn%3Dx%2Cou%3Dother%2Cdc%3Dexample%2Cdc%3Dcom", cookie: authenticated.cookie, status: http.StatusBadRequest},
 		{name: "missing csrf", method: http.MethodPatch, path: "/api/groups", body: validGroupPatchBody(), cookie: authenticated.cookie, status: http.StatusForbidden},
 		{name: "bad origin", method: http.MethodPatch, path: "/api/groups", body: validGroupPatchBody(), cookie: authenticated.cookie, csrf: authenticated.csrf, origin: "https://evil.example", status: http.StatusForbidden},
@@ -229,7 +529,7 @@ func TestHandleGroupsSecurityAndValidationErrorsAvoidModify(t *testing.T) {
 				"dn": "cn=staff,dc=example,dc=com",
 				"changes": []map[string]any{{
 					"operation": "add", "attribute": "member",
-					"values": []string{"UID=Alice,dc=example,dc=com", "uid=alice,DC=example,dc=com"},
+					"values": []string{"UID=Alice,dc=example,dc=com", "uid=Alice,DC=example,dc=com"},
 				}},
 			},
 			cookie: authenticated.cookie, csrf: authenticated.csrf, status: http.StatusBadRequest,
@@ -324,7 +624,7 @@ func TestHandleGroupsRejectsInvalidLDAPGroupResults(t *testing.T) {
 		{name: "non-group entry", entries: []*ldap.Entry{ldap.NewEntry("cn=user,dc=example,dc=com", map[string][]string{"objectClass": {"person"}})}, status: http.StatusBadGateway, code: "invalid_ldap_response"},
 		{name: "duplicate group DN", entries: []*ldap.Entry{
 			ldap.NewEntry("cn=staff,dc=example,dc=com", map[string][]string{"objectClass": {"groupOfNames"}}),
-			ldap.NewEntry("CN=STAFF,DC=EXAMPLE,DC=COM", map[string][]string{"objectClass": {"groupOfNames"}}),
+			ldap.NewEntry("CN=staff,DC=example,DC=com", map[string][]string{"objectClass": {"groupOfNames"}}),
 		}, limit: 3, status: http.StatusBadGateway, code: "invalid_ldap_response"},
 		{name: "result entry limit", entries: []*ldap.Entry{
 			ldap.NewEntry("cn=one,dc=example,dc=com", map[string][]string{"objectClass": {"groupOfNames"}}),
@@ -465,6 +765,105 @@ func TestNestedGroupLimitAndMalformedLDAPMembership(t *testing.T) {
 	}
 }
 
+func TestHandleGroupsMembershipRejectsMalformedLDAPValues(t *testing.T) {
+	t.Parallel()
+	targetDN := "uid=alice,dc=example,dc=com"
+	tests := []struct {
+		name       string
+		attributes map[string][]string
+	}{
+		{
+			name: "invalid member DN",
+			attributes: map[string][]string{
+				"objectClass": {"groupOfNames"}, "member": {"not-a-dn"},
+			},
+		},
+		{
+			name: "valid optional UID with invalid DN",
+			attributes: map[string][]string{
+				"objectClass": {"groupOfUniqueNames"}, "uniqueMember": {"not-a-dn#'101'B"},
+			},
+		},
+		{
+			name: "invalid memberUid",
+			attributes: map[string][]string{
+				"objectClass": {"posixGroup"}, "memberUid": {"bad\nuid"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+				return &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry(
+					"cn=broken,dc=example,dc=com", test.attributes,
+				)}}, nil
+			}}
+			application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+			authenticated := loginTestSession(t, application, "dn")
+			response := performGroupsRequest(t, application, http.MethodGet,
+				"/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_dn="+url.QueryEscape(targetDN),
+				nil, authenticated.cookie, "")
+			if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "invalid_ldap_response") {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleGroupsMembershipEnforcesMembershipValueLimit(t *testing.T) {
+	t.Parallel()
+	targetDN := "uid=alice,dc=example,dc=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry(
+			"cn=staff,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames"},
+				"member":      {targetDN, "uid=bob,dc=example,dc=com"},
+			},
+		)}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, func(config *Config) {
+		config.MaxSearchSize = 1
+	})
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_dn="+url.QueryEscape(targetDN)+"&nested=true",
+		nil, authenticated.cookie, "")
+	if response.Code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(response.Body.String(), "group_membership_limit_exceeded") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestHandleGroupsMembershipAllowsExactMembershipValueLimit(t *testing.T) {
+	t.Parallel()
+	targetDN := "uid=alice,dc=example,dc=com"
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry(
+			"cn=staff,dc=example,dc=com", map[string][]string{
+				"objectClass": {"groupOfNames"},
+				"member":      {targetDN, "uid=bob,dc=example,dc=com"},
+			},
+		)}}, nil
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, func(config *Config) {
+		config.MaxSearchSize = 2
+	})
+	authenticated := loginTestSession(t, application, "dn")
+	response := performGroupsRequest(t, application, http.MethodGet,
+		"/api/groups?base_dn=dc%3Dexample%2Cdc%3Dcom&member_dn="+url.QueryEscape(targetDN),
+		nil, authenticated.cookie, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body groupsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode exact-limit response: %v", err)
+	}
+	if body.Memberships == nil || len(body.Memberships.Groups) != 1 {
+		t.Fatalf("exact-limit response = %#v", body)
+	}
+}
+
 func validGroupPatchBody() map[string]any {
 	return patchBody("add", "memberUid", "alice")
 }
@@ -483,6 +882,22 @@ func assertLDAPChange(t *testing.T, change ldap.Change, operation uint, attribut
 	if change.Operation != operation || change.Modification.Type != attribute ||
 		strings.Join(change.Modification.Vals, "\x00") != strings.Join(values, "\x00") {
 		t.Fatalf("LDAP change = %#v, want operation=%d attribute=%q values=%q", change, operation, attribute, values)
+	}
+}
+
+func assertGroupMembershipReferences(
+	t *testing.T,
+	membership groupMembershipResponse,
+	want []groupMembershipReference,
+) {
+	t.Helper()
+	if len(membership.References) != len(want) {
+		t.Fatalf("membership %q references = %#v, want %#v", membership.DN, membership.References, want)
+	}
+	for index := range want {
+		if membership.References[index] != want[index] {
+			t.Fatalf("membership %q reference %d = %#v, want %#v", membership.DN, index, membership.References[index], want[index])
+		}
 	}
 }
 

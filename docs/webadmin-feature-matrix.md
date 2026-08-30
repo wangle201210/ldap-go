@@ -50,13 +50,13 @@ Web 产品与桌面工具还有以下边界：
 | --- | --- | --- |
 | 连接与 Bind | 每个 `web-admin` 进程配置一个 LDAP URL；每个登录会话执行真实 Bind 并持有独立的有界连接。 | 这不是 LDAPSoft 所述的多连接配置库或同时打开多个目录。密码不在会话中保留。 |
 | 目录浏览与用户管理 | 命名上下文树、分页列表、条目详情；Person、Group、OU 和自定义模板；Add、Modify、Delete。 | 模板只是录入辅助，最终合法性由目标服务器 Schema 和 ACL 决定。 |
-| 用户组基础管理 | 可创建常见组条目，并通过通用属性编辑器维护 `member`、`uniqueMember` 或 `memberUid`。 | 尚不是专门的成员选择、反向成员关系或嵌套成员工作台。 |
+| 用户组管理 | 可创建 `groupOfNames`、`groupOfUniqueNames`、`posixGroup`；提供直接/嵌套成员、分页成员搜索选择器，以及从任意条目反查直接/嵌套所属组和最短来源路径。 | 查询和写入继续使用当前 Bind 身份；隐藏组不会被推断。跨多个组的批量关系修改仍不宣称原子。 |
 | 高级搜索 | 支持 Base DN、base/one/sub scope、原生 RFC 4515 Filter、属性投影、大小限制和 Simple Paged Results 翻页。 | 已有的是精确 LDAP 搜索表单；当前不把 SQL 风格查询算作高级搜索。 |
 | 重命名与移动 | 通过 ModifyDN 修改 RDN，并可指定 `newSuperior` 完成服务器允许的同连接移动。 | 服务器可能拒绝跨命名上下文移动；失败不应自动退化为复制后删除。 |
-| 通用属性编辑 | 多值文本属性的 add/replace/delete；显示 Schema 提示；常见操作属性和二进制属性只读。 | 尚无按 Syntax 选择的 Boolean、Integer、Generalized Time、DN、Object Class、Hex/File 等专用编辑器。 |
-| 二进制数据 | API 使用 Base64 表示二进制属性，页面可识别并只读显示。 | 当前没有安全上传、下载、图片预览、裁剪或格式转换。 |
+| 通用属性编辑 | 多值文本属性的 add/replace/delete；显示 Schema 提示；Boolean 和单值 Integer 使用专用控件，常见操作属性只读。 | DN、Generalized Time、Object Class 和 Hex 仍使用无损文本回退，尚无完整专用编辑器。 |
+| 二进制数据 | API 使用 Base64 表示二进制属性，页面支持有界上传、下载、删除及安全图片预览。 | 不自动裁剪或转码图片，也不内联渲染 SVG/HTML 等活动内容。 |
 | 密码验证与修改 | 使用独立的临时 LDAP Bind 验证所选用户当前密码，不改变管理员会话；验证其他 DN 前要求当前绑定身份对 `userPassword` 或 `authPassword` 具有 LDAP Compare 权限，当前绑定身份可验证自身；默认使用 Password Modify；连接的 Root DSE 明确声明 ldap-go 密码哈希选择控制时，也可为本次 Password Modify 选择受控算法。 | LDAP 服务端先使用明文完成可选旧密码原子校验、ACL、密码质量与历史检查，再生成所选哈希；算法选择要求对目标密码属性具有 `manage` 权限，普通 self-write 用户不可使用，密码输入上限为 4 KiB。未声明该临界控制的目标只展示服务器策略；事务和 translucent 后端明确拒绝而不会静默忽略。密码变更响应不返回哈希。 |
-| 导入/导出 | 有界 LDIF 导入与 LDIF 导出；导入仍逐项经过 LDAP 写操作、ACL 和 Schema。 | 当前 Web 页面不提供 CSV、XLSX、PDF、JSON 或 SQL 格式导入导出。 |
+| 导入/导出 | 有界 LDIF 导入/导出、CSV Add 导入，以及当前查询的 CSV/JSON 导出；每项仍经过 LDAP ACL 和 Schema。 | 尚无 CSV upsert/update、XLSX、PDF 或 SQL 格式；复杂迁移继续以 LDIF 为准。 |
 | Schema | 读取 Root DSE 的 subschema entry，展示 Attribute Types、Object Classes 及其他公开定义并支持页面筛选。 | 只读；不在通用管理页直接修改 `cn=config` 或 Schema。 |
 | 监控 | 读取服务器公开的 Monitor naming context，展示有界的摘要和条目详情。 | 是实时只读快照，不是时间序列、告警或容量报告系统。服务器未公开或 ACL 不可见时不推断数据。 |
 | 页面与运行安全 | 英文/简体中文切换、CSRF/Origin/Host 校验、HttpOnly 会话、请求与搜索资源限制、HTTPS/LDAP TLS 门禁、健康检查和聚合指标。 | 语言只影响界面文本，不转换 DN、属性名、OID、Filter、Schema、LDIF 或属性值。 |
@@ -69,8 +69,8 @@ Time 和未知 Syntax 暂时保留无损文本输入，避免浏览器格式化�
 
 | 能力 | 本波范围 | 完成判定与安全要求 |
 | --- | --- | --- |
-| 用户组工作台 | 识别 `groupOfNames`、`groupOfUniqueNames`、`posixGroup` 等常见组；展示、添加和移除直接成员；支持 DN 与 UID 成员属性。 | 修改必须发送普通 LDAP Modify；不得通过前端缓存覆盖并发变化；成员不可见或写入失败时保留 LDAP 结果，不暗示管理员拥有额外权限。 |
-| 嵌套成员 | 在组详情中按需展开直接和间接成员，标注来源层级，并提供循环检测。 | 必须限制深度、访问条目数、并发和耗时；只返回当前 Bind 身份经 ACL 可见的结果，不能用隐藏成员数量制造侧信道。 |
+| 用户组工作台 | 识别 `groupOfNames`、`groupOfUniqueNames`、`posixGroup`；展示、搜索选择、添加和移除直接成员；支持 DN、NameAndOptionalUID 与 UID 成员属性。 | 修改发送单组原子 LDAP Modify；成员搜索使用独立分页状态，不污染主查询，目标 DN 在异步操作前固定。 |
+| 嵌套成员与所属组 | 在组详情按需展开直接/间接成员；在任意条目上反查直接/嵌套所属组，返回深度、最短上一跳、精确引用值和循环提示。 | 遍历受组数量与关系值上限约束，只返回当前 Bind 身份可见的组；畸形成员值和资源超限显式失败。 |
 | 可视化过滤器 | 提供 AND/OR 条件组和常用等于、包含、前后缀、存在、范围、近似、否定操作；生成可查看、可继续编辑的 RFC 4515 Filter。 | 属性和值必须使用标准 Filter escaping；文本 Filter 始终是权威表示。首版不支持任意深度的拖放 AST，也不引入 SQL。 |
 | 常用搜索与书签 | 内置人员、组、锁定账户等少量可审计模板；允许保存命名查询；记录有限的本地查询历史。 | 个人书签/历史首版仅保存在浏览器，不含 Bind 密码；提供清除入口、条数上限和失效字段处理。共享书签不在本波。 |
 | 批量修改 | 对明确勾选的 DN 执行 add/replace/delete/increment；支持遇错停止或继续，返回逐条成功/失败/未知/未执行结果。 | 服务端限制 DN 数、属性数、值大小和整批耗时；操作前显示影响范围并二次确认。传输中断后的在途写结果标为未知并禁止直接重试。普通 LDAP 请求间不具备跨条目原子性，页面必须如实报告部分成功。 |

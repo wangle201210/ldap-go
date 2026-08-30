@@ -223,17 +223,30 @@ button, .button { letter-spacing: 0; }
 .status-badge { border: 1px solid #a9d4c1; border-radius: 999px; background: #ebf8f2; color: #18714e; padding: 4px 8px; font-size: 12px; font-weight: 800; text-transform: uppercase; }
 .mobile-detail-actions { display: none; }
 .danger-text { color: var(--danger); }
-.group-members { border-bottom: 1px solid var(--line); background: var(--surface-muted); padding: 14px 22px; }
-.group-members .editor-heading { margin-bottom: 9px; }
+.group-members, .entry-memberships { border-bottom: 1px solid var(--line); background: var(--surface-muted); padding: 14px 22px; }
+.group-members .editor-heading, .entry-memberships .editor-heading { margin-bottom: 9px; }
 .group-member-list { max-height: 210px; overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
 .group-member-row { min-height: 36px; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 6px; border-bottom: 1px solid #e5e9eb; padding: 5px 8px; font-size: 13px; }
 .group-member-row:last-child { border-bottom: 0; }
 .group-member-row input { width: 15px; min-height: 15px; }
 .group-member-row span { min-width: 0; overflow-wrap: anywhere; }
 .group-member-row small { color: var(--ink-faint); }
-.group-member-form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 7px; margin-top: 9px; }
+.group-member-form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: end; gap: 7px; margin-top: 9px; }
 .group-member-field { min-width: 0; display: grid; gap: 5px; }
 .group-member-field label { color: var(--ink-soft); font-size: 12px; font-weight: 650; }
+.membership-heading-actions { display: flex; align-items: center; gap: 12px; }
+.entry-membership-list { max-height: 210px; overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.entry-membership-row { width: 100%; min-height: 42px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #e5e9eb; border-radius: 0; background: transparent; color: var(--ink); padding: 7px 9px; text-align: left; }
+.entry-membership-row:hover { background: var(--surface-muted); }
+.entry-membership-row:last-child { border-bottom: 0; }
+.entry-membership-row > * { min-width: 0; }
+.entry-membership-copy, .entry-membership-row strong, .entry-membership-row small { display: block; overflow-wrap: anywhere; }
+.entry-membership-row strong { font-size: 13px; }
+.entry-membership-row small { color: var(--ink-faint); font-size: 12px; }
+.membership-badge { border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 7px; color: var(--ink-soft); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.membership-badge.direct { border-color: #8fc7ae; background: #ebf8f2; color: #18714e; }
+.membership-cycle-note { border-top: 1px solid var(--line); background: var(--amber-soft); color: #754607; margin: 0; padding: 8px 10px; font-size: 12px; }
+.section-status { min-height: 38px; display: flex; align-items: center; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); padding: 8px 10px; color: var(--ink-soft); font-size: 12px; overflow-wrap: anywhere; }
 .entry-editor { max-width: 900px; margin: 0 auto; padding: 20px 22px; }
 .editor-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .editor-heading-actions { display: flex; gap: 7px; }
@@ -314,6 +327,7 @@ button, .button { letter-spacing: 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .modal-form > .modal-actions { position: relative; z-index: 2; border-top: 1px solid var(--line); background: var(--surface); margin: 0; padding: 12px 22px max(12px, env(safe-area-inset-bottom)); }
 #entry-dialog { width: min(720px, calc(100vw - 28px)); }
+#member-picker-dialog { width: min(720px, calc(100vw - 28px)); }
 .login-modal { width: min(400px, calc(100vw - 28px)); }
 .login-modal form { padding: 28px; }
 .login-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 28px; }
@@ -337,6 +351,26 @@ button, .button { letter-spacing: 0; }
 .target-dn { border-left: 3px solid var(--accent); background: var(--surface-muted); padding: 8px 10px; color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .password-modal-heading { min-width: 0; flex: 1; }
 #password-target { margin: 8px 0 0; }
+.member-picker-heading { min-width: 0; flex: 1; }
+#member-picker-target { margin: 8px 0 0; }
+.member-picker-query { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.member-picker-query .form-field { min-width: 0; margin-bottom: 0; }
+.member-picker-results-section { margin-top: 16px; }
+.member-picker-results-heading { min-height: 28px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.member-picker-results-heading h3 { margin: 0; font-size: 13px; }
+.member-picker-results-heading span { color: var(--ink-faint); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+.member-picker-results { min-height: 168px; max-height: 300px; overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.member-picker-result { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 8px; border-bottom: 1px solid #e5e9eb; padding: 7px 8px; cursor: pointer; }
+.member-picker-result:last-child { border-bottom: 0; }
+.member-picker-result:hover { background: var(--surface-muted); }
+.member-picker-result input { width: 16px; min-height: 16px; margin: 0; }
+.member-picker-result > span { min-width: 0; }
+.member-picker-result strong, .member-picker-result small { display: block; overflow-wrap: anywhere; }
+.member-picker-result strong { font-size: 13px; }
+.member-picker-result small { margin-top: 2px; color: var(--ink-faint); font-size: 12px; }
+.member-picker-pagination { display: flex; justify-content: space-between; gap: 8px; margin-top: 9px; }
+.member-picker-pagination .button { min-width: 108px; }
+.member-picker-dialog .modal-actions { display: grid; grid-template-columns: repeat(2, minmax(0, auto)); }
 .check-row { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; }
 .check-row input { width: 16px; min-height: 16px; }
 .file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -413,7 +447,7 @@ button, .button { letter-spacing: 0; }
   .mobile-entry-menu { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; min-width: 150px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: var(--shadow); padding: 5px; }
   .mobile-entry-menu .button { width: 100%; justify-content: flex-start; border: 0; }
   .entry-editor { padding: 16px 14px; }
-  .group-members { padding: 12px 14px; }
+  .group-members, .entry-memberships { padding: 12px 14px; }
   .attribute-row { grid-template-columns: minmax(100px, 0.38fr) minmax(150px, 1fr) 34px; gap: 7px; }
 	  .toast-region { top: auto; right: max(10px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); width: calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
 }
@@ -459,6 +493,17 @@ button, .button { letter-spacing: 0; }
   .bulk-toolbar { align-items: flex-start; flex-direction: column; }
   .group-member-form { grid-template-columns: 1fr 1fr; }
   .group-member-field { grid-column: 1 / 3; }
+  #browse-group-members { grid-column: 1 / 3; }
+  .entry-memberships .editor-heading { flex-wrap: wrap; }
+  .membership-heading-actions { width: 100%; justify-content: space-between; }
+  .member-picker-query { grid-template-columns: minmax(0, 1fr); }
+  .member-picker-query .button { width: 100%; }
+  .member-picker-results-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .member-picker-results-heading span { text-align: left; }
+  .member-picker-results { min-height: 140px; max-height: 240px; }
+  .member-picker-pagination .button { min-width: 0; flex: 1; white-space: normal; }
+  .member-picker-dialog .modal-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .member-picker-dialog .modal-actions .button { min-width: 0; white-space: normal; }
 }
 
 @media (max-width: 430px) {

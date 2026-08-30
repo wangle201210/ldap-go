@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -29,8 +30,9 @@ type groupResponse struct {
 }
 
 type groupsResponse struct {
-	Groups []groupResponse      `json:"groups"`
-	Nested *nestedGroupResponse `json:"nested,omitempty"`
+	Groups      []groupResponse           `json:"groups"`
+	Nested      *nestedGroupResponse      `json:"nested,omitempty"`
+	Memberships *groupMembershipsResponse `json:"memberships,omitempty"`
 }
 
 type nestedGroupResponse struct {
@@ -40,6 +42,27 @@ type nestedGroupResponse struct {
 	UniqueMember []string `json:"uniqueMember"`
 	MemberUID    []string `json:"memberUid"`
 	Cycles       []string `json:"cycles,omitempty"`
+}
+
+type groupMembershipsResponse struct {
+	MemberDN  string                    `json:"member_dn"`
+	MemberUID string                    `json:"member_uid"`
+	Groups    []groupMembershipResponse `json:"groups"`
+	Cycles    []string                  `json:"cycles"`
+}
+
+type groupMembershipResponse struct {
+	DN         string                     `json:"dn"`
+	Type       string                     `json:"type"`
+	Direct     bool                       `json:"direct"`
+	Depth      int                        `json:"depth"`
+	ViaDN      string                     `json:"via_dn,omitempty"`
+	References []groupMembershipReference `json:"references"`
+}
+
+type groupMembershipReference struct {
+	Attribute string `json:"attribute"`
+	Value     string `json:"value"`
 }
 
 type groupPatchRequest struct {
@@ -123,6 +146,20 @@ func (application *Application) getGroups(
 			return
 		}
 	}
+	var memberDN *ldap.DN
+	if query.memberDN != "" {
+		memberDN, err = parseBoundedGroupDN(query.memberDN, "member_dn")
+		if err != nil {
+			writeAPIError(response, http.StatusBadRequest, apiError{Code: "invalid_member_dn", Message: err.Error()})
+			return
+		}
+	}
+	if query.memberUID != "" {
+		if err := validateMemberUID(query.memberUID); err != nil {
+			writeAPIError(response, http.StatusBadRequest, apiError{Code: "invalid_member_uid", Message: err.Error()})
+			return
+		}
+	}
 
 	ldapRequest := ldap.NewSearchRequest(
 		query.baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
@@ -187,6 +224,29 @@ func (application *Application) getGroups(
 			}
 			output.Nested = &nested
 		}
+	} else if memberDN != nil || query.memberUID != "" {
+		memberships, matched, err := findGroupMemberships(
+			groups, index, memberDN, query.memberDN, query.memberUID,
+			query.nested, application.config.MaxSearchSize,
+		)
+		if err != nil {
+			var limitError *nestedGroupLimitError
+			if errors.As(err, &limitError) {
+				writeAPIError(response, http.StatusRequestEntityTooLarge, apiError{
+					Code: "group_membership_limit_exceeded", Message: err.Error(),
+				})
+			} else {
+				writeAPIError(response, http.StatusBadGateway, apiError{
+					Code: "invalid_ldap_response", Message: err.Error(),
+				})
+			}
+			return
+		}
+		output.Groups = make([]groupResponse, 0, len(matched))
+		for _, groupIndex := range matched {
+			output.Groups = append(output.Groups, groups[groupIndex])
+		}
+		output.Memberships = &memberships
 	}
 	writeJSON(response, http.StatusOK, output)
 }
@@ -283,9 +343,11 @@ func (application *Application) patchGroup(
 }
 
 type groupQuery struct {
-	baseDN string
-	dn     string
-	nested bool
+	baseDN    string
+	dn        string
+	memberDN  string
+	memberUID string
+	nested    bool
 }
 
 func parseGroupQuery(raw string) (groupQuery, error) {
@@ -295,7 +357,7 @@ func parseGroupQuery(raw string) (groupQuery, error) {
 	}
 	for name, entries := range values {
 		switch name {
-		case "base_dn", "dn", "nested":
+		case "base_dn", "dn", "member_dn", "member_uid", "nested":
 		default:
 			return groupQuery{}, fmt.Errorf("unknown query parameter %q", name)
 		}
@@ -303,19 +365,34 @@ func parseGroupQuery(raw string) (groupQuery, error) {
 			return groupQuery{}, fmt.Errorf("query parameter %q must occur exactly once", name)
 		}
 	}
-	query := groupQuery{baseDN: values.Get("base_dn"), dn: values.Get("dn")}
+	query := groupQuery{
+		baseDN: values.Get("base_dn"), dn: values.Get("dn"),
+		memberDN: values.Get("member_dn"), memberUID: values.Get("member_uid"),
+	}
 	if query.baseDN == "" {
 		return groupQuery{}, errors.New("base_dn is required")
 	}
-	switch values.Get("nested") {
-	case "", "false":
+	for _, name := range []string{"dn", "member_dn", "member_uid"} {
+		if entries, present := values[name]; present && entries[0] == "" {
+			return groupQuery{}, fmt.Errorf("query parameter %q must not be empty", name)
+		}
+	}
+	if query.dn != "" && (query.memberDN != "" || query.memberUID != "") {
+		return groupQuery{}, errors.New("dn is mutually exclusive with member_dn and member_uid")
+	}
+	nestedValue, nestedPresent := values["nested"]
+	if !nestedPresent {
+		nestedValue = []string{"false"}
+	}
+	switch nestedValue[0] {
+	case "false":
 	case "true":
 		query.nested = true
 	default:
 		return groupQuery{}, errors.New("nested must be true or false")
 	}
-	if query.nested && query.dn == "" {
-		return groupQuery{}, errors.New("dn is required when nested is true")
+	if query.nested && query.dn == "" && query.memberDN == "" && query.memberUID == "" {
+		return groupQuery{}, errors.New("dn, member_dn, or member_uid is required when nested is true")
 	}
 	return query, nil
 }
@@ -388,7 +465,7 @@ func cloneAttributeValues(entry *ldap.Entry, name string) []string {
 }
 
 func groupDNKey(value *ldap.DN) string {
-	return strings.ToLower(value.String())
+	return value.String()
 }
 
 func expandNestedGroup(
@@ -503,19 +580,265 @@ func maximumGroupMembershipLimit(searchLimit int) int {
 	return maximumValuesPerAttribute
 }
 
+type groupMembershipPath struct {
+	depth      int
+	via        int
+	references []groupMembershipReference
+}
+
+func findGroupMemberships(
+	groups []groupResponse,
+	index map[string]int,
+	memberDN *ldap.DN,
+	memberDNValue string,
+	memberUID string,
+	nested bool,
+	maximum int,
+) (groupMembershipsResponse, []int, error) {
+	output := groupMembershipsResponse{
+		MemberDN: memberDNValue, MemberUID: memberUID,
+		Groups: make([]groupMembershipResponse, 0), Cycles: make([]string, 0),
+	}
+	if maximum < 1 {
+		return groupMembershipsResponse{}, nil, &nestedGroupLimitError{message: "group membership limit is invalid"}
+	}
+
+	keys := make([]string, len(groups))
+	for key, groupIndex := range index {
+		if groupIndex < 0 || groupIndex >= len(groups) || keys[groupIndex] != "" {
+			return groupMembershipsResponse{}, nil, errors.New("LDAP group index is inconsistent")
+		}
+		keys[groupIndex] = key
+	}
+	for _, key := range keys {
+		if key == "" {
+			return groupMembershipsResponse{}, nil, errors.New("LDAP group index is incomplete")
+		}
+	}
+
+	parents := make([]map[int][]groupMembershipReference, len(groups))
+	directReferences := make(map[int][]groupMembershipReference)
+	memberDNKey := ""
+	if memberDN != nil {
+		memberDNKey = groupDNKey(memberDN)
+	}
+	membershipLimit := maximumGroupMembershipLimit(maximum)
+	membershipValues := 0
+
+	addDNReference := func(groupIndex int, attribute, raw string, unique bool) error {
+		membershipValues++
+		if membershipValues > membershipLimit {
+			return &nestedGroupLimitError{message: fmt.Sprintf(
+				"group membership graph exceeds %d values", membershipLimit,
+			)}
+		}
+		parsed, _, err := parseGroupMember(raw, unique)
+		if err != nil {
+			return fmt.Errorf("group %q contains invalid %s value %q: %w", groups[groupIndex].DN, attribute, raw, err)
+		}
+		key := groupDNKey(parsed)
+		reference := groupMembershipReference{Attribute: attribute, Value: raw}
+		if memberDN != nil && key == memberDNKey {
+			directReferences[groupIndex] = append(directReferences[groupIndex], reference)
+		}
+		if child, exists := index[key]; exists {
+			if parents[child] == nil {
+				parents[child] = make(map[int][]groupMembershipReference)
+			}
+			parents[child][groupIndex] = append(parents[child][groupIndex], reference)
+		}
+		return nil
+	}
+
+	for groupIndex, group := range groups {
+		for _, value := range group.Member {
+			if err := addDNReference(groupIndex, "member", value, false); err != nil {
+				return groupMembershipsResponse{}, nil, err
+			}
+		}
+		for _, value := range group.UniqueMember {
+			if err := addDNReference(groupIndex, "uniqueMember", value, true); err != nil {
+				return groupMembershipsResponse{}, nil, err
+			}
+		}
+		for _, value := range group.MemberUID {
+			membershipValues++
+			if membershipValues > membershipLimit {
+				return groupMembershipsResponse{}, nil, &nestedGroupLimitError{message: fmt.Sprintf(
+					"group membership graph exceeds %d values", membershipLimit,
+				)}
+			}
+			if err := validateMemberUID(value); err != nil {
+				return groupMembershipsResponse{}, nil, fmt.Errorf(
+					"group %q contains invalid memberUid value %q: %w", group.DN, value, err,
+				)
+			}
+			if memberUID != "" && value == memberUID {
+				directReferences[groupIndex] = append(directReferences[groupIndex], groupMembershipReference{
+					Attribute: "memberUid", Value: value,
+				})
+			}
+		}
+	}
+
+	lessDN := func(left, right int) bool {
+		if keys[left] == keys[right] {
+			return groups[left].DN < groups[right].DN
+		}
+		return keys[left] < keys[right]
+	}
+	direct := make([]int, 0, len(directReferences))
+	paths := make(map[int]groupMembershipPath, len(directReferences))
+	for groupIndex, references := range directReferences {
+		direct = append(direct, groupIndex)
+		paths[groupIndex] = groupMembershipPath{
+			depth: 0, via: -1, references: sortedGroupMembershipReferences(references),
+		}
+	}
+	sort.Slice(direct, func(left, right int) bool { return lessDN(direct[left], direct[right]) })
+
+	if nested {
+		frontier := direct
+		for len(frontier) > 0 {
+			candidates := make(map[int]int)
+			for _, child := range frontier {
+				parentIndexes := make([]int, 0, len(parents[child]))
+				for parent := range parents[child] {
+					parentIndexes = append(parentIndexes, parent)
+				}
+				sort.Slice(parentIndexes, func(left, right int) bool {
+					return lessDN(parentIndexes[left], parentIndexes[right])
+				})
+				for _, parent := range parentIndexes {
+					if _, seen := paths[parent]; seen {
+						continue
+					}
+					if previous, exists := candidates[parent]; !exists || lessDN(child, previous) {
+						candidates[parent] = child
+					}
+				}
+			}
+			next := make([]int, 0, len(candidates))
+			for parent := range candidates {
+				next = append(next, parent)
+			}
+			sort.Slice(next, func(left, right int) bool { return lessDN(next[left], next[right]) })
+			for _, parent := range next {
+				via := candidates[parent]
+				paths[parent] = groupMembershipPath{
+					depth: paths[via].depth + 1, via: via,
+					references: sortedGroupMembershipReferences(parents[via][parent]),
+				}
+			}
+			frontier = next
+		}
+		output.Cycles = findReverseGroupCycles(groups, keys, parents, paths, lessDN)
+	}
+
+	matched := make([]int, 0, len(paths))
+	for groupIndex := range paths {
+		matched = append(matched, groupIndex)
+	}
+	sort.Slice(matched, func(left, right int) bool {
+		leftPath, rightPath := paths[matched[left]], paths[matched[right]]
+		if leftPath.depth != rightPath.depth {
+			return leftPath.depth < rightPath.depth
+		}
+		return lessDN(matched[left], matched[right])
+	})
+	for _, groupIndex := range matched {
+		path := paths[groupIndex]
+		membership := groupMembershipResponse{
+			DN: groups[groupIndex].DN, Type: groups[groupIndex].Type,
+			Direct: path.depth == 0, Depth: path.depth,
+			References: append(make([]groupMembershipReference, 0, len(path.references)), path.references...),
+		}
+		if path.via >= 0 {
+			membership.ViaDN = groups[path.via].DN
+		}
+		output.Groups = append(output.Groups, membership)
+	}
+	return output, matched, nil
+}
+
+func sortedGroupMembershipReferences(input []groupMembershipReference) []groupMembershipReference {
+	output := append(make([]groupMembershipReference, 0, len(input)), input...)
+	sort.SliceStable(output, func(left, right int) bool {
+		if output[left].Attribute != output[right].Attribute {
+			return output[left].Attribute < output[right].Attribute
+		}
+		return output[left].Value < output[right].Value
+	})
+	return output
+}
+
+func findReverseGroupCycles(
+	groups []groupResponse,
+	keys []string,
+	parents []map[int][]groupMembershipReference,
+	paths map[int]groupMembershipPath,
+	lessDN func(int, int) bool,
+) []string {
+	state := make([]uint8, len(groups))
+	cycleIndexes := make(map[int]struct{})
+	starts := make([]int, 0, len(paths))
+	for groupIndex := range paths {
+		starts = append(starts, groupIndex)
+	}
+	sort.Slice(starts, func(left, right int) bool { return lessDN(starts[left], starts[right]) })
+
+	var visit func(int)
+	visit = func(child int) {
+		state[child] = 1
+		parentIndexes := make([]int, 0, len(parents[child]))
+		for parent := range parents[child] {
+			if _, reachable := paths[parent]; reachable {
+				parentIndexes = append(parentIndexes, parent)
+			}
+		}
+		sort.Slice(parentIndexes, func(left, right int) bool {
+			return lessDN(parentIndexes[left], parentIndexes[right])
+		})
+		for _, parent := range parentIndexes {
+			switch state[parent] {
+			case 0:
+				visit(parent)
+			case 1:
+				cycleIndexes[parent] = struct{}{}
+			}
+		}
+		state[child] = 2
+	}
+	for _, start := range starts {
+		if state[start] == 0 {
+			visit(start)
+		}
+	}
+	cycles := make([]int, 0, len(cycleIndexes))
+	for groupIndex := range cycleIndexes {
+		cycles = append(cycles, groupIndex)
+	}
+	sort.Slice(cycles, func(left, right int) bool { return lessDN(cycles[left], cycles[right]) })
+	output := make([]string, 0, len(cycles))
+	for _, groupIndex := range cycles {
+		if keys[groupIndex] != "" {
+			output = append(output, groups[groupIndex].DN)
+		}
+	}
+	return output
+}
+
 func parseGroupMemberDN(value string, unique bool) (*ldap.DN, error) {
 	parsed, _, err := parseGroupMember(value, unique)
 	return parsed, err
 }
 
 func parseGroupMember(value string, unique bool) (*ldap.DN, string, error) {
-	if unique && len(value) <= maximumGroupValueBytes && strings.HasSuffix(value, "'B") {
-		separator := strings.LastIndex(value, "#'")
-		if separator > 0 {
-			for _, bit := range value[separator+2 : len(value)-2] {
-				if bit != '0' && bit != '1' {
-					return nil, "", errors.New("invalid uniqueMember bit string")
-				}
+	if unique && len(value) <= maximumGroupValueBytes {
+		separator := strings.LastIndexByte(value, '#')
+		if separator >= 0 && validGroupBitString(value[separator+1:]) {
+			if separator == 0 {
+				return &ldap.DN{}, value[separator:], nil
 			}
 			parsed, err := parseBoundedGroupDN(value[:separator], "uniqueMember DN")
 			if err != nil {
@@ -526,6 +849,18 @@ func parseGroupMember(value string, unique bool) (*ldap.DN, string, error) {
 	}
 	parsed, err := parseBoundedGroupDN(value, "member DN")
 	return parsed, "", err
+}
+
+func validGroupBitString(value string) bool {
+	if len(value) < 3 || value[0] != '\'' || value[len(value)-2] != '\'' || value[len(value)-1] != 'B' {
+		return false
+	}
+	for _, bit := range value[1 : len(value)-2] {
+		if bit != '0' && bit != '1' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateGroupChanges(input []groupPatchChange, maximum int) ([]groupPatchChange, error) {

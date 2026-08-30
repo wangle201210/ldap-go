@@ -174,10 +174,23 @@
             <div class="group-member-list" id="group-member-list"></div>
             <form class="group-member-form" id="group-member-form">
               <div class="group-member-field"><label for="group-member-value">Member DN or uid</label><input id="group-member-value" autocomplete="off" spellcheck="false" placeholder="uid=user,ou=people,dc=example,dc=org" required></div>
+              <button class="button quiet" id="browse-group-members" type="button" aria-haspopup="dialog" aria-controls="member-picker-dialog">Browse members</button>
               <button class="button quiet" type="submit">Add member</button>
               <button class="button quiet danger-text" id="remove-group-members" type="button" disabled>Remove selected</button>
             </form>
             <div class="form-error" id="group-member-error" role="alert" hidden></div>
+          </section>
+          <section class="entry-memberships" id="entry-memberships" aria-labelledby="entry-memberships-title" hidden>
+            <div class="editor-heading">
+              <div><h3 id="entry-memberships-title">Group memberships</h3><p id="entry-membership-count">0 groups</p></div>
+              <div class="membership-heading-actions">
+                <label class="check-row" for="include-nested-memberships"><input id="include-nested-memberships" type="checkbox" aria-controls="entry-membership-list"><span>Include nested memberships</span></label>
+                <button class="icon-button" id="refresh-entry-memberships" type="button" aria-label="Refresh group memberships" aria-controls="entry-membership-list" title="Refresh group memberships">&#8635;</button>
+              </div>
+            </div>
+            <div class="section-status" id="entry-membership-status" role="status" aria-live="polite" aria-atomic="true">Memberships have not been loaded.</div>
+            <div class="entry-membership-list" id="entry-membership-list" role="region" aria-label="Groups containing this entry" aria-busy="false" hidden></div>
+            <div class="form-error" id="entry-membership-error" role="alert" hidden></div>
           </section>
           <form id="entry-editor" class="entry-editor">
             <div class="editor-heading"><div><h3>Attributes</h3><p id="attribute-count">0 attributes</p></div><div class="editor-heading-actions"><button class="button quiet" id="browse-attributes" type="button">Browse attributes</button><button class="button quiet" id="add-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div></div>
@@ -286,6 +299,36 @@ inetOrgPerson</textarea></div>
         <div class="form-error" id="password-error" role="alert" hidden></div>
       </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Reset password</button></div>
+    </form>
+  </dialog>
+
+	<dialog class="modal member-picker-dialog" id="member-picker-dialog" aria-labelledby="member-picker-title" aria-describedby="member-picker-description member-picker-target">
+    <form class="modal-form" method="dialog" id="member-picker-form">
+	  <div class="modal-header">
+        <div class="member-picker-heading"><span class="eyebrow">Group membership</span><h2 id="member-picker-title">Browse members</h2><p class="target-dn" id="member-picker-target" aria-label="Target group distinguished name"></p></div>
+        <button class="icon-button close-dialog" type="button" aria-label="Close member picker" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="sr-only" id="member-picker-description">Search the directory and select entries to add to the target group.</p>
+        <div class="member-picker-query">
+          <div class="form-field"><label for="member-picker-base">Search base DN</label><input id="member-picker-base" name="base" autocomplete="off" spellcheck="false" data-initial-focus required></div>
+          <div class="form-field"><label for="member-picker-filter">LDAP filter</label><input id="member-picker-filter" name="filter" value="(objectClass=*)" autocomplete="off" spellcheck="false" required></div>
+          <button class="button quiet" id="member-picker-search" type="submit" aria-label="Search directory for members" aria-controls="member-picker-results">Search</button>
+        </div>
+        <div class="form-error" id="member-picker-error" role="alert" hidden></div>
+        <section class="member-picker-results-section" aria-labelledby="member-picker-results-title">
+          <div class="member-picker-results-heading">
+            <h3 id="member-picker-results-title">Search results</h3>
+            <span id="member-picker-status" role="status" aria-live="polite" aria-atomic="true">No search run</span>
+          </div>
+          <div class="member-picker-results" id="member-picker-results" role="group" aria-label="Member search results" aria-describedby="member-picker-status" aria-busy="false"></div>
+          <nav class="member-picker-pagination" aria-label="Member search result pages">
+            <button class="button quiet" id="member-picker-previous" type="button" aria-label="Previous member search page" aria-controls="member-picker-results" disabled><span aria-hidden="true">&lsaquo;</span> Previous</button>
+            <button class="button quiet" id="member-picker-next" type="button" aria-label="Next member search page" aria-controls="member-picker-results" disabled>Next <span aria-hidden="true">&rsaquo;</span></button>
+          </nav>
+        </section>
+      </div>
+      <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" id="member-picker-add" type="button" disabled>Add selected</button></div>
     </form>
   </dialog>
 
