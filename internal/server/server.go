@@ -561,6 +561,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		listenerScheme:       listenerScheme,
 		writeFailed:          &atomic.Bool{},
 		transactionAdmission: &atomic.Bool{},
+		dnCache:              newConnectionDNCache(),
 	}
 	state.maxIncoming = server.connectionIncomingLimit(false)
 	server.registerMetaTransportCache(state.metaTransports)
@@ -1567,32 +1568,34 @@ func (server *Server) dispatch(
 		if failure := requestSecurityResult(state, message.Request); failure != nil {
 			return false, writeResultForMessage(connection, message, *failure)
 		}
-		database := searchRequestDatabase(state.runtime, request)
-		if database != nil {
-			if databaseSearchCandidatesAreDelegated(state.runtime, *database) {
-				if failure := server.delegatedSearchPreflight(
-					state,
-					*database,
-					request,
-					message.Controls,
-				); failure != nil {
-					return false, writeResultForMessage(connection, message, *failure)
-				}
-				message = applyDatabaseSearchLimits(
-					state,
-					message,
-					server.config.MaxSearchEntries,
-				)
-			} else {
-				var failure *ldapwire.Result
-				message, failure = server.applyLocalSearchLimitsBeforeDispatch(
-					ctx,
-					state,
-					message,
-					*database,
-				)
-				if failure != nil {
-					return false, writeResultForMessage(connection, message, *failure)
+		if state.runtime.features.searchPreDispatch {
+			database := searchRequestDatabase(state.runtime, request)
+			if database != nil {
+				if databaseSearchCandidatesAreDelegated(state.runtime, *database) {
+					if failure := server.delegatedSearchPreflight(
+						state,
+						*database,
+						request,
+						message.Controls,
+					); failure != nil {
+						return false, writeResultForMessage(connection, message, *failure)
+					}
+					message = applyDatabaseSearchLimits(
+						state,
+						message,
+						server.config.MaxSearchEntries,
+					)
+				} else {
+					var failure *ldapwire.Result
+					message, failure = server.applyLocalSearchLimitsBeforeDispatch(
+						ctx,
+						state,
+						message,
+						*database,
+					)
+					if failure != nil {
+						return false, writeResultForMessage(connection, message, *failure)
+					}
 				}
 			}
 		}
@@ -1651,19 +1654,21 @@ func (server *Server) dispatch(
 		}
 		return false, writeResultForMessage(connection, message, *failure)
 	}
-	overlayMessage := message
-	overlayMessage.Controls = withoutSessionTrackingControls(message.Controls)
-	overlayMessage.Controls = withoutLazyCommitControls(overlayMessage.Controls)
-	overlayConnection, handled, err := server.trySockOverlayOperation(
-		ctx,
-		connection,
-		state,
-		overlayMessage,
-	)
-	if handled {
-		return false, err
+	if state.runtime.features.sockOverlay {
+		overlayMessage := message
+		overlayMessage.Controls = withoutSessionTrackingControls(message.Controls)
+		overlayMessage.Controls = withoutLazyCommitControls(overlayMessage.Controls)
+		overlayConnection, handled, err := server.trySockOverlayOperation(
+			ctx,
+			connection,
+			state,
+			overlayMessage,
+		)
+		if handled {
+			return false, err
+		}
+		connection = overlayConnection
 	}
-	connection = overlayConnection
 	if domainScope {
 		connection = &domainScopeConnection{
 			Conn:      connection,
@@ -1701,45 +1706,55 @@ func (server *Server) dispatch(
 	); handled {
 		return false, err
 	}
-	if handled, err := server.tryMetaBackendOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.metaBackend {
+		if handled, err := server.tryMetaBackendOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
-	if handled, err := server.tryDNSSRVBackendOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.dnssrvBackend {
+		if handled, err := server.tryDNSSRVBackendOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
-	if handled, err := server.tryLDAPBackendOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.ldapBackend {
+		if handled, err := server.tryLDAPBackendOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
-	if handled, err := server.tryPasswdBackendOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.passwdBackend {
+		if handled, err := server.tryPasswdBackendOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
-	if handled, err := server.trySockBackendOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.sockBackend {
+		if handled, err := server.trySockBackendOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
 	if handled, err := server.handleTransactionSpecification(
 		connection,
@@ -1748,13 +1763,16 @@ func (server *Server) dispatch(
 	); handled {
 		return false, err
 	}
-	if handled, err := server.tryChainOperation(
-		ctx,
-		connection,
-		state,
-		message,
-	); handled {
-		return false, err
+	if state.runtime.features.chain ||
+		hasLDAPControl(message.Controls, chainingBehaviorControlOID) {
+		if handled, err := server.tryChainOperation(
+			ctx,
+			connection,
+			state,
+			message,
+		); handled {
+			return false, err
+		}
 	}
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
@@ -2582,6 +2600,43 @@ type connectionState struct {
 	monitor                    *monitorConnection
 	auditIdentity              *connectionAuditIdentityState
 	maxIncoming                uint64
+	dnCache                    *connectionDNCache
+}
+
+type connectionDNCache struct {
+	mu      sync.Mutex
+	entries map[string]connectionCachedDN
+}
+
+type connectionCachedDN struct {
+	runtime *runtimeState
+	dn      directory.DN
+}
+
+func newConnectionDNCache() *connectionDNCache {
+	return &connectionDNCache{entries: make(map[string]connectionCachedDN)}
+}
+
+func (cache *connectionDNCache) get(runtime *runtimeState, raw string) (directory.DN, bool) {
+	if cache == nil {
+		return directory.DN{}, false
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cached, ok := cache.entries[raw]
+	return cached.dn, ok && cached.runtime == runtime
+}
+
+func (cache *connectionDNCache) put(runtime *runtimeState, raw string, dn directory.DN) {
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if len(cache.entries) >= 64 {
+		clear(cache.entries)
+	}
+	cache.entries[raw] = connectionCachedDN{runtime: runtime, dn: dn}
 }
 
 func (server *Server) connectionIncomingLimit(authenticated bool) uint64 {
@@ -2739,6 +2794,21 @@ func (server *Server) isRoot(
 	}
 	database := databaseForDN(runtime, target)
 	return database != nil && databaseRootMatches(runtime, *database, subject)
+}
+
+func (server *Server) isDatabaseRoot(
+	runtime *runtimeState,
+	database runtimeDatabase,
+	rawDN string,
+) bool {
+	if rawDN == "" {
+		return false
+	}
+	if database.rootDN != nil && rawDN == database.rootDN.String() {
+		return true
+	}
+	subject, err := parseRuntimeDN(rawDN, database.dnNormalizer)
+	return err == nil && databaseRootMatches(runtime, database, subject)
 }
 
 func isAnyDatabaseRoot(runtime *runtimeState, subject directory.DN) bool {

@@ -24,16 +24,20 @@ type Attribute struct {
 
 // Entry is the storage-neutral representation of one LDAP entry.
 type Entry struct {
-	DN         string      `json:"dn"`
-	Attributes []Attribute `json:"attributes"`
-	dnIdentity string
+	DN           string      `json:"dn"`
+	Attributes   []Attribute `json:"attributes"`
+	dnIdentity   string
+	normalizedDN *DN
+	dnOrderKey   string
 }
 
 func (e Entry) Clone() Entry {
 	out := Entry{
-		DN:         e.DN,
-		Attributes: make([]Attribute, len(e.Attributes)),
-		dnIdentity: e.dnIdentity,
+		DN:           e.DN,
+		Attributes:   make([]Attribute, len(e.Attributes)),
+		dnIdentity:   e.dnIdentity,
+		normalizedDN: e.normalizedDN,
+		dnOrderKey:   e.dnOrderKey,
 	}
 	for i, attribute := range e.Attributes {
 		out.Attributes[i].Description = attribute.Description
@@ -46,11 +50,32 @@ func (e Entry) Clone() Entry {
 // The hint is intentionally excluded from JSON and LDAP entry equality.
 func (e Entry) WithDNIdentity(dn DN) Entry {
 	e.dnIdentity = dn.Key()
+	e.normalizedDN = &dn
 	return e
 }
 
 func (e Entry) DNIdentity() (string, bool) {
 	return e.dnIdentity, e.dnIdentity != ""
+}
+
+// WithNormalizedDNHint attaches immutable storage-derived DN information that
+// is intentionally excluded from JSON and LDAP equality.
+func (e Entry) WithNormalizedDNHint(dn DN, orderKey string) Entry {
+	e.dnIdentity = dn.Key()
+	e.normalizedDN = &dn
+	e.dnOrderKey = orderKey
+	return e
+}
+
+func (e Entry) NormalizedDNHint() (DN, bool) {
+	if e.normalizedDN == nil {
+		return DN{}, false
+	}
+	return *e.normalizedDN, true
+}
+
+func (e Entry) DNOrderKeyHint() (string, bool) {
+	return e.dnOrderKey, e.dnOrderKey != ""
 }
 
 func (e Entry) WithoutDNIdentity() Entry {

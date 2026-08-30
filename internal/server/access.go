@@ -91,6 +91,10 @@ func (server *Server) attributesWithPrivilege(
 	privilege acl.Privilege,
 	typesOnly bool,
 ) directory.Entry {
+	subject := accessSubject(reader, subjectDN)
+	if server.isRoot(runtime, subject.DN, entry.DN, "") {
+		return rootVisibleEntry(entry, typesOnly)
+	}
 	filtered := directory.Entry{DN: entry.DN}
 	for _, attribute := range entry.Attributes {
 		if typesOnly {
@@ -138,6 +142,22 @@ func (server *Server) attributesWithPrivilege(
 		if len(selected.Values) > 0 {
 			filtered.Attributes = append(filtered.Attributes, selected)
 		}
+	}
+	return filtered
+}
+
+func rootVisibleEntry(entry directory.Entry, typesOnly bool) directory.Entry {
+	if !typesOnly {
+		return entry
+	}
+	filtered := directory.Entry{
+		DN:         entry.DN,
+		Attributes: make([]directory.Attribute, 0, len(entry.Attributes)),
+	}
+	for _, attribute := range entry.Attributes {
+		filtered.Attributes = append(filtered.Attributes, directory.Attribute{
+			Description: attribute.Description,
+		})
 	}
 	return filtered
 }

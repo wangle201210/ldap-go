@@ -48,14 +48,15 @@ type serverSideSortContext struct {
 }
 
 type searchCandidate struct {
-	selected    directory.Entry
-	readable    directory.Entry
-	route       int
-	dn          string
-	cursorKey   string
-	identityKey string
-	values      []sortValue
-	syncUUID    ldapwire.SyncUUID
+	selected     directory.Entry
+	readable     directory.Entry
+	normalizedDN directory.DN
+	route        int
+	dn           string
+	cursorKey    string
+	identityKey  string
+	values       []sortValue
+	syncUUID     ldapwire.SyncUUID
 }
 
 func searchCandidateRetainedBytes(candidate searchCandidate) int64 {

@@ -908,8 +908,60 @@ func archiveHomedir(path homedirPath, archivePath string, now time.Time) error {
 
 type homedirEffectStore struct {
 	storage.Store
-	server *Server
-	mu     sync.Mutex
+	server     *Server
+	mu         sync.Mutex
+	revisionMu sync.RWMutex
+	revision   uint64
+}
+
+type storageRevisionReader struct {
+	storage.Reader
+	revision uint64
+}
+
+func (reader storageRevisionReader) StorageSnapshotRevision() (uint64, bool) {
+	if revision, ok := storage.ReaderSnapshotRevision(reader.Reader); ok {
+		return revision, true
+	}
+	return reader.revision, true
+}
+
+func (reader storageRevisionReader) AccessContext() any {
+	if provider, ok := reader.Reader.(interface{ AccessContext() any }); ok {
+		return provider.AccessContext()
+	}
+	return nil
+}
+
+func (reader storageRevisionReader) StorageContext() context.Context {
+	if provider, ok := reader.Reader.(interface {
+		StorageContext() context.Context
+	}); ok {
+		return provider.StorageContext()
+	}
+	return nil
+}
+
+func (reader storageRevisionReader) MaintenanceStorageReader() storage.Reader {
+	return reader.Reader
+}
+
+func (store *homedirEffectStore) View(
+	ctx context.Context,
+	view func(storage.Reader) error,
+) error {
+	store.revisionMu.RLock()
+	revision := store.revision
+	entered := false
+	err := store.Store.View(ctx, func(reader storage.Reader) error {
+		entered = true
+		store.revisionMu.RUnlock()
+		return view(storageRevisionReader{Reader: reader, revision: revision})
+	})
+	if !entered {
+		store.revisionMu.RUnlock()
+	}
+	return err
 }
 
 func (store *homedirEffectStore) Update(
@@ -918,6 +970,8 @@ func (store *homedirEffectStore) Update(
 ) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.revisionMu.Lock()
+	defer store.revisionMu.Unlock()
 
 	runtime := store.server.runtime.Load()
 	coordinator := newSQLBackendTransactionCoordinator(ctx)
@@ -935,8 +989,12 @@ func (store *homedirEffectStore) Update(
 	if err != nil {
 		return err
 	}
+	store.revision++
 	coordinator.completeUpdate()
 	if runtime != nil {
+		if collectiveStorageChangesAffectPlan(runtime.schema, changes) {
+			runtime.collectivePlans.invalidate()
+		}
 		store.server.applyHomedirStorageChanges(runtime, changes)
 	}
 	return nil

@@ -124,6 +124,10 @@ type partitionReader struct {
 	partition string
 }
 
+func (reader partitionReader) StorageSnapshotRevision() (uint64, bool) {
+	return ReaderSnapshotRevision(reader.Reader)
+}
+
 func (reader partitionReader) AccessContext() any {
 	if provider, ok := reader.Reader.(interface{ AccessContext() any }); ok {
 		return provider.AccessContext()
@@ -337,7 +341,14 @@ func schemaAwareGetIn(
 	if err := requireSchemaAwareDNIdentities(reader, partition); err != nil {
 		return directory.Entry{}, err
 	}
+	if getter, ok := maintenanceReader(reader).(schemaAwareDirectGetter); ok {
+		return getter.getSchemaAwareIn(partition, dn)
+	}
 	return reader.GetIn(partition, dn)
+}
+
+type schemaAwareDirectGetter interface {
+	getSchemaAwareIn(partition string, dn directory.DN) (directory.Entry, error)
 }
 
 func legacySchemaAwareGetIn(
@@ -382,12 +393,14 @@ func schemaAwareForEachIn(
 	allowLegacy bool,
 	fn func(directory.Entry) error,
 ) error {
-	if err := requireSchemaAwareDNIdentities(reader, partition); err != nil &&
-		!errors.Is(err, ErrDNIdentityMigrationRequired) {
-		return err
-	}
-	if err := validateSchemaAwareDNBindingsIn(reader, partition, normalizer); err != nil {
-		return err
+	identityErr := requireSchemaAwareDNIdentities(reader, partition)
+	if identityErr != nil {
+		if !errors.Is(identityErr, ErrDNIdentityMigrationRequired) {
+			return identityErr
+		}
+		if err := validateSchemaAwareDNBindingsIn(reader, partition, normalizer); err != nil {
+			return err
+		}
 	}
 	type normalizedEntry struct {
 		entry directory.Entry
@@ -395,7 +408,17 @@ func schemaAwareForEachIn(
 	}
 
 	var entries []normalizedEntry
-	if err := reader.ForEachIn(partition, func(entry directory.Entry) error {
+	appendEntry := func(entry directory.Entry, physicalKey string) error {
+		if physicalKey != "" {
+			dn, err := directory.ParseDNWithIdentityKey(entry.DN, physicalKey)
+			if err != nil {
+				return err
+			}
+			key := dn.LegacyKey() + "\x00" + physicalKey
+			entry = entry.WithNormalizedDNHint(dn, key)
+			entries = append(entries, normalizedEntry{entry: entry, key: key})
+			return nil
+		}
 		dn, err := directory.ParseDN(entry.DN)
 		if err != nil {
 			return err
@@ -406,21 +429,50 @@ func schemaAwareForEachIn(
 		}
 		entries = append(entries, normalizedEntry{entry: entry, key: key})
 		return nil
-	}); err != nil {
-		return err
 	}
-	sort.SliceStable(entries, func(left, right int) bool {
-		if entries[left].key == entries[right].key {
-			return entries[left].entry.DN < entries[right].entry.DN
+	var iterationErr error
+	iterationOrdered := false
+	if identityErr == nil {
+		backend := maintenanceReader(reader)
+		if iterator, ok := backend.(schemaAwarePhysicalIterator); ok {
+			iterationOrdered, iterationErr = iterator.forEachSchemaAwarePhysicalIn(
+				partition,
+				appendEntry,
+			)
+		} else {
+			iterationErr = reader.ForEachIn(partition, func(entry directory.Entry) error {
+				return appendEntry(entry, "")
+			})
 		}
-		return entries[left].key < entries[right].key
-	})
+	} else {
+		iterationErr = reader.ForEachIn(partition, func(entry directory.Entry) error {
+			return appendEntry(entry, "")
+		})
+	}
+	if iterationErr != nil {
+		return iterationErr
+	}
+	if !iterationOrdered {
+		sort.SliceStable(entries, func(left, right int) bool {
+			if entries[left].key == entries[right].key {
+				return entries[left].entry.DN < entries[right].entry.DN
+			}
+			return entries[left].key < entries[right].key
+		})
+	}
 	for _, candidate := range entries {
 		if err := fn(candidate.entry); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type schemaAwarePhysicalIterator interface {
+	forEachSchemaAwarePhysicalIn(
+		partition string,
+		visit func(directory.Entry, string) error,
+	) (bool, error)
 }
 
 func schemaAwareDNOrderKey(

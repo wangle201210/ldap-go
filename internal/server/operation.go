@@ -681,7 +681,54 @@ func (connection *serializedResponseConnection) writeOperationResponse(
 	return connection.writeLocked(value)
 }
 
+func (connection *serializedResponseConnection) writeOperationResponseBatch(
+	operation *trackedOperation,
+	values [][]byte,
+) (int, error) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	if operation == nil || !operation.responseAllowed() {
+		return 0, errOperationStopped
+	}
+	return connection.writeLockedBatch(values)
+}
+
 func (connection *serializedResponseConnection) writeLocked(value []byte) (int, error) {
+	written, err := connection.writeRawLocked(value)
+	if err == nil && connection.monitor != nil && connection.monitorConnection != nil {
+		connection.monitor.observeResponse(connection.monitorConnection, value)
+	}
+	return written, err
+}
+
+func (connection *serializedResponseConnection) writeLockedBatch(
+	values [][]byte,
+) (int, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	if len(values) == 1 {
+		return connection.writeLocked(values[0])
+	}
+	total := 0
+	for _, value := range values {
+		total += len(value)
+	}
+	combined := make([]byte, total)
+	offset := 0
+	for _, value := range values {
+		offset += copy(combined[offset:], value)
+	}
+	written, err := connection.writeRawLocked(combined)
+	if err == nil && connection.monitor != nil && connection.monitorConnection != nil {
+		for _, value := range values {
+			connection.monitor.observeResponse(connection.monitorConnection, value)
+		}
+	}
+	return written, err
+}
+
+func (connection *serializedResponseConnection) writeRawLocked(value []byte) (int, error) {
 	if connection.terminal != nil && connection.terminal.Load() {
 		return 0, net.ErrClosed
 	}
@@ -724,9 +771,6 @@ func (connection *serializedResponseConnection) writeLocked(value []byte) (int, 
 		if count == 0 {
 			return fail(written, io.ErrShortWrite)
 		}
-	}
-	if connection.monitor != nil && connection.monitorConnection != nil {
-		connection.monitor.observeResponse(connection.monitorConnection, value)
 	}
 	return written, nil
 }
@@ -788,6 +832,60 @@ func (connection *operationResponseConnection) Write(value []byte) (int, error) 
 	connection.responseBytes += int64(written)
 	if written == len(value) {
 		connection.audit.observeResponse(value)
+	}
+	return written, err
+}
+
+func (connection *operationResponseConnection) writeLDAPResponseBatch(
+	values [][]byte,
+) (int, error) {
+	connection.budgetMu.Lock()
+	defer connection.budgetMu.Unlock()
+	total := 0
+	for _, value := range values {
+		if connection.maximumPDUBytes > 0 && int64(len(value)) > connection.maximumPDUBytes {
+			return 0, errSearchResponseLimit
+		}
+		total += len(value)
+	}
+	if connection.reserveResponseBytes != nil {
+		for _, value := range values {
+			releaseResponseBytes, acquired := connection.reserveResponseBytes(int64(len(value)))
+			if !acquired {
+				return 0, errSearchResponseLimit
+			}
+			releaseResponseBytes()
+		}
+	}
+	if connection.maximumResponseBytes > 0 &&
+		int64(total) > connection.maximumResponseBytes-connection.responseBytes {
+		return 0, errSearchResponseLimit
+	}
+	var written int
+	var err error
+	if writer, ok := connection.Conn.(interface {
+		writeOperationResponseBatch(*trackedOperation, [][]byte) (int, error)
+	}); ok {
+		written, err = writer.writeOperationResponseBatch(connection.operation, values)
+	} else {
+		for _, value := range values {
+			if !connection.operation.responseAllowed() {
+				err = errOperationStopped
+				break
+			}
+			count, writeErr := connection.Conn.Write(value)
+			written += count
+			if writeErr != nil {
+				err = writeErr
+				break
+			}
+		}
+	}
+	connection.responseBytes += int64(written)
+	if err == nil && written == total {
+		for _, value := range values {
+			connection.audit.observeResponse(value)
+		}
 	}
 	return written, err
 }

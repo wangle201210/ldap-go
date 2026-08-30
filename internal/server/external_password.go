@@ -515,7 +515,11 @@ func (server *Server) preverifyPasswordModification(
 			sequences = nil
 			return nil
 		}
-		collectivePlan, err := buildCollectiveAttributePlan(runtime.schema, tx)
+		collectivePlan, err := runtimeCollectiveAttributePlan(
+			runtime,
+			database.partition,
+			tx,
+		)
 		if err != nil {
 			return err
 		}

@@ -196,19 +196,19 @@ func TestMaintenanceCommands(t *testing.T) {
 				"restore", "-backup", backupPath, "-db", restoredPath,
 			},
 			action:   "restored",
-			metadata: 4,
+			metadata: 5,
 		},
 		{
 			name:     "rebuild",
 			args:     []string{"rebuild", "-db", restoredPath},
 			action:   "rebuilt",
-			metadata: 4,
+			metadata: 5,
 		},
 		{
 			name:     "reindex alias",
 			args:     []string{"reindex", "-db", restoredPath},
 			action:   "rebuilt",
-			metadata: 4,
+			metadata: 5,
 		},
 	}
 	for _, test := range tests {

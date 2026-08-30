@@ -1486,6 +1486,19 @@ entries nightly. Custom matching-rule modules and deployment-specific larger
 datasets still require qualification; ldap-go is not a complete OpenLDAP
 drop-in replacement.
 
+For a same-host performance comparison against the pinned OpenLDAP 2.6.13
+reference, use its generated environment file:
+
+```sh
+OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
+  make qualification-compare-openldap
+```
+
+The comparison uses identical generated data, indexes, OpenLDAP client tools,
+and ordered workloads for both servers. It writes machine-readable JSON and
+TSV evidence; configuration and interpretation are documented in
+[Production qualification](docs/production-qualification.md#openldap-performance-comparison).
+
 Imported `olcRootDN` and `olcRootPW` values are loaded from `cn=config`
 automatically and apply only to their database. To provide an explicit
 bootstrap override without exposing its password in the process arguments:

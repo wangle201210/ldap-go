@@ -640,6 +640,13 @@ type rwmStorageReader struct {
 	configuration *rwmRuntimeConfiguration
 }
 
+func (reader *rwmStorageReader) StorageSnapshotRevision() (uint64, bool) {
+	if reader == nil {
+		return 0, false
+	}
+	return storage.ReaderSnapshotRevision(reader.Reader)
+}
+
 func (reader *rwmStorageReader) NormalizeDNIdentity(
 	dn directory.DN,
 ) (directory.DN, error) {

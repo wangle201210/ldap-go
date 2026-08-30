@@ -19,6 +19,7 @@ var (
 	metaBucket                = []byte("metadata")
 	equalityIndexBucket       = []byte("indexes:eq")
 	equalityIndexConfigBucket = []byte("indexes:eq:config")
+	dnOrderBucket             = []byte("indexes:dn-order")
 	contextsKey               = []byte("naming-contexts")
 	metadataPrefix            = []byte("value:")
 )
@@ -56,7 +57,10 @@ func OpenBolt(path string) (*Bolt, error) {
 		if _, err := tx.CreateBucketIfNotExists(equalityIndexBucket); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket)
+		if _, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(dnOrderBucket)
 		return err
 	}); err != nil {
 		_ = store.Close()
@@ -152,6 +156,14 @@ type boltTx struct {
 	meta                 *bolt.Bucket
 	equalityIndexes      *bolt.Bucket
 	equalityIndexConfigs *bolt.Bucket
+	dnOrder              *bolt.Bucket
+}
+
+func (tx *boltTx) StorageSnapshotRevision() (uint64, bool) {
+	if tx == nil || tx.tx == nil {
+		return 0, false
+	}
+	return uint64(tx.tx.ID()), true
 }
 
 func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
@@ -162,6 +174,7 @@ func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
 		meta:                 tx.Bucket(metaBucket),
 		equalityIndexes:      tx.Bucket(equalityIndexBucket),
 		equalityIndexConfigs: tx.Bucket(equalityIndexConfigBucket),
+		dnOrder:              tx.Bucket(dnOrderBucket),
 	}
 }
 
@@ -279,6 +292,25 @@ func (tx *boltTx) GetIn(partition string, dn directory.DN) (directory.Entry, err
 	return match, nil
 }
 
+func (tx *boltTx) getSchemaAwareIn(
+	partition string,
+	dn directory.DN,
+) (directory.Entry, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return directory.Entry{}, err
+	}
+	physicalKey := partitionedEntryKey(partition, dn.Key())
+	value := tx.entries.Get([]byte(physicalKey))
+	if value == nil {
+		return directory.Entry{}, ErrEntryNotFound
+	}
+	stored, err := decodeStoredEntry(value)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	return stored.Entry, nil
+}
+
 func (tx *boltTx) ForEach(fn func(directory.Entry) error) error {
 	return tx.entries.ForEach(func(key, value []byte) error {
 		if err := tx.ctx.Err(); err != nil {
@@ -311,6 +343,69 @@ func (tx *boltTx) ForEachIn(
 		}
 		return fn(entry)
 	})
+}
+
+func (tx *boltTx) forEachSchemaAwarePhysicalIn(
+	partition string,
+	visit func(directory.Entry, string) error,
+) (bool, error) {
+	orderReady, err := tx.schemaAwareDNOrderReady(partition)
+	if err != nil {
+		return false, err
+	}
+	if orderReady {
+		prefix := schemaAwareDNOrderPrefix(partition)
+		cursor := tx.dnOrder.Cursor()
+		seen := false
+		for key, identity := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, identity = cursor.Next() {
+			if err := tx.ctx.Err(); err != nil {
+				return false, err
+			}
+			seen = true
+			physicalKey := string(identity)
+			value := tx.entries.Get([]byte(partitionedEntryKey(partition, physicalKey)))
+			if value == nil {
+				return false, fmt.Errorf("DN order index references missing entry key %q", physicalKey)
+			}
+			stored, err := decodeStoredEntry(value)
+			if err != nil {
+				return false, err
+			}
+			dn, err := directory.ParseDNWithIdentityKey(stored.Entry.DN, physicalKey)
+			if err != nil {
+				return false, err
+			}
+			orderKey := string(key[len(prefix):])
+			entry := stored.Entry.WithNormalizedDNHint(dn, orderKey)
+			if err := visit(entry, physicalKey); err != nil {
+				return false, err
+			}
+		}
+		if !seen {
+			entryCursor := tx.entries.Cursor()
+			entryPrefix := []byte(partition + "\x00")
+			if key, _ := entryCursor.Seek(entryPrefix); key != nil && bytes.HasPrefix(key, entryPrefix) {
+				return false, errors.New("DN order index is empty for a non-empty partition")
+			}
+		}
+		return true, nil
+	}
+	prefix := []byte(partition + "\x00")
+	cursor := tx.entries.Cursor()
+	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
+		if err := tx.ctx.Err(); err != nil {
+			return false, err
+		}
+		physicalKey := string(key[len(prefix):])
+		stored, err := decodeStoredEntry(value)
+		if err != nil {
+			return false, err
+		}
+		if err := visit(stored.Entry, physicalKey); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func (tx *boltTx) ForEachPartition(
@@ -422,7 +517,10 @@ func (tx *boltTx) markSchemaAwareDNIdentityReadyIfNoLegacy(
 	}); err != nil {
 		return err
 	}
-	return tx.setSchemaAwareDNIdentityReady(partition)
+	if err := tx.setSchemaAwareDNIdentityReady(partition); err != nil {
+		return err
+	}
+	return tx.rebuildSchemaAwareDNOrder(partition)
 }
 
 func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
@@ -518,6 +616,9 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 	if err := tx.setSchemaAwareDNIdentityReady(partition); err != nil {
 		return DNIdentityMigrationReport{}, err
 	}
+	if err := tx.rebuildSchemaAwareDNOrder(partition); err != nil {
+		return DNIdentityMigrationReport{}, err
+	}
 	if indexed {
 		config, err := normalizeEqualityIndexConfig(indexSchema.EqualityIndexConfiguration())
 		if err != nil {
@@ -600,6 +701,9 @@ func (tx *boltTx) PutIn(
 		)); err != nil {
 			return err
 		}
+		if err := tx.invalidateSchemaAwareDNOrder(partition); err != nil {
+			return err
+		}
 	}
 	return tx.invalidateEqualityIndexes(partition)
 }
@@ -628,14 +732,27 @@ func (tx *boltTx) putInWithDN(
 				return err
 			}
 		}
-		if tx.entries.Get(key) != nil && !replace {
+		existing := tx.entries.Get(key)
+		if existing != nil && !replace {
 			return ErrEntryExists
+		}
+		if existing != nil {
+			stored, err := decodeStoredEntry(existing)
+			if err != nil {
+				return err
+			}
+			if err := tx.removeSchemaAwareDNOrder(partition, stored.Entry, identity); err != nil {
+				return err
+			}
 		}
 		value, err := encodeEntry(entry, identity, entry.DN)
 		if err != nil {
 			return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 		}
-		return tx.entries.Put(key, value)
+		if err := tx.entries.Put(key, value); err != nil {
+			return err
+		}
+		return tx.putSchemaAwareDNOrder(partition, entry, identity)
 	}
 	existingKeys := make(map[string]struct{})
 	if tx.entries.Get(key) != nil {
@@ -738,10 +855,14 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 				return ErrEntryNotFound
 			}
 		} else {
-			if _, err := decodeAndValidateEntry(dn.Key(), value); err != nil {
+			entry, err := decodeAndValidateEntry(dn.Key(), value)
+			if err != nil {
 				return err
 			}
 			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
+				return err
+			}
+			if err := tx.removeSchemaAwareDNOrder(partition, entry, dn.Key()); err != nil {
 				return err
 			}
 			if err := tx.entries.Delete(key); err != nil {
@@ -788,6 +909,9 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 	if foundKey == nil {
 		return ErrEntryNotFound
 	}
+	if err := tx.invalidateSchemaAwareDNOrder(partition); err != nil {
+		return err
+	}
 	if err := tx.entries.Delete(foundKey); err != nil {
 		return err
 	}
@@ -817,6 +941,7 @@ func (tx *boltTx) Clear() error {
 	for _, bucketName := range [][]byte{
 		equalityIndexBucket,
 		equalityIndexConfigBucket,
+		dnOrderBucket,
 	} {
 		if tx.tx.Bucket(bucketName) != nil {
 			if err := tx.tx.DeleteBucket(bucketName); err != nil {
@@ -834,6 +959,11 @@ func (tx *boltTx) Clear() error {
 	}
 	tx.equalityIndexes = indexes
 	tx.equalityIndexConfigs = configs
+	dnOrder, err := tx.tx.CreateBucket(dnOrderBucket)
+	if err != nil {
+		return err
+	}
+	tx.dnOrder = dnOrder
 	return nil
 }
 
@@ -877,35 +1007,6 @@ func genericMetadataKey(key string) []byte {
 	encoded = append(encoded, metadataPrefix...)
 	encoded = append(encoded, key...)
 	return encoded
-}
-
-type storedEntry struct {
-	directory.Entry
-	DNIdentity string `json:"dnIdentity,omitempty"`
-	DNSource   string `json:"dnSource,omitempty"`
-}
-
-func encodeEntry(entry directory.Entry, identity, source string) ([]byte, error) {
-	if identity == "" {
-		source = ""
-	}
-	value, err := json.Marshal(storedEntry{
-		Entry:      entry,
-		DNIdentity: identity,
-		DNSource:   source,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode entry %q: %w", entry.DN, err)
-	}
-	return value, nil
-}
-
-func decodeStoredEntry(value []byte) (storedEntry, error) {
-	var stored storedEntry
-	if err := json.Unmarshal(value, &stored); err != nil {
-		return storedEntry{}, fmt.Errorf("decode entry: %w", err)
-	}
-	return stored, nil
 }
 
 func decodeAndValidateEntry(key string, value []byte) (directory.Entry, error) {

@@ -78,6 +78,33 @@ type MaintenanceMutationObserver interface {
 	) error
 }
 
+// SnapshotRevisionReader identifies the committed storage snapshot visible to
+// a reader. Decorators should forward the revision when they preserve the same
+// snapshot. Callers may use it only for immutable derived-data caches.
+type SnapshotRevisionReader interface {
+	StorageSnapshotRevision() (uint64, bool)
+}
+
+// ReaderSnapshotRevision unwraps maintenance decorators until it finds a
+// snapshot revision provider.
+func ReaderSnapshotRevision(reader Reader) (uint64, bool) {
+	for depth := 0; depth < 32 && reader != nil; depth++ {
+		if provider, ok := reader.(SnapshotRevisionReader); ok {
+			return provider.StorageSnapshotRevision()
+		}
+		provider, ok := reader.(MaintenanceReaderProvider)
+		if !ok {
+			return 0, false
+		}
+		next := provider.MaintenanceStorageReader()
+		if next == nil || next == reader {
+			return 0, false
+		}
+		reader = next
+	}
+	return 0, false
+}
+
 func maintenanceReader(reader Reader) Reader {
 	for depth := 0; depth < 32; depth++ {
 		provider, ok := reader.(MaintenanceReaderProvider)

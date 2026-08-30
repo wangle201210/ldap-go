@@ -352,7 +352,11 @@ func (server *Server) handleAdd(
 				return err
 			}
 		}
-		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		collectivePlan, err := runtimeCollectiveAttributePlan(
+			state.runtime,
+			database.partition,
+			tx,
+		)
 		if err != nil {
 			return err
 		}
@@ -1040,7 +1044,11 @@ func (server *Server) modifyEntry(
 			}
 		}
 		before := entry.Clone()
-		collectivePlan, err := buildCollectiveAttributePlan(runtime.schema, tx)
+		collectivePlan, err := runtimeCollectiveAttributePlan(
+			runtime,
+			database.partition,
+			tx,
+		)
 		if err != nil {
 			return err
 		}
@@ -1612,7 +1620,11 @@ func (server *Server) handleDelete(
 		if err != nil {
 			return err
 		}
-		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		collectivePlan, err := runtimeCollectiveAttributePlan(
+			state.runtime,
+			database.partition,
+			tx,
+		)
 		if err != nil {
 			return err
 		}
@@ -2135,7 +2147,11 @@ func (server *Server) handleModifyDN(
 			return errors.New("resolved source entry has a different DN identity")
 		}
 		sourceBefore := sourceEntry.Clone()
-		collectivePlan, err := buildCollectiveAttributePlan(state.runtime.schema, tx)
+		collectivePlan, err := runtimeCollectiveAttributePlan(
+			state.runtime,
+			database.partition,
+			tx,
+		)
 		if err != nil {
 			return err
 		}

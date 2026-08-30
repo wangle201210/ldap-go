@@ -728,6 +728,75 @@ func TestCollectiveAttributePlanIsNoOpWithoutSources(t *testing.T) {
 	}
 }
 
+func TestCollectiveAttributePlanSharedCacheTracksStorageRevision(t *testing.T) {
+	t.Parallel()
+
+	registry := collectiveServerRegistry(t)
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	shared := newCollectiveAttributePlanSharedCache()
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{{
+			Description: "objectClass",
+			Values:      stringValues("top", "person"),
+		}},
+	}
+
+	scans := 0
+	apply := func(revision uint64) error {
+		return store.View(context.Background(), func(reader storage.Reader) error {
+			versioned := &collectivePlanCountingReader{
+				Reader: reader, revision: revision, scans: &scans,
+			}
+			_, err := newCollectiveAttributePlanCache(registry, shared).apply(
+				"content", versioned, entry,
+			)
+			return err
+		})
+	}
+
+	if err := apply(7); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if err := apply(7); err != nil {
+		t.Fatalf("cached apply: %v", err)
+	}
+	if scans != 1 {
+		t.Fatalf("same-revision plan scans = %d, want 1", scans)
+	}
+	if err := apply(8); err != nil {
+		t.Fatalf("new storage revision apply: %v", err)
+	}
+	if scans != 1 {
+		t.Fatalf("unrelated storage revision plan scans = %d, want 1", scans)
+	}
+	shared.invalidate()
+	if err := apply(8); err != nil {
+		t.Fatalf("invalidated apply: %v", err)
+	}
+	if scans != 2 {
+		t.Fatalf("new-revision plan scans = %d, want 2", scans)
+	}
+}
+
+type collectivePlanCountingReader struct {
+	storage.Reader
+	revision uint64
+	scans    *int
+}
+
+func (reader *collectivePlanCountingReader) StorageSnapshotRevision() (uint64, bool) {
+	return reader.revision, true
+}
+
+func (reader *collectivePlanCountingReader) ForEach(
+	visit func(directory.Entry) error,
+) error {
+	*reader.scans = *reader.scans + 1
+	return reader.Reader.ForEach(visit)
+}
+
 func collectiveServerRegistry(t *testing.T) *schema.Registry {
 	t.Helper()
 	registry, err := schema.NewBuiltinRegistry()

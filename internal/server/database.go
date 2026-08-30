@@ -2060,8 +2060,13 @@ func effectiveDatabaseSearchExecutionLimitsWithMatcher(
 		!isConfigDatabase(database) {
 		database.dnNormalizer = runtime.schema
 	}
-	subject, err := parseRuntimeDN(boundDN, database.dnNormalizer)
-	root := err == nil && databaseRootMatches(runtime, database, subject)
+	root := database.rootDN != nil && boundDN == database.rootDN.String()
+	var subject directory.DN
+	var err error
+	if !root {
+		subject, err = parseRuntimeDN(boundDN, database.dnNormalizer)
+		root = err == nil && databaseRootMatches(runtime, database, subject)
+	}
 	if err != nil || root {
 		size := effectiveSearchLimit(serverLimit, requestSize)
 		return databaseSearchExecutionLimits{
@@ -3484,6 +3489,27 @@ func databaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
 		}
 		for _, suffix := range databases[index].suffixes {
 			if !databaseDNAtOrBelow(databases[index], dn, suffix) {
+				continue
+			}
+			if suffix.Depth() > bestDepth {
+				bestIndex = index
+				bestDepth = suffix.Depth()
+			}
+		}
+	}
+	return bestIndex
+}
+
+func databaseIndexForNormalizedDN(databases []runtimeDatabase, dn directory.DN) int {
+	bestIndex := -1
+	bestDepth := -1
+	for index := range databases {
+		database := &databases[index]
+		if database.hidden || database.disabled {
+			continue
+		}
+		for _, suffix := range database.suffixes {
+			if !suffix.Equal(dn) && !suffix.AncestorOf(dn) {
 				continue
 			}
 			if suffix.Depth() > bestDepth {

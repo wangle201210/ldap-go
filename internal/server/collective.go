@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/schema"
@@ -34,8 +35,21 @@ type collectiveAttributePlan struct {
 }
 
 type collectiveAttributePlanCache struct {
-	registry *schema.Registry
-	plans    map[string]*collectiveAttributePlan
+	registry   *schema.Registry
+	plans      map[string]*collectiveAttributePlan
+	shared     *collectiveAttributePlanSharedCache
+	generation uint64
+}
+
+type collectiveAttributePlanSharedCache struct {
+	mu         sync.Mutex
+	plans      map[string]collectiveAttributePlanSharedEntry
+	generation uint64
+}
+
+type collectiveAttributePlanSharedEntry struct {
+	generation uint64
+	plan       *collectiveAttributePlan
 }
 
 type collectiveAttributeSource struct {
@@ -65,10 +79,63 @@ type collectiveDerivedAttribute struct {
 
 func newCollectiveAttributePlanCache(
 	registry *schema.Registry,
+	shared ...*collectiveAttributePlanSharedCache,
 ) *collectiveAttributePlanCache {
-	return &collectiveAttributePlanCache{
+	cache := &collectiveAttributePlanCache{
 		registry: registry,
 		plans:    make(map[string]*collectiveAttributePlan),
+	}
+	if len(shared) != 0 {
+		cache.shared = shared[0]
+		if cache.shared != nil {
+			cache.shared.mu.Lock()
+			cache.generation = cache.shared.generation
+			cache.shared.mu.Unlock()
+		}
+	}
+	return cache
+}
+
+func (cache *collectiveAttributePlanSharedCache) invalidate() {
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	cache.generation++
+	clear(cache.plans)
+	cache.mu.Unlock()
+}
+
+func collectiveStorageChangesAffectPlan(
+	registry *schema.Registry,
+	changes []homedirStorageChange,
+) bool {
+	if registry == nil {
+		return false
+	}
+	for _, change := range changes {
+		for _, entry := range []*directory.Entry{change.before, change.after} {
+			if entry == nil {
+				continue
+			}
+			if len(registry.AttributeValues(*entry, "administrativeRole")) != 0 ||
+				registry.EntryHasObjectClass(*entry, "subentry") ||
+				registry.EntryHasObjectClass(*entry, "collectiveAttributeSubentry") {
+				return true
+			}
+			for _, attribute := range entry.Attributes {
+				if registry.IsCollective(attribute.Description) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func newCollectiveAttributePlanSharedCache() *collectiveAttributePlanSharedCache {
+	return &collectiveAttributePlanSharedCache{
+		plans: make(map[string]collectiveAttributePlanSharedEntry),
 	}
 }
 
@@ -77,17 +144,72 @@ func (cache *collectiveAttributePlanCache) apply(
 	reader storage.Reader,
 	entry directory.Entry,
 ) (directory.Entry, error) {
+	plan, err := cache.plan(partition, reader)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	return plan.apply(entry)
+}
+
+func (cache *collectiveAttributePlanCache) plan(
+	partition string,
+	reader storage.Reader,
+) (*collectiveAttributePlan, error) {
 	cacheKey, planReader, _ := collectiveAttributePlanReader(partition, reader)
 	plan := cache.plans[cacheKey]
 	if plan == nil {
-		var err error
-		plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
-		if err != nil {
-			return directory.Entry{}, err
+		reusable := cache.shared != nil && !strings.HasPrefix(cacheKey, "sql:")
+		if reusable {
+			cache.shared.mu.Lock()
+			shared := cache.shared.plans[cacheKey]
+			if cache.generation != cache.shared.generation {
+				cache.shared.mu.Unlock()
+				var err error
+				plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				if shared.plan != nil && shared.generation == cache.generation {
+					plan = shared.plan
+				} else {
+					var err error
+					plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
+					if err != nil {
+						cache.shared.mu.Unlock()
+						return nil, err
+					}
+					cache.shared.plans[cacheKey] = collectiveAttributePlanSharedEntry{
+						generation: cache.generation,
+						plan:       plan,
+					}
+				}
+				cache.shared.mu.Unlock()
+			}
+		} else {
+			var err error
+			plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
+			if err != nil {
+					return nil, err
+			}
 		}
 		cache.plans[cacheKey] = plan
 	}
-	return plan.apply(entry)
+	return plan, nil
+}
+
+func runtimeCollectiveAttributePlan(
+	runtime *runtimeState,
+	partition string,
+	reader storage.Reader,
+) (*collectiveAttributePlan, error) {
+	if runtime == nil {
+		return buildCollectiveAttributePlan(nil, reader)
+	}
+	return newCollectiveAttributePlanCache(
+		runtime.schema,
+		runtime.collectivePlans,
+	).plan(partition, reader)
 }
 
 type collectiveAttributePlanReaderProvider interface {

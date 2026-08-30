@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestPagedSearchPersistentMemoryLeaseLifecycle(t *testing.T) {
 	state := &connectionState{runtime: runtime}
 	request := ldapwire.SearchRequest{}
 	fingerprint := pagedSearchFingerprint("", request, nil)
-	context := &pagedSearchContext{
+	pagingContext := &pagedSearchContext{
 		size:        1,
 		fingerprint: fingerprint,
 		runtime:     runtime,
@@ -25,7 +26,7 @@ func TestPagedSearchPersistentMemoryLeaseLifecycle(t *testing.T) {
 	}
 	controls, err := instance.completePagedSearch(
 		state,
-		context,
+		pagingContext,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
 		1,
 		pagedSearchCursor{},
@@ -38,12 +39,13 @@ func TestPagedSearchPersistentMemoryLeaseLifecycle(t *testing.T) {
 		t.Fatalf("paged state = %#v, controls = %#v", state.pagedSearch, controls)
 	}
 	retained := instance.searchMemoryLimiter.active.Load()
-	if retained <= 0 || context.releaseRetained != nil {
-		t.Fatalf("retained bytes = %d, context release = %v", retained, context.releaseRetained != nil)
+	if retained <= 0 || pagingContext.releaseRetained != nil {
+		t.Fatalf("retained bytes = %d, context release = %v", retained, pagingContext.releaseRetained != nil)
 	}
 
 	instance.searchMemoryLimiter.maximum = retained*2 - 1
 	continuation, failure := instance.preparePagedSearch(
+		context.Background(),
 		state,
 		request,
 		nil,

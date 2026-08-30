@@ -2,13 +2,16 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"unsafe"
 
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 const pagedResultsCookieLength = 16
@@ -27,48 +30,55 @@ type pagedSearchCursor struct {
 }
 
 type pagedSortedItem struct {
-	route int
-	dn    string
+	route        int
+	dn           string
+	normalizedDN directory.DN
 }
 
 type pagedSortedSearch struct {
 	items     []pagedSortedItem
 	offset    int
 	truncated bool
+	live      bool
 }
 
 type pagedSearchState struct {
-	cookie          []byte
-	fingerprint     [sha256.Size]byte
-	runtime         *runtimeState
-	cursor          pagedSearchCursor
-	sorted          *pagedSortedSearch
-	count           int
-	totalLimit      int
-	estimate        int
-	noEstimate      bool
-	sortLease       *serverSideSortLease
-	retainedBytes   int64
-	releaseRetained func()
+	cookie             []byte
+	fingerprint        [sha256.Size]byte
+	runtime            *runtimeState
+	cursor             pagedSearchCursor
+	sorted             *pagedSortedSearch
+	count              int
+	totalLimit         int
+	estimate           int
+	noEstimate         bool
+	sortLease          *serverSideSortLease
+	retainedBytes      int64
+	releaseRetained    func()
+	storageRevision    uint64
+	hasStorageRevision bool
 }
 
 type pagedSearchContext struct {
-	size            int
-	fingerprint     [sha256.Size]byte
-	runtime         *runtimeState
-	cursor          pagedSearchCursor
-	sorted          *pagedSortedSearch
-	count           int
-	totalLimit      int
-	estimate        int
-	noEstimate      bool
-	abandoned       bool
-	sortLease       *serverSideSortLease
-	retainedBytes   int64
-	releaseRetained func()
+	size               int
+	fingerprint        [sha256.Size]byte
+	runtime            *runtimeState
+	cursor             pagedSearchCursor
+	sorted             *pagedSortedSearch
+	count              int
+	totalLimit         int
+	estimate           int
+	noEstimate         bool
+	abandoned          bool
+	sortLease          *serverSideSortLease
+	retainedBytes      int64
+	releaseRetained    func()
+	storageRevision    uint64
+	hasStorageRevision bool
 }
 
 func (server *Server) preparePagedSearch(
+	ctx context.Context,
 	state *connectionState,
 	request ldapwire.SearchRequest,
 	controls []ldapwire.Control,
@@ -151,7 +161,14 @@ func (server *Server) preparePagedSearch(
 		}, nil
 	}
 
-	retainedBytes := pagedSortedSearchRetainedBytes(current.sorted)
+	currentSorted := current.sorted
+	if currentSorted != nil && currentSorted.live && current.hasStorageRevision {
+		if revision, ok := server.currentStorageSnapshotRevision(ctx); !ok ||
+			revision != current.storageRevision {
+			currentSorted = nil
+		}
+	}
+	retainedBytes := pagedSortedSearchRetainedBytes(currentSorted)
 	if retainedBytes > 0 && !server.searchMemoryLimiter.tryAcquire(retainedBytes) {
 		clearPagedSearch(state)
 		return nil, pagingResult(
@@ -160,16 +177,18 @@ func (server *Server) preparePagedSearch(
 		)
 	}
 	context := &pagedSearchContext{
-		size:        paging.size,
-		fingerprint: fingerprint,
-		runtime:     state.runtime,
-		cursor:      current.cursor,
-		sorted:      clonePagedSortedSearch(current.sorted),
-		count:       current.count,
-		totalLimit:  current.totalLimit,
-		estimate:    current.estimate,
-		noEstimate:  current.noEstimate,
-		sortLease:   current.sortLease,
+		size:               paging.size,
+		fingerprint:        fingerprint,
+		runtime:            state.runtime,
+		cursor:             current.cursor,
+		sorted:             clonePagedSortedSearch(currentSorted),
+		count:              current.count,
+		totalLimit:         current.totalLimit,
+		estimate:           current.estimate,
+		noEstimate:         current.noEstimate,
+		sortLease:          current.sortLease,
+		storageRevision:    current.storageRevision,
+		hasStorageRevision: current.hasStorageRevision,
 	}
 	if retainedBytes > 0 {
 		context.retainedBytes = retainedBytes
@@ -223,18 +242,20 @@ func (server *Server) completePagedSearch(
 		}
 		previous := state.pagedSearch
 		state.pagedSearch = &pagedSearchState{
-			cookie:          bytes.Clone(cookie),
-			fingerprint:     paging.fingerprint,
-			runtime:         paging.runtime,
-			cursor:          cursor,
-			sorted:          paging.sorted,
-			count:           paging.count + entryCount,
-			totalLimit:      paging.totalLimit,
-			estimate:        paging.estimate,
-			noEstimate:      paging.noEstimate,
-			sortLease:       paging.sortLease,
-			retainedBytes:   paging.retainedBytes,
-			releaseRetained: paging.releaseRetained,
+			cookie:             bytes.Clone(cookie),
+			fingerprint:        paging.fingerprint,
+			runtime:            paging.runtime,
+			cursor:             cursor,
+			sorted:             paging.sorted,
+			count:              paging.count + entryCount,
+			totalLimit:         paging.totalLimit,
+			estimate:           paging.estimate,
+			noEstimate:         paging.noEstimate,
+			sortLease:          paging.sortLease,
+			retainedBytes:      paging.retainedBytes,
+			releaseRetained:    paging.releaseRetained,
+			storageRevision:    paging.storageRevision,
+			hasStorageRevision: paging.hasStorageRevision,
 		}
 		paging.sorted = nil
 		paging.retainedBytes = 0
@@ -251,6 +272,18 @@ func (server *Server) completePagedSearch(
 		),
 		HasValue: true,
 	}}, nil
+}
+
+func (server *Server) currentStorageSnapshotRevision(
+	ctx context.Context,
+) (uint64, bool) {
+	var revision uint64
+	found := false
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		revision, found = storage.ReaderSnapshotRevision(reader)
+		return nil
+	})
+	return revision, err == nil && found
 }
 
 func clearPagedSearch(state *connectionState) {
@@ -292,7 +325,7 @@ func pagedSortedSearchRetainedBytes(sorted *pagedSortedSearch) int64 {
 	}
 	size += int64(cap(sorted.items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
 	for _, item := range sorted.items {
-		size += int64(len(item.dn))
+		size += int64(len(item.dn) * 2)
 	}
 	return size
 }

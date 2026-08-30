@@ -234,6 +234,86 @@ func ParseDNWithNormalizer(value string, normalizer DNAttributeNormalizer) (DN, 
 	return dn, nil
 }
 
+// ParseDNWithIdentityKey reconstructs a schema-aware DN from its validated
+// physical identity key without rerunning schema matching rules.
+func ParseDNWithIdentityKey(value, key string) (DN, error) {
+	dn, err := ParseDN(value)
+	if err != nil {
+		return DN{}, err
+	}
+	if !strings.HasPrefix(key, schemaAwareDNKeyPrefix) {
+		if err := dn.ValidateIdentityKey(key); err != nil {
+			return DN{}, err
+		}
+		return dn, nil
+	}
+	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != encoded {
+		return DN{}, errors.New("schema-aware DN key is not canonically encoded")
+	}
+	rdns, err := decodeDNIdentityParts(payload)
+	if err != nil {
+		return DN{}, fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
+	}
+	if len(rdns) != len(dn.parsed.RDNs) {
+		return DN{}, fmt.Errorf(
+			"schema-aware DN key has %d RDNs, display DN has %d",
+			len(rdns),
+			len(dn.parsed.RDNs),
+		)
+	}
+	dn.identityRDNs = make([][]byte, len(rdns))
+	dn.normalizedRDNs = make([]string, len(rdns))
+	dn.attributeTypes = make([][]string, len(rdns))
+	for rdnIndex, encodedRDN := range rdns {
+		avas, decodeErr := decodeDNIdentityParts(encodedRDN)
+		if decodeErr != nil {
+			return DN{}, fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, decodeErr)
+		}
+		type normalizedAVA struct {
+			attributeType string
+			value         string
+		}
+		normalized := make([]normalizedAVA, 0, len(avas))
+		for _, ava := range avas {
+			parts, partsErr := decodeDNIdentityParts(ava)
+			if partsErr != nil || len(parts) != 2 || len(parts[0]) == 0 {
+				return DN{}, fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
+			}
+			attributeType := string(parts[0])
+			normalized = append(normalized, normalizedAVA{
+				attributeType: attributeType,
+				value: attributeType + "=" +
+					escapeDNValue(string(parts[1])),
+			})
+		}
+		sort.Slice(normalized, func(left, right int) bool {
+			return normalized[left].attributeType < normalized[right].attributeType
+		})
+		dn.attributeTypes[rdnIndex] = make([]string, len(normalized))
+		normalizedValues := make([]string, len(normalized))
+		for index := range normalized {
+			dn.attributeTypes[rdnIndex][index] = normalized[index].attributeType
+			normalizedValues[index] = normalized[index].value
+		}
+		dn.identityRDNs[rdnIndex] = bytes.Clone(encodedRDN)
+		dn.normalizedRDNs[rdnIndex] = strings.Join(normalizedValues, "+")
+	}
+	dn.identityLevel = schemaAwareDNIdentityLevel
+	dn.canonical = key
+	return dn, nil
+}
+
+// LegacyKey returns the historical case-folded textual key used as the first
+// component of deterministic storage ordering.
+func (dn DN) LegacyKey() string {
+	if dn.parsed == nil {
+		return ""
+	}
+	return strings.ToLower(dn.parsed.String())
+}
+
 func (dn DN) String() string {
 	return strings.Join(dn.displayRDNs, ",")
 }

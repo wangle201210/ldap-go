@@ -134,6 +134,16 @@ func (tx *boltTx) equalityIndexEntries(
 		if err != nil {
 			return nil, err
 		}
+		if isSchemaAwareDNKey(entryKey) {
+			dn, parseErr := directory.ParseDNWithIdentityKey(entry.DN, entryKey)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			entry = entry.WithNormalizedDNHint(
+				dn,
+				dn.LegacyKey()+"\x00"+entryKey,
+			)
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -177,6 +187,9 @@ func (tx *boltTx) putInWithEqualityIndexes(
 			schema,
 			config,
 		); err != nil {
+			return err
+		}
+		if err := tx.removeSchemaAwareDNOrder(partition, existing, entryKey); err != nil {
 			return err
 		}
 		if err := tx.entries.Delete([]byte(key)); err != nil {
@@ -232,6 +245,9 @@ func (tx *boltTx) deleteInWithEqualityIndexes(
 		schema,
 		config,
 	); err != nil {
+		return err
+	}
+	if err := tx.removeSchemaAwareDNOrder(partition, entry, entryKey); err != nil {
 		return err
 	}
 	return tx.entries.Delete([]byte(key))

@@ -6,6 +6,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 runner=$root/scripts/qualification/run.sh
 nightly=$root/scripts/qualification/nightly.sh
 scale=$root/scripts/qualification/scale.sh
+compare_openldap=$root/scripts/qualification/compare-openldap.sh
 
 for script in "$root"/scripts/qualification/*.sh; do
 	sh -n "$script"
@@ -131,6 +132,39 @@ fi
 if QUALIFICATION_SCALE_DRY_RUN=1 QUALIFICATION_SCALE_ENTRIES=100 \
 	QUALIFICATION_SCALE_PAGE_SIZE=101 "$scale" >/dev/null 2>&1; then
 	printf 'qualification-test: oversized page was accepted\n' >&2
+	exit 1
+fi
+
+output=$(QUALIFICATION_COMPARE_DRY_RUN=1 "$compare_openldap")
+case "$output" in
+*'entries=1000'*'page_size=200'*'indexed_searches=1000'*'unindexed_searches=100'*'paged_traversals=10'*'modifications=200'*'concurrency=8'*'searches_per_connection=250'*) ;;
+*)
+	printf 'qualification-test: unexpected OpenLDAP comparison configuration: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+output=$(QUALIFICATION_COMPARE_DRY_RUN=1 \
+	QUALIFICATION_COMPARE_ENTRIES=01000 \
+	QUALIFICATION_COMPARE_PAGE_SIZE=0100 \
+	QUALIFICATION_COMPARE_INDEXED_SEARCHES=0200 "$compare_openldap")
+case "$output" in
+*'entries=1000'*'page_size=100'*'indexed_searches=200'*) ;;
+*)
+	printf 'qualification-test: OpenLDAP comparison leading-zero inputs were not normalized: %s\n' "$output" >&2
+	exit 1
+	;;
+esac
+
+if QUALIFICATION_COMPARE_DRY_RUN=1 QUALIFICATION_COMPARE_ENTRIES=100 \
+	QUALIFICATION_COMPARE_MODIFICATIONS=101 "$compare_openldap" >/dev/null 2>&1; then
+	printf 'qualification-test: oversized OpenLDAP comparison modification count was accepted\n' >&2
+	exit 1
+fi
+
+if QUALIFICATION_COMPARE_DRY_RUN=1 QUALIFICATION_COMPARE_LDAP_GO_PORT=23000 \
+	QUALIFICATION_COMPARE_OPENLDAP_PORT=23000 "$compare_openldap" >/dev/null 2>&1; then
+	printf 'qualification-test: duplicate OpenLDAP comparison ports were accepted\n' >&2
 	exit 1
 fi
 

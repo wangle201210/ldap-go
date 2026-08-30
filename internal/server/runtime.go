@@ -26,6 +26,7 @@ const (
 type runtimeState struct {
 	revision             uint64
 	schema               *schema.Registry
+	collectivePlans      *collectiveAttributePlanSharedCache
 	access               *acl.Policy
 	secureTransport      SecureTransport
 	databases            []runtimeDatabase
@@ -52,6 +53,23 @@ type runtimeState struct {
 	reverseLookup        bool
 	gentleHUP            bool
 	syncContexts         map[string]syncCSNState
+	features             runtimeOperationFeatures
+	searchControlSupport requestControlSupport
+	unindexedValues      *unindexedValueCache
+}
+
+type runtimeOperationFeatures struct {
+	sockOverlay       bool
+	metaBackend       bool
+	dnssrvBackend     bool
+	ldapBackend       bool
+	passwdBackend     bool
+	sockBackend       bool
+	chain             bool
+	retcode           bool
+	pcache            bool
+	noOpSearch        bool
+	searchPreDispatch bool
 }
 
 type connectionPendingRuntimeConfiguration struct {
@@ -360,6 +378,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	}
 	runtime := &runtimeState{
 		schema:               registry,
+		collectivePlans:      newCollectiveAttributePlanSharedCache(),
 		access:               access,
 		secureTransport:      secureTransport,
 		databases:            databases,
@@ -385,6 +404,9 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		rootDSEAttributes:    rootDSEAttributes,
 		reverseLookup:        reverseLookup,
 		gentleHUP:            gentleHUP,
+		features:             runtimeFeaturesForDatabases(databases),
+		searchControlSupport: searchControlSupportForDatabases(databases),
+		unindexedValues:      newUnindexedValueCache(16 << 20),
 	}
 	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
 		return nil, err
@@ -396,6 +418,27 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, err
 	}
 	return runtime, nil
+}
+
+func runtimeFeaturesForDatabases(databases []runtimeDatabase) runtimeOperationFeatures {
+	var features runtimeOperationFeatures
+	for index := range databases {
+		database := &databases[index]
+		features.sockOverlay = features.sockOverlay || len(database.sockOverlays) != 0
+		features.metaBackend = features.metaBackend || database.metaBackend != nil
+		features.dnssrvBackend = features.dnssrvBackend || database.dnssrvBackend != nil
+		features.ldapBackend = features.ldapBackend || database.ldapBackend != nil
+		features.passwdBackend = features.passwdBackend || database.passwdBackend != nil
+		features.sockBackend = features.sockBackend || database.sockBackend != nil
+		features.chain = features.chain || database.chain != nil
+		features.retcode = features.retcode || len(database.retcodes) != 0
+		features.pcache = features.pcache || database.pcache != nil
+		features.noOpSearch = features.noOpSearch || database.noOpSearchOverlay
+	}
+	features.searchPreDispatch = features.sockOverlay || features.metaBackend ||
+		features.dnssrvBackend || features.ldapBackend || features.passwdBackend ||
+		features.sockBackend || features.chain || features.pcache || features.noOpSearch
+	return features
 }
 
 func loadConnectionPendingRuntimeConfiguration(

@@ -21,6 +21,7 @@ type Memory struct {
 	namingContexts       []string
 	metadata             map[string][]byte
 	closed               bool
+	revision             uint64
 }
 
 func NewMemory() *Memory {
@@ -56,6 +57,7 @@ func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
 		namingContexts:       store.namingContexts,
 		metadata:             store.metadata,
 		readOnly:             true,
+		revision:             store.revision,
 	})
 }
 
@@ -94,6 +96,7 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	store.equalityPostings = tx.equalityPostings
 	store.namingContexts = tx.namingContexts
 	store.metadata = tx.metadata
+	store.revision++
 	return nil
 }
 
@@ -121,6 +124,14 @@ type memoryTx struct {
 	namingContexts       []string
 	metadata             map[string][]byte
 	readOnly             bool
+	revision             uint64
+}
+
+func (tx *memoryTx) StorageSnapshotRevision() (uint64, bool) {
+	if tx == nil {
+		return 0, false
+	}
+	return tx.revision, true
 }
 
 func (tx *memoryTx) Get(dn directory.DN) (directory.Entry, error) {
@@ -217,6 +228,20 @@ func (tx *memoryTx) GetIn(partition string, dn directory.DN) (directory.Entry, e
 	return match.Clone(), nil
 }
 
+func (tx *memoryTx) getSchemaAwareIn(
+	partition string,
+	dn directory.DN,
+) (directory.Entry, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return directory.Entry{}, err
+	}
+	entry, ok := tx.entries[partitionedEntryKey(partition, dn.Key())]
+	if !ok {
+		return directory.Entry{}, ErrEntryNotFound
+	}
+	return entry.Clone(), nil
+}
+
 func (tx *memoryTx) ForEach(fn func(directory.Entry) error) error {
 	keys := make([]string, 0, len(tx.entries))
 	for key := range tx.entries {
@@ -265,6 +290,25 @@ func (tx *memoryTx) ForEachIn(
 		}
 	}
 	return nil
+}
+
+func (tx *memoryTx) forEachSchemaAwarePhysicalIn(
+	partition string,
+	visit func(directory.Entry, string) error,
+) (bool, error) {
+	for key, entry := range tx.entries {
+		if err := tx.ctx.Err(); err != nil {
+			return false, err
+		}
+		entryPartition, physicalKey := splitPartitionedEntryKey(key)
+		if entryPartition != partition {
+			continue
+		}
+		if err := visit(entry.Clone(), physicalKey); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func (tx *memoryTx) ForEachPartition(

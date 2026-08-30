@@ -452,6 +452,9 @@ func (server *Server) tryRetcodeOperation(
 	manageDsaIT bool,
 	requestEntry *directory.Entry,
 ) (bool, error) {
+	if state == nil || state.runtime == nil || !state.runtime.features.retcode {
+		return false, nil
+	}
 	database := databaseForDN(state.runtime, target)
 	placeholder := runtimeDatabase{}
 	if database == nil {

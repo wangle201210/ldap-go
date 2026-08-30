@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unsafe"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -141,6 +142,16 @@ func (server *Server) databaseSearchLimitGroupMatches(
 }
 
 func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
+	if runtime != nil && runtime.searchControlSupport != 0 {
+		return runtime.searchControlSupport
+	}
+	if runtime == nil {
+		return searchControlSupportForDatabases(nil)
+	}
+	return searchControlSupportForDatabases(runtime.databases)
+}
+
+func searchControlSupportForDatabases(databases []runtimeDatabase) requestControlSupport {
 	support := supportsAssertion |
 		supportsPagedResults |
 		supportsManageDsaIT |
@@ -152,22 +163,19 @@ func searchRequestControlSupport(runtime *runtimeState) requestControlSupport {
 		supportsSearchOptions |
 		supportsLazyCommit |
 		supportsNoOp
-	if runtime == nil {
-		return support
-	}
-	if runtimeSupportsDeref(runtime.databases) {
+	if runtimeSupportsDeref(databases) {
 		support |= supportsDeref
 	}
-	if runtimeSupportsServerSideSort(runtime.databases) {
+	if runtimeSupportsServerSideSort(databases) {
 		support |= supportsServerSideSort | supportsVirtualListView
 	}
-	if runtimeSupportsSyncProvider(runtime.databases) {
+	if runtimeSupportsSyncProvider(databases) {
 		support |= supportsSync
 	}
-	if runtimeSupportsValueSort(runtime.databases) {
+	if runtimeSupportsValueSort(databases) {
 		support |= supportsValueSort
 	}
-	if runtimeSupportsNoOpSearch(runtime.databases) {
+	if runtimeSupportsNoOpSearch(databases) {
 		support |= supportsNoOpSearch
 	}
 	return support
@@ -237,7 +245,7 @@ func (server *Server) handleSearch(
 			passwordPolicyRestrictionResult(),
 		)
 	}
-	base, baseErr := normalizeSearchRequestBase(state.runtime, request.BaseDN)
+	base, baseErr := normalizeConnectionSearchRequestBase(state, request.BaseDN)
 	if baseErr != nil {
 		return server.writeSearchDone(
 			connection,
@@ -275,31 +283,50 @@ func (server *Server) handleSearch(
 		state.runtime.defaultSearchBase.configured {
 		limitBase = state.runtime.defaultSearchBase.dn
 	}
-	if databaseIndex := databaseIndexForDN(
+	limitDatabaseIndex := databaseIndexForNormalizedDN(
 		state.runtime.databases,
 		limitBase,
-	); databaseIndex >= 0 {
-		database := state.runtime.databases[databaseIndex]
-		err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-			tx := readerForDatabase(reader, database, ctx)
-			requestDN, err := storage.NormalizeReaderDN(tx, base)
-			if err != nil {
-				return err
+	)
+	if limitDatabaseIndex >= 0 {
+		database := state.runtime.databases[limitDatabaseIndex]
+		hasGroupRule := false
+		for _, rule := range database.searchSizeLimits {
+			if rule.selector == databaseSearchLimitGroup {
+				hasGroupRule = true
+				break
 			}
-			limits, err = server.effectiveDatabaseSearchLimitsForRequest(
+		}
+		if hasGroupRule {
+			err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+				tx := readerForDatabase(reader, database, ctx)
+				requestDN, err := storage.NormalizeReaderDN(tx, base)
+				if err != nil {
+					return err
+				}
+				limits, err = server.effectiveDatabaseSearchLimitsForRequest(
+					state.runtime,
+					database,
+					state.boundDN,
+					requestDN,
+					reader,
+					server.config.MaxSearchEntries,
+					noOpSearchRequestedSize(ctx, request.SizeLimit),
+					request.TimeLimit,
+				)
+				return err
+			})
+			if err != nil {
+				return fmt.Errorf("evaluate database search limits: %w", err)
+			}
+		} else {
+			limits = effectiveDatabaseSearchExecutionLimits(
 				state.runtime,
 				database,
 				state.boundDN,
-				requestDN,
-				reader,
 				server.config.MaxSearchEntries,
 				noOpSearchRequestedSize(ctx, request.SizeLimit),
 				request.TimeLimit,
 			)
-			return err
-		})
-		if err != nil {
-			return fmt.Errorf("evaluate database search limits: %w", err)
 		}
 	}
 	if isNoOpSearch(ctx) {
@@ -316,6 +343,7 @@ func (server *Server) handleSearch(
 		)
 	}
 	paging, pagingFailure := server.preparePagedSearch(
+		ctx,
 		state,
 		request,
 		message.Controls,
@@ -1161,9 +1189,21 @@ func (server *Server) handleSearch(
 			false,
 		)
 	}
+	snapshotPaging := paging != nil && !sorting.active() && syncSearch == nil &&
+		!state.runtime.features.chain
+	if snapshotPaging {
+		for _, route := range translucentRoutes {
+			if route != nil {
+				snapshotPaging = false
+				break
+			}
+		}
+	}
 
 	candidates := make([]searchCandidate, 0)
+	snapshotItems := make([]pagedSortedItem, 0)
 	var candidateBytes int64
+	var snapshotBytes int64
 	var processSearchBytes int64
 	defer func() {
 		if processSearchBytes > 0 {
@@ -1173,8 +1213,9 @@ func (server *Server) handleSearch(
 	references := make([][]string, 0)
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	entryLimit := limit
+	remaining := limit
 	if paging != nil {
-		remaining := limit - paging.count
+		remaining = limit - paging.count
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -1199,6 +1240,10 @@ func (server *Server) handleSearch(
 		)
 	}
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		if snapshotPaging {
+			paging.storageRevision, paging.hasStorageRevision =
+				storage.ReaderSnapshotRevision(reader)
+		}
 		if syncSearch != nil {
 			if err := syncSearch.captureSnapshot(reader); err != nil {
 				return err
@@ -1221,7 +1266,10 @@ func (server *Server) handleSearch(
 				return nil
 			}
 		}
-		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
+		collectivePlans := newCollectiveAttributePlanCache(
+			state.runtime.schema,
+			state.runtime.collectivePlans,
+		)
 		collectResponses := newCollectProjectionCache(
 			server,
 			state.runtime,
@@ -1400,6 +1448,11 @@ func (server *Server) handleSearch(
 			database := &state.runtime.databases[route.databaseIndex]
 			routeContext := withSQLBackendScopeRequirements(ctx, route.base, route.scope)
 			tx := readerForDatabase(reader, *database, routeContext)
+			routeRoot := server.isDatabaseRoot(
+				state.runtime,
+				*database,
+				state.boundDN,
+			)
 			scopeBase, normalizeErr := storage.NormalizeReaderDN(tx, route.base)
 			if normalizeErr != nil {
 				return fmt.Errorf(
@@ -1450,7 +1503,7 @@ func (server *Server) handleSearch(
 				if err != nil {
 					return err
 				}
-				if !server.allowed(
+				if !routeRoot && !server.allowed(
 					state.runtime,
 					tx,
 					state.boundDN,
@@ -1462,18 +1515,22 @@ func (server *Server) handleSearch(
 					continue
 				}
 			}
-			routeLimits, limitErr := server.effectiveDatabaseSearchLimitsForRequest(
-				state.runtime,
-				*database,
-				state.boundDN,
-				comparisonBase,
-				reader,
-				server.config.MaxSearchEntries,
-				request.SizeLimit,
-				request.TimeLimit,
-			)
-			if limitErr != nil {
-				return limitErr
+			routeLimits := limits
+			if route.databaseIndex != limitDatabaseIndex {
+				var limitErr error
+				routeLimits, limitErr = server.effectiveDatabaseSearchLimitsForRequest(
+					state.runtime,
+					*database,
+					state.boundDN,
+					comparisonBase,
+					reader,
+					server.config.MaxSearchEntries,
+					request.SizeLimit,
+					request.TimeLimit,
+				)
+				if limitErr != nil {
+					return limitErr
+				}
 			}
 			if routeLimits.unchecked == 0 {
 				candidates = nil
@@ -1514,17 +1571,23 @@ func (server *Server) handleSearch(
 					}
 				}
 				storedEntry := entry.Clone()
-				candidate, err := directory.ParseDN(entry.DN)
-				if err != nil {
-					return err
+				candidate, normalized := entry.NormalizedDNHint()
+				if !normalized {
+					candidate, err = directory.ParseDN(entry.DN)
+					if err != nil {
+						return err
+					}
+					candidate, err = storage.NormalizeReaderDN(tx, candidate)
+					if err != nil {
+						return fmt.Errorf("normalize search candidate %q: %w", entry.DN, err)
+					}
 				}
-				candidate, err = storage.NormalizeReaderDN(tx, candidate)
-				if err != nil {
-					return fmt.Errorf("normalize search candidate %q: %w", entry.DN, err)
-				}
-				candidateOrderKey, err := storage.ReaderDNOrderKey(tx, candidate)
-				if err != nil {
-					return fmt.Errorf("order search candidate %q: %w", entry.DN, err)
+				candidateOrderKey, ordered := entry.DNOrderKeyHint()
+				if !ordered {
+					candidateOrderKey, err = storage.ReaderDNOrderKey(tx, candidate)
+					if err != nil {
+						return fmt.Errorf("order search candidate %q: %w", entry.DN, err)
+					}
 				}
 				if paging != nil && paging.cursor.valid && !sorting.active() {
 					if routeIndex < paging.cursor.route ||
@@ -1596,7 +1659,7 @@ func (server *Server) handleSearch(
 						entry,
 						"referral",
 					) {
-					if server.allowed(
+					if routeRoot || (server.allowed(
 						state.runtime,
 						tx,
 						state.boundDN,
@@ -1612,7 +1675,7 @@ func (server *Server) handleSearch(
 						"ref",
 						nil,
 						acl.Read,
-					) {
+					)) {
 						referrals, err := rewrittenReferralURLs(
 							entry,
 							nil,
@@ -1627,13 +1690,21 @@ func (server *Server) handleSearch(
 					}
 					return nil
 				}
-				matches, err := server.filterMatches(
-					state.runtime,
-					tx,
-					state.boundDN,
-					filterEntry,
-					effectiveFilter,
-				)
+				var matches bool
+				if routeRoot {
+					matches, err = effectiveFilter.MatchWith(
+						filterEntry,
+						state.runtime.schema,
+					)
+				} else {
+					matches, err = server.filterMatches(
+						state.runtime,
+						tx,
+						state.boundDN,
+						filterEntry,
+						effectiveFilter,
+					)
+				}
 				if err != nil {
 					result.Code = ldapwire.ResultInappropriateMatching
 					result.DiagnosticMessage = err.Error()
@@ -1642,7 +1713,7 @@ func (server *Server) handleSearch(
 				if !matches {
 					return nil
 				}
-				if !server.allowed(
+				if !routeRoot && !server.allowed(
 					state.runtime,
 					tx,
 					state.boundDN,
@@ -1700,37 +1771,74 @@ func (server *Server) handleSearch(
 						return err
 					}
 				}
-				sortReadable := server.attributesWithPrivilege(
-					state.runtime,
-					tx,
-					state.boundDN,
-					entry,
-					acl.Read,
-					request.TypesOnly && !sorting.active(),
-				)
-				sortReadable = projectDDSRemainingTTL(
-					sortReadable,
-					entry,
-					time.Now(),
-				)
-				if syncSearch != nil {
-					sortReadable = stripSyncExcludedAttributes(
-						state.runtime.schema,
+				if snapshotPaging {
+					if len(snapshotItems) >= remaining {
+						sortTruncated = true
+						return errStopSearch
+					}
+					itemBytes := int64(unsafe.Sizeof(pagedSortedItem{})) +
+						int64(len(entry.DN)*2)
+					if itemBytes > server.config.MaxSearchCandidateBytes-snapshotBytes {
+						candidates = nil
+						result = ldapwire.ResultError(
+							ldapwire.ResultAdminLimitExceeded,
+							"paged search snapshot budget exceeded",
+						)
+						return errStopSearch
+					}
+					snapshotBytes += itemBytes
+					snapshotItems = append(snapshotItems, pagedSortedItem{
+						route:        routeIndex,
+						dn:           entry.DN,
+						normalizedDN: candidate,
+					})
+					if len(candidates) >= entryLimit {
+						return nil
+					}
+				}
+				var sortReadable directory.Entry
+				if sorting.active() {
+					if routeRoot {
+						sortReadable = entry
+					} else {
+						sortReadable = server.attributesWithPrivilege(
+							state.runtime,
+							tx,
+							state.boundDN,
+							entry,
+							acl.Read,
+							false,
+						)
+					}
+					sortReadable = projectDDSRemainingTTL(
 						sortReadable,
+						entry,
+						time.Now(),
 					)
+					if syncSearch != nil {
+						sortReadable = stripSyncExcludedAttributes(
+							state.runtime.schema,
+							sortReadable,
+						)
+					}
 				}
 				responseEntry, err := collectResponses.apply(*database, entry)
 				if err != nil {
 					return err
 				}
-				readable := server.attributesWithPrivilege(
-					state.runtime,
-					tx,
-					state.boundDN,
-					responseEntry,
-					acl.Read,
-					request.TypesOnly,
-				)
+				var readable directory.Entry
+				if routeRoot {
+					readable = rootVisibleEntry(responseEntry, request.TypesOnly)
+				} else {
+					readable = server.attributesWithPrivilege(
+						state.runtime,
+						tx,
+						state.boundDN,
+						responseEntry,
+						acl.Read,
+						request.TypesOnly,
+					)
+				}
 				readable = projectDDSRemainingTTL(
 					readable,
 					responseEntry,
@@ -1759,7 +1867,7 @@ func (server *Server) handleSearch(
 						&selected,
 					)
 				}
-				if !sorting.active() && len(candidates) >= entryLimit {
+				if !sorting.active() && !snapshotPaging && len(candidates) >= entryLimit {
 					if paging != nil && entryLimit == paging.size {
 						hasMore = true
 					} else {
@@ -1768,12 +1876,13 @@ func (server *Server) handleSearch(
 					return errStopSearch
 				}
 				retainedCandidate := searchCandidate{
-					selected:  selected,
-					readable:  sortReadable,
-					route:     routeIndex,
-					dn:        entry.DN,
-					cursorKey: candidateOrderKey,
-					syncUUID:  syncUUID,
+					selected:     selected,
+					readable:     sortReadable,
+					normalizedDN: candidate,
+					route:        routeIndex,
+					dn:           entry.DN,
+					cursorKey:    candidateOrderKey,
+					syncUUID:     syncUUID,
 				}
 				candidateSize := searchCandidateRetainedBytes(retainedCandidate)
 				if candidateSize <= 0 {
@@ -1817,7 +1926,17 @@ func (server *Server) handleSearch(
 					visitEntry,
 				)
 				if err == nil && !planned {
-					err = tx.ForEach(visitEntry)
+					absent, cached, cacheErr := state.runtime.unindexedValues.definitelyAbsent(
+						state.runtime.schema,
+						*database,
+						tx,
+						request.Filter,
+					)
+					if cacheErr != nil {
+						err = cacheErr
+					} else if !cached || !absent {
+						err = tx.ForEach(visitEntry)
+					}
 				}
 			} else {
 				for _, remoteEntry := range translucentRoute.entries {
@@ -2061,6 +2180,23 @@ func (server *Server) handleSearch(
 				result.Code = ldapwire.ResultSizeLimitExceeded
 			}
 		}
+	} else if snapshotPaging {
+		pageEnd := len(candidates)
+		entries = selectedSearchEntries(candidates)
+		paging.sorted = &pagedSortedSearch{
+			items:     snapshotItems,
+			offset:    pageEnd,
+			truncated: sortTruncated,
+			live:      true,
+		}
+		switch {
+		case result.Code != ldapwire.ResultSuccess:
+			paging.sorted = nil
+		case pageEnd < len(snapshotItems):
+			hasMore = true
+		case sortTruncated:
+			result.Code = ldapwire.ResultSizeLimitExceeded
+		}
 	} else {
 		if paging != nil && len(candidates) > entryLimit {
 			candidates = candidates[:entryLimit]
@@ -2121,6 +2257,26 @@ func (server *Server) handleSearch(
 		sortLease = nil
 	}
 	return writeErr
+}
+
+func normalizeConnectionSearchRequestBase(
+	state *connectionState,
+	value string,
+) (directory.DN, error) {
+	if state != nil {
+		if cached, ok := state.dnCache.get(state.runtime, value); ok {
+			return cached, nil
+		}
+	}
+	var runtime *runtimeState
+	if state != nil {
+		runtime = state.runtime
+	}
+	dn, err := normalizeSearchRequestBase(runtime, value)
+	if err == nil && state != nil {
+		state.dnCache.put(runtime, value, dn)
+	}
+	return dn, err
 }
 
 func invalidSearchParameterResult(
@@ -2271,8 +2427,9 @@ func pagedSortedItems(candidates []searchCandidate) []pagedSortedItem {
 	items := make([]pagedSortedItem, len(candidates))
 	for index := range candidates {
 		items[index] = pagedSortedItem{
-			route: candidates[index].route,
-			dn:    candidates[index].dn,
+			route:        candidates[index].route,
+			dn:           candidates[index].dn,
+			normalizedDN: candidates[index].normalizedDN,
 		}
 	}
 	return items
@@ -2297,7 +2454,10 @@ func (server *Server) continueSortedPagedSearch(
 	}
 
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
+		collectivePlans := newCollectiveAttributePlanCache(
+			state.runtime.schema,
+			state.runtime.collectivePlans,
+		)
 		collectResponses := newCollectProjectionCache(
 			server,
 			state.runtime,
@@ -2327,6 +2487,7 @@ func (server *Server) continueSortedPagedSearch(
 				filter:     request.Filter,
 			},
 		)
+		routeRoots := make(map[int]bool, len(routes))
 		for sorted.offset < len(sorted.items) {
 			if expired(deadline) {
 				result.Code = ldapwire.ResultTimeLimitExceeded
@@ -2338,13 +2499,17 @@ func (server *Server) continueSortedPagedSearch(
 			}
 			database := &state.runtime.databases[routes[item.route].databaseIndex]
 			tx := readerForDatabase(reader, *database)
-			dn, err := directory.ParseDN(item.dn)
-			if err != nil {
-				return fmt.Errorf("parse sorted paged search DN %q: %w", item.dn, err)
-			}
-			dn, err = storage.NormalizeReaderDN(tx, dn)
-			if err != nil {
-				return fmt.Errorf("normalize sorted paged search DN %q: %w", item.dn, err)
+			dn := item.normalizedDN
+			if dn.Depth() == 0 && item.dn != "" {
+				var err error
+				dn, err = directory.ParseDN(item.dn)
+				if err != nil {
+					return fmt.Errorf("parse sorted paged search DN %q: %w", item.dn, err)
+				}
+				dn, err = storage.NormalizeReaderDN(tx, dn)
+				if err != nil {
+					return fmt.Errorf("normalize sorted paged search DN %q: %w", item.dn, err)
+				}
 			}
 			entry, err := tx.Get(dn)
 			if errors.Is(err, storage.ErrEntryNotFound) {
@@ -2381,7 +2546,12 @@ func (server *Server) continueSortedPagedSearch(
 			if err != nil {
 				return err
 			}
-			if !server.allowed(
+			routeRoot, knownRoot := routeRoots[item.route]
+			if !knownRoot {
+				routeRoot = server.isDatabaseRoot(state.runtime, *database, state.boundDN)
+				routeRoots[item.route] = routeRoot
+			}
+			if !routeRoot && !server.allowed(
 				state.runtime,
 				tx,
 				state.boundDN,
@@ -2401,14 +2571,19 @@ func (server *Server) continueSortedPagedSearch(
 			if err != nil {
 				return err
 			}
-			readable := server.attributesWithPrivilege(
-				state.runtime,
-				tx,
-				state.boundDN,
-				responseEntry,
-				acl.Read,
-				request.TypesOnly,
-			)
+			var readable directory.Entry
+			if routeRoot {
+				readable = rootVisibleEntry(responseEntry, request.TypesOnly)
+			} else {
+				readable = server.attributesWithPrivilege(
+					state.runtime,
+					tx,
+					state.boundDN,
+					responseEntry,
+					acl.Read,
+					request.TypesOnly,
+				)
+			}
 			readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
 			selected := server.selectEntry(
 				state.runtime,
@@ -3338,7 +3513,7 @@ func (server *Server) writeSearchResultResponse(
 	references [][]string,
 	additionalControls []ldapwire.Control,
 	chainedPackets []*ber.Packet,
-) error {
+) (responseErr error) {
 	responseControls := serverSideSortResponseControl(
 		sorting,
 		result,
@@ -3367,6 +3542,13 @@ func (server *Server) writeSearchResultResponse(
 		return fmt.Errorf("complete paged search: %w", err)
 	}
 	responseControls = append(responseControls, pagingControls...)
+	batched := newLDAPResponseBatchConnection(connection)
+	connection = batched
+	defer func() {
+		if err := batched.Flush(); responseErr == nil {
+			responseErr = err
+		}
+	}()
 	for _, entry := range entries {
 		entryControls := server.passwordPolicySearchEntryControls(
 			context.Background(),
