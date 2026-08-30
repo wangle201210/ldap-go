@@ -703,7 +703,7 @@ func requestControlFailureBeforeSecurity(
 		return failure
 	case ldapwire.ExtendedRequest:
 		if request.Name == passwordModifyOID {
-			support = supportsManageDsaIT | supportsPasswordPolicy
+			support = supportsManageDsaIT | supportsPasswordPolicy | supportsPasswordHashScheme
 		}
 	case ldapwire.BindRequest:
 		support = supportsPasswordPolicy

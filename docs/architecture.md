@@ -742,6 +742,12 @@ verification, ACL checks, password replacement, schema validation, and
 operational-attribute updates in one storage transaction. Hash selection is
 loaded from the frontend database's `olcPasswordHash` values in the same
 immutable runtime snapshot as ACL and schema configuration.
+The private one-operation hash control is parsed as a critical Password Modify
+control, preflights password-attribute `manage` access and any old-password or
+ppolicy quality/history checks against plaintext, and only then replaces the
+runtime scheme list for that operation before entering the same transaction.
+Transactions and translucent databases reject the critical control instead of
+silently using another hash path.
 
 Secure transports may expose an external identity only after validating the
 peer certificate chain. The standard TLS and TLCP adapters both return the

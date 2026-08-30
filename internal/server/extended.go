@@ -13,7 +13,7 @@ import (
 const (
 	startTLSOID       = "1.3.6.1.4.1.1466.20037"
 	cancelOID         = "1.3.6.1.1.8"
-	passwordModifyOID = "1.3.6.1.4.1.4203.1.11.1"
+	passwordModifyOID = ldapwire.PasswordModifyOID
 	whoAmIOID         = "1.3.6.1.4.1.4203.1.11.3"
 )
 

@@ -32,6 +32,17 @@ const (
 
 var ErrPasswordHashUnavailable = errors.New("scheme provided no hash function")
 
+var passwordHashSelectionSchemes = [...]string{
+	SMPBKDF2HashScheme,
+	OpenLDAPArgon2HashScheme,
+	OpenLDAPPBKDF2SHA256HashScheme,
+	OpenLDAPPBKDF2SHA512HashScheme,
+	"{SSHA512}",
+	"{SSHA256}",
+	OpenLDAPDefaultHashScheme,
+	"{SSM3}",
+}
+
 // VerifyPassword accepts portable OpenLDAP digest schemes, bounded pure-Go
 // crypt(3) formats, and ldap-go's SM3 extensions.
 func VerifyPassword(stored, supplied []byte) bool {
@@ -186,6 +197,27 @@ func NormalizePasswordHashScheme(value string) (string, error) {
 func IsKnownPasswordScheme(value string) bool {
 	_, err := NormalizePasswordHashScheme(value)
 	return err == nil
+}
+
+// PasswordHashSelectionSchemes returns the password hashes that an
+// administrator may explicitly select for one Password Modify operation.
+func PasswordHashSelectionSchemes() []string {
+	return append([]string(nil), passwordHashSelectionSchemes[:]...)
+}
+
+// NormalizePasswordHashSelectionScheme validates a one-operation
+// administrator hash selection and returns its canonical spelling.
+func NormalizePasswordHashSelectionScheme(value string) (string, bool) {
+	normalized, err := NormalizePasswordHashScheme(value)
+	if err != nil {
+		return "", false
+	}
+	for _, scheme := range passwordHashSelectionSchemes {
+		if normalized == scheme {
+			return normalized, true
+		}
+	}
+	return "", false
 }
 
 func HashPassword(password []byte, scheme string, random io.Reader) ([]byte, error) {

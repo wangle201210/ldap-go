@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -63,32 +64,35 @@ const (
 	supportsTreeDelete
 	supportsLazyCommit
 	supportsNoOpSearch
+	supportsPasswordHashScheme
 )
 
 type requestControls struct {
-	assertion        *directory.Filter
-	preRead          *readControlRequest
-	postRead         *readControlRequest
-	paging           *pagedResultsRequest
-	sorting          *serverSideSortRequest
-	vlv              *virtualListViewRequest
-	manageDsaIT      bool
-	dontUseCopy      bool
-	subentries       *bool
-	sync             *syncRequestControl
-	passwordPolicy   bool
-	accountUsability bool
-	relax            bool
-	noOp             bool
-	permissiveModify bool
-	valueSort        *valueSortControlRequest
-	deref            *derefControlRequest
-	matchedValues    *matchedValuesControlRequest
-	chaining         *chainBehaviorRequest
-	domainScope      bool
-	treeDelete       *treeDeleteControlRequest
-	lazyCommit       bool
-	noOpSearch       bool
+	assertion                 *directory.Filter
+	preRead                   *readControlRequest
+	postRead                  *readControlRequest
+	paging                    *pagedResultsRequest
+	sorting                   *serverSideSortRequest
+	vlv                       *virtualListViewRequest
+	manageDsaIT               bool
+	dontUseCopy               bool
+	subentries                *bool
+	sync                      *syncRequestControl
+	passwordPolicy            bool
+	passwordHashScheme        string
+	passwordHashSchemePresent bool
+	accountUsability          bool
+	relax                     bool
+	noOp                      bool
+	permissiveModify          bool
+	valueSort                 *valueSortControlRequest
+	deref                     *derefControlRequest
+	matchedValues             *matchedValuesControlRequest
+	chaining                  *chainBehaviorRequest
+	domainScope               bool
+	treeDelete                *treeDeleteControlRequest
+	lazyCommit                bool
+	noOpSearch                bool
 }
 
 type readControlRequest struct {
@@ -738,6 +742,40 @@ func parseRequestControlsWithDisallows(
 				)
 			}
 			parsed.passwordPolicy = true
+		case ldapwire.PasswordHashSchemeControlOID:
+			if supported&supportsPasswordHashScheme == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.passwordHashSchemePresent {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"password hash scheme control specified multiple times",
+				)
+			}
+			parsed.passwordHashSchemePresent = true
+			if !control.Critical {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"password hash scheme control must be critical",
+				)
+			}
+			if !control.HasValue || len(control.Value) == 0 || len(control.Value) > 64 {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"password hash scheme control value is invalid",
+				)
+			}
+			scheme, ok := auth.NormalizePasswordHashSelectionScheme(string(control.Value))
+			if !ok {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"password hash scheme control value is unsupported",
+				)
+			}
+			parsed.passwordHashScheme = scheme
 		case accountUsabilityControlOID:
 			if supported&supportsAccountUsability == 0 {
 				if control.Critical {

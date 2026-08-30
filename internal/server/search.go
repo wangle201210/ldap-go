@@ -2883,6 +2883,7 @@ func (server *Server) rootDSE(
 		dontUseCopyControlOID,
 		proxyAuthorizationControlOID,
 		passwordPolicyControlOID,
+		ldapwire.PasswordHashSchemeControlOID,
 		accountUsabilityControlOID,
 		netscapePasswordExpiredOID,
 		netscapePasswordExpiringOID,

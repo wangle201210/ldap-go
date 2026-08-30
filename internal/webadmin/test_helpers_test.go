@@ -88,23 +88,27 @@ func (connector *fakeConnector) connectCount() int {
 type fakeClient struct {
 	mu sync.Mutex
 
-	bindFunc           func(string, string) error
-	searchFunc         func(*ldap.SearchRequest) (*ldap.SearchResult, error)
-	compareFunc        func(string, string, string) (bool, error)
-	addFunc            func(*ldap.AddRequest) error
-	modifyFunc         func(*ldap.ModifyRequest) error
-	delFunc            func(*ldap.DelRequest) error
-	modifyDNFunc       func(*ldap.ModifyDNRequest) error
-	passwordModifyFunc func(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error)
+	bindFunc               func(string, string) error
+	searchFunc             func(*ldap.SearchRequest) (*ldap.SearchResult, error)
+	compareFunc            func(string, string, string) (bool, error)
+	addFunc                func(*ldap.AddRequest) error
+	modifyFunc             func(*ldap.ModifyRequest) error
+	delFunc                func(*ldap.DelRequest) error
+	modifyDNFunc           func(*ldap.ModifyDNRequest) error
+	passwordModifyFunc     func(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error)
+	passwordHashModifyFunc func(*ldap.PasswordModifyRequest, string) error
 
-	bindDN        string
-	searches      []*ldap.SearchRequest
-	adds          []*ldap.AddRequest
-	modifies      []*ldap.ModifyRequest
-	deletes       []*ldap.DelRequest
-	renames       []*ldap.ModifyDNRequest
-	passwordCalls int
-	closeCount    int
+	bindDN               string
+	searches             []*ldap.SearchRequest
+	adds                 []*ldap.AddRequest
+	modifies             []*ldap.ModifyRequest
+	deletes              []*ldap.DelRequest
+	renames              []*ldap.ModifyDNRequest
+	passwordCalls        int
+	passwordHashCalls    int
+	passwordHashRequests []*ldap.PasswordModifyRequest
+	passwordHashSchemes  []string
+	closeCount           int
 }
 
 func (client *fakeClient) Bind(username, password string) error {
@@ -192,6 +196,22 @@ func (client *fakeClient) PasswordModify(request *ldap.PasswordModifyRequest) (*
 		return callback(request)
 	}
 	return &ldap.PasswordModifyResult{}, nil
+}
+
+func (client *fakeClient) PasswordModifyWithHashScheme(
+	request *ldap.PasswordModifyRequest,
+	scheme string,
+) error {
+	client.mu.Lock()
+	client.passwordHashCalls++
+	client.passwordHashRequests = append(client.passwordHashRequests, request)
+	client.passwordHashSchemes = append(client.passwordHashSchemes, scheme)
+	callback := client.passwordHashModifyFunc
+	client.mu.Unlock()
+	if callback != nil {
+		return callback(request, scheme)
+	}
+	return nil
 }
 
 func (client *fakeClient) Close() error {

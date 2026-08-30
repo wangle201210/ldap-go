@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -29,7 +30,7 @@ func (server *Server) handlePasswordModify(
 	defer clear(request.Value)
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsManageDsaIT|supportsPasswordPolicy,
+		supportsManageDsaIT|supportsPasswordPolicy|supportsPasswordHashScheme,
 	)
 	if controlFailure != nil {
 		return server.writePasswordModifyResult(
@@ -211,6 +212,17 @@ func (server *Server) handlePasswordModify(
 	); result != nil {
 		return server.writePasswordModifyResult(connection, message.ID, *result, nil)
 	}
+	if controls.passwordHashSchemePresent && activeTranslucentConfiguration(database) != nil {
+		return server.writePasswordModifyResult(
+			connection,
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnavailableCriticalExtension,
+				"password hash scheme control is not supported by the translucent backend",
+			),
+			nil,
+		)
+	}
 	if handled, err := server.tryTranslucentPasswordModify(
 		ctx,
 		connection,
@@ -233,28 +245,52 @@ func (server *Server) handlePasswordModify(
 		defer clear(newPassword)
 		generated = true
 	}
-
-	hashes := make([][]byte, 0, len(state.runtime.passwordHashSchemes))
-	for _, scheme := range state.runtime.passwordHashSchemes {
-		stored, err := hashPasswordForRuntime(state.runtime, newPassword, scheme)
-		if err != nil {
-			return server.internalPasswordModifyError(connection, message.ID, err)
+	if controls.passwordHashSchemePresent {
+		if len(newPassword) > ldapwire.PasswordHashSelectionMaxPasswordBytes {
+			return server.writePasswordModifyResult(
+				connection,
+				message.ID,
+				ldapwire.ResultError(
+					ldapwire.ResultConstraintViolation,
+					"password exceeds the selected-hash input limit",
+				),
+				nil,
+			)
 		}
-		hashes = append(hashes, stored)
+		authorized, authorizationErr := server.passwordHashSelectionAuthorized(
+			ctx,
+			state.runtime,
+			authorizationDN,
+			*database,
+			target,
+		)
+		if authorizationErr != nil {
+			return server.internalPasswordModifyError(connection, message.ID, authorizationErr)
+		}
+		if !authorized {
+			return server.writePasswordModifyResult(
+				connection,
+				message.ID,
+				ldapwire.ResultError(ldapwire.ResultInsufficientAccessRights, ""),
+				nil,
+			)
+		}
 	}
 	changes := []ldapwire.Modification{{
 		Operation: ldapwire.ModificationReplace,
 		Attribute: directory.Attribute{
 			Description: "userPassword",
-			Values:      hashes,
+			Values:      [][]byte{bytes.Clone(newPassword)},
 		},
 	}}
+	defer clear(changes[0].Attribute.Values[0])
 	policyOptions := passwordPolicyModificationOptions{
-		requestControl: controls.passwordPolicy,
-		passwordModify: true,
-		hasOldPassword: passwordRequest.HasOldPassword,
-		oldPassword:    passwordRequest.OldPassword,
-		newPassword:    newPassword,
+		requestControl:           controls.passwordPolicy,
+		passwordModify:           true,
+		hasOldPassword:           passwordRequest.HasOldPassword,
+		enforceQualityAndHistory: controls.passwordHashSchemePresent,
+		oldPassword:              passwordRequest.OldPassword,
+		newPassword:              newPassword,
 	}
 	policyOptions.externalMatches, err = server.preverifyPasswordModification(
 		ctx,
@@ -269,6 +305,25 @@ func (server *Server) handlePasswordModify(
 	if err != nil {
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
+	clear(changes[0].Attribute.Values[0])
+	hashSchemes := state.runtime.passwordHashSchemes
+	if controls.passwordHashSchemePresent {
+		hashSchemes = []string{controls.passwordHashScheme}
+	}
+	hashes := make([][]byte, 0, len(hashSchemes))
+	defer func() {
+		for _, hash := range hashes {
+			clear(hash)
+		}
+	}()
+	for _, scheme := range hashSchemes {
+		stored, hashErr := hashPasswordForRuntime(state.runtime, newPassword, scheme)
+		if hashErr != nil {
+			return server.internalPasswordModifyError(connection, message.ID, hashErr)
+		}
+		hashes = append(hashes, stored)
+	}
+	changes[0].Attribute.Values = hashes
 	var precondition entryModificationPrecondition
 	if passwordRequest.HasOldPassword {
 		precondition = func(reader storage.Reader, entry directory.Entry) error {
@@ -373,6 +428,37 @@ func normalizePasswordModifyDN(
 		return dn, nil
 	}
 	return normalizeRuntimeDatabaseDN(*database, dn)
+}
+
+func (server *Server) passwordHashSelectionAuthorized(
+	ctx context.Context,
+	runtime *runtimeState,
+	boundDN string,
+	database runtimeDatabase,
+	target directory.DN,
+) (bool, error) {
+	authorized := false
+	err := server.viewStorage(ctx, func(reader storage.Reader) error {
+		databaseReader := readerForDatabase(reader, database)
+		entry, err := databaseReader.Get(target)
+		if errors.Is(err, storage.ErrEntryNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		authorized = server.allowed(
+			runtime,
+			databaseReader,
+			boundDN,
+			entry,
+			"userPassword",
+			nil,
+			acl.Manage,
+		)
+		return nil
+	})
+	return authorized, err
 }
 
 func passwordModifyLegacyIdentityCollision(left, right directory.DN) bool {

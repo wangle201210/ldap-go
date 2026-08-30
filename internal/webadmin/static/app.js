@@ -6,6 +6,17 @@
   const QUERY_HISTORY_STORAGE_KEY = "ldap-go.webadmin.queryHistory";
   const LIST_ATTRIBUTES = "objectClass, description, title, modifyTimestamp, createTimestamp";
   const CONFIGURATION_ATTRIBUTE_SUGGESTIONS = ["olcPasswordHash"];
+  const PASSWORD_STORAGE_POLICY = "policy";
+  const PASSWORD_HASH_SCHEMES = Object.freeze([
+	{ value: "{PBKDF2-SM3}", labelKey: "password.scheme.pbkdf2Sm3" },
+	{ value: "{ARGON2}", labelKey: "password.scheme.argon2" },
+	{ value: "{PBKDF2-SHA256}", labelKey: "password.scheme.pbkdf2Sha256" },
+	{ value: "{PBKDF2-SHA512}", labelKey: "password.scheme.pbkdf2Sha512" },
+	{ value: "{SSHA512}", labelKey: "password.scheme.ssha512" },
+	{ value: "{SSHA256}", labelKey: "password.scheme.ssha256" },
+	{ value: "{SSHA}", labelKey: "password.scheme.ssha" },
+	{ value: "{SSM3}", labelKey: "password.scheme.ssm3" }
+  ]);
   const messages = {
     en: {
       "app.title": "LDAP Operations",
@@ -322,6 +333,20 @@
       "password.confirm": "Confirm password",
       "password.mismatch": "Passwords do not match",
       "password.reset": "Password reset",
+	  "password.storage": "Password storage for this change",
+	  "password.policy": "Server policy (recommended)",
+	  "password.hashWarning": "The selected algorithm applies only to this Password Modify and requires password-administrator permission. An entered current password is verified atomically; password quality and history remain enforced.",
+	  "password.schemeUnavailable": "The selected password storage algorithm is not available on this server",
+	  "password.targetUnsupported": "Algorithm selection is unavailable because the target LDAP server does not advertise the required Password Modify control",
+	  "password.hashFailed": "Password hash generation failed",
+	  "password.scheme.pbkdf2Sm3": "PBKDF2-SM3 (SM3 recommended)",
+	  "password.scheme.argon2": "ARGON2",
+	  "password.scheme.pbkdf2Sha256": "PBKDF2-SHA256",
+	  "password.scheme.pbkdf2Sha512": "PBKDF2-SHA512",
+	  "password.scheme.ssha512": "SSHA512 (compatibility, fast digest)",
+	  "password.scheme.ssha256": "SSHA256 (compatibility, fast digest)",
+	  "password.scheme.ssha": "SSHA (legacy OpenLDAP default)",
+	  "password.scheme.ssm3": "SSM3 (legacy, fast digest)",
       "import.title": "Import entries",
       "import.description": "Import LDAP Data Interchange Format changes.",
       "import.choose": "Choose LDIF file",
@@ -686,6 +711,20 @@
       "password.confirm": "确认密码",
       "password.mismatch": "两次输入的密码不一致",
       "password.reset": "密码已重置",
+	  "password.storage": "本次密码存储方式",
+	  "password.policy": "服务器策略（推荐）",
+	  "password.hashWarning": "所选算法仅用于本次 Password Modify，且需要密码管理员权限。填写当前密码时会由服务器原子校验，密码质量与密码历史仍会强制检查。",
+	  "password.schemeUnavailable": "当前服务器不支持所选密码存储算法",
+	  "password.targetUnsupported": "目标 LDAP 服务器未声明所需的 Password Modify 控制，无法指定算法",
+	  "password.hashFailed": "无法生成密码哈希",
+	  "password.scheme.pbkdf2Sm3": "PBKDF2-SM3（国密推荐）",
+	  "password.scheme.argon2": "ARGON2",
+	  "password.scheme.pbkdf2Sha256": "PBKDF2-SHA256",
+	  "password.scheme.pbkdf2Sha512": "PBKDF2-SHA512",
+	  "password.scheme.ssha512": "SSHA512（兼容格式，快速摘要）",
+	  "password.scheme.ssha256": "SSHA256（兼容格式，快速摘要）",
+	  "password.scheme.ssha": "SSHA（旧版 OpenLDAP 默认）",
+	  "password.scheme.ssm3": "SSM3（旧格式，快速摘要）",
       "import.title": "导入条目",
       "import.description": "导入 LDAP 数据交换格式中的目录变更。",
       "import.choose": "选择 LDIF 文件",
@@ -742,7 +781,7 @@
   let sessionAPIQueue = Promise.resolve();
   const SESSION_SERIAL_API_PATHS = new Set([
 	"/api/logout", "/api/session", "/api/capabilities", "/api/root-dse", "/api/root", "/api/search", "/api/entries", "/api/entry",
-	"/api/entries/rename", "/api/rename", "/api/password-verify", "/api/password-modify", "/api/password",
+	"/api/entries/rename", "/api/rename", "/api/password-verify", "/api/password-modify", "/api/password-set-hash", "/api/password",
 	"/api/schema", "/api/monitor", "/api/export", "/api/data-export", "/api/import",
 	"/api/bulk", "/api/groups", "/api/binary", "/api/csv-import"
   ]);
@@ -973,6 +1012,7 @@
 	state.ldifFileSequence++;
 	state.csvFileSequence++;
 	state.capabilities = null;
+	renderPasswordHashSchemes();
 	state.pageLoading = false;
 	if (state.confirmResolve) {
 	  const resolve = state.confirmResolve;
@@ -1218,9 +1258,11 @@
 	["#verify-current-password", "password.verify", "direct"],
 	["#verify-current-password", "password.verify", "attr:aria-label"],
 	["#verify-current-password", "password.verify", "attr:title"],
-    ["label[for='new-password']", "password.new"],
-    ["label[for='confirm-password']", "password.confirm"],
-    ["#password-form .modal-actions .close-dialog", "actions.cancel"],
+	    ["label[for='new-password']", "password.new"],
+	    ["label[for='confirm-password']", "password.confirm"],
+	["label[for='password-hash-scheme']", "password.storage"],
+	["#password-hash-warning", "password.hashWarning"],
+	    ["#password-form .modal-actions .close-dialog", "actions.cancel"],
     ["#password-form .modal-actions button[type='submit']", "actions.resetPassword"],
 	    ["#import-dialog-title", "import.title"],
 	    ["#import-dialog-description", "import.description"],
@@ -1419,6 +1461,12 @@
 			invalid_request: "api.invalidRequest",
 			invalid_credentials: "api.authenticationRequired",
 			invalid_old_password: "password.rejected",
+			unsupported_password_hash_scheme: "password.schemeUnavailable",
+			unsupported_hash_scheme: "password.schemeUnavailable",
+			password_hash_scheme_unavailable: "password.schemeUnavailable",
+			invalid_hash_scheme: "password.schemeUnavailable",
+			password_hash_target_unsupported: "password.targetUnsupported",
+			password_hash_failed: "password.hashFailed",
 			csrf_failed: "api.accessDenied",
 			origin_forbidden: "api.accessDenied",
 			import_deadline_exceeded: "api.timeout",
@@ -1801,7 +1849,55 @@
 		if (!field.dataset.errorDescription) field.removeAttribute("aria-invalid");
 	  }
 
-  function searchMaximumSize() {
+	  function normalizeAdvertisedPasswordHashScheme(value) {
+		if (typeof value !== "string") return "";
+		const advertised = value.trim().toUpperCase();
+		const name = advertised.startsWith("{") && advertised.endsWith("}") ? advertised.slice(1, -1) : advertised;
+		if (!/^[A-Z0-9-]+$/.test(name)) return "";
+		const normalized = name ? `{${name}}` : "";
+		return PASSWORD_HASH_SCHEMES.some((scheme) => scheme.value === normalized) ? normalized : "";
+	  }
+
+	  function availablePasswordHashSchemes() {
+		const advertised = state.capabilities && state.capabilities.password_hash_schemes;
+		if (!Array.isArray(advertised)) return [];
+		const supported = new Set(advertised.map(normalizeAdvertisedPasswordHashScheme).filter(Boolean));
+		return PASSWORD_HASH_SCHEMES.filter((scheme) => supported.has(scheme.value));
+	  }
+
+	  function updatePasswordHashWarning() {
+		const warning = $("#password-hash-warning");
+		warning.hidden = $("#password-hash-scheme").value === PASSWORD_STORAGE_POLICY;
+		if (!warning.hidden && elements.passwordDialog.open) {
+		  requestAnimationFrame(() => warning.scrollIntoView({ block: "nearest" }));
+		}
+	  }
+
+	  function renderPasswordHashSchemes(selected = PASSWORD_STORAGE_POLICY) {
+		const select = $("#password-hash-scheme");
+		const policy = document.createElement("option");
+		policy.value = PASSWORD_STORAGE_POLICY;
+		policy.defaultSelected = true;
+		localize(policy, "password.policy");
+		select.replaceChildren(policy);
+		availablePasswordHashSchemes().forEach((scheme) => {
+		  const option = document.createElement("option");
+		  option.value = scheme.value;
+		  localize(option, scheme.labelKey);
+		  select.append(option);
+		});
+		const available = new Set(Array.from(select.options, (option) => option.value));
+		select.value = available.has(selected) ? selected : PASSWORD_STORAGE_POLICY;
+		updatePasswordHashWarning();
+	  }
+
+	  function selectedPasswordStorageMethod() {
+		const selected = $("#password-hash-scheme").value;
+		if (selected === PASSWORD_STORAGE_POLICY) return selected;
+		return availablePasswordHashSchemes().some((scheme) => scheme.value === selected) ? selected : "";
+	  }
+
+	  function searchMaximumSize() {
 	return Math.max(1, Number(state.capabilities && state.capabilities.max_search_size || 5000));
   }
 
@@ -1858,6 +1954,7 @@
   async function loadWorkspace() {
 	const { data: capabilities } = await api("/api/capabilities");
 	state.capabilities = capabilities && typeof capabilities === "object" ? capabilities : {};
+	renderPasswordHashSchemes();
 	$("#search-size").max = String(searchMaximumSize());
 	$("#search-size").value = String(searchDefaultSize());
     const { data } = await api("/api/root-dse");
@@ -4058,9 +4155,14 @@
 	  const targetDN = state.selectedDN;
 	  $("#password-target").textContent = targetDN;
       $("#password-form").reset();
+	  renderPasswordHashSchemes();
 	  resetPasswordVerification(targetDN);
       openDialog(elements.passwordDialog);
     });
+	$("#password-hash-scheme").addEventListener("change", () => {
+	  setFieldError($("#password-error"), "");
+	  updatePasswordHashWarning();
+	});
 	$("#current-password").addEventListener("input", (event) => {
 	  state.passwordVerifySequence++;
 	  setPasswordVerificationStatus("idle");
@@ -4101,11 +4203,22 @@
 	  const oldPassword = $("#current-password").value;
 	  const password = $("#new-password").value;
 	  if (password !== $("#confirm-password").value) { setFieldError($("#password-error"), translated("password.mismatch"), $("#confirm-password")); return; }
+	  const storageMethod = selectedPasswordStorageMethod();
+	  if (!storageMethod) { setFieldError($("#password-error"), translated("password.schemeUnavailable"), $("#password-hash-scheme")); return; }
 	  setFormSubmitting(submittedForm, true);
       try {
-		const body = { user_identity: targetDN, new_password: password };
-		if (oldPassword !== "") body.old_password = oldPassword;
-		await api("/api/password-modify", { method: "POST", body });
+		if (storageMethod === PASSWORD_STORAGE_POLICY) {
+		  const body = { user_identity: targetDN, new_password: password };
+		  if (oldPassword !== "") body.old_password = oldPassword;
+		  await api("/api/password-modify", { method: "POST", body });
+		} else {
+		  const body = { user_identity: targetDN, new_password: password, hash_scheme: storageMethod };
+		  if (oldPassword !== "") body.old_password = oldPassword;
+		  await api("/api/password-set-hash", {
+			method: "POST",
+			body
+		  });
+		}
 		$("#password-form").reset();
         closeDialog(elements.passwordDialog);
 		toast("password.reset", targetDN);

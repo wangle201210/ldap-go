@@ -941,9 +941,11 @@ paged and visual-filter searches, local query bookmarks/history, Person/POSIX
 account/Group/POSIX Group/OU/custom creation, schema-aware attribute editing,
 clone, rename/move, current-password verification through an isolated LDAP
 Bind, password modification with optional old-password verification,
+per-change server-side password hashing with a curated algorithm selection when
+the connected server advertises ldap-go's critical Password Modify hash control,
 explicit-selection bulk modify and delete, direct/nested group membership,
-bounded LDIF/CSV import, LDIF/CSV/JSON
-export, binary download/upload and safe image preview, schema and Monitor views.
+bounded LDIF/CSV import, LDIF/CSV/JSON export, binary download/upload and safe
+image preview, schema and Monitor views.
 Batch responses report each applied, failed, unknown, or unattempted DN, stop
 on ambiguous transport results, and never claim cross-entry atomicity. The
 interface can switch between English and Simplified Chinese,
@@ -955,8 +957,12 @@ plaintext password. Verifying another user's password first requires the bound
 identity to have LDAP Compare access to `userPassword` or `authPassword`; a
 user may verify its own bound DN. Every operation remains subject to the bound
 identity's LDAP ACL, schema, overlays, audit, and runtime configuration.
-Mutations require
-same-origin CSRF tokens, and sessions use opaque HttpOnly SameSite cookies.
+An explicit per-change hash is generated inside the LDAP server only after old
+password, quality, and history processing, and requires `manage` access to the
+target password attribute; ordinary self-write users cannot select their own
+scheme.
+Mutations require same-origin CSRF tokens, and sessions use opaque HttpOnly
+SameSite cookies.
 Non-loopback HTTP requires `-tls-cert` and `-tls-key`; remote `ldap://`
 upstreams require `-ldap-starttls`, while `ldaps://` is supported directly.
 Non-loopback listeners also require a canonical `-public-url`, which pins Host,
@@ -1498,6 +1504,12 @@ command arguments:
 ldappasswd -x -H ldap://127.0.0.1:1389 \
   -D uid=alice,ou=people,dc=example,dc=com -W -A -S
 ```
+
+The Web console's per-user selector uses ldap-go's critical control
+`1.3.6.1.4.1.4203.666.5.20` on RFC 3062 Password Modify. This selector is for
+password administrators with `manage` access, applies only to that operation,
+and does not change `olcPasswordHash`; normal self-service changes continue to
+use the configured server policy.
 
 See [docs/architecture.md](docs/architecture.md) for the implementation model
 and [docs/testing.md](docs/testing.md) for compatibility gates.

@@ -5,18 +5,19 @@ import "net/http"
 const recommendedCapabilitiesPageSize = 200
 
 type capabilitiesResponse struct {
-	MaxSearchSize       int   `json:"max_search_size"`
-	MaxSearchSeconds    int   `json:"max_search_seconds"`
-	MaxAttributes       int   `json:"max_attributes"`
-	MaxImportChanges    int   `json:"max_import_changes"`
-	MaxExportEntries    int   `json:"max_export_entries"`
-	MaxExportBytes      int64 `json:"max_export_bytes"`
-	RequestBodyLimit    int64 `json:"request_body_limit"`
-	MaxMonitorEntries   int   `json:"max_monitor_entries"`
-	BinaryMaxValues     int   `json:"binary_max_values"`
-	BinaryMaxValueBytes int   `json:"binary_max_value_bytes"`
-	BinaryMaxTotalBytes int   `json:"binary_max_total_bytes"`
-	RecommendedPageSize int   `json:"page_size"`
+	MaxSearchSize       int      `json:"max_search_size"`
+	MaxSearchSeconds    int      `json:"max_search_seconds"`
+	MaxAttributes       int      `json:"max_attributes"`
+	MaxImportChanges    int      `json:"max_import_changes"`
+	MaxExportEntries    int      `json:"max_export_entries"`
+	MaxExportBytes      int64    `json:"max_export_bytes"`
+	RequestBodyLimit    int64    `json:"request_body_limit"`
+	MaxMonitorEntries   int      `json:"max_monitor_entries"`
+	BinaryMaxValues     int      `json:"binary_max_values"`
+	BinaryMaxValueBytes int      `json:"binary_max_value_bytes"`
+	BinaryMaxTotalBytes int      `json:"binary_max_total_bytes"`
+	RecommendedPageSize int      `json:"page_size"`
+	PasswordHashSchemes []string `json:"password_hash_schemes"`
 }
 
 // handleCapabilities exposes the effective Web administration resource limits
@@ -30,6 +31,11 @@ func (application *Application) handleCapabilities(response http.ResponseWriter,
 		return
 	}
 	defer application.releaseSession(current)
+	passwordHashSchemes, err := application.passwordHashSchemesForClient(current.client)
+	if err != nil {
+		writeLDAPError(response, err)
+		return
+	}
 
 	writeJSON(response, http.StatusOK, capabilitiesResponse{
 		MaxSearchSize:       application.config.MaxSearchSize,
@@ -44,5 +50,6 @@ func (application *Application) handleCapabilities(response http.ResponseWriter,
 		BinaryMaxValueBytes: maximumBinaryValueBytes,
 		BinaryMaxTotalBytes: maximumBinaryTotalBytes,
 		RecommendedPageSize: min(recommendedCapabilitiesPageSize, application.config.MaxSearchSize),
+		PasswordHashSchemes: passwordHashSchemes,
 	})
 }

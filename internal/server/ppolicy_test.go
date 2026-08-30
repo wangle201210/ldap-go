@@ -570,6 +570,25 @@ func TestPasswordPolicyResetRestrictionQualityAndHistory(t *testing.T) {
 	); err != nil {
 		t.Fatalf("admin Bind(): %v", err)
 	}
+	err = passwordModifyWithHashScheme(
+		admin,
+		aliceDN,
+		"",
+		"short",
+		auth.SMPBKDF2HashScheme,
+		true,
+	)
+	assertLDAPResultCode(t, err, ldap.LDAPResultConstraintViolation)
+	err = passwordModifyWithHashScheme(
+		admin,
+		aliceDN,
+		"",
+		"secret",
+		auth.SMPBKDF2HashScheme,
+		true,
+	)
+	assertLDAPResultCode(t, err, ldap.LDAPResultConstraintViolation)
+	assertBindPassword(t, address, aliceDN, "secret", true)
 	if _, err := admin.PasswordModify(ldap.NewPasswordModifyRequest(
 		aliceDN,
 		"",

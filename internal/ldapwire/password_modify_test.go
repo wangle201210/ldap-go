@@ -3,6 +3,7 @@ package ldapwire
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -36,6 +37,26 @@ func TestDecodePasswordModifyRequestValue(t *testing.T) {
 		string(request.OldPassword) != "old-secret" ||
 		string(request.NewPassword) != "new-secret" {
 		t.Fatalf("request = %#v", request)
+	}
+}
+
+func TestPasswordModifyRequestValueRoundTrip(t *testing.T) {
+	t.Parallel()
+	want := PasswordModifyRequestValue{
+		UserIdentity:    []byte("uid=alice,dc=example,dc=com"),
+		OldPassword:     []byte("old-secret"),
+		NewPassword:     []byte("new-secret"),
+		HasUserIdentity: true,
+		HasOldPassword:  true,
+		HasNewPassword:  true,
+	}
+	encoded := EncodePasswordModifyRequestValue(want)
+	got, err := DecodePasswordModifyRequestValue(encoded, true)
+	if err != nil {
+		t.Fatalf("DecodePasswordModifyRequestValue(): %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip = %#v, want %#v", got, want)
 	}
 }
 

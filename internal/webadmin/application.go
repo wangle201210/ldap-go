@@ -194,6 +194,7 @@ func (application *Application) routes() http.Handler {
 	mux.HandleFunc("/api/password-modify", application.handlePasswordModify)
 	mux.HandleFunc("/api/password", application.handlePasswordModify)
 	mux.HandleFunc("/api/password-verify", application.handlePasswordVerify)
+	mux.HandleFunc("/api/password-set-hash", application.handlePasswordSetHash)
 	mux.HandleFunc("/api/schema", application.handleSchema)
 	mux.HandleFunc("/api/monitor", application.handleMonitor)
 	mux.HandleFunc("/api/export", application.handleExport)

@@ -491,7 +491,8 @@ func (server *Server) preverifyPasswordModification(
 					)
 				}
 				if analysis.newPasswordIndex >= 0 && prepared.hasPolicy &&
-					policy.inHistory > 0 && !prepared.passwordAdministrator {
+					policy.inHistory > 0 &&
+					(!prepared.passwordAdministrator || options.enforceQualityAndHistory) {
 					candidate := processed[analysis.newPasswordIndex].Attribute.Values[0]
 					if options.passwordModify {
 						candidate = options.newPassword

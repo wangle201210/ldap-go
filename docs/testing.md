@@ -1191,6 +1191,10 @@ Browser artifacts are written below `test-results/` and `playwright-report/`.
 Set `PLAYWRIGHT_USE_SYSTEM_CHROME=1` to opt into an installed Chrome instead of
 the Playwright-pinned Chromium. The suite covers authentication and session
 isolation, isolated current-password Bind verification, old-password Password
-Modify, resource-limit discovery, responsive keyboard operation, entry
-lifecycle, groups and bulk operations, and LDIF import/export against the real
-server.
+Modify, target-control-gated per-change PBKDF2-SM3 hashing, integration-level
+stored-prefix inspection, successful Bind, self-selection denial, and
+mutation-response non-disclosure. Server tests additionally gate plaintext
+quality and history enforcement plus explicit transaction/translucent
+rejection. The browser suite also covers resource-limit discovery, responsive
+keyboard operation, entry lifecycle, groups and bulk operations, and LDIF
+import/export against the real server.

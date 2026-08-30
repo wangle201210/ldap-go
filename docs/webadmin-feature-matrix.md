@@ -55,7 +55,7 @@ Web 产品与桌面工具还有以下边界：
 | 重命名与移动 | 通过 ModifyDN 修改 RDN，并可指定 `newSuperior` 完成服务器允许的同连接移动。 | 服务器可能拒绝跨命名上下文移动；失败不应自动退化为复制后删除。 |
 | 通用属性编辑 | 多值文本属性的 add/replace/delete；显示 Schema 提示；常见操作属性和二进制属性只读。 | 尚无按 Syntax 选择的 Boolean、Integer、Generalized Time、DN、Object Class、Hex/File 等专用编辑器。 |
 | 二进制数据 | API 使用 Base64 表示二进制属性，页面可识别并只读显示。 | 当前没有安全上传、下载、图片预览、裁剪或格式转换。 |
-| 密码验证与修改 | 使用独立的临时 LDAP Bind 验证所选用户当前密码，不改变管理员会话；验证其他 DN 前要求当前绑定身份对 `userPassword` 或 `authPassword` 具有 LDAP Compare 权限，当前绑定身份可验证自身；使用 Password Modify Extended Operation 重置密码，填写旧密码时由服务器原子校验。 | 临时连接使用相同 TLS 策略、受登录限流与资源预算约束并立即关闭。页面不读取、返回或生成目录密码哈希；哈希算法由服务器策略决定。 |
+| 密码验证与修改 | 使用独立的临时 LDAP Bind 验证所选用户当前密码，不改变管理员会话；验证其他 DN 前要求当前绑定身份对 `userPassword` 或 `authPassword` 具有 LDAP Compare 权限，当前绑定身份可验证自身；默认使用 Password Modify；连接的 Root DSE 明确声明 ldap-go 密码哈希选择控制时，也可为本次 Password Modify 选择受控算法。 | LDAP 服务端先使用明文完成可选旧密码原子校验、ACL、密码质量与历史检查，再生成所选哈希；算法选择要求对目标密码属性具有 `manage` 权限，普通 self-write 用户不可使用，密码输入上限为 4 KiB。未声明该临界控制的目标只展示服务器策略；事务和 translucent 后端明确拒绝而不会静默忽略。密码变更响应不返回哈希。 |
 | 导入/导出 | 有界 LDIF 导入与 LDIF 导出；导入仍逐项经过 LDAP 写操作、ACL 和 Schema。 | 当前 Web 页面不提供 CSV、XLSX、PDF、JSON 或 SQL 格式导入导出。 |
 | Schema | 读取 Root DSE 的 subschema entry，展示 Attribute Types、Object Classes 及其他公开定义并支持页面筛选。 | 只读；不在通用管理页直接修改 `cn=config` 或 Schema。 |
 | 监控 | 读取服务器公开的 Monitor naming context，展示有界的摘要和条目详情。 | 是实时只读快照，不是时间序列、告警或容量报告系统。服务器未公开或 ACL 不可见时不推断数据。 |
@@ -104,7 +104,7 @@ Time 和未知 Syntax 暂时保留无损文本输入，避免浏览器格式化�
 | LDAPSoft UI、拖放和桌面工作流 | 不照搬。 | 专有 UI 受版权和产品识别保护，且桌面窗口、系统剪贴板、本地文件与拖放语义不适合共享 Web 服务。仅参考公开功能目标，按 ldap-go 的 Web 信息架构独立实现。 |
 | SQLLDAP 语法兼容 | 不宣称、不直接实现兼容层。 | SQLLDAP 不是 LDAP 标准，公开页面不足以定义完整语法、空值、多值、DN、事务和错误语义。查询优先使用 RFC 4515 Filter，批量变更使用显式 LDAP 操作/LDIF；若需求成立，再设计 ldap-go 自有且默认只读的 DSL。 |
 | SQL `INSERT/UPDATE/DELETE` 导入导出 | 不作为 LDAP 迁移格式。 | SQL 文本容易制造“数据库事务”错觉，并带来解析、注入和方言兼容风险。迁移采用 LDIF；表格交换采用有明确映射规则的 CSV/JSON。 |
-| 浏览器生成并写入密码哈希 | 默认禁止，需独立专家模式评审。 | 客户端选 SHA/MD5/CRYPT 可能绕过密码策略、历史、国密策略和服务器 `olcPasswordHash`，还会鼓励弱算法。默认只调用 Password Modify，让服务器生成带盐哈希；原始哈希迁移使用受审计的 LDIF/离线工具。 |
+| 浏览器生成并写入密码哈希 | 禁止。 | 浏览器和 Web Admin 进程都不生成密码哈希。默认使用 Password Modify；支持该临界控制的 ldap-go 目标允许密码管理员明确选择本次算法，LDAP 服务端在明文策略检查后生成哈希并写入，同时保留旧密码校验和未知写入结果语义。原始哈希迁移仍使用受审计的 LDIF/离线工具。 |
 | 在 Web 中保存 Bind 密码、私钥或连接密钥 | 禁止使用 Cookie 明文、`localStorage` 或普通数据库字段。 | 多连接/定时任务若必须托管凭据，应采用独立 secret store 或 envelope encryption、密钥轮换、最小权限、不可回显、所有者隔离和访问审计。 |
 | 无界嵌套成员、全目录选择和递归复制 | 禁止。 | 循环组和大目录可造成资源耗尽；搜索结果还可能随时间变化。所有操作都要绑定明确 DN 快照，并限制数量、深度、时间、并发、响应字节和可取消性。 |
 | 将批量 LDAP 操作描述为原子事务 | 禁止。 | 除非目标服务器明确支持并成功执行 LDAP Transaction，否则跨条目操作可能部分成功。结果必须逐 DN 展示并可导出失败清单。 |

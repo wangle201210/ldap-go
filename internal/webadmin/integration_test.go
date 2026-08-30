@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 func TestRealLDAPBindAndRootDSEIntegration(t *testing.T) {
+	const userDN = "uid=alice,ou=people,dc=example,dc=com"
 	store := storage.NewMemory()
 	defer store.Close()
 	if err := store.Update(context.Background(), func(writer storage.Writer) error {
@@ -22,6 +26,27 @@ func TestRealLDAPBindAndRootDSEIntegration(t *testing.T) {
 			Attributes: []directory.Attribute{
 				{Description: "objectClass", Values: [][]byte{[]byte("domain")}},
 				{Description: "dc", Values: [][]byte{[]byte("example")}},
+			},
+		}, false); err != nil {
+			return err
+		}
+		if err := writer.Put(directory.Entry{
+			DN: "ou=people,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: [][]byte{[]byte("organizationalUnit")}},
+				{Description: "ou", Values: [][]byte{[]byte("people")}},
+			},
+		}, false); err != nil {
+			return err
+		}
+		if err := writer.Put(directory.Entry{
+			DN: userDN,
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: [][]byte{[]byte("inetOrgPerson")}},
+				{Description: "uid", Values: [][]byte{[]byte("alice")}},
+				{Description: "cn", Values: [][]byte{[]byte("Alice")}},
+				{Description: "sn", Values: [][]byte{[]byte("Example")}},
+				{Description: "userPassword", Values: [][]byte{[]byte("old-secret")}},
 			},
 		}, false); err != nil {
 			return err
@@ -69,6 +94,50 @@ func TestRealLDAPBindAndRootDSEIntegration(t *testing.T) {
 	root := performJSONRequest(t, application, http.MethodGet, "/api/root-dse", nil, authenticated.cookie, "")
 	if root.Code != http.StatusOK || !containsJSONText(root.Body.Bytes(), "supportedLDAPVersion") {
 		t.Fatalf("Root DSE status = %d, body = %s", root.Code, root.Body.String())
+	}
+
+	const newPassword = "PBKDF2-SM3-integration-secret"
+	changed := performJSONRequest(t, application, http.MethodPost, "/api/password-set-hash", map[string]string{
+		"user_identity": userDN,
+		"new_password":  newPassword,
+		"hash_scheme":   auth.SMPBKDF2HashScheme,
+	}, authenticated.cookie, authenticated.csrf)
+	if changed.Code != http.StatusOK || strings.Contains(changed.Body.String(), newPassword) ||
+		strings.Contains(changed.Body.String(), "100000$") {
+		t.Fatalf("password hash status = %d, body = %s", changed.Code, changed.Body.String())
+	}
+
+	parsedUserDN, err := directory.ParseDN(userDN)
+	if err != nil {
+		t.Fatalf("ParseDN(%q): %v", userDN, err)
+	}
+	var stored []byte
+	if err := store.View(t.Context(), func(reader storage.Reader) error {
+		entry, getErr := reader.Get(parsedUserDN)
+		if getErr != nil {
+			return getErr
+		}
+		values := entry.Values("userPassword")
+		if len(values) == 1 {
+			stored = append([]byte(nil), values[0]...)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read stored password: %v", err)
+	}
+	defer clear(stored)
+	if !strings.HasPrefix(string(stored), auth.SMPBKDF2HashScheme) ||
+		!auth.VerifyPassword(stored, []byte(newPassword)) {
+		t.Fatal("stored userPassword does not contain the selected PBKDF2-SM3 hash")
+	}
+
+	user, err := ldap.DialURL("ldap://" + listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial user Bind: %v", err)
+	}
+	defer user.Close()
+	if err := user.Bind(userDN, newPassword); err != nil {
+		t.Fatalf("Bind with selected password hash: %v", err)
 	}
 }
 

@@ -6,11 +6,13 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	ldap "github.com/go-ldap/ldap/v3"
 )
 
-func TestCapabilitiesRouteReturnsEffectiveLimitsWithoutLDAP(t *testing.T) {
+func TestCapabilitiesRouteReturnsEffectiveLimitsAndVerifiedHashSchemes(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{}
+	client := ldapGoPasswordHashFakeClient()
 	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, func(config *Config) {
 		config.MaxSearchSize = 100
 		config.MaxSearchSeconds = 9
@@ -48,6 +50,10 @@ func TestCapabilitiesRouteReturnsEffectiveLimitsWithoutLDAP(t *testing.T) {
 		"binary_max_value_bytes": float64(maximumBinaryValueBytes),
 		"binary_max_total_bytes": float64(maximumBinaryTotalBytes),
 		"page_size":              float64(100),
+		"password_hash_schemes": []any{
+			"{PBKDF2-SM3}", "{ARGON2}", "{PBKDF2-SHA256}", "{PBKDF2-SHA512}",
+			"{SSHA512}", "{SSHA256}", "{SSHA}", "{SSM3}",
+		},
 	}
 	if !reflect.DeepEqual(body, expected) {
 		t.Fatalf("capabilities = %#v, want %#v", body, expected)
@@ -55,9 +61,11 @@ func TestCapabilitiesRouteReturnsEffectiveLimitsWithoutLDAP(t *testing.T) {
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if len(client.searches) != 0 || len(client.adds) != 0 || len(client.modifies) != 0 ||
+	if len(client.searches) != 1 || client.searches[0].BaseDN != "" ||
+		!reflect.DeepEqual(client.searches[0].Attributes, []string{"supportedControl"}) ||
+		len(client.adds) != 0 || len(client.modifies) != 0 ||
 		len(client.deletes) != 0 || len(client.renames) != 0 || client.passwordCalls != 0 {
-		t.Fatalf("capabilities performed LDAP operations: searches=%d adds=%d modifies=%d deletes=%d renames=%d passwords=%d",
+		t.Fatalf("capabilities LDAP operations: searches=%d adds=%d modifies=%d deletes=%d renames=%d passwords=%d",
 			len(client.searches), len(client.adds), len(client.modifies), len(client.deletes),
 			len(client.renames), client.passwordCalls)
 	}
@@ -65,7 +73,7 @@ func TestCapabilitiesRouteReturnsEffectiveLimitsWithoutLDAP(t *testing.T) {
 
 func TestCapabilitiesRecommendedPageSizeUsesDefaultWithinSearchLimit(t *testing.T) {
 	t.Parallel()
-	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{&fakeClient{}}}, func(config *Config) {
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{ldapGoPasswordHashFakeClient()}}, func(config *Config) {
 		config.MaxSearchSize = 500
 	})
 	authenticated := loginTestSession(t, application, "dn")
@@ -79,6 +87,44 @@ func TestCapabilitiesRecommendedPageSizeUsesDefaultWithinSearchLimit(t *testing.
 		body.RecommendedPageSize > body.MaxSearchSize {
 		t.Fatalf("page_size = %d, max_search_size = %d", body.RecommendedPageSize, body.MaxSearchSize)
 	}
+	if !reflect.DeepEqual(body.PasswordHashSchemes, passwordHashSchemes) {
+		t.Fatalf("password_hash_schemes = %#v, want %#v", body.PasswordHashSchemes, passwordHashSchemes)
+	}
+}
+
+func TestCapabilitiesDoesNotAdvertiseDirectHashesForAnUnverifiedTarget(t *testing.T) {
+	t.Parallel()
+	client := passwordHashControlFakeClient(false)
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+
+	response := performCapabilitiesRequest(application, http.MethodGet, authenticated.cookie)
+	if response.Code != http.StatusOK {
+		t.Fatalf("capabilities status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var body capabilitiesResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if body.PasswordHashSchemes == nil || len(body.PasswordHashSchemes) != 0 {
+		t.Fatalf("password_hash_schemes = %#v, want an empty array", body.PasswordHashSchemes)
+	}
+}
+
+func TestCapabilitiesPreservesTargetDiscoveryLDAPFailure(t *testing.T) {
+	t.Parallel()
+	code := uint16(ldap.LDAPResultUnavailable)
+	client := &fakeClient{searchFunc: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+		return nil, ldap.NewError(code, nil)
+	}}
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
+	authenticated := loginTestSession(t, application, "dn")
+
+	response := performCapabilitiesRequest(application, http.MethodGet, authenticated.cookie)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("capabilities status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertCapabilitiesAPIErrorCode(t, response, "ldap_error")
 }
 
 func TestCapabilitiesRouteRequiresAuthentication(t *testing.T) {

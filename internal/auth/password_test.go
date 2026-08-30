@@ -8,6 +8,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -302,6 +303,27 @@ func TestHashPasswordRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := HashPassword([]byte("secret"), "{SHA}", errorReader{}); err != nil {
 		t.Fatalf("unsalted scheme read random source: %v", err)
+	}
+}
+
+func TestPasswordHashSelectionSchemesAreCanonicalAndCurated(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"{PBKDF2-SM3}", "{ARGON2}", "{PBKDF2-SHA256}", "{PBKDF2-SHA512}",
+		"{SSHA512}", "{SSHA256}", "{SSHA}", "{SSM3}",
+	}
+	if got := PasswordHashSelectionSchemes(); !slices.Equal(got, want) {
+		t.Fatalf("PasswordHashSelectionSchemes() = %q, want %q", got, want)
+	}
+	for _, scheme := range want {
+		if normalized, ok := NormalizePasswordHashSelectionScheme(strings.ToLower(scheme)); !ok || normalized != scheme {
+			t.Fatalf("NormalizePasswordHashSelectionScheme(%q) = %q, %v", scheme, normalized, ok)
+		}
+	}
+	for _, scheme := range []string{"", "{CLEARTEXT}", "{SHA}", "{CRYPT}", "{UNKNOWN}"} {
+		if normalized, ok := NormalizePasswordHashSelectionScheme(scheme); ok || normalized != "" {
+			t.Fatalf("NormalizePasswordHashSelectionScheme(%q) = %q, %v", scheme, normalized, ok)
+		}
 	}
 }
 

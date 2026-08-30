@@ -185,9 +185,28 @@ async function expectMobilePasswordDialogFits(page, testInfo) {
 	await page.locator("#current-password").fill("layout-check");
 	await expect(verify).toBeEnabled();
 	await expectButtonTextFits(verify, "verify current password");
+	const storage = page.locator("#password-hash-scheme");
+	await expect(page.locator("label[for='password-hash-scheme']")).toHaveText("本次密码存储方式");
+	await expect(storage).toHaveValue("policy");
+	await expect(storage.locator('option[value="policy"]')).toHaveText("服务器策略（推荐）");
+	await expect(storage.locator('option[value="{PBKDF2-SM3}"]')).toHaveText("PBKDF2-SM3（国密推荐）");
+	await storage.selectOption("{PBKDF2-SM3}");
+	const hashWarning = page.locator("#password-hash-warning");
+	await expect(hashWarning).toBeVisible();
+	await expect(hashWarning).toContainText("密码管理员权限");
+	await expect(page.locator("#password-target")).toBeInViewport();
+	await expect.poll(() => hashWarning.evaluate((warning) => {
+	  const warningBox = warning.getBoundingClientRect();
+	  const bodyBox = warning.closest(".modal-body").getBoundingClientRect();
+	  return warningBox.top >= bodyBox.top - 1 && warningBox.bottom <= bodyBox.bottom + 1;
+	}), { message: "password hash warning must be visible above the fixed dialog actions" }).toBeTruthy();
 	const geometry = await page.locator("#password-dialog").evaluate((dialog) => {
 	  const dialogBox = dialog.getBoundingClientRect();
 	  const controls = dialog.querySelector(".password-verify-controls");
+	  const body = dialog.querySelector(".modal-body");
+	  const storageSelect = dialog.querySelector("#password-hash-scheme");
+	  const warning = dialog.querySelector("#password-hash-warning");
+	  const target = dialog.querySelector("#password-target");
 	  return {
 		left: dialogBox.left,
 		right: dialogBox.right,
@@ -196,7 +215,17 @@ async function expectMobilePasswordDialogFits(page, testInfo) {
 		viewportWidth: window.innerWidth,
 		viewportHeight: window.innerHeight,
 		controlsClientWidth: controls.clientWidth,
-		controlsScrollWidth: controls.scrollWidth
+		controlsScrollWidth: controls.scrollWidth,
+		bodyClientWidth: body.clientWidth,
+		bodyScrollWidth: body.scrollWidth,
+		storageClientWidth: storageSelect.clientWidth,
+		storageScrollWidth: storageSelect.scrollWidth,
+		warningClientWidth: warning.clientWidth,
+		warningScrollWidth: warning.scrollWidth,
+		targetTop: target.getBoundingClientRect().top,
+		targetBottom: target.getBoundingClientRect().bottom,
+		bodyTop: body.getBoundingClientRect().top,
+		warningTop: warning.getBoundingClientRect().top
 	  };
 	});
 	expect(geometry.left).toBeGreaterThanOrEqual(-1);
@@ -204,6 +233,53 @@ async function expectMobilePasswordDialogFits(page, testInfo) {
 	expect(geometry.top).toBeGreaterThanOrEqual(-1);
 	expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
 	expect(geometry.controlsScrollWidth).toBeLessThanOrEqual(geometry.controlsClientWidth + 1);
+	expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.bodyClientWidth + 1);
+	expect(geometry.storageScrollWidth).toBeLessThanOrEqual(geometry.storageClientWidth + 1);
+	expect(geometry.warningScrollWidth).toBeLessThanOrEqual(geometry.warningClientWidth + 1);
+	expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.top - 1);
+	expect(geometry.targetBottom).toBeLessThanOrEqual(geometry.bodyTop + 1);
+	expect(geometry.targetBottom).toBeLessThanOrEqual(geometry.warningTop + 1);
+	await page.screenshot({
+	  path: testInfo.outputPath(`tc006-password-${geometry.viewportWidth}x${geometry.viewportHeight}.png`),
+	  fullPage: true
+	});
+	await closeDialog(page, "#password-dialog");
+}
+
+async function expectDesktopPasswordHashDialogFits(page, e2e, testInfo, trigger) {
+	await page.locator(trigger).click();
+	await expectDialogContract(page, "#password-dialog");
+	await expect(page.locator("#password-target")).toHaveText(e2e.fixtureDN);
+	const storage = page.locator("#password-hash-scheme");
+	await expect(storage.locator('option[value="{PBKDF2-SM3}"]')).toContainText("PBKDF2-SM3");
+	await storage.selectOption("{PBKDF2-SM3}");
+	await expect(page.locator("#password-hash-warning")).toBeVisible();
+	await expect(page.locator("#password-target")).toBeInViewport();
+	const geometry = await page.locator("#password-dialog").evaluate((dialog) => {
+	  const box = dialog.getBoundingClientRect();
+	  const body = dialog.querySelector(".modal-body").getBoundingClientRect();
+	  const target = dialog.querySelector("#password-target").getBoundingClientRect();
+	  const warning = dialog.querySelector("#password-hash-warning").getBoundingClientRect();
+	  return {
+		left: box.left,
+		right: box.right,
+		top: box.top,
+		bottom: box.bottom,
+		viewportWidth: window.innerWidth,
+		viewportHeight: window.innerHeight,
+		targetTop: target.top,
+		targetBottom: target.bottom,
+		warningTop: warning.top,
+		bodyTop: body.top
+	  };
+	});
+	expect(geometry.left).toBeGreaterThanOrEqual(-1);
+	expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+	expect(geometry.top).toBeGreaterThanOrEqual(-1);
+	expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
+	expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.top - 1);
+	expect(geometry.targetBottom).toBeLessThanOrEqual(geometry.bodyTop + 1);
+	expect(geometry.targetBottom).toBeLessThanOrEqual(geometry.warningTop + 1);
 	await page.screenshot({
 	  path: testInfo.outputPath(`tc006-password-${geometry.viewportWidth}x${geometry.viewportHeight}.png`),
 	  fullPage: true
@@ -314,10 +390,11 @@ for (const viewport of viewports) {
     if (viewport.width === 1440) {
       await expect(page.locator(".mobile-view-switch")).toBeHidden();
       await expect(page.locator("#navigation-pane")).toBeVisible();
-      await expect(page.locator("#main-content")).toBeVisible();
-      await expect(page.locator("#context-pane")).toBeVisible();
-      await exerciseDialogContracts(page, e2e);
-	  await expectAccountMenuKeyboard(page);
+	      await expect(page.locator("#main-content")).toBeVisible();
+	      await expect(page.locator("#context-pane")).toBeVisible();
+	      await exerciseDialogContracts(page, e2e);
+		  await expectDesktopPasswordHashDialogFits(page, e2e, testInfo, "#password-button");
+		  await expectAccountMenuKeyboard(page);
     } else if (viewport.width === 900) {
       await expect(page.locator(".mobile-view-switch")).toBeVisible();
 	  await expect(page.locator("#workspace")).not.toHaveAttribute("aria-label", /.+/);
@@ -333,9 +410,18 @@ for (const viewport of viewports) {
       await expect(page.locator("#context-pane")).toBeFocused();
 
       await page.locator('[data-mobile-view="content"]').click();
-      await expectOnlyPane(page, "main-content");
-      await expect(page.locator("#main-content")).toBeFocused();
-      await expectNoHorizontalOverflow(page, "900px single-pane workspace");
+	      await expectOnlyPane(page, "main-content");
+	      await expect(page.locator("#main-content")).toBeFocused();
+	      await expectNoHorizontalOverflow(page, "900px single-pane workspace");
+		  await page.locator('[data-mobile-view="navigation"]').click();
+		  await runSearch(page, {
+			base: e2e.peopleDN,
+			scope: "sub",
+			filter: `(uid=${e2e.fixtureUID})`,
+			size: 10
+		  });
+		  await openEntryFromResults(page, e2e.fixtureDN);
+		  await expectDesktopPasswordHashDialogFits(page, e2e, testInfo, "#mobile-password-button");
     } else {
       await openFixtureOnMobile(page, e2e);
 	  await expectChineseMobileActions(page);

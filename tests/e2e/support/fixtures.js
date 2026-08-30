@@ -68,13 +68,16 @@ async function openEntryFromResults(page, dn) {
 
 async function findAttributeRow(page, container, attribute) {
   const rows = page.locator(`${container} .attribute-row`);
-  for (let index = 0; index < await rows.count(); index += 1) {
-    const row = rows.nth(index);
-    if ((await row.locator(".attribute-name").inputValue()).toLowerCase() === attribute.toLowerCase()) {
-      return row;
-    }
-  }
-  throw new Error(`attribute row ${attribute} was not rendered in ${container}`);
+	const target = attribute.toLowerCase();
+	let matchingIndex = -1;
+	await expect.poll(async () => {
+	  matchingIndex = await rows.locator(".attribute-name").evaluateAll(
+		(fields, expected) => fields.findIndex((field) => String(field.value || "").toLowerCase() === expected),
+		target
+	  );
+	  return matchingIndex;
+	}, { message: `attribute row ${attribute} must render in ${container}` }).toBeGreaterThanOrEqual(0);
+	return rows.nth(matchingIndex);
 }
 
 async function fillAttribute(page, container, attribute, value) {

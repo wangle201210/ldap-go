@@ -82,12 +82,13 @@ type passwordPolicy struct {
 }
 
 type passwordPolicyModificationOptions struct {
-	requestControl  bool
-	passwordModify  bool
-	hasOldPassword  bool
-	oldPassword     []byte
-	newPassword     []byte
-	externalMatches externalPasswordMatches
+	requestControl           bool
+	passwordModify           bool
+	hasOldPassword           bool
+	enforceQualityAndHistory bool
+	oldPassword              []byte
+	newPassword              []byte
+	externalMatches          externalPasswordMatches
 }
 
 var errInvalidPasswordPolicy = errors.New("invalid password policy")
@@ -1318,7 +1319,8 @@ func (server *Server) passwordPolicyModificationProcessor(
 			if options.passwordModify {
 				candidate = options.newPassword
 			}
-			if prepared.hasPolicy && !prepared.passwordAdministrator {
+			if prepared.hasPolicy &&
+				(!prepared.passwordAdministrator || options.enforceQualityAndHistory) {
 				if policy.inHistory > 0 {
 					inHistory, err := passwordPolicyMatchesCurrentOrHistory(
 						entry,
@@ -1462,7 +1464,7 @@ func (server *Server) preparePasswordPolicyModification(
 	}
 
 	if analysis.newPasswordIndex >= 0 && hasPolicy &&
-		!prepared.passwordAdministrator {
+		(!prepared.passwordAdministrator || options.enforceQualityAndHistory) {
 		candidate := processed[analysis.newPasswordIndex].Attribute.Values[0]
 		if options.passwordModify {
 			candidate = options.newPassword

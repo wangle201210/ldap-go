@@ -332,7 +332,11 @@ button, .button { letter-spacing: 0; }
 .password-verification-status[data-state="pending"] { border-color: #9db8b1; color: var(--accent); }
 .password-verification-status[data-state="verified"] { border-color: #8fc7ae; background: #ebf8f2; color: #18714e; }
 .password-verification-status[data-state="rejected"], .password-verification-status[data-state="error"] { border-color: #e1a8ae; background: var(--danger-soft); color: var(--danger); }
+.password-storage-field, .password-storage-field select { min-width: 0; max-width: 100%; }
+.password-hash-warning { scroll-margin-block: 8px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #754607; margin: 2px 0 0; padding: 8px 10px; font-size: 12px; overflow-wrap: anywhere; }
 .target-dn { border-left: 3px solid var(--accent); background: var(--surface-muted); padding: 8px 10px; color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.password-modal-heading { min-width: 0; flex: 1; }
+#password-target { margin: 8px 0 0; }
 .check-row { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; }
 .check-row input { width: 16px; min-height: 16px; }
 .file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; }

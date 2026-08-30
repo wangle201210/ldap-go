@@ -10,6 +10,7 @@ import (
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -39,14 +40,17 @@ func TestLDAPClientPasswordModifySelf(t *testing.T) {
 		0,
 		false,
 		"(objectClass=*)",
-		[]string{"supportedExtension"},
+		[]string{"supportedExtension", "supportedControl"},
 		nil,
 	))
 	if err != nil || len(rootDSE.Entries) != 1 ||
 		!containsString(
 			rootDSE.Entries[0].GetAttributeValues("supportedExtension"),
 			passwordModifyOID,
-		) {
+		) || !containsString(
+		rootDSE.Entries[0].GetAttributeValues("supportedControl"),
+		ldapwire.PasswordHashSchemeControlOID,
+	) {
 		t.Fatalf("Password Modify Root DSE = %#v, %v", rootDSE, err)
 	}
 
@@ -55,6 +59,35 @@ func TestLDAPClientPasswordModifySelf(t *testing.T) {
 	if err := client.Bind(aliceDN, "secret"); err != nil {
 		t.Fatalf("Bind(): %v", err)
 	}
+	err = passwordModifyWithHashScheme(
+		client,
+		"",
+		"secret",
+		"noncritical-hash",
+		auth.SMPBKDF2HashScheme,
+		false,
+	)
+	assertLDAPResultCode(t, err, ldap.LDAPResultProtocolError)
+	err = passwordModifyWithHashScheme(
+		client,
+		"",
+		"secret",
+		"unsupported-hash",
+		"{CLEARTEXT}",
+		true,
+	)
+	assertLDAPResultCode(t, err, ldap.LDAPResultProtocolError)
+	err = passwordModifyWithHashScheme(
+		client,
+		"",
+		"secret",
+		"self-selected-hash",
+		auth.SMPBKDF2HashScheme,
+		true,
+	)
+	assertLDAPResultCode(t, err, ldap.LDAPResultInsufficientAccessRights)
+	assertBindPassword(t, address, aliceDN, "secret", true)
+	assertBindPassword(t, address, aliceDN, "self-selected-hash", false)
 
 	_, err = client.PasswordModify(ldap.NewPasswordModifyRequest(
 		"",
@@ -82,6 +115,43 @@ func TestLDAPClientPasswordModifySelf(t *testing.T) {
 
 	assertBindPassword(t, address, aliceDN, "secret", false)
 	assertBindPassword(t, address, aliceDN, "new-secret", true)
+}
+
+func passwordModifyWithHashScheme(
+	client *ldap.Conn,
+	userIdentity,
+	oldPassword,
+	newPassword,
+	scheme string,
+	critical bool,
+) error {
+	value := ldapwire.PasswordModifyRequestValue{
+		UserIdentity:    []byte(userIdentity),
+		OldPassword:     []byte(oldPassword),
+		NewPassword:     []byte(newPassword),
+		HasUserIdentity: userIdentity != "",
+		HasOldPassword:  oldPassword != "",
+		HasNewPassword:  newPassword != "",
+	}
+	encoded := ldapwire.EncodePasswordModifyRequestValue(value)
+	requestValue := ber.NewString(
+		ber.ClassContext,
+		ber.TypePrimitive,
+		1,
+		string(encoded),
+		"requestValue",
+	)
+	request := ldap.NewExtendedRequest(ldapwire.PasswordModifyOID, requestValue)
+	request.Controls = []ldap.Control{
+		ldap.NewControlString(ldapwire.PasswordHashSchemeControlOID, critical, scheme),
+	}
+	_, err := client.Extended(request)
+	clear(value.UserIdentity)
+	clear(value.OldPassword)
+	clear(value.NewPassword)
+	clear(encoded)
+	requestValue.Data.Reset()
+	return err
 }
 
 func TestLDAPClientPasswordModifyUsesConfiguredSM3Hash(t *testing.T) {

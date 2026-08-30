@@ -8,7 +8,9 @@ import (
 	"net"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 var defaultRandomReader io.Reader = rand.Reader
@@ -39,10 +41,53 @@ type Client interface {
 	Del(*ldap.DelRequest) error
 	ModifyDN(*ldap.ModifyDNRequest) error
 	PasswordModify(*ldap.PasswordModifyRequest) (*ldap.PasswordModifyResult, error)
+	PasswordModifyWithHashScheme(*ldap.PasswordModifyRequest, string) error
 	Close() error
 }
 
 type realConnector struct{}
+
+type realClient struct {
+	*ldap.Conn
+}
+
+func (client *realClient) PasswordModifyWithHashScheme(
+	request *ldap.PasswordModifyRequest,
+	scheme string,
+) error {
+	value := ldapwire.PasswordModifyRequestValue{
+		UserIdentity:    []byte(request.UserIdentity),
+		OldPassword:     []byte(request.OldPassword),
+		NewPassword:     []byte(request.NewPassword),
+		HasUserIdentity: request.UserIdentity != "",
+		HasOldPassword:  request.OldPassword != "",
+		HasNewPassword:  request.NewPassword != "",
+	}
+	defer func() {
+		clear(value.UserIdentity)
+		clear(value.OldPassword)
+		clear(value.NewPassword)
+	}()
+	encoded := ldapwire.EncodePasswordModifyRequestValue(value)
+	defer clear(encoded)
+	requestValue := ber.NewString(
+		ber.ClassContext,
+		ber.TypePrimitive,
+		1,
+		string(encoded),
+		"Password Modify requestValue",
+	)
+	defer func() {
+		requestValue.Value = nil
+		requestValue.Data.Reset()
+	}()
+	extended := ldap.NewExtendedRequest(ldapwire.PasswordModifyOID, requestValue)
+	extended.Controls = []ldap.Control{
+		ldap.NewControlString(ldapwire.PasswordHashSchemeControlOID, true, scheme),
+	}
+	_, err := client.Extended(extended)
+	return err
+}
 
 func (realConnector) Connect(ctx context.Context, config ConnectConfig) (Client, error) {
 	dialer := &net.Dialer{Timeout: config.DialTimeout}
@@ -89,5 +134,5 @@ func (realConnector) Connect(ctx context.Context, config ConnectConfig) (Client,
 			return nil, err
 		}
 	}
-	return connection, nil
+	return &realClient{Conn: connection}, nil
 }

@@ -1136,6 +1136,20 @@ func transactionEntryExists(
 	}
 }
 
+func TestTransactionRejectsPasswordHashSelectionControl(t *testing.T) {
+	t.Parallel()
+	result := validateTransactionOperationControls(ldapwire.Message{
+		Request: ldapwire.ExtendedRequest{Name: passwordModifyOID},
+		Controls: []ldapwire.Control{
+			{OID: transactionSpecificationControlOID, Critical: true, HasValue: true, Value: []byte("transaction")},
+			{OID: ldapwire.PasswordHashSchemeControlOID, Critical: true, HasValue: true, Value: []byte("{PBKDF2-SM3}")},
+		},
+	}, 0)
+	if result == nil || result.Code != ldapwire.ResultUnavailableCriticalExtension {
+		t.Fatalf("transaction password hash control result = %#v", result)
+	}
+}
+
 func seedSecondTransactionDatabase(t *testing.T, store storage.Store) {
 	t.Helper()
 	err := store.Update(context.Background(), func(writer storage.Writer) error {

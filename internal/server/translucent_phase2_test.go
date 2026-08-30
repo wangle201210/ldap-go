@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -217,6 +218,20 @@ func TestTranslucentPhaseTwoBindLocalAndPasswordModify(t *testing.T) {
 		defer localPassword.Close()
 		if err := localPassword.Bind(translucentPhase2UserDN, "local-phase2-secret"); err != nil {
 			t.Fatalf("Bind(local fallback credential): %v", err)
+		}
+		err := passwordModifyWithHashScheme(
+			root,
+			translucentPhase2UserDN,
+			"",
+			"ignored-selected-secret",
+			auth.SMPBKDF2HashScheme,
+			true,
+		)
+		assertLDAPResultCode(t, err, ldap.LDAPResultUnavailableCriticalExtension)
+		ignored := dialTranslucentPhase2(t, address)
+		defer ignored.Close()
+		if err := ignored.Bind(translucentPhase2UserDN, "ignored-selected-secret"); err == nil {
+			t.Fatal("translucent backend applied a rejected password hash selection")
 		}
 
 		if _, err := root.PasswordModify(ldap.NewPasswordModifyRequest(

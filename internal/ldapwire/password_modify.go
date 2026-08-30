@@ -6,6 +6,12 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 )
 
+const (
+	PasswordModifyOID                     = "1.3.6.1.4.1.4203.1.11.1"
+	PasswordHashSchemeControlOID          = "1.3.6.1.4.1.4203.666.5.20"
+	PasswordHashSelectionMaxPasswordBytes = 4096
+)
+
 type PasswordModifyRequestValue struct {
 	UserIdentity    []byte
 	OldPassword     []byte
@@ -79,6 +85,26 @@ func DecodePasswordModifyRequestValue(
 		}
 	}
 	return request, nil
+}
+
+func EncodePasswordModifyRequestValue(request PasswordModifyRequestValue) []byte {
+	sequence := ber.NewSequence("PasswordModifyRequestValue")
+	if request.HasUserIdentity {
+		sequence.AppendChild(ber.NewString(
+			ber.ClassContext, ber.TypePrimitive, 0, string(request.UserIdentity), "userIdentity",
+		))
+	}
+	if request.HasOldPassword {
+		sequence.AppendChild(ber.NewString(
+			ber.ClassContext, ber.TypePrimitive, 1, string(request.OldPassword), "oldPasswd",
+		))
+	}
+	if request.HasNewPassword {
+		sequence.AppendChild(ber.NewString(
+			ber.ClassContext, ber.TypePrimitive, 2, string(request.NewPassword), "newPasswd",
+		))
+	}
+	return sequence.Bytes()
 }
 
 func EncodePasswordModifyResponseValue(generatedPassword []byte) []byte {
