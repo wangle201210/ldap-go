@@ -936,6 +936,60 @@ go run ./cmd/ldap-go web-admin \
 	  -ldap-url ldap://127.0.0.1:1389
 ```
 
+### Connect Web Admin to OpenLDAP
+
+Web Admin is an LDAP client process and can manage an existing OpenLDAP server;
+it does not need direct access to the OpenLDAP database files. Start one Web
+Admin process for each LDAP URL.
+
+For an OpenLDAP server on the same machine:
+
+```sh
+go run ./cmd/ldap-go web-admin \
+  -listen 127.0.0.1:8080 \
+  -ldap-url ldap://127.0.0.1:389
+```
+
+For a remote OpenLDAP server using StartTLS:
+
+```sh
+go run ./cmd/ldap-go web-admin \
+  -listen 127.0.0.1:8080 \
+  -ldap-url ldap://ldap.example.com:389 \
+  -ldap-starttls \
+  -ldap-tls-ca /etc/ldap/ca.pem
+```
+
+For an OpenLDAP LDAPS listener:
+
+```sh
+go run ./cmd/ldap-go web-admin \
+  -listen 127.0.0.1:8080 \
+  -ldap-url ldaps://ldap.example.com:636 \
+  -ldap-tls-ca /etc/ldap/ca.pem
+```
+
+`-ldap-tls-ca` is optional when the OpenLDAP certificate chains to a trusted
+system root. The TLS server name is inferred from `-ldap-url`; use
+`-ldap-tls-server-name` only when the certificate identity intentionally differs
+from that hostname. Remote plaintext `ldap://` is rejected unless
+`-ldap-starttls` is enabled. After startup, open `http://127.0.0.1:8080/` and
+sign in with an LDAP Bind DN such as `cn=admin,dc=example,dc=org` and its
+password. Readiness can be checked without signing in:
+
+```sh
+curl --fail http://127.0.0.1:8080/readyz
+```
+
+All searches and mutations use that bound identity and remain subject to the
+OpenLDAP ACL, Schema, overlays, and limits. Stock OpenLDAP does not advertise
+ldap-go's private one-operation password-hash control, so the password dialog
+shows only **Server policy**; configure OpenLDAP `olcPasswordHash` when a
+different default password scheme is required. Schema browsing requires access
+to the Root DSE `subschemaSubentry`, and the Monitor page requires an enabled,
+ACL-visible `cn=Monitor` database. A Web Admin process has one configured LDAP
+URL; run another process on a different Web port to manage another directory.
+
 The Web console opens at `http://127.0.0.1:8080/`. It covers the directory tree,
 paged and visual-filter searches, local query bookmarks/history, Person/POSIX
 account/Group/POSIX Group/OU/custom creation, schema-aware attribute editing,
