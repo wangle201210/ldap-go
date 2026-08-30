@@ -169,6 +169,73 @@ func TestStaticApplicationCapabilitiesContract(t *testing.T) {
 	}
 }
 
+func TestStaticApplicationPasswordVerificationContract(t *testing.T) {
+	t.Parallel()
+	application, _ := newTestApplication(t, &fakeConnector{}, nil)
+
+	index := httptest.NewRecorder()
+	application.Handler().ServeHTTP(index, httptest.NewRequest(http.MethodGet, "https://admin.example/", nil))
+	if index.Code != http.StatusOK {
+		t.Fatalf("index status = %d", index.Code)
+	}
+	indexSource := index.Body.String()
+	for _, marker := range []string{
+		`id="current-password" type="password" autocomplete="current-password"`,
+		`aria-describedby="password-verify-status"`,
+		`id="verify-current-password" type="button"`,
+		`id="password-verify-status" role="status" aria-live="polite" aria-atomic="true"`,
+	} {
+		if !strings.Contains(indexSource, marker) {
+			t.Errorf("index does not contain password verification contract %q", marker)
+		}
+	}
+
+	asset := httptest.NewRecorder()
+	application.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "https://admin.example/app.js", nil))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("app.js status = %d", asset.Code)
+	}
+	source := asset.Body.String()
+	for _, marker := range []string{
+		`"/api/password-verify"`,
+		`const targetDN = state.passwordTargetDN`,
+		`const generation = state.sessionGeneration`,
+		`const sequence = ++state.passwordVerifySequence`,
+		`body: { user_identity: targetDN, password }`,
+		`generation === state.sessionGeneration`,
+		`targetDN === state.passwordTargetDN`,
+		`data && data.verified === true`,
+		`if (oldPassword !== "") body.old_password = oldPassword`,
+		`passwordVerifyPending: false`,
+		`["#verify-current-password", "password.verify", "attr:aria-label"]`,
+		`["#verify-current-password", "password.verify", "attr:title"]`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("app.js does not contain password verification contract %q", marker)
+		}
+	}
+	if strings.Contains(source, `body: { user_identity: targetDN, old_password: oldPassword, new_password: password }`) {
+		t.Error("administrator resets must not always send an empty old_password")
+	}
+
+	styles := httptest.NewRecorder()
+	application.Handler().ServeHTTP(styles, httptest.NewRequest(http.MethodGet, "https://admin.example/styles.css", nil))
+	if styles.Code != http.StatusOK {
+		t.Fatalf("styles.css status = %d", styles.Code)
+	}
+	styleSource := styles.Body.String()
+	for _, marker := range []string{
+		`.password-verify-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto;`,
+		`.password-verification-status[data-state="verified"]`,
+		`.password-verification-status[data-state="rejected"]`,
+		`.password-verify-controls { grid-template-columns: minmax(0, 1fr); }`,
+	} {
+		if !strings.Contains(styleSource, marker) {
+			t.Errorf("styles.css does not contain password verification contract %q", marker)
+		}
+	}
+}
+
 func TestStaticApplicationMutationSafetyContract(t *testing.T) {
 	t.Parallel()
 	application, _ := newTestApplication(t, &fakeConnector{}, nil)

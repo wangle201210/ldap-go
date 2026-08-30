@@ -82,6 +82,20 @@ async function expectButtonTextFits(locator, label) {
   expect(geometry.scrollHeight, `${label} text is vertically clipped`).toBeLessThanOrEqual(geometry.clientHeight + 1);
 }
 
+async function expectEditorFooterAfterAttributes(page) {
+  const layout = await page.locator("#entry-editor").evaluate((editor) => {
+    const footer = editor.querySelector(".editor-footer").getBoundingClientRect();
+    const rows = Array.from(editor.querySelectorAll("#attribute-list > .attribute-row"), (row) => row.getBoundingClientRect());
+    return {
+      footerTop: footer.top,
+      lastRowBottom: rows.length ? rows[rows.length - 1].bottom : footer.top,
+      overlaps: rows.filter((row) => footer.left < row.right && footer.right > row.left && footer.top < row.bottom && footer.bottom > row.top).length
+    };
+  });
+  expect(layout.footerTop).toBeGreaterThanOrEqual(layout.lastRowBottom - 1);
+  expect(layout.overlaps).toBe(0);
+}
+
 async function openFixtureOnMobile(page, e2e) {
   await page.locator('[data-mobile-view="navigation"]').click();
   await expect(page.locator("#workspace")).toHaveAttribute("data-mobile-view", "navigation");
@@ -99,6 +113,7 @@ async function openFixtureOnMobile(page, e2e) {
   await openEntryFromResults(page, e2e.fixtureDN);
   await expect(page.locator("#detail-dn")).toHaveText(e2e.fixtureDN);
   await expect(page.locator("#detail-view")).toBeVisible();
+  await expectEditorFooterAfterAttributes(page);
 }
 
 async function expectChineseMobileActions(page) {
@@ -157,6 +172,43 @@ async function expectMobileCreateDialogFits(page) {
 	expect(classes).toContain("\n");
 	expect(classes).not.toContain("\\n");
 	await closeDialog(page, "#entry-dialog");
+}
+
+async function expectMobilePasswordDialogFits(page, testInfo) {
+	await page.locator("#mobile-password-button").click();
+	await expectDialogContract(page, "#password-dialog");
+	await expect(page.locator("label[for='current-password']")).toContainText("当前密码");
+	const verify = page.locator("#verify-current-password");
+	await expect(verify).toHaveAttribute("aria-label", "验证当前密码");
+	await expect(verify).toHaveAttribute("title", "验证当前密码");
+	await expect(verify).toBeDisabled();
+	await page.locator("#current-password").fill("layout-check");
+	await expect(verify).toBeEnabled();
+	await expectButtonTextFits(verify, "verify current password");
+	const geometry = await page.locator("#password-dialog").evaluate((dialog) => {
+	  const dialogBox = dialog.getBoundingClientRect();
+	  const controls = dialog.querySelector(".password-verify-controls");
+	  return {
+		left: dialogBox.left,
+		right: dialogBox.right,
+		top: dialogBox.top,
+		bottom: dialogBox.bottom,
+		viewportWidth: window.innerWidth,
+		viewportHeight: window.innerHeight,
+		controlsClientWidth: controls.clientWidth,
+		controlsScrollWidth: controls.scrollWidth
+	  };
+	});
+	expect(geometry.left).toBeGreaterThanOrEqual(-1);
+	expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+	expect(geometry.top).toBeGreaterThanOrEqual(-1);
+	expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
+	expect(geometry.controlsScrollWidth).toBeLessThanOrEqual(geometry.controlsClientWidth + 1);
+	await page.screenshot({
+	  path: testInfo.outputPath(`tc006-password-${geometry.viewportWidth}x${geometry.viewportHeight}.png`),
+	  fullPage: true
+	});
+	await closeDialog(page, "#password-dialog");
 }
 
 async function expectToastDoesNotBlockHeader(page) {
@@ -220,6 +272,7 @@ async function exerciseDialogContracts(page, e2e) {
     size: 10
   });
   await openEntryFromResults(page, e2e.fixtureDN);
+  await expectEditorFooterAfterAttributes(page);
 
   await page.locator("#rename-button").click();
   await expectDialogContract(page, "#rename-dialog");
@@ -285,7 +338,8 @@ for (const viewport of viewports) {
       await expectNoHorizontalOverflow(page, "900px single-pane workspace");
     } else {
       await openFixtureOnMobile(page, e2e);
-      await expectChineseMobileActions(page);
+	  await expectChineseMobileActions(page);
+	  await expectMobilePasswordDialogFits(page, testInfo);
 	  await expectToastDoesNotBlockHeader(page);
 	  await expectMobileCreateDialogFits(page);
       await expectNoHorizontalOverflow(page, `${viewport.width}px mobile detail`);

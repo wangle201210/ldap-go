@@ -90,6 +90,7 @@ type fakeClient struct {
 
 	bindFunc           func(string, string) error
 	searchFunc         func(*ldap.SearchRequest) (*ldap.SearchResult, error)
+	compareFunc        func(string, string, string) (bool, error)
 	addFunc            func(*ldap.AddRequest) error
 	modifyFunc         func(*ldap.ModifyRequest) error
 	delFunc            func(*ldap.DelRequest) error
@@ -126,6 +127,16 @@ func (client *fakeClient) Search(request *ldap.SearchRequest) (*ldap.SearchResul
 		return callback(request)
 	}
 	return &ldap.SearchResult{}, nil
+}
+
+func (client *fakeClient) Compare(dn, attribute, value string) (bool, error) {
+	client.mu.Lock()
+	callback := client.compareFunc
+	client.mu.Unlock()
+	if callback != nil {
+		return callback(dn, attribute, value)
+	}
+	return false, nil
 }
 
 func (client *fakeClient) Add(request *ldap.AddRequest) error {

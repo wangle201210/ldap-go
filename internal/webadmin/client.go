@@ -23,7 +23,7 @@ type ConnectConfig struct {
 	OperationTimeout time.Duration
 }
 
-// Connector creates a fresh, unauthenticated LDAP client for a login attempt.
+// Connector creates a fresh, unauthenticated LDAP client for an authentication attempt.
 type Connector interface {
 	Connect(context.Context, ConnectConfig) (Client, error)
 }
@@ -33,6 +33,7 @@ type Connector interface {
 type Client interface {
 	Bind(username, password string) error
 	Search(*ldap.SearchRequest) (*ldap.SearchResult, error)
+	Compare(dn, attribute, value string) (bool, error)
 	Add(*ldap.AddRequest) error
 	Modify(*ldap.ModifyRequest) error
 	Del(*ldap.DelRequest) error

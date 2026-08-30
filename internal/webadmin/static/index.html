@@ -261,11 +261,20 @@ inetOrgPerson</textarea></div>
     </form>
   </dialog>
 
-	<dialog class="modal" id="password-dialog" aria-labelledby="password-dialog-title" aria-describedby="password-target">
+	<dialog class="modal" id="password-dialog" aria-labelledby="password-dialog-title" aria-describedby="password-dialog-description password-target">
     <form class="modal-form" method="dialog" id="password-form">
 	  <div class="modal-header"><div><span class="eyebrow">Credentials</span><h2 id="password-dialog-title">Reset password</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
       <div class="modal-body">
+		<p class="sr-only" id="password-dialog-description">Verify the current password or reset it directly as an administrator.</p>
         <p class="target-dn" id="password-target"></p>
+		<div class="form-field password-current-field">
+		  <label for="current-password">Current password (optional)</label>
+		  <div class="password-verify-controls">
+			<input id="current-password" type="password" autocomplete="current-password" aria-describedby="password-verify-status">
+			<button class="button quiet" id="verify-current-password" type="button" aria-label="Verify current password" title="Verify current password" disabled>Verify current password</button>
+		  </div>
+		  <div class="password-verification-status" id="password-verify-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle" hidden></div>
+		</div>
 	        <div class="form-field"><label for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password" required></div>
         <div class="form-field"><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" required></div>
         <div class="form-error" id="password-error" role="alert" hidden></div>

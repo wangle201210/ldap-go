@@ -310,6 +310,14 @@
       "rename.removeOld": "Remove old RDN value",
       "rename.apply": "Apply change",
       "password.credentials": "Credentials",
+      "password.description": "Verify the current password or reset it directly as an administrator.",
+      "password.current": "Current password (optional)",
+      "password.verify": "Verify current password",
+      "password.verifying": "Verifying current password",
+      "password.verified": "Current password verified",
+      "password.rejected": "Current password is incorrect",
+      "password.verifyError": "Password verification could not be completed",
+      "password.verifyForbidden": "You are not authorized to verify this user's password",
       "password.new": "New password",
       "password.confirm": "Confirm password",
       "password.mismatch": "Passwords do not match",
@@ -666,6 +674,14 @@
       "rename.removeOld": "移除旧 RDN 值",
       "rename.apply": "应用更改",
       "password.credentials": "凭据",
+      "password.description": "验证当前密码，或由管理员直接重置密码。",
+      "password.current": "当前密码（可选）",
+      "password.verify": "验证当前密码",
+      "password.verifying": "正在验证当前密码",
+      "password.verified": "当前密码验证成功",
+      "password.rejected": "当前密码不正确",
+      "password.verifyError": "无法完成当前密码验证",
+      "password.verifyForbidden": "当前账号无权验证该用户的密码",
       "password.new": "新密码",
       "password.confirm": "确认密码",
       "password.mismatch": "两次输入的密码不一致",
@@ -726,7 +742,7 @@
   let sessionAPIQueue = Promise.resolve();
   const SESSION_SERIAL_API_PATHS = new Set([
 	"/api/logout", "/api/session", "/api/capabilities", "/api/root-dse", "/api/root", "/api/search", "/api/entries", "/api/entry",
-	"/api/entries/rename", "/api/rename", "/api/password-modify", "/api/password",
+	"/api/entries/rename", "/api/rename", "/api/password-verify", "/api/password-modify", "/api/password",
 	"/api/schema", "/api/monitor", "/api/export", "/api/data-export", "/api/import",
 	"/api/bulk", "/api/groups", "/api/binary", "/api/csv-import"
   ]);
@@ -832,7 +848,10 @@
 		csvFileSequence: 0,
 		capabilities: null,
 		pageLoading: false,
-		sessionGeneration: 0
+		sessionGeneration: 0,
+		passwordTargetDN: "",
+		passwordVerifyPending: false,
+		passwordVerifySequence: 0
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -978,6 +997,7 @@
 	  const form = $("form", dialog);
 	  if (form) { setFormSubmitting(form, false); form.reset(); }
 	});
+	resetPasswordVerification();
 	setFormSubmitting(elements.entryEditor, false);
 	setFormSubmitting($("#group-member-form"), false);
 	$("#new-entry-attribute-list").replaceChildren();
@@ -1191,8 +1211,13 @@
     ["#rename-form .modal-actions button[type='submit']", "rename.apply"],
     ["#password-dialog .eyebrow", "password.credentials"],
     ["#password-dialog-title", "actions.resetPassword"],
+	["#password-dialog-description", "password.description"],
     ["#password-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#password-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
+	["label[for='current-password']", "password.current"],
+	["#verify-current-password", "password.verify", "direct"],
+	["#verify-current-password", "password.verify", "attr:aria-label"],
+	["#verify-current-password", "password.verify", "attr:title"],
     ["label[for='new-password']", "password.new"],
     ["label[for='confirm-password']", "password.confirm"],
     ["#password-form .modal-actions .close-dialog", "actions.cancel"],
@@ -1393,6 +1418,7 @@
 			invalid_dn: "api.invalidDN",
 			invalid_request: "api.invalidRequest",
 			invalid_credentials: "api.authenticationRequired",
+			invalid_old_password: "password.rejected",
 			csrf_failed: "api.accessDenied",
 			origin_forbidden: "api.accessDenied",
 			import_deadline_exceeded: "api.timeout",
@@ -3381,6 +3407,50 @@
 	if (dialog.open) dialog.close();
 	if (dialog === elements.entryDialog) renderAttributeSuggestions();
   }
+
+	function setPasswordVerificationStatus(statusName, message = "") {
+	  const status = $("#password-verify-status");
+	  const field = $("#current-password");
+	  status.dataset.state = statusName;
+	  if (message) setDisplayText(status, message);
+	  else {
+		clearLocalization(status);
+		status.textContent = "";
+	  }
+	  status.hidden = !message;
+	  if (statusName === "rejected") field.setAttribute("aria-invalid", "true");
+	  else if (!field.dataset.errorDescription) field.removeAttribute("aria-invalid");
+	}
+
+	function setPasswordVerificationPending(pending) {
+	  const form = $("#password-form");
+	  const field = $("#current-password");
+	  const verify = $("#verify-current-password");
+	  const submit = $("#password-form .modal-actions button[type='submit']");
+	  state.passwordVerifyPending = pending;
+	  verify.setAttribute("aria-busy", String(pending));
+	  if (!submittingControls.has(form)) {
+		field.disabled = pending;
+		submit.disabled = pending;
+	  }
+	  verify.disabled = pending || field.value === "";
+	}
+
+	function resetPasswordVerification(targetDN = "") {
+	  state.passwordVerifySequence++;
+	  state.passwordTargetDN = targetDN;
+	  if (!targetDN) $("#current-password").value = "";
+	  setPasswordVerificationPending(false);
+	  setPasswordVerificationStatus("idle");
+	}
+
+	function isCurrentPasswordVerification(sequence, generation, targetDN) {
+	  return sequence === state.passwordVerifySequence &&
+		generation === state.sessionGeneration &&
+		targetDN === state.passwordTargetDN &&
+		elements.passwordDialog.open;
+	}
+
 	function setFormSubmitting(form, submitting) {
 		if (submitting && !submittingControls.has(form)) {
 		  const disabled = new Map();
@@ -3985,23 +4055,64 @@
 
     $("#password-button").addEventListener("click", () => {
       if (!state.selectedDN) return;
-      $("#password-target").textContent = state.selectedDN;
+	  const targetDN = state.selectedDN;
+	  $("#password-target").textContent = targetDN;
       $("#password-form").reset();
+	  resetPasswordVerification(targetDN);
       openDialog(elements.passwordDialog);
     });
+	$("#current-password").addEventListener("input", (event) => {
+	  state.passwordVerifySequence++;
+	  setPasswordVerificationStatus("idle");
+	  if (event.currentTarget.dataset.errorDescription === "password-error") setFieldError($("#password-error"), "");
+	  $("#verify-current-password").disabled = event.currentTarget.value === "" || state.passwordVerifyPending;
+	});
+	$("#verify-current-password").addEventListener("click", async () => {
+	  const field = $("#current-password");
+	  const password = field.value;
+	  const targetDN = state.passwordTargetDN;
+	  const generation = state.sessionGeneration;
+	  if (!password || !targetDN || state.passwordVerifyPending) return;
+	  const sequence = ++state.passwordVerifySequence;
+	  setPasswordVerificationPending(true);
+	  setPasswordVerificationStatus("pending", translated("password.verifying"));
+	  try {
+		const { data } = await api("/api/password-verify", {
+		  method: "POST",
+		  body: { user_identity: targetDN, password }
+		});
+		if (!isCurrentPasswordVerification(sequence, generation, targetDN)) return;
+		setPasswordVerificationStatus(
+		  data && data.verified === true ? "verified" : "rejected",
+		  translated(data && data.verified === true ? "password.verified" : "password.rejected")
+		);
+	  } catch (error) {
+		if (!isCurrentPasswordVerification(sequence, generation, targetDN) || error instanceof SupersededRequestError) return;
+		const code = error && error.details && error.details.error && error.details.error.code;
+		setPasswordVerificationStatus("error", translated(code === "password_verification_forbidden" ? "password.verifyForbidden" : "password.verifyError"));
+	  } finally {
+		if (isCurrentPasswordVerification(sequence, generation, targetDN)) setPasswordVerificationPending(false);
+	  }
+	});
     $("#password-form").addEventListener("submit", async (event) => {
       event.preventDefault();
 	  const submittedForm = event.currentTarget;
-	  const targetDN = state.selectedDN;
+	  const targetDN = state.passwordTargetDN;
+	  const oldPassword = $("#current-password").value;
 	  const password = $("#new-password").value;
 	  if (password !== $("#confirm-password").value) { setFieldError($("#password-error"), translated("password.mismatch"), $("#confirm-password")); return; }
 	  setFormSubmitting(submittedForm, true);
       try {
-		await api("/api/password-modify", { method: "POST", body: { user_identity: targetDN, new_password: password } });
+		const body = { user_identity: targetDN, new_password: password };
+		if (oldPassword !== "") body.old_password = oldPassword;
+		await api("/api/password-modify", { method: "POST", body });
 		$("#password-form").reset();
         closeDialog(elements.passwordDialog);
 		toast("password.reset", targetDN);
-	  } catch (error) { setFieldError($("#password-error"), error.message, $("#new-password")); }
+	  } catch (error) {
+		const code = error && error.details && error.details.error && error.details.error.code;
+		setFieldError($("#password-error"), error.message, code === "invalid_old_password" ? $("#current-password") : $("#new-password"));
+	  }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
     $("#mobile-rename-button").addEventListener("click", () => $("#rename-button").click());
@@ -4234,6 +4345,7 @@
     $("#confirm-cancel").addEventListener("click", () => resolveConfirm(false));
     elements.confirmDialog.addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirm(false); });
     elements.loginDialog.addEventListener("cancel", (event) => event.preventDefault());
+	elements.passwordDialog.addEventListener("close", () => resetPasswordVerification());
     $$(".close-dialog").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
     window.addEventListener("beforeunload", (event) => { if (state.editorDirty) { event.preventDefault(); event.returnValue = ""; } });
   }

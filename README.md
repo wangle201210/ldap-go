@@ -939,8 +939,10 @@ go run ./cmd/ldap-go web-admin \
 The Web console opens at `http://127.0.0.1:8080/`. It covers the directory tree,
 paged and visual-filter searches, local query bookmarks/history, Person/POSIX
 account/Group/POSIX Group/OU/custom creation, schema-aware attribute editing,
-clone, rename/move, password modification, explicit-selection bulk modify and
-delete, direct/nested group membership, bounded LDIF/CSV import, LDIF/CSV/JSON
+clone, rename/move, current-password verification through an isolated LDAP
+Bind, password modification with optional old-password verification,
+explicit-selection bulk modify and delete, direct/nested group membership,
+bounded LDIF/CSV import, LDIF/CSV/JSON
 export, binary download/upload and safe image preview, schema and Monitor views.
 Batch responses report each applied, failed, unknown, or unattempted DN, stop
 on ambiguous transport results, and never claim cross-entry atomicity. The
@@ -949,8 +951,11 @@ uses the browser language on first use, and remembers the local preference.
 LDAP identifiers and directory values are always displayed unchanged. Login
 performs a real LDAP Bind and retains only that bound LDAP
 connection in the in-memory session; it never opens bbolt or retains the
-plaintext password. Every operation remains subject to the bound identity's
-LDAP ACL, schema, overlays, audit, and runtime configuration. Mutations require
+plaintext password. Verifying another user's password first requires the bound
+identity to have LDAP Compare access to `userPassword` or `authPassword`; a
+user may verify its own bound DN. Every operation remains subject to the bound
+identity's LDAP ACL, schema, overlays, audit, and runtime configuration.
+Mutations require
 same-origin CSRF tokens, and sessions use opaque HttpOnly SameSite cookies.
 Non-loopback HTTP requires `-tls-cert` and `-tls-key`; remote `ldap://`
 upstreams require `-ldap-starttls`, while `ldaps://` is supported directly.

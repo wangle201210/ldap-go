@@ -55,7 +55,7 @@ Web 产品与桌面工具还有以下边界：
 | 重命名与移动 | 通过 ModifyDN 修改 RDN，并可指定 `newSuperior` 完成服务器允许的同连接移动。 | 服务器可能拒绝跨命名上下文移动；失败不应自动退化为复制后删除。 |
 | 通用属性编辑 | 多值文本属性的 add/replace/delete；显示 Schema 提示；常见操作属性和二进制属性只读。 | 尚无按 Syntax 选择的 Boolean、Integer、Generalized Time、DN、Object Class、Hex/File 等专用编辑器。 |
 | 二进制数据 | API 使用 Base64 表示二进制属性，页面可识别并只读显示。 | 当前没有安全上传、下载、图片预览、裁剪或格式转换。 |
-| 密码修改 | 使用 Password Modify Extended Operation 重置密码，传输和访问受 Web/LDAP TLS、ACL 与密码策略约束。 | 页面不生成目录密码哈希；哈希算法由服务器策略决定。 |
+| 密码验证与修改 | 使用独立的临时 LDAP Bind 验证所选用户当前密码，不改变管理员会话；验证其他 DN 前要求当前绑定身份对 `userPassword` 或 `authPassword` 具有 LDAP Compare 权限，当前绑定身份可验证自身；使用 Password Modify Extended Operation 重置密码，填写旧密码时由服务器原子校验。 | 临时连接使用相同 TLS 策略、受登录限流与资源预算约束并立即关闭。页面不读取、返回或生成目录密码哈希；哈希算法由服务器策略决定。 |
 | 导入/导出 | 有界 LDIF 导入与 LDIF 导出；导入仍逐项经过 LDAP 写操作、ACL 和 Schema。 | 当前 Web 页面不提供 CSV、XLSX、PDF、JSON 或 SQL 格式导入导出。 |
 | Schema | 读取 Root DSE 的 subschema entry，展示 Attribute Types、Object Classes 及其他公开定义并支持页面筛选。 | 只读；不在通用管理页直接修改 `cn=config` 或 Schema。 |
 | 监控 | 读取服务器公开的 Monitor naming context，展示有界的摘要和条目详情。 | 是实时只读快照，不是时间序列、告警或容量报告系统。服务器未公开或 ACL 不可见时不推断数据。 |

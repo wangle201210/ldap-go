@@ -43,7 +43,7 @@ func webRequestUsesLDAP(path string) bool {
 	switch path {
 	case "/api/login", "/api/root-dse", "/api/root",
 		"/api/search", "/api/entries", "/api/entry", "/api/entries/rename",
-		"/api/rename", "/api/password-modify", "/api/password", "/api/schema",
+		"/api/rename", "/api/password-modify", "/api/password", "/api/password-verify", "/api/schema",
 		"/api/monitor", "/api/export", "/api/import", "/api/bulk",
 		"/api/groups", "/api/data-export", "/api/csv-import":
 		return true

@@ -265,7 +265,7 @@ func TestPasswordModifyInvalidOldPasswordDoesNotExpireWebSession(t *testing.T) {
 	}, authenticated.cookie, authenticated.csrf)
 	var body apiErrorBody
 	if response.Code != http.StatusUnprocessableEntity || json.Unmarshal(response.Body.Bytes(), &body) != nil ||
-		body.Error.Code != "ldap_error" || body.Error.LDAPResultCode == nil ||
+		body.Error.Code != "invalid_old_password" || body.Error.LDAPResultCode == nil ||
 		*body.Error.LDAPResultCode != ldap.LDAPResultInvalidCredentials {
 		t.Fatalf("status = %d, error = %#v, body = %s", response.Code, body.Error, response.Body.String())
 	}

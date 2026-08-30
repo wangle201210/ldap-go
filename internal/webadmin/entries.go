@@ -496,6 +496,8 @@ func (application *Application) handlePasswordModify(response http.ResponseWrite
 	if failure != nil {
 		if failure.LDAPResultCode != nil && *failure.LDAPResultCode == ldap.LDAPResultInvalidCredentials {
 			status = http.StatusUnprocessableEntity
+			failure.Code = "invalid_old_password"
+			failure.Message = "old password is invalid"
 		}
 		writeAPIError(response, status, *failure)
 		return
