@@ -100,6 +100,12 @@ func TestStaticApplicationChineseLocaleContract(t *testing.T) {
 	if strings.Contains(assetBody, `.entry-table th:nth-child`) {
 		t.Error("table header localization must not replace structural th contents")
 	}
+	if strings.Contains(assetBody, `setFormSubmitting(event.currentTarget`) {
+		t.Error("async submit handlers must capture currentTarget before awaiting")
+	}
+	if count := strings.Count(assetBody, `const submittedForm = event.currentTarget`); count != 7 {
+		t.Errorf("captured async submit forms = %d, want 7", count)
+	}
 
 	englishKeys := localeKeys(t, assetBody, "en", `"zh-CN"`)
 	chineseKeys := localeKeys(t, assetBody, `"zh-CN"`, "};")

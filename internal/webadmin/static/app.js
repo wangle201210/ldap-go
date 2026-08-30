@@ -3033,12 +3033,13 @@
 	$("#new-entry-dn").addEventListener("blur", syncCreateRDNAttribute);
     $("#entry-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+	  const submittedForm = event.currentTarget;
       const dn = $("#new-entry-dn").value.trim();
 	  const attributes = collectAttributeRows($("#new-entry-attribute-list"));
 	  attributes.objectClass = lines($("#new-entry-classes").value);
 	  const validationError = validateCreateEntry(attributes);
 	  if (validationError) { setFieldError($("#entry-form-error"), validationError); return; }
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
       try {
         await api("/api/entries", { method: "POST", body: { dn, attributes } });
         closeDialog(elements.entryDialog);
@@ -3047,13 +3048,14 @@
         await refreshAfterMutation(dn);
         await openEntry(dn);
 	  } catch (error) { setFieldError($("#entry-form-error"), error.message); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
     });
 
     elements.entryEditor.addEventListener("submit", async (event) => {
       event.preventDefault();
+	  const submittedForm = event.currentTarget;
       if (!state.selectedDN) return;
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
       try {
 		const changes = attributeChanges(state.selectedEntry);
         if (!changes.length) {
@@ -3068,7 +3070,7 @@
         toast("entry.updated", state.selectedDN);
         await openEntry(state.selectedDN);
 	  } catch (error) { toast("entry.updateFailed", error.message, "error"); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
     });
     $("#add-attribute").addEventListener("click", () => { addAttributeRow(); markDirty(); });
 	$("#browse-attributes").addEventListener("click", () => {
@@ -3109,10 +3111,11 @@
     });
     $("#rename-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+	  const submittedForm = event.currentTarget;
       const oldDN = state.selectedDN;
       const newRDN = $("#rename-rdn").value.trim();
       const newSuperior = $("#rename-superior").value.trim();
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
       try {
         await api("/api/entries/rename", { method: "POST", body: { dn: oldDN, new_rdn: newRDN, new_superior: newSuperior, delete_old_rdn: $("#rename-delete-old").checked } });
 		const effectiveSuperior = newSuperior || parentDN(oldDN);
@@ -3125,7 +3128,7 @@
         await refreshAfterMutation(newDN);
         await openEntry(newDN);
 	  } catch (error) { setFieldError($("#rename-error"), error.message); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
     });
 
     $("#password-button").addEventListener("click", () => {
@@ -3136,16 +3139,17 @@
     });
     $("#password-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+	  const submittedForm = event.currentTarget;
       const password = $("#new-password").value;
       if (password !== $("#confirm-password").value) { setFieldError($("#password-error"), translated("password.mismatch")); return; }
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
       try {
         await api("/api/password-modify", { method: "POST", body: { user_identity: state.selectedDN, new_password: password } });
 		$("#password-form").reset();
         closeDialog(elements.passwordDialog);
         toast("password.reset", state.selectedDN);
 	  } catch (error) { setFieldError($("#password-error"), error.message); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
     });
     $("#mobile-rename-button").addEventListener("click", () => $("#rename-button").click());
     $("#mobile-password-button").addEventListener("click", () => $("#password-button").click());
@@ -3166,13 +3170,14 @@
 	});
 	$("#bulk-modify-form").addEventListener("submit", async (event) => {
 	  event.preventDefault();
+	  const submittedForm = event.currentTarget;
 	  const changes = [{ operation: $("#bulk-operation").value, attribute: $("#bulk-attribute").value.trim(), values: lines($("#bulk-values").value) }];
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
 	  try {
 		const result = await runBulk("modify", changes, $("#bulk-continue").checked);
 		if (result && !result.failed && !result.unknown && !result.aborted) closeDialog(elements.bulkModifyDialog);
 	  } catch (error) { setFieldError($("#bulk-modify-error"), error.message); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
 	});
 
     [$("#import-button"), $("#menu-import")].forEach((button) => button.addEventListener("click", () => { elements.accountMenu.hidden = true; openDialog(elements.importDialog); }));
@@ -3208,8 +3213,9 @@
 	});
 	$("#csv-import-form").addEventListener("submit", async (event) => {
 	  event.preventDefault();
+	  const submittedForm = event.currentTarget;
 	  if (state.csvRetryBlocked) { setFieldError($("#csv-import-error"), translated("csv.partialNoRetry")); return; }
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
 	  setFieldError($("#csv-import-error"), "");
 	  try {
 		const { data } = await api("/api/csv-import", { method: "POST", body: {
@@ -3246,7 +3252,7 @@
 		}
 		await refreshAfterMutation();
 	  } catch (error) { setFieldError($("#csv-import-error"), error.message); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
 	});
     $("#import-file").addEventListener("change", async (event) => {
       const file = event.target.files[0];
@@ -3258,11 +3264,12 @@
     });
     $("#import-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+	  const submittedForm = event.currentTarget;
       const content = $("#import-content").value.trim();
       if (!content) { setFieldError($("#import-error"), translated("import.required")); return; }
       const approved = await confirmAction("import.confirmTitle", translated("import.confirmMessage"), "import.confirm");
       if (!approved) return;
-	  setFormSubmitting(event.currentTarget, true);
+	  setFormSubmitting(submittedForm, true);
       try {
         await api("/api/import", { method: "POST", body: content, rawBody: true, headers: { "Content-Type": "application/ldif; charset=utf-8" } });
         closeDialog(elements.importDialog);
@@ -3271,7 +3278,7 @@
         toast("import.complete", translated("import.applied"));
         await refreshAfterMutation();
 	  } catch (error) { setFieldError($("#import-error"), error.message); openDialog(elements.importDialog); }
-	  finally { setFormSubmitting(event.currentTarget, false); }
+	  finally { setFormSubmitting(submittedForm, false); }
     });
 
     $("#confirm-form").addEventListener("submit", (event) => { event.preventDefault(); resolveConfirm(true); });
