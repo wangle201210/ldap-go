@@ -54,6 +54,15 @@ func (e Entry) WithDNIdentity(dn DN) Entry {
 	return e
 }
 
+// WithDNIdentityKey attaches an identity key without constructing its parsed
+// representation. Storage planners can defer that work to a runtime cache.
+func (e Entry) WithDNIdentityKey(key string) Entry {
+	e.dnIdentity = key
+	e.normalizedDN = nil
+	e.dnOrderKey = ""
+	return e
+}
+
 func (e Entry) DNIdentity() (string, bool) {
 	return e.dnIdentity, e.dnIdentity != ""
 }

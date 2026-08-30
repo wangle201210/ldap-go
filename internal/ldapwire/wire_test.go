@@ -492,6 +492,37 @@ func TestEncodeSearchResultEntryPreservesBinaryValues(t *testing.T) {
 	}
 }
 
+func TestDirectSearchAndSuccessResultEncodingMatchesBERModel(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "uid", Values: [][]byte{[]byte("alice")}},
+			{Description: "jpegPhoto", Values: [][]byte{{0, 0xff}, {}}},
+		},
+	}
+	operation := encodeSearchResultEntry(entry)
+	wantEntry := encodeMessage(128, operation, nil)
+	if got := EncodeSearchResultEntry(128, entry, nil); !bytes.Equal(got, wantEntry) {
+		t.Fatalf("direct SearchResultEntry = %x, want %x", got, wantEntry)
+	}
+
+	result := Result{Code: ResultSuccess}
+	response := ber.Encode(
+		ber.ClassApplication,
+		ber.TypeConstructed,
+		ApplicationSearchResultDone,
+		nil,
+		"LDAPResult",
+	)
+	appendLDAPResult(response, result)
+	wantDone := encodeMessage(128, response, nil)
+	if got := EncodeSearchResultDone(128, result, nil); !bytes.Equal(got, wantDone) {
+		t.Fatalf("direct SearchResultDone = %x, want %x", got, wantDone)
+	}
+}
+
 func TestSearchResultEntryEncodedSize(t *testing.T) {
 	entry := directory.Entry{
 		DN: "uid=alice,ou=people,dc=example,dc=com",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -213,6 +214,19 @@ func TestBoltReadsAndNormalizesLegacyEntryKeys(t *testing.T) {
 		}
 		if !entry.Equal(got) {
 			t.Fatalf("GetIn() = %#v, want %#v", got, entry)
+		}
+		count := 0
+		if err := reader.ForEachIn("", func(got directory.Entry) error {
+			count++
+			if !entry.Equal(got) {
+				return fmt.Errorf("ForEachIn() entry = %#v, want %#v", got, entry)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("ForEachIn() count = %d, want 1", count)
 		}
 		return nil
 	}); err != nil {

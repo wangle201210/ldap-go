@@ -56,6 +56,7 @@ type runtimeState struct {
 	features             runtimeOperationFeatures
 	searchControlSupport requestControlSupport
 	unindexedValues      *unindexedValueCache
+	pagedSnapshots       *pagedSnapshotCache
 }
 
 type runtimeOperationFeatures struct {
@@ -95,6 +96,12 @@ type disallowsRuntimeConfiguration struct {
 }
 
 func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, error) {
+	directoryReader := reader
+	if _, err := reader.GetIn(configurationStoragePartition, configurationSuffix); err == nil {
+		reader = storage.ReaderInPartition(reader, configurationStoragePartition)
+	} else if !errors.Is(err, storage.ErrEntryNotFound) {
+		return nil, fmt.Errorf("locate OpenLDAP configuration partition: %w", err)
+	}
 	registry := server.baseSchema.Clone()
 	if _, err := schema.LoadOpenLDAPConfigReader(reader, registry); err != nil {
 		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
@@ -407,14 +414,15 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		features:             runtimeFeaturesForDatabases(databases),
 		searchControlSupport: searchControlSupportForDatabases(databases),
 		unindexedValues:      newUnindexedValueCache(16 << 20),
+		pagedSnapshots:       newPagedSnapshotCache(16 << 20),
 	}
-	if err := loadAutoCAAuthorities(reader, runtime); err != nil {
+	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err
 	}
-	if err := server.configureAutoCALocalTLS(reader, runtime, true); err != nil {
+	if err := server.configureAutoCALocalTLS(directoryReader, runtime, true); err != nil {
 		return nil, fmt.Errorf("load AutoCA local TLS configuration: %w", err)
 	}
-	if err := server.preparePcachePersistence(reader, runtime); err != nil {
+	if err := server.preparePcachePersistence(directoryReader, runtime); err != nil {
 		return nil, err
 	}
 	return runtime, nil

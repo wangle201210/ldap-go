@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -19,17 +23,37 @@ var (
 	metaBucket                = []byte("metadata")
 	equalityIndexBucket       = []byte("indexes:eq")
 	equalityIndexConfigBucket = []byte("indexes:eq:config")
-	dnOrderBucket             = []byte("indexes:dn-order")
 	contextsKey               = []byte("naming-contexts")
 	metadataPrefix            = []byte("value:")
 )
 
+const (
+	boltBulkFillPercent = 0.9
+	boltAllocationSize  = 64 << 10
+)
+
 type Bolt struct {
-	db       *bolt.DB
-	pathLock *boltPathLock
+	db          *bolt.DB
+	pathLock    *boltPathLock
+	durableMeta *os.File
+	updateMu    sync.Mutex
+	singleSync  bool
+	revision    atomic.Uint64
 }
 
 func OpenBolt(path string) (*Bolt, error) {
+	return openBolt(path, false)
+}
+
+// OpenBoltForServer avoids rewriting the freelist on every online transaction.
+// bbolt reconstructs it from committed pages after restart. On platforms with
+// synchronized writes, the commit meta page makes the preceding data writes
+// durable without a separate whole-file sync.
+func OpenBoltForServer(path string) (*Bolt, error) {
+	return openBolt(path, true)
+}
+
+func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
@@ -46,25 +70,68 @@ func OpenBolt(path string) (*Bolt, error) {
 		_ = pathLock.Close()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	// Keep small and medium directories close to their live page high-water
+	// mark. This only controls future allocation; the on-disk format and
+	// existing files remain unchanged.
+	db.AllocSize = boltAllocationSize
+	// bbolt documents NoGrowSync as safe outside ext3/ext4. Darwin uses
+	// neither and can let writes extend the file to the exact high-water page.
+	db.NoGrowSync = runtime.GOOS == "darwin"
 	store := &Bolt{db: db, pathLock: pathLock}
-	if err := db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(entriesBucket); err != nil {
-			return err
+	var (
+		initialRevision uint64
+		needsBuckets    bool
+	)
+	if err := db.View(func(tx *bolt.Tx) error {
+		initialRevision = uint64(tx.ID())
+		for _, name := range [][]byte{
+			entriesBucket,
+			metaBucket,
+			equalityIndexBucket,
+			equalityIndexConfigBucket,
+		} {
+			if tx.Bucket(name) == nil {
+				needsBuckets = true
+				break
+			}
 		}
-		if _, err := tx.CreateBucketIfNotExists(metaBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(equalityIndexBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket); err != nil {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists(dnOrderBucket)
-		return err
+		return nil
 	}); err != nil {
 		_ = store.Close()
-		return nil, fmt.Errorf("initialize database: %w", err)
+		return nil, fmt.Errorf("inspect database buckets: %w", err)
+	}
+	if needsBuckets {
+		if err := db.Update(func(tx *bolt.Tx) error {
+			initialRevision = uint64(tx.ID())
+			if _, err := tx.CreateBucketIfNotExists(entriesBucket); err != nil {
+				return err
+			}
+			if _, err := tx.CreateBucketIfNotExists(metaBucket); err != nil {
+				return err
+			}
+			if _, err := tx.CreateBucketIfNotExists(equalityIndexBucket); err != nil {
+				return err
+			}
+			_, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket)
+			return err
+		}); err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("initialize database: %w", err)
+		}
+	}
+	store.revision.Store(initialRevision)
+	db.NoFreelistSync = noFreelistSync
+	if noFreelistSync {
+		durableMeta, openErr := openBoltDurableMetaFile(path)
+		if openErr != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("open durable metadata descriptor: %w", openErr)
+		}
+		if durableMeta != nil {
+			store.durableMeta = durableMeta
+			store.singleSync = true
+			db.NoSync = true
+		}
 	}
 	return store, nil
 }
@@ -85,7 +152,10 @@ func OpenBoltReadOnly(path string) (*Bolt, error) {
 		_ = pathLock.Close()
 		return nil, err
 	}
+	store := &Bolt{db: db, pathLock: pathLock}
+	var revision uint64
 	if err := db.View(func(tx *bolt.Tx) error {
+		revision = uint64(tx.ID())
 		if tx.Bucket(entriesBucket) == nil || tx.Bucket(metaBucket) == nil {
 			return errors.New("required entries or metadata bucket is missing")
 		}
@@ -95,7 +165,8 @@ func OpenBoltReadOnly(path string) (*Bolt, error) {
 		_ = pathLock.Close()
 		return nil, fmt.Errorf("validate database %q: %w", path, err)
 	}
-	return &Bolt{db: db, pathLock: pathLock}, nil
+	store.revision.Store(revision)
+	return store, nil
 }
 
 func (store *Bolt) View(ctx context.Context, fn func(Reader) error) error {
@@ -107,17 +178,61 @@ func (store *Bolt) View(ctx context.Context, fn func(Reader) error) error {
 	})
 }
 
+func (store *Bolt) CurrentStorageSnapshotRevision() (uint64, bool) {
+	if store == nil || store.db == nil {
+		return 0, false
+	}
+	return store.revision.Load(), true
+}
+
 func (store *Bolt) Update(ctx context.Context, fn func(Writer) error) error {
+	return store.update(ctx, fn, 0)
+}
+
+func (store *Bolt) UpdateBulk(ctx context.Context, fn func(Writer) error) error {
+	return store.update(ctx, fn, boltBulkFillPercent)
+}
+
+func (store *Bolt) update(
+	ctx context.Context,
+	fn func(Writer) error,
+	fillPercent float64,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return store.db.Update(func(tx *bolt.Tx) error {
+	store.updateMu.Lock()
+	defer store.updateMu.Unlock()
+	var (
+		before      [][]byte
+		metaReadErr error
+	)
+	if store.singleSync {
+		before, metaReadErr = store.readMetaPages()
+	}
+	var committedRevision uint64
+	err := store.db.Update(func(tx *bolt.Tx) error {
 		writer := newBoltTx(ctx, tx)
+		writer.setFillPercent(fillPercent)
 		if err := fn(writer); err != nil {
 			return err
 		}
-		return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		committedRevision = uint64(tx.ID())
+		return nil
 	})
+	if err == nil {
+		store.revision.Store(committedRevision)
+	}
+	if err != nil || !store.singleSync {
+		return err
+	}
+	if metaReadErr != nil {
+		return store.disableSingleSync(metaReadErr)
+	}
+	return store.syncCommittedMeta(before)
 }
 
 // Backup writes a transactionally consistent snapshot of an open bbolt store.
@@ -138,25 +253,97 @@ func (store *Bolt) Close() error {
 	if store == nil {
 		return nil
 	}
+	store.updateMu.Lock()
+	defer store.updateMu.Unlock()
 	var databaseErr error
 	if store.db != nil {
 		databaseErr = store.db.Close()
+	}
+	var durableMetaErr error
+	if store.durableMeta != nil {
+		durableMetaErr = store.durableMeta.Close()
 	}
 	var lockErr error
 	if store.pathLock != nil {
 		lockErr = store.pathLock.Close()
 	}
-	return errors.Join(databaseErr, lockErr)
+	return errors.Join(databaseErr, durableMetaErr, lockErr)
+}
+
+func (store *Bolt) readMetaPages() ([][]byte, error) {
+	if store == nil || store.durableMeta == nil || store.db == nil {
+		return nil, errors.New("durable metadata descriptor is unavailable")
+	}
+	pageSize := store.db.Info().PageSize
+	if pageSize <= 0 {
+		return nil, errors.New("invalid bbolt page size")
+	}
+	pages := [][]byte{make([]byte, pageSize), make([]byte, pageSize)}
+	for index := range pages {
+		count, err := store.durableMeta.ReadAt(pages[index], int64(index*pageSize))
+		if err != nil {
+			return nil, fmt.Errorf("read metadata page %d: %w", index, err)
+		}
+		if count != pageSize {
+			return nil, fmt.Errorf("read metadata page %d: %w", index, io.ErrUnexpectedEOF)
+		}
+	}
+	return pages, nil
+}
+
+func (store *Bolt) syncCommittedMeta(before [][]byte) error {
+	after, err := store.readMetaPages()
+	if err != nil {
+		return store.disableSingleSync(err)
+	}
+	if len(before) != len(after) {
+		return store.disableSingleSync(errors.New("metadata page snapshot is incomplete"))
+	}
+	changed := -1
+	for index := range after {
+		if bytes.Equal(before[index], after[index]) {
+			continue
+		}
+		if changed >= 0 {
+			return store.disableSingleSync(errors.New("both metadata pages changed in one transaction"))
+		}
+		changed = index
+	}
+	if changed < 0 {
+		return nil
+	}
+	pageSize := len(after[changed])
+	written, err := store.durableMeta.WriteAt(after[changed], int64(changed*pageSize))
+	if err != nil {
+		return store.disableSingleSync(err)
+	}
+	if written != pageSize {
+		return store.disableSingleSync(io.ErrShortWrite)
+	}
+	return nil
+}
+
+func (store *Bolt) disableSingleSync(cause error) error {
+	if err := store.db.Sync(); err != nil {
+		return errors.Join(cause, err)
+	}
+	store.db.NoSync = false
+	store.singleSync = false
+	if store.durableMeta != nil {
+		_ = store.durableMeta.Close()
+		store.durableMeta = nil
+	}
+	return nil
 }
 
 type boltTx struct {
 	ctx                  context.Context
 	tx                   *bolt.Tx
+	fillPercent          float64
 	entries              *bolt.Bucket
 	meta                 *bolt.Bucket
 	equalityIndexes      *bolt.Bucket
 	equalityIndexConfigs *bolt.Bucket
-	dnOrder              *bolt.Bucket
 }
 
 func (tx *boltTx) StorageSnapshotRevision() (uint64, bool) {
@@ -174,7 +361,30 @@ func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
 		meta:                 tx.Bucket(metaBucket),
 		equalityIndexes:      tx.Bucket(equalityIndexBucket),
 		equalityIndexConfigs: tx.Bucket(equalityIndexConfigBucket),
-		dnOrder:              tx.Bucket(dnOrderBucket),
+	}
+}
+
+func (tx *boltTx) setFillPercent(fillPercent float64) {
+	if tx == nil || fillPercent <= 0 {
+		return
+	}
+	tx.fillPercent = fillPercent
+	tx.applyFillPercent()
+}
+
+func (tx *boltTx) applyFillPercent() {
+	if tx == nil || tx.fillPercent <= 0 {
+		return
+	}
+	for _, bucket := range []*bolt.Bucket{
+		tx.entries,
+		tx.meta,
+		tx.equalityIndexes,
+		tx.equalityIndexConfigs,
+	} {
+		if bucket != nil {
+			bucket.FillPercent = tx.fillPercent
+		}
 	}
 }
 
@@ -260,31 +470,28 @@ func (tx *boltTx) GetIn(partition string, dn directory.DN) (directory.Entry, err
 	}
 	match := directEntry
 	matchKey := directKey
-	err := tx.entries.ForEach(func(key, value []byte) error {
+	prefix := []byte(partition + "\x00")
+	cursor := tx.entries.Cursor()
+	for candidateKey, candidateValue := cursor.Seek(prefix); candidateKey != nil && bytes.HasPrefix(candidateKey, prefix); candidateKey, candidateValue = cursor.Next() {
+		key := candidateKey
+		value := candidateValue
 		if bytes.Equal(key, directKey) {
-			return nil
+			continue
 		}
-		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
-		if entryPartition != partition {
-			return nil
-		}
+		_, entryKey := splitPartitionedEntryKey(string(key))
 		entry, err := decodeAndValidateEntry(entryKey, value)
 		if err != nil {
-			return err
+			return directory.Entry{}, err
 		}
 		directIdentity := entryKey == dn.Key() && isSchemaAwareDNKey(entryKey)
 		if !directIdentity && !entryMatchesDisplayDN(entry, dn) {
-			return nil
+			continue
 		}
 		if matchKey != nil {
-			return ErrEntryAmbiguous
+			return directory.Entry{}, ErrEntryAmbiguous
 		}
 		match = entry
 		matchKey = bytes.Clone(key)
-		return nil
-	})
-	if err != nil {
-		return directory.Entry{}, err
 	}
 	if matchKey == nil {
 		return directory.Entry{}, ErrEntryNotFound
@@ -329,67 +536,45 @@ func (tx *boltTx) ForEachIn(
 	partition string,
 	fn func(directory.Entry) error,
 ) error {
-	return tx.entries.ForEach(func(key, value []byte) error {
+	prefix := []byte(partition + "\x00")
+	cursor := tx.entries.Cursor()
+	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
-		entryPartition, entryKey := splitPartitionedEntryKey(string(key))
-		if entryPartition != partition {
-			return nil
-		}
+		_, entryKey := splitPartitionedEntryKey(string(key))
 		entry, err := decodeAndValidateEntry(entryKey, value)
 		if err != nil {
 			return err
 		}
-		return fn(entry)
-	})
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	if partition == "" {
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if bytes.IndexByte(key, 0) >= 0 {
+				continue
+			}
+			if err := tx.ctx.Err(); err != nil {
+				return err
+			}
+			entry, err := decodeAndValidateEntry(string(key), value)
+			if err != nil {
+				return err
+			}
+			if err := fn(entry); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (tx *boltTx) forEachSchemaAwarePhysicalIn(
 	partition string,
 	visit func(directory.Entry, string) error,
 ) (bool, error) {
-	orderReady, err := tx.schemaAwareDNOrderReady(partition)
-	if err != nil {
-		return false, err
-	}
-	if orderReady {
-		prefix := schemaAwareDNOrderPrefix(partition)
-		cursor := tx.dnOrder.Cursor()
-		seen := false
-		for key, identity := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, identity = cursor.Next() {
-			if err := tx.ctx.Err(); err != nil {
-				return false, err
-			}
-			seen = true
-			physicalKey := string(identity)
-			value := tx.entries.Get([]byte(partitionedEntryKey(partition, physicalKey)))
-			if value == nil {
-				return false, fmt.Errorf("DN order index references missing entry key %q", physicalKey)
-			}
-			stored, err := decodeStoredEntry(value)
-			if err != nil {
-				return false, err
-			}
-			dn, err := directory.ParseDNWithIdentityKey(stored.Entry.DN, physicalKey)
-			if err != nil {
-				return false, err
-			}
-			orderKey := string(key[len(prefix):])
-			entry := stored.Entry.WithNormalizedDNHint(dn, orderKey)
-			if err := visit(entry, physicalKey); err != nil {
-				return false, err
-			}
-		}
-		if !seen {
-			entryCursor := tx.entries.Cursor()
-			entryPrefix := []byte(partition + "\x00")
-			if key, _ := entryCursor.Seek(entryPrefix); key != nil && bytes.HasPrefix(key, entryPrefix) {
-				return false, errors.New("DN order index is empty for a non-empty partition")
-			}
-		}
-		return true, nil
-	}
 	prefix := []byte(partition + "\x00")
 	cursor := tx.entries.Cursor()
 	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
@@ -403,6 +588,23 @@ func (tx *boltTx) forEachSchemaAwarePhysicalIn(
 		}
 		if err := visit(stored.Entry, physicalKey); err != nil {
 			return false, err
+		}
+	}
+	if partition == "" {
+		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
+			if bytes.IndexByte(key, 0) >= 0 {
+				continue
+			}
+			if err := tx.ctx.Err(); err != nil {
+				return false, err
+			}
+			stored, err := decodeStoredEntry(value)
+			if err != nil {
+				return false, err
+			}
+			if err := visit(stored.Entry, string(key)); err != nil {
+				return false, err
+			}
 		}
 	}
 	return false, nil
@@ -517,10 +719,7 @@ func (tx *boltTx) markSchemaAwareDNIdentityReadyIfNoLegacy(
 	}); err != nil {
 		return err
 	}
-	if err := tx.setSchemaAwareDNIdentityReady(partition); err != nil {
-		return err
-	}
-	return tx.rebuildSchemaAwareDNOrder(partition)
+	return tx.setSchemaAwareDNIdentityReady(partition)
 }
 
 func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
@@ -566,6 +765,11 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 			)
 		}
 		identities[newKey] = entry.DN
+		report.Entries++
+		if bytes.Equal(key, []byte(newKey)) {
+			report.AlreadyCurrent++
+			return nil
+		}
 		encoded, err := encodeEntry(entry, identity, entry.DN)
 		if err != nil {
 			return err
@@ -576,12 +780,7 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 			value:  encoded,
 			dn:     entry.DN,
 		})
-		report.Entries++
-		if bytes.Equal(key, []byte(newKey)) {
-			report.AlreadyCurrent++
-		} else {
-			report.Migrated++
-		}
+		report.Migrated++
 		return nil
 	}); err != nil {
 		return DNIdentityMigrationReport{}, err
@@ -614,9 +813,6 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 		}
 	}
 	if err := tx.setSchemaAwareDNIdentityReady(partition); err != nil {
-		return DNIdentityMigrationReport{}, err
-	}
-	if err := tx.rebuildSchemaAwareDNOrder(partition); err != nil {
 		return DNIdentityMigrationReport{}, err
 	}
 	if indexed {
@@ -701,9 +897,6 @@ func (tx *boltTx) PutIn(
 		)); err != nil {
 			return err
 		}
-		if err := tx.invalidateSchemaAwareDNOrder(partition); err != nil {
-			return err
-		}
 	}
 	return tx.invalidateEqualityIndexes(partition)
 }
@@ -736,23 +929,11 @@ func (tx *boltTx) putInWithDN(
 		if existing != nil && !replace {
 			return ErrEntryExists
 		}
-		if existing != nil {
-			stored, err := decodeStoredEntry(existing)
-			if err != nil {
-				return err
-			}
-			if err := tx.removeSchemaAwareDNOrder(partition, stored.Entry, identity); err != nil {
-				return err
-			}
-		}
 		value, err := encodeEntry(entry, identity, entry.DN)
 		if err != nil {
 			return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 		}
-		if err := tx.entries.Put(key, value); err != nil {
-			return err
-		}
-		return tx.putSchemaAwareDNOrder(partition, entry, identity)
+		return tx.entries.Put(key, value)
 	}
 	existingKeys := make(map[string]struct{})
 	if tx.entries.Get(key) != nil {
@@ -855,14 +1036,11 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 				return ErrEntryNotFound
 			}
 		} else {
-			entry, err := decodeAndValidateEntry(dn.Key(), value)
+			_, err := decodeAndValidateEntry(dn.Key(), value)
 			if err != nil {
 				return err
 			}
 			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
-				return err
-			}
-			if err := tx.removeSchemaAwareDNOrder(partition, entry, dn.Key()); err != nil {
 				return err
 			}
 			if err := tx.entries.Delete(key); err != nil {
@@ -909,9 +1087,6 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 	if foundKey == nil {
 		return ErrEntryNotFound
 	}
-	if err := tx.invalidateSchemaAwareDNOrder(partition); err != nil {
-		return err
-	}
 	if err := tx.entries.Delete(foundKey); err != nil {
 		return err
 	}
@@ -941,7 +1116,6 @@ func (tx *boltTx) Clear() error {
 	for _, bucketName := range [][]byte{
 		equalityIndexBucket,
 		equalityIndexConfigBucket,
-		dnOrderBucket,
 	} {
 		if tx.tx.Bucket(bucketName) != nil {
 			if err := tx.tx.DeleteBucket(bucketName); err != nil {
@@ -959,11 +1133,7 @@ func (tx *boltTx) Clear() error {
 	}
 	tx.equalityIndexes = indexes
 	tx.equalityIndexConfigs = configs
-	dnOrder, err := tx.tx.CreateBucket(dnOrderBucket)
-	if err != nil {
-		return err
-	}
-	tx.dnOrder = dnOrder
+	tx.applyFillPercent()
 	return nil
 }
 
@@ -1019,6 +1189,7 @@ func decodeAndValidateEntry(key string, value []byte) (directory.Entry, error) {
 		stored.Entry,
 		stored.DNIdentity,
 		stored.DNSource,
+		stored.DNBinding,
 	); err != nil {
 		return directory.Entry{}, err
 	}

@@ -1907,7 +1907,7 @@ func runServe(
 	if auditSink != nil {
 		configuredAuditSink = auditSink
 	}
-	store, err := storage.OpenBolt(*databasePath)
+	store, err := storage.OpenBoltForServer(*databasePath)
 	if err != nil {
 		return err
 	}

@@ -84,7 +84,7 @@ func importLDIF(
 	}
 
 	var result ImportResult
-	err := store.Update(ctx, func(tx storage.Writer) error {
+	err := storage.UpdateBulk(ctx, store, func(tx storage.Writer) error {
 		var importedContent []importedContentEntry
 		var importedConfiguration []importedContentEntry
 		var pendingContent []pendingContentEntry

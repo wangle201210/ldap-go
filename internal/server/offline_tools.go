@@ -1120,7 +1120,7 @@ func ReindexOffline(
 	includeSubordinates bool,
 ) (int, error) {
 	reindexed := 0
-	err := store.Update(ctx, func(writer storage.Writer) error {
+	err := storage.UpdateBulk(ctx, store, func(writer storage.Writer) error {
 		_, runtime, err := buildOfflineRuntime(writer, store)
 		if err != nil {
 			return err
@@ -1137,6 +1137,9 @@ func ReindexOffline(
 			}
 			if err := storage.RebuildEqualityIndexes(writer, database.partition, normalizer); err != nil {
 				return fmt.Errorf("reindex database %q: %w", database.name, err)
+			}
+			if err := markOfflineDNIdentitySchemaCurrent(writer, runtime, database); err != nil {
+				return err
 			}
 			reindexed++
 		}
@@ -1163,7 +1166,7 @@ func ReindexOfflineSelected(
 ) (int, error) {
 	if !options.Quick {
 		reindexed := 0
-		err := store.Update(ctx, func(writer storage.Writer) error {
+		err := storage.UpdateBulk(ctx, store, func(writer storage.Writer) error {
 			_, runtime, err := buildOfflineRuntime(writer, store)
 			if err != nil {
 				return err
@@ -1204,7 +1207,7 @@ func ReindexOfflineSelected(
 	}
 	reindexed := 0
 	for _, databaseName := range databaseNames {
-		err := store.Update(ctx, func(writer storage.Writer) error {
+		err := storage.UpdateBulk(ctx, store, func(writer storage.Writer) error {
 			_, runtime, err := buildOfflineRuntime(writer, store)
 			if err != nil {
 				return err
@@ -1251,9 +1254,55 @@ func reindexOfflineDatabases(
 		); err != nil {
 			return reindexed, fmt.Errorf("reindex database %q: %w", database.name, err)
 		}
+		if err := markOfflineDNIdentitySchemaCurrent(writer, runtime, database); err != nil {
+			return reindexed, err
+		}
 		reindexed++
 	}
 	return reindexed, nil
+}
+
+func markOfflineDNIdentitySchemaCurrent(
+	writer storage.Writer,
+	runtime *runtimeState,
+	database runtimeDatabase,
+) error {
+	if runtime == nil || runtime.schema == nil ||
+		!databaseUsesLocalContentStorage(database) ||
+		database.partition == configurationStoragePartition {
+		return nil
+	}
+	if err := storage.ValidateSchemaAwareDNIdentities(
+		writer,
+		database.partition,
+		database.dnNormalizer,
+	); err != nil {
+		if !errors.Is(err, storage.ErrDNIdentityMigrationRequired) {
+			return fmt.Errorf("validate database %q DN identities: %w", database.name, err)
+		}
+		if _, migrateErr := storage.MigrateSchemaAwareDNIdentities(
+			writer,
+			database.partition,
+			database.dnNormalizer,
+		); migrateErr != nil {
+			return fmt.Errorf("migrate database %q DN identities: %w", database.name, migrateErr)
+		}
+		if validateErr := storage.ValidateSchemaAwareDNIdentities(
+			writer,
+			database.partition,
+			database.dnNormalizer,
+		); validateErr != nil {
+			return fmt.Errorf("validate migrated database %q DN identities: %w", database.name, validateErr)
+		}
+	}
+	fingerprint := runtime.schema.DNIdentityFingerprint()
+	if err := writer.SetMetadata(
+		runtimeDNIdentityFingerprintMetadataKey(database.partition),
+		fingerprint[:],
+	); err != nil {
+		return fmt.Errorf("store database %q DN identity fingerprint: %w", database.name, err)
+	}
+	return nil
 }
 
 func offlineIndexAttributes(

@@ -123,7 +123,104 @@ func EncodeResultResponse(messageID int64, applicationTag uint64, result Result,
 }
 
 func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []Control) []byte {
+	if messageID >= 0 && len(controls) == 0 {
+		return encodeSearchResultEntryDirect(messageID, entry)
+	}
 	return encodeMessage(messageID, encodeSearchResultEntry(entry), controls)
+}
+
+func encodeSearchResultEntryDirect(messageID int64, entry directory.Entry) []byte {
+	attributesContent := 0
+	for _, attribute := range entry.Attributes {
+		valuesContent := 0
+		for _, value := range attribute.Values {
+			valuesContent += berElementSize(len(value))
+		}
+		partialContent := berElementSize(len(attribute.Description)) +
+			berElementSize(valuesContent)
+		attributesContent += berElementSize(partialContent)
+	}
+	entryContent := berElementSize(len(entry.DN)) + berElementSize(attributesContent)
+	messageContent := berElementSize(int(integerContentSize(messageID))) +
+		berElementSize(entryContent)
+	encoded := make([]byte, 0, berElementSize(messageContent))
+	encoded = appendBERHeader(encoded, 0x30, messageContent)
+	encoded = appendBERPositiveInteger(encoded, 0x02, messageID)
+	encoded = appendBERHeader(
+		encoded,
+		0x60|byte(ApplicationSearchResultEntry),
+		entryContent,
+	)
+	encoded = appendBERBytes(encoded, 0x04, []byte(entry.DN))
+	encoded = appendBERHeader(encoded, 0x30, attributesContent)
+	for _, attribute := range entry.Attributes {
+		valuesContent := 0
+		for _, value := range attribute.Values {
+			valuesContent += berElementSize(len(value))
+		}
+		partialContent := berElementSize(len(attribute.Description)) +
+			berElementSize(valuesContent)
+		encoded = appendBERHeader(encoded, 0x30, partialContent)
+		encoded = appendBERBytes(encoded, 0x04, []byte(attribute.Description))
+		encoded = appendBERHeader(encoded, 0x31, valuesContent)
+		for _, value := range attribute.Values {
+			encoded = appendBERBytes(encoded, 0x04, value)
+		}
+	}
+	return encoded
+}
+
+func berElementSize(content int) int {
+	return 1 + berEncodedLengthSize(content) + content
+}
+
+func berEncodedLengthSize(content int) int {
+	if content <= 127 {
+		return 1
+	}
+	width := 0
+	for value := content; value > 0; value >>= 8 {
+		width++
+	}
+	return 1 + width
+}
+
+func appendBERHeader(destination []byte, identifier byte, contentLength int) []byte {
+	destination = append(destination, identifier)
+	if contentLength <= 127 {
+		return append(destination, byte(contentLength))
+	}
+	var encoded [8]byte
+	position := len(encoded)
+	for value := contentLength; value > 0; value >>= 8 {
+		position--
+		encoded[position] = byte(value)
+	}
+	destination = append(destination, byte(0x80|len(encoded)-position))
+	return append(destination, encoded[position:]...)
+}
+
+func appendBERBytes(destination []byte, identifier byte, value []byte) []byte {
+	destination = appendBERHeader(destination, identifier, len(value))
+	return append(destination, value...)
+}
+
+func appendBERPositiveInteger(destination []byte, identifier byte, value int64) []byte {
+	var encoded [9]byte
+	position := len(encoded)
+	if value == 0 {
+		position--
+	} else {
+		for current := uint64(value); current > 0; current >>= 8 {
+			position--
+			encoded[position] = byte(current)
+		}
+		if encoded[position]&0x80 != 0 {
+			position--
+		}
+	}
+	destination = appendBERHeader(destination, identifier, len(encoded)-position)
+	return append(destination, encoded[position:]...)
 }
 
 // SearchResultEntryEncodedSize returns the exact BER size without allocating
@@ -269,9 +366,26 @@ func Write(writer io.Writer, encoded []byte) error {
 }
 
 func encodeResultMessage(messageID int64, tag uint64, result Result, controls []Control) []byte {
+	if messageID >= 0 && tag < 31 && result.Code == ResultSuccess &&
+		result.MatchedDN == "" && result.DiagnosticMessage == "" &&
+		len(result.Referrals) == 0 && len(controls) == 0 {
+		return encodeEmptySuccessResultMessage(messageID, byte(tag))
+	}
 	response := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ber.Tag(tag), nil, "LDAPResult")
 	appendLDAPResult(response, result)
 	return encodeMessage(messageID, response, controls)
+}
+
+func encodeEmptySuccessResultMessage(messageID int64, tag byte) []byte {
+	const resultContent = 7
+	operationSize := berElementSize(resultContent)
+	messageContent := berElementSize(int(integerContentSize(messageID))) + operationSize
+	encoded := make([]byte, 0, berElementSize(messageContent))
+	encoded = appendBERHeader(encoded, 0x30, messageContent)
+	encoded = appendBERPositiveInteger(encoded, 0x02, messageID)
+	encoded = appendBERHeader(encoded, 0x60|tag, resultContent)
+	encoded = append(encoded, 0x0a, 0x01, 0x00, 0x04, 0x00, 0x04, 0x00)
+	return encoded
 }
 
 func appendLDAPResult(packet *ber.Packet, result Result) {

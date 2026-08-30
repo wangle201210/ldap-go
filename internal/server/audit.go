@@ -139,18 +139,18 @@ func (observation *operationAuditObservation) observeResponse(encoded []byte) {
 	if observation == nil {
 		return
 	}
-	packet, err := ber.DecodePacketErr(encoded)
-	if err != nil || len(packet.Children) < 2 {
-		return
-	}
-	operation := packet.Children[1]
-	if operation.ClassType == ber.ClassApplication &&
-		operation.Tag == ldapwire.ApplicationSearchResultEntry {
+	if operationTag, ok := monitorResponseTag(encoded); ok &&
+		operationTag == ldapwire.ApplicationSearchResultEntry {
 		observation.mu.Lock()
 		observation.entries++
 		observation.mu.Unlock()
 		return
 	}
+	packet, err := ber.DecodePacketErr(encoded)
+	if err != nil || len(packet.Children) < 2 {
+		return
+	}
+	operation := packet.Children[1]
 	if len(operation.Children) == 0 {
 		return
 	}

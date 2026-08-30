@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -8,6 +9,29 @@ import (
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
+
+func TestStorageDecoratorsForwardSnapshotRevision(t *testing.T) {
+	t.Parallel()
+
+	base := storage.NewMemory()
+	t.Cleanup(func() { _ = base.Close() })
+	if err := base.Update(context.Background(), func(storage.Writer) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("Update(): %v", err)
+	}
+	decorated := &homedirEffectStore{
+		Store: &accessContextStore{Store: base},
+	}
+	want, ok := base.CurrentStorageSnapshotRevision()
+	if !ok {
+		t.Fatal("base snapshot revision is unavailable")
+	}
+	got, ok := decorated.CurrentStorageSnapshotRevision()
+	if !ok || got != want {
+		t.Fatalf("decorated snapshot revision = %d, %t; want %d, true", got, ok, want)
+	}
+}
 
 func TestConnectionACLSubjectSeparatesSASLStrength(t *testing.T) {
 	server := &Server{}

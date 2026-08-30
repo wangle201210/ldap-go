@@ -964,6 +964,20 @@ func (store *homedirEffectStore) View(
 	return err
 }
 
+func (store *homedirEffectStore) CurrentStorageSnapshotRevision() (uint64, bool) {
+	if store == nil {
+		return 0, false
+	}
+	store.revisionMu.RLock()
+	defer store.revisionMu.RUnlock()
+	if provider, ok := store.Store.(storage.SnapshotRevisionStore); ok {
+		if revision, available := provider.CurrentStorageSnapshotRevision(); available {
+			return revision, true
+		}
+	}
+	return store.revision, true
+}
+
 func (store *homedirEffectStore) Update(
 	ctx context.Context,
 	update func(storage.Writer) error,

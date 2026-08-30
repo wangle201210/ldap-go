@@ -129,20 +129,27 @@ func (tx *boltTx) equalityIndexEntries(
 				key,
 			)
 		}
-		_, entryKey := splitPartitionedEntryKey(key)
-		entry, err := decodeAndValidateEntry(entryKey, value)
-		if err != nil {
-			return nil, err
+		partition, entryKey := splitPartitionedEntryKey(key)
+		ready, readyErr := tx.schemaAwareDNIdentityReady(partition)
+		if readyErr != nil {
+			return nil, readyErr
+		}
+		var entry directory.Entry
+		if ready && isSchemaAwareDNKey(entryKey) {
+			stored, decodeErr := decodeStoredEntry(value)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			entry = stored.Entry
+		} else {
+			var decodeErr error
+			entry, decodeErr = decodeAndValidateEntry(entryKey, value)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
 		}
 		if isSchemaAwareDNKey(entryKey) {
-			dn, parseErr := directory.ParseDNWithIdentityKey(entry.DN, entryKey)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			entry = entry.WithNormalizedDNHint(
-				dn,
-				dn.LegacyKey()+"\x00"+entryKey,
-			)
+			entry = entry.WithDNIdentityKey(entryKey)
 		}
 		entries = append(entries, entry)
 	}
@@ -173,6 +180,27 @@ func (tx *boltTx) putInWithEqualityIndexes(
 	if len(existingKeys) > 0 && !replace {
 		return ErrEntryExists
 	}
+	if len(existingKeys) == 1 && existingKeys[0] == partitionedEntryKey(partition, dn.Key()) {
+		value := tx.entries.Get([]byte(existingKeys[0]))
+		_, entryKey := splitPartitionedEntryKey(existingKeys[0])
+		existing, err := decodeAndValidateEntry(entryKey, value)
+		if err != nil {
+			return err
+		}
+		same, err := equalityIndexEntriesHaveSameTerms(schema, config, existing, entry)
+		if err != nil {
+			return err
+		}
+		if same {
+			return tx.putInWithDN(
+				partition,
+				entry.WithoutDNIdentity(),
+				dn,
+				dn.Key(),
+				true,
+			)
+		}
+	}
 	for _, key := range existingKeys {
 		value := tx.entries.Get([]byte(key))
 		_, entryKey := splitPartitionedEntryKey(key)
@@ -187,9 +215,6 @@ func (tx *boltTx) putInWithEqualityIndexes(
 			schema,
 			config,
 		); err != nil {
-			return err
-		}
-		if err := tx.removeSchemaAwareDNOrder(partition, existing, entryKey); err != nil {
 			return err
 		}
 		if err := tx.entries.Delete([]byte(key)); err != nil {
@@ -245,9 +270,6 @@ func (tx *boltTx) deleteInWithEqualityIndexes(
 		schema,
 		config,
 	); err != nil {
-		return err
-	}
-	if err := tx.removeSchemaAwareDNOrder(partition, entry, entryKey); err != nil {
 		return err
 	}
 	return tx.entries.Delete([]byte(key))
@@ -499,6 +521,7 @@ func (tx *boltTx) ensureEqualityIndexBuckets() error {
 		}
 		tx.equalityIndexConfigs = bucket
 	}
+	tx.applyFillPercent()
 	return nil
 }
 

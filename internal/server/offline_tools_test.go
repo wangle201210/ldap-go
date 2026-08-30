@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -218,6 +220,33 @@ description: continued after failures
 				)
 				if err != nil || count != 1 {
 					t.Fatalf("selective ReindexOfflineSelected() = %d, %v", count, err)
+				}
+				if err := store.View(context.Background(), func(reader storage.Reader) error {
+					_, runtime, err := buildOfflineRuntime(reader, store)
+					if err != nil {
+						return err
+					}
+					indexes, err := selectOfflineDatabases(runtime, "1", false)
+					if err != nil {
+						return err
+					}
+					if len(indexes) != 1 {
+						return fmt.Errorf("selected database count = %d, want 1", len(indexes))
+					}
+					database := &runtime.databases[indexes[0]]
+					stored, err := reader.Metadata(
+						runtimeDNIdentityFingerprintMetadataKey(database.partition),
+					)
+					if err != nil {
+						return err
+					}
+					want := runtime.schema.DNIdentityFingerprint()
+					if !bytes.Equal(stored, want[:]) {
+						return fmt.Errorf("DN identity fingerprint = %x, want %x", stored, want)
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("verify DN identity fingerprint: %v", err)
 				}
 				if _, err := ReindexOfflineSelected(
 					context.Background(), store, OfflineReindexOptions{

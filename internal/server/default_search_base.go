@@ -68,9 +68,38 @@ func normalizeDefaultSearchBaseConfigurationWithNormalizer(
 		entry     directory.Entry
 	}
 
+	needsUpdate := false
+	err := store.View(ctx, func(reader storage.Reader) error {
+		return forEachDefaultSearchBaseConfiguration(reader, func(_ string, entry directory.Entry) error {
+			entryDN, err := directory.ParseDN(entry.DN)
+			if err != nil {
+				return fmt.Errorf("parse entry DN %q: %w", entry.DN, err)
+			}
+			if !configurationSuffix.Equal(entryDN) {
+				databaseValues := entry.Values("olcDatabase")
+				if len(databaseValues) != 1 ||
+					databaseType(string(databaseValues[0])) != "frontend" {
+					return nil
+				}
+			}
+			values := entry.Values("olcDefaultSearchBase")
+			if len(values) != 1 || strings.TrimSpace(string(values[0])) == "" {
+				return nil
+			}
+			dn, err := parseDefaultSearchBaseDN(string(values[0]), normalizer)
+			if err != nil {
+				return fmt.Errorf("parse %s olcDefaultSearchBase: %w", entry.DN, err)
+			}
+			needsUpdate = needsUpdate || string(values[0]) != dn.String()
+			return nil
+		})
+	})
+	if err != nil || !needsUpdate {
+		return err
+	}
 	return store.Update(ctx, func(writer storage.Writer) error {
 		var updates []update
-		err := writer.ForEachPartition(func(
+		err := forEachDefaultSearchBaseConfiguration(writer, func(
 			partition string,
 			entry directory.Entry,
 		) error {
@@ -126,6 +155,20 @@ func normalizeDefaultSearchBaseConfigurationWithNormalizer(
 		}
 		return nil
 	})
+}
+
+func forEachDefaultSearchBaseConfiguration(
+	reader storage.Reader,
+	visit func(string, directory.Entry) error,
+) error {
+	for _, partition := range []string{configurationStoragePartition, ""} {
+		if err := reader.ForEachIn(partition, func(entry directory.Entry) error {
+			return visit(partition, entry)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func loadDefaultSearchBase(

@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -280,20 +279,37 @@ func (monitor *monitorState) observeResponse(
 	connection *monitorConnection,
 	encoded []byte,
 ) {
-	operationTag, ok := monitorResponseTag(encoded)
-	if !ok {
+	monitor.observeResponses(connection, [][]byte{encoded})
+}
+
+func (monitor *monitorState) observeResponses(
+	connection *monitorConnection,
+	encodedValues [][]byte,
+) {
+	var bytesCount, pduCount, entryCount, referralCount uint64
+	for _, encoded := range encodedValues {
+		operationTag, ok := monitorResponseTag(encoded)
+		if !ok {
+			continue
+		}
+		bytesCount += uint64(len(encoded))
+		pduCount++
+		switch operationTag {
+		case ldapwire.ApplicationSearchResultEntry:
+			entryCount++
+		case ldapwire.ApplicationSearchResultReference:
+			referralCount++
+		}
+	}
+	if pduCount == 0 {
 		return
 	}
-	monitor.bytes.Add(uint64(len(encoded)))
-	monitor.pdus.Add(1)
-	switch operationTag {
-	case ldapwire.ApplicationSearchResultEntry:
-		monitor.entries.Add(1)
-	case ldapwire.ApplicationSearchResultReference:
-		monitor.referrals.Add(1)
-	}
+	monitor.bytes.Add(bytesCount)
+	monitor.pdus.Add(pduCount)
+	monitor.entries.Add(entryCount)
+	monitor.referrals.Add(referralCount)
 	connection.mu.Lock()
-	connection.writes++
+	connection.writes += pduCount
 	connection.activityAt = time.Now().UTC()
 	connection.mu.Unlock()
 }
@@ -386,15 +402,83 @@ func monitorOperationIndex(request ldapwire.Request) (int, bool) {
 }
 
 func monitorResponseTag(encoded []byte) (uint64, bool) {
-	packet, err := ber.DecodePacketErr(encoded)
-	if err != nil || len(packet.Children) < 2 {
+	outerClass, outerConstructed, outerTag, content, remaining, ok :=
+		consumeMonitorBERElement(encoded)
+	if !ok || len(remaining) != 0 || outerClass != 0 ||
+		!outerConstructed || outerTag != 16 {
 		return 0, false
 	}
-	operation := packet.Children[1]
-	if operation.ClassType != ber.ClassApplication {
+	messageClass, messageConstructed, messageTag, _, content, ok :=
+		consumeMonitorBERElement(content)
+	if !ok || messageClass != 0 || messageConstructed || messageTag != 2 {
 		return 0, false
 	}
-	return uint64(operation.Tag), true
+	operationClass, _, operationTag, _, trailing, ok :=
+		consumeMonitorBERElement(content)
+	if !ok || operationClass != 1 {
+		return 0, false
+	}
+	if len(trailing) > 0 {
+		controlClass, controlConstructed, controlTag, _, rest, controlOK :=
+			consumeMonitorBERElement(trailing)
+		if !controlOK || controlClass != 2 || !controlConstructed ||
+			controlTag != 0 || len(rest) != 0 {
+			return 0, false
+		}
+	}
+	return operationTag, true
+}
+
+func consumeMonitorBERElement(
+	encoded []byte,
+) (class uint8, constructed bool, tag uint64, content, remaining []byte, ok bool) {
+	if len(encoded) < 2 {
+		return 0, false, 0, nil, nil, false
+	}
+	identifier := encoded[0]
+	class = identifier >> 6
+	constructed = identifier&0x20 != 0
+	tag = uint64(identifier & 0x1f)
+	position := 1
+	if tag == 0x1f {
+		tag = 0
+		if position >= len(encoded) || encoded[position]&0x7f == 0 {
+			return 0, false, 0, nil, nil, false
+		}
+		for {
+			if position >= len(encoded) || tag > (^uint64(0)>>7) {
+				return 0, false, 0, nil, nil, false
+			}
+			value := encoded[position]
+			position++
+			tag = tag<<7 | uint64(value&0x7f)
+			if value&0x80 == 0 {
+				break
+			}
+		}
+	}
+	if position >= len(encoded) {
+		return 0, false, 0, nil, nil, false
+	}
+	lengthByte := encoded[position]
+	position++
+	length := uint64(lengthByte)
+	if lengthByte&0x80 != 0 {
+		width := int(lengthByte & 0x7f)
+		if width == 0 || width > 8 || width > len(encoded)-position {
+			return 0, false, 0, nil, nil, false
+		}
+		length = 0
+		for _, value := range encoded[position : position+width] {
+			length = length<<8 | uint64(value)
+		}
+		position += width
+	}
+	if length > uint64(len(encoded)-position) {
+		return 0, false, 0, nil, nil, false
+	}
+	end := position + int(length)
+	return class, constructed, tag, encoded[position:end], encoded[end:], true
 }
 
 func monitorAddress(address net.Addr) string {

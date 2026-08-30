@@ -61,6 +61,18 @@ func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
 	})
 }
 
+func (store *Memory) CurrentStorageSnapshotRevision() (uint64, bool) {
+	if store == nil {
+		return 0, false
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if store.closed {
+		return 0, false
+	}
+	return store.revision, true
+}
+
 func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -584,6 +596,7 @@ func (tx *memoryTx) validateEntry(key string, entry directory.Entry) error {
 		entry,
 		tx.dnIdentities[key],
 		tx.dnSources[key],
+		nil,
 	); err != nil {
 		return fmt.Errorf("entry key %q: %w", key, err)
 	}

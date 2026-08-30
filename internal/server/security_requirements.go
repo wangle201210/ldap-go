@@ -599,7 +599,8 @@ func requestSecurityPolicy(
 	state *connectionState,
 	request ldapwire.Request,
 ) (*runtimeDatabase, operationPolicyKind, bool) {
-	if state == nil || state.runtime == nil {
+	if state == nil || state.runtime == nil ||
+		!runtimeHasConfiguredOperationSecurity(state.runtime) {
 		return nil, policyRead, false
 	}
 	var rawDN string
@@ -624,7 +625,7 @@ func requestSecurityPolicy(
 	default:
 		return nil, policyRead, false
 	}
-	dn, err := parseRuntimeConnectionDN(state.runtime, rawDN)
+	dn, err := parseConnectionDN(state, rawDN)
 	if err != nil {
 		return nil, kind, false
 	}
@@ -634,14 +635,30 @@ func requestSecurityPolicy(
 		}
 		return nil, kind, true
 	}
-	if isRuntimeSubschemaDN(state.runtime, dn) {
+	if dn.Depth() == 1 && isRuntimeSubschemaDN(state.runtime, dn) {
 		return nil, kind, true
 	}
-	database := databaseForDN(state.runtime, dn)
+	database := databaseForNormalizedDN(state.runtime, dn)
 	if database == nil {
 		return nil, kind, false
 	}
 	return database, kind, true
+}
+
+func runtimeHasConfiguredOperationSecurity(runtime *runtimeState) bool {
+	if runtime == nil {
+		return false
+	}
+	if !runtime.security.empty() || runtime.requires != 0 {
+		return true
+	}
+	for index := range runtime.databases {
+		if !runtime.databases[index].security.empty() ||
+			runtime.databases[index].requires != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func requestSecurityResult(

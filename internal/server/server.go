@@ -355,6 +355,9 @@ func New(config Config) (*Server, error) {
 	}
 	config.Store = server.config.Store
 	server.syncConsumers = newSyncConsumerManager(server)
+	if err := server.partitionLegacyConfigurationEntries(context.Background()); err != nil {
+		return nil, err
+	}
 	var runtime *runtimeState
 	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
 		var err error
@@ -392,19 +395,21 @@ func New(config Config) (*Server, error) {
 	if err := server.migrateRuntimeDNIdentities(context.Background(), runtime); err != nil {
 		return nil, err
 	}
-	if err := config.Store.Update(
-		context.Background(),
-		func(writer storage.Writer) error {
-			if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
-				return err
-			}
-			if err := server.ensureAccesslogContainers(writer, runtime); err != nil {
-				return err
-			}
-			return server.ensurePcachePersistence(writer, runtime)
-		},
-	); err != nil {
-		return nil, fmt.Errorf("initialize runtime-owned entries: %w", err)
+	if runtimeNeedsOwnedEntries(runtime) {
+		if err := config.Store.Update(
+			context.Background(),
+			func(writer storage.Writer) error {
+				if err := server.ensureAutoCAAuthorities(writer, runtime); err != nil {
+					return err
+				}
+				if err := server.ensureAccesslogContainers(writer, runtime); err != nil {
+					return err
+				}
+				return server.ensurePcachePersistence(writer, runtime)
+			},
+		); err != nil {
+			return nil, fmt.Errorf("initialize runtime-owned entries: %w", err)
+		}
 	}
 	previousRuntime := runtime
 	err = config.Store.View(context.Background(), func(reader storage.Reader) error {
@@ -436,6 +441,21 @@ func New(config Config) (*Server, error) {
 	server.activateRuntime(runtime)
 	started = true
 	return server, nil
+}
+
+func runtimeNeedsOwnedEntries(runtime *runtimeState) bool {
+	if runtime == nil {
+		return false
+	}
+	if runtime.features.pcache || runtimeHasAccesslog(runtime) {
+		return true
+	}
+	for index := range runtime.databases {
+		if runtime.databases[index].autoca != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
@@ -2781,6 +2801,24 @@ func (server *Server) isRoot(
 	if rawDN == "" {
 		return false
 	}
+	for index := range runtime.databases {
+		database := &runtime.databases[index]
+		if database.rootDN == nil || rawDN != database.rootDN.String() {
+			continue
+		}
+		if targetDN == "" {
+			if attribute == "children" {
+				return true
+			}
+			continue
+		}
+		for _, suffix := range database.suffixes {
+			text := suffix.String()
+			if targetDN == text || strings.HasSuffix(targetDN, ","+text) {
+				return true
+			}
+		}
+	}
 	subject, err := parseRuntimeConnectionDN(runtime, rawDN)
 	if err != nil {
 		return false
@@ -2822,6 +2860,17 @@ func isAnyDatabaseRoot(runtime *runtimeState, subject directory.DN) bool {
 
 func databaseForDN(runtime *runtimeState, dn directory.DN) *runtimeDatabase {
 	index := databaseIndexForDN(runtime.databases, dn)
+	if index < 0 {
+		return nil
+	}
+	return &runtime.databases[index]
+}
+
+func databaseForNormalizedDN(runtime *runtimeState, dn directory.DN) *runtimeDatabase {
+	if runtime == nil {
+		return nil
+	}
+	index := databaseIndexForNormalizedDN(runtime.databases, dn)
 	if index < 0 {
 		return nil
 	}

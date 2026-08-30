@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"sync"
 	"unsafe"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -33,6 +34,8 @@ type pagedSortedItem struct {
 	route        int
 	dn           string
 	normalizedDN directory.DN
+	selected     directory.Entry
+	hasSelected  bool
 }
 
 type pagedSortedSearch struct {
@@ -77,6 +80,98 @@ type pagedSearchContext struct {
 	hasStorageRevision bool
 }
 
+type pagedSnapshotCache struct {
+	mu      sync.Mutex
+	entries map[pagedSnapshotCacheKey]pagedSnapshotCacheEntry
+	bytes   int64
+	maximum int64
+}
+
+type pagedSnapshotCacheKey struct {
+	fingerprint [sha256.Size]byte
+	revision    uint64
+}
+
+type pagedSnapshotCacheEntry struct {
+	items []pagedSortedItem
+	bytes int64
+}
+
+func newPagedSnapshotCache(maximum int64) *pagedSnapshotCache {
+	return &pagedSnapshotCache{
+		entries: make(map[pagedSnapshotCacheKey]pagedSnapshotCacheEntry),
+		maximum: maximum,
+	}
+}
+
+func (cache *pagedSnapshotCache) get(
+	fingerprint [sha256.Size]byte,
+	revision uint64,
+) []pagedSortedItem {
+	if cache == nil {
+		return nil
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry, ok := cache.entries[pagedSnapshotCacheKey{
+		fingerprint: fingerprint,
+		revision:    revision,
+	}]
+	if !ok {
+		return nil
+	}
+	return append([]pagedSortedItem(nil), entry.items...)
+}
+
+func (cache *pagedSnapshotCache) put(
+	fingerprint [sha256.Size]byte,
+	revision uint64,
+	items []pagedSortedItem,
+) {
+	if cache == nil || len(items) == 0 {
+		return
+	}
+	retained := int64(cap(items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
+	for _, item := range items {
+		retained += pagedSortedItemBytes(item)
+	}
+	if retained > cache.maximum {
+		return
+	}
+	key := pagedSnapshotCacheKey{fingerprint: fingerprint, revision: revision}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if previous, ok := cache.entries[key]; ok {
+		cache.bytes -= previous.bytes
+	}
+	if cache.bytes+retained > cache.maximum || len(cache.entries) >= 64 {
+		clear(cache.entries)
+		cache.bytes = 0
+	}
+	cache.entries[key] = pagedSnapshotCacheEntry{
+		items: append([]pagedSortedItem(nil), items...),
+		bytes: retained,
+	}
+	cache.bytes += retained
+}
+
+func pagedSortedItemBytes(item pagedSortedItem) int64 {
+	retained := int64(len(item.dn) * 2)
+	if !item.hasSelected {
+		return retained
+	}
+	retained += int64(len(item.selected.DN))
+	retained += int64(cap(item.selected.Attributes)) * int64(unsafe.Sizeof(directory.Attribute{}))
+	for _, attribute := range item.selected.Attributes {
+		retained += int64(len(attribute.Description))
+		retained += int64(cap(attribute.Values)) * int64(unsafe.Sizeof([]byte(nil)))
+		for _, value := range attribute.Values {
+			retained += int64(len(value))
+		}
+	}
+	return retained
+}
+
 func (server *Server) preparePagedSearch(
 	ctx context.Context,
 	state *connectionState,
@@ -119,13 +214,21 @@ func (server *Server) preparePagedSearch(
 		if paging.size == 0 {
 			return nil, nil
 		}
-		return &pagedSearchContext{
+		context := &pagedSearchContext{
 			size:        paging.size,
 			fingerprint: fingerprint,
 			runtime:     state.runtime,
 			totalLimit:  limits.pageTotal,
 			noEstimate:  limits.pageNoEstimate,
-		}, nil
+		}
+		if revision, ok := server.currentStorageSnapshotRevision(ctx); ok {
+			if items := state.runtime.pagedSnapshots.get(fingerprint, revision); len(items) != 0 {
+				context.sorted = &pagedSortedSearch{items: items, live: true}
+				context.storageRevision = revision
+				context.hasStorageRevision = true
+			}
+		}
+		return context, nil
 	}
 
 	if len(paging.cookie) != pagedResultsCookieLength {
@@ -277,6 +380,9 @@ func (server *Server) completePagedSearch(
 func (server *Server) currentStorageSnapshotRevision(
 	ctx context.Context,
 ) (uint64, bool) {
+	if provider, ok := server.config.Store.(storage.SnapshotRevisionStore); ok {
+		return provider.CurrentStorageSnapshotRevision()
+	}
 	var revision uint64
 	found := false
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
@@ -325,7 +431,7 @@ func pagedSortedSearchRetainedBytes(sorted *pagedSortedSearch) int64 {
 	}
 	size += int64(cap(sorted.items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
 	for _, item := range sorted.items {
-		size += int64(len(item.dn) * 2)
+		size += pagedSortedItemBytes(item)
 	}
 	return size
 }

@@ -141,7 +141,7 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(ldapwire.ResultEntryAlreadyExists, ""),
 		)
 	}
-	database := databaseForDN(state.runtime, dn)
+	database := databaseForNormalizedDN(state.runtime, dn)
 	if database == nil {
 		return server.writeOperationResult(
 			connection,
@@ -683,7 +683,7 @@ func (server *Server) handleModify(
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
-	database := databaseForDN(state.runtime, dn)
+	database := databaseForNormalizedDN(state.runtime, dn)
 	if database == nil {
 		return server.writeOperationResult(
 			connection,
@@ -1487,7 +1487,7 @@ func (server *Server) handleDelete(
 			ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "subschema is read-only"),
 		)
 	}
-	database := databaseForDN(state.runtime, dn)
+	database := databaseForNormalizedDN(state.runtime, dn)
 	if database == nil {
 		return server.writeOperationResult(
 			connection,
@@ -1902,7 +1902,7 @@ func (server *Server) handleModifyDN(
 		)
 	}
 
-	database := databaseForDN(state.runtime, oldDN)
+	database := databaseForNormalizedDN(state.runtime, oldDN)
 	if database == nil {
 		return server.writeOperationResult(
 			connection,
@@ -1961,7 +1961,7 @@ func (server *Server) handleModifyDN(
 		return err
 	}
 	defer frontendSeqmodRelease()
-	destinationDatabase := databaseForDN(state.runtime, newDN)
+	destinationDatabase := databaseForNormalizedDN(state.runtime, newDN)
 	databaseSeqmodRelease, err := acquireDatabaseSeqmod(ctx, *database, oldDN)
 	if err != nil {
 		return err
@@ -2708,7 +2708,7 @@ func (server *Server) handleCompare(
 	subschemaTarget := isRuntimeSubschemaDN(state.runtime, dn)
 	var database *runtimeDatabase
 	if !rootDSETarget && !subschemaTarget {
-		database = databaseForDN(state.runtime, dn)
+		database = databaseForNormalizedDN(state.runtime, dn)
 		if database == nil {
 			return server.writeOperationResult(
 				connection,

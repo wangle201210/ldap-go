@@ -501,6 +501,7 @@ func checkBoltDatabase(
 				entry,
 				stored.DNIdentity,
 				stored.DNSource,
+				stored.DNBinding,
 			); err != nil {
 				return fmt.Errorf(
 					"entry key %q does not match DN %q: %w",

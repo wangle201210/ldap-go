@@ -239,6 +239,63 @@ func TestMonitorListenerURLPreservesTLCPListenerScheme(t *testing.T) {
 	}
 }
 
+func TestMonitorResponseTagReadsLDAPEnvelopeWithoutDecodingPayload(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{{
+			Description: "jpegPhoto",
+			Values:      [][]byte{{0, 0xff, 0x10}},
+		}},
+	}
+	encoded := ldapwire.EncodeSearchResultEntry(128, entry, nil)
+	tag, ok := monitorResponseTag(encoded)
+	if !ok || tag != ldapwire.ApplicationSearchResultEntry {
+		t.Fatalf("monitorResponseTag() = %d, %t", tag, ok)
+	}
+	for _, malformed := range [][]byte{
+		nil,
+		{0x30, 0x80},
+		{0x30, 0x03, 0x02, 0x01, 0x01},
+		append(encoded, 0),
+	} {
+		if tag, ok := monitorResponseTag(malformed); ok {
+			t.Fatalf("monitorResponseTag(%x) = %d, true", malformed, tag)
+		}
+	}
+}
+
+func TestMonitorObserveResponsesAggregatesBatch(t *testing.T) {
+	t.Parallel()
+
+	monitor := newMonitorState()
+	connection := &monitorConnection{}
+	entry := ldapwire.EncodeSearchResultEntry(
+		1,
+		directory.Entry{DN: "dc=example,dc=com"},
+		nil,
+	)
+	done := ldapwire.EncodeSearchResultDone(
+		1,
+		ldapwire.Result{Code: ldapwire.ResultSuccess},
+		nil,
+	)
+	monitor.observeResponses(connection, [][]byte{entry, entry, done, {0x00}})
+	if got := monitor.entries.Load(); got != 2 {
+		t.Fatalf("entries = %d, want 2", got)
+	}
+	if got := monitor.pdus.Load(); got != 3 {
+		t.Fatalf("PDUs = %d, want 3", got)
+	}
+	if got := monitor.bytes.Load(); got != uint64(2*len(entry)+len(done)) {
+		t.Fatalf("bytes = %d", got)
+	}
+	if connection.writes != 3 || connection.activityAt.IsZero() {
+		t.Fatalf("connection counters = %#v", connection)
+	}
+}
+
 func TestMonitorStateConcurrentSnapshots(t *testing.T) {
 	t.Parallel()
 

@@ -15,9 +15,51 @@ func (server *Server) migrateRuntimeDNIdentities(
 	ctx context.Context,
 	runtime *runtimeState,
 ) error {
+	current, err := runtimeDNIdentityFingerprintsCurrent(
+		ctx,
+		server.config.Store,
+		runtime,
+	)
+	if err != nil || current {
+		return err
+	}
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
 		return migrateRuntimeDNIdentitiesInWriter(writer, runtime)
 	})
+}
+
+func runtimeDNIdentityFingerprintsCurrent(
+	ctx context.Context,
+	store storage.Store,
+	runtime *runtimeState,
+) (bool, error) {
+	if runtime == nil || runtime.schema == nil {
+		return true, nil
+	}
+	fingerprint := runtime.schema.DNIdentityFingerprint()
+	partitions := make(map[string]struct{})
+	for _, database := range runtime.databases {
+		if databaseUsesLocalContentStorage(database) &&
+			database.partition != configurationStoragePartition {
+			partitions[database.partition] = struct{}{}
+		}
+	}
+	current := true
+	err := store.View(ctx, func(reader storage.Reader) error {
+		for partition := range partitions {
+			stored, err := reader.Metadata(runtimeDNIdentityFingerprintMetadataKey(partition))
+			switch {
+			case errors.Is(err, storage.ErrMetadataNotFound):
+				current = false
+			case err != nil:
+				return err
+			case !bytes.Equal(stored, fingerprint[:]):
+				current = false
+			}
+		}
+		return nil
+	})
+	return current, err
 }
 
 func migrateRuntimeDNIdentitiesInWriter(

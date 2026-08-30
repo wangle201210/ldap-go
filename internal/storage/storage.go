@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -53,6 +54,20 @@ type Store interface {
 	Close() error
 }
 
+type bulkUpdateStore interface {
+	UpdateBulk(ctx context.Context, fn func(Writer) error) error
+}
+
+// UpdateBulk uses dense backend pages for one atomic offline build when the
+// store supports it. Online transactions retain the backend's random-write
+// fill policy.
+func UpdateBulk(ctx context.Context, store Store, fn func(Writer) error) error {
+	if bulk, ok := store.(bulkUpdateStore); ok {
+		return bulk.UpdateBulk(ctx, fn)
+	}
+	return store.Update(ctx, fn)
+}
+
 // MaintenanceReaderProvider exposes the backend reader hidden by a contextual
 // decorator. Storage maintenance uses it for backend-specific identity and
 // index capabilities; normal directory reads continue through the decorator.
@@ -83,6 +98,12 @@ type MaintenanceMutationObserver interface {
 // snapshot. Callers may use it only for immutable derived-data caches.
 type SnapshotRevisionReader interface {
 	StorageSnapshotRevision() (uint64, bool)
+}
+
+// SnapshotRevisionStore exposes the latest committed revision without opening
+// a read transaction. It is used only to validate immutable derived caches.
+type SnapshotRevisionStore interface {
+	CurrentStorageSnapshotRevision() (uint64, bool)
 }
 
 // ReaderSnapshotRevision unwraps maintenance decorators until it finds a
@@ -321,6 +342,31 @@ func validateSchemaAwareDNBindingsIn(
 	return validator.validateSchemaAwareDNBindingsIn(partition, normalizer)
 }
 
+// ValidateSchemaAwareDNIdentities verifies that a partition has no legacy
+// physical keys and that every v2 key matches the supplied schema semantics.
+func ValidateSchemaAwareDNIdentities(
+	reader Reader,
+	partition string,
+	normalizer directory.DNAttributeNormalizer,
+) error {
+	if normalizer == nil {
+		return errors.New("DN attribute normalizer is required")
+	}
+	backend := maintenanceReader(reader)
+	identityStore, ok := backend.(schemaAwareDNIdentityStorage)
+	if !ok {
+		return errors.New("reader does not support schema-aware DN identities")
+	}
+	ready, err := identityStore.schemaAwareDNIdentityReady(partition)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("partition %q: %w", partition, ErrDNIdentityMigrationRequired)
+	}
+	return validateSchemaAwareDNBindingsIn(reader, partition, normalizer)
+}
+
 // PutInWithDN stores an entry under an explicitly normalized DN identity. It
 // keeps the broad Writer contract backward compatible while allowing importers
 // that have loaded cn=config schema to opt into v2 keys.
@@ -455,48 +501,62 @@ func validateStoredEntryIdentity(
 	entry directory.Entry,
 	storedIdentity string,
 	storedSource string,
+	storedBinding []byte,
 ) error {
 	dn, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return fmt.Errorf("invalid entry DN %q: %w", entry.DN, err)
 	}
 	if isSchemaAwareDNKey(physicalKey) {
-		if storedIdentity == "" {
-			return fmt.Errorf(
-				"schema-aware physical key %q has no DN identity binding",
-				physicalKey,
-			)
-		}
-		if storedIdentity != physicalKey {
-			return fmt.Errorf(
-				"schema-aware physical key %q does not match stored DN identity %q",
-				physicalKey,
-				storedIdentity,
-			)
-		}
-		if storedSource == "" {
-			return fmt.Errorf(
-				"schema-aware physical key %q has no source DN binding",
-				physicalKey,
-			)
-		}
-		sourceDN, err := directory.ParseDN(storedSource)
-		if err != nil {
-			return fmt.Errorf("invalid stored source DN %q: %w", storedSource, err)
-		}
-		if !sourceDN.EqualExact(dn) {
-			return fmt.Errorf(
-				"stored source DN %q does not match entry DN %q",
-				storedSource,
-				entry.DN,
-			)
+		if len(storedBinding) > 0 {
+			if storedIdentity != "" || storedSource != "" {
+				return errors.New("entry carries both explicit and digest DN bindings")
+			}
+			if len(storedBinding) != sha256.Size {
+				return fmt.Errorf("DN binding has invalid length %d", len(storedBinding))
+			}
+			expected := entryDNBinding(physicalKey, entry.DN)
+			if !bytes.Equal(storedBinding, expected[:]) {
+				return fmt.Errorf("schema-aware physical key %q has an invalid DN binding", physicalKey)
+			}
+		} else {
+			if storedIdentity == "" {
+				return fmt.Errorf(
+					"schema-aware physical key %q has no DN identity binding",
+					physicalKey,
+				)
+			}
+			if storedIdentity != physicalKey {
+				return fmt.Errorf(
+					"schema-aware physical key %q does not match stored DN identity %q",
+					physicalKey,
+					storedIdentity,
+				)
+			}
+			if storedSource == "" {
+				return fmt.Errorf(
+					"schema-aware physical key %q has no source DN binding",
+					physicalKey,
+				)
+			}
+			sourceDN, err := directory.ParseDN(storedSource)
+			if err != nil {
+				return fmt.Errorf("invalid stored source DN %q: %w", storedSource, err)
+			}
+			if !sourceDN.EqualExact(dn) {
+				return fmt.Errorf(
+					"stored source DN %q does not match entry DN %q",
+					storedSource,
+					entry.DN,
+				)
+			}
 		}
 		if err := dn.ValidateIdentityKey(physicalKey); err != nil {
 			return fmt.Errorf("invalid schema-aware physical key %q: %w", physicalKey, err)
 		}
 		return nil
 	}
-	if storedIdentity != "" || storedSource != "" {
+	if storedIdentity != "" || storedSource != "" || len(storedBinding) != 0 {
 		return fmt.Errorf(
 			"legacy physical key %q unexpectedly carries DN identity binding",
 			physicalKey,

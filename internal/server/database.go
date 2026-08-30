@@ -630,8 +630,79 @@ type databaseEqualityIndexInitialization struct {
 }
 
 type databaseEqualityIndexNormalizer struct {
-	registry databaseEqualityIndexRegistry
-	config   storage.EqualityIndexConfig
+	registry     databaseEqualityIndexRegistry
+	config       storage.EqualityIndexConfig
+	validationMu sync.Mutex
+	validation   map[string]databaseEqualityIndexValidation
+	dnCacheMu    sync.Mutex
+	dnCache      map[string]directory.DN
+}
+
+type databaseEqualityIndexValidation struct {
+	revision uint64
+	current  bool
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexValidation(
+	partition string,
+	revision uint64,
+) (bool, bool) {
+	if normalizer == nil {
+		return false, false
+	}
+	normalizer.validationMu.Lock()
+	defer normalizer.validationMu.Unlock()
+	validation, ok := normalizer.validation[partition]
+	return validation.current, ok && validation.revision == revision
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) StoreEqualityIndexValidation(
+	partition string,
+	revision uint64,
+	current bool,
+) {
+	if normalizer == nil {
+		return
+	}
+	normalizer.validationMu.Lock()
+	defer normalizer.validationMu.Unlock()
+	if normalizer.validation == nil {
+		normalizer.validation = make(map[string]databaseEqualityIndexValidation)
+	}
+	normalizer.validation[partition] = databaseEqualityIndexValidation{
+		revision: revision,
+		current:  current,
+	}
+}
+
+func (normalizer *databaseEqualityIndexNormalizer) ResolveDNIdentityHint(
+	entry directory.Entry,
+	identity string,
+) (directory.Entry, error) {
+	key := identity + "\x00" + entry.DN
+	normalizer.dnCacheMu.Lock()
+	dn, found := normalizer.dnCache[key]
+	normalizer.dnCacheMu.Unlock()
+	if !found {
+		var err error
+		dn, err = directory.ParseDNWithIdentityKey(entry.DN, identity)
+		if err != nil {
+			return directory.Entry{}, err
+		}
+		normalizer.dnCacheMu.Lock()
+		if len(normalizer.dnCache) >= 8192 {
+			clear(normalizer.dnCache)
+		}
+		if normalizer.dnCache == nil {
+			normalizer.dnCache = make(map[string]directory.DN)
+		}
+		normalizer.dnCache[key] = dn
+		normalizer.dnCacheMu.Unlock()
+	}
+	return entry.WithNormalizedDNHint(
+		dn,
+		dn.LegacyKey()+"\x00"+identity,
+	), nil
 }
 
 func (normalizer *databaseEqualityIndexNormalizer) NormalizeDNAttribute(

@@ -14,6 +14,17 @@ type accessContextStore struct {
 	storage.Store
 }
 
+func (store *accessContextStore) CurrentStorageSnapshotRevision() (uint64, bool) {
+	if store == nil {
+		return 0, false
+	}
+	provider, ok := store.Store.(storage.SnapshotRevisionStore)
+	if !ok {
+		return 0, false
+	}
+	return provider.CurrentStorageSnapshotRevision()
+}
+
 func (store *accessContextStore) View(
 	ctx context.Context,
 	view func(storage.Reader) error,

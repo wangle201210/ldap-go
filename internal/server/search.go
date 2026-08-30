@@ -1191,6 +1191,19 @@ func (server *Server) handleSearch(
 	}
 	snapshotPaging := paging != nil && !sorting.active() && syncSearch == nil &&
 		!state.runtime.features.chain
+	snapshotCacheable := snapshotPaging && controls.assertion == nil &&
+		pagedSnapshotFilterCacheable(state.runtime.schema, request.Filter)
+	snapshotEntriesCacheable := snapshotCacheable &&
+		pagedSnapshotAttributesCacheable(state.runtime.schema, request.Attributes)
+	if snapshotCacheable {
+		for _, route := range routes {
+			database := state.runtime.databases[route.databaseIndex]
+			if !server.isDatabaseRoot(state.runtime, database, state.boundDN) {
+				snapshotCacheable = false
+				break
+			}
+		}
+	}
 	if snapshotPaging {
 		for _, route := range translucentRoutes {
 			if route != nil {
@@ -1199,6 +1212,8 @@ func (server *Server) handleSearch(
 			}
 		}
 	}
+	snapshotCacheable = snapshotCacheable && snapshotPaging
+	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
 
 	candidates := make([]searchCandidate, 0)
 	snapshotItems := make([]pagedSortedItem, 0)
@@ -1302,6 +1317,11 @@ func (server *Server) handleSearch(
 		primary := routes[0]
 		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
 		primaryReader := readerForDatabase(reader, *primaryDatabase)
+		primaryRoot := server.isDatabaseRoot(
+			state.runtime,
+			*primaryDatabase,
+			state.boundDN,
+		)
 		primaryBase, err := storage.NormalizeReaderDN(primaryReader, base)
 		if err != nil {
 			return fmt.Errorf("normalize primary search base %q: %w", base.String(), err)
@@ -1389,7 +1409,7 @@ func (server *Server) handleSearch(
 		if err != nil {
 			return err
 		}
-		if !server.allowed(
+		if !primaryRoot && !server.allowed(
 			state.runtime,
 			primaryReader,
 			state.boundDN,
@@ -1448,11 +1468,14 @@ func (server *Server) handleSearch(
 			database := &state.runtime.databases[route.databaseIndex]
 			routeContext := withSQLBackendScopeRequirements(ctx, route.base, route.scope)
 			tx := readerForDatabase(reader, *database, routeContext)
-			routeRoot := server.isDatabaseRoot(
-				state.runtime,
-				*database,
-				state.boundDN,
-			)
+			routeRoot := primaryRoot && routeIndex == 0
+			if routeIndex != 0 {
+				routeRoot = server.isDatabaseRoot(
+					state.runtime,
+					*database,
+					state.boundDN,
+				)
+			}
 			scopeBase, normalizeErr := storage.NormalizeReaderDN(tx, route.base)
 			if normalizeErr != nil {
 				return fmt.Errorf(
@@ -1792,7 +1815,7 @@ func (server *Server) handleSearch(
 						dn:           entry.DN,
 						normalizedDN: candidate,
 					})
-					if len(candidates) >= entryLimit {
+					if len(candidates) >= entryLimit && !snapshotEntriesCacheable {
 						return nil
 					}
 				}
@@ -1856,6 +1879,16 @@ func (server *Server) handleSearch(
 					request.Attributes,
 					request.TypesOnly,
 				)
+				if snapshotEntriesCacheable {
+					if len(snapshotItems) > 8192 {
+						snapshotEntriesCacheable = false
+						snapshotCacheable = false
+					} else {
+						item := &snapshotItems[len(snapshotItems)-1]
+						item.selected = selected
+						item.hasSelected = true
+					}
+				}
 				if syncSearch == nil &&
 					(controls.valueSort == nil || !controls.valueSort.raw) {
 					applyValueSort(
@@ -2181,13 +2214,28 @@ func (server *Server) handleSearch(
 			}
 		}
 	} else if snapshotPaging {
-		pageEnd := len(candidates)
-		entries = selectedSearchEntries(candidates)
+		pageEnd := min(entryLimit, len(candidates))
+		entries = selectedSearchEntries(candidates[:pageEnd])
+		if pageEnd > 0 {
+			last := candidates[pageEnd-1]
+			lastCursor = pagedSearchCursor{
+				route: last.route,
+				dnKey: last.cursorKey,
+				valid: true,
+			}
+		}
 		paging.sorted = &pagedSortedSearch{
 			items:     snapshotItems,
 			offset:    pageEnd,
 			truncated: sortTruncated,
 			live:      true,
+		}
+		if snapshotCacheable && paging.hasStorageRevision {
+			state.runtime.pagedSnapshots.put(
+				paging.fingerprint,
+				paging.storageRevision,
+				snapshotItems,
+			)
 		}
 		switch {
 		case result.Code != ldapwire.ResultSuccess:
@@ -2257,6 +2305,48 @@ func (server *Server) handleSearch(
 		sortLease = nil
 	}
 	return writeErr
+}
+
+func pagedSnapshotFilterCacheable(
+	registry *schema.Registry,
+	filter directory.Filter,
+) bool {
+	if registry == nil {
+		return false
+	}
+	if filter.Attribute != "" && registry.IsOperational(filter.Attribute) {
+		return false
+	}
+	if filter.Kind == directory.FilterExtensible && filter.Attribute == "" {
+		return false
+	}
+	for _, child := range filter.Children {
+		if !pagedSnapshotFilterCacheable(registry, child) {
+			return false
+		}
+	}
+	return true
+}
+
+func pagedSnapshotAttributesCacheable(
+	registry *schema.Registry,
+	attributes []string,
+) bool {
+	if registry == nil {
+		return false
+	}
+	for _, attribute := range attributes {
+		switch attribute {
+		case "", "1.1":
+			continue
+		case "*", "+":
+			return false
+		}
+		if registry.IsOperational(attribute) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeConnectionSearchRequestBase(
@@ -2452,6 +2542,28 @@ func (server *Server) continueSortedPagedSearch(
 	if sorted == nil {
 		return nil, result, false, errors.New("sorted paged search state is absent")
 	}
+	pageEnd := min(sorted.offset+paging.size, len(sorted.items))
+	allSelected := sorted.live
+	for index := sorted.offset; allSelected && index < pageEnd; index++ {
+		allSelected = sorted.items[index].hasSelected
+	}
+	if allSelected {
+		for sorted.offset < pageEnd {
+			if expired(deadline) {
+				result.Code = ldapwire.ResultTimeLimitExceeded
+				return entries, result, false, nil
+			}
+			entries = append(entries, sorted.items[sorted.offset].selected)
+			sorted.offset++
+		}
+		if sorted.offset < len(sorted.items) {
+			return entries, result, true, nil
+		}
+		if sorted.truncated {
+			result.Code = ldapwire.ResultSizeLimitExceeded
+		}
+		return entries, result, false, nil
+	}
 
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		collectivePlans := newCollectiveAttributePlanCache(
@@ -2493,7 +2605,16 @@ func (server *Server) continueSortedPagedSearch(
 				result.Code = ldapwire.ResultTimeLimitExceeded
 				return nil
 			}
+			if len(entries) >= paging.size {
+				hasMore = true
+				return nil
+			}
 			item := sorted.items[sorted.offset]
+			if item.hasSelected {
+				entries = append(entries, item.selected)
+				sorted.offset++
+				continue
+			}
 			if item.route < 0 || item.route >= len(routes) {
 				return fmt.Errorf("sorted paged search route %d is invalid", item.route)
 			}
@@ -2562,10 +2683,6 @@ func (server *Server) continueSortedPagedSearch(
 			) {
 				sorted.offset++
 				continue
-			}
-			if len(entries) >= paging.size {
-				hasMore = true
-				return nil
 			}
 			responseEntry, err := collectResponses.apply(*database, entry)
 			if err != nil {

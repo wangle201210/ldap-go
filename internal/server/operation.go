@@ -721,9 +721,7 @@ func (connection *serializedResponseConnection) writeLockedBatch(
 	}
 	written, err := connection.writeRawLocked(combined)
 	if err == nil && connection.monitor != nil && connection.monitorConnection != nil {
-		for _, value := range values {
-			connection.monitor.observeResponse(connection.monitorConnection, value)
-		}
+		connection.monitor.observeResponses(connection.monitorConnection, values)
 	}
 	return written, err
 }

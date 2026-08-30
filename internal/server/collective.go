@@ -190,7 +190,7 @@ func (cache *collectiveAttributePlanCache) plan(
 			var err error
 			plan, err = buildCollectiveAttributePlan(cache.registry, planReader)
 			if err != nil {
-					return nil, err
+				return nil, err
 			}
 		}
 		cache.plans[cacheKey] = plan

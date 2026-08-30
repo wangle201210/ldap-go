@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -31,9 +32,57 @@ func TestBinaryEntryCodecRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeStoredEntry(): %v", err)
 	}
+	wantBinding := entryDNBinding("normalized-key", entry.DN)
 	if !reflect.DeepEqual(decoded.Entry, entry) ||
-		decoded.DNIdentity != "normalized-key" || decoded.DNSource != entry.DN {
+		!bytes.Equal(decoded.DNBinding, wantBinding[:]) ||
+		decoded.DNIdentity != "" || decoded.DNSource != "" {
 		t.Fatalf("decoded entry = %#v", decoded)
+	}
+}
+
+func TestEntryCodecReadsBinaryV1(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{{
+			Description: "uid",
+			Values:      [][]byte{[]byte("alice")},
+		}},
+	}
+	encoded := append([]byte(nil), entryBinaryV1Prefix...)
+	encoded = appendEntryBinaryField(encoded, []byte(entry.DN))
+	encoded = appendEntryBinaryField(encoded, []byte("normalized-key"))
+	encoded = appendEntryBinaryField(encoded, []byte(entry.DN))
+	encoded = binary.AppendUvarint(encoded, 1)
+	encoded = appendEntryBinaryField(encoded, []byte("uid"))
+	encoded = binary.AppendUvarint(encoded, 1)
+	encoded = appendEntryBinaryField(encoded, []byte("alice"))
+
+	decoded, err := decodeStoredEntry(encoded)
+	if err != nil {
+		t.Fatalf("decodeStoredEntry(): %v", err)
+	}
+	if !reflect.DeepEqual(decoded.Entry, entry) ||
+		decoded.DNIdentity != "normalized-key" || decoded.DNSource != entry.DN ||
+		len(decoded.DNBinding) != 0 {
+		t.Fatalf("decoded v1 entry = %#v", decoded)
+	}
+}
+
+func TestEntryCodecDNBindingRejectsAnotherPhysicalKey(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{DN: "uid=alice,dc=example,dc=com"}
+	binding := entryDNBinding("dn:v2:first", entry.DN)
+	if err := validateStoredEntryIdentity(
+		"dn:v2:second",
+		entry,
+		"",
+		"",
+		binding[:],
+	); err == nil {
+		t.Fatal("validateStoredEntryIdentity() accepted a binding for another key")
 	}
 }
 

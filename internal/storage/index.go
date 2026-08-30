@@ -135,6 +135,20 @@ type equalityIndexCandidatePlanner interface {
 	planEqualityIndexCandidates(directory.Filter) ([]directory.Entry, bool, error)
 }
 
+// EqualityIndexValidationCache lets an immutable schema adapter retain the
+// result of comparing its expected index configuration with one storage
+// snapshot. A new storage revision always forces validation again.
+type EqualityIndexValidationCache interface {
+	EqualityIndexValidation(partition string, revision uint64) (current, known bool)
+	StoreEqualityIndexValidation(partition string, revision uint64, current bool)
+}
+
+// DNIdentityHintResolver resolves a stored physical identity through a
+// runtime-owned bounded cache.
+type DNIdentityHintResolver interface {
+	ResolveDNIdentityHint(entry directory.Entry, identity string) (directory.Entry, error)
+}
+
 // ForEachFilterCandidate visits an index-reduced candidate set when the reader
 // has a complete compatible equality index. planned=false means the caller
 // must perform its normal full scan. Every returned entry still requires scope,
@@ -350,12 +364,28 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	if !ok {
 		return nil, false, nil
 	}
+	revision, hasRevision := ReaderSnapshotRevision(reader.Reader)
+	validationCache, cacheable := schema.(EqualityIndexValidationCache)
+	if hasRevision && cacheable {
+		if current, known := validationCache.EqualityIndexValidation(
+			reader.partition,
+			revision,
+		); known {
+			if !current {
+				return nil, false, nil
+			}
+			return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter)
+		}
+	}
 	want, err := normalizeEqualityIndexConfig(schema.EqualityIndexConfiguration())
 	if err != nil || len(want.Attributes) == 0 {
 		return nil, false, err
 	}
 	stored, present, err := indexed.equalityIndexConfig(reader.partition)
 	if err != nil || !present {
+		if err == nil && hasRevision && cacheable {
+			validationCache.StoreEqualityIndexValidation(reader.partition, revision, false)
+		}
 		return nil, false, err
 	}
 	stored, err = normalizeEqualityIndexConfig(stored)
@@ -363,9 +393,22 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 		return nil, false, nil
 	}
 	if !equalityIndexConfigsEqual(stored, want) {
+		if hasRevision && cacheable {
+			validationCache.StoreEqualityIndexValidation(reader.partition, revision, false)
+		}
 		return nil, false, nil
 	}
+	if hasRevision && cacheable {
+		validationCache.StoreEqualityIndexValidation(reader.partition, revision, true)
+	}
+	return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter)
+}
 
+func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
+	indexed equalityIndexStorageReader,
+	schema EqualityIndexSchema,
+	filter directory.Filter,
+) ([]directory.Entry, bool, error) {
 	keys, planned, err := planEqualityIndexFilter(
 		indexed,
 		reader.partition,
@@ -381,6 +424,20 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	}
 	sort.Strings(ordered)
 	entries, err := indexed.equalityIndexEntries(ordered)
+	if err == nil {
+		if resolver, ok := schema.(DNIdentityHintResolver); ok {
+			for index := range entries {
+				identity, present := entries[index].DNIdentity()
+				if !present {
+					continue
+				}
+				entries[index], err = resolver.ResolveDNIdentityHint(entries[index], identity)
+				if err != nil {
+					return nil, false, err
+				}
+			}
+		}
+	}
 	return entries, true, err
 }
 
@@ -874,6 +931,43 @@ func equalityIndexEntryTerms(
 		terms[attribute.Attribute] = result
 	}
 	return terms, nil
+}
+
+func equalityIndexEntriesHaveSameTerms(
+	schema EqualityIndexSchema,
+	config EqualityIndexConfig,
+	left, right directory.Entry,
+) (bool, error) {
+	leftTerms, err := equalityIndexEntryTerms(schema, config, left)
+	if err != nil {
+		return false, err
+	}
+	rightTerms, err := equalityIndexEntryTerms(schema, config, right)
+	if err != nil {
+		return false, err
+	}
+	for _, definition := range config.Attributes {
+		leftSet := make(map[string]struct{})
+		for _, term := range equalityIndexTermsForAttribute(
+			definition,
+			leftTerms[definition.Attribute],
+		) {
+			leftSet[string(append([]byte{term.kind}, term.value...))] = struct{}{}
+		}
+		rightValues := equalityIndexTermsForAttribute(
+			definition,
+			rightTerms[definition.Attribute],
+		)
+		if len(leftSet) != len(rightValues) {
+			return false, nil
+		}
+		for _, term := range rightValues {
+			if _, ok := leftSet[string(append([]byte{term.kind}, term.value...))]; !ok {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 func uniqueIndexValues(values [][]byte) [][]byte {

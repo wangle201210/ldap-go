@@ -273,8 +273,15 @@ func parseConnectionDN(
 	var runtime *runtimeState
 	if state != nil {
 		runtime = state.runtime
+		if cached, ok := state.dnCache.get(runtime, value); ok {
+			return cached, nil
+		}
 	}
-	return parseRuntimeConnectionDN(runtime, value)
+	dn, err := parseRuntimeConnectionDN(runtime, value)
+	if err == nil && state != nil {
+		state.dnCache.put(runtime, value, dn)
+	}
+	return dn, err
 }
 
 func parseRuntimeConnectionDN(
