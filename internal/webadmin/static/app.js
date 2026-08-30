@@ -892,11 +892,11 @@
     ["#bulk-clear-button", "bulk.clear"],
     ["#list-view", "content.directoryEntriesLabel", "attr:aria-label"],
     ["#content-state strong", "search.loading"],
-    [".entry-table th:nth-child(1)", "content.relativeName"],
-    [".entry-table th:nth-child(2)", "content.type"],
-    [".entry-table th:nth-child(3)", "content.description"],
-    [".entry-table th:nth-child(4)", "content.modified"],
-    [".entry-table th:nth-child(5) .sr-only", "content.open"],
+    ["#column-relative-name", "content.relativeName"],
+    ["#column-type", "content.type"],
+    ["#column-description", "content.description"],
+    ["#column-modified", "content.modified"],
+    ["#column-open", "content.open"],
     ["#detail-view", "entry.attributesLabel", "attr:aria-label"],
     ["#copy-entry-dn", "entry.copyDN", "attr:title"],
     ["#detail-status", "entry.active"],
@@ -3291,5 +3291,11 @@
     catch (_) { toast("actions.copyFailed", translated("actions.clipboardDenied"), "error"); }
   }
 
-  initialize();
+  initialize().catch((error) => {
+	elements.shell.setAttribute("aria-busy", "false");
+	setConnection("error", "session.serverUnavailable");
+	showState("error", "session.directoryUnavailable", error && error.message || t("session.serverUnreachable"), {
+	  labelKey: "search.retry", handler: () => window.location.reload()
+	});
+  });
 })();

@@ -57,6 +57,9 @@ func TestStaticApplicationChineseLocaleContract(t *testing.T) {
 		`id="group-members"`,
 		`id="menu-export-csv"`,
 		`id="menu-export-json"`,
+		`id="select-page"`,
+		`id="column-relative-name"`,
+		`id="column-open"`,
 	} {
 		if !strings.Contains(indexBody, marker) {
 			t.Errorf("index does not contain %q", marker)
@@ -84,6 +87,8 @@ func TestStaticApplicationChineseLocaleContract(t *testing.T) {
 		`function renderGroupMembers(`,
 		`function openCloneDialog()`,
 		`function exportData(format)`,
+		`["#column-relative-name", "content.relativeName"]`,
+		`["#column-open", "content.open"]`,
 		"\"app.title\": \"LDAP \u8fd0\u7ef4\u7ba1\u7406\"",
 		"\"search.filter\": \"LDAP \u8fc7\u6ee4\u5668\"",
 		"\"import.content\": \"LDIF \u5185\u5bb9\"",
@@ -91,6 +96,9 @@ func TestStaticApplicationChineseLocaleContract(t *testing.T) {
 		if !strings.Contains(assetBody, marker) {
 			t.Errorf("app.js does not contain %q", marker)
 		}
+	}
+	if strings.Contains(assetBody, `.entry-table th:nth-child`) {
+		t.Error("table header localization must not replace structural th contents")
 	}
 
 	englishKeys := localeKeys(t, assetBody, "en", `"zh-CN"`)
