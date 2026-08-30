@@ -9,16 +9,16 @@
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to directory content</a>
-  <div class="app-shell" id="app-shell" aria-busy="true">
+	  <div class="app-shell" id="app-shell" aria-busy="false">
     <header class="topbar">
-      <button class="icon-button mobile-only" id="mobile-menu" type="button" aria-label="Open directory navigation" title="Directory navigation">&#9776;</button>
+      <button class="icon-button mobile-only" id="mobile-menu" type="button" aria-label="Open directory navigation" title="Directory navigation" hidden>&#9776;</button>
       <div class="brand" aria-label="LDAP Operations">
         <canvas id="brand-mark" width="34" height="34" aria-hidden="true"></canvas>
         <span class="brand-copy"><strong>LDAP</strong><small>OPERATIONS</small></span>
       </div>
       <div class="environment">
         <span class="status-dot" id="connection-dot" aria-hidden="true"></span>
-        <span id="connection-label">Connecting</span>
+        <span id="connection-label" role="status" aria-live="polite" aria-atomic="true">Connecting</span>
         <span class="environment-divider" aria-hidden="true"></span>
         <span class="truncate" id="root-label">Directory</span>
       </div>
@@ -34,28 +34,28 @@
           <button type="button" data-language="en" aria-pressed="true" title="English">EN</button>
           <button type="button" data-language="zh-CN" aria-pressed="false" title="Simplified Chinese">中文</button>
         </div>
-        <button class="account-button" id="account-button" type="button" aria-haspopup="true" aria-expanded="false">
+        <button class="account-button" id="account-button" type="button" aria-haspopup="menu" aria-controls="account-menu" aria-expanded="false">
           <span class="avatar" id="account-avatar" aria-hidden="true">A</span>
           <span class="account-copy"><strong id="account-name">Administrator</strong><small id="account-dn">Not signed in</small></span>
           <span aria-hidden="true">&#9662;</span>
         </button>
-        <div class="account-menu" id="account-menu" hidden>
-          <button type="button" id="menu-import"><span aria-hidden="true">&#8679;</span> Import LDIF</button>
-          <button type="button" id="menu-import-csv"><span aria-hidden="true">&#8679;</span> Import CSV</button>
-          <button type="button" id="menu-export"><span aria-hidden="true">&#8681;</span> Export LDIF</button>
-          <button type="button" id="menu-export-csv"><span aria-hidden="true">&#8681;</span> Export CSV</button>
-          <button type="button" id="menu-export-json"><span aria-hidden="true">&#8681;</span> Export JSON</button>
-          <button type="button" id="logout-button"><span aria-hidden="true">&#8594;</span> Sign out</button>
+        <div class="account-menu" id="account-menu" role="menu" aria-labelledby="account-button" hidden>
+	          <button type="button" id="menu-import" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8679;</span> Import LDIF</button>
+	          <button type="button" id="menu-import-csv" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8679;</span> Import CSV</button>
+	          <button type="button" id="menu-export" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8681;</span> Export LDIF</button>
+	          <button type="button" id="menu-export-csv" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8681;</span> Export CSV</button>
+	          <button type="button" id="menu-export-json" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8681;</span> Export JSON</button>
+	          <button type="button" id="logout-button" role="menuitem" tabindex="-1"><span aria-hidden="true">&#8594;</span> Sign out</button>
         </div>
       </div>
       <div class="activity-line" id="activity-line" hidden></div>
     </header>
 
     <div class="workspace" id="workspace" data-mobile-view="content">
-      <aside class="navigation-pane" id="navigation-pane" aria-label="Directory navigation">
+	      <aside class="navigation-pane" id="navigation-pane" aria-label="Directory navigation" tabindex="-1">
         <div class="pane-tabs" role="tablist" aria-label="Directory tools">
           <button id="tree-tab" role="tab" aria-selected="true" aria-controls="tree-panel" type="button">Tree</button>
-          <button id="search-tab" role="tab" aria-selected="false" aria-controls="search-panel" type="button">Search</button>
+	          <button id="search-tab" role="tab" aria-selected="false" aria-controls="search-panel" type="button" tabindex="-1">Search</button>
         </div>
         <section class="pane-section tab-panel" id="tree-panel" role="tabpanel" aria-labelledby="tree-tab">
           <div class="section-heading">
@@ -78,7 +78,7 @@
 			  <div><label for="search-size">Limit</label><input id="search-size" name="size" type="number" min="1" max="5000" value="500"></div>
             </div>
             <label for="search-attributes">Attributes</label>
-            <input id="search-attributes" name="attributes" placeholder="*, +" autocomplete="off" spellcheck="false">
+			<input id="search-attributes" name="attributes" placeholder="objectClass, description, title" autocomplete="off" spellcheck="false">
           </form>
           <div class="saved-filters" aria-label="Common searches">
             <button type="button" data-filter="(objectClass=person)">People</button>
@@ -131,7 +131,7 @@
               <button type="button" class="active" id="list-view-button" aria-pressed="true">Entries</button>
               <button type="button" id="detail-view-button" aria-pressed="false" disabled>Attributes</button>
             </div>
-		    <div class="result-summary" id="result-summary">No results</div>
+		    <div class="result-summary" id="result-summary" role="status" aria-live="polite" aria-atomic="true">No results</div>
 		    <div class="page-actions" aria-label="Search result pages"><button class="icon-button" id="previous-page" type="button" aria-label="Previous result page" title="Previous page" disabled>&lsaquo;</button><button class="icon-button" id="next-page" type="button" aria-label="Next result page" title="Next page" disabled>&rsaquo;</button></div>
           </div>
           <div class="bulk-toolbar" id="bulk-toolbar" hidden>
@@ -141,7 +141,7 @@
         </div>
 
         <section class="content-body" id="list-view" aria-label="Directory entries">
-          <div class="state-view" id="content-state">
+          <div class="state-view" id="content-state" role="status" aria-live="polite" aria-atomic="true">
             <div class="spinner" aria-hidden="true"></div><strong>Loading entries</strong>
           </div>
           <div class="table-wrap" id="entry-table-wrap" hidden>
@@ -161,13 +161,19 @@
           <div class="mobile-detail-actions" aria-label="Entry actions">
             <button class="button quiet" id="mobile-rename-button" type="button"><span aria-hidden="true">&#9998;</span> Rename</button>
             <button class="button quiet" id="mobile-password-button" type="button"><span aria-hidden="true">&#9919;</span> Password</button>
-            <button class="button quiet danger-text" id="mobile-delete-button" type="button"><span aria-hidden="true">&#128465;</span> Delete</button>
+            <button class="button quiet" id="mobile-clone-button" type="button" aria-label="Clone selected entry" title="Clone"><span aria-hidden="true">&#10697;</span> Clone</button>
+	            <details class="mobile-entry-more" id="mobile-entry-more">
+	              <summary class="button quiet" aria-label="More entry actions" title="More entry actions"><span aria-hidden="true">&#8942;</span><span class="mobile-more-label">More</span></summary>
+	              <div class="mobile-entry-menu" id="mobile-entry-menu">
+	                <button class="button quiet danger-text" id="mobile-delete-button" type="button"><span aria-hidden="true">&#128465;</span> Delete</button>
+              </div>
+            </details>
           </div>
           <section class="group-members" id="group-members" hidden>
             <div class="editor-heading"><div><h3>Group members</h3><p id="group-member-count">0 members</p></div><label class="check-row" for="include-nested-members"><input id="include-nested-members" type="checkbox"><span>Include nested members</span></label></div>
             <div class="group-member-list" id="group-member-list"></div>
             <form class="group-member-form" id="group-member-form">
-              <label class="sr-only" for="group-member-value">Member DN or uid</label><input id="group-member-value" autocomplete="off" spellcheck="false" placeholder="uid=user,ou=people,dc=example,dc=org" required>
+              <div class="group-member-field"><label for="group-member-value">Member DN or uid</label><input id="group-member-value" autocomplete="off" spellcheck="false" placeholder="uid=user,ou=people,dc=example,dc=org" required></div>
               <button class="button quiet" type="submit">Add member</button>
               <button class="button quiet danger-text" id="remove-group-members" type="button" disabled>Remove selected</button>
             </form>
@@ -181,10 +187,10 @@
         </section>
       </main>
 
-      <aside class="context-pane" id="context-pane" aria-label="Directory context">
+	      <aside class="context-pane" id="context-pane" aria-label="Directory context" tabindex="-1">
         <div class="pane-tabs" role="tablist" aria-label="Context tools">
           <button id="schema-tab" role="tab" aria-selected="true" aria-controls="schema-panel" type="button">Schema</button>
-          <button id="monitor-tab" role="tab" aria-selected="false" aria-controls="monitor-panel" type="button">Monitor</button>
+	          <button id="monitor-tab" role="tab" aria-selected="false" aria-controls="monitor-panel" type="button" tabindex="-1">Monitor</button>
         </div>
         <section class="context-section tab-panel" id="schema-panel" role="tabpanel" aria-labelledby="schema-tab">
 		  <div class="section-heading"><div><span class="eyebrow">Context</span><h2>Object classes</h2></div><button class="icon-button" id="refresh-schema" type="button" aria-label="Refresh schema" title="Refresh schema">&#8635;</button></div>
@@ -194,7 +200,7 @@
         </section>
         <section class="context-section tab-panel" id="monitor-panel" role="tabpanel" aria-labelledby="monitor-tab" hidden>
           <div class="section-heading"><div><span class="eyebrow">Runtime</span><h2>Server monitor</h2></div><button class="icon-button" id="refresh-monitor" type="button" aria-label="Refresh monitor" title="Refresh monitor">&#8635;</button></div>
-          <div class="monitor-health" id="monitor-health"><span class="health-icon" aria-hidden="true">&#10003;</span><div><strong>Checking server</strong><small>Waiting for monitor data</small></div></div>
+          <div class="monitor-health" id="monitor-health" role="status" aria-live="polite" aria-atomic="true"><span class="health-icon" aria-hidden="true">&#10003;</span><div><strong>Checking server</strong><small>Waiting for monitor data</small></div></div>
           <dl class="metric-grid" id="metric-grid"></dl>
           <div class="monitor-list" id="monitor-list"></div>
         </section>
@@ -202,9 +208,9 @@
     </div>
   </div>
 
-  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+	  <div class="toast-region" id="toast-region"></div>
 
-	<dialog class="modal login-modal" id="login-dialog" aria-labelledby="login-title">
+	<dialog class="modal login-modal" id="login-dialog" aria-labelledby="login-title" aria-describedby="login-description">
     <form method="dialog" id="login-form">
 	  <div class="login-heading">
         <div class="login-brand"><canvas id="login-mark" width="46" height="46" aria-hidden="true"></canvas><div><strong>LDAP Operations</strong><span>Secure administration</span></div></div>
@@ -214,7 +220,7 @@
         </div>
       </div>
 	  <h2 id="login-title">Sign in</h2>
-      <p class="modal-subtitle">Use an administrator directory account.</p>
+	      <p class="modal-subtitle" id="login-description">Use an administrator directory account.</p>
       <div class="form-field"><label for="login-dn">Bind DN</label><input id="login-dn" name="dn" autocomplete="username" spellcheck="false" required autofocus placeholder="cn=admin,dc=example,dc=org"></div>
       <div class="form-field"><label for="login-password">Password</label><div class="password-input"><input id="login-password" name="password" type="password" autocomplete="current-password" required><button class="icon-button" id="toggle-password" type="button" aria-label="Show password" title="Show password">&#9673;</button></div></div>
       <div class="form-error" id="login-error" role="alert" hidden></div>
@@ -222,85 +228,105 @@
     </form>
   </dialog>
 
-	<dialog class="modal" id="entry-dialog" aria-labelledby="entry-dialog-title">
-	    <form method="dialog" id="entry-form">
-	  <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="entry-dialog-title">Create entry</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-	      <div class="form-field"><label for="new-entry-template">Entry type</label><select id="new-entry-template"><option value="person">Person</option><option value="posixAccount">POSIX account</option><option value="group">Group</option><option value="uniqueGroup">Unique-name group</option><option value="posixGroup">POSIX group</option><option value="ou">Organizational unit</option><option value="custom">Custom</option></select></div>
-	      <div class="form-field"><label for="new-entry-dn">Distinguished name</label><input id="new-entry-dn" name="dn" spellcheck="false" required></div>
-	      <div class="form-field"><label for="new-entry-classes">Object classes</label><textarea id="new-entry-classes" rows="3" spellcheck="false" required>top\nperson\norganizationalPerson\ninetOrgPerson</textarea></div>
-	      <div class="editor-heading create-attributes-heading"><div><h3>Attributes</h3></div><button class="button quiet" id="add-entry-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div>
-	      <div class="attribute-list create-attribute-list" id="new-entry-attribute-list"></div>
-	      <div class="form-error" id="entry-form-error" role="alert" hidden></div>
+	<dialog class="modal" id="entry-dialog" aria-labelledby="entry-dialog-title" aria-describedby="entry-dialog-description">
+	    <form class="modal-form" method="dialog" id="entry-form">
+	      <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="entry-dialog-title">Create entry</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
+	      <div class="modal-body">
+			<p class="sr-only" id="entry-dialog-description">Add an LDAP directory entry.</p>
+	        <div class="form-field"><label for="new-entry-template">Entry type</label><select id="new-entry-template"><option value="person">Person</option><option value="posixAccount">POSIX account</option><option value="group">Group</option><option value="uniqueGroup">Unique-name group</option><option value="posixGroup">POSIX group</option><option value="ou">Organizational unit</option><option value="custom">Custom</option></select></div>
+	        <div class="form-field"><label for="new-entry-dn">Distinguished name</label><input id="new-entry-dn" name="dn" spellcheck="false" required></div>
+	        <div class="form-field"><label for="new-entry-classes">Object classes</label><textarea id="new-entry-classes" rows="4" spellcheck="false" required>top
+person
+organizationalPerson
+inetOrgPerson</textarea></div>
+	        <div class="editor-heading create-attributes-heading"><div><h3>Attributes</h3></div><button class="button quiet" id="add-entry-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div>
+	        <div class="attribute-list create-attribute-list" id="new-entry-attribute-list"></div>
+	        <div class="form-error" id="entry-form-error" role="alert" hidden></div>
+	      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Create entry</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal" id="rename-dialog" aria-labelledby="rename-dialog-title">
-    <form method="dialog" id="rename-form">
+	<dialog class="modal" id="rename-dialog" aria-labelledby="rename-dialog-title" aria-describedby="rename-dialog-description">
+    <form class="modal-form" method="dialog" id="rename-form">
 	  <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="rename-dialog-title">Rename or move</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-      <div class="form-field"><label for="rename-rdn">New RDN</label><input id="rename-rdn" spellcheck="false" required></div>
-      <div class="form-field"><label for="rename-superior">New parent DN</label><input id="rename-superior" spellcheck="false"></div>
-      <label class="check-row"><input id="rename-delete-old" type="checkbox" checked><span>Remove old RDN value</span></label>
-      <div class="form-error" id="rename-error" role="alert" hidden></div>
+	      <div class="modal-body">
+			<p class="sr-only" id="rename-dialog-description">Change the relative name or parent of this entry.</p>
+        <div class="form-field"><label for="rename-rdn">New RDN</label><input id="rename-rdn" spellcheck="false" required></div>
+        <div class="form-field"><label for="rename-superior">New parent DN</label><input id="rename-superior" spellcheck="false"></div>
+        <label class="check-row"><input id="rename-delete-old" type="checkbox" checked><span>Remove old RDN value</span></label>
+        <div class="form-error" id="rename-error" role="alert" hidden></div>
+      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Apply change</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal" id="password-dialog" aria-labelledby="password-dialog-title">
-    <form method="dialog" id="password-form">
+	<dialog class="modal" id="password-dialog" aria-labelledby="password-dialog-title" aria-describedby="password-target">
+    <form class="modal-form" method="dialog" id="password-form">
 	  <div class="modal-header"><div><span class="eyebrow">Credentials</span><h2 id="password-dialog-title">Reset password</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-      <p class="target-dn" id="password-target"></p>
-      <div class="form-field"><label for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password" minlength="8" required></div>
-      <div class="form-field"><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" required></div>
-      <div class="form-error" id="password-error" role="alert" hidden></div>
+      <div class="modal-body">
+        <p class="target-dn" id="password-target"></p>
+	        <div class="form-field"><label for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password" required></div>
+        <div class="form-field"><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" required></div>
+        <div class="form-error" id="password-error" role="alert" hidden></div>
+      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Reset password</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal import-modal" id="import-dialog" aria-labelledby="import-dialog-title">
-    <form method="dialog" id="import-form">
+	<dialog class="modal import-modal" id="import-dialog" aria-labelledby="import-dialog-title" aria-describedby="import-dialog-description">
+    <form class="modal-form" method="dialog" id="import-form">
 	  <div class="modal-header"><div><span class="eyebrow">LDIF</span><h2 id="import-dialog-title">Import entries</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-      <div class="file-picker"><input id="import-file" type="file" accept=".ldif,text/plain"><label for="import-file"><span aria-hidden="true">&#8679;</span><strong id="import-file-name">Choose LDIF file</strong><small>UTF-8 text</small></label></div>
-      <div class="divider-label"><span>or paste LDIF</span></div>
-      <div class="form-field"><label class="sr-only" for="import-content">LDIF content</label><textarea id="import-content" rows="12" spellcheck="false" placeholder="dn: uid=user,dc=example,dc=org"></textarea></div>
-      <div class="form-error" id="import-error" role="alert" hidden></div>
+	      <div class="modal-body">
+			<p class="sr-only" id="import-dialog-description">Import LDAP Data Interchange Format changes.</p>
+        <div class="file-picker"><input id="import-file" type="file" accept=".ldif,text/plain"><label for="import-file"><span aria-hidden="true">&#8679;</span><strong id="import-file-name">Choose LDIF file</strong><small>UTF-8 text</small></label></div>
+        <div class="divider-label"><span>or paste LDIF</span></div>
+        <div class="form-field"><label class="sr-only" for="import-content">LDIF content</label><textarea id="import-content" rows="12" spellcheck="false" placeholder="dn: uid=user,dc=example,dc=org"></textarea></div>
+        <div class="form-error" id="import-error" role="alert" hidden></div>
+      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Import</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal" id="bulk-modify-dialog" aria-labelledby="bulk-modify-title">
-    <form method="dialog" id="bulk-modify-form">
+	<dialog class="modal" id="bulk-modify-dialog" aria-labelledby="bulk-modify-title" aria-describedby="bulk-modify-description">
+    <form class="modal-form" method="dialog" id="bulk-modify-form">
 	  <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="bulk-modify-title">Modify selected entries</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-      <div class="form-field"><label for="bulk-operation">Operation</label><select id="bulk-operation"><option value="replace">Replace</option><option value="add">Add values</option><option value="delete">Delete values or attribute</option><option value="increment">Increment</option></select></div>
-      <div class="form-field"><label for="bulk-attribute">Attribute</label><input id="bulk-attribute" spellcheck="false" required></div>
-      <div class="form-field"><label for="bulk-values">Values</label><textarea id="bulk-values" rows="5" spellcheck="false"></textarea></div>
-      <label class="check-row" for="bulk-continue"><input id="bulk-continue" type="checkbox"><span>Continue after an entry fails</span></label>
-      <div class="form-error" id="bulk-modify-error" role="alert" hidden></div>
+	      <div class="modal-body">
+			<p class="sr-only" id="bulk-modify-description">Apply one LDAP modification to the selected entries.</p>
+        <div class="form-field"><label for="bulk-operation">Operation</label><select id="bulk-operation"><option value="replace">Replace</option><option value="add">Add values</option><option value="delete">Delete values or attribute</option><option value="increment">Increment</option></select></div>
+        <div class="form-field"><label for="bulk-attribute">Attribute</label><input id="bulk-attribute" spellcheck="false" required></div>
+        <div class="form-field"><label for="bulk-values">Values</label><textarea id="bulk-values" rows="5" spellcheck="false"></textarea></div>
+        <label class="check-row" for="bulk-continue"><input id="bulk-continue" type="checkbox"><span>Continue after an entry fails</span></label>
+        <div class="form-error" id="bulk-modify-error" role="alert" hidden></div>
+      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Apply to selected</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal import-modal" id="csv-import-dialog" aria-labelledby="csv-import-title">
-    <form method="dialog" id="csv-import-form">
+	<dialog class="modal import-modal" id="csv-import-dialog" aria-labelledby="csv-import-title" aria-describedby="csv-import-description">
+    <form class="modal-form" method="dialog" id="csv-import-form">
 	  <div class="modal-header"><div><span class="eyebrow">CSV</span><h2 id="csv-import-title">Import CSV entries</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-      <div class="file-picker"><input id="csv-import-file" type="file" accept=".csv,text/csv,text/plain"><label for="csv-import-file"><span aria-hidden="true">&#8679;</span><strong id="csv-import-file-name">Choose CSV file</strong><small>UTF-8 CSV</small></label></div>
-      <div class="form-grid two csv-import-options">
-        <div><label for="csv-import-base">Base DN</label><input id="csv-import-base" spellcheck="false" required></div>
-        <div><label for="csv-import-rdn">RDN attribute</label><input id="csv-import-rdn" value="uid" spellcheck="false" required></div>
-      </div>
-      <div class="form-field"><label for="csv-import-classes">Object classes</label><textarea id="csv-import-classes" rows="3" spellcheck="false" required>top
+	      <div class="modal-body">
+			<p class="sr-only" id="csv-import-description">Map CSV columns to LDAP attributes and create entries.</p>
+        <div class="file-picker"><input id="csv-import-file" type="file" accept=".csv,text/csv,text/plain"><label for="csv-import-file"><span aria-hidden="true">&#8679;</span><strong id="csv-import-file-name">Choose CSV file</strong><small>UTF-8 CSV</small></label></div>
+        <div class="form-grid two csv-import-options">
+          <div><label for="csv-import-base">Base DN</label><input id="csv-import-base" spellcheck="false" required></div>
+          <div><label for="csv-import-rdn">RDN attribute</label><input id="csv-import-rdn" value="uid" spellcheck="false" required></div>
+        </div>
+        <div class="form-field"><label for="csv-import-classes">Object classes</label><textarea id="csv-import-classes" rows="4" spellcheck="false" required>top
 person
 organizationalPerson
 inetOrgPerson</textarea></div>
-      <div class="form-field"><label for="csv-import-mapping">Column mapping</label><textarea id="csv-import-mapping" rows="5" spellcheck="false" placeholder="username=uid&#10;full_name=cn&#10;surname=sn" required></textarea><small>One CSV column=LDAP attribute per line</small></div>
-      <div class="form-field"><label class="sr-only" for="csv-import-content">CSV content</label><textarea id="csv-import-content" rows="8" spellcheck="false" required></textarea></div>
-      <label class="check-row" for="csv-import-continue"><input id="csv-import-continue" type="checkbox"><span>Continue after a row fails</span></label>
-      <div class="form-error" id="csv-import-error" role="alert" hidden></div>
+        <div class="form-field"><label for="csv-import-mapping">Column mapping</label><textarea id="csv-import-mapping" rows="5" spellcheck="false" placeholder="username=uid&#10;full_name=cn&#10;surname=sn" required></textarea><small>One CSV column=LDAP attribute per line</small></div>
+        <div class="form-field"><label for="csv-import-content">CSV content</label><textarea id="csv-import-content" rows="8" spellcheck="false" required></textarea></div>
+        <label class="check-row" for="csv-import-continue"><input id="csv-import-continue" type="checkbox"><span>Continue after a row fails</span></label>
+        <div class="form-error" id="csv-import-error" role="alert" hidden></div>
+      </div>
       <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Import entries</button></div>
     </form>
   </dialog>
 
-	<dialog class="modal confirm-modal" id="confirm-dialog" aria-labelledby="confirm-title">
+	<dialog class="modal confirm-modal" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
     <form method="dialog" id="confirm-form">
       <div class="confirm-icon" aria-hidden="true">!</div><h2 id="confirm-title">Confirm action</h2><p id="confirm-message"></p>
       <div class="modal-actions"><button class="button quiet" id="confirm-cancel" type="button">Cancel</button><button class="button danger" id="confirm-submit" type="submit">Confirm</button></div>

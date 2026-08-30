@@ -137,6 +137,79 @@ func TestAdvancedAdministrationRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestStaticApplicationCapabilitiesContract(t *testing.T) {
+	t.Parallel()
+	application, _ := newTestApplication(t, &fakeConnector{}, nil)
+
+	asset := httptest.NewRecorder()
+	application.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "https://admin.example/app.js", nil))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("app.js status = %d", asset.Code)
+	}
+	source := asset.Body.String()
+	for _, marker := range []string{
+		`const { data: capabilities } = await api("/api/capabilities")`,
+		`state.capabilities.max_search_size`,
+		`state.capabilities.page_size`,
+		`$("#search-size").max = String(searchMaximumSize())`,
+		`$("#search-size").value = String(searchDefaultSize())`,
+		`return Math.min(500, searchMaximumSize())`,
+		`size_limit: Math.min(searchMaximumSize()`,
+		`page_size: Math.min(searchMaximumSize()`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("app.js does not contain capabilities contract %q", marker)
+		}
+	}
+
+	capabilitiesFetch := strings.Index(source, `await api("/api/capabilities")`)
+	rootDSEFetch := strings.Index(source, `await api("/api/root-dse")`)
+	if capabilitiesFetch < 0 || rootDSEFetch < 0 || capabilitiesFetch > rootDSEFetch {
+		t.Errorf("workspace must load capabilities before root DSE: capabilities=%d root-dse=%d", capabilitiesFetch, rootDSEFetch)
+	}
+}
+
+func TestStaticApplicationMutationSafetyContract(t *testing.T) {
+	t.Parallel()
+	application, _ := newTestApplication(t, &fakeConnector{}, nil)
+	asset := httptest.NewRecorder()
+	application.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "https://admin.example/app.js", nil))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("app.js status = %d", asset.Code)
+	}
+	source := asset.Body.String()
+	for _, marker := range []string{
+		`csvRetryFingerprints: new Set()`,
+		`ldifRetryFingerprints: new Set()`,
+		`function canonicalLDIF(value)`,
+		`async function batchFingerprint(kind, value)`,
+		`function unsafeBatchOutcome(data, error = null)`,
+		`state.csvRetryFingerprints.add(fingerprint)`,
+		`state.ldifRetryFingerprints.add(fingerprint)`,
+		`$$("button, input, select, textarea", form)`,
+		`const generation = state.sessionGeneration`,
+		`sequence !== fileSequence || generation !== state.sessionGeneration || state.selectedDN !== readTargetDN`,
+		`node.toggle.classList.toggle("empty", !childCount && !node.nextCookie)`,
+		`affectedDNs.filter(Boolean).forEach((dn) => requestedBranches.push(parentDN(dn) || dn))`,
+		`await refreshAfterMutation([oldDN, newDN])`,
+		`function currentEditorAttributeValues(name)`,
+		`rule.type === "dITContentRules"`,
+		`schemaDefinitionTokens(rule, "NOT")`,
+		`async function runSearch(query = queryFromForm(), cookie = null, pageTransition = null)`,
+		`handler: () => runSearch(query, cookie, pageTransition)`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Errorf("app.js does not contain mutation safety contract %q", marker)
+		}
+	}
+	if strings.Contains(source, "RetryBlocked") {
+		t.Error("batch retry protection must not use an edit-cleared boolean lock")
+	}
+	if count := strings.Count(source, `openDialog(elements.importDialog)`); count != 1 {
+		t.Errorf("LDIF dialog open calls = %d, want only the explicit menu/button path", count)
+	}
+}
+
 func localeKeys(t *testing.T, source, start, end string) []string {
 	t.Helper()
 	startMarker := start + ": {"

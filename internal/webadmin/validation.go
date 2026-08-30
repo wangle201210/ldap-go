@@ -100,6 +100,9 @@ func validateAttributeMap(attributes map[string][]string, maximum int) error {
 		if err := validateAttribute(attribute, false); err != nil {
 			return err
 		}
+		if len(values) == 0 {
+			return fmt.Errorf("attribute %q requires at least one value", attribute)
+		}
 		if len(values) > maximumValuesPerAttribute {
 			return fmt.Errorf("attribute %q has too many values", attribute)
 		}

@@ -95,6 +95,9 @@ func (application *Application) handleSearch(response http.ResponseWriter, reque
 		return
 	}
 	defer release()
+	if rejectIncompleteReferrals(response, result) {
+		return
+	}
 	writeJSON(response, http.StatusOK, convertSearchResult(result))
 }
 
@@ -274,6 +277,9 @@ func (application *Application) handleGetEntry(response http.ResponseWriter, req
 		return
 	}
 	defer release()
+	if rejectIncompleteReferrals(response, result) {
+		return
+	}
 	if len(result.Entries) == 0 {
 		code := uint16(ldap.LDAPResultNoSuchObject)
 		writeAPIError(response, http.StatusNotFound, apiError{
@@ -311,8 +317,10 @@ func (application *Application) handleAddEntry(response http.ResponseWriter, req
 	for attribute, values := range input.Attributes {
 		ldapRequest.Attribute(attribute, values)
 	}
-	if err := current.client.Add(ldapRequest); err != nil {
-		writeLDAPError(response, err)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Add(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusCreated, map[string]string{"dn": input.DN})
@@ -368,8 +376,10 @@ func (application *Application) handleModifyEntry(response http.ResponseWriter, 
 			return
 		}
 	}
-	if err := current.client.Modify(ldapRequest); err != nil {
-		writeLDAPError(response, err)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Modify(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"dn": input.DN})
@@ -397,8 +407,11 @@ func (application *Application) handleDeleteEntry(response http.ResponseWriter, 
 		writeAPIError(response, http.StatusBadRequest, apiError{Code: "invalid_dn", Message: err.Error()})
 		return
 	}
-	if err := current.client.Del(ldap.NewDelRequest(dn, nil)); err != nil {
-		writeLDAPError(response, err)
+	ldapRequest := ldap.NewDelRequest(dn, nil)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Del(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"dn": dn})
@@ -435,10 +448,13 @@ func (application *Application) handleRename(response http.ResponseWriter, reque
 			return
 		}
 	}
-	if err := current.client.ModifyDN(ldap.NewModifyDNRequest(
+	ldapRequest := ldap.NewModifyDNRequest(
 		input.DN, input.NewRDN, input.DeleteOldRDN, input.NewSuperior,
-	)); err != nil {
-		writeLDAPError(response, err)
+	)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.ModifyDN(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"dn": input.DN})
@@ -465,23 +481,31 @@ func (application *Application) handlePasswordModify(response http.ResponseWrite
 		input.OldPassword = ""
 		input.NewPassword = ""
 	}()
-	if input.NewPassword == "" && input.OldPassword == "" {
-		writeAPIError(response, http.StatusBadRequest, apiError{Code: "invalid_request", Message: "old_password or new_password is required"})
-		return
-	}
-	ldapRequest := ldap.NewPasswordModifyRequest(
-		input.UserIdentity, input.OldPassword, input.NewPassword,
-	)
-	result, err := current.client.PasswordModify(ldapRequest)
-	ldapRequest.OldPassword = ""
-	ldapRequest.NewPassword = ""
-	if err != nil {
-		writeLDAPError(response, err)
+	userIdentity := input.UserIdentity
+	oldPassword := input.OldPassword
+	newPassword := input.NewPassword
+	var result *ldap.PasswordModifyResult
+	failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		ldapRequest := ldap.NewPasswordModifyRequest(userIdentity, oldPassword, newPassword)
+		var err error
+		result, err = client.PasswordModify(ldapRequest)
+		ldapRequest.OldPassword = ""
+		ldapRequest.NewPassword = ""
+		return err
+	})
+	if failure != nil {
+		if failure.LDAPResultCode != nil && *failure.LDAPResultCode == ldap.LDAPResultInvalidCredentials {
+			status = http.StatusUnprocessableEntity
+		}
+		writeAPIError(response, status, *failure)
 		return
 	}
 	generated := ""
 	if result != nil && result.GeneratedPassword != "" {
-		generated = base64.StdEncoding.EncodeToString([]byte(result.GeneratedPassword))
+		generated = result.GeneratedPassword
 	}
-	writeJSON(response, http.StatusOK, map[string]string{"generated_password_base64": generated})
+	writeJSON(response, http.StatusOK, map[string]string{
+		"generated_password":        generated,
+		"generated_password_base64": base64.StdEncoding.EncodeToString([]byte(generated)),
+	})
 }

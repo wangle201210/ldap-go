@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: test script-test vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak release-check release-upgrade-gate release-build release-gate compat full
+.PHONY: test script-test webadmin-e2e vet race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak release-check release-upgrade-gate release-build release-gate compat full
 
 test: script-test
 	go test ./... -count=1
@@ -8,6 +8,9 @@ test: script-test
 script-test:
 	./scripts/test-build-openldap-reference.sh
 	./scripts/qualification/test.sh
+
+webadmin-e2e:
+	npm run test:e2e
 
 vet:
 	go vet ./...
@@ -59,8 +62,8 @@ release-upgrade-gate:
 release-build:
 	./scripts/release/build-artifacts.sh
 
-release-gate: release-check release-upgrade-gate release-build
+release-gate: release-check release-upgrade-gate release-build webadmin-e2e
 
 compat: fmt-check vet platform-builds test openldap fuzz-smoke
 
-full: fmt-check vet platform-builds test race openldap-full fuzz
+full: fmt-check vet platform-builds test race openldap-full fuzz webadmin-e2e

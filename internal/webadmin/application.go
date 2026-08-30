@@ -183,6 +183,7 @@ func (application *Application) routes() http.Handler {
 	mux.HandleFunc("/api/login", application.handleLogin)
 	mux.HandleFunc("/api/logout", application.handleLogout)
 	mux.HandleFunc("/api/session", application.handleSession)
+	mux.HandleFunc("/api/capabilities", application.handleCapabilities)
 	mux.HandleFunc("/api/root-dse", application.handleRootDSE)
 	mux.HandleFunc("/api/root", application.handleRootDSE)
 	mux.HandleFunc("/api/search", application.handleSearch)
@@ -664,6 +665,54 @@ func writeLDAPError(response http.ResponseWriter, err error) {
 		Code: "ldap_error", Message: message, LDAPResultCode: &code,
 		LDAPResultName: ldap.LDAPResultCodeMap[code], MatchedDN: ldapError.MatchedDN,
 	})
+}
+
+func (application *Application) executeLDAPWrite(
+	ctx context.Context,
+	current *session,
+	operation func(Client) error,
+) (*apiError, int) {
+	operationContext, cancel := context.WithTimeout(ctx, application.config.OperationTimeout)
+	defer cancel()
+	if err := operationContext.Err(); err != nil {
+		failure := apiError{Code: "request_canceled", Message: "LDAP write was canceled before it started"}
+		status := http.StatusRequestTimeout
+		if errors.Is(err, context.DeadlineExceeded) {
+			failure.Code = "operation_deadline_exceeded"
+			failure.Message = "LDAP write exceeded the operation deadline before it started"
+			status = http.StatusGatewayTimeout
+		}
+		return &failure, status
+	}
+
+	err, interrupted := executeBatchWrite(operationContext, application, current, operation)
+	if err == nil {
+		return nil, 0
+	}
+	if errors.Is(err, errBatchApplicationClosed) {
+		return &apiError{
+			Code: "administration_closing", Message: "administration service is closing",
+		}, http.StatusServiceUnavailable
+	}
+	if interrupted {
+		failure := apiError{
+			Code:    "ldap_result_unknown",
+			Message: "LDAP write result is unknown because the request was canceled during the operation",
+		}
+		status := http.StatusRequestTimeout
+		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
+			failure.Message = "LDAP write result is unknown because the operation deadline was exceeded"
+			status = http.StatusGatewayTimeout
+		}
+		return &failure, status
+	}
+
+	failure, unknown := ldapWriteFailure(err)
+	if unknown {
+		application.scheduleSessionClose(current, nil)
+		return &failure, http.StatusBadGateway
+	}
+	return &failure, ldapHTTPStatus(*failure.LDAPResultCode)
 }
 
 func ldapHTTPStatus(code uint16) int {

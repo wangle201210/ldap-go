@@ -23,6 +23,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install browser test dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run real LDAP Web administration tests
+        run: npm run test:e2e
       - name: Validate release scripts
         run: make release-check
       - name: Run core and race gates

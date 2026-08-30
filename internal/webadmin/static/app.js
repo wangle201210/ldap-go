@@ -4,6 +4,8 @@
   const LANGUAGE_STORAGE_KEY = "ldap-go.webadmin.language";
   const QUERY_STORAGE_KEY = "ldap-go.webadmin.savedQueries";
   const QUERY_HISTORY_STORAGE_KEY = "ldap-go.webadmin.queryHistory";
+  const LIST_ATTRIBUTES = "objectClass, description, title, modifyTimestamp, createTimestamp";
+  const CONFIGURATION_ATTRIBUTE_SUGGESTIONS = ["olcPasswordHash"];
   const messages = {
     en: {
       "app.title": "LDAP Operations",
@@ -44,6 +46,8 @@
       "nav.root": "root",
       "nav.loading": "Loading",
       "nav.retryLoading": "Retry loading",
+      "nav.loadMore": "Load more",
+      "nav.collapse": "Collapse {name}",
       "nav.treeLoadFailed": "Tree load failed",
       "nav.loaded.one": "{count} entry loaded",
       "nav.loaded.other": "{count} entries loaded",
@@ -94,6 +98,7 @@
       "search.previousTitle": "Previous page",
       "search.next": "Next result page",
       "search.nextTitle": "Next page",
+      "search.tooManyAttributes": "Select no more than {limit} attributes",
       "actions.import": "Import",
       "actions.export": "Export",
       "actions.importLDIF": "Import LDIF",
@@ -117,6 +122,7 @@
       "actions.attributes": "Attributes",
       "actions.rename": "Rename",
       "actions.password": "Password",
+      "actions.more": "More",
       "actions.attribute": "Attribute",
       "actions.browseAttributes": "Browse attributes",
       "actions.discard": "Discard",
@@ -138,6 +144,7 @@
       "content.description": "Description",
       "content.modified": "Modified",
       "content.open": "Open",
+      "content.openEntry": "Open {name}",
       "entry.attributesLabel": "Entry attributes",
       "entry.directoryEntry": "Directory entry",
       "entry.noneSelected": "No entry selected",
@@ -210,6 +217,7 @@
       "bulk.delete": "Delete",
       "bulk.clear": "Clear",
       "bulk.title": "Modify selected entries",
+      "bulk.description": "Apply one LDAP modification to the selected entries.",
       "bulk.operation": "Operation",
       "bulk.replace": "Replace",
       "bulk.add": "Add values",
@@ -224,6 +232,8 @@
       "bulk.complete": "Bulk operation complete",
       "bulk.summary": "{applied} applied, {failed} failed, {unknown} unknown",
       "bulk.aborted": "Batch stopped: {reason}",
+      "bulk.entryFailure": "{dn}: {message}",
+      "bulk.notAttempted": "{count} entries were not attempted",
       "group.title": "Group members",
       "group.members.one": "{count} member",
       "group.members.other": "{count} members",
@@ -244,6 +254,23 @@
       "binary.confirmDelete": "Delete binary attribute?",
       "binary.confirmDeleteMessage": "All values of {attribute} will be removed.",
       "binary.readFailed": "Binary attribute could not be read",
+      "file.tooLarge": "File exceeds the {limit} byte limit",
+      "file.reading": "Wait for the selected file to finish loading",
+      "api.authenticationRequired": "Authentication is required",
+      "api.sessionExpired": "Your session has expired",
+      "api.sessionBusy": "Another directory operation is still running",
+      "api.accessDenied": "The directory denied this operation",
+      "api.noSuchObject": "The directory entry does not exist",
+      "api.alreadyExists": "A directory entry with that name already exists",
+      "api.constraintViolation": "The submitted values violate a directory constraint",
+      "api.invalidDN": "The distinguished name is invalid",
+      "api.invalidRequest": "The submitted request is invalid",
+      "api.bodyTooLarge": "The submitted data exceeds the server limit",
+      "api.capacityReached": "The administration service is at capacity; retry shortly",
+      "api.referralUnfollowed": "The directory returned a referral that was not followed",
+      "api.timeout": "The directory operation timed out",
+      "api.canceled": "The directory operation was canceled",
+      "api.unavailable": "The directory service is unavailable",
       "session.connecting": "Connecting",
       "session.directory": "Directory",
       "session.administrator": "Administrator",
@@ -262,6 +289,7 @@
       "login.showPassword": "Show password",
       "login.hidePassword": "Hide password",
       "create.title": "Create entry",
+      "create.description": "Add an LDAP directory entry.",
       "create.entryType": "Entry type",
       "create.person": "Person",
       "create.posixAccount": "POSIX account",
@@ -276,6 +304,7 @@
       "create.required": "{name} is required for this entry type",
       "create.structuralRequired": "Custom entries require a structural object class",
       "rename.title": "Rename or move",
+      "rename.description": "Change the relative name or parent of this entry.",
       "rename.newRDN": "New RDN",
       "rename.newParent": "New parent DN",
       "rename.removeOld": "Remove old RDN value",
@@ -286,6 +315,7 @@
       "password.mismatch": "Passwords do not match",
       "password.reset": "Password reset",
       "import.title": "Import entries",
+      "import.description": "Import LDAP Data Interchange Format changes.",
       "import.choose": "Choose LDIF file",
       "import.utf8": "UTF-8 text",
       "import.orPaste": "or paste LDIF",
@@ -295,8 +325,16 @@
       "import.confirmMessage": "The server will apply the submitted directory changes.",
       "import.confirm": "Import entries",
       "import.complete": "Import complete",
+      "import.partial": "LDIF import partially applied",
       "import.applied": "Directory entries were applied",
+      "import.partialNoRetry": "Some changes were already applied or have an unknown result. Review the records and edit or replace the LDIF before submitting again.",
+      "import.changedRetryTitle": "Submit a changed LDIF batch?",
+      "import.changedRetryMessage": "The previous batch was partially applied or its result is unknown. Submit only after removing every record that may already have been applied.",
+      "import.changedRetryConfirm": "Submit changed batch",
+      "import.recordFailure": "Record {record} ({dn}): {message}",
+      "import.notAttempted": "{count} records were not attempted",
       "csv.title": "Import CSV entries",
+      "csv.description": "Map CSV columns to LDAP attributes and create entries.",
       "csv.choose": "Choose CSV file",
       "csv.utf8": "UTF-8 CSV",
       "csv.base": "Base DN",
@@ -311,6 +349,9 @@
       "csv.complete": "CSV import complete",
       "csv.partial": "CSV import partially applied",
       "csv.partialNoRetry": "Some write results may already exist. The original CSV is retained for review, but direct retry is disabled; start a new import containing only failed or unattempted rows.",
+      "csv.changedRetryTitle": "Submit a changed CSV batch?",
+      "csv.changedRetryMessage": "The previous batch was partially applied or its result is unknown. Submit only after removing every row that may already have been applied.",
+      "csv.changedRetryConfirm": "Submit changed batch",
       "csv.rowFailure": "Row {row}: {message}",
       "csv.notAttempted": "{count} rows were not attempted",
       "confirm.title": "Confirm action",
@@ -361,6 +402,8 @@
       "nav.root": "根节点",
       "nav.loading": "正在加载",
       "nav.retryLoading": "重新加载",
+      "nav.loadMore": "继续加载",
+      "nav.collapse": "折叠 {name}",
       "nav.treeLoadFailed": "目录树加载失败",
       "nav.loaded.one": "已加载 {count} 个条目",
       "nav.loaded.other": "已加载 {count} 个条目",
@@ -411,6 +454,7 @@
       "search.previousTitle": "上一页",
       "search.next": "下一页查询结果",
       "search.nextTitle": "下一页",
+      "search.tooManyAttributes": "最多只能选择 {limit} 个属性",
       "actions.import": "导入",
       "actions.export": "导出",
       "actions.importLDIF": "导入 LDIF",
@@ -434,6 +478,7 @@
       "actions.attributes": "属性",
       "actions.rename": "重命名",
       "actions.password": "密码",
+      "actions.more": "更多",
       "actions.attribute": "添加属性",
       "actions.browseAttributes": "浏览可用属性",
       "actions.discard": "放弃",
@@ -455,6 +500,7 @@
       "content.description": "描述",
       "content.modified": "修改时间",
       "content.open": "打开",
+      "content.openEntry": "打开 {name}",
       "entry.attributesLabel": "条目属性",
       "entry.directoryEntry": "目录条目",
       "entry.noneSelected": "未选择条目",
@@ -527,6 +573,7 @@
       "bulk.delete": "批量删除",
       "bulk.clear": "清除选择",
       "bulk.title": "修改所选条目",
+      "bulk.description": "对所选条目应用一次 LDAP 修改。",
       "bulk.operation": "操作",
       "bulk.replace": "替换",
       "bulk.add": "添加值",
@@ -541,6 +588,8 @@
       "bulk.complete": "批量操作完成",
       "bulk.summary": "成功 {applied} 项，失败 {failed} 项，结果未知 {unknown} 项",
       "bulk.aborted": "批处理已停止：{reason}",
+      "bulk.entryFailure": "{dn}：{message}",
+      "bulk.notAttempted": "{count} 个条目未执行",
       "group.title": "组成员",
       "group.members.one": "{count} 个成员",
       "group.members.other": "{count} 个成员",
@@ -561,6 +610,23 @@
       "binary.confirmDelete": "删除二进制属性？",
       "binary.confirmDeleteMessage": "将删除 {attribute} 的全部值。",
       "binary.readFailed": "无法读取二进制属性",
+      "file.tooLarge": "文件超过 {limit} 字节限制",
+      "file.reading": "请等待所选文件读取完成",
+      "api.authenticationRequired": "需要登录后才能继续",
+      "api.sessionExpired": "登录会话已过期",
+      "api.sessionBusy": "另一个目录操作仍在执行，请稍候",
+      "api.accessDenied": "目录服务器拒绝了此操作",
+      "api.noSuchObject": "目录条目不存在",
+      "api.alreadyExists": "同名目录条目已存在",
+      "api.constraintViolation": "提交的值不符合目录约束",
+      "api.invalidDN": "可分辨名称格式无效",
+      "api.invalidRequest": "提交的请求无效",
+      "api.bodyTooLarge": "提交的数据超过服务器限制",
+      "api.capacityReached": "管理服务当前繁忙，请稍后重试",
+      "api.referralUnfollowed": "目录服务器返回了未跟随的引用",
+      "api.timeout": "目录操作超时",
+      "api.canceled": "目录操作已取消",
+      "api.unavailable": "目录服务当前不可用",
       "session.connecting": "正在连接",
       "session.directory": "目录",
       "session.administrator": "管理员",
@@ -579,6 +645,7 @@
       "login.showPassword": "显示密码",
       "login.hidePassword": "隐藏密码",
       "create.title": "创建条目",
+      "create.description": "添加一个 LDAP 目录条目。",
       "create.entryType": "条目类型",
       "create.person": "用户",
       "create.posixAccount": "POSIX 账户",
@@ -593,6 +660,7 @@
       "create.required": "此条目类型必须填写 {name}",
       "create.structuralRequired": "自定义条目必须包含一个结构型对象类",
       "rename.title": "重命名或移动",
+      "rename.description": "修改此条目的相对名称或父级。",
       "rename.newRDN": "新 RDN",
       "rename.newParent": "新父级 DN",
       "rename.removeOld": "移除旧 RDN 值",
@@ -603,6 +671,7 @@
       "password.mismatch": "两次输入的密码不一致",
       "password.reset": "密码已重置",
       "import.title": "导入条目",
+      "import.description": "导入 LDAP 数据交换格式中的目录变更。",
       "import.choose": "选择 LDIF 文件",
       "import.utf8": "UTF-8 文本",
       "import.orPaste": "或粘贴 LDIF",
@@ -612,8 +681,16 @@
       "import.confirmMessage": "服务器将应用所提交的目录更改。",
       "import.confirm": "导入条目",
       "import.complete": "导入完成",
+      "import.partial": "LDIF 导入已部分执行",
       "import.applied": "目录条目已应用",
+      "import.partialNoRetry": "部分变更已成功或结果未知。请核对记录并编辑或更换 LDIF 后再提交，不能直接重试原内容。",
+      "import.changedRetryTitle": "提交修改后的 LDIF 批次？",
+      "import.changedRetryMessage": "上一批次已部分成功或结果未知。请先删除所有可能已经执行的记录，再提交修改后的批次。",
+      "import.changedRetryConfirm": "提交修改后的批次",
+      "import.recordFailure": "第 {record} 条（{dn}）：{message}",
+      "import.notAttempted": "{count} 条记录未执行",
       "csv.title": "导入 CSV 条目",
+      "csv.description": "将 CSV 列映射为 LDAP 属性并创建条目。",
       "csv.choose": "选择 CSV 文件",
       "csv.utf8": "UTF-8 CSV",
       "csv.base": "基础 DN",
@@ -628,6 +705,9 @@
       "csv.complete": "CSV 导入完成",
       "csv.partial": "CSV 导入已部分执行",
       "csv.partialNoRetry": "部分写入结果可能已存在。原 CSV 会保留供核对，但已禁止直接重试；请重新开始并仅导入失败或未执行的行。",
+      "csv.changedRetryTitle": "提交修改后的 CSV 批次？",
+      "csv.changedRetryMessage": "上一批次已部分成功或结果未知。请先删除所有可能已经执行的行，再提交修改后的批次。",
+      "csv.changedRetryConfirm": "提交修改后的批次",
       "csv.rowFailure": "第 {row} 行：{message}",
       "csv.notAttempted": "{count} 行未执行",
       "confirm.title": "确认操作",
@@ -642,7 +722,14 @@
   };
 
   const liveTranslations = new Map();
-  let apiQueue = Promise.resolve();
+  const submittingControls = new WeakMap();
+  let sessionAPIQueue = Promise.resolve();
+  const SESSION_SERIAL_API_PATHS = new Set([
+	"/api/logout", "/api/session", "/api/capabilities", "/api/root-dse", "/api/root", "/api/search", "/api/entries", "/api/entry",
+	"/api/entries/rename", "/api/rename", "/api/password-modify", "/api/password",
+	"/api/schema", "/api/monitor", "/api/export", "/api/data-export", "/api/import",
+	"/api/bulk", "/api/groups", "/api/binary", "/api/csv-import"
+  ]);
   const translationObserver = new MutationObserver(() => {
     for (const element of liveTranslations.keys()) {
       if (!element.isConnected) liveTranslations.delete(element);
@@ -713,29 +800,39 @@
     session: null,
     rootDN: "",
     namingContexts: [],
-    baseDN: "",
+		baseDN: "",
+		createBaseDN: "",
     entries: [],
     selectedDN: "",
     selectedEntry: null,
-    schema: { objectClasses: [], attributeTypes: [] },
-	schemaView: "classes",
+	    schema: { objectClasses: [], attributeTypes: [], rules: [] },
+		schemaView: "classes",
     monitor: null,
     currentQuery: null,
     activeRequests: 0,
     editorDirty: false,
     treeNodes: new Map(),
-	confirmResolve: null,
-	searchSequence: 0,
-	entrySequence: 0,
-	pageHistory: [],
-	currentPageCookie: "",
+		confirmResolve: null,
+		searchSequence: 0,
+		entrySequence: 0,
+		treeSequence: 0,
+		pageHistory: [],
+		currentPageCookie: "",
 		nextPageCookie: "",
 		selectedDNs: new Set(),
 		entryDialogMode: "create",
 		groupAttribute: "member",
 		groupMembers: [],
-		csvRetryBlocked: false,
-		csvFileSequence: 0
+		groupUpdating: false,
+		csvRetryFingerprints: new Set(),
+		csvFileLoading: false,
+		ldifRetryFingerprints: new Set(),
+		ldifFileLoading: false,
+		ldifFileSequence: 0,
+		csvFileSequence: 0,
+		capabilities: null,
+		pageLoading: false,
+		sessionGeneration: 0
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -743,7 +840,8 @@
 
   const elements = {
     shell: $("#app-shell"),
-    workspace: $("#workspace"),
+	workspace: $("#workspace"),
+	mainContent: $("#main-content"),
     activity: $("#activity-line"),
     connectionDot: $("#connection-dot"),
     connectionLabel: $("#connection-label"),
@@ -801,6 +899,114 @@
     toastRegion: $("#toast-region")
   };
 
+  function sessionDN(session = state.session) {
+	if (!session || typeof session !== "object") return "";
+	const user = session.user && typeof session.user === "object" ? session.user : {};
+	return String(session.dn || session.bind_dn || session.bindDN || session.bindDn || user.dn || user.name || "");
+  }
+
+  function storageScope() {
+	const dn = sessionDN();
+	if (!dn) return "";
+	const bytes = new TextEncoder().encode(`${window.location.origin}\0${dn.toLowerCase()}`);
+	let raw = "";
+	bytes.forEach((value) => { raw += String.fromCharCode(value); });
+	return window.btoa(raw).replace(/=+$/, "");
+  }
+
+  function scopedStorageKey(base) {
+	const scope = storageScope();
+	return scope ? `${base}.${scope}` : "";
+  }
+
+  function resetDirectoryState() {
+	state.sessionGeneration++;
+	sessionAPIQueue = Promise.resolve();
+	state.searchSequence++;
+	state.entrySequence++;
+	state.treeSequence++;
+	state.csrf = "";
+	state.session = null;
+	state.rootDN = "";
+	state.namingContexts = [];
+	state.baseDN = "";
+	state.createBaseDN = "";
+	state.entries = [];
+	state.selectedDN = "";
+	state.selectedEntry = null;
+	state.schema = { objectClasses: [], attributeTypes: [], rules: [] };
+	state.monitor = null;
+	state.currentQuery = null;
+	state.editorDirty = false;
+	state.treeNodes.clear();
+	state.pageHistory = [];
+	state.currentPageCookie = "";
+	state.nextPageCookie = "";
+	state.selectedDNs.clear();
+	state.groupMembers = [];
+	state.groupUpdating = false;
+	state.groupAttribute = "member";
+	state.entryDialogMode = "create";
+	state.csvRetryFingerprints.clear();
+	state.csvFileLoading = false;
+	state.ldifRetryFingerprints.clear();
+	state.ldifFileLoading = false;
+	state.ldifFileSequence++;
+	state.csvFileSequence++;
+	state.capabilities = null;
+	state.pageLoading = false;
+	if (state.confirmResolve) {
+	  const resolve = state.confirmResolve;
+	  state.confirmResolve = null;
+	  resolve(false);
+	}
+	elements.tree.replaceChildren();
+	elements.tableBody.replaceChildren();
+	elements.attributeList.replaceChildren();
+	elements.schemaList.replaceChildren();
+	elements.metricGrid.replaceChildren();
+	elements.monitorList.replaceChildren();
+	elements.breadcrumb.replaceChildren();
+	elements.groupMemberList.replaceChildren();
+	elements.toastRegion.replaceChildren();
+	elements.searchForm.reset();
+	$("#schema-search").value = "";
+	$("#filter-condition-list").replaceChildren();
+	addFilterCondition("objectClass", "present", "");
+	[elements.entryDialog, elements.renameDialog, elements.passwordDialog, elements.importDialog,
+	  elements.csvImportDialog, elements.bulkModifyDialog].forEach((dialog) => {
+	  const form = $("form", dialog);
+	  if (form) { setFormSubmitting(form, false); form.reset(); }
+	});
+	setFormSubmitting(elements.entryEditor, false);
+	setFormSubmitting($("#group-member-form"), false);
+	$("#new-entry-attribute-list").replaceChildren();
+	$$('.form-error').forEach((error) => setFieldError(error, ""));
+	localize($("#import-file-name"), "import.choose");
+	localize($("#csv-import-file-name"), "csv.choose");
+	elements.groupMembers.hidden = true;
+	elements.tableWrap.hidden = true;
+	elements.detailButton.disabled = true;
+	closeAccountMenu();
+	localize(elements.accountName, "session.administrator");
+	localize(elements.accountDN, "session.signedOut");
+	elements.accountAvatar.textContent = "A";
+	updateEntryActions(false);
+	clearBulkSelection();
+	showListView();
+	localize(elements.rootLabel, "session.directory");
+	localize(elements.contentTitle, "content.directoryEntries");
+	localize(elements.contentSubtitle, "content.loadingContext");
+	localize(elements.resultSummary, "search.results.none");
+	localize(elements.detailName, "entry.noneSelected");
+	localize(elements.detailKind, "entry.directoryEntry");
+	elements.detailDN.textContent = "";
+	localize(elements.treeCount, "nav.loaded.other", { count: 0 });
+	for (const dialog of $$('dialog:not(#login-dialog)')) closeDialog(dialog);
+	renderSavedQueries();
+	renderQueryHistory();
+  }
+
   const staticTranslations = [
     ["title", "app.title"],
     [".skip-link", "nav.skip"],
@@ -810,12 +1016,12 @@
     [".brand-copy small", "app.operations"],
     ["#connection-label", "session.connecting"],
     [".mobile-view-switch", "nav.workspace", "attr:aria-label"],
-    ["[data-mobile-view='navigation']", "nav.directoryView", "attr:aria-label"],
-    ["[data-mobile-view='navigation']", "nav.directoryTitle", "attr:title"],
-    ["[data-mobile-view='content']", "nav.entriesView", "attr:aria-label"],
-    ["[data-mobile-view='content']", "nav.entriesTitle", "attr:title"],
-    ["[data-mobile-view='context']", "nav.contextView", "attr:aria-label"],
-    ["[data-mobile-view='context']", "nav.contextTitle", "attr:title"],
+    [".mobile-view-switch [data-mobile-view='navigation']", "nav.directoryView", "attr:aria-label"],
+    [".mobile-view-switch [data-mobile-view='navigation']", "nav.directoryTitle", "attr:title"],
+    [".mobile-view-switch [data-mobile-view='content']", "nav.entriesView", "attr:aria-label"],
+    [".mobile-view-switch [data-mobile-view='content']", "nav.entriesTitle", "attr:title"],
+    [".mobile-view-switch [data-mobile-view='context']", "nav.contextView", "attr:aria-label"],
+    [".mobile-view-switch [data-mobile-view='context']", "nav.contextTitle", "attr:title"],
     ["#import-button", "actions.import", "direct"],
     ["#export-button", "actions.export", "direct"],
     ["#menu-import", "actions.importLDIF", "direct"],
@@ -901,9 +1107,17 @@
     ["#copy-entry-dn", "entry.copyDN", "attr:title"],
     ["#detail-status", "entry.active"],
     [".mobile-detail-actions", "entry.actions", "attr:aria-label"],
-    ["#mobile-rename-button", "actions.rename", "direct"],
-    ["#mobile-password-button", "actions.password", "direct"],
-    ["#mobile-delete-button", "actions.delete", "direct"],
+	    ["#mobile-rename-button", "actions.rename", "direct"],
+	    ["#mobile-password-button", "actions.password", "direct"],
+	    ["#mobile-clone-button", "actions.clone", "direct"],
+	    ["#mobile-clone-button", "actions.cloneSelected", "attr:aria-label"],
+	    ["#mobile-clone-button", "actions.clone", "attr:title"],
+	    ["#mobile-entry-more summary", "actions.more", "attr:aria-label"],
+	    ["#mobile-entry-more summary", "actions.more", "attr:title"],
+	    ["#mobile-entry-more .mobile-more-label", "actions.more"],
+	    ["#mobile-delete-button", "actions.delete", "direct"],
+	    ["#mobile-delete-button", "actions.deleteSelected", "attr:aria-label"],
+	    ["#mobile-delete-button", "actions.delete", "attr:title"],
     ["#group-members h3", "group.title"],
     ["#group-member-count", "group.members.other", "text", { count: 0 }],
     ["label[for='include-nested-members'] span", "group.includeNested"],
@@ -947,7 +1161,8 @@
     ["#toggle-password", "login.showPassword", "attr:title"],
     ["#login-submit", "login.signIn"],
     ["#entry-dialog .eyebrow", "session.directory"],
-    ["#entry-dialog-title", "create.title"],
+	    ["#entry-dialog-title", "create.title"],
+	    ["#entry-dialog-description", "create.description"],
     ["#entry-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#entry-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
     ["label[for='new-entry-template']", "create.entryType"],
@@ -965,7 +1180,8 @@
     ["#entry-form .modal-actions .close-dialog", "actions.cancel"],
     ["#entry-form .modal-actions button[type='submit']", "create.submit"],
     ["#rename-dialog .eyebrow", "session.directory"],
-    ["#rename-dialog-title", "rename.title"],
+	    ["#rename-dialog-title", "rename.title"],
+	    ["#rename-dialog-description", "rename.description"],
     ["#rename-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#rename-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
     ["label[for='rename-rdn']", "rename.newRDN"],
@@ -981,7 +1197,8 @@
     ["label[for='confirm-password']", "password.confirm"],
     ["#password-form .modal-actions .close-dialog", "actions.cancel"],
     ["#password-form .modal-actions button[type='submit']", "actions.resetPassword"],
-    ["#import-dialog-title", "import.title"],
+	    ["#import-dialog-title", "import.title"],
+	    ["#import-dialog-description", "import.description"],
     ["#import-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#import-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
     [".file-picker small", "import.utf8"],
@@ -989,7 +1206,8 @@
     ["label[for='import-content']", "import.content"],
     ["#import-form .modal-actions .close-dialog", "actions.cancel"],
     ["#import-form .modal-actions button[type='submit']", "actions.import"],
-    ["#csv-import-title", "csv.title"],
+	    ["#csv-import-title", "csv.title"],
+	    ["#csv-import-description", "csv.description"],
     ["#csv-import-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#csv-import-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
     ["#csv-import-dialog .file-picker small", "csv.utf8"],
@@ -1003,7 +1221,8 @@
     ["#csv-import-form .modal-actions .close-dialog", "actions.cancel"],
     ["#csv-import-form .modal-actions button[type='submit']", "csv.submit"],
     ["#bulk-modify-dialog .eyebrow", "session.directory"],
-    ["#bulk-modify-title", "bulk.title"],
+	    ["#bulk-modify-title", "bulk.title"],
+	    ["#bulk-modify-description", "bulk.description"],
     ["#bulk-modify-dialog .modal-header .close-dialog", "actions.close", "attr:aria-label"],
     ["#bulk-modify-dialog .modal-header .close-dialog", "actions.close", "attr:title"],
     ["label[for='bulk-operation']", "bulk.operation"],
@@ -1100,6 +1319,13 @@
     }
   }
 
+  class SupersededRequestError extends Error {
+	constructor() {
+	  super("request superseded before execution");
+	  this.name = "SupersededRequestError";
+	}
+  }
+
   function drawDirectoryMark(canvas) {
     if (!canvas) return;
     const ratio = window.devicePixelRatio || 1;
@@ -1155,19 +1381,62 @@
     if (!data) return fallback;
     if (typeof data === "string") return data.trim() || fallback;
     if (data.error && typeof data.error === "object") {
-	  const message = data.error.message || data.error.code || fallback;
-		  return Number.isInteger(data.error.applied) && data.error.applied > 0
-		    ? t("session.applied", { message, count: data.error.applied })
-	    : message;
+		  const errorKeys = {
+			authentication_required: "api.authenticationRequired",
+			session_expired: "api.sessionExpired",
+			session_busy: "api.sessionBusy",
+			ldap_referral_unfollowed: "api.referralUnfollowed",
+			request_body_too_large: "api.bodyTooLarge",
+			operation_capacity_reached: "api.capacityReached",
+			ldap_transport_error: "api.unavailable",
+			ldap_result_unknown: "api.unavailable",
+			invalid_dn: "api.invalidDN",
+			invalid_request: "api.invalidRequest",
+			invalid_credentials: "api.authenticationRequired",
+			csrf_failed: "api.accessDenied",
+			origin_forbidden: "api.accessDenied",
+			import_deadline_exceeded: "api.timeout",
+			import_canceled: "api.canceled",
+			administration_closing: "api.unavailable"
+		  };
+		  const ldapResultKeys = {
+			19: "api.constraintViolation",
+			32: "api.noSuchObject",
+			49: "api.authenticationRequired",
+			50: "api.accessDenied",
+			51: "api.sessionBusy",
+			52: "api.unavailable",
+			53: "api.constraintViolation",
+			64: "api.invalidDN",
+			65: "api.constraintViolation",
+			68: "api.alreadyExists",
+			80: "api.unavailable"
+		  };
+		  const key = errorKeys[data.error.code] || ldapResultKeys[Number(data.error.ldap_result_code)] ||
+			(String(data.error.code || "").startsWith("invalid_") ? "api.invalidRequest" : "");
+		  const message = key ? t(key) : data.error.message || data.error.code || fallback;
+			  return Number.isInteger(data.error.applied) && data.error.applied > 0
+			    ? t("session.applied", { message, count: data.error.applied })
+		    : message;
     }
     return data.error || data.message || data.diagnostic || data.detail || fallback;
   }
 
   function api(path, options = {}) {
-    const execute = () => apiRequest(path, options);
-    const pending = apiQueue.then(execute, execute);
-    apiQueue = pending.catch(() => {});
-    return pending;
+		const generation = state.sessionGeneration;
+		const execute = () => {
+		  if (generation !== state.sessionGeneration) throw new SupersededRequestError();
+		  if (typeof options.stale === "function" && options.stale()) throw new SupersededRequestError();
+		  return apiRequest(path, options).then((result) => {
+			if (generation !== state.sessionGeneration) throw new SupersededRequestError();
+			return result;
+		  });
+		};
+		const pathname = new URL(path, window.location.origin).pathname;
+		if (!SESSION_SERIAL_API_PATHS.has(pathname)) return execute();
+	    const pending = sessionAPIQueue.then(execute, execute);
+	    sessionAPIQueue = pending.catch(() => {});
+	    return pending;
   }
 
   async function apiRequest(path, options = {}) {
@@ -1212,6 +1481,7 @@
   }
 
   function showLogin(message = "") {
+	resetDirectoryState();
     setConnection("error", "session.authRequired");
     clearLocalization(elements.loginError);
     elements.loginError.hidden = !message;
@@ -1226,16 +1496,22 @@
   }
 
   function setSession(session) {
-    state.session = session || {};
-    const user = session.user && typeof session.user === "object" ? session.user : {};
-    const dn = session.dn || session.bind_dn || session.bindDN || session.bindDn || user.dn || user.name || t("session.administrator");
-    const name = session.displayName || user.displayName || user.cn || rdnValue(dn) || t("session.administrator");
+	const previousDN = sessionDN();
+	const nextDN = sessionDN(session);
+	if (previousDN && previousDN.toLowerCase() !== nextDN.toLowerCase()) resetDirectoryState();
+	const value = session && typeof session === "object" ? session : {};
+	    state.session = value;
+	    const user = value.user && typeof value.user === "object" ? value.user : {};
+	    const dn = value.dn || value.bind_dn || value.bindDN || value.bindDn || user.dn || user.name || t("session.administrator");
+	    const name = value.displayName || user.displayName || user.cn || rdnValue(dn) || t("session.administrator");
     clearLocalization(elements.accountName);
     clearLocalization(elements.accountDN);
     elements.accountName.textContent = name;
     elements.accountDN.textContent = dn;
     elements.accountAvatar.textContent = initials(name);
     setConnection("online", "session.connected");
+	renderSavedQueries();
+	renderQueryHistory();
   }
 
   function sessionAuthenticated(data) {
@@ -1426,24 +1702,53 @@
     const detail = document.createElement("span");
     setDisplayText(detail, message);
     copy.append(heading, detail);
-    const close = document.createElement("button");
+	    const close = document.createElement("button");
     close.type = "button";
     localize(close, "actions.dismiss", {}, "attr:aria-label");
     close.textContent = "\u00d7";
-    close.addEventListener("click", () => item.remove());
-    item.append(icon, copy, close);
-    elements.toastRegion.append(item);
-    window.setTimeout(() => item.remove(), kind === "error" ? 9000 : 5000);
-  }
+		const remove = (forced = false) => {
+		  if (!forced && item.contains(document.activeElement)) {
+			window.setTimeout(() => remove(false), 2000);
+			return;
+		  }
+		  if (item.contains(document.activeElement)) elements.mainContent?.focus();
+		  item.remove();
+		};
+	    close.addEventListener("click", () => remove(true));
+	    item.append(icon, copy, close);
+	    elements.toastRegion.append(item);
+	    window.setTimeout(() => remove(false), kind === "error" ? 9000 : 5000);
+	  }
 
-  function setFieldError(element, message) {
-    if (message) setDisplayText(element, message);
+	  function setFieldError(element, message, field = null) {
+		const form = element.closest("form");
+		if (form && element.id) {
+		  $$(`[data-error-description="${element.id}"]`, form).forEach((candidate) => {
+			candidate.removeAttribute("aria-invalid");
+			const descriptions = String(candidate.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== element.id);
+			if (descriptions.length) candidate.setAttribute("aria-describedby", descriptions.join(" "));
+			else candidate.removeAttribute("aria-describedby");
+			delete candidate.dataset.errorDescription;
+		  });
+		}
+	    if (message) setDisplayText(element, message);
     else {
       clearLocalization(element);
       element.textContent = "";
-    }
-    element.hidden = !message;
-  }
+	    }
+	    element.hidden = !message;
+		if (message && form && element.id) {
+		  const candidate = field && form.contains(field) ? field :
+			(document.activeElement && form.contains(document.activeElement) && document.activeElement.matches("input, select, textarea") ? document.activeElement : $(":invalid", form));
+		  if (candidate) {
+			candidate.setAttribute("aria-invalid", "true");
+			const descriptions = new Set(String(candidate.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+			descriptions.add(element.id);
+			candidate.setAttribute("aria-describedby", Array.from(descriptions).join(" "));
+			candidate.dataset.errorDescription = element.id;
+		  }
+		}
+	  }
 
   function nativeValidationMessage(field) {
     field.setCustomValidity("");
@@ -1455,20 +1760,55 @@
     return "";
   }
 
-  function refreshNativeValidation(field) {
+	  function refreshNativeValidation(field) {
     const message = nativeValidationMessage(field);
-    if (message) {
-      field.setCustomValidity(message);
-      field.dataset.localizedValidation = "true";
-    } else delete field.dataset.localizedValidation;
+	    if (message) {
+	      field.setCustomValidity(message);
+	      field.dataset.localizedValidation = "true";
+		  field.setAttribute("aria-invalid", "true");
+	    } else delete field.dataset.localizedValidation;
+	  }
+
+	  function clearNativeValidation(field) {
+	    field.setCustomValidity("");
+	    delete field.dataset.localizedValidation;
+		if (!field.dataset.errorDescription) field.removeAttribute("aria-invalid");
+	  }
+
+  function searchMaximumSize() {
+	return Math.max(1, Number(state.capabilities && state.capabilities.max_search_size || 5000));
   }
 
-  function clearNativeValidation(field) {
-    field.setCustomValidity("");
-    delete field.dataset.localizedValidation;
+  function searchDefaultSize() {
+	return Math.min(500, searchMaximumSize());
+  }
+
+  function recommendedPageSize() {
+	return Math.max(1, Math.min(searchMaximumSize(), Number(state.capabilities && state.capabilities.page_size || 200)));
+  }
+
+  function requestBodyLimit() {
+	return Math.max(1, Number(state.capabilities && state.capabilities.request_body_limit || 8 << 20));
+  }
+
+  function assertRequestSize(value) {
+	const size = new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)).byteLength;
+	const limit = requestBodyLimit();
+	if (size > limit) throw new Error(t("file.tooLarge", { limit }));
+	return value;
+  }
+
+  function assertFileSize(file) {
+	const limit = requestBodyLimit();
+	if (file.size > limit) throw new Error(t("file.tooLarge", { limit }));
+	return file;
   }
 
   async function initialize() {
+	try {
+	  window.localStorage.removeItem(QUERY_STORAGE_KEY);
+	  window.localStorage.removeItem(QUERY_HISTORY_STORAGE_KEY);
+	} catch (_) { /* storage can be unavailable */ }
     applyLanguage(state.language, false);
     drawDirectoryMark($("#brand-mark"));
     drawDirectoryMark($("#login-mark"));
@@ -1490,6 +1830,10 @@
   }
 
   async function loadWorkspace() {
+	const { data: capabilities } = await api("/api/capabilities");
+	state.capabilities = capabilities && typeof capabilities === "object" ? capabilities : {};
+	$("#search-size").max = String(searchMaximumSize());
+	$("#search-size").value = String(searchDefaultSize());
     const { data } = await api("/api/root-dse");
     const rootData = unwrap(data, ["root", "rootDSE"]);
     const rootEntry = normalizeEntry(rootData);
@@ -1507,13 +1851,14 @@
     $("#search-base").value = state.rootDN;
     buildTreeRoot();
     await Promise.allSettled([
-      ...state.namingContexts.map((dn) => loadTreeChildren(dn)),
-      runSearch({ base: state.rootDN, scope: "one", filter: "(objectClass=*)", attributes: "*, +", size: 500 }),
-      loadSchema()
+	  runSearch({ base: state.rootDN, scope: "one", filter: "(objectClass=*)", attributes: LIST_ATTRIBUTES, size: searchDefaultSize() }),
+	      loadSchema(),
+	      ...state.namingContexts.map((dn) => loadTreeChildren(dn))
     ]);
   }
 
   function buildTreeRoot() {
+	state.treeSequence++;
     state.treeNodes.clear();
     elements.tree.replaceChildren();
     state.namingContexts.forEach((dn) => elements.tree.append(createTreeNode(dn, 0, true).element));
@@ -1521,27 +1866,31 @@
     renderBreadcrumb(state.rootDN);
   }
 
-  function createTreeNode(dn, depth, expanded = false) {
+  function createTreeNode(dn, depth, expanded = false, objectClasses = []) {
     const container = document.createElement("div");
     container.className = "tree-node";
     container.dataset.dn = dn;
     const row = document.createElement("div");
     row.className = "tree-node-row";
-    row.setAttribute("role", "treeitem");
-    row.setAttribute("aria-level", String(depth + 1));
-    row.setAttribute("aria-expanded", String(expanded));
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "tree-toggle";
-    localize(toggle, "nav.expand", () => ({ name: rdnValue(dn) || t("nav.root") }), "attr:aria-label");
+	row.setAttribute("role", "none");
+	    const toggle = document.createElement("span");
+	toggle.className = "tree-toggle";
+	toggle.setAttribute("aria-hidden", "true");
     toggle.textContent = expanded ? "\u25be" : "\u203a";
     const icon = document.createElement("span");
     icon.className = "tree-icon";
     icon.setAttribute("aria-hidden", "true");
-    icon.textContent = depth === 0 ? "DC" : "DN";
+	const classes = toValues(objectClasses).map((value) => value.toLowerCase());
+	icon.textContent = depth === 0 ? "DC" : classes.includes("organizationalunit") ? "OU" :
+	  classes.some((value) => value.includes("group")) ? "GR" :
+	  classes.some((value) => value === "person" || value === "inetorgperson" || value === "posixaccount") ? "US" : "DN";
     const select = document.createElement("button");
-    select.type = "button";
-    select.className = "tree-select";
+	select.type = "button";
+	select.className = "tree-select";
+	select.setAttribute("role", "treeitem");
+	select.setAttribute("aria-level", String(depth + 1));
+	select.setAttribute("aria-expanded", String(expanded));
+	select.setAttribute("aria-selected", "false");
     select.title = dn || t("nav.rootDSE");
     if (rdnValue(dn)) select.textContent = rdnValue(dn);
     else localize(select, "nav.rootDSE");
@@ -1551,23 +1900,25 @@
     children.className = "tree-children";
     children.setAttribute("role", "group");
     children.hidden = !expanded;
-    toggle.addEventListener("click", async () => {
-      const model = state.treeNodes.get(dn);
-      if (!model.loaded) await loadTreeChildren(dn);
-      const open = model.children.hidden;
-      model.children.hidden = !open;
-      model.toggle.textContent = open ? "\u25be" : "\u203a";
-      model.row.setAttribute("aria-expanded", String(open));
+	toggle.addEventListener("click", async () => {
+	  const model = state.treeNodes.get(dn);
+	  const open = model.children.hidden;
+	  if (open && !model.loaded) await loadTreeChildren(dn);
+	  model.children.hidden = !open;
+	  model.toggle.textContent = open ? "\u25be" : "\u203a";
+	  model.select.setAttribute("aria-expanded", String(open));
+	  localize(model.select, open ? "nav.collapse" : "nav.expand", () => ({ name: rdnValue(dn) || t("nav.root") }), "attr:aria-label");
     });
     select.addEventListener("click", async () => {
       state.baseDN = dn;
       $("#search-base").value = dn;
       selectTreeRow(dn);
-      await runSearch({ base: dn, scope: "one", filter: "(objectClass=*)", attributes: "*, +", size: 500 });
-      setMobileView("content");
+	  await runSearch({ base: dn, scope: "one", filter: "(objectClass=*)", attributes: LIST_ATTRIBUTES, size: searchDefaultSize() });
+	  setMobileView("content");
+	  requestAnimationFrame(() => elements.mainContent && elements.mainContent.focus());
     });
 	select.addEventListener("keydown", (event) => {
-	  const visible = $$(".tree-select", elements.tree).filter((button) => !button.closest(".tree-children")?.hidden);
+	  const visible = $$(".tree-select", elements.tree).filter((button) => !button.closest("[hidden]"));
 	  const index = visible.indexOf(select);
 	  if (event.key === "ArrowDown" && index < visible.length - 1) {
 		event.preventDefault(); visible[index + 1].focus();
@@ -1586,55 +1937,82 @@
 	});
     row.append(toggle, icon, select, count);
     container.append(row, children);
-    const model = { dn, depth, element: container, row, toggle, count, children, loaded: false };
-    state.treeNodes.set(dn, model);
-    return model;
+	const model = { dn, depth, objectClasses: toValues(objectClasses), element: container, row, select, toggle, count, children, loaded: false, nextCookie: "" };
+	state.treeNodes.set(dn, model);
+	localize(select, expanded ? "nav.collapse" : "nav.expand", () => ({ name: rdnValue(dn) || t("nav.root") }), "attr:aria-label");
+	return model;
   }
 
-  async function loadTreeChildren(dn, force = false) {
-    const node = state.treeNodes.get(dn);
-    if (!node || (node.loaded && !force)) return;
-    node.children.hidden = false;
-    node.children.replaceChildren();
-    const loading = document.createElement("div");
-    loading.className = "tree-loading";
-    localize(loading, "nav.loading");
-    node.children.append(loading);
-    try {
-	  const entries = [];
-	  let cookie = "";
-	  for (let page = 0; page < 20; page += 1) {
-		const { data } = await api("/api/search", {
-		  method: "POST",
-		  body: searchRequest({ base: dn, scope: "one", filter: "(objectClass=*)", attributes: "objectClass", size: 5000 }, cookie, 250)
-		});
-		entries.push(...normalizeEntries(data));
-		cookie = data && (data.page_cookie || data.pageCookie) || "";
-		if (!cookie) break;
-	  }
+  function clearTreeDescendants(node) {
+	for (const [key, candidate] of state.treeNodes) {
+	  if (candidate !== node && node.children.contains(candidate.element)) state.treeNodes.delete(key);
+	}
+  }
+
+  async function loadTreeChildren(dn, force = false, append = false) {
+	const node = state.treeNodes.get(dn);
+	if (!node || node.loading || (node.loaded && !force && !append)) return;
+	const generation = state.treeSequence;
+	node.loading = true;
+	node.children.hidden = false;
+	if (!append) {
+	  clearTreeDescendants(node);
+	  node.children.replaceChildren();
+	  node.nextCookie = "";
+	} else {
+	  $(".tree-load-more", node.children)?.remove();
+	}
+	const loading = document.createElement("div");
+	loading.className = "tree-loading";
+	localize(loading, "nav.loading");
+	node.children.append(loading);
+	try {
+	  const { data } = await api("/api/search", {
+		method: "POST",
+		body: searchRequest({ base: dn, scope: "one", filter: "(objectClass=*)", attributes: "objectClass", size: searchMaximumSize() }, append ? node.nextCookie : "", Math.min(250, recommendedPageSize())),
+		stale: () => generation !== state.treeSequence || state.treeNodes.get(dn) !== node
+	  });
+	  if (generation !== state.treeSequence || state.treeNodes.get(dn) !== node) return;
+	  const entries = normalizeEntries(data);
 	  entries.sort((a, b) => a.dn.localeCompare(b.dn));
-      node.children.replaceChildren();
-      entries.forEach((entry) => node.children.append(createTreeNode(entry.dn, node.depth + 1).element));
-      node.loaded = true;
-      node.count.textContent = entries.length ? String(entries.length) : "";
-      if (!entries.length) node.toggle.classList.add("empty");
-      node.toggle.textContent = "\u25be";
-      node.row.setAttribute("aria-expanded", "true");
-      localize(elements.treeCount, state.treeNodes.size === 1 ? "nav.loaded.one" : "nav.loaded.other", () => ({ count: state.treeNodes.size }));
-    } catch (error) {
-      node.children.replaceChildren();
-      const failure = document.createElement("button");
+	  loading.remove();
+	  entries.forEach((entry) => node.children.append(createTreeNode(entry.dn, node.depth + 1, false, attributeValues(entry, "objectClass")).element));
+	  node.nextCookie = data && (data.page_cookie || data.pageCookie) || "";
+	  if (node.nextCookie) {
+		const more = document.createElement("button");
+		more.type = "button";
+		more.className = "text-button tree-loading tree-load-more";
+		localize(more, "nav.loadMore");
+		more.addEventListener("click", () => loadTreeChildren(dn, false, true));
+		node.children.append(more);
+	  }
+	  node.loaded = true;
+	  const childCount = $(":scope > .tree-node", node.children) ? $$(":scope > .tree-node", node.children).length : 0;
+	  node.count.textContent = childCount ? String(childCount) : "";
+	  node.toggle.classList.toggle("empty", !childCount && !node.nextCookie);
+	  node.toggle.textContent = "\u25be";
+	  node.select.setAttribute("aria-expanded", "true");
+	  localize(elements.treeCount, state.treeNodes.size === 1 ? "nav.loaded.one" : "nav.loaded.other", () => ({ count: state.treeNodes.size }));
+	} catch (error) {
+	  if (error instanceof SupersededRequestError || generation !== state.treeSequence || state.treeNodes.get(dn) !== node) return;
+	  loading.remove();
+	  const failure = document.createElement("button");
       failure.type = "button";
       failure.className = "text-button tree-loading";
       localize(failure, "nav.retryLoading");
-      failure.addEventListener("click", () => loadTreeChildren(dn, true));
-      node.children.append(failure);
-      toast("nav.treeLoadFailed", error.message, "error");
-    }
+	  failure.addEventListener("click", () => loadTreeChildren(dn, !append, append));
+	  node.children.append(failure);
+	  toast("nav.treeLoadFailed", error.message, "error");
+	} finally { node.loading = false; }
   }
 
   function selectTreeRow(dn) {
-    state.treeNodes.forEach((node) => node.row.classList.toggle("selected", node.dn === dn));
+	state.treeNodes.forEach((node) => {
+	  const selected = node.dn === dn;
+	  node.row.classList.toggle("selected", selected);
+	  node.select.setAttribute("aria-selected", String(selected));
+	  node.select.tabIndex = selected ? 0 : -1;
+	});
   }
 
   function queryFromForm() {
@@ -1643,8 +2021,8 @@
       base: String(form.get("base") || state.rootDN),
       scope: String(form.get("scope") || "sub"),
       filter: String(form.get("filter") || "(objectClass=*)"),
-      attributes: String(form.get("attributes") || "*, +"),
-      size: Number(form.get("size") || 500)
+	  attributes: String(form.get("attributes") || LIST_ATTRIBUTES),
+	      size: Math.max(1, Math.min(searchMaximumSize(), Number(form.get("size") || searchDefaultSize())))
     };
   }
 
@@ -1705,7 +2083,9 @@
 
   function storedQueries() {
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(QUERY_STORAGE_KEY) || "[]");
+	  const key = scopedStorageKey(QUERY_STORAGE_KEY);
+	  if (!key) return [];
+	  const parsed = JSON.parse(window.localStorage.getItem(key) || "[]");
       return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.name === "string" && item.query && typeof item.query === "object").slice(0, 50) : [];
     } catch (_) { return []; }
   }
@@ -1733,7 +2113,9 @@
     if (!name || !name.trim()) return;
     const queries = storedQueries();
     queries.push({ name: name.trim().slice(0, 80), query: queryFromForm() });
-    try { window.localStorage.setItem(QUERY_STORAGE_KEY, JSON.stringify(queries.slice(-50))); }
+	const key = scopedStorageKey(QUERY_STORAGE_KEY);
+	if (!key) return;
+	try { window.localStorage.setItem(key, JSON.stringify(queries.slice(-50))); }
     catch (_) { return; }
     renderSavedQueries();
     toast("query.savedToast", name.trim());
@@ -1741,7 +2123,9 @@
 
   function queryHistory() {
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(QUERY_HISTORY_STORAGE_KEY) || "[]");
+	  const key = scopedStorageKey(QUERY_HISTORY_STORAGE_KEY);
+	  if (!key) return [];
+	  const parsed = JSON.parse(window.localStorage.getItem(key) || "[]");
       return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object").slice(0, 20) : [];
     } catch (_) { return []; }
   }
@@ -1749,13 +2133,15 @@
   function recordQueryHistory(query) {
     const normalized = {
       base: String(query.base || ""), scope: String(query.scope || "sub"),
-      filter: String(query.filter || "(objectClass=*)"), attributes: String(query.attributes || "*, +"),
-      size: Number(query.size || 500)
+	  filter: String(query.filter || "(objectClass=*)"), attributes: String(query.attributes || LIST_ATTRIBUTES),
+	      size: Number(query.size || searchDefaultSize())
     };
     const signature = JSON.stringify(normalized);
     const history = queryHistory().filter((item) => JSON.stringify(item) !== signature);
     history.unshift(normalized);
-    try { window.localStorage.setItem(QUERY_HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, 20))); }
+	const key = scopedStorageKey(QUERY_HISTORY_STORAGE_KEY);
+	if (!key) return;
+	try { window.localStorage.setItem(key, JSON.stringify(history.slice(0, 20))); }
     catch (_) { return; }
     renderQueryHistory();
   }
@@ -1780,19 +2166,22 @@
     $("#search-base").value = String(query.base || state.rootDN);
     $("#search-filter").value = String(query.filter || "(objectClass=*)");
     $("#search-scope").value = ["base", "one", "sub"].includes(query.scope) ? query.scope : "sub";
-    $("#search-size").value = Number(query.size) > 0 ? Number(query.size) : 500;
-    $("#search-attributes").value = String(query.attributes || "*, +");
+	    $("#search-size").value = String(Math.max(1, Math.min(searchMaximumSize(), Number(query.size) > 0 ? Number(query.size) : searchDefaultSize())));
+	$("#search-attributes").value = String(query.attributes || LIST_ATTRIBUTES);
     runSearch(queryFromForm());
   }
 
-	function searchRequest(query, cookie = "", pageSize = 200) {
-	const request = {
+	function searchRequest(query, cookie = "", pageSize = recommendedPageSize()) {
+		const attributes = attributeSelectors(query.attributes || LIST_ATTRIBUTES);
+		const attributeLimit = Math.max(1, Number(state.capabilities && state.capabilities.max_attributes || 128));
+		if (attributes.length > attributeLimit) throw new Error(t("search.tooManyAttributes", { limit: attributeLimit }));
+		const request = {
       base_dn: query.base || "",
       scope: query.scope || "sub",
       filter: query.filter || "(objectClass=*)",
-      attributes: attributeSelectors(query.attributes || "*, +"),
-	  size_limit: Number(query.size || 500),
-	  page_size: Math.min(Number(query.size || 500), pageSize)
+		  attributes,
+	  size_limit: Math.min(searchMaximumSize(), Number(query.size || searchDefaultSize())),
+	  page_size: Math.min(searchMaximumSize(), Number(query.size || searchDefaultSize()), pageSize)
     };
 	if (cookie) request.page_cookie = cookie;
 	return request;
@@ -1801,13 +2190,16 @@
 	  return JSON.stringify({
 		base: String(query && query.base || ""), scope: String(query && query.scope || "sub"),
 		filter: String(query && query.filter || "(objectClass=*)"),
-		attributes: attributeSelectors(query && query.attributes || "*, +"), size: Number(query && query.size || 500)
+		attributes: attributeSelectors(query && query.attributes || LIST_ATTRIBUTES), size: Number(query && query.size || searchDefaultSize())
 	  });
 	}
 
-	async function runSearch(query = queryFromForm(), cookie = null) {
-	const sequence = ++state.searchSequence;
-	if (cookie === null) {
+	async function runSearch(query = queryFromForm(), cookie = null, pageTransition = null) {
+		const sequence = ++state.searchSequence;
+		state.pageLoading = true;
+		updatePagination();
+		setMobileView("content");
+		if (cookie === null) {
 	  if (state.currentQuery && queryIdentity(state.currentQuery) !== queryIdentity(query)) clearBulkSelection();
 	  recordQueryHistory(query);
 	  state.pageHistory = [];
@@ -1829,33 +2221,52 @@
     } else localize(elements.contentSubtitle, "nav.rootDSE");
     renderBreadcrumb(query.base);
     try {
-	  const { data } = await api("/api/search", { method: "POST", body: searchRequest(query, cookie) });
-	  if (sequence !== state.searchSequence) return;
-      state.entries = normalizeEntries(data);
-	  state.currentPageCookie = cookie;
-	  state.nextPageCookie = data && (data.page_cookie || data.pageCookie) || "";
-      renderEntries();
-    } catch (error) {
-	  if (sequence !== state.searchSequence) return;
-      state.entries = [];
-      localize(elements.resultSummary, "search.failed");
-      showState("error", "search.failed", error.message, { labelKey: "search.retry", handler: () => runSearch(query) });
-    }
-  }
+	  const { data } = await api("/api/search", {
+		method: "POST", body: searchRequest(query, cookie), stale: () => sequence !== state.searchSequence
+	  });
+		  if (sequence !== state.searchSequence) return false;
+	      state.entries = normalizeEntries(data);
+		  state.currentPageCookie = cookie;
+		  if (pageTransition) {
+			const history = Array.isArray(pageTransition.history) ? pageTransition.history.slice() : [];
+			state.pageHistory = pageTransition.type === "next" ? [...history, pageTransition.from] : history.slice(0, -1);
+		  }
+		  state.nextPageCookie = data && (data.page_cookie || data.pageCookie) || "";
+	      renderEntries();
+		  return true;
+	    } catch (error) {
+		  if (sequence !== state.searchSequence || error instanceof SupersededRequestError) return false;
+	      state.entries = [];
+	      localize(elements.resultSummary, "search.failed");
+	      showState("error", "search.failed", error.message, { labelKey: "search.retry", handler: () => runSearch(query, cookie, pageTransition) });
+		  return false;
+	    } finally {
+		  if (sequence === state.searchSequence) {
+			state.pageLoading = false;
+			updatePagination();
+		  }
+		}
+	  }
+
+	  function updatePagination() {
+		elements.previousPage.disabled = state.pageLoading || state.pageHistory.length === 0;
+		elements.nextPage.disabled = state.pageLoading || !state.nextPageCookie;
+		elements.previousPage.setAttribute("aria-busy", String(state.pageLoading));
+		elements.nextPage.setAttribute("aria-busy", String(state.pageLoading));
+	  }
 
   function renderEntries() {
     elements.tableBody.replaceChildren();
     localize(elements.resultSummary, state.entries.length === 1 ? "search.results.one" : "search.results.other", () => ({ count: state.entries.length }));
-	elements.previousPage.disabled = state.pageHistory.length === 0;
-	elements.nextPage.disabled = !state.nextPageCookie;
+		updatePagination();
     if (!state.entries.length) {
       showState("empty", "search.none", state.currentQuery ? state.currentQuery.filter : "");
       return;
     }
     const fragment = document.createDocumentFragment();
-    state.entries.forEach((entry) => {
-      const row = document.createElement("tr");
-      row.tabIndex = 0;
+	    state.entries.forEach((entry, entryIndex) => {
+	      const row = document.createElement("tr");
+	      row.tabIndex = entry.dn === state.selectedDN || (!state.selectedDN && entryIndex === 0) ? 0 : -1;
       row.dataset.dn = entry.dn;
       row.classList.toggle("selected", entry.dn === state.selectedDN);
       const selectionCell = document.createElement("td");
@@ -1896,7 +2307,21 @@
       openCell.textContent = "\u203a";
       row.append(openCell);
       row.addEventListener("click", () => openEntry(entry.dn));
-      row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openEntry(entry.dn); } });
+	      row.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" || event.key === " ") {
+			  event.preventDefault();
+			  openEntry(entry.dn);
+			} else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			  const rows = $$("tr[data-dn]", elements.tableBody);
+			  const index = rows.indexOf(row);
+			  const target = rows[index + (event.key === "ArrowDown" ? 1 : -1)];
+			  if (target) {
+				event.preventDefault();
+				rows.forEach((candidate) => { candidate.tabIndex = candidate === target ? 0 : -1; });
+				target.focus();
+			  }
+			}
+		  });
       fragment.append(row);
     });
     elements.tableBody.append(fragment);
@@ -1929,14 +2354,25 @@
     return element;
   }
 
-  async function openEntry(dn) {
-    if (state.editorDirty && !(await confirmAction("entry.discardTitle", translated("entry.discardMessage"), "actions.discard"))) return;
+	  async function confirmEditorDiscard() {
+		if (!state.editorDirty) return true;
+		const approved = await confirmAction("entry.discardTitle", translated("entry.discardMessage"), "actions.discard");
+		if (approved) {
+		  state.editorDirty = false;
+		  setEditorStatus(false);
+		  if (state.selectedEntry) renderEntryDetail(state.selectedEntry);
+		}
+		return approved;
+	  }
+
+	  async function openEntry(dn) {
+	    if (!(await confirmEditorDiscard())) return;
 	const sequence = ++state.entrySequence;
     state.selectedDN = dn;
 	state.selectedEntry = null;
 	elements.groupMembers.hidden = true;
 	elements.groupMemberList.replaceChildren();
-    updateEntryActions(true);
+	    updateEntryActions(false);
     $$("tr[data-dn]", elements.tableBody).forEach((row) => row.classList.toggle("selected", row.dataset.dn === dn));
     elements.detailButton.disabled = false;
     showDetailView();
@@ -1944,13 +2380,21 @@
     localize(elements.detailName, "entry.loading");
     elements.detailDN.textContent = dn;
     try {
-	  const { data } = await api(`/api/entries?${new URLSearchParams({ dn })}`);
-	  if (sequence !== state.entrySequence || state.selectedDN !== dn) return;
-      state.selectedEntry = normalizeEntry(unwrap(data, ["entry"]));
-      renderEntryDetail(state.selectedEntry);
+	  const { data } = await api(`/api/entries?${new URLSearchParams({ dn })}`, {
+		stale: () => sequence !== state.entrySequence || state.selectedDN !== dn
+	  });
+		  if (sequence !== state.entrySequence || state.selectedDN !== dn) return;
+	      state.selectedEntry = normalizeEntry(unwrap(data, ["entry"]));
+	      renderEntryDetail(state.selectedEntry);
+		  updateEntryActions(true);
+		  requestAnimationFrame(() => {
+			elements.detailName.tabIndex = -1;
+			elements.detailName.focus();
+		  });
     } catch (error) {
 	  if (sequence !== state.entrySequence || state.selectedDN !== dn) return;
-      state.selectedEntry = null;
+	      state.selectedEntry = null;
+		  updateEntryActions(false);
       localize(elements.detailName, "entry.unavailable");
       const message = document.createElement("div");
       message.className = "state-view error";
@@ -1990,9 +2434,10 @@
 	Object.entries(entry.binaryAttributes || {}).sort(([a], [b]) => a.localeCompare(b)).forEach(
 	  ([name, values]) => addAttributeRow(name, values, { readOnly: true, binary: true, mixed: Object.keys(entry.attributes || {}).some((textName) => textName.toLowerCase() === name.toLowerCase()) })
 	);
-    updateAttributeCount();
-    setEditorStatus(false);
-    renderSchema();
+	    updateAttributeCount();
+	    setEditorStatus(false);
+	    renderAttributeSuggestions();
+	    renderSchema();
     $("#include-nested-members").checked = false;
     renderGroupMembers(entry, false);
   }
@@ -2071,11 +2516,14 @@
 	}) || state.rootDN;
   }
 
-  async function updateGroupMembers(add, remove) {
-    if (!state.selectedEntry || !state.groupAttribute) return;
-	const dn = state.selectedEntry.dn;
-	const attribute = state.groupAttribute;
-    setFieldError($("#group-member-error"), "");
+	  async function updateGroupMembers(add, remove) {
+	    if (state.groupUpdating || !state.selectedEntry || !state.groupAttribute) return;
+		const dn = state.selectedEntry.dn;
+		const attribute = state.groupAttribute;
+		state.groupUpdating = true;
+		setFormSubmitting($("#group-member-form"), true);
+		$("#remove-group-members").disabled = true;
+	    setFieldError($("#group-member-error"), "");
     try {
       const changes = [];
       if (add.length) changes.push({ operation: "add", attribute, values: add });
@@ -2083,12 +2531,20 @@
       await api("/api/groups", { method: "PATCH", body: { dn, changes } });
 	  if (state.selectedDN !== dn) return;
       toast("group.updated", dn);
+	  await refreshAfterMutation([dn]);
+	  if (state.selectedDN !== dn) return;
       await openEntry(dn);
-    } catch (error) { if (state.selectedDN === dn) setFieldError($("#group-member-error"), error.message); }
-  }
+	    } catch (error) { if (state.selectedDN === dn) setFieldError($("#group-member-error"), error.message); }
+		finally {
+		  state.groupUpdating = false;
+		  setFormSubmitting($("#group-member-form"), false);
+		  $("#remove-group-members").disabled = !$$('input:checked', elements.groupMemberList).length;
+		}
+	  }
 
-  function openCloneDialog() {
-    if (!state.selectedEntry) return;
+	  async function openCloneDialog() {
+	    if (!state.selectedEntry) return;
+		if (!(await confirmEditorDiscard())) return;
     state.entryDialogMode = "clone";
     $("#entry-form").reset();
     $("#new-entry-template").value = "custom";
@@ -2109,12 +2565,13 @@
 	const randomSuffix = window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
 	const clonedRDN = `${sourceAttribute}=copy-${randomSuffix}`;
     $("#new-entry-dn").value = parentDN(source.dn) ? `${clonedRDN},${parentDN(source.dn)}` : clonedRDN;
-    syncCreateRDNAttribute();
-    openDialog(elements.entryDialog);
-    requestAnimationFrame(() => $("#new-entry-dn").focus());
+	    syncCreateRDNAttribute();
+	    openDialog(elements.entryDialog);
+		renderAttributeSuggestions();
+	    requestAnimationFrame(() => $("#new-entry-dn").focus());
   }
 
-	function addAttributeRow(name = "", values = [], options = {}) {
+		function addAttributeRow(name = "", values = [], options = {}) {
     const row = $("#attribute-row-template").content.firstElementChild.cloneNode(true);
 	localizeAttributeRow(row);
     const nameInput = $(".attribute-name", row);
@@ -2134,11 +2591,28 @@
 		  $(".remove-attribute", row).hidden = true;
 		}
 		if (options.mixed) localize(meta, "entry.mixedValuesReadOnly");
-		if (options.binary) loadBinaryTools(row, name, !options.mixed);
-    $(".remove-attribute", row).addEventListener("click", () => { row.remove(); markDirty(); updateAttributeCount(); });
-	const bindValueInput = (input) => input.addEventListener("input", markDirty);
+		if (options.binary) loadBinaryTools(row, name, !options.mixed, values);
+	    $(".remove-attribute", row).addEventListener("click", () => {
+	  const affectedObjectClasses = attributeNamesEquivalent(nameInput.value.trim(), "objectClass") ||
+		attributeNamesEquivalent(row.dataset.originalName, "objectClass");
+	  row.remove();
+	  markDirty();
+	  updateAttributeCount();
+		  if (affectedObjectClasses) renderEditedSchemaContext();
+	});
+	const bindValueInput = (input) => input.addEventListener("input", () => {
+	  markDirty();
+		  if (attributeNamesEquivalent(nameInput.value.trim(), "objectClass")) renderEditedSchemaContext();
+	});
 	bindValueInput(valuesInput);
-	nameInput.addEventListener("input", () => { setAttributeMeta(meta, nameInput.value, false); markDirty(); });
+	let previousName = nameInput.value;
+	nameInput.addEventListener("input", () => {
+	  const affectsObjectClasses = attributeNamesEquivalent(previousName, "objectClass") || attributeNamesEquivalent(nameInput.value.trim(), "objectClass");
+	  previousName = nameInput.value.trim();
+	  setAttributeMeta(meta, nameInput.value, false);
+	  markDirty();
+		  if (affectsObjectClasses) renderEditedSchemaContext();
+	});
 	nameInput.addEventListener("change", () => {
 	  const current = $(".attribute-values", row);
 	  const value = current.value;
@@ -2148,8 +2622,13 @@
 	});
     elements.attributeList.append(row);
     if (!name) nameInput.focus();
-    updateAttributeCount();
-  }
+	    updateAttributeCount();
+	  }
+
+	  function renderEditedSchemaContext() {
+		renderAttributeSuggestions();
+		renderSchema();
+	  }
 
 	const operationalReadOnlyAttributes = new Set([
 	  "creatorsname", "modifiersname", "createtimestamp", "modifytimestamp",
@@ -2240,19 +2719,27 @@
     return window.btoa(raw);
   }
 
-  async function loadBinaryTools(row, attribute, mutable = true) {
+  function detectBinaryMIME(value) {
+	const raw = window.atob(value);
+	const byte = (index) => raw.charCodeAt(index) || 0;
+	if (byte(0) === 0xff && byte(1) === 0xd8 && byte(2) === 0xff) return "image/jpeg";
+	if (byte(0) === 0x89 && raw.slice(1, 4) === "PNG") return "image/png";
+	if (raw.slice(0, 3) === "GIF") return "image/gif";
+	if (raw.slice(0, 4) === "RIFF" && raw.slice(8, 12) === "WEBP") return "image/webp";
+	return "application/octet-stream";
+  }
+
+  function loadBinaryTools(row, attribute, mutable = true, encodedValues = []) {
     const tools = document.createElement("div");
     tools.className = "binary-tools";
     row.append(tools);
-    try {
-      const params = new URLSearchParams({ dn: state.selectedDN, attribute });
-      const { data } = await api(`/api/binary?${params}`);
-      const values = toValues(data && data.values_base64);
-      const mimeTypes = toValues(data && data.mime_types);
+	const targetDN = state.selectedDN;
+	const values = toValues(encodedValues);
+	try {
       values.forEach((value, index) => {
         const item = document.createElement("div");
         item.className = "binary-value";
-        const mime = mimeTypes[index] || "application/octet-stream";
+		const mime = detectBinaryMIME(value);
         if (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime)) {
           const image = document.createElement("img");
           localize(image, "binary.value", { index: index + 1 }, "attr:alt");
@@ -2285,21 +2772,45 @@
       const input = document.createElement("input");
       input.type = "file";
       input.hidden = true;
-      const replace = document.createElement("button");
-      replace.type = "button";
-      replace.className = "button quiet";
-      localize(replace, "binary.replace");
-      replace.addEventListener("click", () => input.click());
-      input.addEventListener("change", async () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
-        try {
-          const encoded = bufferBase64(await file.arrayBuffer());
-          await api("/api/binary", { method: "PUT", body: { dn: state.selectedDN, attribute, values_base64: [encoded] } });
-          toast("binary.updated", attribute);
-          await openEntry(state.selectedDN);
-        } catch (error) { toast("binary.readFailed", error.message, "error"); }
-      });
+	      const replace = document.createElement("button");
+	      replace.type = "button";
+	      replace.className = "button quiet";
+	      localize(replace, "binary.replace");
+	      replace.addEventListener("click", () => input.click());
+		  let fileSequence = 0;
+		  input.addEventListener("change", async () => {
+			const file = input.files && input.files[0];
+			if (!file) return;
+			const sequence = ++fileSequence;
+			const generation = state.sessionGeneration;
+			const readTargetDN = targetDN;
+			input.disabled = true;
+			replace.disabled = true;
+			remove.disabled = true;
+			actions.setAttribute("aria-busy", "true");
+			try {
+				  const limit = Number(state.capabilities && state.capabilities.binary_max_value_bytes || 1 << 20);
+			  if (file.size > limit) throw new Error(t("file.tooLarge", { limit }));
+			  const encoded = bufferBase64(await file.arrayBuffer());
+			  if (sequence !== fileSequence || generation !== state.sessionGeneration || state.selectedDN !== readTargetDN) return;
+			  await api("/api/binary", { method: "PUT", body: { dn: readTargetDN, attribute, values_base64: [encoded] } });
+			  toast("binary.updated", attribute);
+			  await refreshAfterMutation([readTargetDN]);
+			  if (state.selectedDN === readTargetDN) await openEntry(readTargetDN);
+		        } catch (error) {
+			  if (sequence !== fileSequence || generation !== state.sessionGeneration || error instanceof SupersededRequestError) return;
+			  toast("binary.readFailed", error.message, "error");
+			}
+			finally {
+			  if (sequence === fileSequence) {
+				input.value = "";
+				input.disabled = false;
+				replace.disabled = false;
+				remove.disabled = false;
+				actions.setAttribute("aria-busy", "false");
+			  }
+			}
+	      });
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "button quiet danger-text";
@@ -2308,9 +2819,10 @@
         const approved = await confirmAction("binary.confirmDelete", translated("binary.confirmDeleteMessage", { attribute }), "binary.remove");
         if (!approved) return;
         try {
-          await api(`/api/binary?${new URLSearchParams({ dn: state.selectedDN, attribute })}`, { method: "DELETE" });
-          toast("binary.deleted", attribute);
-          await openEntry(state.selectedDN);
+		  await api(`/api/binary?${new URLSearchParams({ dn: targetDN, attribute })}`, { method: "DELETE" });
+		  toast("binary.deleted", attribute);
+		  await refreshAfterMutation([targetDN]);
+		  if (state.selectedDN === targetDN) await openEntry(targetDN);
         } catch (error) { toast("entry.updateFailed", error.message, "error"); }
       });
       actions.append(input, replace, remove);
@@ -2340,12 +2852,15 @@
   }
   function collectAttributeRows(container) {
     const attributes = {};
-	$$(".attribute-row", container).forEach((row) => {
+		$$(".attribute-row", container).forEach((row) => {
       const name = $(".attribute-name", row).value.trim();
       if (!name) return;
-	  const text = $(".attribute-values", row).value.replace(/\r\n/g, "\n");
-	  const values = text === "" ? [] : text.split("\n");
-      attributes[name] = values;
+		  const text = $(".attribute-values", row).value.replace(/\r\n/g, "\n");
+		  const values = text === "" ? [] : text.split("\n").filter((value) => value !== "");
+		  if (!values.length) return;
+		  const existing = Object.keys(attributes).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+	      if (existing) attributes[existing].push(...values);
+		  else attributes[name] = values;
     });
     return attributes;
   }
@@ -2405,7 +2920,16 @@
 	$("#new-entry-classes").value = template.classes.join("\n");
 	$("#new-entry-attribute-list").replaceChildren();
 	template.attributes.forEach(([attribute, values]) => addCreateAttributeRow(attribute, values));
-	$("#new-entry-dn").value = state.baseDN ? `${template.rdn}=,${state.baseDN}` : `${template.rdn}=`;
+		const base = state.createBaseDN || state.baseDN;
+		$("#new-entry-dn").value = base ? `${template.rdn}=,${base}` : `${template.rdn}=`;
+		renderAttributeSuggestions();
+	  }
+
+  function creationBaseDN() {
+	const model = state.treeNodes.get(state.baseDN);
+	const classes = new Set(toValues(model && model.objectClasses).map((value) => value.toLowerCase()));
+	const leaf = [...classes].some((value) => value === "person" || value === "inetorgperson" || value === "posixaccount" || value.includes("group"));
+	return leaf ? parentDN(state.baseDN) : state.baseDN;
   }
 
 	function syncCreateRDNAttribute() {
@@ -2510,7 +3034,16 @@
     elements.detailButton.classList.add("active");
     elements.detailButton.setAttribute("aria-pressed", "true");
   }
-  function updateEntryActions(enabled) { $$(".entry-action").forEach((button) => { button.disabled = !enabled; }); }
+	  function updateEntryActions(enabled) {
+		$$(`.entry-action, #mobile-rename-button, #mobile-password-button, #mobile-clone-button, #mobile-delete-button`).forEach((button) => {
+		  button.disabled = !enabled;
+		});
+		const more = $("#mobile-entry-more");
+		if (more) {
+		  if (!enabled) more.removeAttribute("open");
+		  more.classList.toggle("disabled", !enabled);
+		}
+	  }
 
   function renderBreadcrumb(dn) {
     elements.breadcrumb.replaceChildren();
@@ -2524,7 +3057,7 @@
       button.type = "button";
       button.textContent = rdnValue(part);
       button.title = targetDN;
-      button.addEventListener("click", () => runSearch({ base: targetDN, scope: "one", filter: "(objectClass=*)", attributes: "*, +", size: 500 }));
+	  button.addEventListener("click", () => runSearch({ base: targetDN, scope: "one", filter: "(objectClass=*)", attributes: LIST_ATTRIBUTES, size: searchDefaultSize() }));
       elements.breadcrumb.append(button);
       if (index < visible.length - 1) {
         const separator = document.createElement("span");
@@ -2537,7 +3070,7 @@
 
   function normalizeSchema(data) {
     const source = unwrap(data, ["schema"]);
-    if (!source || typeof source !== "object") return { objectClasses: [], attributeTypes: [] };
+    if (!source || typeof source !== "object") return { objectClasses: [], attributeTypes: [], rules: [] };
     const definitions = source.definitions && typeof source.definitions === "object" ? source.definitions : source;
     return {
       objectClasses: arrayFrom(definitions.objectClasses || definitions.objectclasses || definitions.classes).map(parseSchemaDefinition),
@@ -2586,9 +3119,92 @@
       elements.schemaList.replaceChildren(contextMessage("schema.unavailable", error.message, true));
     }
   }
-  function renderAttributeSuggestions() {
-    const names = state.schema.attributeTypes.map(schemaName).filter(Boolean).sort((left, right) => left.localeCompare(right));
-    $("#attribute-name-options").replaceChildren(...names.slice(0, 5000).map((name) => {
+	  function schemaDefinitionTokens(definition, keyword) {
+		if (definition && typeof definition === "object") {
+		  const directKey = Object.keys(definition).find((key) => key.toLowerCase() === keyword.toLowerCase());
+		  if (directKey) {
+			const direct = Array.isArray(definition[directKey]) ? definition[directKey] : String(definition[directKey] || "").split(/[\s$]+/);
+			return direct.map((value) => String(value).replace(/^'+|'+$/g, "")).filter(Boolean);
+		  }
+		}
+		const source = typeof definition === "string" ? definition : String(definition && definition.definition || "");
+		const match = new RegExp(`\\b${keyword}\\s+(?:\\(\\s*([^)]*)\\)|([^\\s)]+))`, "i").exec(source);
+		if (!match) return [];
+		return String(match[1] || match[2] || "").match(/[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*/g) || [];
+	  }
+
+	  function schemaDefinitionNames(definition) {
+		return [schemaName(definition), definition && definition.oid, ...arrayFrom(definition && definition.aliases)]
+		  .filter(Boolean).map((value) => String(value));
+	  }
+
+	  function currentEditorAttributeValues(name) {
+		const values = [];
+		$$(".attribute-row", elements.attributeList).forEach((row) => {
+		  const attributeName = $(".attribute-name", row)?.value.trim() || "";
+		  if (!attributeNamesEquivalent(attributeName, name)) return;
+		  const control = $(".attribute-values", row);
+		  if (control) values.push(...lines(control.value));
+		});
+		return values;
+	  }
+
+	  function suggestedAttributeNames() {
+		let classNames = currentEditorAttributeValues("objectClass");
+		let targetDN = state.selectedDN;
+		if (elements.entryDialog.open) {
+		  classNames = lines($("#new-entry-classes").value);
+		  targetDN = $("#new-entry-dn").value.trim();
+		}
+		if (!classNames.length) return null;
+		const classByName = new Map();
+		state.schema.objectClasses.forEach((definition) => {
+		  schemaDefinitionNames(definition).forEach((name) => classByName.set(name.toLowerCase(), definition));
+		});
+		const allowed = new Set(["objectclass"]);
+		const denied = new Set();
+		const visited = new Set();
+		const resolved = new Set();
+		const resolvedIdentifiers = new Set();
+		const visit = (name) => {
+		  const normalized = String(name).toLowerCase();
+		  if (visited.has(normalized)) return;
+		  visited.add(normalized);
+		  const definition = classByName.get(normalized);
+		  if (!definition) return;
+		  resolved.add(normalized);
+		  schemaDefinitionNames(definition).forEach((identifier) => resolvedIdentifiers.add(identifier.toLowerCase()));
+		  schemaDefinitionTokens(definition, "MUST").forEach((attribute) => allowed.add(attribute.toLowerCase()));
+		  schemaDefinitionTokens(definition, "MAY").forEach((attribute) => allowed.add(attribute.toLowerCase()));
+		  schemaDefinitionTokens(definition, "SUP").forEach(visit);
+		};
+		classNames.forEach(visit);
+		if (![...resolved].some((name) => name !== "top")) return null;
+		(state.schema.rules || []).filter((rule) => rule.type === "dITContentRules").forEach((rule) => {
+		  if (!schemaDefinitionNames(rule).some((identifier) => resolvedIdentifiers.has(identifier.toLowerCase()))) return;
+		  schemaDefinitionTokens(rule, "MUST").forEach((attribute) => allowed.add(attribute.toLowerCase()));
+		  schemaDefinitionTokens(rule, "MAY").forEach((attribute) => allowed.add(attribute.toLowerCase()));
+		  schemaDefinitionTokens(rule, "NOT").forEach((attribute) => denied.add(attribute.toLowerCase()));
+		});
+		const targetRDN = rdn(targetDN);
+		const separator = unescapedIndex(targetRDN, "=");
+		if (separator > 0) allowed.add(targetRDN.slice(0, separator).trim().toLowerCase());
+		if (allowed.size === 1) return null;
+		return { allowed, denied };
+	  }
+
+	  function renderAttributeSuggestions() {
+		const constraints = suggestedAttributeNames();
+	    const names = state.schema.attributeTypes.filter((definition) => {
+		  if (!constraints) return true;
+		  const identifiers = schemaDefinitionNames(definition).map((name) => name.toLowerCase());
+		  return identifiers.some((name) => constraints.allowed.has(name)) && !identifiers.some((name) => constraints.denied.has(name));
+		}).map(schemaName).filter(Boolean);
+		CONFIGURATION_ATTRIBUTE_SUGGESTIONS.forEach((name) => {
+		  if ((!constraints || constraints.allowed.has(name.toLowerCase())) && !names.some((candidate) => candidate.toLowerCase() === name.toLowerCase())) names.push(name);
+		});
+		names.sort((left, right) => left.localeCompare(right));
+	    $("#attribute-name-options").replaceChildren(...names.slice(0, 1000).map((name) => {
       const option = document.createElement("option");
       option.value = name;
       return option;
@@ -2596,7 +3212,7 @@
   }
   function renderSchema() {
     const query = elements.schemaSearch.value.trim().toLowerCase();
-    const selectedClasses = new Set(attributeValues(state.selectedEntry, "objectClass").map((value) => value.toLowerCase()));
+	    const selectedClasses = new Set((state.selectedEntry ? currentEditorAttributeValues("objectClass") : []).map((value) => value.toLowerCase()));
 	const source = state.schemaView === "attributes" ? state.schema.attributeTypes :
 	  state.schemaView === "rules" ? state.schema.rules : state.schema.objectClasses;
 	const classes = source.filter((definition) => {
@@ -2749,16 +3365,38 @@
   }
 
   function openDialog(dialog) {
+	if (dialog.open) return;
 	const error = $(".form-error", dialog);
 	if (error) setFieldError(error, "");
     $$("input, select, textarea", dialog).forEach(clearNativeValidation);
-    if (!dialog.open) dialog.showModal();
+	    dialog.showModal();
+	requestAnimationFrame(() => {
+	  if (!dialog.open) return;
+	  const target = dialog === elements.confirmDialog ? $("#confirm-cancel") :
+		$("[autofocus], [data-initial-focus], input:not([type='hidden']), select, textarea, button", dialog);
+	  target?.focus();
+	});
   }
-  function closeDialog(dialog) { if (dialog.open) dialog.close(); }
+  function closeDialog(dialog) {
+	if (dialog.open) dialog.close();
+	if (dialog === elements.entryDialog) renderAttributeSuggestions();
+  }
 	function setFormSubmitting(form, submitting) {
-	$$("button[type='submit']", form).forEach((button) => { button.disabled = submitting; });
-	form.setAttribute("aria-busy", String(submitting));
-  }
+		if (submitting && !submittingControls.has(form)) {
+		  const disabled = new Map();
+		  $$("button, input, select, textarea", form).forEach((control) => {
+			disabled.set(control, control.disabled);
+			control.disabled = true;
+		  });
+		  submittingControls.set(form, disabled);
+		} else if (!submitting && submittingControls.has(form)) {
+		  submittingControls.get(form).forEach((wasDisabled, control) => {
+			if (control.isConnected) control.disabled = wasDisabled;
+		  });
+		  submittingControls.delete(form);
+		}
+		form.setAttribute("aria-busy", String(submitting));
+	  }
   function confirmAction(titleKey, message, confirmLabelKey = "actions.confirm") {
     if (state.confirmResolve) state.confirmResolve(false);
     localize($("#confirm-title"), titleKey);
@@ -2775,23 +3413,54 @@
     resolve(value);
   }
 
-  function setMobileView(view) {
-    elements.workspace.dataset.mobileView = view;
-    $$("[data-mobile-view]").forEach((button) => {
+	  function setMobileView(view) {
+	    elements.workspace.dataset.mobileView = view;
+	    $$(".mobile-view-switch [data-mobile-view]").forEach((button) => {
 	  const active = button.dataset.mobileView === view;
 	  button.classList.toggle("active", active);
-	  button.setAttribute("aria-pressed", String(active));
-	});
-  }
+	      button.setAttribute("aria-pressed", String(active));
+	    });
+		if (window.matchMedia("(max-width: 1080px)").matches) {
+		  const target = view === "navigation" ? $("#navigation-pane") : view === "context" ? $("#context-pane") : elements.mainContent;
+		  target?.focus();
+		}
+	  }
 
-  async function refreshAfterMutation(preferredDN = "") {
-    if (preferredDN) state.selectedDN = preferredDN;
-    await Promise.allSettled([runSearch(state.currentQuery || queryFromForm()), refreshTreeBranch(state.baseDN)]);
-  }
-  async function refreshTreeBranch(dn) {
-    const node = state.treeNodes.get(dn) || state.treeNodes.get(parentDN(dn)) || state.treeNodes.get(state.rootDN);
-    if (node) await loadTreeChildren(node.dn, true);
-  }
+	  function closeAccountMenu(restoreFocus = false) {
+		elements.accountMenu.hidden = true;
+		elements.accountButton.setAttribute("aria-expanded", "false");
+		$$('[role="menuitem"]', elements.accountMenu).forEach((item) => { item.tabIndex = -1; });
+		if (restoreFocus) elements.accountButton.focus();
+	  }
+
+	  async function refreshAfterMutation(affectedDNs = [], branchDNs = []) {
+		const detailDN = state.selectedEntry && state.selectedDN;
+		const preserveDetail = Boolean(detailDN && !elements.detailView.hidden);
+		const requestedBranches = branchDNs.filter(Boolean);
+		affectedDNs.filter(Boolean).forEach((dn) => requestedBranches.push(parentDN(dn) || dn));
+		if (!requestedBranches.length && state.baseDN) requestedBranches.push(state.baseDN);
+		const treeNodes = new Map();
+		requestedBranches.forEach((dn) => {
+		  const node = nearestTreeNode(dn);
+		  if (node) treeNodes.set(node.dn, node);
+		});
+	    await Promise.allSettled([
+		  runSearch(state.currentQuery || queryFromForm()),
+		  ...Array.from(treeNodes.values(), (node) => loadTreeChildren(node.dn, true))
+		]);
+		if (preserveDetail && state.selectedEntry && state.selectedDN === detailDN) showDetailView();
+	  }
+	  function nearestTreeNode(dn) {
+		let candidate = String(dn || "");
+		while (candidate) {
+		  const node = state.treeNodes.get(candidate);
+		  if (node) return node;
+		  const parent = parentDN(candidate);
+		  if (!parent || parent === candidate) break;
+		  candidate = parent;
+		}
+		return state.treeNodes.get(state.rootDN) || null;
+	  }
 
   async function exportLDIF() {
     const query = state.currentQuery || queryFromForm();
@@ -2817,7 +3486,7 @@
     const query = state.currentQuery || queryFromForm();
     const params = new URLSearchParams({
       format, base_dn: query.base, filter: query.filter, scope: query.scope || "sub",
-      attributes: attributeSelectors(query.attributes || "*, +").join(","), size_limit: String(query.size || 500)
+	  attributes: attributeSelectors(query.attributes || LIST_ATTRIBUTES).join(","), size_limit: String(query.size || searchDefaultSize())
     });
     try {
       const { data, response } = await api(`/api/data-export?${params}`, { responseType: "blob", accept: format === "csv" ? "text/csv" : "application/json" });
@@ -2836,7 +3505,7 @@
     } catch (error) { toast("export.failed", error.message, "error"); }
   }
 
-  async function runBulk(action, changes = [], continueOnError = false) {
+	  async function runBulk(action, changes = [], continueOnError = false) {
     const dns = Array.from(state.selectedDNs);
     if (!dns.length) return;
     const { data } = await api("/api/bulk", { method: "POST", body: {
@@ -2847,12 +3516,128 @@
     const unknown = Number(data && data.unknown || 0);
 	(data && data.results || []).filter((result) => result.status === "applied" || result.status === "unknown").forEach((result) => state.selectedDNs.delete(result.dn));
 	updateBulkSelection();
-    const summary = data && data.aborted ? translated("bulk.aborted", { reason: data.abort_reason || "" }) : translated("bulk.summary", { applied, failed, unknown });
-    toast("bulk.complete", summary, failed || unknown || data && data.aborted ? "error" : "success");
+	    const summary = data && data.aborted ? t("bulk.aborted", { reason: localizedAbortReason(data) }) : t("bulk.summary", { applied, failed, unknown });
+		const details = batchResultDetails(data, 5);
+	    toast("bulk.complete", [summary, details].filter(Boolean).join("\n"), failed || unknown || data && data.aborted ? "error" : "success");
     if (!failed && !unknown && !(data && data.aborted)) clearBulkSelection();
-    await refreshAfterMutation();
-	return data;
-  }
+	    await refreshAfterMutation(dns);
+		return data;
+	  }
+
+	  function batchResultDetails(data, limit = 10) {
+		const results = data && Array.isArray(data.results) ? data.results : [];
+		const failures = results.filter((result) => result.status === "failed" || result.status === "unknown").slice(0, limit).map((result) =>
+		  t("bulk.entryFailure", { dn: result.dn || "?", message: errorMessage({ error: result.error }, result.status || t("api.unavailable")) })
+		);
+		const notAttempted = results.filter((result) => result.status === "not_attempted").length;
+		if (notAttempted) failures.push(t("bulk.notAttempted", { count: notAttempted }));
+		return failures.join("\n");
+	  }
+
+	  function localizedAbortReason(data) {
+		const reason = String(data && data.abort_reason || "");
+		if (/deadline|timed? out/i.test(reason)) return t("api.timeout");
+		if (/cancel/i.test(reason)) return t("api.canceled");
+		if (/closing|unavailable|unknown/i.test(reason)) return t("api.unavailable");
+		return reason || t("api.unavailable");
+	  }
+
+	  function ldifResultDetails(data, limit = 10) {
+		const results = data && Array.isArray(data.results) ? data.results : [];
+		const failures = results.filter((result) => result.status === "failed" || result.status === "unknown").slice(0, limit).map((result) =>
+		  t("import.recordFailure", {
+			record: result.record || "?",
+			dn: result.dn || "?",
+			message: errorMessage({ error: result.error }, result.status || t("api.unavailable"))
+		  })
+		);
+		const notAttempted = results.filter((result) => result.status === "not_attempted").length;
+		if (notAttempted) failures.push(t("import.notAttempted", { count: notAttempted }));
+		return failures.join("\n");
+	  }
+
+	  function stableSerialize(value) {
+		if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+		if (value && typeof value === "object") {
+		  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+		}
+		return JSON.stringify(value);
+	  }
+
+	  function canonicalLDIF(value) {
+		const logicalLines = [];
+		String(value || "").replace(/\r\n?/g, "\n").split("\n").forEach((line) => {
+		  if (line.startsWith(" ") && logicalLines.length) logicalLines[logicalLines.length - 1] += line.slice(1);
+		  else logicalLines.push(line);
+		});
+		const records = [];
+		let record = [];
+		const flush = () => {
+		  if (record.length) records.push(record.join("\n"));
+		  record = [];
+		};
+		logicalLines.forEach((line) => {
+		  if (!line.trim()) flush();
+		  else if (!line.startsWith("#")) record.push(line);
+		});
+		flush();
+		return records.join("\n\n");
+	  }
+
+	  function canonicalCSVBody(body) {
+		return {
+		  ...body,
+		  csv: String(body.csv || "").replace(/\r\n?/g, "\n").replace(/\n+$/, "")
+		};
+	  }
+
+	  async function batchFingerprint(kind, value) {
+		const canonical = kind === "ldif" ? canonicalLDIF(value) : stableSerialize(canonicalCSVBody(value));
+		if (!window.crypto || !window.crypto.subtle) return `raw:${canonical}`;
+		const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+		return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+	  }
+
+	  function retryFingerprints(kind) {
+		return kind === "ldif" ? state.ldifRetryFingerprints : state.csvRetryFingerprints;
+	  }
+
+	  function hasStructuredBatchResult(data) {
+		return Boolean(data && typeof data === "object" && (
+		  Array.isArray(data.results) || ["applied", "failed", "unknown", "aborted"].some((key) => Object.prototype.hasOwnProperty.call(data, key))
+		));
+	  }
+
+	  function unsafeBatchOutcome(data, error = null) {
+		if (!hasStructuredBatchResult(data)) return !error || !error.status || error.status >= 500;
+		const applied = Number(data.applied || data.error && data.error.applied || 0);
+		return applied > 0 || Number(data.unknown || 0) > 0;
+	  }
+
+	  function csvResultDetails(data, limit = 10) {
+		const results = data && Array.isArray(data.results) ? data.results : [];
+		const failures = results.filter((result) => result.status === "failed" || result.status === "unknown").slice(0, limit).map((result) =>
+		  t("csv.rowFailure", { row: result.row || "?", message: errorMessage({ error: result.error }, result.status || t("api.unavailable")) })
+		);
+		const notAttempted = results.filter((result) => result.status === "not_attempted").length;
+		if (notAttempted) failures.push(t("csv.notAttempted", { count: notAttempted }));
+		return failures.join("\n");
+	  }
+
+	  async function approveChangedBatch(kind, fingerprint, errorElement, field) {
+		const fingerprints = retryFingerprints(kind);
+		if (!fingerprints.size) return true;
+		if (fingerprints.has(fingerprint)) {
+		  setFieldError(errorElement, translated(`${kind === "ldif" ? "import" : "csv"}.partialNoRetry`), field);
+		  return false;
+		}
+		const prefix = kind === "ldif" ? "import" : "csv";
+		return confirmAction(`${prefix}.changedRetryTitle`, translated(`${prefix}.changedRetryMessage`), `${prefix}.changedRetryConfirm`);
+	  }
+
+	  function resultDNs(data) {
+		return data && Array.isArray(data.results) ? data.results.map((result) => String(result.dn || "")).filter(Boolean) : [];
+	  }
 
   function parseCSVMapping(value) {
     const mapping = {};
@@ -2904,7 +3689,9 @@
       if (event.target.matches("input, select, textarea")) clearNativeValidation(event.target);
     });
     bindTabs($("#tree-tab"), $("#search-tab"), $("#tree-panel"), $("#search-panel"));
-    bindTabs($("#schema-tab"), $("#monitor-tab"), $("#schema-panel"), $("#monitor-panel"), loadMonitor);
+	bindTabs($("#schema-tab"), $("#monitor-tab"), $("#schema-panel"), $("#monitor-panel"), () => {
+	  if (!state.monitor) loadMonitor();
+	});
     elements.searchForm.addEventListener("submit", (event) => { event.preventDefault(); runSearch(); });
 	addFilterCondition("objectClass", "present", "");
 	$("#add-filter-condition").addEventListener("click", () => addFilterCondition());
@@ -2923,18 +3710,24 @@
 	  if (event.target.value !== "") applyStoredQuery(queryHistory()[Number(event.target.value)]);
 	});
 	$("#clear-query-history").addEventListener("click", () => {
-	  try { window.localStorage.removeItem(QUERY_HISTORY_STORAGE_KEY); } catch (_) { /* ignore */ }
+	  const key = scopedStorageKey(QUERY_HISTORY_STORAGE_KEY);
+	  try { if (key) window.localStorage.removeItem(key); } catch (_) { /* ignore */ }
 	  renderQueryHistory();
 	});
-	elements.nextPage.addEventListener("click", () => {
-	  if (!state.nextPageCookie) return;
-	  state.pageHistory.push(state.currentPageCookie);
-	  runSearch(state.currentQuery || queryFromForm(), state.nextPageCookie);
+	elements.nextPage.addEventListener("click", async () => {
+	  if (state.pageLoading || !state.nextPageCookie) return;
+	  const previousCookie = state.currentPageCookie;
+	  const nextCookie = state.nextPageCookie;
+	  await runSearch(state.currentQuery || queryFromForm(), nextCookie, {
+		type: "next", from: previousCookie, history: state.pageHistory.slice()
+	  });
 	});
-	elements.previousPage.addEventListener("click", () => {
-	  if (!state.pageHistory.length) return;
-	  const cookie = state.pageHistory.pop();
-	  runSearch(state.currentQuery || queryFromForm(), cookie);
+	elements.previousPage.addEventListener("click", async () => {
+	  if (state.pageLoading || !state.pageHistory.length) return;
+	  const cookie = state.pageHistory[state.pageHistory.length - 1];
+	  await runSearch(state.currentQuery || queryFromForm(), cookie, {
+		type: "previous", history: state.pageHistory.slice()
+	  });
 	});
     $$("[data-filter]").forEach((button) => button.addEventListener("click", () => { $("#search-filter").value = button.dataset.filter; runSearch(); }));
 	$("#select-page").addEventListener("change", (event) => {
@@ -2972,45 +3765,82 @@
     $("#copy-base").addEventListener("click", () => copyText(state.baseDN, "actions.baseCopied"));
     $("#copy-entry-dn").addEventListener("click", () => copyText(state.selectedDN, "actions.entryCopied"));
     $("#mobile-menu").addEventListener("click", () => setMobileView("navigation"));
-    $$("[data-mobile-view]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileView)));
+	    $$(".mobile-view-switch [data-mobile-view]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileView)));
 
-    elements.accountButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      elements.accountMenu.hidden = !elements.accountMenu.hidden;
-      elements.accountButton.setAttribute("aria-expanded", String(!elements.accountMenu.hidden));
-    });
-    document.addEventListener("click", (event) => {
-      if (!elements.accountMenu.contains(event.target) && event.target !== elements.accountButton) {
-        elements.accountMenu.hidden = true;
-        elements.accountButton.setAttribute("aria-expanded", "false");
-      }
+	    elements.accountButton.addEventListener("click", (event) => {
+	      event.stopPropagation();
+		  if (!elements.accountMenu.hidden) { closeAccountMenu(); return; }
+		  elements.accountMenu.hidden = false;
+	      elements.accountButton.setAttribute("aria-expanded", "true");
+		  const first = $("[role='menuitem']", elements.accountMenu);
+		  if (first) first.tabIndex = 0;
+		  requestAnimationFrame(() => first?.focus());
+	    });
+		elements.accountMenu.addEventListener("keydown", (event) => {
+		  const items = $$('[role="menuitem"]', elements.accountMenu).filter((item) => !item.disabled);
+		  const index = items.indexOf(document.activeElement);
+		  const focusItem = (item) => {
+			items.forEach((candidate) => { candidate.tabIndex = candidate === item ? 0 : -1; });
+			item?.focus();
+		  };
+			  if (event.key === "Escape") {
+				event.preventDefault();
+				closeAccountMenu(true);
+		  } else if (event.key === "ArrowDown" && items.length) {
+			event.preventDefault();
+			focusItem(items[(index + 1 + items.length) % items.length]);
+		  } else if (event.key === "ArrowUp" && items.length) {
+			event.preventDefault();
+			focusItem(items[(index - 1 + items.length) % items.length]);
+		  } else if (event.key === "Home" && items.length) {
+			event.preventDefault(); focusItem(items[0]);
+		  } else if (event.key === "End" && items.length) {
+			event.preventDefault(); focusItem(items[items.length - 1]);
+		  } else if (event.key === "Tab") {
+			window.setTimeout(() => closeAccountMenu(), 0);
+		  }
+	});
+	    document.addEventListener("click", (event) => {
+	      if (!elements.accountMenu.contains(event.target) && event.target !== elements.accountButton) {
+	        closeAccountMenu();
+	      }
     });
     $("#logout-button").addEventListener("click", async () => {
       try { await api("/api/logout", { method: "POST", body: {} }); } catch (_) { /* clear local session regardless */ }
-      state.csrf = "";
-      state.session = null;
-      elements.accountMenu.hidden = true;
+		  resetDirectoryState();
+	      closeAccountMenu();
       localize(elements.accountName, "session.administrator");
       localize(elements.accountDN, "session.signedOut");
       elements.accountAvatar.textContent = "A";
       showLogin();
     });
 
-    elements.loginForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const submit = $("#login-submit");
-      submit.disabled = true;
-      setFieldError(elements.loginError, "");
-      try {
-        const { data } = await api("/api/login", { method: "POST", body: { bind_dn: $("#login-dn").value.trim(), password: $("#login-password").value } });
-        state.csrf = csrfFrom(data);
-        setSession(unwrap(data, ["session"]));
-        closeDialog(elements.loginDialog);
-        $("#login-password").value = "";
-        await loadWorkspace();
-      } catch (error) { setFieldError(elements.loginError, error.message); }
-      finally { submit.disabled = false; }
-    });
+	    elements.loginForm.addEventListener("submit", async (event) => {
+	      event.preventDefault();
+	      const submit = $("#login-submit");
+	      submit.disabled = true;
+	      setFieldError(elements.loginError, "");
+		  let authenticated = false;
+	      try {
+	        const { data } = await api("/api/login", { method: "POST", body: { bind_dn: $("#login-dn").value.trim(), password: $("#login-password").value } });
+	        state.csrf = csrfFrom(data);
+	        setSession(unwrap(data, ["session"]));
+	        closeDialog(elements.loginDialog);
+	        $("#login-password").value = "";
+			authenticated = true;
+	      } catch (error) { setFieldError(elements.loginError, error.message, $("#login-password")); }
+	      finally { submit.disabled = false; }
+		  if (!authenticated) return;
+		  try {
+			await loadWorkspace();
+		  } catch (error) {
+			if (error.status === 401) showLogin(error.message);
+			else {
+			  setConnection("error", "session.serverUnavailable");
+			  showState("error", "session.directoryUnavailable", error.message, { labelKey: "search.retry", handler: loadWorkspace });
+			}
+		  }
+	    });
     $("#toggle-password").addEventListener("click", () => {
       const field = $("#login-password");
       const show = field.type === "password";
@@ -3019,17 +3849,22 @@
       localize($("#toggle-password"), show ? "login.hidePassword" : "login.showPassword", {}, "attr:title");
     });
 
-    $("#new-entry-button").addEventListener("click", () => {
-      elements.entryDialog.querySelector("form").reset();
+	    $("#new-entry-button").addEventListener("click", async () => {
+		  if (!(await confirmEditorDiscard())) return;
+	      elements.entryDialog.querySelector("form").reset();
+	  state.createBaseDN = creationBaseDN();
 	  state.entryDialogMode = "create";
 	  localize($("#entry-dialog-title"), "create.title");
 	  $("#new-entry-template").value = "person";
 	  renderEntryTemplate("person");
       openDialog(elements.entryDialog);
+	  renderAttributeSuggestions();
       requestAnimationFrame(() => $("#new-entry-dn").focus());
     });
 	$("#new-entry-template").addEventListener("change", (event) => renderEntryTemplate(event.target.value));
+	$("#new-entry-classes").addEventListener("input", renderAttributeSuggestions);
 	$("#add-entry-attribute").addEventListener("click", () => addCreateAttributeRow());
+	$("#new-entry-dn").addEventListener("input", renderAttributeSuggestions);
 	$("#new-entry-dn").addEventListener("blur", syncCreateRDNAttribute);
     $("#entry-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -3045,30 +3880,35 @@
         closeDialog(elements.entryDialog);
 		state.entryDialogMode = "create";
         toast("entry.created", dn);
-        await refreshAfterMutation(dn);
+		        await refreshAfterMutation([dn]);
         await openEntry(dn);
-	  } catch (error) { setFieldError($("#entry-form-error"), error.message); }
+	  } catch (error) { setFieldError($("#entry-form-error"), error.message, $("#new-entry-dn")); }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
 
     elements.entryEditor.addEventListener("submit", async (event) => {
       event.preventDefault();
 	  const submittedForm = event.currentTarget;
-      if (!state.selectedDN) return;
+	  const targetDN = state.selectedDN;
+	  const targetEntry = state.selectedEntry;
+	  if (!targetDN || !targetEntry) return;
 	  setFormSubmitting(submittedForm, true);
       try {
-		const changes = attributeChanges(state.selectedEntry);
+		const changes = attributeChanges(targetEntry);
         if (!changes.length) {
           state.editorDirty = false;
           setEditorStatus(false);
           toast("entry.noChanges", state.selectedDN);
           return;
         }
-        await api("/api/entries", { method: "PATCH", body: { dn: state.selectedDN, changes } });
-        state.editorDirty = false;
-        setEditorStatus(false);
-        toast("entry.updated", state.selectedDN);
-        await openEntry(state.selectedDN);
+		await api("/api/entries", { method: "PATCH", body: { dn: targetDN, changes } });
+		toast("entry.updated", targetDN);
+		if (state.selectedDN === targetDN) {
+		  state.editorDirty = false;
+		  setEditorStatus(false);
+		}
+		await refreshAfterMutation([targetDN]);
+		if (state.selectedDN === targetDN) await openEntry(targetDN);
 	  } catch (error) { toast("entry.updateFailed", error.message, "error"); }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
@@ -3078,32 +3918,43 @@
 	  setMobileView("context");
 	  requestAnimationFrame(() => elements.schemaSearch.focus());
 	});
-    $("#discard-entry").addEventListener("click", async () => { if (state.selectedDN) await openEntry(state.selectedDN); });
+	    $("#discard-entry").addEventListener("click", async () => {
+		  if (!state.selectedDN) return;
+		  state.editorDirty = false;
+		  setEditorStatus(false);
+		  await openEntry(state.selectedDN);
+		});
 
     $("#delete-button").addEventListener("click", async () => {
-      if (!state.selectedDN) return;
-      const approved = await confirmAction("entry.deleteTitle", translated("entry.deleteMessage", { dn: state.selectedDN }), "entry.deleteConfirm");
+	  const targetDN = state.selectedDN;
+	  if (!targetDN) return;
+	  const approved = await confirmAction("entry.deleteTitle", translated("entry.deleteMessage", { dn: targetDN }), "entry.deleteConfirm");
       if (!approved) return;
 	  const deleteButton = $("#delete-button");
 	  deleteButton.disabled = true;
       try {
-        await api("/api/entries", { method: "DELETE", body: { dn: state.selectedDN } });
-        const deleted = state.selectedDN;
-		state.selectedDNs.delete(deleted);
+		await api("/api/entries", { method: "DELETE", body: { dn: targetDN } });
+		state.selectedDNs.delete(targetDN);
 		updateBulkSelection();
-        state.selectedDN = "";
-        state.selectedEntry = null;
-        updateEntryActions(false);
-        elements.detailButton.disabled = true;
-        showListView();
-        toast("entry.deleted", deleted);
-        await refreshAfterMutation();
+		state.entries = state.entries.filter((entry) => entry.dn !== targetDN);
+		toast("entry.deleted", targetDN);
+		if (state.selectedDN === targetDN) {
+		  state.selectedDN = "";
+		  state.selectedEntry = null;
+		  state.editorDirty = false;
+		  setEditorStatus(false);
+		  updateEntryActions(false);
+		  elements.detailButton.disabled = true;
+		  showListView();
+		}
+		await refreshAfterMutation([targetDN]);
 	  } catch (error) { toast("entry.deleteFailed", error.message, "error"); }
 	  finally { deleteButton.disabled = false; }
     });
 
-    $("#rename-button").addEventListener("click", () => {
-      if (!state.selectedDN) return;
+	    $("#rename-button").addEventListener("click", async () => {
+	      if (!state.selectedDN) return;
+		  if (!(await confirmEditorDiscard())) return;
       $("#rename-rdn").value = rdn(state.selectedDN);
       $("#rename-superior").value = parentDN(state.selectedDN);
       $("#rename-delete-old").checked = true;
@@ -3122,12 +3973,13 @@
 		const newDN = effectiveSuperior ? `${newRDN},${effectiveSuperior}` : newRDN;
 		if (state.selectedDNs.delete(oldDN)) state.selectedDNs.add(newDN);
 		updateBulkSelection();
-        state.selectedDN = newDN;
-        closeDialog(elements.renameDialog);
-        toast("entry.renamed", newDN);
-        await refreshAfterMutation(newDN);
-        await openEntry(newDN);
-	  } catch (error) { setFieldError($("#rename-error"), error.message); }
+		const remainsSelected = state.selectedDN === oldDN;
+		if (remainsSelected) state.selectedDN = newDN;
+	      closeDialog(elements.renameDialog);
+	      toast("entry.renamed", newDN);
+		      await refreshAfterMutation([oldDN, newDN]);
+		if (remainsSelected && state.selectedDN === newDN) await openEntry(newDN);
+	  } catch (error) { setFieldError($("#rename-error"), error.message, $("#rename-rdn")); }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
 
@@ -3140,19 +3992,21 @@
     $("#password-form").addEventListener("submit", async (event) => {
       event.preventDefault();
 	  const submittedForm = event.currentTarget;
-      const password = $("#new-password").value;
-      if (password !== $("#confirm-password").value) { setFieldError($("#password-error"), translated("password.mismatch")); return; }
+	  const targetDN = state.selectedDN;
+	  const password = $("#new-password").value;
+	  if (password !== $("#confirm-password").value) { setFieldError($("#password-error"), translated("password.mismatch"), $("#confirm-password")); return; }
 	  setFormSubmitting(submittedForm, true);
       try {
-        await api("/api/password-modify", { method: "POST", body: { user_identity: state.selectedDN, new_password: password } });
+		await api("/api/password-modify", { method: "POST", body: { user_identity: targetDN, new_password: password } });
 		$("#password-form").reset();
         closeDialog(elements.passwordDialog);
-        toast("password.reset", state.selectedDN);
-	  } catch (error) { setFieldError($("#password-error"), error.message); }
+		toast("password.reset", targetDN);
+	  } catch (error) { setFieldError($("#password-error"), error.message, $("#new-password")); }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
     $("#mobile-rename-button").addEventListener("click", () => $("#rename-button").click());
     $("#mobile-password-button").addEventListener("click", () => $("#password-button").click());
+	$("#mobile-clone-button").addEventListener("click", () => $("#clone-button").click());
     $("#mobile-delete-button").addEventListener("click", () => $("#delete-button").click());
 	$("#include-nested-members").addEventListener("change", () => {
 	  if (state.selectedEntry) renderGroupMembers(state.selectedEntry, $("#include-nested-members").checked);
@@ -3173,63 +4027,94 @@
 	  const submittedForm = event.currentTarget;
 	  const changes = [{ operation: $("#bulk-operation").value, attribute: $("#bulk-attribute").value.trim(), values: lines($("#bulk-values").value) }];
 	  setFormSubmitting(submittedForm, true);
-	  try {
-		const result = await runBulk("modify", changes, $("#bulk-continue").checked);
-		if (result && !result.failed && !result.unknown && !result.aborted) closeDialog(elements.bulkModifyDialog);
+		  try {
+			const result = await runBulk("modify", changes, $("#bulk-continue").checked);
+			if (result && !result.failed && !result.unknown && !result.aborted) closeDialog(elements.bulkModifyDialog);
+			else if (result) setFieldError($("#bulk-modify-error"), batchResultDetails(result));
 	  } catch (error) { setFieldError($("#bulk-modify-error"), error.message); }
 	  finally { setFormSubmitting(submittedForm, false); }
 	});
 
-    [$("#import-button"), $("#menu-import")].forEach((button) => button.addEventListener("click", () => { elements.accountMenu.hidden = true; openDialog(elements.importDialog); }));
-	$("#menu-import-csv").addEventListener("click", () => {
-	  elements.accountMenu.hidden = true;
-	  if (state.csvRetryBlocked) {
-		state.csvFileSequence++;
-		$("#csv-import-form").reset();
-		state.csvRetryBlocked = false;
-		localize($("#csv-import-file-name"), "csv.choose");
-	  }
-	  $("#csv-import-base").value = state.baseDN || state.rootDN;
-	  openDialog(elements.csvImportDialog);
+		[$("#import-button"), $("#menu-import")].forEach((button) => button.addEventListener("click", () => {
+		  closeAccountMenu();
+		  openDialog(elements.importDialog);
+		  if (state.ldifRetryFingerprints.size) setFieldError($("#import-error"), translated("import.partialNoRetry"), $("#import-content"));
+		}));
+		$("#menu-import-csv").addEventListener("click", () => {
+		  closeAccountMenu();
+		  if (!$("#csv-import-base").value.trim()) $("#csv-import-base").value = state.baseDN || state.rootDN;
+		  openDialog(elements.csvImportDialog);
+		  if (state.csvRetryFingerprints.size) setFieldError($("#csv-import-error"), translated("csv.partialNoRetry"), $("#csv-import-content"));
+		});
+	    [$("#export-button"), $("#menu-export")].forEach((button) => button.addEventListener("click", () => { closeAccountMenu(); exportLDIF(); }));
+		$("#menu-export-csv").addEventListener("click", () => { closeAccountMenu(); exportData("csv"); });
+		$("#menu-export-json").addEventListener("click", () => { closeAccountMenu(); exportData("json"); });
+	  $("#csv-import-file").addEventListener("change", async (event) => {
+		const file = event.target.files[0];
+		if (!file) return;
+		  const sequence = ++state.csvFileSequence;
+		  state.csvFileLoading = true;
+		  $("#csv-import-content").value = "";
+		clearLocalization($("#csv-import-file-name"));
+		$("#csv-import-file-name").textContent = file.name;
+		try {
+		  assertFileSize(file);
+		  const content = await file.text();
+			if (sequence !== state.csvFileSequence) return;
+			$("#csv-import-content").value = content;
+			state.csvFileLoading = false;
+			if (state.csvRetryFingerprints.size) setFieldError($("#csv-import-error"), translated("csv.partialNoRetry"), $("#csv-import-content"));
+		  }
+		  catch (error) {
+			if (sequence === state.csvFileSequence) {
+			  state.csvFileLoading = false;
+			  setFieldError($("#csv-import-error"), error.message);
+			}
+		  }
+		});
+	$("#csv-import-content").addEventListener("input", () => {
+	  state.csvFileSequence++;
+	  state.csvFileLoading = false;
+	  if (state.csvRetryFingerprints.size) setFieldError($("#csv-import-error"), translated("csv.partialNoRetry"), $("#csv-import-content"));
 	});
-    [$("#export-button"), $("#menu-export")].forEach((button) => button.addEventListener("click", () => { elements.accountMenu.hidden = true; exportLDIF(); }));
-	$("#menu-export-csv").addEventListener("click", () => { elements.accountMenu.hidden = true; exportData("csv"); });
-	$("#menu-export-json").addEventListener("click", () => { elements.accountMenu.hidden = true; exportData("json"); });
-	$("#csv-import-file").addEventListener("change", async (event) => {
-	  const file = event.target.files[0];
-	  if (!file) return;
-	  const sequence = ++state.csvFileSequence;
-	  state.csvRetryBlocked = true;
-	  $("#csv-import-content").value = "";
-	  clearLocalization($("#csv-import-file-name"));
-	  $("#csv-import-file-name").textContent = file.name;
-	  try {
-		const content = await file.text();
-		if (sequence !== state.csvFileSequence) return;
-		$("#csv-import-content").value = content;
-		state.csvRetryBlocked = false;
+	$("#csv-import-form").addEventListener("input", (event) => {
+	  if (event.target.id !== "csv-import-content" && state.csvRetryFingerprints.size) {
+		setFieldError($("#csv-import-error"), translated("csv.partialNoRetry"), event.target);
 	  }
-	  catch (error) { if (sequence === state.csvFileSequence) setFieldError($("#csv-import-error"), error.message); }
 	});
-	$("#csv-import-form").addEventListener("submit", async (event) => {
-	  event.preventDefault();
-	  const submittedForm = event.currentTarget;
-	  if (state.csvRetryBlocked) { setFieldError($("#csv-import-error"), translated("csv.partialNoRetry")); return; }
-	  setFormSubmitting(submittedForm, true);
-	  setFieldError($("#csv-import-error"), "");
-	  try {
-		const { data } = await api("/api/csv-import", { method: "POST", body: {
-		  csv: $("#csv-import-content").value,
-		  base_dn: $("#csv-import-base").value.trim(),
-		  rdn_attribute: $("#csv-import-rdn").value.trim(),
-		  object_classes: lines($("#csv-import-classes").value),
-		  mapping: parseCSVMapping($("#csv-import-mapping").value),
-		  continue_on_error: $("#csv-import-continue").checked
-		} });
+		$("#csv-import-form").addEventListener("submit", async (event) => {
+		  event.preventDefault();
+		  const submittedForm = event.currentTarget;
+		  if (state.csvFileLoading) { setFieldError($("#csv-import-error"), translated("file.reading"), $("#csv-import-file")); return; }
+		  let body;
+		  let fingerprint;
+		  try {
+			body = {
+			csv: $("#csv-import-content").value,
+			base_dn: $("#csv-import-base").value.trim(),
+			rdn_attribute: $("#csv-import-rdn").value.trim(),
+			object_classes: lines($("#csv-import-classes").value),
+			mapping: parseCSVMapping($("#csv-import-mapping").value),
+			continue_on_error: $("#csv-import-continue").checked
+			};
+			assertRequestSize(body);
+			fingerprint = await batchFingerprint("csv", body);
+		  } catch (error) {
+			setFieldError($("#csv-import-error"), error.message);
+			return;
+		  }
+		  if (!(await approveChangedBatch("csv", fingerprint, $("#csv-import-error"), $("#csv-import-content")))) return;
+		  const generation = state.sessionGeneration;
+		  setFormSubmitting(submittedForm, true);
+		  setFieldError($("#csv-import-error"), "");
+		  try {
+		  const { data } = await api("/api/csv-import", { method: "POST", body });
+		if (generation !== state.sessionGeneration) return;
+		if (!hasStructuredBatchResult(data)) throw new APIError(t("api.unavailable"), 0, null);
 		const applied = Number(data && data.applied || 0);
 		const failed = Number(data && data.failed || 0);
 		const unknown = Number(data && data.unknown || 0);
-		const summary = data && data.aborted ? translated("bulk.aborted", { reason: data.abort_reason || "" }) : translated("bulk.summary", { applied, failed, unknown });
+		const summary = data && data.aborted ? translated("bulk.aborted", { reason: localizedAbortReason(data) }) : translated("bulk.summary", { applied, failed, unknown });
 		const hasIssues = failed || unknown || data && data.aborted;
 		toast(hasIssues ? "csv.partial" : "csv.complete", summary, hasIssues ? "error" : "success");
 		if (hasIssues) {
@@ -3239,45 +4124,109 @@
 		  const errorElement = $("#csv-import-error");
 		  renderDynamic(errorElement, () => [
 			applied > 0 || unknown > 0 ? t("csv.partialNoRetry") : "",
-			...failures.map((result) => t("csv.rowFailure", { row: result.row, message: result.error && result.error.message || result.status })),
+			...failures.map((result) => t("csv.rowFailure", { row: result.row, message: errorMessage({ error: result.error }, result.status) })),
 			notAttempted ? t("csv.notAttempted", { count: notAttempted }) : ""
 		  ].filter(Boolean).join("\n"));
 		  errorElement.hidden = false;
-		  if (applied > 0 || unknown > 0) state.csvRetryBlocked = true;
+		  if (applied > 0 || unknown > 0) state.csvRetryFingerprints.add(fingerprint);
 		} else {
-		  state.csvRetryBlocked = false;
+		  state.csvRetryFingerprints.clear();
 		  closeDialog(elements.csvImportDialog);
 		  $("#csv-import-form").reset();
 		  localize($("#csv-import-file-name"), "csv.choose");
 		}
-		await refreshAfterMutation();
-	  } catch (error) { setFieldError($("#csv-import-error"), error.message); }
+		if (applied > 0 || unknown > 0) await refreshAfterMutation(resultDNs(data), [body.base_dn]);
+	  } catch (error) {
+		if (generation !== state.sessionGeneration || error && error.status === 401 || error instanceof SupersededRequestError) return;
+		const data = error && error.details && typeof error.details === "object" ? error.details : null;
+		const unsafe = unsafeBatchOutcome(data, error);
+		if (unsafe) state.csvRetryFingerprints.add(fingerprint);
+		setFieldError($("#csv-import-error"), [error.message, unsafe ? t("csv.partialNoRetry") : "", csvResultDetails(data)].filter(Boolean).join("\n"), $("#csv-import-content"));
+		if (unsafe) await refreshAfterMutation(resultDNs(data), [body.base_dn]);
+	  }
 	  finally { setFormSubmitting(submittedForm, false); }
 	});
-    $("#import-file").addEventListener("change", async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-      clearLocalization($("#import-file-name"));
-      $("#import-file-name").textContent = file.name;
-      try { $("#import-content").value = await file.text(); }
-      catch (error) { setFieldError($("#import-error"), error.message); }
-    });
-    $("#import-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-	  const submittedForm = event.currentTarget;
-      const content = $("#import-content").value.trim();
-      if (!content) { setFieldError($("#import-error"), translated("import.required")); return; }
-      const approved = await confirmAction("import.confirmTitle", translated("import.confirmMessage"), "import.confirm");
-      if (!approved) return;
-	  setFormSubmitting(submittedForm, true);
-      try {
-        await api("/api/import", { method: "POST", body: content, rawBody: true, headers: { "Content-Type": "application/ldif; charset=utf-8" } });
-        closeDialog(elements.importDialog);
-        $("#import-form").reset();
-        localize($("#import-file-name"), "import.choose");
-        toast("import.complete", translated("import.applied"));
-        await refreshAfterMutation();
-	  } catch (error) { setFieldError($("#import-error"), error.message); openDialog(elements.importDialog); }
+		    $("#import-file").addEventListener("change", async (event) => {
+		      const file = event.target.files[0];
+	      if (!file) return;
+		  const sequence = ++state.ldifFileSequence;
+		  state.ldifFileLoading = true;
+		  $("#import-content").value = "";
+	      clearLocalization($("#import-file-name"));
+	      $("#import-file-name").textContent = file.name;
+		      try {
+			assertFileSize(file);
+			const content = await file.text();
+			if (sequence !== state.ldifFileSequence) return;
+			$("#import-content").value = content;
+			state.ldifFileLoading = false;
+			if (state.ldifRetryFingerprints.size) setFieldError($("#import-error"), translated("import.partialNoRetry"), $("#import-content"));
+		  } catch (error) {
+			if (sequence === state.ldifFileSequence) {
+			  state.ldifFileLoading = false;
+			  setFieldError($("#import-error"), error.message);
+			}
+		  }
+	    });
+	$("#import-content").addEventListener("input", () => {
+	  state.ldifFileSequence++;
+	  state.ldifFileLoading = false;
+	  if (state.ldifRetryFingerprints.size) setFieldError($("#import-error"), translated("import.partialNoRetry"), $("#import-content"));
+	});
+	    $("#import-form").addEventListener("submit", async (event) => {
+	      event.preventDefault();
+		  const submittedForm = event.currentTarget;
+		  if (state.ldifFileLoading) { setFieldError($("#import-error"), translated("file.reading"), $("#import-file")); return; }
+	      const content = $("#import-content").value;
+	      if (!content.trim()) { setFieldError($("#import-error"), translated("import.required")); return; }
+		  let fingerprint;
+		  try {
+			assertRequestSize(content);
+			fingerprint = await batchFingerprint("ldif", content);
+		  } catch (error) {
+			setFieldError($("#import-error"), error.message, $("#import-content"));
+			return;
+		  }
+		  const reviewingChangedBatch = state.ldifRetryFingerprints.size > 0;
+		  if (!(await approveChangedBatch("ldif", fingerprint, $("#import-error"), $("#import-content")))) return;
+		  if (!reviewingChangedBatch && !(await confirmAction("import.confirmTitle", translated("import.confirmMessage"), "import.confirm"))) return;
+		  const generation = state.sessionGeneration;
+		  setFormSubmitting(submittedForm, true);
+	      try {
+		        const { data } = await api("/api/import", { method: "POST", body: content, rawBody: true, headers: { "Content-Type": "application/ldif; charset=utf-8" } });
+			if (generation !== state.sessionGeneration) return;
+			if (!hasStructuredBatchResult(data)) throw new APIError(t("api.unavailable"), 0, null);
+			const applied = Number(data && data.applied || 0);
+			const failed = Number(data && data.failed || 0);
+			const unknown = Number(data && data.unknown || 0);
+			const hasIssues = failed > 0 || unknown > 0 || Boolean(data && data.aborted);
+			if (hasIssues) {
+			  if (applied > 0 || unknown > 0) state.ldifRetryFingerprints.add(fingerprint);
+			  setFieldError($("#import-error"), [
+				applied > 0 || unknown > 0 ? t("import.partialNoRetry") : "",
+				ldifResultDetails(data)
+			  ].filter(Boolean).join("\n"), $("#import-content"));
+			} else {
+			  state.ldifRetryFingerprints.clear();
+			  closeDialog(elements.importDialog);
+			  $("#import-form").reset();
+			  localize($("#import-file-name"), "import.choose");
+			}
+			toast(hasIssues ? "import.partial" : "import.complete", t("bulk.summary", { applied, failed, unknown }), hasIssues ? "error" : "success");
+			if (applied > 0 || unknown > 0) await refreshAfterMutation(resultDNs(data));
+		  } catch (error) {
+			if (generation !== state.sessionGeneration || error && error.status === 401 || error instanceof SupersededRequestError) return;
+			const data = error && error.details && typeof error.details === "object" ? error.details : null;
+			const applied = Number(data && data.applied || 0);
+			const unsafe = unsafeBatchOutcome(data, error);
+			if (unsafe) state.ldifRetryFingerprints.add(fingerprint);
+			setFieldError($("#import-error"), [
+			  error.message,
+			  unsafe ? t("import.partialNoRetry") : "",
+			  ldifResultDetails(data)
+			].filter(Boolean).join("\n"), $("#import-content"));
+			if (unsafe || applied > 0) await refreshAfterMutation(resultDNs(data));
+		  }
 	  finally { setFormSubmitting(submittedForm, false); }
     });
 
@@ -3286,9 +4235,6 @@
     elements.confirmDialog.addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirm(false); });
     elements.loginDialog.addEventListener("cancel", (event) => event.preventDefault());
     $$(".close-dialog").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
-    $$('dialog:not(#login-dialog):not(#confirm-dialog)').forEach((dialog) => dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) closeDialog(dialog);
-    }));
     window.addEventListener("beforeunload", (event) => { if (state.editorDirty) { event.preventDefault(); event.returnValue = ""; } });
   }
 

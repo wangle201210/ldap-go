@@ -1174,3 +1174,22 @@ LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
     -run TestLDAPGoSyncreplConsumesOpenLDAPProviderWithSCRAMSHA256 \
     -count=1
 ```
+
+## Web Administration Browser Tests
+
+The Playwright suite builds the current `ldap-go` binary, starts disposable
+LDAP and Web administration processes on random loopback ports, imports an
+isolated directory, and removes the processes and database after the run.
+
+```sh
+npm ci
+npm run test:e2e:install
+make webadmin-e2e
+```
+
+Browser artifacts are written below `test-results/` and `playwright-report/`.
+Set `PLAYWRIGHT_USE_SYSTEM_CHROME=1` to opt into an installed Chrome instead of
+the Playwright-pinned Chromium. The suite covers authentication and session
+isolation,
+resource-limit discovery, responsive keyboard operation, entry lifecycle,
+groups and bulk operations, and LDIF import/export against the real server.
