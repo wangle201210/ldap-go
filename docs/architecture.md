@@ -897,16 +897,23 @@ does not install `olcAutoCAlocalDN` material into the listener TLS context.
 `storage.Store`. Login creates a fresh LDAP connection, performs a real Bind,
 and retains that bound connection under a random server-side session token;
 plaintext credentials are not retained. Directory browsing, CRUD, rename,
-Password Modify, schema and Monitor views, and bounded LDIF import/export all
-use the same bound connection, leaving LDAP ACL, schema, overlays, audit, and
-runtime reload behavior authoritative.
+Password Modify, group membership, bounded bulk operations, binary attributes,
+schema and Monitor views, and bounded LDIF/CSV/JSON transfer all use the same
+bound connection, leaving LDAP ACL, schema, overlays, audit, and runtime reload
+behavior authoritative. CSV and bulk operations validate their complete input
+before the first write, execute independent LDAP requests in a stable order,
+and report partial success explicitly; they are not represented as atomic.
+An LDAP response lost after a write is reported as `unknown`, stops the batch,
+and is removed from direct-retry selections. The batch deadline closes the
+bound connection when an in-flight request cannot finish in time.
 
 Plain HTTP and LDAP upstreams are accepted only on loopback. Other HTTP
 listeners require HTTPS, while remote LDAP requires LDAPS or mandatory
 StartTLS. Sessions have idle and absolute expiry, maximum-count admission,
 background connection cleanup, opaque HttpOnly SameSite cookies, same-origin
 checks, and constant-time CSRF validation. Login attempts, request bodies,
-filters, attributes, Search results, LDIF records, export bytes, and Monitor
+filters, attributes, Search results, LDIF/CSV records, decoded binary values,
+export bytes, bulk targets, nested group traversal, and Monitor
 responses are independently bounded, including global LDAP-operation admission
 and per-operation/process retained-response byte budgets. Web LDIF rejects controls and all URL
 values before parsing so it cannot read files from the administration host.

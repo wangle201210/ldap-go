@@ -42,6 +42,12 @@ type Application struct {
 	closeOnce       sync.Once
 	closeDone       chan struct{}
 	closeErr        error
+	closeTaskMu     sync.Mutex
+	closeTasks      sync.WaitGroup
+	batchTaskMu     sync.Mutex
+	batchOperations sync.WaitGroup
+	closingSessions int
+	asyncCloseErrs  []error
 }
 
 type session struct {
@@ -54,6 +60,7 @@ type session struct {
 	closed    bool
 	closeOnce sync.Once
 	closeErr  error
+	asyncOnce sync.Once
 }
 
 type loginRate struct {
@@ -110,6 +117,7 @@ func (application *Application) CloseContext(ctx context.Context) error {
 		return errors.New("web administration close context is required")
 	}
 	application.closeOnce.Do(func() {
+		application.batchTaskMu.Lock()
 		application.mu.Lock()
 		application.closed = true
 		close(application.sweepStop)
@@ -120,15 +128,23 @@ func (application *Application) CloseContext(ctx context.Context) error {
 		clear(application.sessions)
 		clear(application.rates)
 		application.mu.Unlock()
+		application.batchTaskMu.Unlock()
 
 		go func() {
 			var closeErrors []error
 			for _, current := range sessions {
-				if err := current.forceClose(); err != nil {
+				if err := application.safeForceClose(current); err != nil {
 					closeErrors = append(closeErrors, err)
 				}
 			}
 			<-application.sweepDone
+			application.closeTaskMu.Lock()
+			application.closeTaskMu.Unlock()
+			application.closeTasks.Wait()
+			application.batchOperations.Wait()
+			application.mu.Lock()
+			closeErrors = append(closeErrors, application.asyncCloseErrs...)
+			application.mu.Unlock()
 			for _, current := range sessions {
 				current.mu.Lock()
 				current.closed = true
@@ -179,7 +195,12 @@ func (application *Application) routes() http.Handler {
 	mux.HandleFunc("/api/schema", application.handleSchema)
 	mux.HandleFunc("/api/monitor", application.handleMonitor)
 	mux.HandleFunc("/api/export", application.handleExport)
+	mux.HandleFunc("/api/data-export", application.handleDataExport)
 	mux.HandleFunc("/api/import", application.handleImport)
+	mux.HandleFunc("/api/bulk", application.handleBulk)
+	mux.HandleFunc("/api/groups", application.handleGroups)
+	mux.HandleFunc("/api/binary", application.handleBinaryAttribute)
+	mux.HandleFunc("/api/csv-import", application.handleCSVImport)
 	mux.HandleFunc("/livez", application.handleLiveness)
 	mux.HandleFunc("/readyz", application.handleReadiness)
 	mux.HandleFunc("/metrics", application.handleMetrics)
@@ -193,7 +214,7 @@ func (application *Application) securityHeaders(next http.Handler) http.Handler 
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		application.requests.Add(1)
 		headers := response.Header()
-		headers.Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
+		headers.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 		headers.Set("Cross-Origin-Opener-Policy", "same-origin")
 		headers.Set("Cross-Origin-Resource-Policy", "same-origin")
 		headers.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
@@ -253,6 +274,54 @@ func (current *session) forceClose() error {
 	return current.closeErr
 }
 
+func (application *Application) safeForceClose(current *session) (err error) {
+	defer func() {
+		if recover() != nil {
+			application.panics.Add(1)
+			application.config.Logger.Printf("webadmin panic while closing LDAP client")
+			err = errors.New("LDAP client panicked while closing")
+		}
+	}()
+	return current.forceClose()
+}
+
+func (application *Application) scheduleSessionClose(current *session, operationDone <-chan error) {
+	current.closed = true
+	current.asyncOnce.Do(func() {
+		application.closeTaskMu.Lock()
+		application.mu.Lock()
+		if application.closed {
+			application.mu.Unlock()
+			application.closeTaskMu.Unlock()
+			return
+		}
+		for key, candidate := range application.sessions {
+			if candidate == current {
+				delete(application.sessions, key)
+				break
+			}
+		}
+		application.closingSessions++
+		application.closeTasks.Add(1)
+		application.mu.Unlock()
+		application.closeTaskMu.Unlock()
+
+		go func() {
+			err := application.safeForceClose(current)
+			if operationDone != nil {
+				<-operationDone
+			}
+			application.mu.Lock()
+			application.closingSessions--
+			if err != nil && len(application.asyncCloseErrs) < application.config.MaxSessions {
+				application.asyncCloseErrs = append(application.asyncCloseErrs, err)
+			}
+			application.mu.Unlock()
+			application.closeTasks.Done()
+		}()
+	})
+}
+
 func (application *Application) acquireSession(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -275,7 +344,13 @@ func (application *Application) acquireSession(
 		return nil, false
 	}
 
-	current.mu.Lock()
+	if !current.mu.TryLock() {
+		response.Header().Set("Retry-After", "1")
+		writeAPIError(response, http.StatusConflict, apiError{
+			Code: "session_busy", Message: "another LDAP operation is active in this session",
+		})
+		return nil, false
+	}
 	application.mu.Lock()
 	stillCurrent := application.sessions[key] == current && !application.closed
 	application.mu.Unlock()

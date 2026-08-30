@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 )
@@ -185,7 +184,7 @@ func TestSearchValidationRejectsUnsafeBoundsBeforeLDAP(t *testing.T) {
 	}
 }
 
-func TestBoundConnectionIsSerializedPerSession(t *testing.T) {
+func TestBoundConnectionRejectsConcurrentSessionOperation(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
@@ -212,20 +211,20 @@ func TestBoundConnectionIsSerializedPerSession(t *testing.T) {
 			"/api/search?base=dc%3Dexample%2Cdc%3Dcom&filter=%28objectClass%3D%2A%29",
 			nil, authenticated.cookie, "")
 	}
-	results := make(chan *httptest.ResponseRecorder, 2)
-	go func() { results <- request() }()
+	firstResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstResult <- request() }()
 	<-entered
-	go func() { results <- request() }()
-	select {
-	case <-entered:
-		t.Fatal("second search entered LDAP before the first completed")
-	case <-time.After(30 * time.Millisecond):
+	second := request()
+	if second.Code != http.StatusConflict || second.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(second.Body.String(), "session_busy") {
+		t.Fatalf("second search status = %d, headers = %#v, body = %s", second.Code, second.Header(), second.Body.String())
+	}
+	if activeSlots := len(application.operations); activeSlots != 1 {
+		t.Fatalf("active global operation slots = %d, want only the executing request", activeSlots)
 	}
 	close(release)
-	for range 2 {
-		if result := <-results; result.Code != http.StatusOK {
-			t.Fatalf("search status = %d", result.Code)
-		}
+	if first := <-firstResult; first.Code != http.StatusOK {
+		t.Fatalf("first search status = %d", first.Code)
 	}
 	if maximum.Load() != 1 {
 		t.Fatalf("maximum concurrent LDAP calls = %d", maximum.Load())

@@ -44,11 +44,22 @@ func webRequestUsesLDAP(path string) bool {
 	case "/api/login", "/api/root-dse", "/api/root",
 		"/api/search", "/api/entries", "/api/entry", "/api/entries/rename",
 		"/api/rename", "/api/password-modify", "/api/password", "/api/schema",
-		"/api/monitor", "/api/export", "/api/import":
+		"/api/monitor", "/api/export", "/api/import", "/api/bulk",
+		"/api/groups", "/api/data-export", "/api/csv-import":
 		return true
 	default:
 		return false
 	}
+}
+
+func rejectIncompleteReferrals(response http.ResponseWriter, result *ldap.SearchResult) bool {
+	if result == nil || len(result.Referrals) == 0 {
+		return false
+	}
+	writeAPIError(response, http.StatusBadGateway, apiError{
+		Code: "ldap_referral_unfollowed", Message: "LDAP search returned referrals that the Web administration connection did not follow",
+	})
+	return true
 }
 
 func (application *Application) search(

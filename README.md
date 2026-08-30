@@ -936,10 +936,18 @@ go run ./cmd/ldap-go web-admin \
 	  -ldap-url ldap://127.0.0.1:1389
 ```
 
-The Web console opens at `http://127.0.0.1:8080/`. It covers directory tree and
-filter searches, Person/Group/OU/custom entry creation, generic attribute
-editing, rename/move, password modification, LDIF import/export, schema and
-Monitor views. Login performs a real LDAP Bind and retains only that bound LDAP
+The Web console opens at `http://127.0.0.1:8080/`. It covers the directory tree,
+paged and visual-filter searches, local query bookmarks/history, Person/POSIX
+account/Group/POSIX Group/OU/custom creation, schema-aware attribute editing,
+clone, rename/move, password modification, explicit-selection bulk modify and
+delete, direct/nested group membership, bounded LDIF/CSV import, LDIF/CSV/JSON
+export, binary download/upload and safe image preview, schema and Monitor views.
+Batch responses report each applied, failed, unknown, or unattempted DN, stop
+on ambiguous transport results, and never claim cross-entry atomicity. The
+interface can switch between English and Simplified Chinese,
+uses the browser language on first use, and remembers the local preference.
+LDAP identifiers and directory values are always displayed unchanged. Login
+performs a real LDAP Bind and retains only that bound LDAP
 connection in the in-memory session; it never opens bbolt or retains the
 plaintext password. Every operation remains subject to the bound identity's
 LDAP ACL, schema, overlays, audit, and runtime configuration. Mutations require

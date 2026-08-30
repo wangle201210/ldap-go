@@ -139,7 +139,7 @@ func (application *Application) handleLogin(response http.ResponseWriter, reques
 	if hasOldKey {
 		previous = application.sessions[oldKey]
 	}
-	effectiveSessions := len(application.sessions)
+	effectiveSessions := len(application.sessions) + application.closingSessions
 	if previous != nil {
 		effectiveSessions--
 	}
@@ -177,7 +177,7 @@ func (application *Application) hasLoginCapacity(request *http.Request) bool {
 	oldKey, hasOldKey := application.sessionKey(request)
 	application.mu.Lock()
 	defer application.mu.Unlock()
-	count := len(application.sessions)
+	count := len(application.sessions) + application.closingSessions
 	if hasOldKey && application.sessions[oldKey] != nil {
 		count--
 	}

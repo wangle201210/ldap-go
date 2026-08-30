@@ -23,13 +23,17 @@
         <span class="truncate" id="root-label">Directory</span>
       </div>
       <nav class="mobile-view-switch" aria-label="Workspace view">
-        <button type="button" data-mobile-view="navigation" aria-label="Directory view" title="Directory">&#9776;</button>
-        <button type="button" data-mobile-view="content" class="active" aria-label="Entries view" title="Entries">&#9638;</button>
-        <button type="button" data-mobile-view="context" aria-label="Context view" title="Schema and monitor">&#9432;</button>
+        <button type="button" data-mobile-view="navigation" aria-pressed="false" aria-label="Directory view" title="Directory">&#9776;</button>
+        <button type="button" data-mobile-view="content" class="active" aria-pressed="true" aria-label="Entries view" title="Entries">&#9638;</button>
+        <button type="button" data-mobile-view="context" aria-pressed="false" aria-label="Context view" title="Schema and monitor">&#9432;</button>
       </nav>
       <div class="top-actions">
         <button class="button quiet desktop-action" id="import-button" type="button"><span aria-hidden="true">&#8679;</span> Import</button>
         <button class="button quiet desktop-action" id="export-button" type="button"><span aria-hidden="true">&#8681;</span> Export</button>
+        <div class="language-switch" id="language-switch" role="group" aria-label="Language">
+          <button type="button" data-language="en" aria-pressed="true" title="English">EN</button>
+          <button type="button" data-language="zh-CN" aria-pressed="false" title="Simplified Chinese">中文</button>
+        </div>
         <button class="account-button" id="account-button" type="button" aria-haspopup="true" aria-expanded="false">
           <span class="avatar" id="account-avatar" aria-hidden="true">A</span>
           <span class="account-copy"><strong id="account-name">Administrator</strong><small id="account-dn">Not signed in</small></span>
@@ -37,7 +41,10 @@
         </button>
         <div class="account-menu" id="account-menu" hidden>
           <button type="button" id="menu-import"><span aria-hidden="true">&#8679;</span> Import LDIF</button>
+          <button type="button" id="menu-import-csv"><span aria-hidden="true">&#8679;</span> Import CSV</button>
           <button type="button" id="menu-export"><span aria-hidden="true">&#8681;</span> Export LDIF</button>
+          <button type="button" id="menu-export-csv"><span aria-hidden="true">&#8681;</span> Export CSV</button>
+          <button type="button" id="menu-export-json"><span aria-hidden="true">&#8681;</span> Export JSON</button>
           <button type="button" id="logout-button"><span aria-hidden="true">&#8594;</span> Sign out</button>
         </div>
       </div>
@@ -75,8 +82,28 @@
           </form>
           <div class="saved-filters" aria-label="Common searches">
             <button type="button" data-filter="(objectClass=person)">People</button>
-            <button type="button" data-filter="(objectClass=groupOfNames)">Groups</button>
+            <button type="button" data-filter="(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))">Groups</button>
+            <button type="button" data-filter="(objectClass=posixAccount)">POSIX accounts</button>
+            <button type="button" data-filter="(objectClass=organizationalUnit)">Organizational units</button>
+            <button type="button" data-filter="(objectClass=ipHost)">Hosts</button>
             <button type="button" data-filter="(pwdAccountLockedTime=*)">Locked</button>
+          </div>
+          <details class="filter-builder" id="filter-builder">
+            <summary>Filter builder</summary>
+            <div class="filter-builder-controls">
+              <label for="filter-logic">Match</label>
+              <select id="filter-logic"><option value="and">All conditions</option><option value="or">Any condition</option></select>
+              <div class="filter-condition-list" id="filter-condition-list"></div>
+              <div class="filter-builder-actions"><button class="text-button" id="add-filter-condition" type="button">Add condition</button><button class="button quiet" id="apply-filter-builder" type="button">Apply filter</button></div>
+            </div>
+          </details>
+          <div class="saved-query-tools">
+            <button class="text-button" id="save-query" type="button">Save query</button>
+            <select id="saved-query-list" aria-label="Saved queries"><option value="">Saved queries</option></select>
+          </div>
+          <div class="saved-query-tools">
+            <button class="text-button" id="clear-query-history" type="button">Clear history</button>
+            <select id="recent-query-list" aria-label="Recent queries"><option value="">Recent queries</option></select>
           </div>
         </section>
         <footer class="navigation-footer">
@@ -93,6 +120,7 @@
             <div class="content-actions">
               <button class="button primary" id="new-entry-button" type="button"><span aria-hidden="true">+</span> New entry</button>
               <button class="icon-button" id="refresh-content" type="button" aria-label="Refresh entries" title="Refresh">&#8635;</button>
+              <button class="icon-button entry-action" id="clone-button" type="button" aria-label="Clone selected entry" title="Clone" disabled>&#10697;</button>
               <button class="icon-button entry-action" id="rename-button" type="button" aria-label="Rename selected entry" title="Rename or move" disabled>&#9998;</button>
               <button class="icon-button entry-action" id="password-button" type="button" aria-label="Reset password for selected entry" title="Reset password" disabled>&#9919;</button>
               <button class="icon-button danger-icon entry-action" id="delete-button" type="button" aria-label="Delete selected entry" title="Delete" disabled>&#128465;</button>
@@ -106,6 +134,10 @@
 		    <div class="result-summary" id="result-summary">No results</div>
 		    <div class="page-actions" aria-label="Search result pages"><button class="icon-button" id="previous-page" type="button" aria-label="Previous result page" title="Previous page" disabled>&lsaquo;</button><button class="icon-button" id="next-page" type="button" aria-label="Next result page" title="Next page" disabled>&rsaquo;</button></div>
           </div>
+          <div class="bulk-toolbar" id="bulk-toolbar" hidden>
+            <strong id="bulk-selection-count">0 selected</strong>
+            <div><button class="button quiet" id="bulk-modify-button" type="button">Modify</button><button class="button quiet danger-text" id="bulk-delete-button" type="button">Delete</button><button class="text-button" id="bulk-clear-button" type="button">Clear</button></div>
+          </div>
         </div>
 
         <section class="content-body" id="list-view" aria-label="Directory entries">
@@ -114,7 +146,7 @@
           </div>
           <div class="table-wrap" id="entry-table-wrap" hidden>
             <table class="entry-table">
-              <thead><tr><th scope="col">Relative name</th><th scope="col">Type</th><th scope="col">Description</th><th scope="col">Modified</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+              <thead><tr><th class="selection-column" scope="col"><input id="select-page" type="checkbox" aria-label="Select all entries on this page"></th><th scope="col">Relative name</th><th scope="col">Type</th><th scope="col">Description</th><th scope="col">Modified</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
               <tbody id="entry-table-body"></tbody>
             </table>
           </div>
@@ -131,8 +163,18 @@
             <button class="button quiet" id="mobile-password-button" type="button"><span aria-hidden="true">&#9919;</span> Password</button>
             <button class="button quiet danger-text" id="mobile-delete-button" type="button"><span aria-hidden="true">&#128465;</span> Delete</button>
           </div>
+          <section class="group-members" id="group-members" hidden>
+            <div class="editor-heading"><div><h3>Group members</h3><p id="group-member-count">0 members</p></div><label class="check-row" for="include-nested-members"><input id="include-nested-members" type="checkbox"><span>Include nested members</span></label></div>
+            <div class="group-member-list" id="group-member-list"></div>
+            <form class="group-member-form" id="group-member-form">
+              <label class="sr-only" for="group-member-value">Member DN or uid</label><input id="group-member-value" autocomplete="off" spellcheck="false" placeholder="uid=user,ou=people,dc=example,dc=org" required>
+              <button class="button quiet" type="submit">Add member</button>
+              <button class="button quiet danger-text" id="remove-group-members" type="button" disabled>Remove selected</button>
+            </form>
+            <div class="form-error" id="group-member-error" role="alert" hidden></div>
+          </section>
           <form id="entry-editor" class="entry-editor">
-            <div class="editor-heading"><div><h3>Attributes</h3><p id="attribute-count">0 attributes</p></div><button class="button quiet" id="add-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div>
+            <div class="editor-heading"><div><h3>Attributes</h3><p id="attribute-count">0 attributes</p></div><div class="editor-heading-actions"><button class="button quiet" id="browse-attributes" type="button">Browse attributes</button><button class="button quiet" id="add-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div></div>
             <div class="attribute-list" id="attribute-list"></div>
             <div class="editor-footer"><span id="editor-status">No unsaved changes</span><div><button class="button quiet" id="discard-entry" type="button">Discard</button><button class="button primary" id="save-entry" type="submit">Save changes</button></div></div>
           </form>
@@ -164,7 +206,13 @@
 
 	<dialog class="modal login-modal" id="login-dialog" aria-labelledby="login-title">
     <form method="dialog" id="login-form">
-      <div class="login-brand"><canvas id="login-mark" width="46" height="46" aria-hidden="true"></canvas><div><strong>LDAP Operations</strong><span>Secure administration</span></div></div>
+	  <div class="login-heading">
+        <div class="login-brand"><canvas id="login-mark" width="46" height="46" aria-hidden="true"></canvas><div><strong>LDAP Operations</strong><span>Secure administration</span></div></div>
+        <div class="language-switch login-language" role="group" aria-label="Language">
+          <button type="button" data-language="en" aria-pressed="true" title="English">EN</button>
+          <button type="button" data-language="zh-CN" aria-pressed="false" title="Simplified Chinese">中文</button>
+        </div>
+      </div>
 	  <h2 id="login-title">Sign in</h2>
       <p class="modal-subtitle">Use an administrator directory account.</p>
       <div class="form-field"><label for="login-dn">Bind DN</label><input id="login-dn" name="dn" autocomplete="username" spellcheck="false" required autofocus placeholder="cn=admin,dc=example,dc=org"></div>
@@ -177,7 +225,7 @@
 	<dialog class="modal" id="entry-dialog" aria-labelledby="entry-dialog-title">
 	    <form method="dialog" id="entry-form">
 	  <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="entry-dialog-title">Create entry</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
-	      <div class="form-field"><label for="new-entry-template">Entry type</label><select id="new-entry-template"><option value="person">Person</option><option value="group">Group</option><option value="ou">Organizational unit</option><option value="custom">Custom</option></select></div>
+	      <div class="form-field"><label for="new-entry-template">Entry type</label><select id="new-entry-template"><option value="person">Person</option><option value="posixAccount">POSIX account</option><option value="group">Group</option><option value="uniqueGroup">Unique-name group</option><option value="posixGroup">POSIX group</option><option value="ou">Organizational unit</option><option value="custom">Custom</option></select></div>
 	      <div class="form-field"><label for="new-entry-dn">Distinguished name</label><input id="new-entry-dn" name="dn" spellcheck="false" required></div>
 	      <div class="form-field"><label for="new-entry-classes">Object classes</label><textarea id="new-entry-classes" rows="3" spellcheck="false" required>top\nperson\norganizationalPerson\ninetOrgPerson</textarea></div>
 	      <div class="editor-heading create-attributes-heading"><div><h3>Attributes</h3></div><button class="button quiet" id="add-entry-attribute" type="button"><span aria-hidden="true">+</span> Attribute</button></div>
@@ -220,6 +268,38 @@
     </form>
   </dialog>
 
+	<dialog class="modal" id="bulk-modify-dialog" aria-labelledby="bulk-modify-title">
+    <form method="dialog" id="bulk-modify-form">
+	  <div class="modal-header"><div><span class="eyebrow">Directory</span><h2 id="bulk-modify-title">Modify selected entries</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
+      <div class="form-field"><label for="bulk-operation">Operation</label><select id="bulk-operation"><option value="replace">Replace</option><option value="add">Add values</option><option value="delete">Delete values or attribute</option><option value="increment">Increment</option></select></div>
+      <div class="form-field"><label for="bulk-attribute">Attribute</label><input id="bulk-attribute" spellcheck="false" required></div>
+      <div class="form-field"><label for="bulk-values">Values</label><textarea id="bulk-values" rows="5" spellcheck="false"></textarea></div>
+      <label class="check-row" for="bulk-continue"><input id="bulk-continue" type="checkbox"><span>Continue after an entry fails</span></label>
+      <div class="form-error" id="bulk-modify-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Apply to selected</button></div>
+    </form>
+  </dialog>
+
+	<dialog class="modal import-modal" id="csv-import-dialog" aria-labelledby="csv-import-title">
+    <form method="dialog" id="csv-import-form">
+	  <div class="modal-header"><div><span class="eyebrow">CSV</span><h2 id="csv-import-title">Import CSV entries</h2></div><button class="icon-button close-dialog" type="button" aria-label="Close" title="Close">&times;</button></div>
+      <div class="file-picker"><input id="csv-import-file" type="file" accept=".csv,text/csv,text/plain"><label for="csv-import-file"><span aria-hidden="true">&#8679;</span><strong id="csv-import-file-name">Choose CSV file</strong><small>UTF-8 CSV</small></label></div>
+      <div class="form-grid two csv-import-options">
+        <div><label for="csv-import-base">Base DN</label><input id="csv-import-base" spellcheck="false" required></div>
+        <div><label for="csv-import-rdn">RDN attribute</label><input id="csv-import-rdn" value="uid" spellcheck="false" required></div>
+      </div>
+      <div class="form-field"><label for="csv-import-classes">Object classes</label><textarea id="csv-import-classes" rows="3" spellcheck="false" required>top
+person
+organizationalPerson
+inetOrgPerson</textarea></div>
+      <div class="form-field"><label for="csv-import-mapping">Column mapping</label><textarea id="csv-import-mapping" rows="5" spellcheck="false" placeholder="username=uid&#10;full_name=cn&#10;surname=sn" required></textarea><small>One CSV column=LDAP attribute per line</small></div>
+      <div class="form-field"><label class="sr-only" for="csv-import-content">CSV content</label><textarea id="csv-import-content" rows="8" spellcheck="false" required></textarea></div>
+      <label class="check-row" for="csv-import-continue"><input id="csv-import-continue" type="checkbox"><span>Continue after a row fails</span></label>
+      <div class="form-error" id="csv-import-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button quiet close-dialog" type="button">Cancel</button><button class="button primary" type="submit">Import entries</button></div>
+    </form>
+  </dialog>
+
 	<dialog class="modal confirm-modal" id="confirm-dialog" aria-labelledby="confirm-title">
     <form method="dialog" id="confirm-form">
       <div class="confirm-icon" aria-hidden="true">!</div><h2 id="confirm-title">Confirm action</h2><p id="confirm-message"></p>
@@ -229,9 +309,20 @@
 
   <template id="attribute-row-template">
     <div class="attribute-row">
-      <div><label>Attribute name<input class="attribute-name" spellcheck="false" required></label><span class="attribute-meta"></span></div>
+      <div><label>Attribute name<input class="attribute-name" list="attribute-name-options" spellcheck="false" required></label><span class="attribute-meta"></span></div>
       <label>Values<textarea class="attribute-values" rows="2" spellcheck="false"></textarea></label>
       <button class="icon-button remove-attribute" type="button" aria-label="Remove attribute" title="Remove attribute">&times;</button>
+    </div>
+  </template>
+
+  <datalist id="attribute-name-options"></datalist>
+
+  <template id="filter-condition-template">
+    <div class="filter-condition">
+      <input class="filter-attribute" spellcheck="false" placeholder="Attribute" aria-label="Filter attribute">
+      <select class="filter-operator" aria-label="Filter operator"><option value="eq">Equals</option><option value="contains">Contains</option><option value="starts">Starts with</option><option value="ends">Ends with</option><option value="present">Is present</option><option value="ge">Greater than or equal</option><option value="le">Less than or equal</option><option value="approx">Approximately</option><option value="not">Does not equal</option></select>
+      <input class="filter-value" spellcheck="false" placeholder="Value" aria-label="Filter value">
+      <button class="icon-button remove-filter-condition" type="button" aria-label="Remove condition" title="Remove condition">&times;</button>
     </div>
   </template>
 
