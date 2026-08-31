@@ -62,14 +62,16 @@ func appendEntryBinaryField(destination, value []byte) []byte {
 
 func decodeStoredEntry(value []byte) (storedEntry, error) {
 	if bytes.HasPrefix(value, entryBinaryPrefix) {
-		stored, err := decodeBinaryStoredEntry(value[len(entryBinaryPrefix):])
+		owned := bytes.Clone(value[len(entryBinaryPrefix):])
+		stored, err := decodeBinaryStoredEntry(owned)
 		if err != nil {
 			return storedEntry{}, fmt.Errorf("decode entry: %w", err)
 		}
 		return stored, nil
 	}
 	if bytes.HasPrefix(value, entryBinaryV1Prefix) {
-		stored, err := decodeBinaryStoredEntryV1(value[len(entryBinaryV1Prefix):])
+		owned := bytes.Clone(value[len(entryBinaryV1Prefix):])
+		stored, err := decodeBinaryStoredEntryV1(owned)
 		if err != nil {
 			return storedEntry{}, fmt.Errorf("decode entry: %w", err)
 		}
@@ -138,7 +140,7 @@ func decodeBinaryStoredEntryAttributes(
 		Entry: directory.Entry{
 			DN: string(dn),
 		},
-		DNBinding: bytes.Clone(binding),
+		DNBinding: binding,
 	}
 	if attributeCount > 0 {
 		stored.Attributes = make([]directory.Attribute, 0, attributeCount)
@@ -171,7 +173,7 @@ func decodeBinaryStoredEntryAttributes(
 					valueErr,
 				)
 			}
-			attribute.Values = append(attribute.Values, bytes.Clone(encodedValue))
+			attribute.Values = append(attribute.Values, encodedValue)
 			next = afterValue
 		}
 		stored.Attributes = append(stored.Attributes, attribute)
@@ -205,7 +207,7 @@ func consumeEntryBinaryField(value []byte) ([]byte, []byte, error) {
 	if length > uint64(len(value)) {
 		return nil, nil, errors.New("truncated value")
 	}
-	return value[:int(length)], value[int(length):], nil
+	return value[:int(length):int(length)], value[int(length):], nil
 }
 
 func consumeEntryBinaryCount(value []byte) (int, []byte, error) {

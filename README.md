@@ -38,18 +38,18 @@ on an Apple M1 Pro. Timing and resource rows are lower-is-better; a ratio below
 
 | Metric | ldap-go | OpenLDAP | ldap-go / OpenLDAP |
 | --- | ---: | ---: | ---: |
-| Import plus index | 101,085 ms | 876,070 ms | 0.12 |
-| Startup ready | 261 ms | 89 ms | 2.93 |
-| Indexed search, repeated | 680 ms | 554 ms | 1.23 |
-| Indexed search, first batch | 4,073 ms | 642 ms | 6.34 |
-| Unindexed negative, repeated | 32 ms | 336 ms | 0.10 |
-| Unindexed negative, first batch | 1,036 ms | 350 ms | 2.96 |
-| Paged traversal, repeated | 741 ms | 900 ms | 0.82 |
-| Paged traversal, first | 3,876 ms | 450 ms | 8.61 |
-| Concurrent indexed search | 202 ms | 201 ms | 1.00 |
-| Modify | 572 ms | 5,420 ms | 0.11 |
-| RSS after workload | 773.5 MiB | 93.6 MiB | 8.26 |
-| RSS after 10 seconds idle | 700.3 MiB | 92.8 MiB | 7.55 |
+| Import plus index | 165,692 ms | 961,340 ms | 0.17 |
+| Startup ready | 319 ms | 93 ms | 3.43 |
+| Indexed search, repeated | 810 ms | 605 ms | 1.34 |
+| Indexed search, first batch | 4,280 ms | 550 ms | 7.78 |
+| Unindexed negative, repeated | 42 ms | 351 ms | 0.12 |
+| Unindexed negative, first batch | 1,047 ms | 472 ms | 2.22 |
+| Paged traversal, repeated | 750 ms | 1,402 ms | 0.53 |
+| Paged traversal, first | 4,152 ms | 726 ms | 5.72 |
+| Concurrent indexed search | 255 ms | 237 ms | 1.08 |
+| Modify | 1,032 ms | 4,299 ms | 0.24 |
+| RSS after workload | 406.2 MiB | 92.4 MiB | 4.40 |
+| RSS after 10 seconds idle | 266.4 MiB | 92.4 MiB | 2.88 |
 | Database file | 118.1 MiB | 81.3 MiB | 1.45 |
 
 All 100,000 people, 1,000 modifications, representative result codes, and

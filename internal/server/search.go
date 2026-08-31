@@ -2053,7 +2053,7 @@ func (server *Server) handleSearch(
 						err = cacheErr
 					} else if !cached || !absent {
 						streamed := false
-						if snapshotPaging {
+						if !sorting.active() && syncSearch == nil {
 							streamed, err = storage.ForEachStablePhysicalEntry(tx, visitEntry)
 						}
 						if err == nil && !streamed {
@@ -3826,13 +3826,17 @@ func countLocalSearchCandidates(
 ) (int, error) {
 	count := 0
 	visit := func(entry directory.Entry) error {
-		candidate, err := directory.ParseDN(entry.DN)
-		if err != nil {
-			return err
-		}
-		candidate, err = storage.NormalizeReaderDN(reader, candidate)
-		if err != nil {
-			return err
+		candidate, normalized := entry.NormalizedDNHint()
+		if !normalized {
+			var err error
+			candidate, err = directory.ParseDN(entry.DN)
+			if err != nil {
+				return err
+			}
+			candidate, err = storage.NormalizeReaderDN(reader, candidate)
+			if err != nil {
+				return err
+			}
 		}
 		if !directory.InScope(base, candidate, scope) {
 			return nil
@@ -3855,6 +3859,9 @@ func countLocalSearchCandidates(
 	if err != nil || planned {
 		return count, err
 	}
-	err = reader.ForEach(visit)
+	streamed, err := storage.ForEachStablePhysicalEntry(reader, visit)
+	if err == nil && !streamed {
+		err = reader.ForEach(visit)
+	}
 	return count, err
 }

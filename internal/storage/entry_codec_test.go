@@ -40,6 +40,47 @@ func TestBinaryEntryCodecRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBinaryEntryCodecDecodeOwnsEncodedData(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{{
+			Description: "uid",
+			Values:      [][]byte{[]byte("alice"), []byte("second")},
+		}},
+	}
+	encoded, err := encodeEntry(entry, "normalized-key", entry.DN)
+	if err != nil {
+		t.Fatalf("encodeEntry(): %v", err)
+	}
+	decoded, err := decodeStoredEntry(encoded)
+	if err != nil {
+		t.Fatalf("decodeStoredEntry(): %v", err)
+	}
+	for index := range encoded {
+		encoded[index] = 0
+	}
+	if !reflect.DeepEqual(decoded.Entry, entry) {
+		t.Fatalf("decoded entry changed with encoded input: %#v", decoded.Entry)
+	}
+	wantBinding := entryDNBinding("normalized-key", entry.DN)
+	if !bytes.Equal(decoded.DNBinding, wantBinding[:]) {
+		t.Fatalf("decoded binding changed with encoded input: %x", decoded.DNBinding)
+	}
+	second := bytes.Clone(decoded.Attributes[0].Values[1])
+	decoded.Attributes[0].Values[0] = append(
+		decoded.Attributes[0].Values[0],
+		" extended"...,
+	)
+	if string(decoded.Attributes[0].Values[0]) != "alice extended" {
+		t.Fatalf("extended decoded value = %q", decoded.Attributes[0].Values[0])
+	}
+	if !bytes.Equal(decoded.Attributes[0].Values[1], second) {
+		t.Fatalf("extending one decoded value changed another: %q", decoded.Attributes[0].Values[1])
+	}
+}
+
 func TestEntryCodecReadsBinaryV1(t *testing.T) {
 	t.Parallel()
 
@@ -124,6 +165,32 @@ func TestBinaryEntryCodecRejectsMalformedValues(t *testing.T) {
 	} {
 		if _, err := decodeStoredEntry(value); err == nil {
 			t.Fatalf("decodeStoredEntry(%x) succeeded", value)
+		}
+	}
+}
+
+func BenchmarkBinaryEntryCodecDecode(b *testing.B) {
+	entry := directory.Entry{
+		DN: "uid=alice,ou=people,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "objectClass", Values: [][]byte{[]byte("top"), []byte("person"), []byte("inetOrgPerson")}},
+			{Description: "uid", Values: [][]byte{[]byte("alice")}},
+			{Description: "cn", Values: [][]byte{[]byte("Alice Example")}},
+			{Description: "sn", Values: [][]byte{[]byte("Example")}},
+			{Description: "mail", Values: [][]byte{[]byte("alice@example.com")}},
+			{Description: "description", Values: [][]byte{bytes.Repeat([]byte("value"), 32)}},
+		},
+	}
+	encoded, err := encodeEntry(entry, "dn:v2:benchmark", entry.DN)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(encoded)))
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := decodeStoredEntry(encoded); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

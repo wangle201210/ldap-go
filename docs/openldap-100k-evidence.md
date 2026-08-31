@@ -17,18 +17,18 @@ Run profile:
 
 | Metric | ldap-go | OpenLDAP | ldap-go / OpenLDAP |
 | --- | ---: | ---: | ---: |
-| Import plus index | 101,085 ms | 876,070 ms | 0.12 |
-| Startup ready | 261 ms | 89 ms | 2.93 |
-| Indexed search, repeated | 680 ms | 554 ms | 1.23 |
-| Indexed search, first batch | 4,073 ms | 642 ms | 6.34 |
-| Unindexed negative, repeated | 32 ms | 336 ms | 0.10 |
-| Unindexed negative, first batch | 1,036 ms | 350 ms | 2.96 |
-| Paged traversal, repeated | 741 ms | 900 ms | 0.82 |
-| Paged traversal, first | 3,876 ms | 450 ms | 8.61 |
-| Concurrent indexed search | 202 ms | 201 ms | 1.00 |
-| Modify | 572 ms | 5,420 ms | 0.11 |
-| RSS after workload | 811,089,920 B | 98,189,312 B | 8.26 |
-| RSS after 10 seconds idle | 734,314,496 B | 97,255,424 B | 7.55 |
+| Import plus index | 165,692 ms | 961,340 ms | 0.17 |
+| Startup ready | 319 ms | 93 ms | 3.43 |
+| Indexed search, repeated | 810 ms | 605 ms | 1.34 |
+| Indexed search, first batch | 4,280 ms | 550 ms | 7.78 |
+| Unindexed negative, repeated | 42 ms | 351 ms | 0.12 |
+| Unindexed negative, first batch | 1,047 ms | 472 ms | 2.22 |
+| Paged traversal, repeated | 750 ms | 1,402 ms | 0.53 |
+| Paged traversal, first | 4,152 ms | 726 ms | 5.72 |
+| Concurrent indexed search | 255 ms | 237 ms | 1.08 |
+| Modify | 1,032 ms | 4,299 ms | 0.24 |
+| RSS after workload | 425,967,616 B | 96,911,360 B | 4.40 |
+| RSS after 10 seconds idle | 279,379,968 B | 96,894,976 B | 2.88 |
 | Database file | 123,813,888 B | 85,254,144 B | 1.45 |
 
 Correctness evidence:
@@ -48,10 +48,17 @@ and random UUIDs that are intentionally server-specific. Raw and canonical
 LDIF, operation status tables, logs, databases, `results.tsv`, and
 `report.json` were retained in the run artifact directory.
 
-The retained-cache budgets are bounded, but Go did not return most transient
-scan heap pages to the operating system during this run's ten-second idle
-window. The table records that observed RSS without forcing a GC or otherwise
-altering one side of the comparison.
+Compared with the preceding run of this same 100k profile on the same host,
+streaming unsorted scans and coalescing binary-entry ownership reduced
+ldap-go's post-workload RSS from 811,089,920 B to 425,967,616 B (47%) and its
+ten-second-idle RSS from 734,314,496 B to 279,379,968 B (62%). Database size
+remained 123,813,888 B. The comparison does not force a GC or otherwise alter
+one side. Cold indexed and cold paged latency remain materially slower than
+OpenLDAP and are explicit follow-up targets rather than resolved regressions.
+A focused representative binary-entry decode benchmark moved from 23 to 15
+allocations per operation and from roughly 571-635 ns/op to 402-465 ns/op. The
+single owned encoded block increased retained bytes in that microbenchmark from
+816 to 880 B/op; the 100k database size did not change.
 
 Reproduce with:
 
