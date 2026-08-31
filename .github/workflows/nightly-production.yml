@@ -33,7 +33,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
-      BUILD: ${{ runner.temp }}/ldap-go-openldap-reference-2.6.13
       OPENLDAP_SOURCE_CACHE: ${{ github.workspace }}/.cache/openldap-source-2.6.13
       LDAP_GO_OPENLDAP_FAILURE_LOG: ${{ github.workspace }}/nightly-openldap-failure.log
       JOBS: "2"
@@ -43,6 +42,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Configure temporary build directory
+        run: echo "BUILD=$RUNNER_TEMP/ldap-go-openldap-reference-2.6.13" >> "$GITHUB_ENV"
       - name: Install pinned-reference build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
