@@ -216,23 +216,24 @@ The same profile is available as `make qualification-compare-openldap-100k`.
 ### Latest 100k evidence
 
 The retained 2026-08-31 Apple M1 Pro run produced the following results. Lower
-timing and resource values are better; a ratio below 1 favors ldap-go.
+timing and resource values are better. The ratio is `OpenLDAP / ldap-go`: a
+value above 1 favors ldap-go, and larger is better.
 
-| Metric | ldap-go | OpenLDAP | ldap-go / OpenLDAP |
+| Metric | ldap-go | OpenLDAP | OpenLDAP / ldap-go |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 0.13 |
-| Startup ready | 272 ms | 96 ms | 2.83 |
-| Indexed search, repeated | 720 ms | 608 ms | 1.18 |
-| Indexed search, first batch | 1,953 ms | 617 ms | 3.17 |
-| Unindexed negative, repeated | 30 ms | 338 ms | 0.09 |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 2.61 |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 0.47 |
-| Paged traversal, first | 2,012 ms | 715 ms | 2.81 |
-| Concurrent indexed search | 258 ms | 275 ms | 0.94 |
-| Modify | 565 ms | 3,780 ms | 0.15 |
-| RSS after workload | 462.7 MiB | 93.6 MiB | 4.94 |
-| RSS after 10 seconds idle | 207.2 MiB | 89.7 MiB | 2.31 |
-| Database file | 118.1 MiB | 81.3 MiB | 1.45 |
+| Import plus index | 105,727 ms | 832,618 ms | 7.88 |
+| Startup ready | 272 ms | 96 ms | 0.35 |
+| Indexed search, repeated | 720 ms | 608 ms | 0.84 |
+| Indexed search, first batch | 1,953 ms | 617 ms | 0.32 |
+| Unindexed negative, repeated | 30 ms | 338 ms | 11.27 |
+| Unindexed negative, first batch | 1,016 ms | 390 ms | 0.38 |
+| Paged traversal, repeated | 718 ms | 1,543 ms | 2.15 |
+| Paged traversal, first | 2,012 ms | 715 ms | 0.36 |
+| Concurrent indexed search | 258 ms | 275 ms | 1.07 |
+| Modify | 565 ms | 3,780 ms | 6.69 |
+| RSS after workload | 462.7 MiB | 93.6 MiB | 0.20 |
+| RSS after 10 seconds idle | 207.2 MiB | 89.7 MiB | 0.43 |
+| Database file | 118.1 MiB | 81.3 MiB | 0.69 |
 
 Both servers returned 100,000 unique people and all 1,000 timed modifications.
 The 15 canonical data, query, Bind, Compare, and error-result checks passed;
@@ -267,9 +268,8 @@ The artifact directory contains `report.json`, `results.tsv`,
 `data-parity-results.tsv`, both database files, generated LDIF, raw and
 canonical query results, bounded mismatch diffs, effective configuration,
 validation output, and server logs. In `results.tsv`,
-`ldap_go_over_openldap` is `ldap-go / OpenLDAP`: for
-timing and resource rows, a value above 1 means ldap-go took longer or used
-more resources; a value below 1 favors ldap-go.
+`openldap_over_ldap_go` is `OpenLDAP / ldap-go`: for timing and resource rows,
+a value above 1 favors ldap-go and a larger value means a larger improvement.
 
 This comparison is a reproducible local regression benchmark, not a universal
 capacity claim. Run repeated trials on the same otherwise-idle host and compare

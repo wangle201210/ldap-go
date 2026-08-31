@@ -174,4 +174,13 @@ if QUALIFICATION_COMPARE_DRY_RUN=1 QUALIFICATION_COMPARE_DATA_PARITY=2 \
 	exit 1
 fi
 
+grep -F 'openldap_over_ldap_go' "$compare_openldap" >/dev/null || {
+	printf 'qualification-test: OpenLDAP comparison ratio must use OpenLDAP / ldap-go\n' >&2
+	exit 1
+}
+if grep -F 'ldap_go_over_openldap' "$compare_openldap" >/dev/null; then
+	printf 'qualification-test: legacy ldap-go / OpenLDAP ratio column is still present\n' >&2
+	exit 1
+fi
+
 printf 'Production qualification script checks passed.\n'

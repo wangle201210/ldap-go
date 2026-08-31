@@ -15,21 +15,24 @@ Run profile:
 - 1,000 Modify operations
 - canonical full-data and operation-result parity enabled
 
-| Metric | ldap-go | OpenLDAP | ldap-go / OpenLDAP |
+For timing and resource rows, the ratio is `OpenLDAP / ldap-go`: a value above
+1 favors ldap-go, and larger is better.
+
+| Metric | ldap-go | OpenLDAP | OpenLDAP / ldap-go |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 0.13 |
-| Startup ready | 272 ms | 96 ms | 2.83 |
-| Indexed search, repeated | 720 ms | 608 ms | 1.18 |
-| Indexed search, first batch | 1,953 ms | 617 ms | 3.17 |
-| Unindexed negative, repeated | 30 ms | 338 ms | 0.09 |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 2.61 |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 0.47 |
-| Paged traversal, first | 2,012 ms | 715 ms | 2.81 |
-| Concurrent indexed search | 258 ms | 275 ms | 0.94 |
-| Modify | 565 ms | 3,780 ms | 0.15 |
-| RSS after workload | 485,179,392 B | 98,140,160 B | 4.94 |
-| RSS after 10 seconds idle | 217,268,224 B | 94,093,312 B | 2.31 |
-| Database file | 123,813,888 B | 85,254,144 B | 1.45 |
+| Import plus index | 105,727 ms | 832,618 ms | 7.88 |
+| Startup ready | 272 ms | 96 ms | 0.35 |
+| Indexed search, repeated | 720 ms | 608 ms | 0.84 |
+| Indexed search, first batch | 1,953 ms | 617 ms | 0.32 |
+| Unindexed negative, repeated | 30 ms | 338 ms | 11.27 |
+| Unindexed negative, first batch | 1,016 ms | 390 ms | 0.38 |
+| Paged traversal, repeated | 718 ms | 1,543 ms | 2.15 |
+| Paged traversal, first | 2,012 ms | 715 ms | 0.36 |
+| Concurrent indexed search | 258 ms | 275 ms | 1.07 |
+| Modify | 565 ms | 3,780 ms | 6.69 |
+| RSS after workload | 485,179,392 B | 98,140,160 B | 0.20 |
+| RSS after 10 seconds idle | 217,268,224 B | 94,093,312 B | 0.43 |
+| Database file | 123,813,888 B | 85,254,144 B | 0.69 |
 
 Correctness evidence:
 

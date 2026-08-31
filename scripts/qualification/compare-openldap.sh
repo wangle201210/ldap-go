@@ -853,36 +853,36 @@ ratio() {
 }
 
 {
-	printf 'metric\tldap_go\topenldap\tldap_go_over_openldap\tworkload\n'
+	printf 'metric\tldap_go\topenldap\topenldap_over_ldap_go\tworkload\n'
 	printf 'offline_import_plus_index_ms\t%s\t%s\t%s\t%s entries with uid/objectClass equality indexes\n' \
-		"$ldap_go_import_index_ms" "$openldap_import_index_ms" "$(ratio "$ldap_go_import_index_ms" "$openldap_import_index_ms")" "$entries"
+		"$ldap_go_import_index_ms" "$openldap_import_index_ms" "$(ratio "$openldap_import_index_ms" "$ldap_go_import_index_ms")" "$entries"
 	printf 'startup_ready_ms\t%s\t%s\t%s\tauthenticated WhoAmI readiness\n' \
-		"$ldap_go_startup_ms" "$openldap_startup_ms" "$(ratio "$ldap_go_startup_ms" "$openldap_startup_ms")"
+		"$ldap_go_startup_ms" "$openldap_startup_ms" "$(ratio "$openldap_startup_ms" "$ldap_go_startup_ms")"
 	printf 'indexed_search_ms\t%s\t%s\t%s\t%s sequential searches per round\n' \
-		"$ldap_go_indexed_ms" "$openldap_indexed_ms" "$(ratio "$ldap_go_indexed_ms" "$openldap_indexed_ms")" "$indexed_searches"
+		"$ldap_go_indexed_ms" "$openldap_indexed_ms" "$(ratio "$openldap_indexed_ms" "$ldap_go_indexed_ms")" "$indexed_searches"
 	printf 'indexed_cold_ms\t%s\t%s\t%s\tfirst %s sequential searches with LDIF output\n' \
 		"$ldap_go_indexed_cold_ms" "$openldap_indexed_cold_ms" \
-		"$(ratio "$ldap_go_indexed_cold_ms" "$openldap_indexed_cold_ms")" "$indexed_searches"
+		"$(ratio "$openldap_indexed_cold_ms" "$ldap_go_indexed_cold_ms")" "$indexed_searches"
 	printf 'unindexed_negative_ms\t%s\t%s\t%s\t%s full negative scans per round\n' \
-		"$ldap_go_unindexed_ms" "$openldap_unindexed_ms" "$(ratio "$ldap_go_unindexed_ms" "$openldap_unindexed_ms")" "$unindexed_searches"
+		"$ldap_go_unindexed_ms" "$openldap_unindexed_ms" "$(ratio "$openldap_unindexed_ms" "$ldap_go_unindexed_ms")" "$unindexed_searches"
 	printf 'unindexed_cold_ms\t%s\t%s\t%s\tfirst %s full negative scans\n' \
 		"$ldap_go_unindexed_cold_ms" "$openldap_unindexed_cold_ms" \
-		"$(ratio "$ldap_go_unindexed_cold_ms" "$openldap_unindexed_cold_ms")" "$unindexed_searches"
+		"$(ratio "$openldap_unindexed_cold_ms" "$ldap_go_unindexed_cold_ms")" "$unindexed_searches"
 	printf 'paged_search_ms\t%s\t%s\t%s\t%s full traversals per round, page size %s\n' \
-		"$ldap_go_paged_ms" "$openldap_paged_ms" "$(ratio "$ldap_go_paged_ms" "$openldap_paged_ms")" "$paged_traversals" "$page_size"
+		"$ldap_go_paged_ms" "$openldap_paged_ms" "$(ratio "$openldap_paged_ms" "$ldap_go_paged_ms")" "$paged_traversals" "$page_size"
 	printf 'paged_cold_ms\t%s\t%s\t%s\tone uncached full traversal, page size %s\n' \
-		"$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms" "$(ratio "$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms")" "$page_size"
+		"$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms" "$(ratio "$openldap_paged_cold_ms" "$ldap_go_paged_cold_ms")" "$page_size"
 	printf 'concurrent_indexed_ms\t%s\t%s\t%s\t%s connections x %s searches per round\n' \
-		"$ldap_go_concurrent_ms" "$openldap_concurrent_ms" "$(ratio "$ldap_go_concurrent_ms" "$openldap_concurrent_ms")" "$concurrency" "$searches_per_connection"
+		"$ldap_go_concurrent_ms" "$openldap_concurrent_ms" "$(ratio "$openldap_concurrent_ms" "$ldap_go_concurrent_ms")" "$concurrency" "$searches_per_connection"
 	printf 'modify_ms\t%s\t%s\t%s\t%s replaces\n' \
-		"$ldap_go_modify_ms" "$openldap_modify_ms" "$(ratio "$ldap_go_modify_ms" "$openldap_modify_ms")" "$modifications"
+		"$ldap_go_modify_ms" "$openldap_modify_ms" "$(ratio "$openldap_modify_ms" "$ldap_go_modify_ms")" "$modifications"
 	printf 'rss_bytes\t%s\t%s\t%s\tafter workload\n' \
-		"$ldap_go_rss_bytes" "$openldap_rss_bytes" "$(ratio "$ldap_go_rss_bytes" "$openldap_rss_bytes")"
+		"$ldap_go_rss_bytes" "$openldap_rss_bytes" "$(ratio "$openldap_rss_bytes" "$ldap_go_rss_bytes")"
 	printf 'rss_quiescent_bytes\t%s\t%s\t%s\tafter 10 seconds idle\n' \
 		"$ldap_go_rss_quiescent_bytes" "$openldap_rss_quiescent_bytes" \
-		"$(ratio "$ldap_go_rss_quiescent_bytes" "$openldap_rss_quiescent_bytes")"
+		"$(ratio "$openldap_rss_quiescent_bytes" "$ldap_go_rss_quiescent_bytes")"
 	printf 'database_bytes\t%s\t%s\t%s\tlogical file size\n' \
-		"$ldap_go_db_bytes" "$openldap_db_bytes" "$(ratio "$ldap_go_db_bytes" "$openldap_db_bytes")"
+		"$ldap_go_db_bytes" "$openldap_db_bytes" "$(ratio "$openldap_db_bytes" "$ldap_go_db_bytes")"
 	printf 'unique_entries\t%s\t%s\t1.00\tpaged correctness\n' "$ldap_go_unique" "$openldap_unique"
 	printf 'modified_entries\t%s\t%s\t1.00\tpost-write correctness\n' "$ldap_go_modified" "$openldap_modified"
 	printf 'canonical_data_entries\t%s\t%s\t1.00\tpost-operation ordinary attribute parity\n' \
