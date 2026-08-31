@@ -268,6 +268,7 @@ type collectProjectionCache struct {
 	reader    storage.Reader
 	subjectDN string
 	templates map[string]collectTemplate
+	enabled   bool
 }
 
 type collectTemplate struct {
@@ -283,12 +284,26 @@ func newCollectProjectionCache(
 	reader storage.Reader,
 	subjectDN string,
 ) *collectProjectionCache {
+	enabled := false
+	if runtime != nil {
+		for index := range runtime.databases {
+			if runtime.databases[index].collect != nil {
+				enabled = true
+				break
+			}
+		}
+	}
+	var templates map[string]collectTemplate
+	if enabled {
+		templates = make(map[string]collectTemplate)
+	}
 	return &collectProjectionCache{
 		server:    server,
 		runtime:   runtime,
 		reader:    reader,
 		subjectDN: subjectDN,
-		templates: make(map[string]collectTemplate),
+		templates: templates,
+		enabled:   enabled,
 	}
 }
 
@@ -296,6 +311,9 @@ func (cache *collectProjectionCache) apply(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) (directory.Entry, error) {
+	if cache == nil || !cache.enabled {
+		return entry, nil
+	}
 	configurations := collectConfigurationsForDatabase(
 		cache.runtime.databases,
 		database,

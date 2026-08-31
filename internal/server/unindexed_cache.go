@@ -73,11 +73,14 @@ func (cache *unindexedValueCache) definitelyAbsent(
 		if registry.EntryHasObjectClass(entry, "referral") {
 			hasReferral = true
 		}
-		for _, value := range registry.AttributeValues(entry, filter.Attribute) {
-			normalized, normalizeErr := registry.NormalizeEqualityValue(filter.Attribute, value)
-			if normalizeErr != nil {
-				return errUnindexedValueCacheUnsupported
-			}
+		normalizedValues, normalizeErr := registry.NormalizedEqualityAttributeValues(
+			entry,
+			filter.Attribute,
+		)
+		if normalizeErr != nil {
+			return errUnindexedValueCacheUnsupported
+		}
+		for _, normalized := range normalizedValues {
 			term := string(normalized)
 			if _, exists := values[term]; exists {
 				continue
@@ -90,7 +93,7 @@ func (cache *unindexedValueCache) definitelyAbsent(
 		}
 		return nil
 	}
-	streamed, err := storage.ForEachStablePhysicalEntry(reader, visit)
+	streamed, err := storage.ForEachPhysicalEntry(reader, visit)
 	if err == nil && !streamed {
 		err = reader.ForEach(visit)
 	}

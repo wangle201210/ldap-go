@@ -325,6 +325,7 @@ type nestGroupProjectionCache struct {
 	subjectDN string
 	request   nestGroupProjectionRequest
 	plans     map[string]*nestGroupDatabasePlan
+	enabled   bool
 }
 
 type nestGroupDatabasePlan struct {
@@ -382,6 +383,19 @@ func newNestGroupProjectionCache(
 	subjectDN string,
 	request nestGroupProjectionRequest,
 ) *nestGroupProjectionCache {
+	enabled := false
+	if runtime != nil {
+		for index := range runtime.databases {
+			if len(runtime.databases[index].nestGroups) != 0 {
+				enabled = true
+				break
+			}
+		}
+	}
+	var plans map[string]*nestGroupDatabasePlan
+	if enabled {
+		plans = make(map[string]*nestGroupDatabasePlan)
+	}
 	return &nestGroupProjectionCache{
 		ctx:       ctx,
 		server:    server,
@@ -389,13 +403,17 @@ func newNestGroupProjectionCache(
 		reader:    reader,
 		subjectDN: subjectDN,
 		request:   request,
-		plans:     make(map[string]*nestGroupDatabasePlan),
+		plans:     plans,
+		enabled:   enabled,
 	}
 }
 
 func (cache *nestGroupProjectionCache) plan(
 	database runtimeDatabase,
 ) (*nestGroupDatabasePlan, error) {
+	if !cache.enabled {
+		return &nestGroupDatabasePlan{}, nil
+	}
 	cacheKey := database.partition + "\x00" + database.configDNKey
 	if plan, found := cache.plans[cacheKey]; found {
 		return plan, nil
@@ -478,6 +496,9 @@ func (cache *nestGroupProjectionCache) project(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) (directory.Entry, error) {
+	if !cache.enabled {
+		return entry, nil
+	}
 	plan, err := cache.plan(database)
 	if err != nil || len(plan.instances) == 0 {
 		return entry, err
@@ -517,6 +538,9 @@ func (cache *nestGroupProjectionCache) apply(
 	entry,
 	filterEntry directory.Entry,
 ) (directory.Entry, directory.Entry, directory.Filter, error) {
+	if !cache.enabled {
+		return entry, filterEntry, cache.request.filter, nil
+	}
 	plan, err := cache.plan(database)
 	if err != nil {
 		return directory.Entry{}, directory.Entry{}, directory.Filter{}, err

@@ -1256,6 +1256,7 @@ func (server *Server) handleSearch(
 	}
 	snapshotCacheable = snapshotCacheable && snapshotPaging
 	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
+	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 
 	candidates := make([]searchCandidate, 0)
 	snapshotItems := make([]pagedSortedItem, 0)
@@ -1904,11 +1905,13 @@ func (server *Server) handleSearch(
 							false,
 						)
 					}
-					sortReadable = projectDDSRemainingTTL(
-						sortReadable,
-						entry,
-						time.Now(),
-					)
+					if database.dds != nil {
+						sortReadable = projectDDSRemainingTTL(
+							sortReadable,
+							entry,
+							time.Now(),
+						)
+					}
 					if syncSearch != nil {
 						sortReadable = stripSyncExcludedAttributes(
 							state.runtime.schema,
@@ -1933,11 +1936,13 @@ func (server *Server) handleSearch(
 						request.TypesOnly,
 					)
 				}
-				readable = projectDDSRemainingTTL(
-					readable,
-					responseEntry,
-					time.Now(),
-				)
+				if database.dds != nil {
+					readable = projectDDSRemainingTTL(
+						readable,
+						responseEntry,
+						time.Now(),
+					)
+				}
 				if syncSearch != nil {
 					readable = stripSyncExcludedAttributes(
 						state.runtime.schema,
@@ -1970,7 +1975,7 @@ func (server *Server) handleSearch(
 						snapshotBytes += delta
 					}
 				}
-				if syncSearch == nil &&
+				if valueSortEnabled && syncSearch == nil &&
 					(controls.valueSort == nil || !controls.valueSort.raw) {
 					applyValueSort(
 						state.runtime.schema,
@@ -2669,6 +2674,7 @@ func (server *Server) continueSortedPagedSearch(
 		}
 		return entries, result, false, nil
 	}
+	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		collectivePlans := newCollectiveAttributePlanCache(
@@ -2806,14 +2812,16 @@ func (server *Server) continueSortedPagedSearch(
 					request.TypesOnly,
 				)
 			}
-			readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
+			if database.dds != nil {
+				readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
+			}
 			selected := server.selectEntry(
 				state.runtime,
 				readable,
 				request.Attributes,
 				request.TypesOnly,
 			)
-			if !rawValueOrder {
+			if valueSortEnabled && !rawValueOrder {
 				applyValueSort(
 					state.runtime.schema,
 					valueSortRulesForDatabase(state.runtime.databases, *database),

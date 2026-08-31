@@ -379,6 +379,7 @@ func (server *Server) virtualListViewEntries(
 		return nil, errors.New("VLV window is invalid")
 	}
 	entries := make([]directory.Entry, 0, end-start)
+	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 		collectivePlans := newCollectiveAttributePlanCache(state.runtime.schema)
 		collectResponses := newCollectProjectionCache(
@@ -473,14 +474,16 @@ func (server *Server) virtualListViewEntries(
 				acl.Read,
 				request.TypesOnly,
 			)
-			readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
+			if database.dds != nil {
+				readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
+			}
 			selected := server.selectEntry(
 				state.runtime,
 				readable,
 				request.Attributes,
 				request.TypesOnly,
 			)
-			if !rawValueOrder {
+			if valueSortEnabled && !rawValueOrder {
 				applyValueSort(
 					state.runtime.schema,
 					valueSortRulesForDatabase(state.runtime.databases, *database),

@@ -151,6 +151,34 @@ func ForEachStablePhysicalEntry(
 	return true, err
 }
 
+// ForEachPhysicalEntry streams a schema-aware partition without constructing
+// normalized DN hints. It is intended for callers that inspect only stored
+// attributes and do not depend on iteration order.
+func ForEachPhysicalEntry(
+	reader Reader,
+	fn func(directory.Entry) error,
+) (bool, error) {
+	scoped, ok := reader.(schemaAwarePartitionReader)
+	if !ok {
+		return false, nil
+	}
+	if err := requireSchemaAwareDNIdentities(scoped.Reader, scoped.partition); err != nil {
+		return false, err
+	}
+	backend := maintenanceReader(scoped.Reader)
+	iterator, ok := backend.(schemaAwarePhysicalIterator)
+	if !ok {
+		return false, nil
+	}
+	_, err := iterator.forEachSchemaAwarePhysicalIn(
+		scoped.partition,
+		func(entry directory.Entry, _ string) error {
+			return fn(entry)
+		},
+	)
+	return true, err
+}
+
 type partitionReader struct {
 	Reader
 	partition string

@@ -140,6 +140,55 @@ func TestBoltSchemaAwarePointOperationsDoNotScaleNormalizerWork(t *testing.T) {
 	}
 }
 
+func TestForEachPhysicalEntrySkipsDNNormalization(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	defer store.Close()
+	var calls atomic.Int64
+	normalizer := countingDNNormalizer{calls: &calls}
+	if err := store.Update(context.Background(), func(writer Writer) error {
+		scoped := WriterInPartitionWithNormalizer(writer, "db", normalizer)
+		for _, dn := range []string{
+			"uid=alice,dc=example,dc=com",
+			"uid=bob,dc=example,dc=com",
+		} {
+			if err := scoped.Put(directory.Entry{DN: dn}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed schema-aware entries: %v", err)
+	}
+	calls.Store(0)
+	count := 0
+	if err := store.View(context.Background(), func(reader Reader) error {
+		streamed, err := ForEachPhysicalEntry(
+			ReaderInPartitionWithNormalizer(reader, "db", normalizer),
+			func(entry directory.Entry) error {
+				count++
+				if _, normalized := entry.NormalizedDNHint(); normalized {
+					t.Fatalf("physical entry %q unexpectedly has a DN hint", entry.DN)
+				}
+				return nil
+			},
+		)
+		if !streamed {
+			t.Fatal("schema-aware Bolt reader did not stream physical entries")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("ForEachPhysicalEntry(): %v", err)
+	}
+	if count != 2 || calls.Load() != 0 {
+		t.Fatalf("physical iteration count/calls = %d/%d, want 2/0", count, calls.Load())
+	}
+}
+
 func TestBoltIndexedReplaceDoesNotScaleNormalizerWork(t *testing.T) {
 	t.Parallel()
 

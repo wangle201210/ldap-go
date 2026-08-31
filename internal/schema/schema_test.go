@@ -714,6 +714,23 @@ func TestNormalizeEqualityValue(t *testing.T) {
 	if len(opaque) != 3 || opaque[0] != 0 || opaque[1] != 1 || opaque[2] != 2 {
 		t.Fatalf("normalized jpegPhoto = %v", opaque)
 	}
+	entry := directory.Entry{Attributes: []directory.Attribute{
+		{Description: "cn", Values: byteValues("  Alice   EXAMPLE ")},
+		{Description: "cn;lang-en", Values: byteValues("  Second   VALUE ")},
+		{Description: "sn", Values: byteValues("ignored")},
+	}}
+	values, err := registry.NormalizedEqualityAttributeValues(entry, "cn")
+	if err != nil {
+		t.Fatalf("NormalizedEqualityAttributeValues(cn): %v", err)
+	}
+	if len(values) != 2 || string(values[0]) != "alice example" ||
+		string(values[1]) != "second value" {
+		t.Fatalf("normalized cn values = %q", values)
+	}
+	entry.Attributes[0].Values[0][0] = 'X'
+	if string(values[0]) != "alice example" {
+		t.Fatalf("normalized values alias source entry: %q", values[0])
+	}
 }
 
 func TestEntryValidationSkipValueSyntaxRetainsOpenLDAPParserChecks(t *testing.T) {

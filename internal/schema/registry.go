@@ -570,6 +570,43 @@ func (registry *Registry) AttributeValues(
 	return registry.attributeValues(entry, description)
 }
 
+// NormalizedEqualityAttributeValues returns all values selected by an
+// AttributeDescription after applying that attribute's equality rule. It
+// resolves the schema once for callers that need every normalized value.
+func (registry *Registry) NormalizedEqualityAttributeValues(
+	entry directory.Entry,
+	description string,
+) ([][]byte, error) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(description))]
+	if !ok {
+		return nil, fmt.Errorf("undefined attribute type %q", description)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return nil, err
+	}
+	var values [][]byte
+	for _, candidate := range entry.Attributes {
+		if !registry.attributeDescriptionSubtype(candidate.Description, description) {
+			continue
+		}
+		for _, value := range candidate.Values {
+			normalized := bytes.Clone(value)
+			if effective.Equality != "" {
+				normalized, err = registry.normalizeWithRuleLocked(effective.Equality, value)
+				if err != nil {
+					return nil, err
+				}
+			}
+			values = append(values, normalized)
+		}
+	}
+	return values, nil
+}
+
 func (registry *Registry) attributeValues(
 	entry directory.Entry,
 	description string,
