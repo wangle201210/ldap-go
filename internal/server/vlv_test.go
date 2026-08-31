@@ -996,7 +996,7 @@ func decodeRawVirtualListViewResponse(
 	}
 	for _, control := range response.Children[2].Children {
 		if len(control.Children) < 2 ||
-			string(control.Children[0].Data.Bytes()) != vlvResponseControlOID {
+			control.Children[0].Data.String() != vlvResponseControlOID {
 			continue
 		}
 		decoded, err := ldapwire.DecodeVirtualListViewResponseValue(

@@ -139,8 +139,8 @@ func (application *Application) CloseContext(ctx context.Context) error {
 			}
 			<-application.sweepDone
 			application.closeTaskMu.Lock()
-			application.closeTaskMu.Unlock()
 			application.closeTasks.Wait()
+			application.closeTaskMu.Unlock()
 			application.batchOperations.Wait()
 			application.mu.Lock()
 			closeErrors = append(closeErrors, application.asyncCloseErrs...)

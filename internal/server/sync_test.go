@@ -1090,14 +1090,14 @@ func readRawSyncMessage(
 			if len(attribute.Children) != 2 {
 				t.Fatalf("malformed PartialAttribute: %#v", attribute)
 			}
-			description := string(attribute.Children[0].Data.Bytes())
+			description := attribute.Children[0].Data.String()
 			attributeNames = append(
 				attributeNames,
 				description,
 			)
 			values := make([]string, 0, len(attribute.Children[1].Children))
 			for _, value := range attribute.Children[1].Children {
-				values = append(values, string(value.Data.Bytes()))
+				values = append(values, value.Data.String())
 			}
 			attributes[description] = values
 		}
@@ -1107,7 +1107,7 @@ func readRawSyncMessage(
 			t.Fatalf("DecodeSyncStateValue(): %v", err)
 		}
 		message.entry = &rawSyncEntry{
-			dn:             string(operation.Children[0].Data.Bytes()),
+			dn:             operation.Children[0].Data.String(),
 			attributeCount: len(operation.Children[1].Children),
 			attributeNames: attributeNames,
 			attributes:     attributes,
@@ -1120,7 +1120,7 @@ func readRawSyncMessage(
 		for _, child := range operation.Children {
 			switch child.Tag {
 			case 0:
-				name = string(child.Data.Bytes())
+				name = child.Data.String()
 			case 1:
 				value = bytes.Clone(child.Data.Bytes())
 			}
@@ -1186,7 +1186,7 @@ func rawLDAPResponseControls(message *ber.Packet) map[string][]byte {
 		if len(control.Children) == 0 {
 			continue
 		}
-		oid := string(control.Children[0].Data.Bytes())
+		oid := control.Children[0].Data.String()
 		for _, child := range control.Children[1:] {
 			if child.ClassType == ber.ClassUniversal &&
 				child.Tag == ber.TagOctetString {

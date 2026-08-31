@@ -650,10 +650,12 @@ func (connection *saslDigestMD5PrivacyConnection) Close() error {
 		clear(connection.sendKey[:])
 		clear(connection.receiveKey[:])
 		if connection.sendCipher != nil {
+			//lint:ignore SA1019 Reset is retained as best-effort cleanup for the legacy DIGEST-MD5 RC4 state.
 			connection.sendCipher.Reset()
 			connection.sendCipher = nil
 		}
 		if connection.recvCipher != nil {
+			//lint:ignore SA1019 Reset is retained as best-effort cleanup for the legacy DIGEST-MD5 RC4 state.
 			connection.recvCipher.Reset()
 			connection.recvCipher = nil
 		}

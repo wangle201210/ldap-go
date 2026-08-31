@@ -395,11 +395,6 @@ func ldapBooleanFlagValue(flags *flag.FlagSet, name string) (bool, error) {
 	return value, nil
 }
 
-func ldapCompareExitCode(code uint16) bool {
-	return (code > 0 && code <= ldap.LDAPResultOther) ||
-		(code >= ldap.LDAPResultCanceled && code <= ldap.LDAPResultAuthorizationDenied)
-}
-
 func parseLDAPCompareAssertion(assertion string) (string, []byte, error) {
 	separator := strings.IndexByte(assertion, ':')
 	if separator <= 0 {
@@ -593,16 +588,16 @@ func ldapRawSimpleBind(
 	return ldapRawResultError(result)
 }
 
-func (client *ldapClientOptions) compareRawWithReferrals(
+func (options *ldapClientOptions) compareRawWithReferrals(
 	connection *ldapRawCompareConnection,
 	dn, attribute string,
 	value []byte,
 	controls []ldap.Control,
 ) (ldapCompareResult, error) {
 	seen := map[string]struct{}{
-		client.referralKey(client.uri, "compare", dn): {},
+		options.referralKey(options.uri, "compare", dn): {},
 	}
-	return client.compareRawWithReferralsAt(
+	return options.compareRawWithReferralsAt(
 		connection,
 		dn,
 		attribute,
@@ -613,7 +608,7 @@ func (client *ldapClientOptions) compareRawWithReferrals(
 	)
 }
 
-func (client *ldapClientOptions) compareRawWithReferralsAt(
+func (options *ldapClientOptions) compareRawWithReferralsAt(
 	connection *ldapRawCompareConnection,
 	dn, attribute string,
 	value []byte,
@@ -623,23 +618,23 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 ) (ldapCompareResult, error) {
 	result, err := ldapRawCompare(
 		connection,
-		client.timeout,
+		options.timeout,
 		dn,
 		attribute,
 		value,
 		controls,
 	)
-	if err != nil || !client.chaseReferrals || result.code != ldap.LDAPResultReferral {
+	if err != nil || !options.chaseReferrals || result.code != ldap.LDAPResultReferral {
 		return result, err
 	}
 	referrals := result.referrals
 	if len(referrals) == 0 {
 		return result, nil
 	}
-	if depth >= client.referralHopLimit {
+	if depth >= options.referralHopLimit {
 		return ldapCompareResult{}, ldap.NewError(
 			ldap.LDAPResultReferralLimitExceeded,
-			fmt.Errorf("referral hop limit %d exceeded", client.referralHopLimit),
+			fmt.Errorf("referral hop limit %d exceeded", options.referralHopLimit),
 		)
 	}
 	var lastErr error
@@ -653,7 +648,7 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 		if target.hasDN {
 			followedDN = target.dn
 		}
-		key := client.referralKey(target.endpoint, "compare", followedDN)
+		key := options.referralKey(target.endpoint, "compare", followedDN)
 		if _, duplicate := seen[key]; duplicate {
 			lastErr = ldap.NewError(
 				ldap.LDAPResultClientLoop,
@@ -661,14 +656,14 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 			)
 			continue
 		}
-		referralConnection, connectErr := client.connectLDAPRawReferral(target)
+		referralConnection, connectErr := options.connectLDAPRawReferral(target)
 		if connectErr != nil {
 			lastErr = connectErr
 			continue
 		}
 		branchSeen := cloneLDAPReferralSet(seen)
 		branchSeen[key] = struct{}{}
-		followedResult, compareErr := client.compareRawWithReferralsAt(
+		followedResult, compareErr := options.compareRawWithReferralsAt(
 			referralConnection,
 			followedDN,
 			attribute,
@@ -689,19 +684,19 @@ func (client *ldapClientOptions) compareRawWithReferralsAt(
 	return ldapCompareResult{}, fmt.Errorf("chase LDAP referral: %w", lastErr)
 }
 
-func (client *ldapClientOptions) connectLDAPRawReferral(
+func (options *ldapClientOptions) connectLDAPRawReferral(
 	target ldapReferralTarget,
 ) (*ldapRawCompareConnection, error) {
 	parsed, err := url.Parse(target.endpoint)
 	if err != nil {
 		return nil, err
 	}
-	tlsConfig, err := client.clientTLSConfig(parsed.Hostname())
+	tlsConfig, err := options.clientTLSConfig(parsed.Hostname())
 	if err != nil {
 		return nil, err
 	}
 	dial := func(useTLS bool) (net.Conn, error) {
-		return dialLDAPRawConnection(parsed, tlsConfig, client.timeout, useTLS)
+		return dialLDAPRawConnection(parsed, tlsConfig, options.timeout, useTLS)
 	}
 	connection, err := dial(parsed.Scheme == "ldaps")
 	if err != nil {
@@ -716,7 +711,7 @@ func (client *ldapClientOptions) connectLDAPRawReferral(
 		upgraded, startTLSErr := ldapClientSASLStartTLS(
 			connection,
 			tlsConfig,
-			client.timeout,
+			options.timeout,
 			messageID,
 		)
 		messageID++
@@ -742,7 +737,7 @@ func (client *ldapClientOptions) connectLDAPRawReferral(
 			connection = upgraded
 		}
 	}
-	if err := connection.SetDeadline(time.Now().Add(client.timeout)); err != nil {
+	if err := connection.SetDeadline(time.Now().Add(options.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set referral bind deadline: %w", err))
 	}
 	if err := ldapRawSimpleBind(connection, &messageID, "", nil); err != nil {

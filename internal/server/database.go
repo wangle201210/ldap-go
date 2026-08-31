@@ -136,6 +136,17 @@ type databaseSearchSizeLimit struct {
 	subjectRegex     *regexp.Regexp
 }
 
+func databaseSearchLimitsRequireRequestContext(
+	limits []databaseSearchSizeLimit,
+) bool {
+	for _, limit := range limits {
+		if limit.requestDN || limit.selector == databaseSearchLimitGroup {
+			return true
+		}
+	}
+	return false
+}
+
 type databaseSearchExecutionLimits struct {
 	size           int
 	time           int
@@ -1505,11 +1516,6 @@ func orderedDatabaseIndexDirectives(values [][]byte) ([]string, error) {
 		result[index] = directives[index].value
 	}
 	return result, nil
-}
-
-func stripOrderedDatabaseIndexPrefix(value string) (string, error) {
-	value, _, _, err := parseOrderedDatabaseIndexPrefix(value)
-	return value, err
 }
 
 func parseOrderedDatabaseIndexPrefix(value string) (string, int, bool, error) {

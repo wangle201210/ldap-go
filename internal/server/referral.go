@@ -276,20 +276,6 @@ func referralResult(
 	)
 }
 
-func referralResultWithNormalizer(
-	entry directory.Entry,
-	target *directory.DN,
-	scope referralURLScope,
-	normalizer directory.DNAttributeNormalizer,
-) (ldapwire.Result, error) {
-	return referralResultWithParser(
-		entry,
-		target,
-		scope,
-		referralParserWithNormalizer(normalizer),
-	)
-}
-
 func referralResultWithReader(
 	entry directory.Entry,
 	target *directory.DN,
@@ -617,33 +603,6 @@ func referralURLQuery(parsed *url.URL) ([]string, bool) {
 		}
 	}
 	return components, true
-}
-
-func rewriteReferralDN(
-	referralDN *directory.DN,
-	base *directory.DN,
-	target *directory.DN,
-) (string, error) {
-	return rewriteReferralDNWithParser(
-		referralDN,
-		base,
-		target,
-		nil,
-	)
-}
-
-func rewriteReferralDNWithNormalizer(
-	referralDN *directory.DN,
-	base *directory.DN,
-	target *directory.DN,
-	normalizer directory.DNAttributeNormalizer,
-) (string, error) {
-	return rewriteReferralDNWithParser(
-		referralDN,
-		base,
-		target,
-		referralParserWithNormalizer(normalizer),
-	)
 }
 
 func rewriteReferralDNWithParser(

@@ -433,7 +433,7 @@ func assertSockStreamingEntry(
 	if len(operation.Children) < 1 {
 		t.Fatalf("SearchResultEntry has no DN: %#v", operation)
 	}
-	if got := string(operation.Children[0].Data.Bytes()); got != wantDN {
+	if got := operation.Children[0].Data.String(); got != wantDN {
 		t.Fatalf("SearchResultEntry DN = %q, want %q", got, wantDN)
 	}
 }
@@ -451,7 +451,7 @@ func assertSockStreamingReference(
 		messageID,
 		ldapwire.ApplicationSearchResultReference,
 	)
-	if len(operation.Children) != 1 || string(operation.Children[0].Data.Bytes()) != want {
+	if len(operation.Children) != 1 || operation.Children[0].Data.String() != want {
 		t.Fatalf("SearchResultReference = %#v, want %q", operation.Children, want)
 	}
 }

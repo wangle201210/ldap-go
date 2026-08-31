@@ -601,7 +601,7 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 			"operation not permitted within namingContext",
 		)
 	}
-	dn, storedDN, err := writer.parseNormalizedSQLDN(entry.DN)
+	dn, _, err := writer.parseNormalizedSQLDN(entry.DN)
 	if err != nil {
 		return err
 	}
@@ -609,7 +609,7 @@ func (writer *sqlBackendWriter) add(entry directory.Entry) error {
 	if err != nil {
 		return err
 	}
-	storedDN = stored.String()
+	storedDN := stored.String()
 	keyValue, err := writer.createMappedObject(entry, mapping)
 	if err != nil {
 		return err
@@ -992,7 +992,7 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 	if pending == nil {
 		return errors.New("SQL-backend rename source is missing")
 	}
-	newDN, storedDN, err := writer.parseNormalizedSQLDN(entry.DN)
+	newDN, _, err := writer.parseNormalizedSQLDN(entry.DN)
 	if err != nil {
 		return err
 	}
@@ -1000,7 +1000,7 @@ func (writer *sqlBackendWriter) renameEntry(entry directory.Entry) error {
 	if err != nil {
 		return err
 	}
-	storedDN = stored.String()
+	storedDN := stored.String()
 	parentID := int64(0)
 	if parent, present := newDN.Parent(); present && parent.Depth() > 0 {
 		parentEntry, parentErr := writer.entryID(parent)

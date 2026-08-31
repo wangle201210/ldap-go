@@ -274,11 +274,6 @@ func valuesForAttributeAliases(entry directory.Entry, names ...string) [][]byte 
 	return values
 }
 
-func stripDynlistOrderingPrefix(value string) (string, error) {
-	value, _, _, err := parseDynlistOrderingPrefix(value)
-	return value, err
-}
-
 func parseDynlistOrderingPrefix(value string) (string, int, bool, error) {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "{") {

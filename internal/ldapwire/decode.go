@@ -190,10 +190,6 @@ func readFrameWithContentLimit(
 	return frame, nil
 }
 
-func decodeMessage(packet *ber.Packet) (Message, error) {
-	return decodeMessageWithFilterDepth(packet, DefaultMaxFilterDepth)
-}
-
 func decodeMessageWithFilterDepth(packet *ber.Packet, maxFilterDepth int) (Message, error) {
 	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) {
 		return Message{}, malformed("LDAPMessage is not a sequence")
@@ -362,7 +358,7 @@ func decodeDeleteRequest(packet *ber.Packet) (DeleteRequest, error) {
 	if packet.TagType != ber.TypePrimitive || len(packet.Children) != 0 {
 		return DeleteRequest{}, malformed("invalid DeleteRequest")
 	}
-	return DeleteRequest{DN: string(packet.Data.Bytes())}, nil
+	return DeleteRequest{DN: packet.Data.String()}, nil
 }
 
 func decodeModifyDNRequest(packet *ber.Packet) (ModifyDNRequest, error) {
@@ -388,7 +384,7 @@ func decodeModifyDNRequest(packet *ber.Packet) (ModifyDNRequest, error) {
 		if !isPacket(superior, ber.ClassContext, ber.TypePrimitive, 0) {
 			return ModifyDNRequest{}, malformed("invalid newSuperior")
 		}
-		request.NewSuperior = string(superior.Data.Bytes())
+		request.NewSuperior = superior.Data.String()
 		request.HasNewSuperior = true
 	}
 	return request, nil
@@ -440,7 +436,7 @@ func decodeExtendedRequest(packet *ber.Packet) (ExtendedRequest, error) {
 		name.Data.Len() == 0 {
 		return ExtendedRequest{}, malformed("invalid ExtendedRequest name")
 	}
-	request := ExtendedRequest{Name: string(name.Data.Bytes())}
+	request := ExtendedRequest{Name: name.Data.String()}
 	if len(packet.Children) == 2 {
 		value := packet.Children[1]
 		if !isPacket(value, ber.ClassContext, ber.TypePrimitive, 1) {
@@ -493,10 +489,6 @@ func decodeAttributeListElement(packet *ber.Packet, allowEmptyValues bool) (dire
 		attribute.Values = append(attribute.Values, value)
 	}
 	return attribute, nil
-}
-
-func decodeSearchRequest(packet *ber.Packet) (SearchRequest, error) {
-	return decodeSearchRequestWithFilterDepth(packet, DefaultMaxFilterDepth)
 }
 
 func decodeSearchRequestWithFilterDepth(
@@ -599,14 +591,6 @@ func decodeControls(packet *ber.Packet) ([]Control, error) {
 		controls = append(controls, control)
 	}
 	return controls, nil
-}
-
-func nonNegativeInt(packet *ber.Packet, name string) (int, error) {
-	value, err := packetInteger(packet)
-	if err != nil || value < 0 || value > math.MaxInt32 {
-		return 0, malformed("invalid %s", name)
-	}
-	return int(value), nil
 }
 
 func packetInteger(packet *ber.Packet) (int64, error) {

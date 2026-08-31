@@ -201,7 +201,8 @@ func TestDatabaseLimitsReachSockOverlayShortCircuit(t *testing.T) {
 	setDatabaseAuxiliaryLimits(
 		t,
 		store,
-		"anonymous size.soft=2 size.hard=2 time.soft=3 time.hard=3",
+		`dn.this.exact="ou=people,dc=example,dc=com" size.soft=2 size.hard=2 time.soft=3 time.hard=3`,
+		"anonymous size.soft=5 size.hard=5 time.soft=6 time.hard=6",
 	)
 	address, stop := startServer(t, store, Config{MaxSearchEntries: 100})
 	defer stop()

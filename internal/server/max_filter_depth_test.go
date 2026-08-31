@@ -185,12 +185,12 @@ func assertFilterDepthDisconnect(t *testing.T, connection net.Conn) {
 	if err != nil || code != int64(ldap.LDAPResultProtocolError) {
 		t.Fatalf("Notice result = %d, %v", code, err)
 	}
-	if diagnostic := string(operation.Children[2].Data.Bytes()); diagnostic != "filter nested too deeply" {
+	if diagnostic := operation.Children[2].Data.String(); diagnostic != "filter nested too deeply" {
 		t.Fatalf("Notice diagnostic = %q", diagnostic)
 	}
 	if operation.Children[3].ClassType != ber.ClassContext ||
 		operation.Children[3].Tag != 10 ||
-		string(operation.Children[3].Data.Bytes()) != "1.3.6.1.4.1.1466.20036" {
+		operation.Children[3].Data.String() != "1.3.6.1.4.1.1466.20036" {
 		t.Fatalf("Notice responseName = %#v", operation.Children[3])
 	}
 }

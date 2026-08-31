@@ -326,14 +326,7 @@ func (server *Server) handleSearch(
 	)
 	if limitDatabaseIndex >= 0 {
 		database := state.runtime.databases[limitDatabaseIndex]
-		hasGroupRule := false
-		for _, rule := range database.searchSizeLimits {
-			if rule.selector == databaseSearchLimitGroup {
-				hasGroupRule = true
-				break
-			}
-		}
-		if hasGroupRule {
+		if databaseSearchLimitsRequireRequestContext(database.searchSizeLimits) {
 			err := server.config.Store.View(ctx, func(reader storage.Reader) error {
 				tx := readerForDatabase(reader, database, ctx)
 				requestDN, err := storage.NormalizeReaderDN(tx, base)
@@ -3619,34 +3612,6 @@ func (server *Server) writeSearchResult(
 	)
 }
 
-func (server *Server) writeSearchResultWithReferences(
-	connection net.Conn,
-	messageID int64,
-	state *connectionState,
-	paging *pagedSearchContext,
-	sorting *serverSideSortContext,
-	entries []directory.Entry,
-	result ldapwire.Result,
-	cursor pagedSearchCursor,
-	hasMore bool,
-	references [][]string,
-) error {
-	return server.writeSearchResultResponse(
-		connection,
-		messageID,
-		state,
-		paging,
-		sorting,
-		entries,
-		result,
-		cursor,
-		hasMore,
-		references,
-		nil,
-		nil,
-	)
-}
-
 func (server *Server) writeSearchResultWithChainedReferences(
 	connection net.Conn,
 	messageID int64,
@@ -3699,35 +3664,6 @@ func (server *Server) writeSearchResultWithControls(
 		cursor,
 		hasMore,
 		nil,
-		additionalControls,
-		nil,
-	)
-}
-
-func (server *Server) writeSearchResultWithReferencesAndControls(
-	connection net.Conn,
-	messageID int64,
-	state *connectionState,
-	paging *pagedSearchContext,
-	sorting *serverSideSortContext,
-	entries []directory.Entry,
-	result ldapwire.Result,
-	cursor pagedSearchCursor,
-	hasMore bool,
-	references [][]string,
-	additionalControls []ldapwire.Control,
-) error {
-	return server.writeSearchResultResponse(
-		connection,
-		messageID,
-		state,
-		paging,
-		sorting,
-		entries,
-		result,
-		cursor,
-		hasMore,
-		references,
 		additionalControls,
 		nil,
 	)

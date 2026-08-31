@@ -76,8 +76,11 @@ func TestGlobalTLSCACertificatePathLoadsDirectoryAndDeduplicates(t *testing.T) {
 	if !ok {
 		t.Fatalf("runtime TLS transport = %T", instance.runtime.Load().secureTransport)
 	}
-	if got := len(transport.config.ClientCAs.Subjects()); got != 2 {
-		t.Fatalf("hash-dir CA subjects = %d, want 2; rogue.pem must be ignored", got)
+	expectedClientCAs := x509.NewCertPool()
+	expectedClientCAs.AddCert(firstAuthority.certificate)
+	expectedClientCAs.AddCert(secondAuthority.certificate)
+	if !transport.config.ClientCAs.Equal(expectedClientCAs) {
+		t.Fatal("hash-dir CA pool differs from the two registered authorities")
 	}
 }
 
@@ -1096,6 +1099,7 @@ func writeGlobalTLSEncryptedPrivateKey(
 	password []byte,
 ) string {
 	t.Helper()
+	//lint:ignore SA1019 The fixture exercises the required OpenLDAP legacy encrypted-PEM compatibility path.
 	block, err := x509.EncryptPEMBlock(
 		rand.Reader,
 		"PRIVATE KEY",

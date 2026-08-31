@@ -19,8 +19,10 @@ import (
 
 func TestResourceLimiterBoundsAndCancelsWaiters(t *testing.T) {
 	limiter := newResourceLimiter(2)
-	if !limiter.acquire(context.Background()) || !limiter.acquire(context.Background()) {
-		t.Fatal("initial limiter slots were unavailable")
+	for range 2 {
+		if !limiter.acquire(context.Background()) {
+			t.Fatal("initial limiter slot was unavailable")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	waiting := make(chan bool, 1)

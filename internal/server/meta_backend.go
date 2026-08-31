@@ -244,12 +244,6 @@ func loadMetaBackendDNCacheTTL(entry directory.Entry) (time.Duration, error) {
 	}
 }
 
-func validateMetaBackendDatabase(
-	entry directory.Entry,
-) (directory.DN, []directory.DN, error) {
-	return validateMetaBackendDatabaseWithNormalizer(entry, nil)
-}
-
 func validateMetaBackendDatabaseWithNormalizer(
 	entry directory.Entry,
 	normalizer directory.DNAttributeNormalizer,
@@ -1139,14 +1133,6 @@ func (configuration *metaBackendRuntimeConfiguration) candidateTargetsForDN(
 		result = append(result, target.clone())
 	}
 	return result
-}
-
-func (configuration *metaBackendRuntimeConfiguration) defaultTargetKey() string {
-	if configuration == nil || configuration.defaultTarget < 0 ||
-		configuration.defaultTarget >= len(configuration.targets) {
-		return ""
-	}
-	return configuration.targets[configuration.defaultTarget].configDNKey
 }
 
 func (configuration *metaBackendRuntimeConfiguration) targetForDN(

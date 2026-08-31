@@ -2419,10 +2419,6 @@ func (state *pcacheState) completeRefreshContext(
 	})
 }
 
-func (state *pcacheState) invalidateRefresh(refresh pcacheRefreshLease) bool {
-	return state.invalidateRefreshContext(context.Background(), refresh)
-}
-
 func (state *pcacheState) invalidateRefreshContext(
 	ctx context.Context,
 	refresh pcacheRefreshLease,

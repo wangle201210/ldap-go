@@ -387,13 +387,13 @@ func readChildrenScopeSearchResponse(
 			for _, child := range operation.Children {
 				observation.references = append(
 					observation.references,
-					string(child.Data.Bytes()),
+					child.Data.String(),
 				)
 			}
 		case ldapwire.ApplicationSearchResultDone:
 			observation.resultCode = rawLDAPResultCode(t, operation)
 			if len(operation.Children) > 1 {
-				observation.matchedDN = string(operation.Children[1].Data.Bytes())
+				observation.matchedDN = operation.Children[1].Data.String()
 			}
 			for _, child := range operation.Children[3:] {
 				if child.ClassType != ber.ClassContext || child.Tag != 3 {
@@ -402,7 +402,7 @@ func readChildrenScopeSearchResponse(
 				for _, referral := range child.Children {
 					observation.referrals = append(
 						observation.referrals,
-						string(referral.Data.Bytes()),
+						referral.Data.String(),
 					)
 				}
 			}
@@ -428,18 +428,18 @@ func decodeChildrenScopeEntry(
 		t.Fatalf("malformed children-scope entry: %#v", operation)
 	}
 	entry := childrenScopeEntryObservation{
-		dn:         string(operation.Children[0].Data.Bytes()),
+		dn:         operation.Children[0].Data.String(),
 		attributes: make(map[string][]string),
 	}
 	for _, attribute := range operation.Children[1].Children {
 		if len(attribute.Children) != 2 {
 			t.Fatalf("malformed children-scope attribute: %#v", attribute)
 		}
-		description := strings.ToLower(string(attribute.Children[0].Data.Bytes()))
+		description := strings.ToLower(attribute.Children[0].Data.String())
 		for _, value := range attribute.Children[1].Children {
 			entry.attributes[description] = append(
 				entry.attributes[description],
-				string(value.Data.Bytes()),
+				value.Data.String(),
 			)
 		}
 		slices.Sort(entry.attributes[description])

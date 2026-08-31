@@ -274,8 +274,8 @@ func TestEncodeDerefResponseValue(t *testing.T) {
 	first := packet.Children[0]
 	if !isPacket(first, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
 		len(first.Children) != 3 ||
-		string(first.Children[0].Data.Bytes()) != "member" ||
-		string(first.Children[1].Data.Bytes()) != "uid=alice,ou=people,dc=example,dc=com" {
+		first.Children[0].Data.String() != "member" ||
+		first.Children[1].Data.String() != "uid=alice,ou=people,dc=example,dc=com" {
 		t.Fatalf("first deref result = %#v", first)
 	}
 	attributes := first.Children[2]
@@ -305,7 +305,7 @@ func TestEncodeDerefResponseValue(t *testing.T) {
 	second := packet.Children[1]
 	if !isPacket(second, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
 		len(second.Children) != 2 ||
-		string(second.Children[0].Data.Bytes()) != "manager" ||
+		second.Children[0].Data.String() != "manager" ||
 		len(second.Children[1].Data.Bytes()) != 0 {
 		t.Fatalf("second deref result = %#v", second)
 	}
@@ -463,7 +463,7 @@ func assertDerefPartialAttributeForTest(
 	t.Helper()
 	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
 		len(packet.Children) != 2 ||
-		string(packet.Children[0].Data.Bytes()) != wantType {
+		packet.Children[0].Data.String() != wantType {
 		t.Fatalf("partial attribute = %#v, want type %q", packet, wantType)
 	}
 	values := packet.Children[1]

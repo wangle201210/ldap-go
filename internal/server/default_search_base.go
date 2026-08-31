@@ -229,13 +229,6 @@ func loadDefaultSearchBaseWithNormalizer(
 	return global, nil
 }
 
-func loadDefaultSearchBaseFromEntry(
-	reader storage.Reader,
-	dn directory.DN,
-) (defaultSearchBaseConfiguration, error) {
-	return loadDefaultSearchBaseFromEntryWithNormalizer(reader, dn, nil)
-}
-
 func loadDefaultSearchBaseFromEntryWithNormalizer(
 	reader storage.Reader,
 	dn directory.DN,
@@ -249,12 +242,6 @@ func loadDefaultSearchBaseFromEntryWithNormalizer(
 		return defaultSearchBaseConfiguration{}, err
 	}
 	return parseDefaultSearchBaseEntryWithNormalizer(entry, normalizer)
-}
-
-func parseDefaultSearchBaseEntry(
-	entry directory.Entry,
-) (defaultSearchBaseConfiguration, error) {
-	return parseDefaultSearchBaseEntryWithNormalizer(entry, nil)
 }
 
 func parseDefaultSearchBaseEntryWithNormalizer(

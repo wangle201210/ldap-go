@@ -1137,9 +1137,3 @@ func (listener *combinedListener) Close() error {
 func (listener *combinedListener) Addr() net.Addr {
 	return listener.listeners[0].Addr()
 }
-
-func closeListeners(listeners []net.Listener) {
-	for _, listener := range listeners {
-		_ = listener.Close()
-	}
-}

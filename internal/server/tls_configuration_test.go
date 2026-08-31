@@ -57,8 +57,9 @@ func TestGlobalTLSConfigurationLoadsInlineDER(t *testing.T) {
 	if configuration.ClientAuth != tls.RequireAndVerifyClientCert {
 		t.Fatalf("ClientAuth = %v, want RequireAndVerifyClientCert", configuration.ClientAuth)
 	}
-	if configuration.ClientCAs == nil ||
-		len(configuration.ClientCAs.Subjects()) != 1 {
+	expectedClientCAs := x509.NewCertPool()
+	expectedClientCAs.AddCert(material.certificate)
+	if configuration.ClientCAs == nil || !configuration.ClientCAs.Equal(expectedClientCAs) {
 		t.Fatal("inline DER CA was not loaded")
 	}
 	if configuration.MinVersion != tls.VersionTLS12 {

@@ -1920,10 +1920,3 @@ func monitorInteger(description string, value int) directory.Attribute {
 func monitorInteger64(description string, value uint64) directory.Attribute {
 	return monitorAttribute(description, strconv.FormatUint(value, 10))
 }
-
-func isMonitorOperationalAttribute(description string) bool {
-	name := strings.ToLower(strings.TrimSpace(description))
-	return name == "monitorcounter" || strings.HasPrefix(name, "olm") ||
-		name == "structuralobjectclass" || name == "entrydn" ||
-		name == "createtimestamp" || name == "modifytimestamp"
-}

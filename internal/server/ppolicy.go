@@ -422,19 +422,6 @@ func parsePasswordPolicyTime(value []byte) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func passwordPolicyEnabledForDatabase(database *runtimeDatabase) bool {
-	return database != nil && database.ppolicy != nil
-}
-
-func runtimeSupportsPasswordPolicy(databases []runtimeDatabase) bool {
-	for index := range databases {
-		if databases[index].ppolicy != nil {
-			return true
-		}
-	}
-	return false
-}
-
 type passwordBindResult struct {
 	authenticated bool
 	restricted    bool

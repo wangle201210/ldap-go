@@ -264,10 +264,6 @@ func parseConstraintRestriction(
 	}, nil
 }
 
-func parseConstraintLDAPURL(raw string) (parsedConstraintLDAPURL, error) {
-	return parseConstraintLDAPURLWithNormalizer(raw, nil)
-}
-
 func parseConstraintLDAPURLWithNormalizer(
 	raw string,
 	normalizer directory.DNAttributeNormalizer,

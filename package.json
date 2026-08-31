@@ -1,13 +1,13 @@
 {
   "name": "ldap-go-webadmin-e2e",
   "private": true,
-	"packageManager": "npm@10.9.2",
-	"engines": {
-	  "node": ">=20"
-	},
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-	    "test:e2e": "npm run test:e2e:support && playwright test",
-	    "test:e2e:support": "node --test tests/e2e/support/runtime.test.js",
+    "test:e2e": "npm run test:e2e:support && playwright test",
+    "test:e2e:support": "node --test tests/e2e/support/runtime.test.js",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:install": "playwright install chromium"
   },

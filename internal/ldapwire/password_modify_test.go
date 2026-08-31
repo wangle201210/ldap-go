@@ -108,7 +108,7 @@ func TestEncodePasswordModifyResponseValue(t *testing.T) {
 	if !isPacket(packet, ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence) ||
 		len(packet.Children) != 1 ||
 		!isPacket(packet.Children[0], ber.ClassContext, ber.TypePrimitive, 0) ||
-		string(packet.Children[0].Data.Bytes()) != "generated" {
+		packet.Children[0].Data.String() != "generated" {
 		t.Fatalf("response packet = %#v", packet)
 	}
 }

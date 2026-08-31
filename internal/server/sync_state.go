@@ -741,7 +741,7 @@ func advanceSyncContextCSN(
 	csn openLDAPCSN,
 ) error {
 	key := syncContextCSNMetadataKey(partition)
-	state := make(syncCSNState)
+	var state syncCSNState
 	rawCurrent, err := writer.Metadata(key)
 	switch {
 	case err == nil:

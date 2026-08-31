@@ -76,8 +76,6 @@ func validateRuleSchema(rule Rule, schema TargetSchema) error {
 			if !known {
 				return fmt.Errorf("unknown object class %q", selector[1:])
 			}
-		case strings.HasPrefix(selector, "-"):
-			continue
 		default:
 			// OpenLDAP can expose dynamically registered and proxied undefined
 			// attributes (for example cmusaslsecretDIGEST-MD5). Exact names
@@ -401,11 +399,6 @@ func matchesTargetAttribute(attributes []string, target Target) bool {
 		}
 	}
 	return false
-}
-
-func matchesTargetValue(selector ValueSelector, target Target) bool {
-	matched, _ := matchTargetValue(selector, target)
-	return matched
 }
 
 func matchTargetValue(selector ValueSelector, target Target) (bool, []string) {
@@ -1236,14 +1229,6 @@ func valueIsSubjectDN(
 	valueDN, valueErr := parseACLDN(string(value), normalizer)
 	subjectDN, subjectErr := parseACLDN(rawSubject, normalizer)
 	return valueErr == nil && subjectErr == nil && valueDN.Equal(subjectDN)
-}
-
-func equalRawDN(raw string, target directory.DN) bool {
-	if raw == "" {
-		return false
-	}
-	subject, err := directory.ParseDN(raw)
-	return err == nil && subject.Equal(target)
 }
 
 func matchesSelfLevel(

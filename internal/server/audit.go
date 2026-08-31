@@ -166,13 +166,13 @@ func (observation *operationAuditObservation) observeResponse(encoded []byte) {
 	}
 	diagnostic := ""
 	if len(operation.Children) > 2 {
-		diagnostic = string(operation.Children[2].Data.Bytes())
+		diagnostic = operation.Children[2].Data.String()
 	}
 	var referrals []string
 	for _, child := range operation.Children[3:] {
 		if child.ClassType == ber.ClassContext && child.Tag == 3 {
 			for _, referral := range child.Children {
-				referrals = append(referrals, string(referral.Data.Bytes()))
+				referrals = append(referrals, referral.Data.String())
 			}
 		}
 	}
@@ -200,7 +200,7 @@ func auditDecodeResponseControls(packet *ber.Packet) []ldapwire.Control {
 		if len(encoded.Children) < 1 || len(encoded.Children) > 3 {
 			continue
 		}
-		control := ldapwire.Control{OID: string(encoded.Children[0].Data.Bytes())}
+		control := ldapwire.Control{OID: encoded.Children[0].Data.String()}
 		position := 1
 		if position < len(encoded.Children) &&
 			encoded.Children[position].ClassType == ber.ClassUniversal &&

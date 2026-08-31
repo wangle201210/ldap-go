@@ -580,14 +580,6 @@ func verifyBackendTLSRevocation(
 				)
 			}
 		}
-		for _, entry := range list.RevokedCertificates {
-			if entry.SerialNumber.Cmp(certificate.SerialNumber) == 0 {
-				return fmt.Errorf(
-					"upstream TLS certificate serial %s is revoked",
-					certificate.SerialNumber,
-				)
-			}
-		}
 	}
 	return nil
 }

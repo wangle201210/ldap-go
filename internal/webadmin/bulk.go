@@ -269,11 +269,6 @@ func executeBatchWrite(ctx context.Context, application *Application, current *s
 	}
 }
 
-func bulkLDAPError(err error) apiError {
-	failure, _ := ldapWriteFailure(err)
-	return failure
-}
-
 func ldapWriteFailure(err error) (apiError, bool) {
 	var ldapError *ldap.Error
 	if !errors.As(err, &ldapError) {

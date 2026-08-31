@@ -34,11 +34,6 @@ func (server *Server) requiresImplicitTLS() bool {
 			server.config.ListenerSchemeForConnection != nil)
 }
 
-func (server *Server) implicitTLSForConnection(connection net.Conn) bool {
-	scheme := server.listenerSchemeForConnection(connection)
-	return scheme == "ldaps" || scheme == "ldap+tlcp"
-}
-
 func (server *Server) listenerSchemeForConnection(connection net.Conn) string {
 	if server == nil {
 		return "ldap"

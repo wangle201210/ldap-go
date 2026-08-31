@@ -330,7 +330,7 @@ func assertAbortedTransactionNotice(
 		}
 		switch child.Tag {
 		case 10:
-			responseName = string(child.Data.Bytes())
+			responseName = child.Data.String()
 		case 11:
 			responseValue = child.Data.Bytes()
 			valuePresent = true

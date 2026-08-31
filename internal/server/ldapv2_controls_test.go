@@ -381,7 +381,7 @@ func readLDAPv2ControlDisconnect(
 	observation.diagnostic = rawLDAPDiagnostic(packet)
 	for _, child := range operation.Children[3:] {
 		if child.ClassType == ber.ClassContext && child.Tag == 10 {
-			observation.responseOID = string(child.Data.Bytes())
+			observation.responseOID = child.Data.String()
 		}
 	}
 	var trailing [1]byte

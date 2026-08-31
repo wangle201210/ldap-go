@@ -15,6 +15,7 @@ import (
 	crypthash "github.com/sergeymakinen/go-crypt/hash"
 	cryptsha1 "github.com/sergeymakinen/go-crypt/sha1"
 	cryptsunmd5 "github.com/sergeymakinen/go-crypt/sunmd5"
+	//lint:ignore SA1019 OpenLDAP $3$ NT crypt verification requires the legacy MD4 primitive.
 	"golang.org/x/crypto/md4"
 )
 

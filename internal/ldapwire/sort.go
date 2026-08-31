@@ -59,7 +59,7 @@ func decodeSortKey(packet *ber.Packet) (SortKey, error) {
 		if packet.Children[next].Data.Len() == 0 {
 			return SortKey{}, malformed("sort key ordering rule is empty")
 		}
-		key.OrderingRule = string(packet.Children[next].Data.Bytes())
+		key.OrderingRule = packet.Children[next].Data.String()
 		next++
 	}
 	if next < len(packet.Children) &&
@@ -167,7 +167,7 @@ func DecodeSortResultValue(value []byte) (ResultCode, string, error) {
 		) || attributePacket.Data.Len() == 0 {
 			return 0, "", malformed("sort result attribute type is invalid")
 		}
-		attributeType = string(attributePacket.Data.Bytes())
+		attributeType = attributePacket.Data.String()
 	}
 	return ResultCode(rawResult), attributeType, nil
 }

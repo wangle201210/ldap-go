@@ -3397,18 +3397,6 @@ func operationFailureFromSchema(err error) error {
 	return &operationFailure{result: result}
 }
 
-func (server *Server) applyCreateOperationalAttributes(
-	entry *directory.Entry,
-	actor string,
-	lastMod bool,
-	serverID uint16,
-	registry *schema.Registry,
-) error {
-	return server.applyCreateOperationalAttributesContext(
-		context.Background(), entry, actor, lastMod, serverID, registry,
-	)
-}
-
 func (server *Server) applyCreateOperationalAttributesContext(
 	ctx context.Context,
 	entry *directory.Entry,

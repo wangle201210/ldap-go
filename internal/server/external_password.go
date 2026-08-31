@@ -218,7 +218,7 @@ func verifyStoredPasswordWithExternalMatches(
 ) bool {
 	if scheme, _ := externalPasswordScheme(stored); scheme != "" {
 		key := newExternalPasswordMatchKey(stored, supplied)
-		matched, _ := externalMatches.values[key]
+		matched := externalMatches.values[key]
 		return matched
 	}
 	return auth.VerifyPassword(stored, supplied)

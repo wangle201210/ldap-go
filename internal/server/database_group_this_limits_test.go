@@ -345,6 +345,32 @@ func TestDatabaseThisLimitMatchesSearchTargetDN(t *testing.T) {
 	}
 }
 
+func TestDatabaseThisLimitAppliesToSearchBase(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		limit string
+	}{
+		{
+			name:  "exact",
+			limit: `dn.this.exact="ou=people,dc=example,dc=com" size.soft=1 size.hard=1`,
+		},
+		{
+			name:  "regex",
+			limit: `dn.this.regex="^ou=people,dc=example,dc=com$" size.soft=1 size.hard=1`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			address, stop := startAuxiliaryDifferentialServer(t, test.limit)
+			defer stop()
+			code, entries := observeAuxiliarySizedSearch(t, "ldap://"+address, 0)
+			if code != ldap.LDAPResultSizeLimitExceeded || entries != 1 {
+				t.Fatalf("dn.this search = (%d,%d), want (%d,1)",
+					code, entries, ldap.LDAPResultSizeLimitExceeded)
+			}
+		})
+	}
+}
+
 func TestOpenLDAPReferenceDatabaseGroupAndThisLimitDifferential(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
 

@@ -1859,14 +1859,7 @@ func (server *Server) applyLocalSearchLimitsBeforeDispatch(
 	if !ok {
 		return message, nil
 	}
-	hasGroupRule := false
-	for _, rule := range database.searchSizeLimits {
-		if rule.selector == databaseSearchLimitGroup {
-			hasGroupRule = true
-			break
-		}
-	}
-	if !hasGroupRule {
+	if !databaseSearchLimitsRequireRequestContext(database.searchSizeLimits) {
 		return applyDatabaseSearchLimits(
 			state,
 			message,

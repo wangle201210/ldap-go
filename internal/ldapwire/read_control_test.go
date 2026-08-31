@@ -65,7 +65,7 @@ func TestEncodeReadControlValuePreservesEntry(t *testing.T) {
 	}
 	if packet.ClassType != ber.ClassApplication ||
 		packet.Tag != ApplicationSearchResultEntry ||
-		string(packet.Children[0].Data.Bytes()) != entry.DN ||
+		packet.Children[0].Data.String() != entry.DN ||
 		!bytes.Equal(
 			packet.Children[1].Children[0].Children[1].Children[0].Data.Bytes(),
 			entry.Attributes[0].Values[0],

@@ -202,7 +202,7 @@ func runOpenLDAPReferenceSearchAt(
 		switch uint64(operation.Tag) {
 		case ldapwire.ApplicationSearchResultEntry:
 			result.entries = append(result.entries, openLDAPReferenceEntry{
-				dn:       string(operation.Children[0].Data.Bytes()),
+				dn:       operation.Children[0].Data.String(),
 				controls: openLDAPReferenceControls(packet),
 			})
 		case ldapwire.ApplicationSearchResultDone:
@@ -638,7 +638,7 @@ func observeDerefResponseSemantics(
 
 func observeDirectDerefTargetDescription(t *testing.T, address string) []string {
 	t.Helper()
-	client, err := ldap.Dial("tcp", address)
+	client, err := ldap.DialURL("ldap://" + address)
 	if err != nil {
 		t.Fatalf("dial direct deref target: %v", err)
 	}

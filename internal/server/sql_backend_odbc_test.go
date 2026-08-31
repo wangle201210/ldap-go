@@ -83,7 +83,7 @@ func (connector sqlBackendODBCAdapterTestConnector) Connect(
 }
 
 func (connector sqlBackendODBCAdapterTestConnector) Driver() driver.Driver {
-	return sqlBackendODBCAdapterTestDriver{state: connector.state}
+	return sqlBackendODBCAdapterTestDriver(connector)
 }
 
 type sqlBackendODBCAdapterTestDriver struct {

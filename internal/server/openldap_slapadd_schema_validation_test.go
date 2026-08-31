@@ -1169,13 +1169,6 @@ func requireOpenLDAPSlapaddSchemaReferenceTools(
 	return tools
 }
 
-func openLDAPSlapaddSchemaConfig(
-	tools openLDAPReferenceTools,
-	databaseDir string,
-) string {
-	return openLDAPSlapaddSchemaConfigWithDirectives(tools, databaseDir, "")
-}
-
 func openLDAPSlapaddSchemaConfigWithDirectives(
 	tools openLDAPReferenceTools,
 	databaseDir string,

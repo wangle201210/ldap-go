@@ -219,10 +219,7 @@ func (application *Application) prepareCSVImport(input csvImportRequestBody) ([]
 		return nil, err
 	}
 
-	text := string(input.CSV)
-	if strings.HasPrefix(text, "\uFEFF") {
-		text = strings.TrimPrefix(text, "\uFEFF")
-	}
+	text := strings.TrimPrefix(string(input.CSV), "\uFEFF")
 	if text == "" {
 		return nil, errors.New("csv is required")
 	}
@@ -387,11 +384,6 @@ func validateCSVImportLDAPType(value, field string) error {
 		return fmt.Errorf("%s contains invalid LDAP type %q", field, value)
 	}
 	return nil
-}
-
-func csvImportLDAPError(err error) apiError {
-	failure, _ := ldapWriteFailure(err)
-	return failure
 }
 
 func appendCSVNotAttempted(result *csvImportResponse, remaining []csvImportEntry) {

@@ -357,10 +357,10 @@ func TestRetcodeOverlayWireResponses(t *testing.T) {
 		if len(operation.Children) != 5 ||
 			operation.Children[3].ClassType != ber.ClassContext ||
 			operation.Children[3].Tag != 10 ||
-			string(operation.Children[3].Data.Bytes()) != "1.2.3.4" ||
+			operation.Children[3].Data.String() != "1.2.3.4" ||
 			operation.Children[4].ClassType != ber.ClassContext ||
 			operation.Children[4].Tag != 11 ||
-			string(operation.Children[4].Data.Bytes()) != "payload" {
+			operation.Children[4].Data.String() != "payload" {
 			t.Fatalf("unexpected unsolicited ExtendedResponse: %#v", operation)
 		}
 	})
@@ -839,8 +839,8 @@ func TestRetcodeOverlayInDirectoryWireResponses(t *testing.T) {
 		)
 		operation := response.Children[1]
 		if len(operation.Children) != 5 ||
-			string(operation.Children[3].Data.Bytes()) != "1.2.3.4" ||
-			string(operation.Children[4].Data.Bytes()) != "directory-payload" {
+			operation.Children[3].Data.String() != "1.2.3.4" ||
+			operation.Children[4].Data.String() != "directory-payload" {
 			t.Fatalf("unexpected in-directory unsolicited response: %#v", operation)
 		}
 	})

@@ -326,7 +326,7 @@ func TestEncodeIntermediateResponse(t *testing.T) {
 		ber.ClassContext,
 		ber.TypePrimitive,
 		0,
-	) || string(operation.Children[0].Data.Bytes()) !=
+	) || operation.Children[0].Data.String() !=
 		"1.3.6.1.4.1.4203.1.9.1.4" {
 		t.Fatalf("responseName packet = %#v", operation.Children[0])
 	}

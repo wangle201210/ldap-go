@@ -404,10 +404,10 @@ func observeOpenLDAPSockValidation(
 		observation.responseTag = uint64(operation.Tag)
 		observation.code = rawLDAPResultCode(t, operation)
 		if len(operation.Children) > 1 {
-			observation.matchedDN = string(operation.Children[1].Data.Bytes())
+			observation.matchedDN = operation.Children[1].Data.String()
 		}
 		if len(operation.Children) > 2 {
-			observation.diagnostic = string(operation.Children[2].Data.Bytes())
+			observation.diagnostic = operation.Children[2].Data.String()
 		}
 	}
 

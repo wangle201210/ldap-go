@@ -131,7 +131,7 @@ func observeWriteControls(t *testing.T, uri string) writeControlReferenceResult 
 			if len(control.Children) > 0 {
 				result.noOpReadControls = append(
 					result.noOpReadControls,
-					string(control.Children[0].Data.Bytes()),
+					control.Children[0].Data.String(),
 				)
 			}
 		}

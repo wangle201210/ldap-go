@@ -83,10 +83,10 @@ func observeUnknownLDAPOperation(t *testing.T, address string) unknownOperationO
 	if err != nil {
 		t.Fatalf("parse notice result code: %v", err)
 	}
-	observation.diagnostic = string(operationPacket.Children[2].Data.Bytes())
+	observation.diagnostic = operationPacket.Children[2].Data.String()
 	for _, child := range operationPacket.Children[3:] {
 		if child.ClassType == ber.ClassContext && child.Tag == 10 {
-			observation.responseOID = string(child.Data.Bytes())
+			observation.responseOID = child.Data.String()
 		}
 	}
 	_, err = ber.ReadPacket(connection)

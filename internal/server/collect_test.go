@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -807,7 +806,7 @@ func TestCollectOverlayRemainsSeparateFromRFC3671CollectiveAttributes(t *testing
 }
 
 func TestCollectDynamicConfigurationRollbackAndRestart(t *testing.T) {
-	store, address, configClient, dataClient, stop := startCollectTestServer(t)
+	store, _, configClient, dataClient, stop := startCollectTestServer(t)
 	addCollectTestFixtures(t, dataClient)
 	addCollectDatabaseOverlay(t, configClient)
 
@@ -934,7 +933,7 @@ func TestCollectDynamicConfigurationRollbackAndRestart(t *testing.T) {
 	configClient.Close()
 	dataClient.Close()
 	stop()
-	address, stop = startServer(t, store, Config{
+	address, stop := startServer(t, store, Config{
 		RootDN:       "cn=admin,dc=example,dc=com",
 		RootPassword: []byte("admin-secret"),
 	})
@@ -1152,25 +1151,5 @@ func assertCollectModifyDenied(t *testing.T, err error, attribute string) {
 		ldapErr.ResultCode != ldap.LDAPResultUnwillingToPerform ||
 		!strings.Contains(ldapErr.Error(), "cannot change virtual attribute '"+attribute+"'") {
 		t.Fatalf("collect Modify error = %v", err)
-	}
-}
-
-func seedCollectOverlayDirect(
-	t *testing.T,
-	store storage.Store,
-	values ...string,
-) {
-	t.Helper()
-	if err := store.Update(context.Background(), func(writer storage.Writer) error {
-		return writer.Put(directory.Entry{
-			DN: collectDatabaseOverlayDN,
-			Attributes: []directory.Attribute{
-				{Description: "objectClass", Values: stringValues("olcOverlayConfig", "olcCollectConfig")},
-				{Description: "olcOverlay", Values: stringValues("{0}collect")},
-				{Description: "olcCollectInfo", Values: stringValues(values...)},
-			},
-		}, false)
-	}); err != nil {
-		t.Fatalf("seed collect overlay: %v", err)
 	}
 }

@@ -214,7 +214,7 @@ if [ "$data_parity" = 1 ]; then
 			die "QUALIFICATION_COMPARE_LDIF_CANONICALIZER is not executable: $canonicalizer"
 	else
 		command -v go >/dev/null 2>&1 || die "go is required for data parity canonicalization"
-		(cd "$root" && go build -o "$canonicalizer" ./scripts/qualification/ldifcanonical)
+		(cd "$root" && go build -o "$canonicalizer" ./internal/cmd/ldifcanonical)
 	fi
 fi
 

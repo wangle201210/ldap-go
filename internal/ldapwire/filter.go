@@ -110,7 +110,7 @@ func decodeFilterWithMaxDepth(
 		if packet.TagType != ber.TypePrimitive || packet.Data.Len() == 0 {
 			return directory.Filter{}, malformed("invalid present filter")
 		}
-		filter.Attribute = string(packet.Data.Bytes())
+		filter.Attribute = packet.Data.String()
 		return filter, nil
 
 	case directory.FilterSubstrings:
@@ -162,9 +162,9 @@ func decodeFilterWithMaxDepth(
 			}
 			switch child.Tag {
 			case 1:
-				filter.MatchingRule = string(child.Data.Bytes())
+				filter.MatchingRule = child.Data.String()
 			case 2:
-				filter.Attribute = string(child.Data.Bytes())
+				filter.Attribute = child.Data.String()
 			case 3:
 				filter.Assertion = bytes.Clone(child.Data.Bytes())
 				hasAssertion = true

@@ -597,7 +597,7 @@ func runOpenLDAPReferenceSearch(
 		switch uint64(operation.Tag) {
 		case ldapwire.ApplicationSearchResultEntry:
 			result.entries = append(result.entries, openLDAPReferenceEntry{
-				dn:       string(operation.Children[0].Data.Bytes()),
+				dn:       operation.Children[0].Data.String(),
 				controls: openLDAPReferenceControls(packet),
 			})
 		case ldapwire.ApplicationIntermediateResponse:
@@ -609,7 +609,7 @@ func runOpenLDAPReferenceSearch(
 				}
 				switch child.Tag {
 				case 0:
-					responseName = string(child.Data.Bytes())
+					responseName = child.Data.String()
 				case 1:
 					responseValue = bytes.Clone(child.Data.Bytes())
 				}
@@ -708,7 +708,7 @@ func openLDAPReferenceControls(
 			continue
 		}
 		control := openLDAPReferenceControl{
-			oid: string(packet.Children[0].Data.Bytes()),
+			oid: packet.Children[0].Data.String(),
 		}
 		for _, child := range packet.Children[1:] {
 			if child.ClassType == ber.ClassUniversal &&

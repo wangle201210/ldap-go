@@ -188,7 +188,7 @@ func (connection *derefSearchResponseConnection) Write(value []byte) (int, error
 		return connection.Conn.Write(value)
 	}
 
-	entryDN := string(packet.Children[1].Children[0].Data.Bytes())
+	entryDN := packet.Children[1].Children[0].Data.String()
 	control, err := connection.server.derefResponseControl(
 		connection.ctx,
 		connection.state,
@@ -238,7 +238,7 @@ func messageHasDerefControl(packet *ber.Packet) bool {
 	}
 	for _, control := range packet.Children[2].Children {
 		if len(control.Children) > 0 &&
-			string(control.Children[0].Data.Bytes()) == ldapwire.DerefControlOID {
+			control.Children[0].Data.String() == ldapwire.DerefControlOID {
 			return true
 		}
 	}

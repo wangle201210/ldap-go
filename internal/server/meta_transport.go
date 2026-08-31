@@ -175,19 +175,6 @@ func (cache *metaTransportCache) releaseOwned(
 	}
 }
 
-func (cache *metaTransportCache) remove(key string, transport *syncConsumerTransport) {
-	if cache == nil || key == "" {
-		return
-	}
-	cache.mu.Lock()
-	entry := cache.entries[key]
-	if entry != nil && (transport == nil || entry.transport == transport) {
-		delete(cache.entries, key)
-		entry.retired = true
-	}
-	cache.mu.Unlock()
-}
-
 func (cache *metaTransportCache) resetOwner(owner string) {
 	if cache == nil || owner == "" {
 		return

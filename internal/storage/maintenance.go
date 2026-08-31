@@ -16,6 +16,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 const maintenanceTransactionSize = 64 << 20
@@ -350,7 +351,7 @@ func lockOfflineBoltDestination(path string) (*restoreDestinationLock, error) {
 		return lock, nil
 	}
 	database, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Millisecond})
-	if errors.Is(err, bolt.ErrTimeout) {
+	if errors.Is(err, bolterrors.ErrTimeout) {
 		_ = lock.Close()
 		return nil, fmt.Errorf("%w: %q is open", ErrRestoreRequiresOffline, path)
 	}
@@ -839,16 +840,6 @@ func checkBoltEqualityIndexes(
 		}
 	}
 	return nil
-}
-
-func writeAtomicDatabaseFile(
-	ctx context.Context,
-	path string,
-	replace bool,
-	write func(*os.File) error,
-	validate func(string) error,
-) error {
-	return writeAtomicDatabaseFileWithFS(ctx, path, replace, write, validate, osFileSystem{})
 }
 
 func writeAtomicDatabaseFileWithFS(

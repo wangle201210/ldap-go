@@ -1599,21 +1599,6 @@ func (reader *sqlBackendReader) readAttributeValues(
 	return values, rows.Err()
 }
 
-func (reader *sqlBackendReader) entryID(dn directory.DN) (sqlEntryID, error) {
-	if reader.initializationErr != nil {
-		return sqlEntryID{}, reader.initializationErr
-	}
-	database, err := reader.configuration.database(reader.ctx)
-	if err != nil {
-		return sqlEntryID{}, err
-	}
-	queryer := reader.queryer
-	if queryer == nil {
-		queryer = database
-	}
-	return reader.entryIDWithQueryer(queryer, dn)
-}
-
 func (reader *sqlBackendReader) entryIDWithQueryer(
 	queryer sqlBackendQueryer,
 	dn directory.DN,

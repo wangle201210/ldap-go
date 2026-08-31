@@ -753,7 +753,7 @@ func retcodeReferenceSearch(
 	diagnostic := ""
 	if ldapErr.Packet != nil && len(ldapErr.Packet.Children) >= 2 &&
 		len(ldapErr.Packet.Children[1].Children) >= 3 {
-		diagnostic = string(ldapErr.Packet.Children[1].Children[2].Data.Bytes())
+		diagnostic = ldapErr.Packet.Children[1].Children[2].Data.String()
 	}
 	referrals := ldapResultReferrals(ldapErr.Packet)
 	return ldapErr.ResultCode, fmt.Sprintf(

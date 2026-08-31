@@ -661,14 +661,13 @@ func rawLDAPDiagnostic(response *ber.Packet) string {
 		len(response.Children[1].Children) < 3 {
 		return ""
 	}
-	return string(response.Children[1].Children[2].Data.Bytes())
+	return response.Children[1].Children[2].Data.String()
 }
 
 type cancelSearchGate struct {
 	started chan struct{}
 	release chan struct{}
 	resumed chan struct{}
-	once    sync.Once
 	claimed bool
 }
 
@@ -679,12 +678,6 @@ func (gate *cancelSearchGate) waitUntilBlocked(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Search did not reach the storage scan")
 	}
-}
-
-func (gate *cancelSearchGate) unblock() {
-	gate.once.Do(func() {
-		close(gate.release)
-	})
 }
 
 type cancelBlockingStore struct {

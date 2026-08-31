@@ -511,7 +511,7 @@ func rawReadControlEntry(
 	}
 	for _, control := range response.Children[2].Children {
 		if len(control.Children) < 2 ||
-			string(control.Children[0].Data.Bytes()) != oid {
+			control.Children[0].Data.String() != oid {
 			continue
 		}
 		value := control.Children[len(control.Children)-1].Data.Bytes()
@@ -525,13 +525,13 @@ func rawReadControlEntry(
 			len(packet.Children) != 2 {
 			t.Fatalf("invalid %s SearchResultEntry: %#v", oid, packet)
 		}
-		entry := directory.Entry{DN: string(packet.Children[0].Data.Bytes())}
+		entry := directory.Entry{DN: packet.Children[0].Data.String()}
 		for _, partial := range packet.Children[1].Children {
 			if len(partial.Children) != 2 {
 				t.Fatalf("invalid %s PartialAttribute: %#v", oid, partial)
 			}
 			attribute := directory.Attribute{
-				Description: string(partial.Children[0].Data.Bytes()),
+				Description: partial.Children[0].Data.String(),
 			}
 			for _, rawValue := range partial.Children[1].Children {
 				attribute.Values = append(

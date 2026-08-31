@@ -249,9 +249,7 @@ func securityStrengthTarget(
 }
 
 func parseSecurityStrength(value string) (uint32, error) {
-	if strings.HasPrefix(value, "+") {
-		value = value[1:]
-	}
+	value = strings.TrimPrefix(value, "+")
 	if value == "" {
 		return 0, errors.New("empty security strength")
 	}

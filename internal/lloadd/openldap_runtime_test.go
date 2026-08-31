@@ -182,40 +182,40 @@ func (process *openLDAPLloaddProcess) start() error {
 	return nil
 }
 
-func (process *openLDAPLloaddProcess) wait(timeout time.Duration) (error, bool) {
+func (process *openLDAPLloaddProcess) wait(timeout time.Duration) (bool, error) {
 	if timeout <= 0 {
 		select {
 		case <-process.done:
-			return process.waitErr, true
+			return true, process.waitErr
 		default:
-			return nil, false
+			return false, nil
 		}
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-process.done:
-		return process.waitErr, true
+		return true, process.waitErr
 	case <-timer.C:
-		return nil, false
+		return false, nil
 	}
 }
 
-func (process *openLDAPLloaddProcess) stop(gracePeriod, killTimeout time.Duration) (error, bool, bool) {
-	if err, exited := process.wait(0); exited {
-		return err, false, true
+func (process *openLDAPLloaddProcess) stop(gracePeriod, killTimeout time.Duration) (bool, bool, error) {
+	if exited, err := process.wait(0); exited {
+		return false, true, err
 	}
 	if process.command.Process != nil {
 		_ = process.command.Process.Signal(syscall.SIGTERM)
 	}
-	if err, exited := process.wait(gracePeriod); exited {
-		return err, false, true
+	if exited, err := process.wait(gracePeriod); exited {
+		return false, true, err
 	}
 	if process.command.Process != nil {
 		_ = process.command.Process.Kill()
 	}
-	err, exited := process.wait(killTimeout)
-	return err, true, exited
+	exited, err := process.wait(killTimeout)
+	return true, exited, err
 }
 
 func startOpenLDAPReferenceLloadd(t *testing.T, configText string) string {
@@ -251,7 +251,7 @@ func startOpenLDAPReferenceLloadd(t *testing.T, configText string) string {
 		t.Fatalf("start OpenLDAP lloadd: %v", err)
 	}
 	t.Cleanup(func() {
-		err, forceKilled, exited := process.stop(5*time.Second, 5*time.Second)
+		forceKilled, exited, err := process.stop(5*time.Second, 5*time.Second)
 		if !exited {
 			t.Error("OpenLDAP lloadd did not exit after SIGKILL")
 			return
@@ -286,7 +286,7 @@ func startOpenLDAPReferenceLloadd(t *testing.T, configText string) string {
 func TestOpenLDAPLloaddProcessExitCanBeObservedRepeatedly(t *testing.T) {
 	process, _ := startOpenLDAPLloaddProcessHelper(t, "exit")
 	for observation := 0; observation < 3; observation++ {
-		err, exited := process.wait(2 * time.Second)
+		exited, err := process.wait(2 * time.Second)
 		if !exited {
 			t.Fatalf("observation %d timed out", observation)
 		}
@@ -294,7 +294,7 @@ func TestOpenLDAPLloaddProcessExitCanBeObservedRepeatedly(t *testing.T) {
 			t.Fatalf("observation %d exit error: %v", observation, err)
 		}
 	}
-	if err, forceKilled, exited := process.stop(time.Second, time.Second); err != nil || forceKilled || !exited {
+	if forceKilled, exited, err := process.stop(time.Second, time.Second); err != nil || forceKilled || !exited {
 		t.Fatalf("stop after observed exit = (%v, %t, %t), want (nil, false, true)", err, forceKilled, exited)
 	}
 }
@@ -312,7 +312,7 @@ func TestOpenLDAPLloaddProcessStop(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			process, readyPath := startOpenLDAPLloaddProcessHelper(t, test.mode)
 			waitForOpenLDAPLloaddProcessHelper(t, process, readyPath)
-			waitErr, forceKilled, exited := process.stop(test.gracePeriod, 2*time.Second)
+			forceKilled, exited, waitErr := process.stop(test.gracePeriod, 2*time.Second)
 			if !exited {
 				t.Fatal("helper process was not reaped")
 			}
@@ -323,7 +323,7 @@ func TestOpenLDAPLloaddProcessStop(t *testing.T) {
 				t.Fatalf("graceful stop error: %v", waitErr)
 			}
 			for observation := 0; observation < 2; observation++ {
-				gotErr, gotExited := process.wait(0)
+				gotExited, gotErr := process.wait(0)
 				if !gotExited || fmt.Sprint(gotErr) != fmt.Sprint(waitErr) {
 					t.Fatalf(
 						"observation %d = (%v, %t), want (%v, true)",
@@ -387,13 +387,13 @@ func startOpenLDAPLloaddProcessHelper(t *testing.T, mode string) (*openLDAPLload
 		t.Fatalf("start helper process: %v", err)
 	}
 	t.Cleanup(func() {
-		if _, exited := process.wait(0); exited {
+		if exited, _ := process.wait(0); exited {
 			return
 		}
 		if process.command.Process != nil {
 			_ = process.command.Process.Kill()
 		}
-		if _, exited := process.wait(2 * time.Second); !exited {
+		if exited, _ := process.wait(2 * time.Second); !exited {
 			t.Error("helper process was not reaped during cleanup")
 		}
 	})
@@ -413,7 +413,7 @@ func waitForOpenLDAPLloaddProcessHelper(
 		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("stat helper ready marker: %v", err)
 		}
-		if waitErr, exited := process.wait(0); exited {
+		if exited, waitErr := process.wait(0); exited {
 			t.Fatalf("helper exited before ready: %v\n%s", waitErr, process.logs.String())
 		}
 		time.Sleep(10 * time.Millisecond)

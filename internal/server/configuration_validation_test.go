@@ -154,6 +154,7 @@ func TestValidateConfigurationRejectsRuntimeConfigurationLayers(t *testing.T) {
 func TestValidateConfigurationValidatesArguments(t *testing.T) {
 	t.Parallel()
 
+	//lint:ignore SA1012 This test verifies the public nil-context rejection contract.
 	if _, err := ValidateConfiguration(nil, Config{}); err == nil ||
 		!strings.Contains(err.Error(), "context") {
 		t.Fatalf("nil context error = %v", err)

@@ -891,8 +891,8 @@ func decodeDerefTestResponse(
 			t.Fatalf("deref response result %d = %#v", resultIndex, encoded)
 		}
 		result := ldapwire.DerefResult{
-			DerefAttr:  string(encoded.Children[0].Data.Bytes()),
-			DerefValue: string(encoded.Children[1].Data.Bytes()),
+			DerefAttr:  encoded.Children[0].Data.String(),
+			DerefValue: encoded.Children[1].Data.String(),
 		}
 		if len(encoded.Children) == 3 {
 			attributeList := encoded.Children[2]
@@ -909,7 +909,7 @@ func decodeDerefTestResponse(
 					t.Fatalf("deref response attribute %d/%d = %#v", resultIndex, attributeIndex, partial)
 				}
 				attribute := ldapwire.DerefAttribute{
-					Type: string(partial.Children[0].Data.Bytes()),
+					Type: partial.Children[0].Data.String(),
 				}
 				for _, encodedValue := range partial.Children[1].Children {
 					attribute.Values = append(
@@ -1073,12 +1073,12 @@ func runDerefTestSearch(
 		switch uint64(operation.Tag) {
 		case ldapwire.ApplicationSearchResultEntry:
 			entry := derefTestSearchEntry{
-				dn:       string(operation.Children[0].Data.Bytes()),
+				dn:       operation.Children[0].Data.String(),
 				controls: derefTestMessageControls(packet),
 			}
 			for _, partial := range operation.Children[1].Children {
 				attribute := directory.Attribute{
-					Description: string(partial.Children[0].Data.Bytes()),
+					Description: partial.Children[0].Data.String(),
 				}
 				for _, value := range partial.Children[1].Children {
 					attribute.Values = append(
@@ -1107,7 +1107,7 @@ func derefTestMessageControls(message *ber.Packet) map[string][]byte {
 		if len(packet.Children) == 0 {
 			continue
 		}
-		oid := string(packet.Children[0].Data.Bytes())
+		oid := packet.Children[0].Data.String()
 		for _, child := range packet.Children[1:] {
 			if child.ClassType == ber.ClassUniversal && child.Tag == ber.TagOctetString {
 				controls[oid] = bytes.Clone(child.Data.Bytes())

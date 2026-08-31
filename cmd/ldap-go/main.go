@@ -1123,8 +1123,8 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 	}
 
 	effectiveDatabasePath := *databasePath
-	cleanup := func() {}
 	if dryRun {
+		var cleanup func()
 		effectiveDatabasePath, cleanup, err = prepareDryRunDatabase(*databasePath)
 		if err != nil {
 			return err

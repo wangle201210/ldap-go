@@ -912,11 +912,13 @@ func normalizeGlobalTLSPrivateKey(data []byte) ([]byte, error) {
 		if !strings.Contains(block.Type, "PRIVATE KEY") {
 			continue
 		}
+		//lint:ignore SA1019 OpenLDAP compatibility requires reading traditional RFC 1423 encrypted PEM keys.
 		if x509.IsEncryptedPEMBlock(block) {
 			password, err := loadGlobalTLSPrivateKeyPassword()
 			if err != nil {
 				return nil, err
 			}
+			//lint:ignore SA1019 OpenLDAP compatibility requires reading traditional RFC 1423 encrypted PEM keys.
 			decrypted, err := x509.DecryptPEMBlock(block, password)
 			clearGlobalTLSSecret(password)
 			if err != nil {
@@ -1298,14 +1300,6 @@ func certificateSupportsServerAuthentication(certificate *x509.Certificate) bool
 		}
 	}
 	return false
-}
-
-func parseGlobalTLSCAPool(data []byte) (*x509.CertPool, error) {
-	certificates, err := parseGlobalTLSCertificates(data)
-	if err != nil {
-		return nil, err
-	}
-	return globalTLSCAPool(certificates), nil
 }
 
 func buildGlobalTLSCAPool(data []byte, pathList string) (*x509.CertPool, error) {

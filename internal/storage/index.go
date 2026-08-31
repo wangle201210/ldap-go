@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -875,27 +874,6 @@ func equalityIndexConfigsEqual(left, right EqualityIndexConfig) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
-}
-
-func equalityIndexConfigFingerprint(config EqualityIndexConfig) (string, error) {
-	config, err := normalizeEqualityIndexConfig(config)
-	if err != nil {
-		return "", err
-	}
-	encoded, err := json.Marshal(config)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:]), nil
-}
-
-func equalityIndexAttributeConfigured(config EqualityIndexConfig, attribute string) bool {
-	index := sort.Search(len(config.Attributes), func(index int) bool {
-		return config.Attributes[index].Attribute >= attribute
-	})
-	return index < len(config.Attributes) &&
-		config.Attributes[index].Attribute == attribute
 }
 
 func equalityIndexAttributeDefinition(

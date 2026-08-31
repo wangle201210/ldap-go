@@ -28,6 +28,24 @@ TCP / Unix / TLS / StartTLS
  memory | durable local | proxy | monitor | config
 ```
 
+### Repository boundaries
+
+`cmd/ldap-go` assembles the shipped executable and owns command-line parsing.
+Reusable behavior stays under `internal`: `ldapwire` owns BER protocol data,
+`directory` owns DNs/entries/filters, `schema` owns matching rules, `storage`
+owns transactions and indexes, `auth` owns credentials, and `server` composes
+those layers into the DSA runtime. `lloadd` remains a separate runtime because
+it routes LDAP frames without directory or backend semantics. The server
+package intentionally keeps backend and overlay implementations beside its
+private runtime types; moving them into nominal subpackages would expose those
+types and reverse the dependency direction.
+
+Non-shipped Go executables live under `internal/cmd`. `scripts` contains only
+shell orchestration, `tests/e2e` contains process-level browser coverage, and
+package tests remain beside the code whose private contracts they exercise.
+Design and qualification records live under `docs`; only repository entry
+points and build manifests remain at the root.
+
 ### Wire
 
 The wire package owns RFC 4511 BER decoding and encoding, message IDs,

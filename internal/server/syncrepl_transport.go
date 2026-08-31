@@ -605,7 +605,7 @@ func parseSyncConsumerLDAPResult(
 					"duplicate LDAP extended response name",
 				)
 			}
-			result.responseName = string(child.Data.Bytes())
+			result.responseName = child.Data.String()
 		case responseTag == ldap.ApplicationExtendedResponse &&
 			syncConsumerPacketIs(
 				child,

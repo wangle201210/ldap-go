@@ -68,7 +68,7 @@ func normalizeSyncConsumerResponsePacket(packet *ber.Packet) ([]byte, error) {
 		}
 		switch child.Tag {
 		case 0:
-			responseName = string(child.Data.Bytes())
+			responseName = child.Data.String()
 		case 1:
 			valueIndex = index
 		}

@@ -282,12 +282,10 @@ func (server *Server) preparePcachePersistence(
 		}
 		configuration.state.mu.Lock()
 		current := configuration.state.persistence
-		if current != nil && current.metadataKey == persistence.metadataKey &&
-			current.fingerprint == persistence.fingerprint &&
-			current.enabled == persistence.enabled &&
-			current.epoch == persistence.epoch && !current.retired.Load() {
-			persistence = current
-		} else {
+		if current == nil || current.metadataKey != persistence.metadataKey ||
+			current.fingerprint != persistence.fingerprint ||
+			current.enabled != persistence.enabled ||
+			current.epoch != persistence.epoch || current.retired.Load() {
 			configuration.state.persistence = persistence
 		}
 		configuration.state.mu.Unlock()

@@ -204,6 +204,6 @@ func readRootDSEOperationResult(
 	}
 	return rootDSEOperationResult{
 		code:       code,
-		diagnostic: string(response.Children[1].Children[2].Data.Bytes()),
+		diagnostic: response.Children[1].Children[2].Data.String(),
 	}
 }

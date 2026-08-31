@@ -113,8 +113,8 @@ func observeMaxFilterDepthDisconnect(
 		messageID:      messageID,
 		applicationTag: uint64(operation.Tag),
 		resultCode:     code,
-		diagnostic:     string(operation.Children[2].Data.Bytes()),
-		responseName:   string(operation.Children[3].Data.Bytes()),
+		diagnostic:     operation.Children[2].Data.String(),
+		responseName:   operation.Children[3].Data.String(),
 	}
 	_, err = ber.ReadPacket(connection)
 	if err != nil {

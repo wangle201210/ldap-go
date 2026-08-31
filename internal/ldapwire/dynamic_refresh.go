@@ -67,7 +67,7 @@ func DecodeDynamicRefreshRequestValue(
 		)
 	}
 	return DynamicRefreshRequestValue{
-		EntryName:  string(entryName.Data.Bytes()),
+		EntryName:  entryName.Data.String(),
 		RequestTTL: ttl,
 	}, nil
 }

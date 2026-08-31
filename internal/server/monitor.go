@@ -493,14 +493,6 @@ func monitorAddress(address net.Addr) string {
 	}
 }
 
-func monitorListenerURL(address net.Addr, implicitTLS bool) string {
-	scheme := "ldap"
-	if implicitTLS {
-		scheme = "ldaps"
-	}
-	return monitorListenerURLWithScheme(address, scheme)
-}
-
 func monitorListenerURLWithScheme(address net.Addr, scheme string) string {
 	if address == nil {
 		return ""

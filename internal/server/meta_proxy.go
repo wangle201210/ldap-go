@@ -477,7 +477,3 @@ func metaModifyDNStaysInTarget(
 	local, err := mapping.normalizeDN(mapping.suffix.local)
 	return err == nil && (local.Equal(newSuperior) || local.AncestorOf(newSuperior))
 }
-
-func metaDescriptionIsSpecial(value string) bool {
-	return rwmSpecialAttributeDescription(value)
-}

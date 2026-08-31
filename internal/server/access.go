@@ -198,23 +198,6 @@ func (server *Server) filterMatchesWithPrivilege(
 	return result == filterTrue, err
 }
 
-func (server *Server) evaluateFilter(
-	runtime *runtimeState,
-	reader storage.Reader,
-	subjectDN string,
-	entry directory.Entry,
-	filter directory.Filter,
-) (filterResult, error) {
-	return server.evaluateFilterWithPrivilege(
-		runtime,
-		reader,
-		subjectDN,
-		entry,
-		filter,
-		acl.Search,
-	)
-}
-
 func (server *Server) evaluateFilterWithPrivilege(
 	runtime *runtimeState,
 	reader storage.Reader,

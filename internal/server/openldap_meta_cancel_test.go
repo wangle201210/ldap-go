@@ -456,7 +456,7 @@ func readOpenLDAPMetaCancelInitialEntry(
 		len(packet.Children[1].Children) == 0 {
 		t.Fatalf("initial back-meta long-search response = %#v", response)
 	}
-	return strings.ToLower(string(packet.Children[1].Children[0].Data.Bytes()))
+	return strings.ToLower(packet.Children[1].Children[0].Data.String())
 }
 
 func readOpenLDAPMetaCancelCancellationResponses(
@@ -532,7 +532,7 @@ func readOpenLDAPMetaCancelFollowupResponses(
 			}
 			observation.followupEntries = append(
 				observation.followupEntries,
-				strings.ToLower(string(operation.Children[0].Data.Bytes())),
+				strings.ToLower(operation.Children[0].Data.String()),
 			)
 		case ldapwire.ApplicationSearchResultDone:
 			observation.followupDone = true

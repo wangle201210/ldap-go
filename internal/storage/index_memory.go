@@ -68,13 +68,12 @@ func (tx *memoryTx) equalityIndexPostings(
 	if err := tx.ctx.Err(); err != nil {
 		return nil, err
 	}
-	term := string(equalityIndexPostingPrefix(
+	keys := tx.equalityPostings[partition][string(equalityIndexPostingPrefix(
 		partition,
 		attribute,
 		kind,
 		value,
-	))
-	keys := tx.equalityPostings[partition][term]
+	))]
 	result := make([]string, 0, len(keys))
 	for key := range keys {
 		result = append(result, key)

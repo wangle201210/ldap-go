@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -243,10 +242,10 @@ func TestLoadSyncConsumerTLSMaterialExplicitCAIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse explicit CA: %v", err)
 	}
-	subjects := material.roots.Subjects()
-	if len(subjects) != 1 ||
-		!bytes.Equal(subjects[0], certificate.RawSubject) {
-		t.Fatalf("explicit CA pool contains %d subjects", len(subjects))
+	expectedRoots := x509.NewCertPool()
+	expectedRoots.AddCert(certificate)
+	if !material.roots.Equal(expectedRoots) {
+		t.Fatal("explicit CA pool does not contain exactly the configured authority")
 	}
 }
 
