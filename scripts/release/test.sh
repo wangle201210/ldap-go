@@ -53,6 +53,23 @@ fi
 grep -F 'release-gate:' "$root/Makefile" >/dev/null
 grep -F 'release-build:' "$root/Makefile" >/dev/null
 grep -F 'release-upgrade-gate:' "$root/Makefile" >/dev/null
+grep -F 'cp -R "$root/docs" "$stage/docs"' \
+	"$root/scripts/release/build-artifacts.sh" >/dev/null
+grep -F 'cp -R "$root/examples" "$stage/examples"' \
+	"$root/scripts/release/build-artifacts.sh" >/dev/null
+
+for document in \
+	README.md \
+	docs/operations.md \
+	docs/migration-and-passwords.md \
+	docs/implementation-status.md \
+	docs/compatibility.md \
+	examples/base.ldif; do
+	[ -r "$root/$document" ] || {
+		printf 'release-test: required document is missing: %s\n' "$document" >&2
+		exit 1
+	}
+done
 
 nightly=$root/.github/workflows/nightly-production.yml
 [ -r "$nightly" ] || {

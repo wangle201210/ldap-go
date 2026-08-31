@@ -79,8 +79,10 @@ make release-build
 
 The build matrix is Linux amd64/arm64, macOS amd64/arm64, Windows amd64, and
 FreeBSD amd64. Unix binaries are packaged as `tar.gz`; Windows is packaged as
-`zip`. Each archive includes the binary, README, and license. `SHA256SUMS`
-covers every archive and is verified immediately after it is generated.
+`zip`. Each archive includes the binary, README, documentation, examples, and
+license so README links and the quick-start LDIF also work offline.
+`SHA256SUMS` covers every archive and is verified immediately after it is
+generated.
 Local builds require Go, Git, tar, zip, and either `sha256sum` or `shasum`.
 
 `make release-gate` runs script checks, the upgrade gate, and release builds.

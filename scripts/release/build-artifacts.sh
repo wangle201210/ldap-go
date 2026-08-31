@@ -60,9 +60,11 @@ printf '%s\n' "$targets" | while read -r goos goarch; do
 		CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build \
 			-trimpath -ldflags "-s -w -X main.version=$version" \
 			-o "$binary" ./cmd/ldap-go
-	)
-	cp "$root/README.md" "$stage/README.md"
-	cp "$root/LICENSE" "$stage/LICENSE"
+		)
+		cp "$root/README.md" "$stage/README.md"
+		cp -R "$root/docs" "$stage/docs"
+		cp -R "$root/examples" "$stage/examples"
+		cp "$root/LICENSE" "$stage/LICENSE"
 	if [ "$goos" = windows ]; then
 		(
 			cd "$work_dir"
