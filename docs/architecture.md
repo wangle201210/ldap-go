@@ -43,6 +43,7 @@ types and reverse the dependency direction.
 Non-shipped Go executables live under `internal/cmd`. `scripts` contains only
 shell orchestration, `tests/e2e` contains process-level browser coverage, and
 package tests remain beside the code whose private contracts they exercise.
+Cross-package black-box test harnesses live under `internal/testutil`.
 Design and qualification records live under `docs`; only repository entry
 points and build manifests remain at the root.
 

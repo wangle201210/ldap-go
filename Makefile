@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: test script-test webadmin-e2e vet staticcheck race fmt-check platform-builds openldap openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak qualification-compare-openldap qualification-compare-openldap-100k release-check release-upgrade-gate release-build release-gate compat full
+.PHONY: test script-test webadmin-e2e vet staticcheck race fmt-check platform-builds openldap openldap-sdk openldap-strict openldap-full fuzz-smoke fuzz qualification-check qualification-smoke qualification-soak qualification-compare-openldap qualification-compare-openldap-100k release-check release-upgrade-gate release-build release-gate compat full
 
 test: script-test
 	go test ./... -count=1
@@ -8,6 +8,7 @@ test: script-test
 script-test:
 	./scripts/test-build-openldap-reference.sh
 	./scripts/qualification/test.sh
+	sh -n ./scripts/test-openldap-sdk.sh
 
 webadmin-e2e:
 	npm run test:e2e
@@ -34,6 +35,9 @@ platform-builds:
 
 openldap:
 	./scripts/test-openldap.sh
+
+openldap-sdk:
+	./scripts/test-openldap-sdk.sh
 
 openldap-strict:
 	LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 ./scripts/test-openldap.sh

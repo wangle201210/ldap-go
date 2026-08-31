@@ -39,6 +39,37 @@ intentionally server-generated, then compared for:
 
 Any intentional difference requires a documented compatibility exception.
 
+The reusable `internal/testutil/ldapdiff` runner adds an application-facing
+black-box layer that uses `github.com/go-ldap/ldap/v3` for both servers. Its
+state-machine test starts fresh OpenLDAP MDB and bbolt-backed ldap-go services
+from equivalent data, then compares anonymous and authenticated Bind,
+Base/One/Subtree Search,
+compound and substring filters, types-only and size-limited responses, paging,
+Add and duplicate Add, Compare TRUE/FALSE/errors, mixed Modify, Password
+Modify plus old/new password Bind, non-leaf Delete, subtree ModifyDN, cleanup,
+and full ordinary-attribute snapshots after each write phase.
+
+Result codes, matched DNs, referrals, deterministic controls, DNs, attribute
+names, and raw values are compared exactly after schema-aware DN normalization
+and deterministic entry, attribute, and multi-value ordering.
+Diagnostics are captured but excluded in this state machine because LDAP does
+not standardize their text. Paged cookies are treated as opaque while their
+control presence and continuation behavior remain mandatory. A size-limited,
+unsorted Search compares its result code and count because the particular
+truncated subset is unspecified. Password hashes are excluded from raw state
+comparison and instead verified through equivalent old/new credential Bind.
+No other ordinary attribute is ignored.
+
+After building the pinned reference, run only this SDK contract with:
+
+```sh
+OPENLDAP_ENV_FILE=/path/to/openldap-reference.env make openldap-sdk
+```
+
+`make openldap-full` requires this test to report PASS. The SDK layer does not
+replace raw BER and official OpenLDAP CLI differentials: an SDK may normalize
+or hide wire details that those lower-level tests must continue to expose.
+
 ## Migration tests
 
 Fixtures are generated with `slapadd` and `slapcat`, imported unchanged into
