@@ -332,6 +332,10 @@ func TestBackupPruneRejectsReplacementRacesWithoutFollowingLinks(t *testing.T) {
 		fixture := newBackupPruneFixture(t)
 		now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 		name := writeBackupPruneFile(t, fixture.directory, now.Add(-72*time.Hour), "4000000000000003", "old")
+		replacement := filepath.Join(filepath.Dir(fixture.directory), name+".replacement")
+		if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+			t.Fatalf("write replacement candidate: %v", err)
+		}
 		_, err := executeBackupPrune(context.Background(), backupPruneOptions{
 			directory:      fixture.directory,
 			prefix:         backupPruneTestPrefix,
@@ -343,10 +347,7 @@ func TestBackupPruneRejectsReplacementRacesWithoutFollowingLinks(t *testing.T) {
 			now:            now,
 			hooks: backupPruneHooks{beforeRemove: func(candidate string) error {
 				path := filepath.Join(fixture.directory, candidate)
-				if err := os.Remove(path); err != nil {
-					return err
-				}
-				return os.WriteFile(path, []byte("replacement"), 0o600)
+				return os.Rename(replacement, path)
 			}},
 		})
 		if err == nil || !strings.Contains(err.Error(), "changed identity") {
