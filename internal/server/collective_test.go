@@ -728,6 +728,83 @@ func TestCollectiveAttributePlanIsNoOpWithoutSources(t *testing.T) {
 	}
 }
 
+func TestCollectiveAttributePlanUsesObjectClassIndex(t *testing.T) {
+	t.Parallel()
+
+	registry := collectiveServerRegistry(t)
+	normalizer, _, err := loadDatabaseEqualityIndexes(directory.Entry{
+		DN: "olcDatabase={1}mdb,cn=config",
+		Attributes: []directory.Attribute{{
+			Description: "olcDbIndex",
+			Values:      stringValues("objectClass eq"),
+		}},
+	}, registry)
+	if err != nil {
+		t.Fatalf("load objectClass index: %v", err)
+	}
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	entries := []directory.Entry{
+		collectiveAdministrativePointEntry(
+			"ou=People,dc=example,dc=com",
+			"collectiveAttributeSpecificArea",
+		),
+		collectiveServerSource(
+			"cn=indexed,ou=People,dc=example,dc=com",
+			"{}",
+			directory.Attribute{
+				Description: "c-description",
+				Values:      stringValues("Indexed"),
+			},
+		),
+		collectiveServerPerson(
+			"uid=alice,ou=People,dc=example,dc=com",
+			nil,
+		),
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		indexed := storage.WriterInPartitionWithNormalizer(writer, "db", normalizer)
+		for _, entry := range entries {
+			if err := indexed.Put(entry, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed indexed collective store: %v", err)
+	}
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		indexed := storage.ReaderInPartitionWithNormalizer(reader, "db", normalizer)
+		plan, err := buildCollectiveAttributePlan(registry, indexed)
+		if err != nil {
+			return err
+		}
+		if len(plan.sources) != 1 {
+			t.Fatalf("indexed collective sources = %d, want 1", len(plan.sources))
+		}
+		personDN, err := directory.ParseDN(entries[2].DN)
+		if err != nil {
+			return err
+		}
+		person, err := indexed.Get(personDN)
+		if err != nil {
+			return err
+		}
+		derived, err := plan.apply(person)
+		if err != nil {
+			return err
+		}
+		assertCollectiveStringValues(
+			t,
+			derived.Values("c-description"),
+			"Indexed",
+		)
+		return nil
+	}); err != nil {
+		t.Fatalf("evaluate indexed collective plan: %v", err)
+	}
+}
+
 func TestCollectiveAttributePlanSharedCacheTracksStorageRevision(t *testing.T) {
 	t.Parallel()
 

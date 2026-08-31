@@ -2507,6 +2507,10 @@ func (server *Server) ensureSearchEqualityIndexes(
 		if initialization == nil || database.partition == "" {
 			continue
 		}
+		revision, hasRevision := server.currentStorageSnapshotRevision(ctx)
+		if initialization.readyFor(revision, hasRevision) {
+			continue
+		}
 		schema, ok := database.dnNormalizer.(storage.EqualityIndexSchema)
 		if !ok {
 			continue
@@ -2521,6 +2525,7 @@ func (server *Server) ensureSearchEqualityIndexes(
 			return err
 		}
 		if current {
+			initialization.markReady(revision, hasRevision)
 			continue
 		}
 		initialization.mu.Lock()
@@ -2538,10 +2543,11 @@ func (server *Server) ensureSearchEqualityIndexes(
 				)
 			})
 		}
-		if err == nil {
-			initialization.ready = true
-		}
 		initialization.mu.Unlock()
+		if err == nil {
+			revision, hasRevision = server.currentStorageSnapshotRevision(ctx)
+			initialization.markReady(revision, hasRevision)
+		}
 		if err != nil {
 			server.logSearchEqualityIndexError(database, err)
 			return err

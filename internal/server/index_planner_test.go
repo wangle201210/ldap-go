@@ -979,8 +979,9 @@ func TestEnsureSearchEqualityIndexesFirstBuildAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := storage.NewMemory()
-	defer store.Close()
+	base := storage.NewMemory()
+	defer base.Close()
+	store := &indexUpdateCountingStore{Store: base}
 	if err := store.Update(context.Background(), func(writer storage.Writer) error {
 		return writer.PutIn("db", directory.Entry{
 			DN: "cn=Alice,dc=example",
@@ -1002,7 +1003,16 @@ func TestEnsureSearchEqualityIndexesFirstBuildAndReload(t *testing.T) {
 		equalityIndexInit: &databaseEqualityIndexInitialization{},
 	}}}
 	routes := []databaseSearchRoute{{databaseIndex: 0}}
-	instance.ensureSearchEqualityIndexes(context.Background(), runtime, routes)
+	if err := instance.ensureSearchEqualityIndexes(context.Background(), runtime, routes); err != nil {
+		t.Fatal(err)
+	}
+	store.resetViews()
+	if err := instance.ensureSearchEqualityIndexes(context.Background(), runtime, routes); err != nil {
+		t.Fatal(err)
+	}
+	if views := store.viewCount(); views != 0 {
+		t.Fatalf("same-revision indexed Search preparation views = %d, want 0", views)
+	}
 	assertServerIndexPlanned(t, store, runtime.databases[0], directory.Filter{
 		Kind: directory.FilterEquality, Attribute: "cn", Assertion: []byte("ALICE"),
 	})
@@ -1211,6 +1221,23 @@ func TestEnsureSearchEqualityIndexesRebuildsAfterRawWrite(t *testing.T) {
 type indexUpdateCountingStore struct {
 	storage.Store
 	updates atomic.Int64
+	views   atomic.Int64
+}
+
+func (store *indexUpdateCountingStore) View(
+	ctx context.Context,
+	fn func(storage.Reader) error,
+) error {
+	store.views.Add(1)
+	return store.Store.View(ctx, fn)
+}
+
+func (store *indexUpdateCountingStore) CurrentStorageSnapshotRevision() (uint64, bool) {
+	provider, ok := store.Store.(storage.SnapshotRevisionStore)
+	if !ok {
+		return 0, false
+	}
+	return provider.CurrentStorageSnapshotRevision()
 }
 
 func (store *indexUpdateCountingStore) Update(
@@ -1225,8 +1252,16 @@ func (store *indexUpdateCountingStore) resetUpdates() {
 	store.updates.Store(0)
 }
 
+func (store *indexUpdateCountingStore) resetViews() {
+	store.views.Store(0)
+}
+
 func (store *indexUpdateCountingStore) updateCount() int64 {
 	return store.updates.Load()
+}
+
+func (store *indexUpdateCountingStore) viewCount() int64 {
+	return store.views.Load()
 }
 
 func seedIndexedSearchDirectory(t *testing.T, store storage.Store) {

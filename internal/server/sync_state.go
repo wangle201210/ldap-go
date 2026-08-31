@@ -615,6 +615,9 @@ func withSyncProviderContextCSNs(
 	database runtimeDatabase,
 	entry directory.Entry,
 ) (directory.Entry, error) {
+	if !database.syncProvider && database.accesslog == nil {
+		return entry, nil
+	}
 	entryDN, err := normalizeSyncStateDN(database, entry.DN)
 	if err != nil {
 		return directory.Entry{}, err

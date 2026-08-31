@@ -17,6 +17,22 @@ const (
 	syncStateCSN      = "20260823010101.000001Z#000000#001#000000"
 )
 
+func TestSyncProviderContextWithoutFeaturesIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "not a valid DN",
+		Attributes: []directory.Attribute{{
+			Description: "cn",
+			Values:      stringValues("unchanged"),
+		}},
+	}
+	got, err := withSyncProviderContextCSNs(nil, runtimeDatabase{}, entry)
+	if err != nil || !got.Equal(entry) {
+		t.Fatalf("context projection = %#v, %v; want unchanged", got, err)
+	}
+}
+
 func TestDNIdentitySyncProviderState(t *testing.T) {
 	backends := []struct {
 		name string

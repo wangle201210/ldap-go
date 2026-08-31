@@ -636,8 +636,37 @@ type databaseEqualityIndexRegistry interface {
 }
 
 type databaseEqualityIndexInitialization struct {
-	mu    sync.Mutex
-	ready bool
+	mu          sync.Mutex
+	ready       bool
+	revision    uint64
+	hasRevision bool
+}
+
+func (initialization *databaseEqualityIndexInitialization) readyFor(
+	revision uint64,
+	available bool,
+) bool {
+	if initialization == nil || !available {
+		return false
+	}
+	initialization.mu.Lock()
+	defer initialization.mu.Unlock()
+	return initialization.ready && initialization.hasRevision &&
+		initialization.revision == revision
+}
+
+func (initialization *databaseEqualityIndexInitialization) markReady(
+	revision uint64,
+	available bool,
+) {
+	if initialization == nil {
+		return
+	}
+	initialization.mu.Lock()
+	initialization.ready = true
+	initialization.revision = revision
+	initialization.hasRevision = available
+	initialization.mu.Unlock()
 }
 
 type databaseEqualityIndexNormalizer struct {

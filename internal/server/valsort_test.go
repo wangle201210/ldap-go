@@ -49,6 +49,23 @@ func TestLoadValueSortRuntimeConfiguration(t *testing.T) {
 	}
 }
 
+func TestApplyValueSortWithoutRulesIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	entry := directory.Entry{
+		DN: "not a valid DN",
+		Attributes: []directory.Attribute{{
+			Description: "description",
+			Values:      stringValues("second", "first"),
+		}},
+	}
+	want := entry.Clone()
+	applyValueSort(valueSortTestRegistry(t), nil, &entry)
+	if !entry.Equal(want) {
+		t.Fatalf("entry changed without value-sort rules: %#v", entry)
+	}
+}
+
 func TestLoadValueSortRuntimeConfigurationRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 

@@ -438,6 +438,9 @@ func applyValueSort(
 	rules []valueSortRule,
 	entry *directory.Entry,
 ) {
+	if registry == nil || len(rules) == 0 || entry == nil {
+		return
+	}
 	dn, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return

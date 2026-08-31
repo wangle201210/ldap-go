@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -263,7 +264,7 @@ func buildCollectiveAttributePlan(
 		administrativePoints []collectiveAdministrativePoint
 		candidateSources     []collectiveAttributeSource
 	)
-	if err := reader.ForEach(func(entry directory.Entry) error {
+	visit := func(entry directory.Entry) error {
 		dn, err := directory.ParseDN(entry.DN)
 		if err != nil {
 			return fmt.Errorf("parse collective administration DN %q: %w", entry.DN, err)
@@ -324,7 +325,27 @@ func buildCollectiveAttributePlan(
 		}
 		candidateSources = append(candidateSources, source)
 		return nil
-	}); err != nil {
+	}
+	planned, _, err := storage.ForEachFilterCandidate(
+		reader,
+		directory.Filter{
+			Kind:      directory.FilterEquality,
+			Attribute: "objectClass",
+			Assertion: []byte("collectiveAttributeSubentry"),
+		},
+		visit,
+	)
+	if err == nil && planned {
+		err = collectCollectiveAdministrativePoints(
+			registry,
+			reader,
+			candidateSources,
+			&administrativePoints,
+		)
+	} else if err == nil {
+		err = reader.ForEach(visit)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("scan collective attribute subentries: %w", err)
 	}
 
@@ -388,6 +409,44 @@ func buildCollectiveAttributePlan(
 		plan.sources[index] = ordered[index].source
 	}
 	return plan, nil
+}
+
+func collectCollectiveAdministrativePoints(
+	registry *schema.Registry,
+	reader storage.Reader,
+	sources []collectiveAttributeSource,
+	points *[]collectiveAdministrativePoint,
+) error {
+	visited := make(map[string]struct{})
+	for _, source := range sources {
+		current := source.administrativePoint
+		for {
+			key := current.Key()
+			if _, seen := visited[key]; seen {
+				break
+			}
+			visited[key] = struct{}{}
+			entry, err := reader.Get(current)
+			if errors.Is(err, storage.ErrEntryNotFound) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if roles := collectiveAdministrativeRoles(registry, entry); roles != 0 {
+				*points = append(*points, collectiveAdministrativePoint{
+					dn:    current,
+					roles: roles,
+				})
+			}
+			parent, ok := current.Parent()
+			if !ok {
+				break
+			}
+			current = parent
+		}
+	}
+	return nil
 }
 
 func (plan *collectiveAttributePlan) apply(entry directory.Entry) (directory.Entry, error) {
