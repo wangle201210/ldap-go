@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/creack/pty"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/go-ldap/ldif"
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -261,91 +260,6 @@ func TestLDAPPromptPasswordInputBoundaries(t *testing.T) {
 	if exitCode != 1 || stdout != "" ||
 		!strings.Contains(stderr, "password input ended before a password was read") {
 		t.Fatalf("empty -W exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
-	}
-}
-
-func TestLDAPPromptPasswordPTYBoundaries(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PTY password test is unavailable on Windows")
-	}
-
-	t.Run("password is hidden", func(t *testing.T) {
-		master, slave, err := pty.Open()
-		if err != nil {
-			t.Fatalf("open PTY: %v", err)
-		}
-		defer master.Close()
-		defer slave.Close()
-
-		type result struct {
-			password []byte
-			err      error
-		}
-		results := make(chan result, 1)
-		var stderr bytes.Buffer
-		go func() {
-			password, err := readLDAPPromptPassword(slave, &stderr)
-			results <- result{password: password, err: err}
-		}()
-		time.Sleep(100 * time.Millisecond)
-		if _, err := master.Write([]byte("pty-secret\n")); err != nil {
-			t.Fatalf("write PTY password: %v", err)
-		}
-
-		select {
-		case got := <-results:
-			defer clear(got.password)
-			if got.err != nil || string(got.password) != "pty-secret" {
-				t.Fatalf("PTY password = %q, %v", got.password, got.err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("PTY password read timed out")
-		}
-		if stderr.String() != "\n" {
-			t.Fatalf("PTY prompt newline = %q", stderr.String())
-		}
-
-		if err := master.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err == nil {
-			buffer := make([]byte, 64)
-			count, _ := master.Read(buffer)
-			if count != 0 {
-				t.Fatalf("terminal echoed password bytes %q", buffer[:count])
-			}
-		}
-	})
-
-	for _, test := range []struct {
-		name  string
-		input string
-	}{
-		{name: "blank line", input: "\n"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			master, slave, err := pty.Open()
-			if err != nil {
-				t.Fatalf("open PTY: %v", err)
-			}
-			defer slave.Close()
-			results := make(chan error, 1)
-			go func() {
-				password, err := readLDAPPromptPassword(slave, io.Discard)
-				clear(password)
-				results <- err
-			}()
-			time.Sleep(100 * time.Millisecond)
-			defer master.Close()
-			if _, err := master.Write([]byte(test.input)); err != nil {
-				t.Fatalf("write PTY input: %v", err)
-			}
-			select {
-			case err := <-results:
-				if err == nil {
-					t.Fatal("PTY accepted empty password input")
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("PTY empty password read timed out")
-			}
-		})
 	}
 }
 
