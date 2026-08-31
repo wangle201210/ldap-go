@@ -15,24 +15,25 @@ Run profile:
 - 1,000 Modify operations
 - canonical full-data and operation-result parity enabled
 
-For timing and resource rows, the ratio is `OpenLDAP / ldap-go`: a value above
-1 favors ldap-go, and larger is better.
+For timing and resource rows, relative performance is `OpenLDAP / ldap-go`,
+expressed as a percentage: 100% means equal performance, values above 100%
+favor ldap-go, and larger is better.
 
-| Metric | ldap-go | OpenLDAP | OpenLDAP / ldap-go |
+| Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 7.88 |
-| Startup ready | 272 ms | 96 ms | 0.35 |
-| Indexed search, repeated | 720 ms | 608 ms | 0.84 |
-| Indexed search, first batch | 1,953 ms | 617 ms | 0.32 |
-| Unindexed negative, repeated | 30 ms | 338 ms | 11.27 |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 0.38 |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 2.15 |
-| Paged traversal, first | 2,012 ms | 715 ms | 0.36 |
-| Concurrent indexed search | 258 ms | 275 ms | 1.07 |
-| Modify | 565 ms | 3,780 ms | 6.69 |
-| RSS after workload | 485,179,392 B | 98,140,160 B | 0.20 |
-| RSS after 10 seconds idle | 217,268,224 B | 94,093,312 B | 0.43 |
-| Database file | 123,813,888 B | 85,254,144 B | 0.69 |
+| Import plus index | 105,727 ms | 832,618 ms | 788% |
+| Startup ready | 272 ms | 96 ms | 35% |
+| Indexed search, repeated | 720 ms | 608 ms | 84% |
+| Indexed search, first batch | 1,953 ms | 617 ms | 32% |
+| Unindexed negative, repeated | 30 ms | 338 ms | 1,127% |
+| Unindexed negative, first batch | 1,016 ms | 390 ms | 38% |
+| Paged traversal, repeated | 718 ms | 1,543 ms | 215% |
+| Paged traversal, first | 2,012 ms | 715 ms | 36% |
+| Concurrent indexed search | 258 ms | 275 ms | 107% |
+| Modify | 565 ms | 3,780 ms | 669% |
+| RSS after workload | 485,179,392 B | 98,140,160 B | 20% |
+| RSS after 10 seconds idle | 217,268,224 B | 94,093,312 B | 43% |
+| Database file | 123,813,888 B | 85,254,144 B | 69% |
 
 Correctness evidence:
 

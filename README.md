@@ -33,24 +33,25 @@ Detailed implementation claims and boundaries are recorded in the
 
 The following single-host result was produced on 2026-08-31 using 100,000
 generated entries, identical indexes and OpenLDAP 2.6.13 clients over loopback
-on an Apple M1 Pro. Timing and resource rows are lower-is-better. The ratio is
-`OpenLDAP / ldap-go`: a value above 1 favors ldap-go, and larger is better.
+on an Apple M1 Pro. Timing and resource rows are lower-is-better. Relative
+performance is `OpenLDAP / ldap-go`, expressed as a percentage: 100% means
+equal performance, values above 100% favor ldap-go, and larger is better.
 
-| Metric | ldap-go | OpenLDAP | OpenLDAP / ldap-go |
+| Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 7.88 |
-| Startup ready | 272 ms | 96 ms | 0.35 |
-| Indexed search, repeated | 720 ms | 608 ms | 0.84 |
-| Indexed search, first batch | 1,953 ms | 617 ms | 0.32 |
-| Unindexed negative, repeated | 30 ms | 338 ms | 11.27 |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 0.38 |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 2.15 |
-| Paged traversal, first | 2,012 ms | 715 ms | 0.36 |
-| Concurrent indexed search | 258 ms | 275 ms | 1.07 |
-| Modify | 565 ms | 3,780 ms | 6.69 |
-| RSS after workload | 462.7 MiB | 93.6 MiB | 0.20 |
-| RSS after 10 seconds idle | 207.2 MiB | 89.7 MiB | 0.43 |
-| Database file | 118.1 MiB | 81.3 MiB | 0.69 |
+| Import plus index | 105,727 ms | 832,618 ms | 788% |
+| Startup ready | 272 ms | 96 ms | 35% |
+| Indexed search, repeated | 720 ms | 608 ms | 84% |
+| Indexed search, first batch | 1,953 ms | 617 ms | 32% |
+| Unindexed negative, repeated | 30 ms | 338 ms | 1,127% |
+| Unindexed negative, first batch | 1,016 ms | 390 ms | 38% |
+| Paged traversal, repeated | 718 ms | 1,543 ms | 215% |
+| Paged traversal, first | 2,012 ms | 715 ms | 36% |
+| Concurrent indexed search | 258 ms | 275 ms | 107% |
+| Modify | 565 ms | 3,780 ms | 669% |
+| RSS after workload | 462.7 MiB | 93.6 MiB | 20% |
+| RSS after 10 seconds idle | 207.2 MiB | 89.7 MiB | 43% |
+| Database file | 118.1 MiB | 81.3 MiB | 69% |
 
 All 100,000 people, 1,000 modifications, representative result codes, and
 42,712,504 bytes of canonical ordinary-attribute LDIF matched. This is a
