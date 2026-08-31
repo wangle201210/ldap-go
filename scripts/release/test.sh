@@ -57,9 +57,12 @@ grep -F 'cp -R "$root/docs" "$stage/docs"' \
 	"$root/scripts/release/build-artifacts.sh" >/dev/null
 grep -F 'cp -R "$root/examples" "$stage/examples"' \
 	"$root/scripts/release/build-artifacts.sh" >/dev/null
+grep -F 'cp "$root/README.zh-CN.md" "$stage/README.zh-CN.md"' \
+	"$root/scripts/release/build-artifacts.sh" >/dev/null
 
 for document in \
 	README.md \
+	README.zh-CN.md \
 	docs/operations.md \
 	docs/migration-and-passwords.md \
 	docs/implementation-status.md \

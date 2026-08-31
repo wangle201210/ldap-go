@@ -62,6 +62,7 @@ printf '%s\n' "$targets" | while read -r goos goarch; do
 			-o "$binary" ./cmd/ldap-go
 		)
 		cp "$root/README.md" "$stage/README.md"
+		cp "$root/README.zh-CN.md" "$stage/README.zh-CN.md"
 		cp -R "$root/docs" "$stage/docs"
 		cp -R "$root/examples" "$stage/examples"
 		cp "$root/LICENSE" "$stage/LICENSE"

@@ -1,5 +1,7 @@
 # ldap-go
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 `ldap-go` is a Go implementation of an LDAPv3 directory server targeting
 behavioral and LDIF data compatibility with OpenLDAP 2.6.x. It includes a
 persistent directory server, OpenLDAP-style client and offline tools, an LDAP
@@ -26,6 +28,36 @@ authoritative support boundary.
 
 Detailed implementation claims and boundaries are recorded in the
 [implementation status](docs/implementation-status.md), not duplicated here.
+
+## Performance snapshot
+
+The following single-host result was produced on 2026-08-31 using 100,000
+generated entries, identical indexes and OpenLDAP 2.6.13 clients over loopback
+on an Apple M1 Pro. Timing and resource rows are lower-is-better; a ratio below
+1 favors ldap-go.
+
+| Metric | ldap-go | OpenLDAP | ldap-go / OpenLDAP |
+| --- | ---: | ---: | ---: |
+| Import plus index | 101,085 ms | 876,070 ms | 0.12 |
+| Startup ready | 261 ms | 89 ms | 2.93 |
+| Indexed search, repeated | 680 ms | 554 ms | 1.23 |
+| Indexed search, first batch | 4,073 ms | 642 ms | 6.34 |
+| Unindexed negative, repeated | 32 ms | 336 ms | 0.10 |
+| Unindexed negative, first batch | 1,036 ms | 350 ms | 2.96 |
+| Paged traversal, repeated | 741 ms | 900 ms | 0.82 |
+| Paged traversal, first | 3,876 ms | 450 ms | 8.61 |
+| Concurrent indexed search | 202 ms | 201 ms | 1.00 |
+| Modify | 572 ms | 5,420 ms | 0.11 |
+| RSS after workload | 773.5 MiB | 93.6 MiB | 8.26 |
+| RSS after 10 seconds idle | 700.3 MiB | 92.8 MiB | 7.55 |
+| Database file | 118.1 MiB | 81.3 MiB | 1.45 |
+
+All 100,000 people, 1,000 modifications, representative result codes, and
+42,712,504 bytes of canonical ordinary-attribute LDIF matched. This is a
+bounded regression benchmark, not a universal production capacity claim. See
+the [100k evidence](docs/openldap-100k-evidence.md) for the exact workload and
+interpretation, and [production qualification](docs/production-qualification.md#openldap-performance-comparison)
+for the reproducible comparison method.
 
 ## Requirements
 
@@ -123,6 +155,7 @@ upgrade checks are documented in [release](docs/release.md).
 | Supported and unsupported behavior | [Compatibility matrix](docs/compatibility.md) |
 | Package and runtime design | [Architecture](docs/architecture.md) |
 | Test suites and OpenLDAP differential setup | [Testing](docs/testing.md) |
+| OpenLDAP 100k performance evidence | [100k comparison](docs/openldap-100k-evidence.md) |
 | Production scale and crash qualification | [Production qualification](docs/production-qualification.md) |
 | Backend, overlay, and module boundary | [OpenLDAP module coverage](docs/openldap-module-coverage.md) |
 | Web administration feature boundary | [Web Admin feature matrix](docs/webadmin-feature-matrix.md) |
