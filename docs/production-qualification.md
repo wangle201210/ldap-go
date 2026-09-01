@@ -215,40 +215,32 @@ The same profile is available as `make qualification-compare-openldap-100k`.
 
 ### Latest 100k evidence
 
-The retained 2026-08-31 Apple M1 Pro run produced the following results. Lower
+The retained 2026-09-01 Apple M1 Pro run produced the following results. Lower
 timing and resource values are better. Relative performance is
 `OpenLDAP / ldap-go`, expressed as a percentage: 100% means equal performance,
 values above 100% favor ldap-go, and larger is better.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 788% |
-| Startup ready | 272 ms | 96 ms | 35% |
-| Indexed search, repeated | 720 ms | 608 ms | 84% |
-| Indexed search, first batch | 1,953 ms | 617 ms | 32% |
-| Unindexed negative, repeated | 30 ms | 338 ms | 1,127% |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 38% |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 215% |
-| Paged traversal, first | 2,012 ms | 715 ms | 36% |
-| Concurrent indexed search | 258 ms | 275 ms | 107% |
-| Modify | 565 ms | 3,780 ms | 669% |
-| RSS after workload | 462.7 MiB | 93.6 MiB | 20% |
-| RSS after 10 seconds idle | 207.2 MiB | 89.7 MiB | 43% |
-| Database file | 118.1 MiB | 81.3 MiB | 69% |
+| Import plus index | 129,952 ms | 1,021,672 ms | 786% |
+| Startup ready | 265 ms | 106 ms | 40% |
+| Indexed search, repeated | 726 ms | 644 ms | 89% |
+| Indexed search, first batch | 1,225 ms | 592 ms | 48% |
+| Unindexed negative, repeated | 30 ms | 347 ms | 1,157% |
+| Unindexed negative, first batch | 331 ms | 391 ms | 118% |
+| Paged traversal, repeated | 1,113 ms | 1,029 ms | 92% |
+| Paged traversal, first | 568 ms | 576 ms | 101% |
+| Concurrent indexed search | 336 ms | 267 ms | 79% |
+| Modify | 748 ms | 5,478 ms | 732% |
+| RSS after workload | 140.2 MiB | 93.4 MiB | 67% |
+| RSS after 10 seconds idle | 107.6 MiB | 88.9 MiB | 83% |
+| Database file | 134.2 MiB | 81.3 MiB | 61% |
 
 Both servers returned 100,000 unique people and all 1,000 timed modifications.
 The 15 canonical data, query, Bind, Compare, and error-result checks passed;
 42,712,504 bytes of ordinary-attribute LDIF matched byte for byte. The full
-workload, optimization deltas, interpretation, and the documented offline
-host-suspension recheck are in
+workload, optimization deltas, and interpretation are in
 [OpenLDAP 100k comparison evidence](openldap-100k-evidence.md).
-
-Subsequent targeted checks on the same 100k data, restarting ldap-go for each
-trial, measured 1,018-1,047 ms for the first indexed batch, 590-604 ms for the
-first paged traversal, and 306-308 ms for the first unindexed negative batch.
-Paged-traversal RSS was 113,728-117,152 KiB. The indexed check used a copy
-upgraded by `slapindex` to physical-key references. These values remain
-separate because only a complete paired run may replace the table above.
 
 | Variable | Default | Meaning |
 | --- | ---: | --- |

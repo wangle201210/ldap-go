@@ -1,6 +1,7 @@
 # OpenLDAP 100k comparison evidence
 
-This evidence was produced on 2026-08-31 (Asia/Shanghai) on an Apple M1 Pro,
+This evidence was produced on 2026-09-01 (Asia/Shanghai) from ldap-go commit
+`38f3fb2` on an Apple M1 Pro,
 Darwin 24.6.0 arm64 host. Both servers used the same OpenLDAP 2.6.13 client
 binaries over loopback. OpenLDAP and ldap-go explicitly rebuilt `uid` and
 `objectClass` equality indexes before startup.
@@ -21,19 +22,19 @@ favor ldap-go, and larger is better.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 105,727 ms | 832,618 ms | 788% |
-| Startup ready | 272 ms | 96 ms | 35% |
-| Indexed search, repeated | 720 ms | 608 ms | 84% |
-| Indexed search, first batch | 1,953 ms | 617 ms | 32% |
-| Unindexed negative, repeated | 30 ms | 338 ms | 1,127% |
-| Unindexed negative, first batch | 1,016 ms | 390 ms | 38% |
-| Paged traversal, repeated | 718 ms | 1,543 ms | 215% |
-| Paged traversal, first | 2,012 ms | 715 ms | 36% |
-| Concurrent indexed search | 258 ms | 275 ms | 107% |
-| Modify | 565 ms | 3,780 ms | 669% |
-| RSS after workload | 485,179,392 B | 98,140,160 B | 20% |
-| RSS after 10 seconds idle | 217,268,224 B | 94,093,312 B | 43% |
-| Database file | 123,813,888 B | 85,254,144 B | 69% |
+| Import plus index | 129,952 ms | 1,021,672 ms | 786% |
+| Startup ready | 265 ms | 106 ms | 40% |
+| Indexed search, repeated | 726 ms | 644 ms | 89% |
+| Indexed search, first batch | 1,225 ms | 592 ms | 48% |
+| Unindexed negative, repeated | 30 ms | 347 ms | 1,157% |
+| Unindexed negative, first batch | 331 ms | 391 ms | 118% |
+| Paged traversal, repeated | 1,113 ms | 1,029 ms | 92% |
+| Paged traversal, first | 568 ms | 576 ms | 101% |
+| Concurrent indexed search | 336 ms | 267 ms | 79% |
+| Modify | 748 ms | 5,478 ms | 732% |
+| RSS after workload | 147,013,632 B | 97,910,784 B | 67% |
+| RSS after 10 seconds idle | 112,869,376 B | 93,257,728 B | 83% |
+| Database file | 140,738,560 B | 85,254,144 B | 61% |
 
 Correctness evidence:
 
@@ -52,40 +53,25 @@ and random UUIDs that are intentionally server-specific. Raw and canonical
 LDIF, operation status tables, logs, databases, `results.tsv`, and
 `report.json` were retained in the run artifact directory.
 
-Compared with the original pre-optimization run of this same 100k profile on
-the same host, streaming unsorted scans and coalescing binary-entry ownership
-reduced ldap-go's post-workload RSS from 811,089,920 B to 485,179,392 B (40%)
-and its ten-second-idle RSS from 734,314,496 B to 217,268,224 B (70%). Database
-size remained 123,813,888 B. Indexed collective-plan discovery, revision-bound
-index validation, and no-op valsort/sync projection fast paths reduced the cold
-indexed batch from 4,280 ms to 1,953 ms and cold paging from 4,152 ms to
-2,012 ms relative to the immediately preceding complete run. The comparison
-does not force a GC or otherwise alter one side. Cold indexed and cold paged
-latency remain slower than OpenLDAP and are explicit follow-up targets rather
-than resolved regressions.
-A focused representative binary-entry decode benchmark moved from 23 to 15
-allocations per operation and from roughly 571-635 ns/op to 402-465 ns/op. The
-single owned encoded block increased retained bytes in that microbenchmark from
-816 to 880 B/op; the 100k database size did not change.
+Compared with the previous complete 100k run on the same host, ldap-go's first
+indexed batch fell from 1,953 ms to 1,225 ms (37%), the first unindexed negative
+batch from 1,016 ms to 331 ms (67%), and the first paged traversal from 2,012 ms
+to 568 ms (72%). Post-workload RSS fell from 485,179,392 B to 147,013,632 B
+(70%), and ten-second-idle RSS fell from 217,268,224 B to 112,869,376 B (48%).
+The physical-key index references increased the database file from 123,813,888
+B to 140,738,560 B (14%), while keyset paging made repeated traversal 55%
+slower than the previous retained snapshot path. In the paired result, first
+paging and first unindexed negative search now favor ldap-go; repeated indexed
+and paged searches are within 11% and 8% of OpenLDAP. Cold indexed search,
+concurrent indexed search, startup, idle RSS, and database size remain explicit
+follow-up targets.
 
-The full comparison run encountered a host suspension during ldap-go's offline
-phase. The `105,727 ms` ldap-go import-plus-index row is an immediate rerun with
-the same generated seed, comparison binary, database options, and commands;
-the `832,618 ms` OpenLDAP value is from the completed full run. All online,
-resource, correctness, and OpenLDAP measurements are from that full run. Its
-raw anomalous offline value remains available in the retained `report.json`.
-
-After the retained full run, the final code in the subsequent optimization
-round was tested against the same 100k data with a new ldap-go process for every
-trial. The final five-run indexed range was 1,018-1,047 ms for the first 10,000
-searches. Three-run ranges were 590-604 ms for the first paged traversal and
-306-308 ms for the first ten unindexed negative searches. RSS immediately
-after the paged traversal was 113,728-117,152 KiB. The indexed check used a
-copy upgraded by `slapindex` to
-the physical-key reference representation; the other checks used the retained
-database directly. These targeted measurements are not substituted into the
-paired table above; the next complete paired run will replace that table
-atomically.
+Every offline, online, resource, and correctness value in the table comes from
+this one uninterrupted run. The comparison does not force a GC, drop filesystem
+caches, or otherwise alter one side between paired measurements. Raw LDIF,
+canonical output, status tables, logs, databases, `results.tsv`, and
+`report.json` are retained under `/var/tmp/ldap-go-perf-round10-100k` on the
+qualification host.
 
 Reproduce with:
 
