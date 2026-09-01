@@ -120,6 +120,10 @@ func (tx *boltTx) equalityIndexEntries(
 	schema EqualityIndexSchema,
 ) ([]directory.Entry, error) {
 	entries := make([]directory.Entry, 0, len(references))
+	ready, err := tx.schemaAwareDNIdentityReady(partition)
+	if err != nil {
+		return nil, err
+	}
 	for _, entryID := range references {
 		if err := tx.ctx.Err(); err != nil {
 			return nil, err
@@ -167,10 +171,6 @@ func (tx *boltTx) equalityIndexEntries(
 			)
 		}
 		_, entryKey := splitPartitionedEntryKey(key)
-		ready, readyErr := tx.schemaAwareDNIdentityReady(partition)
-		if readyErr != nil {
-			return nil, readyErr
-		}
 		var entry directory.Entry
 		if ready && isSchemaAwareDNKey(entryKey) {
 			stored, decodeErr := decodeStoredEntry(value)

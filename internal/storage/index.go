@@ -437,6 +437,31 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 	schema EqualityIndexSchema,
 	filter directory.Filter,
 ) ([]directory.Entry, bool, error) {
+	if filter.Kind == directory.FilterEquality {
+		attribute, equality, _, err := schema.ResolveEqualityIndexAttribute(filter.Attribute)
+		if err != nil || !equality {
+			return nil, false, err
+		}
+		normalized, err := schema.NormalizeEqualityIndexAssertion(
+			filter.Attribute,
+			filter.Assertion,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		references, err := indexed.equalityIndexPostings(
+			reader.partition,
+			attribute,
+			equalityIndexValue,
+			normalized,
+		)
+		if err != nil {
+			return nil, true, err
+		}
+		sort.Strings(references)
+		entries, err := indexed.equalityIndexEntries(reader.partition, references, schema)
+		return entries, true, err
+	}
 	keys, planned, err := planEqualityIndexFilter(
 		indexed,
 		reader.partition,
