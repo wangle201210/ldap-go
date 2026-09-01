@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"sync"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -129,7 +130,40 @@ func (server *Server) rootEqualitySearchCacheFingerprint(
 	if err != nil || !equality {
 		return [sha256.Size]byte{}, false
 	}
-	return pagedSearchFingerprint(state.boundDN, request, controls), true
+	return rootEqualitySearchFingerprint(state.boundDN, request), true
+}
+
+func rootEqualitySearchFingerprint(
+	boundDN string,
+	request ldapwire.SearchRequest,
+) [sha256.Size]byte {
+	var buffer [512]byte
+	encoded := buffer[:0]
+	encoded = append(encoded, "ldap-go:root-equality-search:v1"...)
+	encoded = appendSearchFingerprintField(encoded, []byte(boundDN))
+	encoded = appendSearchFingerprintField(encoded, []byte(request.BaseDN))
+	encoded = binary.AppendVarint(encoded, int64(request.Scope))
+	encoded = binary.AppendVarint(encoded, int64(request.DerefAliases))
+	encoded = binary.AppendVarint(encoded, int64(request.SizeLimit))
+	encoded = binary.AppendVarint(encoded, int64(request.TimeLimit))
+	if request.TypesOnly {
+		encoded = append(encoded, 1)
+	} else {
+		encoded = append(encoded, 0)
+	}
+	encoded = append(encoded, byte(request.Filter.Kind))
+	encoded = appendSearchFingerprintField(encoded, []byte(request.Filter.Attribute))
+	encoded = appendSearchFingerprintField(encoded, request.Filter.Assertion)
+	encoded = binary.AppendUvarint(encoded, uint64(len(request.Attributes)))
+	for _, attribute := range request.Attributes {
+		encoded = appendSearchFingerprintField(encoded, []byte(attribute))
+	}
+	return sha256.Sum256(encoded)
+}
+
+func appendSearchFingerprintField(destination, value []byte) []byte {
+	destination = binary.AppendUvarint(destination, uint64(len(value)))
+	return append(destination, value...)
 }
 
 func databaseSearchResultCacheSafe(

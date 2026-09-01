@@ -5,8 +5,36 @@ import (
 	"testing"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
+
+func TestDatabaseUsesRuntimeDNIdentity(t *testing.T) {
+	t.Parallel()
+
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	other, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(other): %v", err)
+	}
+	for _, database := range []runtimeDatabase{
+		{dnNormalizer: registry},
+		{dnNormalizer: &databaseEqualityIndexNormalizer{registry: registry}},
+	} {
+		if !databaseUsesRuntimeDNIdentity(database, registry) {
+			t.Fatalf("database normalizer %T did not reuse runtime identity", database.dnNormalizer)
+		}
+		if databaseUsesRuntimeDNIdentity(database, other) {
+			t.Fatalf("database normalizer %T reused another registry", database.dnNormalizer)
+		}
+	}
+	if databaseUsesRuntimeDNIdentity(runtimeDatabase{}, registry) {
+		t.Fatal("database without a normalizer reused runtime identity")
+	}
+}
 
 func TestLoadRuntimeDatabasesIgnoresBusinessConfigurationAttributes(t *testing.T) {
 	t.Parallel()

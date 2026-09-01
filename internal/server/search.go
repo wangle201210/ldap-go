@@ -1417,9 +1417,12 @@ func (server *Server) handleSearch(
 			*primaryDatabase,
 			state.boundDN,
 		)
-		primaryBase, err := storage.NormalizeReaderDN(primaryReader, base)
-		if err != nil {
-			return fmt.Errorf("normalize primary search base %q: %w", base.String(), err)
+		primaryBase := base
+		if !databaseUsesRuntimeDNIdentity(*primaryDatabase, state.runtime.schema) {
+			primaryBase, err = storage.NormalizeReaderDN(primaryReader, base)
+			if err != nil {
+				return fmt.Errorf("normalize primary search base %q: %w", base.String(), err)
+			}
 		}
 		var baseEntry directory.Entry
 		if translucentRoutes[0] != nil {
@@ -1573,21 +1576,26 @@ func (server *Server) handleSearch(
 					state.boundDN,
 				)
 			}
-			scopeBase, normalizeErr := storage.NormalizeReaderDN(tx, route.base)
-			if normalizeErr != nil {
-				return fmt.Errorf(
-					"normalize search route base %q: %w",
-					route.base.String(),
-					normalizeErr,
-				)
-			}
-			comparisonBase, normalizeErr := storage.NormalizeReaderDN(tx, base)
-			if normalizeErr != nil {
-				return fmt.Errorf(
-					"normalize search base %q: %w",
-					base.String(),
-					normalizeErr,
-				)
+			scopeBase := route.base
+			comparisonBase := base
+			if !databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) {
+				var normalizeErr error
+				scopeBase, normalizeErr = storage.NormalizeReaderDN(tx, route.base)
+				if normalizeErr != nil {
+					return fmt.Errorf(
+						"normalize search route base %q: %w",
+						route.base.String(),
+						normalizeErr,
+					)
+				}
+				comparisonBase, normalizeErr = storage.NormalizeReaderDN(tx, base)
+				if normalizeErr != nil {
+					return fmt.Errorf(
+						"normalize search base %q: %w",
+						base.String(),
+						normalizeErr,
+					)
+				}
 			}
 			translucentRoute := translucentRoutes[routeIndex]
 			if translucentRoute != nil {

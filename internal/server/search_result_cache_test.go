@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 )
 
 func TestSearchResultCacheSeparatesStorageRevisions(t *testing.T) {
@@ -31,6 +33,63 @@ func TestSearchResultCacheSeparatesStorageRevisions(t *testing.T) {
 	if !found || string(again[0].Attributes[0].Values[0]) != "alice" {
 		t.Fatalf("caller mutation changed cached value: %#v", again)
 	}
+}
+
+func TestRootEqualitySearchFingerprintSeparatesRequestFields(t *testing.T) {
+	t.Parallel()
+
+	request := ldapwire.SearchRequest{
+		BaseDN:     "ou=people,dc=example,dc=com",
+		Scope:      directory.ScopeWholeSubtree,
+		Filter:     directory.Filter{Kind: directory.FilterEquality, Attribute: "uid", Assertion: []byte("alice")},
+		Attributes: []string{"uid"},
+	}
+	baseline := rootEqualitySearchFingerprint("cn=admin,dc=example,dc=com", request)
+	tests := []ldapwire.SearchRequest{
+		func() ldapwire.SearchRequest { value := request; value.BaseDN = "dc=example,dc=com"; return value }(),
+		func() ldapwire.SearchRequest {
+			value := request
+			value.Scope = directory.ScopeSingleLevel
+			return value
+		}(),
+		func() ldapwire.SearchRequest { value := request; value.TypesOnly = true; return value }(),
+		func() ldapwire.SearchRequest { value := request; value.Filter.Assertion = []byte("bob"); return value }(),
+		func() ldapwire.SearchRequest { value := request; value.Attributes = []string{"cn"}; return value }(),
+	}
+	for index, candidate := range tests {
+		if got := rootEqualitySearchFingerprint("cn=admin,dc=example,dc=com", candidate); got == baseline {
+			t.Fatalf("candidate %d reused the baseline fingerprint", index)
+		}
+	}
+	if got := rootEqualitySearchFingerprint("uid=alice,dc=example,dc=com", request); got == baseline {
+		t.Fatal("bound DN reused the baseline fingerprint")
+	}
+}
+
+func BenchmarkRootEqualitySearchFingerprint(b *testing.B) {
+	request := ldapwire.SearchRequest{
+		BaseDN:     "ou=people,dc=example,dc=com",
+		Scope:      directory.ScopeWholeSubtree,
+		Filter:     directory.Filter{Kind: directory.FilterEquality, Attribute: "uid", Assertion: []byte("alice")},
+		Attributes: []string{"uid"},
+	}
+	boundDN := "cn=admin,dc=example,dc=com"
+	b.Run("binary", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = rootEqualitySearchFingerprint(boundDN, request)
+		}
+	})
+	b.Run("json", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			encoded, _ := json.Marshal(struct {
+				BoundDN string
+				Request ldapwire.SearchRequest
+			}{BoundDN: boundDN, Request: request})
+			_ = encoded
+		}
+	})
 }
 
 func TestSearchResultCacheRetainsEmptyResults(t *testing.T) {

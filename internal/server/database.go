@@ -678,6 +678,23 @@ type databaseEqualityIndexNormalizer struct {
 	dnCache      map[string]directory.DN
 }
 
+func databaseUsesRuntimeDNIdentity(
+	database runtimeDatabase,
+	registry *schema.Registry,
+) bool {
+	if registry == nil {
+		return false
+	}
+	switch normalizer := database.dnNormalizer.(type) {
+	case *databaseEqualityIndexNormalizer:
+		return normalizer != nil && normalizer.registry == registry
+	case *schema.Registry:
+		return normalizer == registry
+	default:
+		return false
+	}
+}
+
 type databaseEqualityIndexValidation struct {
 	revision uint64
 	current  bool
