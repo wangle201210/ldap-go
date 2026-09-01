@@ -1261,6 +1261,20 @@ func (server *Server) handleSearch(
 	snapshotCacheable = snapshotCacheable && snapshotPaging
 	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
 	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
+	var preparedRootSubstring *schema.PreparedSubstringMatcher
+	if request.Filter.Kind == directory.FilterSubstrings {
+		preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(
+			request.Filter.Attribute,
+			request.Filter.Substring,
+		)
+	}
+	preparedEntryClasses, _ := state.runtime.schema.PrepareObjectClassMatcher(
+		"subentry",
+		"alias",
+		"referral",
+	)
+	preparedSelection, hasPreparedSelection :=
+		state.runtime.schema.PrepareExplicitAttributeSelection(request.Attributes)
 
 	candidates := make([]searchCandidate, 0)
 	snapshotItems := make([]pagedSortedItem, 0)
@@ -1736,28 +1750,31 @@ func (server *Server) handleSearch(
 						return projectErr
 					}
 				}
-				if !subentrySearchVisible(
-					state.runtime,
-					entry,
+				var subentry, alias, referral bool
+				if preparedEntryClasses != nil {
+					classFlags := preparedEntryClasses.Match(entry)
+					subentry = classFlags&searchEntryClassSubentry != 0
+					alias = classFlags&searchEntryClassAlias != 0
+					referral = classFlags&searchEntryClassReferral != 0
+				} else {
+					subentry = state.runtime.schema.EntryHasObjectClass(entry, "subentry")
+					alias = state.runtime.schema.EntryHasObjectClass(entry, "alias")
+					referral = state.runtime.schema.EntryHasObjectClass(entry, "referral")
+				}
+				if !subentrySearchVisibleClassified(
+					subentry,
 					request.Scope,
 					controls.subentries,
 				) {
 					return nil
 				}
 				if derefAliasesWhileSearching(request.DerefAliases) &&
-					state.runtime.schema.EntryHasObjectClass(
-						entry,
-						"alias",
-					) &&
+					alias &&
 					(derefAliasesWhileFinding(request.DerefAliases) ||
 						!candidate.Equal(comparisonBase)) {
 					return nil
 				}
-				if !controls.manageDsaIT &&
-					state.runtime.schema.EntryHasObjectClass(
-						entry,
-						"referral",
-					) {
+				if !controls.manageDsaIT && referral {
 					if routeRoot || (server.allowed(
 						state.runtime,
 						tx,
@@ -1790,7 +1807,10 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				var matches bool
-				if routeRoot {
+				if routeRoot && preparedRootSubstring != nil &&
+					len(database.nestGroups) == 0 {
+					matches, err = preparedRootSubstring.Match(filterEntry)
+				} else if routeRoot {
 					matches, err = effectiveFilter.MatchWith(
 						filterEntry,
 						state.runtime.schema,
@@ -1953,12 +1973,17 @@ func (server *Server) handleSearch(
 						readable,
 					)
 				}
-				selected := server.selectEntry(
-					state.runtime,
-					readable,
-					request.Attributes,
-					request.TypesOnly,
-				)
+				var selected directory.Entry
+				if hasPreparedSelection {
+					selected = preparedSelection.Select(readable, request.TypesOnly)
+				} else {
+					selected = server.selectEntry(
+						state.runtime,
+						readable,
+						request.Attributes,
+						request.TypesOnly,
+					)
+				}
 				if snapshotEntriesCacheable {
 					item := &snapshotItems[len(snapshotItems)-1]
 					previousBytes := pagedSortedItemBytes(*item)
@@ -3464,11 +3489,25 @@ func subentrySearchVisible(
 	visibility *bool,
 ) bool {
 	subentry := runtime.schema.EntryHasObjectClass(entry, "subentry")
+	return subentrySearchVisibleClassified(subentry, scope, visibility)
+}
+
+func subentrySearchVisibleClassified(
+	subentry bool,
+	scope directory.Scope,
+	visibility *bool,
+) bool {
 	if visibility != nil {
 		return subentry == *visibility
 	}
 	return scope == directory.ScopeBase || !subentry
 }
+
+const (
+	searchEntryClassSubentry uint64 = 1 << iota
+	searchEntryClassAlias
+	searchEntryClassReferral
+)
 
 func withSubschemaReference(entry directory.Entry) directory.Entry {
 	if entry.HasAttribute("subschemaSubentry") {

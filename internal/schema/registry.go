@@ -791,6 +791,139 @@ func (registry *Registry) EntryHasObjectClass(
 	return false
 }
 
+// PreparedObjectClassMatcher resolves a fixed set of object classes once and
+// classifies each entry with one objectClass scan. Bit i corresponds to names[i].
+type PreparedObjectClassMatcher struct {
+	attributes map[string]struct{}
+	flags      map[string]uint64
+}
+
+// PreparedAttributeSelection handles explicit, option-free attribute lists.
+// Wildcards and option-qualified requests retain the general selection path.
+type PreparedAttributeSelection struct {
+	attributes map[string]struct{}
+	empty      bool
+}
+
+func (registry *Registry) PrepareExplicitAttributeSelection(
+	requested []string,
+) (*PreparedAttributeSelection, bool) {
+	if len(requested) == 1 && requested[0] == "1.1" {
+		return &PreparedAttributeSelection{empty: true}, true
+	}
+	if len(requested) == 0 {
+		return nil, false
+	}
+	for _, description := range requested {
+		if description == "" || description == "*" || description == "+" ||
+			strings.Contains(description, ";") || strings.HasPrefix(description, "@") {
+			return nil, false
+		}
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	selected := make(map[string]struct{})
+	for _, description := range requested {
+		requestedType, known := registry.attributes[schemaKey(description)]
+		if !known {
+			selected[schemaKey(description)] = struct{}{}
+			continue
+		}
+		for key, candidate := range registry.attributes {
+			if registry.attributeTypeSubtype(
+				candidate,
+				requestedType,
+				make(map[string]bool),
+			) {
+				selected[key] = struct{}{}
+			}
+		}
+	}
+	return &PreparedAttributeSelection{attributes: selected}, true
+}
+
+func (selection *PreparedAttributeSelection) Select(
+	entry directory.Entry,
+	typesOnly bool,
+) directory.Entry {
+	result := directory.Entry{DN: entry.DN}
+	if selection == nil || selection.empty {
+		return result
+	}
+	for _, attribute := range entry.Attributes {
+		description, _, _ := strings.Cut(attribute.Description, ";")
+		if _, selected := selection.attributes[schemaKey(description)]; !selected {
+			continue
+		}
+		value := directory.Attribute{Description: attribute.Description}
+		if !typesOnly {
+			value.Values = clonePreparedValues(attribute.Values)
+		}
+		result.Attributes = append(result.Attributes, value)
+	}
+	return result
+}
+
+func (registry *Registry) PrepareObjectClassMatcher(
+	names ...string,
+) (*PreparedObjectClassMatcher, error) {
+	if len(names) > 64 {
+		return nil, fmt.Errorf("at most 64 object classes can be prepared")
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	targets := make([]*ObjectClass, len(names))
+	for index, name := range names {
+		target, ok := registry.objectClasses[schemaKey(name)]
+		if !ok {
+			return nil, fmt.Errorf("undefined object class %q", name)
+		}
+		targets[index] = target
+	}
+	objectClassAttribute, ok := registry.attributes[schemaKey("objectClass")]
+	if !ok {
+		return nil, errors.New("undefined objectClass attribute")
+	}
+	attributes := make(map[string]struct{})
+	for key, candidate := range registry.attributes {
+		if registry.attributeTypeSubtype(
+			candidate,
+			objectClassAttribute,
+			make(map[string]bool),
+		) {
+			attributes[key] = struct{}{}
+		}
+	}
+	flags := make(map[string]uint64, len(registry.objectClasses))
+	for key, candidate := range registry.objectClasses {
+		var value uint64
+		for index, target := range targets {
+			if registry.isSubclass(candidate, target, make(map[string]bool)) {
+				value |= uint64(1) << index
+			}
+		}
+		flags[key] = value
+	}
+	return &PreparedObjectClassMatcher{attributes: attributes, flags: flags}, nil
+}
+
+func (matcher *PreparedObjectClassMatcher) Match(entry directory.Entry) uint64 {
+	if matcher == nil {
+		return 0
+	}
+	var result uint64
+	for _, attribute := range entry.Attributes {
+		description, _, _ := strings.Cut(attribute.Description, ";")
+		if _, ok := matcher.attributes[schemaKey(description)]; !ok {
+			continue
+		}
+		for _, value := range attribute.Values {
+			result |= matcher.flags[schemaKey(string(value))]
+		}
+	}
+	return result
+}
+
 func (registry *Registry) IsOperational(attributeName string) bool {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -1561,6 +1694,144 @@ func (registry *Registry) MatchSubstring(
 		return false, fmt.Errorf("attribute %q has no substring matching rule", attributeName)
 	}
 	return matchSubstringWithRule(effective.Substring, value, substring)
+}
+
+// PreparedSubstringMatcher resolves an attribute and normalizes the fixed
+// assertion parts once for repeated matching within one immutable runtime.
+type PreparedSubstringMatcher struct {
+	attributes     map[string]struct{}
+	normalize      func([]byte) []byte
+	substring      directory.Substring
+	rawSubstring   directory.Substring
+	caseIgnoreList bool
+}
+
+func (registry *Registry) PrepareSubstringMatcher(
+	attributeName string,
+	substring directory.Substring,
+) (*PreparedSubstringMatcher, error) {
+	if strings.Contains(attributeName, ";") {
+		return nil, fmt.Errorf("option-qualified substring filters use the general matcher")
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
+	if !ok {
+		return nil, fmt.Errorf("undefined attribute type %q", attributeName)
+	}
+	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
+	if err != nil {
+		return nil, err
+	}
+	attributes := make(map[string]struct{})
+	for key, candidate := range registry.attributes {
+		if registry.attributeTypeSubtype(candidate, attribute, make(map[string]bool)) {
+			attributes[key] = struct{}{}
+		}
+	}
+	matcher := &PreparedSubstringMatcher{
+		attributes: attributes,
+		rawSubstring: directory.Substring{
+			Initial: bytes.Clone(substring.Initial),
+			Any:     clonePreparedValues(substring.Any),
+			Final:   bytes.Clone(substring.Final),
+		},
+	}
+	switch strings.ToLower(effective.Substring) {
+	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
+		matcher.normalize = normalizeCaseIgnore
+	case "caseignorelistsubstringsmatch":
+		matcher.caseIgnoreList = true
+	case "caseexactsubstringsmatch", "caseexactia5substringsmatch":
+		matcher.normalize = normalizeSpace
+	case "telephonenumbersubstringsmatch":
+		matcher.normalize = normalizeTelephoneNumber
+	case "numericstringsubstringsmatch":
+		matcher.normalize = normalizeNumericString
+	case "":
+		return nil, fmt.Errorf("attribute %q has no substring matching rule", attributeName)
+	default:
+		return nil, fmt.Errorf("unsupported substring matching rule %q", effective.Substring)
+	}
+	if !matcher.caseIgnoreList {
+		matcher.substring = normalizeSubstringAssertion(matcher.normalize, substring)
+	}
+	return matcher, nil
+}
+
+func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, error) {
+	if matcher == nil {
+		return false, errors.New("prepared substring matcher is nil")
+	}
+	for _, attribute := range entry.Attributes {
+		description, _, _ := strings.Cut(attribute.Description, ";")
+		if _, ok := matcher.attributes[schemaKey(description)]; !ok {
+			continue
+		}
+		for _, value := range attribute.Values {
+			var matches bool
+			var err error
+			if matcher.caseIgnoreList {
+				matches, err = matchCaseIgnoreListSubstring(value, matcher.rawSubstring)
+			} else {
+				matches = matchNormalizedSubstring(
+					matcher.normalize(value),
+					matcher.substring,
+				)
+			}
+			if err != nil || matches {
+				return matches, err
+			}
+		}
+	}
+	return false, nil
+}
+
+func normalizeSubstringAssertion(
+	normalize func([]byte) []byte,
+	substring directory.Substring,
+) directory.Substring {
+	result := directory.Substring{Any: make([][]byte, len(substring.Any))}
+	if substring.Initial != nil {
+		result.Initial = normalize(substring.Initial)
+	}
+	for index, value := range substring.Any {
+		result.Any[index] = normalize(value)
+	}
+	if substring.Final != nil {
+		result.Final = normalize(substring.Final)
+	}
+	return result
+}
+
+func clonePreparedValues(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for index := range values {
+		cloned[index] = bytes.Clone(values[index])
+	}
+	return cloned
+}
+
+func matchNormalizedSubstring(candidate []byte, substring directory.Substring) bool {
+	position := 0
+	if substring.Initial != nil {
+		if !bytes.HasPrefix(candidate, substring.Initial) {
+			return false
+		}
+		position = len(substring.Initial)
+	}
+	for _, part := range substring.Any {
+		index := bytes.Index(candidate[position:], part)
+		if index < 0 {
+			return false
+		}
+		position += index + len(part)
+	}
+	if substring.Final != nil {
+		return bytes.HasSuffix(candidate[position:], substring.Final)
+	}
+	return true
 }
 
 func (registry *Registry) ValidateEntry(entry directory.Entry) error {

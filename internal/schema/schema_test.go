@@ -733,6 +733,96 @@ func TestNormalizeEqualityValue(t *testing.T) {
 	}
 }
 
+func TestPreparedSubstringMatcher(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	assertion := directory.Substring{
+		Initial: []byte("  SCALE "),
+		Any:     byteValues(" USER "),
+		Final:   []byte(" 001 "),
+	}
+	matcher, err := registry.PrepareSubstringMatcher("cn", assertion)
+	if err != nil {
+		t.Fatalf("PrepareSubstringMatcher(): %v", err)
+	}
+	assertion.Initial[0] = 'X'
+	entry := directory.Entry{Attributes: []directory.Attribute{
+		{Description: "cn;lang-en", Values: byteValues("scale user 001")},
+	}}
+	matches, err := matcher.Match(entry)
+	if err != nil || !matches {
+		t.Fatalf("prepared matcher result = %t, %v", matches, err)
+	}
+	entry.Attributes[0].Values[0] = []byte("scale account 001")
+	matches, err = matcher.Match(entry)
+	if err != nil || matches {
+		t.Fatalf("prepared non-match result = %t, %v", matches, err)
+	}
+}
+
+func TestPreparedObjectClassMatcher(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	matcher, err := registry.PrepareObjectClassMatcher("top", "person", "alias")
+	if err != nil {
+		t.Fatalf("PrepareObjectClassMatcher(): %v", err)
+	}
+	entry := directory.Entry{Attributes: []directory.Attribute{{
+		Description: "objectClass;binary",
+		Values:      byteValues("inetOrgPerson"),
+	}}}
+	flags := matcher.Match(entry)
+	if flags&1 == 0 || flags&(1<<1) == 0 || flags&(1<<2) != 0 {
+		t.Fatalf("inetOrgPerson flags = %03b", flags)
+	}
+}
+
+func TestPreparedExplicitAttributeSelection(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	selection, prepared := registry.PrepareExplicitAttributeSelection([]string{"name"})
+	if !prepared {
+		t.Fatal("explicit name selection was not prepared")
+	}
+	entry := directory.Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []directory.Attribute{
+			{Description: "cn;lang-en", Values: byteValues("Alice")},
+			{Description: "sn", Values: byteValues("Example")},
+			{Description: "uid", Values: byteValues("alice")},
+		},
+	}
+	selected := selection.Select(entry, false)
+	want := entry.SelectWithMatcher(
+		[]string{"name"},
+		false,
+		registry.IsOperational,
+		registry.AttributeDescriptionSubtype,
+	)
+	if !selected.Equal(want) {
+		t.Fatalf("prepared selection = %#v, want %#v", selected, want)
+	}
+	entry.Attributes[0].Values[0][0] = 'X'
+	if string(selected.Attributes[0].Values[0]) != "Alice" {
+		t.Fatal("prepared selection aliases source values")
+	}
+	if _, prepared := registry.PrepareExplicitAttributeSelection([]string{"cn;lang-en"}); prepared {
+		t.Fatal("option-qualified selection unexpectedly used explicit fast path")
+	}
+}
+
 func TestEntryValidationSkipValueSyntaxRetainsOpenLDAPParserChecks(t *testing.T) {
 	t.Parallel()
 
