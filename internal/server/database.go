@@ -2387,7 +2387,7 @@ func applyDatabaseSearchLimits(
 	if err != nil {
 		return message
 	}
-	database := databaseForDN(state.runtime, base)
+	database := databaseForNormalizedDN(state.runtime, base)
 	if database == nil {
 		return message
 	}
@@ -2449,7 +2449,7 @@ func searchRequestDatabase(
 	if err != nil {
 		return nil
 	}
-	return databaseForDN(runtime, base)
+	return databaseForNormalizedDN(runtime, base)
 }
 
 func databaseSearchCandidatesAreDelegated(

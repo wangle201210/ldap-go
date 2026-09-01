@@ -748,7 +748,11 @@ func (server *Server) handleSearch(
 			limit,
 		)
 	}
-	routes := databaseSearchRoutes(state.runtime.databases, base, request.Scope)
+	routes := databaseSearchRoutesFromNormalizedBase(
+		state.runtime.databases,
+		base,
+		request.Scope,
+	)
 	if len(routes) == 0 {
 		result := ldapwire.Result{Code: ldapwire.ResultNoSuchObject}
 		if referral, ok := globalReferralResult(
@@ -2851,6 +2855,23 @@ func databaseSearchRoutes(
 	scope directory.Scope,
 ) []databaseSearchRoute {
 	primaryIndex := databaseIndexForDN(databases, base)
+	if primaryIndex < 0 {
+		return nil
+	}
+	return databaseSearchRoutesFromPrimary(
+		databases,
+		primaryIndex,
+		base,
+		scope,
+	)
+}
+
+func databaseSearchRoutesFromNormalizedBase(
+	databases []runtimeDatabase,
+	base directory.DN,
+	scope directory.Scope,
+) []databaseSearchRoute {
+	primaryIndex := databaseIndexForNormalizedDN(databases, base)
 	if primaryIndex < 0 {
 		return nil
 	}

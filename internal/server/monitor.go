@@ -1288,7 +1288,7 @@ func monitorTime(value time.Time) string {
 }
 
 func monitorDatabaseIndexForDN(databases []runtimeDatabase, dn directory.DN) int {
-	index := databaseIndexForDN(databases, dn)
+	index := databaseIndexForNormalizedDN(databases, dn)
 	if index < 0 || !isMonitorDatabase(databases[index]) {
 		return -1
 	}
