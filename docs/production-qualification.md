@@ -244,7 +244,7 @@ host-suspension recheck are in
 [OpenLDAP 100k comparison evidence](openldap-100k-evidence.md).
 
 Subsequent targeted checks on the same 100k data, restarting ldap-go for each
-trial, measured 1,071-1,365 ms for the first indexed batch, 590-604 ms for the
+trial, measured 1,018-1,047 ms for the first indexed batch, 590-604 ms for the
 first paged traversal, and 306-308 ms for the first unindexed negative batch.
 Paged-traversal RSS was 113,728-117,152 KiB. The indexed check used a copy
 upgraded by `slapindex` to physical-key references. These values remain

@@ -12,6 +12,59 @@ import (
 
 const searchResultCacheMaximumEntries = 16384
 
+const searchBaseCacheMaximumEntries = 64
+
+type searchBaseCache struct {
+	mu      sync.Mutex
+	entries map[searchBaseCacheKey]directory.Entry
+}
+
+type searchBaseCacheKey struct {
+	partition string
+	dnKey     string
+	revision  uint64
+}
+
+func newSearchBaseCache() *searchBaseCache {
+	return &searchBaseCache{entries: make(map[searchBaseCacheKey]directory.Entry)}
+}
+
+func (cache *searchBaseCache) get(
+	partition string,
+	dn directory.DN,
+	revision uint64,
+) (directory.Entry, bool) {
+	if cache == nil {
+		return directory.Entry{}, false
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry, found := cache.entries[searchBaseCacheKey{
+		partition: partition,
+		dnKey:     dn.Key(),
+		revision:  revision,
+	}]
+	return entry, found
+}
+
+func (cache *searchBaseCache) put(
+	partition string,
+	dn directory.DN,
+	revision uint64,
+	entry directory.Entry,
+) {
+	if cache == nil {
+		return
+	}
+	key := searchBaseCacheKey{partition: partition, dnKey: dn.Key(), revision: revision}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if len(cache.entries) >= searchBaseCacheMaximumEntries {
+		clear(cache.entries)
+	}
+	cache.entries[key] = entry.Clone()
+}
+
 type searchResultCache struct {
 	mu      sync.Mutex
 	entries map[searchResultCacheKey]searchResultCacheEntry

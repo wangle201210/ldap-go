@@ -59,6 +59,7 @@ type runtimeState struct {
 	unindexedValues      *unindexedValueCache
 	pagedSnapshots       *pagedSnapshotCache
 	searchResults        *searchResultCache
+	searchBases          *searchBaseCache
 	searchEntryClasses   *schema.PreparedObjectClassMatcher
 	searchSelections     *preparedAttributeSelectionCache
 }
@@ -476,6 +477,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		unindexedValues:      newUnindexedValueCache(16 << 20),
 		pagedSnapshots:       newPagedSnapshotCache(64 << 20),
 		searchResults:        newSearchResultCache(32 << 20),
+		searchBases:          newSearchBaseCache(),
 		searchEntryClasses:   searchEntryClasses,
 		searchSelections:     newPreparedAttributeSelectionCache(),
 	}

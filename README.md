@@ -61,7 +61,7 @@ interpretation, and [production qualification](docs/production-qualification.md#
 for the reproducible comparison method.
 
 Subsequent targeted fresh-process checks on the same 100k data measured
-1,071-1,365 ms for the first indexed batch, 590-604 ms for a complete paged
+1,018-1,047 ms for the first indexed batch, 590-604 ms for a complete paged
 traversal, and 306-308 ms for the first unindexed negative batch. These newer
 ldap-go-only measurements remain separate from the paired table until the next
 complete 100k OpenLDAP run.

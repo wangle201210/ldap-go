@@ -35,6 +35,35 @@ func TestSearchResultCacheSeparatesStorageRevisions(t *testing.T) {
 	}
 }
 
+func TestSearchBaseCacheSeparatesRevisionsAndOwnsEntries(t *testing.T) {
+	t.Parallel()
+
+	cache := newSearchBaseCache()
+	dn, err := directory.ParseDN("ou=people,dc=example,dc=com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := directory.Entry{
+		DN: dn.String(),
+		Attributes: []directory.Attribute{{
+			Description: "ou",
+			Values:      [][]byte{[]byte("people")},
+		}},
+	}
+	cache.put("db", dn, 7, entry)
+	entry.Attributes[0].Values[0][0] = 'X'
+	got, found := cache.get("db", dn, 7)
+	if !found || string(got.Attributes[0].Values[0]) != "people" {
+		t.Fatalf("cached base = %#v, found=%t", got, found)
+	}
+	if _, found := cache.get("db", dn, 8); found {
+		t.Fatal("base cache reused an entry across storage revisions")
+	}
+	if _, found := cache.get("other", dn, 7); found {
+		t.Fatal("base cache reused an entry across partitions")
+	}
+}
+
 func TestRootEqualitySearchFingerprintSeparatesRequestFields(t *testing.T) {
 	t.Parallel()
 

@@ -1474,13 +1474,33 @@ func (server *Server) handleSearch(
 			}
 		}
 		var baseEntry directory.Entry
-		if translucentRoutes[0] != nil {
-			baseEntry, err = translucentMergedRemoteEntry(
-				primaryReader,
-				*translucentRoutes[0].base,
+		baseCacheable := resultCacheable && hasResultCacheRevision &&
+			translucentRoutes[0] == nil
+		baseCached := false
+		if baseCacheable {
+			baseEntry, baseCached = state.runtime.searchBases.get(
+				primaryDatabase.partition,
+				primaryBase,
+				resultCacheRevision,
 			)
-		} else {
-			baseEntry, err = primaryReader.Get(primaryBase)
+		}
+		if !baseCached {
+			if translucentRoutes[0] != nil {
+				baseEntry, err = translucentMergedRemoteEntry(
+					primaryReader,
+					*translucentRoutes[0].base,
+				)
+			} else {
+				baseEntry, err = primaryReader.Get(primaryBase)
+			}
+		}
+		if err == nil && baseCacheable && !baseCached {
+			state.runtime.searchBases.put(
+				primaryDatabase.partition,
+				primaryBase,
+				resultCacheRevision,
+				baseEntry,
+			)
 		}
 		if err != nil {
 			if errors.Is(err, storage.ErrEntryNotFound) {
