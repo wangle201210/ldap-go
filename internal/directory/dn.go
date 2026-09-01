@@ -668,6 +668,32 @@ func (dn DN) RDNValues() []AttributeValue {
 	return values
 }
 
+// AllAttributeTypesMatch reports whether every AVA attribute type is accepted
+// without allocating an intermediate list.
+func (dn DN) AllAttributeTypesMatch(accept func(string) bool) bool {
+	if accept == nil || dn.parsed == nil {
+		return false
+	}
+	if dn.hasSchemaAwareIdentity() && len(dn.attributeTypes) == len(dn.parsed.RDNs) {
+		for _, rdn := range dn.attributeTypes {
+			for _, attributeType := range rdn {
+				if !accept(attributeType) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	for _, rdn := range dn.parsed.RDNs {
+		for _, attribute := range rdn.Attributes {
+			if !accept(attribute.Type) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 type Scope int
 
 const (

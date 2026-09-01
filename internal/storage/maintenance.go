@@ -695,6 +695,7 @@ func checkBoltEqualityIndexes(
 
 	entries := tx.Bucket(entriesBucket)
 	entryReferences := make(map[string]string)
+	physicalEntries := make(map[string]string)
 	if err := entries.ForEach(func(key, value []byte) error {
 		partition, entryKey := splitPartitionedEntryKey(string(key))
 		entry, err := decodeAndValidateEntry(entryKey, value)
@@ -706,6 +707,7 @@ func checkBoltEqualityIndexes(
 			return fmt.Errorf("entries %q and %q have the same index DN reference", previous, key)
 		}
 		entryReferences[referenceKey] = string(key)
+		physicalEntries[string(key)] = entry.DN
 		return nil
 	}); err != nil {
 		return err
@@ -716,13 +718,29 @@ func checkBoltEqualityIndexes(
 		if len(key) != equalityIndexEntryIDSize {
 			return fmt.Errorf("equality index entry ID has invalid length %d", len(key))
 		}
-		partition, reference, err := decodeEqualityIndexEntryReference(value)
+		partition, locator, err := decodeEqualityIndexEntryReference(value)
 		if err != nil {
 			return err
 		}
-		physicalKey, found := entryReferences[partitionedEntryKey(partition, reference)]
-		if !found {
-			return fmt.Errorf("equality index entry ID %x references missing DN %q", key, reference)
+		physicalKey := ""
+		reference := locator
+		if isSchemaAwareDNKey(locator) {
+			physicalKey = partitionedEntryKey(partition, locator)
+			var found bool
+			reference, found = physicalEntries[physicalKey]
+			if !found {
+				return fmt.Errorf(
+					"equality index entry ID %x references missing physical key %q",
+					key,
+					physicalKey,
+				)
+			}
+		} else {
+			var found bool
+			physicalKey, found = entryReferences[partitionedEntryKey(partition, reference)]
+			if !found {
+				return fmt.Errorf("equality index entry ID %x references missing DN %q", key, reference)
+			}
 		}
 		wantID := equalityIndexEntryID(partition, physicalKey)
 		if !bytes.Equal(key, wantID) {

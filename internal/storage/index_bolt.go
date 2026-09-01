@@ -135,7 +135,7 @@ func (tx *boltTx) equalityIndexEntries(
 		if encodedReference == nil {
 			return nil, fmt.Errorf("equality index references missing entry ID %x", entryID)
 		}
-		referencePartition, reference, err := decodeEqualityIndexEntryReference(encodedReference)
+		referencePartition, locator, err := decodeEqualityIndexEntryReference(encodedReference)
 		if err != nil {
 			return nil, err
 		}
@@ -147,14 +147,22 @@ func (tx *boltTx) equalityIndexEntries(
 				partition,
 			)
 		}
-		dn, err := resolveEqualityIndexDNReference(schema, reference)
-		if err != nil {
-			return nil, fmt.Errorf("resolve equality index DN reference %q: %w", reference, err)
+		var dn directory.DN
+		physicalEntryKey := ""
+		if isSchemaAwareDNKey(locator) {
+			physicalEntryKey = partitionedEntryKey(partition, locator)
 		}
-		key := partitionedEntryKey(partition, dn.Key())
+		key := physicalEntryKey
+		if key == "" {
+			dn, err = resolveEqualityIndexDNReference(schema, locator)
+			if err != nil {
+				return nil, fmt.Errorf("resolve equality index DN reference %q: %w", locator, err)
+			}
+			key = partitionedEntryKey(partition, dn.Key())
+		}
 		value := tx.entries.Get([]byte(key))
-		if value == nil {
-			legacy, legacyErr := directory.ParseDN(reference)
+		if value == nil && physicalEntryKey == "" {
+			legacy, legacyErr := directory.ParseDN(locator)
 			if legacyErr != nil {
 				return nil, legacyErr
 			}
@@ -185,10 +193,23 @@ func (tx *boltTx) equalityIndexEntries(
 				return nil, decodeErr
 			}
 		}
-		entry = entry.WithNormalizedDNHint(
-			dn,
-			dn.LegacyKey()+"\x00"+dn.Key(),
-		)
+		if physicalEntryKey == "" {
+			entry = entry.WithNormalizedDNHint(
+				dn,
+				dn.LegacyKey()+"\x00"+dn.Key(),
+			)
+		} else if ready && isSchemaAwareDNKey(entryKey) {
+			entry = entry.WithDNIdentityKey(entryKey)
+		} else {
+			dn, err = directory.ParseDNWithIdentityKey(entry.DN, entryKey)
+			if err != nil {
+				return nil, err
+			}
+			entry = entry.WithNormalizedDNHint(
+				dn,
+				dn.LegacyKey()+"\x00"+dn.Key(),
+			)
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -602,15 +623,21 @@ func (tx *boltTx) putEqualityIndexEntryReference(
 		return "", errors.New("equality index reference bucket is missing")
 	}
 	entryID := equalityIndexEntryID(partition, entryKey)
-	encoded := encodeEqualityIndexEntryReference(partition, reference)
+	_, physicalKey := splitPartitionedEntryKey(entryKey)
+	encoded := encodeEqualityIndexEntryReference(partition, physicalKey)
 	if existing := tx.equalityIndexRefs.Get(entryID); existing != nil &&
 		!bytes.Equal(existing, encoded) {
-		return "", fmt.Errorf(
-			"equality index entry ID collision %x between %q and %q",
-			entryID,
-			existing,
-			encoded,
-		)
+		existingPartition, existingLocator, decodeErr :=
+			decodeEqualityIndexEntryReference(existing)
+		if decodeErr != nil || existingPartition != partition ||
+			(existingLocator != reference && existingLocator != physicalKey) {
+			return "", fmt.Errorf(
+				"equality index entry ID collision %x between %q and %q",
+				entryID,
+				existing,
+				encoded,
+			)
+		}
 	}
 	if err := tx.equalityIndexRefs.Put(entryID, encoded); err != nil {
 		return "", err
@@ -622,9 +649,9 @@ func equalityIndexEntryID(partition, entryKey string) []byte {
 	return appendEqualityIndexToken(nil, "entry\x00"+partition, entryKey, equalityIndexEntryIDSize)
 }
 
-func encodeEqualityIndexEntryReference(partition, reference string) []byte {
+func encodeEqualityIndexEntryReference(partition, locator string) []byte {
 	encoded := appendLengthPrefixed(nil, []byte(partition))
-	return appendLengthPrefixed(encoded, []byte(reference))
+	return appendLengthPrefixed(encoded, []byte(locator))
 }
 
 func decodeEqualityIndexEntryReference(encoded []byte) (string, string, error) {
@@ -632,14 +659,14 @@ func decodeEqualityIndexEntryReference(encoded []byte) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	reference, position, err := readLengthPrefixed(encoded, position)
+	locator, position, err := readLengthPrefixed(encoded, position)
 	if err != nil {
 		return "", "", err
 	}
 	if position != len(encoded) {
 		return "", "", errors.New("equality index entry reference has trailing data")
 	}
-	return string(partition), string(reference), nil
+	return string(partition), string(locator), nil
 }
 
 func (tx *boltTx) invalidateEqualityIndexes(partition string) error {

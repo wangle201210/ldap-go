@@ -69,8 +69,13 @@ func (cache *unindexedValueCache) definitelyAbsent(
 	values := make(map[string]struct{})
 	var retained int64
 	hasReferral := false
+	referralMatcher, _ := registry.PrepareObjectClassMatcher("referral")
 	visit := func(entry directory.Entry) error {
-		if registry.EntryHasObjectClass(entry, "referral") {
+		isReferral := referralMatcher != nil && referralMatcher.Match(entry)&1 != 0
+		if referralMatcher == nil {
+			isReferral = registry.EntryHasObjectClass(entry, "referral")
+		}
+		if isReferral {
 			hasReferral = true
 		}
 		normalizedValues, normalizeErr := registry.NormalizedEqualityAttributeValues(

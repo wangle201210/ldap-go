@@ -60,6 +60,12 @@ the [100k evidence](docs/openldap-100k-evidence.md) for the exact workload and
 interpretation, and [production qualification](docs/production-qualification.md#openldap-performance-comparison)
 for the reproducible comparison method.
 
+Subsequent targeted fresh-process checks on the same 100k data measured
+1,071-1,365 ms for the first indexed batch, 590-604 ms for a complete paged
+traversal, and 306-308 ms for the first unindexed negative batch. These newer
+ldap-go-only measurements remain separate from the paired table until the next
+complete 100k OpenLDAP run.
+
 ## Requirements
 
 - Go 1.26 or newer.

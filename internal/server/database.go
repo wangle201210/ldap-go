@@ -682,7 +682,8 @@ func databaseUsesRuntimeDNIdentity(
 	database runtimeDatabase,
 	registry *schema.Registry,
 ) bool {
-	if registry == nil {
+	if registry == nil || !databaseUsesLocalContentStorage(database) ||
+		database.rwm != nil || database.translucent != nil || database.relay != nil {
 		return false
 	}
 	switch normalizer := database.dnNormalizer.(type) {
@@ -693,6 +694,22 @@ func databaseUsesRuntimeDNIdentity(
 	default:
 		return false
 	}
+}
+
+func databaseCanReuseSearchBase(
+	database runtimeDatabase,
+	registry *schema.Registry,
+	dn directory.DN,
+) bool {
+	return databaseUsesRuntimeDNIdentity(database, registry) &&
+		dn.AllAttributeTypesMatch(func(attributeType string) bool {
+			switch strings.ToLower(attributeType) {
+			case "c", "cn", "dc", "o", "ou", "uid":
+				return true
+			default:
+				return false
+			}
+		})
 }
 
 type databaseEqualityIndexValidation struct {

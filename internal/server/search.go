@@ -197,6 +197,63 @@ func (server *Server) handleSearch(
 	); handled {
 		return err
 	}
+	var (
+		base                   directory.DN
+		baseReady              bool
+		resultCacheFingerprint [sha256.Size]byte
+		resultCacheRevision    uint64
+		hasResultCacheRevision bool
+		resultCacheable        bool
+		resultCacheEvaluated   bool
+	)
+	if len(message.Controls) == 0 && state.passwordPolicyRestrictedDN == "" {
+		var baseErr error
+		base, baseErr = normalizeConnectionSearchRequestBase(state, request.BaseDN)
+		if baseErr != nil {
+			return server.writeSearchDone(
+				connection,
+				message.ID,
+				ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+			)
+		}
+		baseReady = true
+		resultCacheEvaluated = true
+		if base.Depth() > 0 {
+			if database := databaseForNormalizedDN(state.runtime, base); database != nil {
+				cacheRequest := request
+				cacheRequest.BaseDN = base.String()
+				if fingerprint, cacheable := server.rootEqualitySearchCacheFingerprint(
+					state,
+					*database,
+					cacheRequest,
+					nil,
+				); cacheable {
+					if revision, available := server.currentStorageSnapshotRevision(ctx); available {
+						if cached, found := state.runtime.searchResults.get(
+							fingerprint,
+							revision,
+						); found {
+							return server.writeSearchResult(
+								connection,
+								message.ID,
+								state,
+								nil,
+								nil,
+								cached,
+								ldapwire.Result{Code: ldapwire.ResultSuccess},
+								pagedSearchCursor{},
+								false,
+							)
+						}
+						resultCacheFingerprint = fingerprint
+						resultCacheRevision = revision
+						hasResultCacheRevision = true
+						resultCacheable = true
+					}
+				}
+			}
+		}
+	}
 	var sortLease *serverSideSortLease
 	defer func() {
 		releaseServerSideSortLease(state, sortLease)
@@ -246,13 +303,16 @@ func (server *Server) handleSearch(
 			passwordPolicyRestrictionResult(),
 		)
 	}
-	base, baseErr := normalizeConnectionSearchRequestBase(state, request.BaseDN)
-	if baseErr != nil {
-		return server.writeSearchDone(
-			connection,
-			message.ID,
-			ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
-		)
+	if !baseReady {
+		var baseErr error
+		base, baseErr = normalizeConnectionSearchRequestBase(state, request.BaseDN)
+		if baseErr != nil {
+			return server.writeSearchDone(
+				connection,
+				message.ID,
+				ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
+			)
+		}
 	}
 	ctx = withSQLBackendScopeRequirements(ctx, base, request.Scope)
 	if handled, err := server.tryRetcodeSearch(
@@ -265,13 +325,7 @@ func (server *Server) handleSearch(
 	); handled {
 		return err
 	}
-	var (
-		resultCacheFingerprint [sha256.Size]byte
-		resultCacheRevision    uint64
-		hasResultCacheRevision bool
-		resultCacheable        bool
-	)
-	if base.Depth() > 0 {
+	if !resultCacheEvaluated && base.Depth() > 0 {
 		if database := databaseForNormalizedDN(state.runtime, base); database != nil {
 			cacheRequest := request
 			cacheRequest.BaseDN = base.String()
@@ -1262,9 +1316,11 @@ func (server *Server) handleSearch(
 	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
 	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 	var preparedRootSubstring *schema.PreparedSubstringMatcher
-	var preparedEntryClasses *schema.PreparedObjectClassMatcher
-	var preparedSelection *schema.PreparedAttributeSelection
-	hasPreparedSelection := false
+	preparedEntryClasses := state.runtime.searchEntryClasses
+	preparedSelection, hasPreparedSelection := state.runtime.searchSelections.get(
+		state.runtime.schema,
+		request.Attributes,
+	)
 	if snapshotPaging {
 		if request.Filter.Kind == directory.FilterSubstrings {
 			preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(
@@ -1272,13 +1328,6 @@ func (server *Server) handleSearch(
 				request.Filter.Substring,
 			)
 		}
-		preparedEntryClasses, _ = state.runtime.schema.PrepareObjectClassMatcher(
-			"subentry",
-			"alias",
-			"referral",
-		)
-		preparedSelection, hasPreparedSelection =
-			state.runtime.schema.PrepareExplicitAttributeSelection(request.Attributes)
 	}
 
 	candidates := make([]searchCandidate, 0)
@@ -1418,7 +1467,7 @@ func (server *Server) handleSearch(
 			state.boundDN,
 		)
 		primaryBase := base
-		if !databaseUsesRuntimeDNIdentity(*primaryDatabase, state.runtime.schema) {
+		if !databaseCanReuseSearchBase(*primaryDatabase, state.runtime.schema, base) {
 			primaryBase, err = storage.NormalizeReaderDN(primaryReader, base)
 			if err != nil {
 				return fmt.Errorf("normalize primary search base %q: %w", base.String(), err)
@@ -1578,7 +1627,11 @@ func (server *Server) handleSearch(
 			}
 			scopeBase := route.base
 			comparisonBase := base
-			if !databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) {
+			if !databaseCanReuseSearchBase(
+				*database,
+				state.runtime.schema,
+				route.base,
+			) {
 				var normalizeErr error
 				scopeBase, normalizeErr = storage.NormalizeReaderDN(tx, route.base)
 				if normalizeErr != nil {
@@ -1706,15 +1759,23 @@ func (server *Server) handleSearch(
 					storedEntry = entry.Clone()
 				}
 				candidate, candidateReady := entry.NormalizedDNHint()
+				candidateIdentityKey, hasCandidateIdentity := entry.DNIdentity()
+				identityScope := stableCursorPaging ||
+					(!candidateReady && hasCandidateIdentity &&
+						databaseUsesRuntimeDNIdentity(*database, state.runtime.schema))
 				resolveCandidate := func() error {
 					if candidateReady {
 						return nil
 					}
 					var resolveErr error
-					if stableCursorPaging {
+					if identityScope {
+						identityKey := candidateIdentityKey
+						if stableCursorPaging {
+							identityKey = physicalCursorKey
+						}
 						candidate, resolveErr = directory.ParseDNWithIdentityKey(
 							entry.DN,
-							physicalCursorKey,
+							identityKey,
 						)
 					} else {
 						candidate, resolveErr = directory.ParseDN(entry.DN)
@@ -1729,7 +1790,7 @@ func (server *Server) handleSearch(
 					return nil
 				}
 				candidateOrderKey := ""
-				if !stableCursorPaging {
+				if !stableCursorPaging && (paging != nil || sorting.active()) {
 					if err := resolveCandidate(); err != nil {
 						return err
 					}
@@ -1761,11 +1822,20 @@ func (server *Server) handleSearch(
 					result.Code = ldapwire.ResultTimeLimitExceeded
 					return errStopSearch
 				}
+				if !identityScope && !candidateReady {
+					if err := resolveCandidate(); err != nil {
+						return err
+					}
+				}
 				inScope := false
-				if stableCursorPaging {
+				if identityScope {
+					identityKey := candidateIdentityKey
+					if stableCursorPaging {
+						identityKey = physicalCursorKey
+					}
 					inScope, err = directory.IdentityKeyInScope(
 						scopeBase,
-						physicalCursorKey,
+						identityKey,
 						route.scope,
 					)
 					if err != nil {

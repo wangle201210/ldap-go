@@ -56,6 +56,11 @@ Web 管理控制台。
 与结果解释见 [100k 对比证据](docs/openldap-100k-evidence.md)，复现方法见
 [生产资格测试](docs/production-qualification.md#openldap-performance-comparison)。
 
+后续使用同一份 100k 数据、每次重启进程的定向复测结果为：首次索引批次
+1,071-1,365 ms、完整分页遍历 590-604 ms、首次无索引负查询批次
+306-308 ms。这些是更新后的 ldap-go 单端数据，在下一次完整 100k OpenLDAP
+配对测试前不会替换上方正式表格。
+
 ## 环境要求
 
 - Go 1.26 或更高版本。

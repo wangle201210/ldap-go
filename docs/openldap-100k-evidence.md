@@ -75,13 +75,16 @@ the `832,618 ms` OpenLDAP value is from the completed full run. All online,
 resource, correctness, and OpenLDAP measurements are from that full run. Its
 raw anomalous offline value remains available in the retained `report.json`.
 
-After the retained full run, additional no-op overlay and attribute-only scan
-fast paths were tested against the same 100k database with a new ldap-go process
-for every trial. Three-run ranges were 1,660-1,868 ms for the first 10,000
-indexed searches, 1,865-1,909 ms for the first paged traversal, and 554-570 ms
-for the first ten unindexed negative searches. These targeted measurements are
-not substituted into the paired table above; the next complete paired run will
-replace that table atomically.
+After the retained full run, the final code in the subsequent optimization
+round was tested against the same 100k data with a new ldap-go process for every
+trial. Three-run ranges were 1,071-1,365 ms for the first 10,000 indexed
+searches, 590-604 ms for the first paged traversal, and 306-308 ms for the first
+ten unindexed negative searches. RSS immediately after the paged traversal was
+113,728-117,152 KiB. The indexed check used a copy upgraded by `slapindex` to
+the physical-key reference representation; the other checks used the retained
+database directly. These targeted measurements are not substituted into the
+paired table above; the next complete paired run will replace that table
+atomically.
 
 Reproduce with:
 

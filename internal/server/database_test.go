@@ -21,14 +21,18 @@ func TestDatabaseUsesRuntimeDNIdentity(t *testing.T) {
 		t.Fatalf("NewBuiltinRegistry(other): %v", err)
 	}
 	for _, database := range []runtimeDatabase{
-		{dnNormalizer: registry},
-		{dnNormalizer: &databaseEqualityIndexNormalizer{registry: registry}},
+		{name: "{1}mdb", partition: "db", dnNormalizer: registry},
+		{name: "{1}mdb", partition: "db", dnNormalizer: &databaseEqualityIndexNormalizer{registry: registry}},
 	} {
 		if !databaseUsesRuntimeDNIdentity(database, registry) {
 			t.Fatalf("database normalizer %T did not reuse runtime identity", database.dnNormalizer)
 		}
 		if databaseUsesRuntimeDNIdentity(database, other) {
 			t.Fatalf("database normalizer %T reused another registry", database.dnNormalizer)
+		}
+		base, err := registry.NormalizeDN("ou=people,dc=example,dc=com")
+		if err != nil || !databaseCanReuseSearchBase(database, registry, base) {
+			t.Fatalf("database normalizer %T did not reuse common base: %v", database.dnNormalizer, err)
 		}
 	}
 	if databaseUsesRuntimeDNIdentity(runtimeDatabase{}, registry) {

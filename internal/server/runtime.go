@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
@@ -58,6 +59,8 @@ type runtimeState struct {
 	unindexedValues      *unindexedValueCache
 	pagedSnapshots       *pagedSnapshotCache
 	searchResults        *searchResultCache
+	searchEntryClasses   *schema.PreparedObjectClassMatcher
+	searchSelections     *preparedAttributeSelectionCache
 }
 
 type runtimeOperationFeatures struct {
@@ -72,6 +75,54 @@ type runtimeOperationFeatures struct {
 	pcache            bool
 	noOpSearch        bool
 	searchPreDispatch bool
+}
+
+type preparedAttributeSelectionCache struct {
+	mu      sync.Mutex
+	entries map[string]preparedAttributeSelectionCacheEntry
+}
+
+type preparedAttributeSelectionCacheEntry struct {
+	selection *schema.PreparedAttributeSelection
+	prepared  bool
+}
+
+func newPreparedAttributeSelectionCache() *preparedAttributeSelectionCache {
+	return &preparedAttributeSelectionCache{
+		entries: make(map[string]preparedAttributeSelectionCacheEntry),
+	}
+}
+
+func (cache *preparedAttributeSelectionCache) get(
+	registry *schema.Registry,
+	attributes []string,
+) (*schema.PreparedAttributeSelection, bool) {
+	if cache == nil || registry == nil {
+		return nil, false
+	}
+	key := strconv.Itoa(len(attributes)) + ":"
+	if len(attributes) == 1 {
+		key += attributes[0]
+	} else {
+		key += strings.Join(attributes, "\x00")
+	}
+	cache.mu.Lock()
+	entry, found := cache.entries[key]
+	cache.mu.Unlock()
+	if found {
+		return entry.selection, entry.prepared
+	}
+	selection, prepared := registry.PrepareExplicitAttributeSelection(attributes)
+	cache.mu.Lock()
+	if len(cache.entries) >= 64 {
+		clear(cache.entries)
+	}
+	cache.entries[key] = preparedAttributeSelectionCacheEntry{
+		selection: selection,
+		prepared:  prepared,
+	}
+	cache.mu.Unlock()
+	return selection, prepared
 }
 
 type connectionPendingRuntimeConfiguration struct {
@@ -384,6 +435,14 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 			return nil, err
 		}
 	}
+	searchEntryClasses, err := registry.PrepareObjectClassMatcher(
+		"subentry",
+		"alias",
+		"referral",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare search object classes: %w", err)
+	}
 	runtime := &runtimeState{
 		schema:               registry,
 		collectivePlans:      newCollectiveAttributePlanSharedCache(),
@@ -417,6 +476,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		unindexedValues:      newUnindexedValueCache(16 << 20),
 		pagedSnapshots:       newPagedSnapshotCache(64 << 20),
 		searchResults:        newSearchResultCache(32 << 20),
+		searchEntryClasses:   searchEntryClasses,
+		searchSelections:     newPreparedAttributeSelectionCache(),
 	}
 	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err

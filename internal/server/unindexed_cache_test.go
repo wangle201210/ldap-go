@@ -66,3 +66,47 @@ func TestUnindexedValueCacheTracksStorageRevision(t *testing.T) {
 		t.Fatalf("value after revision = absent %t used %t", absent, used)
 	}
 }
+
+func TestUnindexedValueCacheRejectsReferralPartitions(t *testing.T) {
+	t.Parallel()
+
+	registry, err := schema.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("NewBuiltinRegistry(): %v", err)
+	}
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		return writer.Put(directory.Entry{
+			DN: "ou=remote,dc=example,dc=com",
+			Attributes: []directory.Attribute{
+				{Description: "objectClass", Values: stringValues("referral")},
+				{Description: "ref", Values: stringValues("ldap://remote.example/dc=example,dc=net")},
+			},
+		}, false)
+	}); err != nil {
+		t.Fatalf("seed referral: %v", err)
+	}
+	cache := newUnindexedValueCache(1 << 20)
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		absent, used, err := cache.definitelyAbsent(
+			registry,
+			runtimeDatabase{},
+			reader,
+			directory.Filter{
+				Kind:      directory.FilterEquality,
+				Attribute: "description",
+				Assertion: []byte("missing"),
+			},
+		)
+		if err != nil {
+			return err
+		}
+		if absent || used {
+			t.Fatalf("referral cache result = absent %t used %t", absent, used)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -823,3 +823,33 @@ func BenchmarkEqualityIndexCandidateCount(b *testing.B) {
 		}
 	}
 }
+
+func TestEqualityIndexEntryReferencePhysicalKeyCompatibility(t *testing.T) {
+	t.Parallel()
+
+	partition := "database:1"
+	reference := "uid=alice,dc=example,dc=com"
+	physicalKey := "dn:v2:identity"
+	current := encodeEqualityIndexEntryReference(partition, physicalKey)
+	gotPartition, gotLocator, err :=
+		decodeEqualityIndexEntryReference(current)
+	if err != nil || gotPartition != partition || gotLocator != physicalKey {
+		t.Fatalf(
+			"current reference = %q, %q, %v",
+			gotPartition,
+			gotLocator,
+			err,
+		)
+	}
+	legacy := appendLengthPrefixed(nil, []byte(partition))
+	legacy = appendLengthPrefixed(legacy, []byte(reference))
+	gotPartition, gotLocator, err = decodeEqualityIndexEntryReference(legacy)
+	if err != nil || gotPartition != partition || gotLocator != reference {
+		t.Fatalf(
+			"legacy reference = %q, %q, %v",
+			gotPartition,
+			gotLocator,
+			err,
+		)
+	}
+}
