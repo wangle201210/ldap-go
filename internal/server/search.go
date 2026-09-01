@@ -1262,19 +1262,24 @@ func (server *Server) handleSearch(
 	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
 	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 	var preparedRootSubstring *schema.PreparedSubstringMatcher
-	if request.Filter.Kind == directory.FilterSubstrings {
-		preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(
-			request.Filter.Attribute,
-			request.Filter.Substring,
+	var preparedEntryClasses *schema.PreparedObjectClassMatcher
+	var preparedSelection *schema.PreparedAttributeSelection
+	hasPreparedSelection := false
+	if snapshotPaging {
+		if request.Filter.Kind == directory.FilterSubstrings {
+			preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(
+				request.Filter.Attribute,
+				request.Filter.Substring,
+			)
+		}
+		preparedEntryClasses, _ = state.runtime.schema.PrepareObjectClassMatcher(
+			"subentry",
+			"alias",
+			"referral",
 		)
+		preparedSelection, hasPreparedSelection =
+			state.runtime.schema.PrepareExplicitAttributeSelection(request.Attributes)
 	}
-	preparedEntryClasses, _ := state.runtime.schema.PrepareObjectClassMatcher(
-		"subentry",
-		"alias",
-		"referral",
-	)
-	preparedSelection, hasPreparedSelection :=
-		state.runtime.schema.PrepareExplicitAttributeSelection(request.Attributes)
 
 	candidates := make([]searchCandidate, 0)
 	snapshotItems := make([]pagedSortedItem, 0)
@@ -1331,7 +1336,19 @@ func (server *Server) handleSearch(
 			),
 		)
 	}
+	stableCursorPaging := false
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		primary := routes[0]
+		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
+		primaryReader := readerForDatabase(reader, *primaryDatabase)
+		stableCursorPaging = snapshotPaging && len(routes) == 1 &&
+			databaseSupportsPhysicalKeyPaging(*primaryDatabase, request.Filter) &&
+			storage.SupportsStablePhysicalEntryContinuation(primaryReader)
+		if stableCursorPaging {
+			snapshotPaging = false
+			snapshotCacheable = false
+			snapshotEntriesCacheable = false
+		}
 		if resultCacheable {
 			resultCacheRevision, hasResultCacheRevision =
 				storage.ReaderSnapshotRevision(reader)
@@ -1395,9 +1412,6 @@ func (server *Server) handleSearch(
 				filter:     request.Filter,
 			},
 		)
-		primary := routes[0]
-		primaryDatabase := &state.runtime.databases[primary.databaseIndex]
-		primaryReader := readerForDatabase(reader, *primaryDatabase)
 		primaryRoot := server.isDatabaseRoot(
 			state.runtime,
 			*primaryDatabase,
@@ -1670,6 +1684,7 @@ func (server *Server) handleSearch(
 				}
 			}
 
+			physicalCursorKey := ""
 			visitEntry := func(entry directory.Entry) error {
 				if translucentRoute != nil {
 					var mergeErr error
@@ -1682,25 +1697,52 @@ func (server *Server) handleSearch(
 				if syncSearch != nil {
 					storedEntry = entry.Clone()
 				}
-				candidate, normalized := entry.NormalizedDNHint()
-				if !normalized {
-					candidate, err = directory.ParseDN(entry.DN)
-					if err != nil {
+				candidate, candidateReady := entry.NormalizedDNHint()
+				resolveCandidate := func() error {
+					if candidateReady {
+						return nil
+					}
+					var resolveErr error
+					if stableCursorPaging {
+						candidate, resolveErr = directory.ParseDNWithIdentityKey(
+							entry.DN,
+							physicalCursorKey,
+						)
+					} else {
+						candidate, resolveErr = directory.ParseDN(entry.DN)
+						if resolveErr == nil {
+							candidate, resolveErr = storage.NormalizeReaderDN(tx, candidate)
+						}
+					}
+					if resolveErr != nil {
+						return fmt.Errorf("normalize search candidate %q: %w", entry.DN, resolveErr)
+					}
+					candidateReady = true
+					return nil
+				}
+				candidateOrderKey := ""
+				if !stableCursorPaging {
+					if err := resolveCandidate(); err != nil {
 						return err
 					}
-					candidate, err = storage.NormalizeReaderDN(tx, candidate)
-					if err != nil {
-						return fmt.Errorf("normalize search candidate %q: %w", entry.DN, err)
+					var ordered bool
+					candidateOrderKey, ordered = entry.DNOrderKeyHint()
+					if !ordered {
+						candidateOrderKey, err = storage.ReaderDNOrderKey(tx, candidate)
+						if err != nil {
+							return fmt.Errorf("order search candidate %q: %w", entry.DN, err)
+						}
 					}
 				}
-				candidateOrderKey, ordered := entry.DNOrderKeyHint()
-				if !ordered {
-					candidateOrderKey, err = storage.ReaderDNOrderKey(tx, candidate)
-					if err != nil {
-						return fmt.Errorf("order search candidate %q: %w", entry.DN, err)
+				candidateCursorKey := candidateOrderKey
+				if stableCursorPaging {
+					if physicalCursorKey == "" {
+						return errors.New("stable physical paging candidate has no cursor key")
 					}
+					candidateCursorKey = physicalCursorKey
 				}
-				if paging != nil && paging.cursor.valid && !sorting.active() {
+				if paging != nil && paging.cursor.valid && !sorting.active() &&
+					!stableCursorPaging {
 					if routeIndex < paging.cursor.route ||
 						(routeIndex == paging.cursor.route &&
 							candidateOrderKey <= paging.cursor.dnKey) {
@@ -1711,7 +1753,20 @@ func (server *Server) handleSearch(
 					result.Code = ldapwire.ResultTimeLimitExceeded
 					return errStopSearch
 				}
-				if !directory.InScope(scopeBase, candidate, route.scope) {
+				inScope := false
+				if stableCursorPaging {
+					inScope, err = directory.IdentityKeyInScope(
+						scopeBase,
+						physicalCursorKey,
+						route.scope,
+					)
+					if err != nil {
+						return err
+					}
+				} else {
+					inScope = directory.InScope(scopeBase, candidate, route.scope)
+				}
+				if !inScope {
 					return nil
 				}
 				if projectSubschemaReference {
@@ -1768,11 +1823,16 @@ func (server *Server) handleSearch(
 				) {
 					return nil
 				}
-				if derefAliasesWhileSearching(request.DerefAliases) &&
-					alias &&
-					(derefAliasesWhileFinding(request.DerefAliases) ||
-						!candidate.Equal(comparisonBase)) {
-					return nil
+				if derefAliasesWhileSearching(request.DerefAliases) && alias {
+					if derefAliasesWhileFinding(request.DerefAliases) {
+						return nil
+					}
+					if err := resolveCandidate(); err != nil {
+						return err
+					}
+					if !candidate.Equal(comparisonBase) {
+						return nil
+					}
 				}
 				if !controls.manageDsaIT && referral {
 					if routeRoot || (server.allowed(
@@ -2032,7 +2092,7 @@ func (server *Server) handleSearch(
 					normalizedDN: candidate,
 					route:        routeIndex,
 					dn:           entry.DN,
-					cursorKey:    candidateOrderKey,
+					cursorKey:    candidateCursorKey,
 					syncUUID:     syncUUID,
 				}
 				candidateSize := searchCandidateRetainedBytes(retainedCandidate)
@@ -2062,7 +2122,7 @@ func (server *Server) handleSearch(
 				if !sorting.active() {
 					lastCursor = pagedSearchCursor{
 						route: routeIndex,
-						dnKey: candidateOrderKey,
+						dnKey: candidateCursorKey,
 						valid: true,
 					}
 				}
@@ -2087,7 +2147,20 @@ func (server *Server) handleSearch(
 						err = cacheErr
 					} else if !cached || !absent {
 						streamed := false
-						if !sorting.active() && syncSearch == nil {
+						if stableCursorPaging {
+							after := ""
+							if paging.cursor.valid {
+								after = paging.cursor.dnKey
+							}
+							streamed, err = storage.ForEachStablePhysicalEntryAfter(
+								tx,
+								after,
+								func(entry directory.Entry, key string) error {
+									physicalCursorKey = key
+									return visitEntry(entry)
+								},
+							)
+						} else if !sorting.active() && syncSearch == nil {
 							streamed, err = storage.ForEachStablePhysicalEntry(tx, visitEntry)
 						}
 						if err == nil && !streamed {
@@ -2459,6 +2532,23 @@ func pagedSnapshotFilterCacheable(
 		}
 	}
 	return true
+}
+
+func databaseSupportsPhysicalKeyPaging(
+	database runtimeDatabase,
+	filter directory.Filter,
+) bool {
+	if filter.Kind != directory.FilterSubstrings {
+		return false
+	}
+	normalizer, ok := database.dnNormalizer.(*databaseEqualityIndexNormalizer)
+	if !ok {
+		return false
+	}
+	_, initial, any, final, err := normalizer.ResolveSubstringIndexAttribute(
+		filter.Attribute,
+	)
+	return err == nil && !initial && !any && !final
 }
 
 func pagedSnapshotAttributesCacheable(

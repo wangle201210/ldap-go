@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -461,6 +462,129 @@ func TestLDAPClientPagedSearchContinuesAcrossMutations(t *testing.T) {
 	slices.Sort(allUIDs)
 	if !slices.Equal(allUIDs, expectedUIDs) {
 		t.Fatalf("UIDs across mutation = %q, want %q", allUIDs, expectedUIDs)
+	}
+}
+
+func TestBoltPagedSubstringSearchContinuesAcrossMutations(t *testing.T) {
+	t.Parallel()
+
+	store, err := storage.OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	expectedUIDs := seedPagedPeople(t, store, 20)[1:]
+	configDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		entry, err := writer.Get(configDN)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcDbIndex", stringValues("uid eq"))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatalf("configure uid equality index: %v", err)
+	}
+
+	address, stop := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	defer stop()
+	client := bindPagedRootClient(t, address)
+	defer client.Close()
+
+	control := ldap.NewControlPaging(3)
+	request := ldap.NewSearchRequest(
+		"ou=people,dc=example,dc=com",
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(uid=page-*)",
+		[]string{"uid"},
+		[]ldap.Control{control},
+	)
+	first, err := client.Search(request)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	allUIDs := pagedResultUIDs(t, first)
+	cookie := bytes.Clone(pagedResponseControl(t, first).Cookie)
+
+	returned := make(map[string]struct{}, len(allUIDs))
+	for _, uid := range allUIDs {
+		returned[uid] = struct{}{}
+	}
+	deletedUID := ""
+	for _, uid := range expectedUIDs {
+		if _, found := returned[uid]; !found {
+			deletedUID = uid
+			break
+		}
+	}
+	if deletedUID == "" {
+		t.Fatal("first page unexpectedly returned every seeded entry")
+	}
+	addedUID := "page-99-new"
+	if err := client.Del(ldap.NewDelRequest(
+		"uid="+deletedUID+",ou=people,dc=example,dc=com",
+		nil,
+	)); err != nil {
+		t.Fatalf("delete during paged search: %v", err)
+	}
+	deletedResult, err := client.Search(ldap.NewSearchRequest(
+		"ou=people,dc=example,dc=com",
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		0,
+		0,
+		false,
+		"(uid="+deletedUID+")",
+		[]string{"1.1"},
+		nil,
+	))
+	if err != nil || len(deletedResult.Entries) != 0 {
+		t.Fatalf("deleted entry remains visible: %#v, %v", deletedResult, err)
+	}
+	if err := client.Add(newPersonAddRequest(addedUID)); err != nil {
+		t.Fatalf("add during paged search: %v", err)
+	}
+
+	for page := 0; len(cookie) > 0; page++ {
+		if page > 20 {
+			t.Fatal("paged search did not terminate")
+		}
+		control.SetCookie(cookie)
+		result, err := client.Search(request)
+		if err != nil {
+			t.Fatalf("page %d after mutation: %v", page+2, err)
+		}
+		allUIDs = append(allUIDs, pagedResultUIDs(t, result)...)
+		cookie = bytes.Clone(pagedResponseControl(t, result).Cookie)
+	}
+
+	expectedUIDs = slices.DeleteFunc(expectedUIDs, func(uid string) bool {
+		return uid == deletedUID
+	})
+	if slices.Contains(allUIDs, addedUID) {
+		expectedUIDs = append(expectedUIDs, addedUID)
+	}
+	slices.Sort(expectedUIDs)
+	slices.Sort(allUIDs)
+	if !slices.Equal(allUIDs, expectedUIDs) {
+		t.Fatalf(
+			"Bolt keyset first/deleted/all = %q/%q/%q, want %q",
+			returned,
+			deletedUID,
+			allUIDs,
+			expectedUIDs,
+		)
 	}
 }
 

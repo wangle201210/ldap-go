@@ -583,9 +583,25 @@ func (tx *boltTx) forEachSchemaAwarePhysicalIn(
 	partition string,
 	visit func(directory.Entry, string) error,
 ) (bool, error) {
+	return tx.forEachSchemaAwarePhysicalInAfter(partition, "", visit)
+}
+
+func (tx *boltTx) forEachSchemaAwarePhysicalInAfter(
+	partition,
+	after string,
+	visit func(directory.Entry, string) error,
+) (bool, error) {
 	prefix := []byte(partition + "\x00")
+	start := prefix
+	if after != "" {
+		start = append(bytes.Clone(prefix), after...)
+	}
 	cursor := tx.entries.Cursor()
-	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
+	key, value := cursor.Seek(start)
+	if after != "" && bytes.Equal(key, start) {
+		key, value = cursor.Next()
+	}
+	for ; key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
 		if err := tx.ctx.Err(); err != nil {
 			return false, err
 		}
@@ -598,7 +614,7 @@ func (tx *boltTx) forEachSchemaAwarePhysicalIn(
 			return false, err
 		}
 	}
-	if partition == "" {
+	if partition == "" && after == "" {
 		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
 			if bytes.IndexByte(key, 0) >= 0 {
 				continue

@@ -189,6 +189,76 @@ func TestForEachPhysicalEntrySkipsDNNormalization(t *testing.T) {
 	}
 }
 
+func TestForEachStablePhysicalEntryAfterResumesBoltCursor(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenBolt(filepath.Join(t.TempDir(), "directory.db"))
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	defer store.Close()
+	normalizer := countingDNNormalizer{calls: &atomic.Int64{}}
+	if err := store.Update(context.Background(), func(writer Writer) error {
+		scoped := WriterInPartitionWithNormalizer(writer, "db", normalizer)
+		for _, dn := range []string{
+			"uid=alice,dc=example,dc=com",
+			"uid=bob,dc=example,dc=com",
+			"uid=carol,dc=example,dc=com",
+		} {
+			if err := scoped.Put(directory.Entry{DN: dn}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed schema-aware entries: %v", err)
+	}
+	var allKeys []string
+	if err := store.View(context.Background(), func(reader Reader) error {
+		scoped := ReaderInPartitionWithNormalizer(reader, "db", normalizer)
+		if !SupportsStablePhysicalEntryContinuation(scoped) {
+			t.Fatal("schema-aware Bolt reader does not support continuation")
+		}
+		streamed, err := ForEachStablePhysicalEntryAfter(
+			scoped,
+			"",
+			func(_ directory.Entry, key string) error {
+				allKeys = append(allKeys, key)
+				return nil
+			},
+		)
+		if !streamed {
+			t.Fatal("initial physical iteration did not stream")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("initial physical iteration: %v", err)
+	}
+	if len(allKeys) != 3 {
+		t.Fatalf("initial physical keys = %d, want 3", len(allKeys))
+	}
+	var resumed []string
+	if err := store.View(context.Background(), func(reader Reader) error {
+		streamed, err := ForEachStablePhysicalEntryAfter(
+			ReaderInPartitionWithNormalizer(reader, "db", normalizer),
+			allKeys[0],
+			func(_ directory.Entry, key string) error {
+				resumed = append(resumed, key)
+				return nil
+			},
+		)
+		if !streamed {
+			t.Fatal("resumed physical iteration did not stream")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("resumed physical iteration: %v", err)
+	}
+	if len(resumed) != 2 || resumed[0] != allKeys[1] || resumed[1] != allKeys[2] {
+		t.Fatalf("resumed physical keys = %q, want %q", resumed, allKeys[1:])
+	}
+}
+
 func TestBoltIndexedReplaceDoesNotScaleNormalizerWork(t *testing.T) {
 	t.Parallel()
 

@@ -151,6 +151,48 @@ func ForEachStablePhysicalEntry(
 	return true, err
 }
 
+// SupportsStablePhysicalEntryContinuation reports whether a schema-aware
+// reader can resume stable physical iteration from an opaque physical key.
+func SupportsStablePhysicalEntryContinuation(reader Reader) bool {
+	scoped, ok := reader.(schemaAwarePartitionReader)
+	if !ok || scoped.partition == "" {
+		return false
+	}
+	backend := maintenanceReader(scoped.Reader)
+	iterator, ok := backend.(stableSchemaAwarePhysicalContinuationIterator)
+	return ok && iterator.schemaAwarePhysicalIterationStable()
+}
+
+// ForEachStablePhysicalEntryAfter resumes stable physical iteration strictly
+// after the supplied key. The callback key is opaque and valid as the next
+// continuation cursor only for the same partition and storage revision.
+func ForEachStablePhysicalEntryAfter(
+	reader Reader,
+	after string,
+	fn func(directory.Entry, string) error,
+) (bool, error) {
+	scoped, ok := reader.(schemaAwarePartitionReader)
+	if !ok || scoped.partition == "" {
+		return false, nil
+	}
+	if err := requireSchemaAwareDNIdentities(scoped.Reader, scoped.partition); err != nil {
+		return false, err
+	}
+	backend := maintenanceReader(scoped.Reader)
+	iterator, ok := backend.(stableSchemaAwarePhysicalContinuationIterator)
+	if !ok || !iterator.schemaAwarePhysicalIterationStable() {
+		return false, nil
+	}
+	_, err := iterator.forEachSchemaAwarePhysicalInAfter(
+		scoped.partition,
+		after,
+		func(entry directory.Entry, physicalKey string) error {
+			return fn(entry, physicalKey)
+		},
+	)
+	return true, err
+}
+
 // ForEachPhysicalEntry streams a schema-aware partition without constructing
 // normalized DN hints. It is intended for callers that inspect only stored
 // attributes and do not depend on iteration order.
@@ -538,6 +580,15 @@ type schemaAwarePhysicalIterator interface {
 type stableSchemaAwarePhysicalIterator interface {
 	schemaAwarePhysicalIterator
 	schemaAwarePhysicalIterationStable() bool
+}
+
+type stableSchemaAwarePhysicalContinuationIterator interface {
+	stableSchemaAwarePhysicalIterator
+	forEachSchemaAwarePhysicalInAfter(
+		partition,
+		after string,
+		visit func(directory.Entry, string) error,
+	) (bool, error)
 }
 
 func schemaAwareDNOrderKey(

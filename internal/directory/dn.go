@@ -691,3 +691,47 @@ func InScope(base, candidate DN, scope Scope) bool {
 		return false
 	}
 }
+
+// IdentityKeyInScope evaluates scope directly against a validated schema-aware
+// physical key without constructing the candidate's display DN.
+func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error) {
+	if !base.hasSchemaAwareIdentity() {
+		return false, errors.New("scope base has no schema-aware identity")
+	}
+	if !strings.HasPrefix(candidateKey, schemaAwareDNKeyPrefix) {
+		return false, errors.New("candidate has no schema-aware identity key")
+	}
+	encoded := strings.TrimPrefix(candidateKey, schemaAwareDNKeyPrefix)
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != encoded {
+		return false, errors.New("candidate schema-aware DN key is not canonically encoded")
+	}
+	candidateRDNs, err := decodeDNIdentityParts(payload)
+	if err != nil {
+		return false, fmt.Errorf("decode candidate schema-aware DN key: %w", err)
+	}
+	equal := len(base.identityRDNs) == len(candidateRDNs)
+	ancestor := len(base.identityRDNs) < len(candidateRDNs)
+	if equal || ancestor {
+		offset := len(candidateRDNs) - len(base.identityRDNs)
+		for index := range base.identityRDNs {
+			if !bytes.Equal(base.identityRDNs[index], candidateRDNs[index+offset]) {
+				equal = false
+				ancestor = false
+				break
+			}
+		}
+	}
+	switch scope {
+	case ScopeBase:
+		return equal, nil
+	case ScopeSingleLevel:
+		return ancestor && len(candidateRDNs) == len(base.identityRDNs)+1, nil
+	case ScopeWholeSubtree:
+		return equal || ancestor, nil
+	case ScopeChildren:
+		return ancestor, nil
+	default:
+		return false, nil
+	}
+}

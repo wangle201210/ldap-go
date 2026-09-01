@@ -1,8 +1,18 @@
 package directory
 
 import (
+	"strings"
 	"testing"
 )
+
+type scopeIdentityNormalizer struct{}
+
+func (scopeIdentityNormalizer) NormalizeDNAttribute(
+	attribute string,
+	value []byte,
+) (string, []byte, error) {
+	return strings.ToLower(attribute), []byte(strings.ToLower(string(value))), nil
+}
 
 func TestDNScopes(t *testing.T) {
 	t.Parallel()
@@ -29,6 +39,39 @@ func TestDNScopes(t *testing.T) {
 	if !InScope(base, child, ScopeChildren) ||
 		!InScope(base, grandchild, ScopeChildren) {
 		t.Fatal("descendants must be in children scope")
+	}
+}
+
+func TestIdentityKeyInScope(t *testing.T) {
+	t.Parallel()
+
+	normalizer := scopeIdentityNormalizer{}
+	base, err := ParseDNWithNormalizer("dc=Example,dc=COM", normalizer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		"dc=example,dc=com",
+		"ou=People,dc=example,dc=com",
+		"uid=alice,ou=people,dc=example,dc=com",
+		"dc=other,dc=com",
+	} {
+		candidate, err := ParseDNWithNormalizer(raw, normalizer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for scope := ScopeBase; scope <= ScopeChildren; scope++ {
+			got, err := IdentityKeyInScope(base, candidate.Key(), scope)
+			if err != nil {
+				t.Fatalf("IdentityKeyInScope(%q, %d): %v", raw, scope, err)
+			}
+			if want := InScope(base, candidate, scope); got != want {
+				t.Fatalf("IdentityKeyInScope(%q, %d) = %t, want %t", raw, scope, got, want)
+			}
+		}
+	}
+	if _, err := IdentityKeyInScope(base, "not-an-identity", ScopeWholeSubtree); err == nil {
+		t.Fatal("IdentityKeyInScope accepted a legacy key")
 	}
 }
 
