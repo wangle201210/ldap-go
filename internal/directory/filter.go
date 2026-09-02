@@ -44,6 +44,18 @@ type ValueMatcher interface {
 	MatchSubstring(attribute string, value []byte, substring Substring) (bool, error)
 }
 
+type OrderingMatcher interface {
+	CompareOrdering(attribute, matchingRule string, left, right []byte) (int, error)
+}
+
+type FilterResult uint8
+
+const (
+	FilterUndefinedResult FilterResult = iota
+	FilterFalseResult
+	FilterTrueResult
+)
+
 // ApproximateMatcher lets schema-aware matchers provide the approximate rule
 // associated with an attribute's equality rule. Matchers without this optional
 // interface retain the LDAP equality fallback used when no approximate rule is
@@ -62,41 +74,73 @@ func (filter Filter) Match(entry Entry) (bool, error) {
 }
 
 func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) {
+	result, err := filter.EvaluateWith(entry, matcher)
+	return result == FilterTrueResult, err
+}
+
+// EvaluateWith applies LDAP's true, false, and undefined filter logic.
+// Matching-rule or assertion incompatibilities produce undefined rather than
+// failing the Search operation.
+func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResult, error) {
 	switch filter.Kind {
 	case FilterAnd:
+		result := FilterTrueResult
 		for _, child := range filter.Children {
-			matches, err := child.MatchWith(entry, matcher)
-			if err != nil || !matches {
-				return matches, err
+			childResult, err := child.EvaluateWith(entry, matcher)
+			if err != nil {
+				return FilterUndefinedResult, err
+			}
+			if childResult == FilterFalseResult {
+				return FilterFalseResult, nil
+			}
+			if childResult == FilterUndefinedResult {
+				result = FilterUndefinedResult
 			}
 		}
-		return true, nil
+		return result, nil
 
 	case FilterOr:
+		result := FilterFalseResult
 		for _, child := range filter.Children {
-			matches, err := child.MatchWith(entry, matcher)
+			childResult, err := child.EvaluateWith(entry, matcher)
 			if err != nil {
-				return false, err
+				return FilterUndefinedResult, err
 			}
-			if matches {
-				return true, nil
+			if childResult == FilterTrueResult {
+				return FilterTrueResult, nil
+			}
+			if childResult == FilterUndefinedResult {
+				result = FilterUndefinedResult
 			}
 		}
-		return false, nil
+		return result, nil
 
 	case FilterNot:
 		if len(filter.Children) != 1 {
-			return false, fmt.Errorf("not filter requires exactly one child")
+			return FilterUndefinedResult, fmt.Errorf("not filter requires exactly one child")
 		}
-		matches, err := filter.Children[0].MatchWith(entry, matcher)
-		return !matches, err
+		result, err := filter.Children[0].EvaluateWith(entry, matcher)
+		if err != nil {
+			return FilterUndefinedResult, err
+		}
+		switch result {
+		case FilterTrueResult:
+			return FilterFalseResult, nil
+		case FilterFalseResult:
+			return FilterTrueResult, nil
+		default:
+			return FilterUndefinedResult, nil
+		}
 
 	case FilterPresent:
-		return resolvedHasAttribute(matcher, entry, filter.Attribute), nil
+		return booleanFilterResult(
+			resolvedHasAttribute(matcher, entry, filter.Attribute),
+		), nil
 
 	case FilterApprox:
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
 		approximate, hasApproximateMatcher := matcher.(ApproximateMatcher)
+		undefined := false
 		for _, value := range values {
 			if hasApproximateMatcher {
 				matches, err := approximate.MatchApproximate(
@@ -105,61 +149,91 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 					filter.Assertion,
 				)
 				if err != nil {
-					return false, err
+					undefined = true
+					continue
 				}
 				if matches {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 				continue
 			}
 			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
 			if err != nil {
-				return false, err
+				undefined = true
+				continue
 			}
 			if comparison == 0 {
-				return true, nil
+				return FilterTrueResult, nil
 			}
 		}
-		return false, nil
+		if undefined {
+			return FilterUndefinedResult, nil
+		}
+		return FilterFalseResult, nil
 
 	case FilterEquality, FilterGreaterOrEqual, FilterLessOrEqual:
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+		undefined := false
 		for _, value := range values {
-			comparison, err := matcher.Compare(filter.Attribute, "", value, filter.Assertion)
+			var comparison int
+			var err error
+			if filter.Kind == FilterEquality {
+				comparison, err = matcher.Compare(
+					filter.Attribute, "", value, filter.Assertion,
+				)
+			} else if ordering, ok := matcher.(OrderingMatcher); ok {
+				comparison, err = ordering.CompareOrdering(
+					filter.Attribute, "", value, filter.Assertion,
+				)
+			} else {
+				comparison, err = matcher.Compare(
+					filter.Attribute, "", value, filter.Assertion,
+				)
+			}
 			if err != nil {
-				return false, err
+				undefined = true
+				continue
 			}
 			switch filter.Kind {
 			case FilterEquality:
 				if comparison == 0 {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 			case FilterGreaterOrEqual:
 				if comparison >= 0 {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 			case FilterLessOrEqual:
 				if comparison <= 0 {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 			}
 		}
-		return false, nil
+		if undefined {
+			return FilterUndefinedResult, nil
+		}
+		return FilterFalseResult, nil
 
 	case FilterSubstrings:
+		undefined := false
 		for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
 			matches, err := matcher.MatchSubstring(filter.Attribute, value, filter.Substring)
 			if err != nil {
-				return false, err
+				undefined = true
+				continue
 			}
 			if matches {
-				return true, nil
+				return FilterTrueResult, nil
 			}
 		}
-		return false, nil
+		if undefined {
+			return FilterUndefinedResult, nil
+		}
+		return FilterFalseResult, nil
 
 	case FilterExtensible:
 		if filter.Attribute != "" {
+			undefined := false
 			for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
 				comparison, err := matcher.Compare(
 					filter.Attribute,
@@ -168,14 +242,19 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 					filter.Assertion,
 				)
 				if err != nil {
-					return false, err
+					undefined = true
+					continue
 				}
 				if comparison == 0 {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 			}
-			return false, nil
+			if undefined {
+				return FilterUndefinedResult, nil
+			}
+			return FilterFalseResult, nil
 		}
+		undefined := false
 		for _, attribute := range entry.Attributes {
 			for _, value := range attribute.Values {
 				comparison, err := matcher.Compare(
@@ -185,18 +264,29 @@ func (filter Filter) MatchWith(entry Entry, matcher ValueMatcher) (bool, error) 
 					filter.Assertion,
 				)
 				if err != nil {
+					undefined = true
 					continue
 				}
 				if comparison == 0 {
-					return true, nil
+					return FilterTrueResult, nil
 				}
 			}
 		}
-		return false, nil
+		if undefined {
+			return FilterUndefinedResult, nil
+		}
+		return FilterFalseResult, nil
 
 	default:
-		return false, fmt.Errorf("unknown filter kind %d", filter.Kind)
+		return FilterUndefinedResult, fmt.Errorf("unknown filter kind %d", filter.Kind)
 	}
+}
+
+func booleanFilterResult(value bool) FilterResult {
+	if value {
+		return FilterTrueResult
+	}
+	return FilterFalseResult
 }
 
 func resolvedAttributeValues(
@@ -228,6 +318,13 @@ func (BasicMatcher) Compare(_, matchingRule string, left, right []byte) (int, er
 		return 0, fmt.Errorf("matching rule %q is not registered", matchingRule)
 	}
 	return compareDirectoryValue(left, right), nil
+}
+
+func (matcher BasicMatcher) CompareOrdering(
+	attribute, matchingRule string,
+	left, right []byte,
+) (int, error) {
+	return matcher.Compare(attribute, matchingRule, left, right)
 }
 
 func (BasicMatcher) MatchSubstring(_ string, value []byte, substring Substring) (bool, error) {

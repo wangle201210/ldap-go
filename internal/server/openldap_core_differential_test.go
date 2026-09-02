@@ -277,6 +277,22 @@ func runCoreReferenceScenario(
 		observeCoreError("duplicate add", client.Add(coreReferencePersonAdd(daveDN, "dave"))),
 		observeCoreBind(t, uri, "user bind", daveDN, "secret"),
 		observeCoreBind(t, uri, "invalid user bind", daveDN, "wrong"),
+		observeCoreSearch(t, client, "ordering rule unavailable", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(cn>=A)", []string{"1.1"}, nil,
+		)),
+		observeCoreSearch(t, client, "substring rule unavailable", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(userPassword=*sec*)", []string{"1.1"}, nil,
+		)),
+		observeCoreSearch(t, client, "not undefined remains undefined", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(!(userPassword=*sec*))", []string{"1.1"}, nil,
+		)),
+		observeCoreSearch(t, client, "unknown extensible rule", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(cn:1.2.3:=Dave)", []string{"1.1"}, nil,
+		)),
 	)
 
 	missingParent := coreReferencePersonAdd(

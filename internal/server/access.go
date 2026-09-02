@@ -314,8 +314,8 @@ func (server *Server) evaluateFilterWithPrivilege(
 					filtered.Attributes = append(filtered.Attributes, attribute)
 				}
 			}
-			matches, err := filter.MatchWith(filtered, runtime.schema)
-			return booleanFilterResult(matches), err
+			result, err := filter.EvaluateWith(filtered, runtime.schema)
+			return serverFilterResult(result), err
 		}
 		if !server.allowed(
 			runtime,
@@ -332,8 +332,8 @@ func (server *Server) evaluateFilterWithPrivilege(
 		return filterUndefined, errors.New("unknown filter kind")
 	}
 
-	matches, err := filter.MatchWith(entry, runtime.schema)
-	return booleanFilterResult(matches), err
+	result, err := filter.EvaluateWith(entry, runtime.schema)
+	return serverFilterResult(result), err
 }
 
 func booleanFilterResult(value bool) filterResult {
@@ -341,6 +341,17 @@ func booleanFilterResult(value bool) filterResult {
 		return filterTrue
 	}
 	return filterFalse
+}
+
+func serverFilterResult(result directory.FilterResult) filterResult {
+	switch result {
+	case directory.FilterTrueResult:
+		return filterTrue
+	case directory.FilterFalseResult:
+		return filterFalse
+	default:
+		return filterUndefined
+	}
 }
 
 func (server *Server) canAccessAttribute(

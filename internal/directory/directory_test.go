@@ -1,6 +1,7 @@
 package directory
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -203,6 +204,90 @@ func TestFilterApproxUsesOptionalMatcher(t *testing.T) {
 	if err != nil || !matches {
 		t.Fatalf("equality fallback = %v, err = %v", matches, err)
 	}
+}
+
+func TestFilterUndefinedUsesLDAPThreeValuedLogic(t *testing.T) {
+	t.Parallel()
+
+	entry := Entry{
+		DN: "uid=alice,dc=example,dc=com",
+		Attributes: []Attribute{
+			{Description: "cn", Values: [][]byte{[]byte("Alice")}},
+			{Description: "sn", Values: [][]byte{[]byte("Example")}},
+		},
+	}
+	undefined := Filter{
+		Kind: FilterSubstrings, Attribute: "cn",
+		Substring: Substring{Any: [][]byte{[]byte("lic")}},
+	}
+	matcher := undefinedFilterMatcher{BasicMatcher: BasicMatcher{}}
+	for _, test := range []struct {
+		name   string
+		filter Filter
+		want   FilterResult
+	}{
+		{name: "leaf", filter: undefined, want: FilterUndefinedResult},
+		{name: "not", filter: Filter{Kind: FilterNot, Children: []Filter{undefined}}, want: FilterUndefinedResult},
+		{name: "and false", filter: Filter{Kind: FilterAnd, Children: []Filter{
+			undefined,
+			{Kind: FilterEquality, Attribute: "sn", Assertion: []byte("Missing")},
+		}}, want: FilterFalseResult},
+		{name: "or true", filter: Filter{Kind: FilterOr, Children: []Filter{
+			undefined,
+			{Kind: FilterEquality, Attribute: "sn", Assertion: []byte("Example")},
+		}}, want: FilterTrueResult},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := test.filter.EvaluateWith(entry, matcher)
+			if err != nil || result != test.want {
+				t.Fatalf("EvaluateWith() = %v, %v; want %v", result, err, test.want)
+			}
+			matched, err := test.filter.MatchWith(entry, matcher)
+			if err != nil || matched != (test.want == FilterTrueResult) {
+				t.Fatalf("MatchWith() = %v, %v", matched, err)
+			}
+		})
+	}
+}
+
+type undefinedFilterMatcher struct {
+	BasicMatcher
+}
+
+func (undefinedFilterMatcher) MatchSubstring(
+	string,
+	[]byte,
+	Substring,
+) (bool, error) {
+	return false, fmt.Errorf("substring matching rule unavailable")
+}
+
+func TestFilterOrderingUsesOrderingMatcher(t *testing.T) {
+	t.Parallel()
+
+	matcher := &recordingOrderingMatcher{BasicMatcher: BasicMatcher{}}
+	filter := Filter{
+		Kind: FilterGreaterOrEqual, Attribute: "cn", Assertion: []byte("A"),
+	}
+	matched, err := filter.MatchWith(Entry{Attributes: []Attribute{{
+		Description: "cn", Values: [][]byte{[]byte("B")},
+	}}}, matcher)
+	if err != nil || !matched || matcher.calls != 1 {
+		t.Fatalf("ordering match = %v, %v; calls=%d", matched, err, matcher.calls)
+	}
+}
+
+type recordingOrderingMatcher struct {
+	BasicMatcher
+	calls int
+}
+
+func (matcher *recordingOrderingMatcher) CompareOrdering(
+	attribute, matchingRule string,
+	left, right []byte,
+) (int, error) {
+	matcher.calls++
+	return matcher.BasicMatcher.Compare(attribute, matchingRule, left, right)
 }
 
 type recordingApproximateMatcher struct {
