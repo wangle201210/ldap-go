@@ -82,7 +82,23 @@ func (server *Server) tryMetaBackendSearch(
 	if tracker, ok := connection.(interface{ enableMetaBackendSearch() }); ok {
 		tracker.enableMetaBackendSearch()
 	}
-	plans, err := database.metaBackend.searchPlans(request)
+	upstreamRequest, localACL, err := server.prepareMetaACLSearchRequest(
+		ctx,
+		state,
+		database,
+		request,
+	)
+	if err != nil {
+		return true, writeResultForMessage(
+			connection,
+			message,
+			ldapwire.ResultError(
+				ldapwire.ResultOther,
+				"load back-meta ACL configuration: "+err.Error(),
+			),
+		)
+	}
+	plans, err := database.metaBackend.searchPlans(upstreamRequest)
 	if err != nil {
 		return true, writeResultForMessage(
 			connection,
@@ -118,6 +134,7 @@ func (server *Server) tryMetaBackendSearch(
 			request,
 			plans,
 			limit,
+			localACL,
 		)
 	}
 	return server.runMetaBackendSearch(
@@ -129,6 +146,7 @@ func (server *Server) tryMetaBackendSearch(
 		request,
 		plans,
 		limit,
+		localACL,
 	)
 }
 

@@ -395,9 +395,16 @@ type openLDAPMetaClientPRProvider struct {
 
 	mu       sync.Mutex
 	requests []openLDAPMetaClientPRUpstreamRequest
+	raw      []openLDAPMetaClientPRRawRequest
+	failBase string
 	clients  map[net.Conn]struct{}
 	stopped  bool
 	wg       sync.WaitGroup
+}
+
+type openLDAPMetaClientPRRawRequest struct {
+	request  ldapwire.SearchRequest
+	controls []ldapwire.Control
 }
 
 func startOpenLDAPMetaClientPRProvider(
@@ -507,6 +514,12 @@ func (provider *openLDAPMetaClientPRProvider) serveSearch(
 	connection net.Conn,
 	message ldapwire.Message,
 ) error {
+	request := message.Request.(ldapwire.SearchRequest)
+	raw := openLDAPMetaClientPRRawRequest{
+		request:  request,
+		controls: cloneLDAPControls(message.Controls),
+	}
+	raw.request.Attributes = append([]string(nil), request.Attributes...)
 	observation := openLDAPMetaClientPRUpstreamRequest{}
 	var paging *ldapwire.Control
 	for index := range message.Controls {
@@ -545,7 +558,22 @@ func (provider *openLDAPMetaClientPRProvider) serveSearch(
 	}
 	provider.mu.Lock()
 	provider.requests = append(provider.requests, observation)
+	provider.raw = append(provider.raw, raw)
+	fail := provider.failBase != "" && strings.EqualFold(
+		provider.failBase,
+		request.BaseDN,
+	)
 	provider.mu.Unlock()
+	if fail {
+		return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
+			message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultUnavailable,
+				"injected ACL auxiliary lookup failure",
+			),
+			nil,
+		))
+	}
 
 	if observation.decodeError != "" {
 		return ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
@@ -588,6 +616,27 @@ func (provider *openLDAPMetaClientPRProvider) serveSearch(
 		ldapwire.Result{Code: ldapwire.ResultSuccess},
 		responseControls,
 	))
+}
+
+func (provider *openLDAPMetaClientPRProvider) failSearchBase(baseDN string) {
+	provider.mu.Lock()
+	provider.failBase = baseDN
+	provider.mu.Unlock()
+}
+
+func (provider *openLDAPMetaClientPRProvider) rawSnapshot() []openLDAPMetaClientPRRawRequest {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	result := make([]openLDAPMetaClientPRRawRequest, len(provider.raw))
+	for index := range provider.raw {
+		result[index] = provider.raw[index]
+		result[index].request.Attributes = append(
+			[]string(nil),
+			provider.raw[index].request.Attributes...,
+		)
+		result[index].controls = cloneLDAPControls(provider.raw[index].controls)
+	}
+	return result
 }
 
 func (provider *openLDAPMetaClientPRProvider) snapshot() []openLDAPMetaClientPRUpstreamRequest {

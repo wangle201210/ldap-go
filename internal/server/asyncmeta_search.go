@@ -19,6 +19,7 @@ func (server *Server) runAsyncMetaBackendSearch(
 	request ldapwire.SearchRequest,
 	plans []metaSearchPlan,
 	limit int,
+	localACL bool,
 ) (bool, error) {
 	return server.runMetaBackendSearch(
 		ctx,
@@ -29,5 +30,6 @@ func (server *Server) runAsyncMetaBackendSearch(
 		request,
 		plans,
 		limit,
+		localACL,
 	)
 }

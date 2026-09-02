@@ -85,6 +85,7 @@ func (server *Server) runMetaBackendSearch(
 	request ldapwire.SearchRequest,
 	plans []metaSearchPlan,
 	limit int,
+	localACL bool,
 ) (bool, error) {
 	searchCtx, cancel := context.WithCancel(ctx)
 	if request.TimeLimit > 0 {
@@ -111,7 +112,8 @@ func (server *Server) runMetaBackendSearch(
 				searchCtx,
 				state,
 				database,
-				request.TypesOnly,
+				request,
+				localACL,
 				message,
 				index,
 				plan,
@@ -254,13 +256,24 @@ func (server *Server) runMetaSearchTarget(
 	ctx context.Context,
 	state *connectionState,
 	database runtimeDatabase,
-	typesOnly bool,
+	request ldapwire.SearchRequest,
+	localACL bool,
 	message ldapwire.Message,
 	targetIndex int,
 	plan metaSearchPlan,
 	startup *metaSearchStartup,
 	events chan<- metaSearchEvent,
 ) {
+	aclSession := newMetaACLSearchSession(
+		ctx,
+		server,
+		state,
+		database,
+		request,
+		localACL,
+	)
+	defer aclSession.close()
+
 	var startupOnce sync.Once
 	started := false
 	arrive := func(failed bool) {
@@ -332,7 +345,7 @@ func (server *Server) runMetaSearchTarget(
 				state,
 				database,
 				[]*ber.Packet{mappedPacket},
-				typesOnly,
+				aclSession,
 			)
 			if filterErr != nil {
 				return filterErr
