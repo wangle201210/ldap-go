@@ -36,6 +36,7 @@ type ImportOptions struct {
 	UpdateContextCSN              bool
 	ResumeLine                    int
 	ValidateTransaction           func(storage.Reader) error
+	ValidateConfigTransaction     func(storage.Reader) error
 }
 
 type ImportResult struct {
@@ -160,6 +161,7 @@ func importLDIF(
 				return errors.New("no available OpenLDAP content database")
 			}
 		}
+		configurationChanged := options.Replace && (!targetSelected || target.config)
 		if targetSelected && !options.DryRun && !target.supportsOfflineImport() {
 			return fmt.Errorf(
 				"OpenLDAP %s backend %q does not support offline entry import",
@@ -201,9 +203,13 @@ func importLDIF(
 			} else {
 				replaceTargets := []databaseTarget{target}
 				if !options.DisableSubordinateGlue {
+					var normalizer directory.DNAttributeNormalizer
+					if identitySchema != nil {
+						normalizer = identitySchema
+					}
 					configuredTargets, err := loadDatabaseTargetsWithNormalizer(
 						tx,
-						identitySchema,
+						normalizer,
 					)
 					if err != nil {
 						return fmt.Errorf("load OpenLDAP databases for replacement: %w", err)
@@ -262,6 +268,7 @@ func importLDIF(
 				return fmt.Errorf("import %q: %w", entry.DN, err)
 			}
 			if configurationEntry {
+				configurationChanged = true
 				if err := tx.PutIn(storage.OpenLDAPConfigPartition, entry, false); err != nil {
 					return fmt.Errorf("import %q: %w", entry.DN, err)
 				}
@@ -410,7 +417,8 @@ func importLDIF(
 			})
 		}
 
-		if options.ValidateConfigurationEntries {
+		if options.ValidateConfigurationEntries ||
+			(configurationChanged && options.ValidateConfigTransaction != nil) {
 			if err := validateImportedHierarchy(tx, importedConfiguration); err != nil {
 				return err
 			}
@@ -478,6 +486,11 @@ func importLDIF(
 		for partition := range discardedPartitions {
 			if err := storage.WriterInPartition(tx, partition).Clear(); err != nil {
 				return fmt.Errorf("discard null backend import: %w", err)
+			}
+		}
+		if configurationChanged && options.ValidateConfigTransaction != nil {
+			if err := options.ValidateConfigTransaction(tx); err != nil {
+				return fmt.Errorf("validate imported configuration: %w", err)
 			}
 		}
 		if options.ValidateTransaction != nil {

@@ -1192,15 +1192,18 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		UpdateContextCSN:              updateContextCSN && !dryRun,
 		ResumeLine:                    resumeLine,
 	}
+	validateConfiguration := func(reader storage.Reader) error {
+		_, err := server.ValidateConfigurationReader(
+			context.Background(),
+			server.Config{},
+			reader,
+		)
+		return err
+	}
 	if command == "slapadd" {
-		importOptions.ValidateTransaction = func(reader storage.Reader) error {
-			_, err := server.ValidateConfigurationReader(
-				context.Background(),
-				server.Config{},
-				reader,
-			)
-			return err
-		}
+		importOptions.ValidateTransaction = validateConfiguration
+	} else {
+		importOptions.ValidateConfigTransaction = validateConfiguration
 	}
 	var result migration.ImportResult
 	continuedFailures := 0

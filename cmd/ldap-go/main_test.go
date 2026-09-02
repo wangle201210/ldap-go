@@ -1179,6 +1179,149 @@ olcReadOnly: not-a-boolean
 	}
 }
 
+func TestImportConfigRuntimeValidationIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "config-import.db")
+	validConfig := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcLogLevel: stats
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+entryUUID: 11111111-1111-4111-8111-111111111111
+
+`
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-database", "0", "-replace"},
+		validConfig,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 3 entries") || stderr != "" {
+		t.Fatalf("valid config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	content := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+description: retained after failed config replacement
+
+`
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-database", "1", "-replace"},
+		content,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") || stderr != "" {
+		t.Fatalf("content import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	invalidConfig := strings.Replace(
+		validConfig,
+		"olcLogLevel: stats",
+		"olcLogLevel: not-a-log-level",
+		1,
+	)
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-replace"},
+		invalidConfig,
+	)
+	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "olcLogLevel") {
+		t.Fatalf("invalid config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	orphanConfig := `dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+
+`
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-database", "0", "-replace"},
+		orphanConfig,
+	)
+	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "parent entry") {
+		t.Fatalf("orphan config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	store, err := storage.OpenBoltReadOnly(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBoltReadOnly(): %v", err)
+	}
+	configDN, err := directory.ParseDN("cn=config")
+	if err != nil {
+		t.Fatalf("ParseDN(cn=config): %v", err)
+	}
+	contentDN, err := directory.ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatalf("ParseDN(content): %v", err)
+	}
+	if err := store.View(context.Background(), func(reader storage.Reader) error {
+		configuration, err := reader.GetIn(storage.OpenLDAPConfigPartition, configDN)
+		if err != nil {
+			return err
+		}
+		if got := configuration.Values("olcLogLevel"); len(got) != 1 || string(got[0]) != "stats" {
+			t.Fatalf("persisted olcLogLevel after rollback = %q", got)
+		}
+		partition := storage.OpenLDAPDatabasePartition(
+			"{1}mdb",
+			[]byte("11111111-1111-4111-8111-111111111111"),
+		)
+		entry, err := reader.GetIn(partition, contentDN)
+		if err != nil {
+			return err
+		}
+		if got := entry.Values("description"); len(got) != 1 ||
+			string(got[0]) != "retained after failed config replacement" {
+			t.Fatalf("content entry after rollback = %q", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect config import rollback: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close rollback inspection store: %v", err)
+	}
+
+	store, err = storage.OpenBolt(databasePath)
+	if err != nil {
+		t.Fatalf("OpenBolt(): %v", err)
+	}
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		configuration, err := writer.GetIn(storage.OpenLDAPConfigPartition, configDN)
+		if err != nil {
+			return err
+		}
+		configuration.ReplaceValues("olcLogLevel", [][]byte{[]byte("not-a-log-level")})
+		return writer.PutIn(storage.OpenLDAPConfigPartition, configuration, true)
+	}); err != nil {
+		_ = store.Close()
+		t.Fatalf("seed unchanged invalid configuration: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close invalid configuration store: %v", err)
+	}
+
+	content = strings.Replace(content, "retained after failed config replacement", "content import remains independent", 1)
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-database", "1", "-replace"},
+		content,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") || stderr != "" {
+		t.Fatalf("independent content import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+}
+
 func TestOpenLDAPImportExportAliasesRoundTrip(t *testing.T) {
 	t.Parallel()
 
