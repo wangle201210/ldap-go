@@ -158,6 +158,20 @@ func TestOnlineConfigMaintainsOrderedAccessValues(t *testing.T) {
 		"{0}to attrs=mail by * read",
 		"{1}to * by users read by * none",
 	})
+	beforeSiblings := readOrderedDatabaseSiblings(t, client)
+	invalidDatabase := ldap.NewAddRequest("olcDatabase=null,cn=config", nil)
+	invalidDatabase.Attribute("objectClass", []string{"olcDatabaseConfig"})
+	invalidDatabase.Attribute("olcDatabase", []string{"null"})
+	invalidDatabase.Attribute("olcSuffix", []string{"dc=example,dc=com"})
+	if err := client.Add(invalidDatabase); err == nil {
+		t.Fatal("ordered sibling Add with duplicate suffix succeeded")
+	}
+	if afterSiblings := readOrderedDatabaseSiblings(t, client); !slices.Equal(
+		afterSiblings,
+		beforeSiblings,
+	) {
+		t.Fatalf("failed ordered Add changed siblings: before=%q after=%q", beforeSiblings, afterSiblings)
+	}
 }
 
 func TestOpenLDAPReferenceOrderedConfigValues(t *testing.T) {
@@ -189,6 +203,117 @@ func TestOpenLDAPReferenceOrderedConfigValues(t *testing.T) {
 	if !reflect.DeepEqual(implementation, reference) {
 		t.Fatalf("ordered config values:\nldap-go:  %q\nOpenLDAP: %q", implementation, reference)
 	}
+}
+
+func TestOpenLDAPReferenceOrderedSiblingDifferential(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	referenceURI := startOpenLDAPDynamicConfigReferralServer(t, tools)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOfflineToolStore(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={0}config,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.GetIn(storage.OpenLDAPConfigPartition, dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcRootPW", stringValues("config-secret"))
+		return writer.PutIn(storage.OpenLDAPConfigPartition, entry, true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	reference := runOrderedSiblingScenario(t, referenceURI)
+	implementation := runOrderedSiblingScenario(t, "ldap://"+address)
+	if !reflect.DeepEqual(implementation, reference) {
+		t.Fatalf("ordered siblings:\nldap-go:  %q\nOpenLDAP: %q", implementation, reference)
+	}
+}
+
+func runOrderedSiblingScenario(t *testing.T, uri string) [][]string {
+	t.Helper()
+	client, err := ldap.DialURL(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatal(err)
+	}
+	addDatabase := func(dn, suffix string) {
+		t.Helper()
+		request := ldap.NewAddRequest(dn, nil)
+		request.Attribute("objectClass", []string{"olcDatabaseConfig"})
+		request.Attribute("olcDatabase", []string{"null"})
+		request.Attribute("olcSuffix", []string{suffix})
+		if err := client.Add(request); err != nil {
+			t.Fatalf("Add(%s): %v", dn, err)
+		}
+	}
+	overlay := ldap.NewAddRequest(
+		"olcOverlay=syncprov,olcDatabase={1}mdb,cn=config",
+		nil,
+	)
+	overlay.Attribute("objectClass", []string{"olcOverlayConfig", "olcSyncProvConfig"})
+	overlay.Attribute("olcOverlay", []string{"syncprov"})
+	if err := client.Add(overlay); err != nil {
+		t.Fatalf("Add syncprov overlay: %v", err)
+	}
+	var observations [][]string
+	addDatabase("olcDatabase=null,cn=config", "dc=null-one,dc=example")
+	observations = append(observations, readOrderedSiblingSnapshot(t, client))
+	addDatabase("olcDatabase={1}null,cn=config", "dc=null-two,dc=example")
+	observations = append(observations, readOrderedSiblingSnapshot(t, client))
+	if err := client.Del(ldap.NewDelRequest("olcDatabase={1}null,cn=config", nil)); err != nil {
+		t.Fatal(err)
+	}
+	observations = append(observations, readOrderedSiblingSnapshot(t, client))
+	return observations
+}
+
+func readOrderedSiblingSnapshot(t *testing.T, client *ldap.Conn) []string {
+	t.Helper()
+	values := readOrderedDatabaseSiblings(t, client)
+	result, err := client.Search(ldap.NewSearchRequest(
+		"cn=config", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
+		0, 0, false, "(olcOverlay=*)", []string{"olcOverlay"}, nil,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range result.Entries {
+		values = append(values, entry.DN+"|"+entry.GetAttributeValue("olcOverlay"))
+	}
+	slices.Sort(values)
+	return values
+}
+
+func readOrderedDatabaseSiblings(t *testing.T, client *ldap.Conn) []string {
+	t.Helper()
+	result, err := client.Search(ldap.NewSearchRequest(
+		"cn=config", ldap.ScopeSingleLevel, ldap.NeverDerefAliases,
+		0, 0, false, "(olcDatabase=*)", []string{"olcDatabase"}, nil,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values []string
+	for _, entry := range result.Entries {
+		value := entry.GetAttributeValue("olcDatabase")
+		order, _, indexed, err := parseOrderedSiblingValue(value)
+		if err != nil || (indexed && order < 0) {
+			continue
+		}
+		values = append(values, entry.DN+"|"+value)
+	}
+	slices.Sort(values)
+	return values
 }
 
 func runOrderedConfigScenario(t *testing.T, uri string) [][]string {

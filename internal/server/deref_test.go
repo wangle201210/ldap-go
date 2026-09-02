@@ -569,8 +569,11 @@ func TestDerefFrontendOverlayOnlineLifecycle(t *testing.T) {
 		HasValue: true,
 	}
 
-	const overlayDN = "olcOverlay=deref,olcDatabase={-1}frontend,cn=config"
-	overlay := ldap.NewAddRequest(overlayDN, nil)
+	const (
+		overlayRequestDN = "olcOverlay=deref,olcDatabase={-1}frontend,cn=config"
+		overlayDN        = "olcOverlay={0}deref,olcDatabase={-1}frontend,cn=config"
+	)
+	overlay := ldap.NewAddRequest(overlayRequestDN, nil)
 	overlay.Attribute("objectClass", []string{"olcOverlayConfig"})
 	overlay.Attribute("olcOverlay", []string{"deref"})
 	if err := configClient.Add(overlay); err != nil {

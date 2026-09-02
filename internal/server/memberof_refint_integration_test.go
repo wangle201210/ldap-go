@@ -385,6 +385,7 @@ func TestRefintOverlayOnlineSubtreeAndNothing(t *testing.T) {
 	if err := configClient.Add(refint); err != nil {
 		t.Fatalf("Add(refint overlay): %v", err)
 	}
+	actualRefintOverlayDN := "olcOverlay={0}refint,olcDatabase={1}mdb,cn=config"
 
 	targetDN := "uid=target,ou=people,dc=example,dc=com"
 	if err := dataClient.Add(memberOfPersonAdd("target")); err != nil {
@@ -468,14 +469,14 @@ func TestRefintOverlayOnlineSubtreeAndNothing(t *testing.T) {
 		renamedLeadDN,
 	)
 
-	invalidConfig := ldap.NewModifyRequest(testRefintOverlayDN, nil)
+	invalidConfig := ldap.NewModifyRequest(actualRefintOverlayDN, nil)
 	invalidConfig.Replace("olcRefintAttribute", []string{"undefinedRefintAttribute"})
 	assertLDAPResultCode(
 		t,
 		configClient.Modify(invalidConfig),
 		ldap.LDAPResultConstraintViolation,
 	)
-	configured := readStoredEntry(t, store, testRefintOverlayDN).
+	configured := readStoredEntry(t, store, actualRefintOverlayDN).
 		Values("olcRefintAttribute")
 	if len(configured) != 1 || string(configured[0]) != "managerRef memberA" {
 		t.Fatalf("refint configuration rollback values = %q", configured)

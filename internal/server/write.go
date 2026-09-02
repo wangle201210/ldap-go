@@ -220,7 +220,13 @@ func (server *Server) handleAdd(
 			ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, err.Error()),
 		)
 	}
+	_, _, orderedConfigurationSibling := orderedSiblingRDN(
+		dn, state.runtime.schema,
+	)
 	validationResult := validateNewEntry(entry, dn)
+	if configurationWrite && orderedConfigurationSibling {
+		validationResult = validateNewEntryAttributes(entry)
+	}
 	if !configurationWrite {
 		validationResult = validateNewEntryWithSchema(
 			entry,
@@ -253,9 +259,22 @@ func (server *Server) handleAdd(
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
 		syncChanges      []*syncChange
+		siblingChanges   []orderedSiblingChange
 	)
 	err = server.updateStorage(ctx, func(writer storage.Writer) error {
 		tx := writerForDatabase(writer, *database)
+		if configurationWrite {
+			var siblingErr error
+			entry, dn, siblingChanges, siblingErr = prepareOrderedConfigAdd(
+				tx, entry, dn, state.runtime.schema,
+			)
+			if siblingErr != nil {
+				return operationFailed(
+					ldapwire.ResultNamingViolation,
+					siblingErr.Error(),
+				)
+			}
+		}
 		if _, err := server.entryOrReferral(
 			state.runtime,
 			tx,
@@ -580,6 +599,20 @@ func (server *Server) handleAdd(
 			if validationErr != nil {
 				return validationErr
 			}
+		}
+		for _, sibling := range siblingChanges {
+			change, changeErr := server.recordSyncChangeContext(
+				ctx,
+				writer,
+				state.runtime,
+				*database,
+				&sibling.before,
+				&sibling.after,
+			)
+			if changeErr != nil {
+				return changeErr
+			}
+			syncChanges = appendSyncChanges(syncChanges, change)
 		}
 		sourceChange, changeErr := server.recordSyncChangeContext(
 			ctx,
@@ -1592,6 +1625,7 @@ func (server *Server) handleDelete(
 		nextRuntime      *runtimeState
 		responseControls []ldapwire.Control
 		syncChanges      []*syncChange
+		siblingChanges   []orderedSiblingChange
 	)
 	writeRecord := accesslogWriteRecord{
 		operation:       accesslogDelete,
@@ -1772,6 +1806,14 @@ func (server *Server) handleDelete(
 				}
 			}
 		}
+		if configurationWrite {
+			siblingChanges, err = renumberOrderedConfigSiblingsAfterDelete(
+				tx, dn, state.runtime.schema,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		if !configurationWrite {
 			if err := applyMemberOfDelete(
 				state.runtime,
@@ -1802,6 +1844,20 @@ func (server *Server) handleDelete(
 			if err != nil {
 				return err
 			}
+		}
+		for _, sibling := range siblingChanges {
+			change, changeErr := server.recordSyncChangeContext(
+				ctx,
+				writer,
+				state.runtime,
+				*database,
+				&sibling.before,
+				&sibling.after,
+			)
+			if changeErr != nil {
+				return changeErr
+			}
+			syncChanges = appendSyncChanges(syncChanges, change)
 		}
 		sourceChange, changeErr := server.recordSyncChangeContext(
 			ctx,

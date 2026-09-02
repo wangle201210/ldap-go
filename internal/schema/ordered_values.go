@@ -22,6 +22,17 @@ func (registry *Registry) HasOrderedValues(description string) bool {
 	return found && attributeHasOrderedValues(*attribute)
 }
 
+func (registry *Registry) HasOrderedSiblings(description string) bool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	attribute, found := registry.attributes[schemaKey(baseAttributeDescription(description))]
+	if !found {
+		return false
+	}
+	values := attribute.Extensions["X-ORDERED"]
+	return len(values) == 1 && values[0] == "SIBLINGS"
+}
+
 // ParseOrderedValue separates a valid OpenLDAP {n} prefix. A value beginning
 // with an invalid brace prefix is rejected because slapd's ordered-value sort
 // rejects it even when the underlying syntax could otherwise accept it.
