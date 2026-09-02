@@ -45,6 +45,7 @@ func TestOnlineDatabaseConfigurationModifyDNRequiresEntryUUID(t *testing.T) {
 			address,
 			databaseConfigModifyDNOldDN,
 			false,
+			false,
 		)
 
 		configClient.Close()
@@ -61,6 +62,7 @@ func TestOnlineDatabaseConfigurationModifyDNRequiresEntryUUID(t *testing.T) {
 			t,
 			address,
 			databaseConfigModifyDNOldDN,
+			false,
 			false,
 		)
 	})
@@ -80,7 +82,18 @@ func TestOnlineDatabaseConfigurationModifyDNRequiresEntryUUID(t *testing.T) {
 				return err
 			}
 			entry.ReplaceValues("entryUUID", stringValues(databaseUUID))
-			return writer.Put(entry, true)
+			if err := writer.Put(entry, true); err != nil {
+				return err
+			}
+			return writer.PutIn(storage.OpenLDAPConfigPartition, directory.Entry{
+				DN: "olcDatabase={2}null,cn=config",
+				Attributes: []directory.Attribute{
+					{Description: "objectClass", Values: stringValues("olcDatabaseConfig")},
+					{Description: "olcDatabase", Values: stringValues("{2}null")},
+					{Description: "olcSuffix", Values: stringValues("dc=other,dc=example")},
+					{Description: "entryUUID", Values: stringValues("33333333-3333-4333-8333-333333333333")},
+				},
+			}, false)
 		}); err != nil {
 			t.Fatalf("set database entryUUID: %v", err)
 		}
@@ -100,6 +113,7 @@ func TestOnlineDatabaseConfigurationModifyDNRequiresEntryUUID(t *testing.T) {
 			address,
 			databaseConfigModifyDNNewDN,
 			true,
+			true,
 		)
 
 		configClient.Close()
@@ -116,6 +130,7 @@ func TestOnlineDatabaseConfigurationModifyDNRequiresEntryUUID(t *testing.T) {
 			t,
 			address,
 			databaseConfigModifyDNNewDN,
+			true,
 			true,
 		)
 	})
@@ -148,6 +163,7 @@ func assertDatabaseConfigModifyDNState(
 	address string,
 	wantConfigDN string,
 	wantUUID bool,
+	wantSwappedSibling bool,
 ) {
 	t.Helper()
 	configClient := dialDatabaseConfigModifyDNConfigRoot(t, address)
@@ -174,6 +190,9 @@ func assertDatabaseConfigModifyDNState(
 		t.Fatalf("database config entryUUID = %q, want present=%v", got, wantUUID)
 	}
 
+	if wantSwappedSibling {
+		return
+	}
 	missingConfigDN := databaseConfigModifyDNNewDN
 	if wantConfigDN == databaseConfigModifyDNNewDN {
 		missingConfigDN = databaseConfigModifyDNOldDN

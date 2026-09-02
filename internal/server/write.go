@@ -2117,7 +2117,22 @@ func (server *Server) handleModifyDN(
 		server.configMu.Lock()
 		defer server.configMu.Unlock()
 	}
-	if oldDN.Equal(newDN) {
+	orderedSiblingMove := false
+	orderedSiblingTarget := 0
+	if configurationWrite {
+		var orderedFailure *ldapwire.Result
+		orderedSiblingMove, orderedSiblingTarget, orderedFailure =
+			orderedSiblingModifyDNRequest(
+				oldDN, newRDN, request.HasNewSuperior, state.runtime.schema,
+			)
+		if orderedFailure != nil {
+			return server.writeOperationResult(
+				connection, message.ID, ldapwire.ApplicationModifyDNResponse,
+				*orderedFailure,
+			)
+		}
+	}
+	if oldDN.Equal(newDN) && !orderedSiblingMove {
 		return server.writeOperationResult(
 			connection,
 			message.ID,
@@ -2168,7 +2183,7 @@ func (server *Server) handleModifyDN(
 		if err != nil {
 			return err
 		}
-		if comparisonOldDN.Equal(comparisonNewDN) {
+		if comparisonOldDN.Equal(comparisonNewDN) && !orderedSiblingMove {
 			return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
 		}
 		if comparisonOldDN.Equal(comparisonSuperior) ||
@@ -2422,6 +2437,65 @@ func (server *Server) handleModifyDN(
 		}
 		if preRead != nil {
 			responseControls = append(responseControls, *preRead)
+		}
+		if orderedSiblingMove {
+			changes, renamed, reorderErr := reorderOrderedConfigSibling(
+				tx, comparisonOldDN, orderedSiblingTarget, state.runtime.schema,
+			)
+			if reorderErr != nil {
+				if errors.Is(reorderErr, storage.ErrEntryNotFound) {
+					return operationFailed(ldapwire.ResultNoSuchObject, "")
+				}
+				return reorderErr
+			}
+			postRead, err := server.readResponseControl(
+				state.runtime, tx, state.boundDN, renamed,
+				controls.postRead, postReadControlOID,
+			)
+			if err != nil {
+				return err
+			}
+			if postRead != nil {
+				responseControls = append(responseControls, *postRead)
+			}
+			if controls.noOp {
+				return noOperationFailure()
+			}
+			if len(changes) == 0 {
+				return nil
+			}
+			if err := refreshRuntimeNamingContexts(writer, state.runtime); err != nil {
+				return err
+			}
+			nextRuntime, err = server.validateRuntimeConfiguration(writer)
+			if err != nil {
+				return err
+			}
+			var sourceChange *syncChange
+			for _, sibling := range changes {
+				change, changeErr := server.recordSyncChangeContext(
+					ctx, writer, state.runtime, *database,
+					&sibling.before, &sibling.after,
+				)
+				if changeErr != nil {
+					return changeErr
+				}
+				syncChanges = appendSyncChanges(syncChanges, change)
+				beforeDN, parseErr := directory.ParseDN(sibling.before.DN)
+				if parseErr == nil && beforeDN.Equal(comparisonOldDN) {
+					sourceChange = change
+				}
+			}
+			writeRecord.before = &sourceBefore
+			writeRecord.after = &renamed
+			logChanges, logErr := server.recordAccesslogWrite(
+				ctx, writer, state.runtime, *database, writeRecord, sourceChange,
+			)
+			if logErr != nil {
+				return logErr
+			}
+			syncChanges = append(syncChanges, logChanges...)
+			return nil
 		}
 		if !configurationWrite {
 			constraintEntry := sourceEntry.Clone()

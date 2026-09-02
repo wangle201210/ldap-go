@@ -9,6 +9,7 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -23,6 +24,120 @@ type orderedSibling struct {
 	entry   directory.Entry
 	order   int
 	content string
+}
+
+func orderedSiblingModifyDNRequest(
+	oldDN directory.DN,
+	newRDN directory.DN,
+	hasNewSuperior bool,
+	registry *schema.Registry,
+) (bool, int, *ldapwire.Result) {
+	oldAttribute, oldValue, ordered := orderedSiblingRDN(oldDN, registry)
+	if !ordered {
+		return false, 0, nil
+	}
+	failure := func(code ldapwire.ResultCode, diagnostic string) (bool, int, *ldapwire.Result) {
+		result := ldapwire.ResultError(code, diagnostic)
+		return true, 0, &result
+	}
+	if hasNewSuperior {
+		return failure(ldapwire.ResultUnwillingToPerform, "ordered siblings cannot change parent")
+	}
+	newAttribute, newValue, newOrdered := orderedSiblingRDN(newRDN, registry)
+	if !newOrdered || !constraintAttributeDescriptionsEqual(
+		registry, oldAttribute, newAttribute,
+	) {
+		return failure(ldapwire.ResultUnwillingToPerform, "ordered sibling type cannot change")
+	}
+	oldOrder, oldContent, oldIndexed, err := parseOrderedSiblingValue(oldValue)
+	if err != nil || !oldIndexed {
+		return failure(ldapwire.ResultNamingViolation, "existing ordered sibling has no valid index")
+	}
+	newOrder, newContent, newIndexed, err := parseOrderedSiblingValue(newValue)
+	if err != nil || !newIndexed || newOrder < 0 {
+		return failure(ldapwire.ResultUnwillingToPerform, "new ordered sibling index is invalid")
+	}
+	comparison, err := registry.Compare(
+		oldAttribute, "", []byte(oldContent), []byte(newContent),
+	)
+	if err != nil || comparison != 0 {
+		return failure(ldapwire.ResultUnwillingToPerform, "ordered sibling value cannot change")
+	}
+	if oldOrder < 0 || (oldOrder == 0 && strings.EqualFold(oldContent, "config")) {
+		return failure(ldapwire.ResultConstraintViolation, "fixed ordered sibling cannot move")
+	}
+	return true, newOrder, nil
+}
+
+func reorderOrderedConfigSibling(
+	tx storage.Writer,
+	oldDN directory.DN,
+	targetOrder int,
+	registry *schema.Registry,
+) ([]orderedSiblingChange, directory.Entry, error) {
+	attribute, _, ordered := orderedSiblingRDN(oldDN, registry)
+	if !ordered {
+		return nil, directory.Entry{}, errors.New("entry is not an ordered sibling")
+	}
+	parent, ok := oldDN.Parent()
+	if !ok {
+		return nil, directory.Entry{}, errors.New("ordered sibling requires a parent")
+	}
+	parentDisplay := orderedSiblingParentDisplay(tx, parent)
+	siblings, err := collectOrderedSiblings(tx, parent, attribute, registry)
+	if err != nil {
+		return nil, directory.Entry{}, err
+	}
+	source := -1
+	for index := range siblings {
+		if siblings[index].dn.Equal(oldDN) {
+			source = index
+			break
+		}
+	}
+	if source < 0 {
+		return nil, directory.Entry{}, storage.ErrEntryNotFound
+	}
+	moving := siblings[source]
+	siblings = append(siblings[:source], siblings[source+1:]...)
+	if targetOrder > len(siblings) {
+		targetOrder = len(siblings)
+	}
+	siblings = append(siblings, orderedSibling{})
+	copy(siblings[targetOrder+1:], siblings[targetOrder:])
+	siblings[targetOrder] = moving
+
+	mappings := make([]orderedSiblingMapping, 0, len(siblings))
+	for order, sibling := range siblings {
+		value := formatOrderedSiblingValue(order, sibling.content)
+		newDN, err := composeOrderedSiblingDN(attribute, value, parent, registry)
+		if err != nil {
+			return nil, directory.Entry{}, err
+		}
+		if sibling.dn.Equal(newDN) {
+			continue
+		}
+		mappings = append(mappings, orderedSiblingMapping{
+			oldDN: sibling.dn, newDN: newDN,
+			oldDisplay: sibling.entry.DN,
+			newDisplay: orderedSiblingDisplayDN(attribute, value, parentDisplay),
+			attribute:  attribute, value: value,
+		})
+	}
+	if len(mappings) == 0 {
+		return nil, moving.entry, nil
+	}
+	changes, err := applyOrderedSiblingMappings(tx, mappings, registry)
+	if err != nil {
+		return nil, directory.Entry{}, err
+	}
+	for _, change := range changes {
+		beforeDN, parseErr := directory.ParseDN(change.before.DN)
+		if parseErr == nil && beforeDN.Equal(oldDN) {
+			return changes, change.after, nil
+		}
+	}
+	return nil, directory.Entry{}, errors.New("ordered sibling move omitted source entry")
 }
 
 func parseOrderedSiblingValue(value string) (int, string, bool, error) {

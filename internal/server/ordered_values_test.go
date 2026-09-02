@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -234,6 +236,123 @@ func TestOpenLDAPReferenceOrderedSiblingDifferential(t *testing.T) {
 	if !reflect.DeepEqual(implementation, reference) {
 		t.Fatalf("ordered siblings:\nldap-go:  %q\nOpenLDAP: %q", implementation, reference)
 	}
+}
+
+func TestOpenLDAPReferenceOrderedSiblingModifyDNDifferential(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	referenceURI := startOpenLDAPDynamicConfigReferralServer(t, tools)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOfflineToolStore(t, store)
+	if err := store.Update(context.Background(), func(writer storage.Writer) error {
+		dn, err := directory.ParseDN("olcDatabase={0}config,cn=config")
+		if err != nil {
+			return err
+		}
+		entry, err := writer.GetIn(storage.OpenLDAPConfigPartition, dn)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues("olcRootPW", stringValues("config-secret"))
+		if err := writer.PutIn(storage.OpenLDAPConfigPartition, entry, true); err != nil {
+			return err
+		}
+		mdbDN, err := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+		if err != nil {
+			return err
+		}
+		mdb, err := writer.GetIn(storage.OpenLDAPConfigPartition, mdbDN)
+		if err != nil {
+			return err
+		}
+		mdb.ReplaceValues("entryUUID", stringValues("44444444-4444-4444-8444-444444444444"))
+		return writer.PutIn(storage.OpenLDAPConfigPartition, mdb, true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+
+	reference := runOrderedSiblingModifyDNScenario(t, referenceURI)
+	implementation := runOrderedSiblingModifyDNScenario(t, "ldap://"+address)
+	if !reflect.DeepEqual(implementation, reference) {
+		t.Fatalf("ordered ModifyDN:\nldap-go:  %#v\nOpenLDAP: %#v", implementation, reference)
+	}
+}
+
+type orderedSiblingModifyDNOutcome struct {
+	MoveCode     uint16
+	Values       []string
+	FinalValues  []string
+	SameCode     uint16
+	TypeCode     uint16
+	SuperiorCode uint16
+	ConfigCode   uint16
+}
+
+func runOrderedSiblingModifyDNScenario(
+	t *testing.T,
+	uri string,
+) orderedSiblingModifyDNOutcome {
+	t.Helper()
+	client, err := ldap.DialURL(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatal(err)
+	}
+	overlay := ldap.NewAddRequest(
+		"olcOverlay=syncprov,olcDatabase={1}mdb,cn=config",
+		nil,
+	)
+	overlay.Attribute("objectClass", []string{"olcOverlayConfig", "olcSyncProvConfig"})
+	overlay.Attribute("olcOverlay", []string{"syncprov"})
+	if err := client.Add(overlay); err != nil {
+		t.Fatalf("Add syncprov overlay: %v", err)
+	}
+	for index := 0; index < 2; index++ {
+		request := ldap.NewAddRequest("olcDatabase=null,cn=config", nil)
+		request.Attribute("objectClass", []string{"olcDatabaseConfig"})
+		request.Attribute("olcDatabase", []string{"null"})
+		request.Attribute("olcSuffix", []string{fmt.Sprintf("dc=null-%d,dc=example", index)})
+		if err := client.Add(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outcome := orderedSiblingModifyDNOutcome{}
+	outcome.MoveCode = orderedSiblingLDAPResultCode(client.ModifyDN(ldap.NewModifyDNRequest(
+		"olcDatabase={1}mdb,cn=config", "olcDatabase={3}mdb", true, "",
+	)))
+	outcome.Values = readOrderedSiblingSnapshot(t, client)
+	outcome.SameCode = orderedSiblingLDAPResultCode(client.ModifyDN(ldap.NewModifyDNRequest(
+		"olcDatabase={3}mdb,cn=config", "olcDatabase={3}mdb", true, "",
+	)))
+	outcome.TypeCode = orderedSiblingLDAPResultCode(client.ModifyDN(ldap.NewModifyDNRequest(
+		"olcDatabase={3}mdb,cn=config", "olcDatabase={1}null", true, "",
+	)))
+	outcome.SuperiorCode = orderedSiblingLDAPResultCode(client.ModifyDN(ldap.NewModifyDNRequest(
+		"olcDatabase={3}mdb,cn=config", "olcDatabase={1}mdb", true,
+		"olcDatabase={0}config,cn=config",
+	)))
+	outcome.ConfigCode = orderedSiblingLDAPResultCode(client.ModifyDN(ldap.NewModifyDNRequest(
+		"olcDatabase={0}config,cn=config", "olcDatabase={1}config", true, "",
+	)))
+	outcome.FinalValues = readOrderedSiblingSnapshot(t, client)
+	return outcome
+}
+
+func orderedSiblingLDAPResultCode(err error) uint16 {
+	if err == nil {
+		return ldap.LDAPResultSuccess
+	}
+	var ldapErr *ldap.Error
+	if errors.As(err, &ldapErr) {
+		return ldapErr.ResultCode
+	}
+	return ldap.LDAPResultOther
 }
 
 func runOrderedSiblingScenario(t *testing.T, uri string) [][]string {
