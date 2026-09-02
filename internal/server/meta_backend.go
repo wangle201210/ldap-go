@@ -895,10 +895,19 @@ func loadMetaBackendSuffixRewrite(
 		if err != nil {
 			return nil, fmt.Errorf("%s olcDbRewrite: %w", entry.DN, err)
 		}
-		if len(words) == 0 ||
-			(!strings.EqualFold(words[0], "suffixmassage") &&
-				!strings.EqualFold(words[0], "rwm-suffixmassage")) {
-			continue
+		if len(words) == 0 {
+			return nil, fmt.Errorf(
+				"%s olcDbRewrite contains an empty unsupported rewrite directive; only suffixmassage is supported (map uses olcDbMap)",
+				entry.DN,
+			)
+		}
+		if !strings.EqualFold(words[0], "suffixmassage") &&
+			!strings.EqualFold(words[0], "rwm-suffixmassage") {
+			return nil, fmt.Errorf(
+				"%s olcDbRewrite contains unsupported rewrite directive %q; only suffixmassage is supported (map uses olcDbMap)",
+				entry.DN,
+				words[0],
+			)
 		}
 		if len(words) != 3 {
 			return nil, fmt.Errorf(

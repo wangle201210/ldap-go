@@ -89,10 +89,19 @@ func loadRWMRuntimeConfiguration(
 				err,
 			)
 		}
-		if len(words) == 0 ||
-			(!strings.EqualFold(words[0], "rwm-suffixmassage") &&
-				!strings.EqualFold(words[0], "suffixmassage")) {
-			continue
+		if len(words) == 0 {
+			return rwmRuntimeConfiguration{}, fmt.Errorf(
+				"%s olcRwmRewrite contains an empty unsupported rewrite directive; only suffixmassage is supported (map uses olcRwmMap)",
+				entry.DN,
+			)
+		}
+		if !strings.EqualFold(words[0], "rwm-suffixmassage") &&
+			!strings.EqualFold(words[0], "suffixmassage") {
+			return rwmRuntimeConfiguration{}, fmt.Errorf(
+				"%s olcRwmRewrite contains unsupported rewrite directive %q; only suffixmassage is supported (map uses olcRwmMap)",
+				entry.DN,
+				words[0],
+			)
 		}
 		if configuration.suffix != nil {
 			return rwmRuntimeConfiguration{}, fmt.Errorf(
