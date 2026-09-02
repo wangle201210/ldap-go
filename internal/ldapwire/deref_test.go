@@ -338,6 +338,65 @@ func TestEncodeDerefResponseValue(t *testing.T) {
 	}
 }
 
+func TestDecodeDerefResponseValueRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := []DerefResult{
+		{
+			DerefAttr:  "member",
+			DerefValue: "uid=alice,ou=people,dc=example,dc=com",
+			Attributes: []DerefAttribute{
+				{Type: "uid", Values: [][]byte{[]byte("alice"), []byte("a.smith")}},
+				{Type: "jpegPhoto", Values: [][]byte{{0x00, 0xff, 0x10}}},
+				{Type: "description", Values: [][]byte{{}}},
+			},
+		},
+		{DerefAttr: "manager", DerefValue: ""},
+	}
+	encoded, err := EncodeDerefResponseValue(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeDerefResponseValue(encoded)
+	if err != nil {
+		t.Fatalf("DecodeDerefResponseValue(): %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded deref response = %#v, want %#v", got, want)
+	}
+
+	got[0].Attributes[0].Values[0][0] = 'X'
+	again, err := DecodeDerefResponseValue(encoded)
+	if err != nil || string(again[0].Attributes[0].Values[0]) != "alice" {
+		t.Fatalf("decoded deref values alias input or prior output: %#v, %v", again, err)
+	}
+}
+
+func TestDecodeDerefResponseValueRejectsMalformedBER(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string][]byte{
+		"empty":                nil,
+		"wrong outer tag":      {0x31, 0x00},
+		"trailing data":        {0x30, 0x00, 0x00},
+		"wrong result tag":     {0x30, 0x02, 0x31, 0x00},
+		"missing deref value":  {0x30, 0x05, 0x30, 0x03, 0x04, 0x01, 'a'},
+		"invalid deref value":  {0x30, 0x08, 0x30, 0x06, 0x04, 0x01, 'a', 0x04, 0x01, 0xff},
+		"wrong attributes tag": {0x30, 0x0b, 0x30, 0x09, 0x04, 0x01, 'a', 0x04, 0x00, 0x30, 0x02, 0x04, 0x00},
+		"empty attributes":     {0x30, 0x09, 0x30, 0x07, 0x04, 0x01, 'a', 0x04, 0x00, 0xa0, 0x00},
+		"empty value set":      {0x30, 0x10, 0x30, 0x0e, 0x04, 0x01, 'a', 0x04, 0x00, 0xa0, 0x07, 0x30, 0x05, 0x04, 0x01, 'b', 0x31, 0x00},
+	}
+	for name, value := range tests {
+		name, value := name, value
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if decoded, err := DecodeDerefResponseValue(value); !errors.Is(err, ErrMalformedMessage) {
+				t.Fatalf("DecodeDerefResponseValue(%x) = %#v, %v", value, decoded, err)
+			}
+		})
+	}
+}
+
 func TestEncodeDerefResponseValueEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -443,6 +502,47 @@ func FuzzDecodeDerefRequestValue(f *testing.F) {
 			if spec.DerefAttr == "" || len(spec.Attributes) == 0 ||
 				len(spec.Attributes) > maxDerefAttributesPerSpec {
 				t.Fatalf("decoded deref spec = %#v", spec)
+			}
+		}
+	})
+}
+
+func FuzzDecodeDerefResponseValue(f *testing.F) {
+	valid, err := EncodeDerefResponseValue([]DerefResult{{
+		DerefAttr:  "member",
+		DerefValue: "uid=alice,dc=example,dc=com",
+		Attributes: []DerefAttribute{{
+			Type: "uid", Values: [][]byte{[]byte("alice"), {0x00, 0xff}},
+		}},
+	}})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add([]byte{})
+	f.Add([]byte{0x30, 0x80, 0x00, 0x00})
+	f.Add(valid[:len(valid)-1])
+
+	f.Fuzz(func(t *testing.T, value []byte) {
+		results, err := DecodeDerefResponseValue(value)
+		if err != nil {
+			if !errors.Is(err, ErrMalformedMessage) {
+				t.Fatalf("DecodeDerefResponseValue() error = %v", err)
+			}
+			return
+		}
+		if len(results) > maxDerefResults {
+			t.Fatalf("decoded deref results = %d", len(results))
+		}
+		for _, result := range results {
+			if result.DerefAttr == "" || len(result.Attributes) > maxDerefAttributesPerResult {
+				t.Fatalf("decoded deref result = %#v", result)
+			}
+			for _, attribute := range result.Attributes {
+				if attribute.Type == "" || len(attribute.Values) == 0 ||
+					len(attribute.Values) > maxDerefValuesPerAttribute {
+					t.Fatalf("decoded deref attribute = %#v", attribute)
+				}
 			}
 		}
 	})

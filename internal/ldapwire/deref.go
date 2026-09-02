@@ -351,6 +351,280 @@ func EncodeDerefResponseValue(results []DerefResult) ([]byte, error) {
 	return encoded, nil
 }
 
+// DecodeDerefResponseValue decodes the value of an OpenLDAP dereference
+// response control while enforcing the same structural and aggregate bounds
+// as EncodeDerefResponseValue.
+func DecodeDerefResponseValue(value []byte) ([]DerefResult, error) {
+	if len(value) == 0 {
+		return nil, malformed("deref response value is empty")
+	}
+	if int64(len(value)) > DefaultMaxMessageSize {
+		return nil, malformed(
+			"deref response value exceeds %d-byte limit",
+			DefaultMaxMessageSize,
+		)
+	}
+
+	outer, trailing, err := readDerefBERElement(value)
+	if err != nil {
+		return nil, malformed("decode deref response value: %v", err)
+	}
+	if len(trailing) != 0 {
+		return nil, malformed("deref response value has trailing data")
+	}
+	if outer.identifier != 0x30 {
+		return nil, malformed("deref response value is not a sequence")
+	}
+
+	var results []DerefResult
+	totalAttributes := 0
+	totalValues := 0
+	payloadBytes := int64(0)
+	remaining := outer.content
+	for len(remaining) != 0 {
+		if len(results) == maxDerefResults {
+			return nil, malformed(
+				"deref response contains more than %d results",
+				maxDerefResults,
+			)
+		}
+		var encodedResult derefBERElement
+		encodedResult, remaining, err = readDerefBERElement(remaining)
+		if err != nil {
+			return nil, malformed(
+				"decode deref response result %d: %v",
+				len(results),
+				err,
+			)
+		}
+		if encodedResult.identifier != 0x30 {
+			return nil, malformed(
+				"deref response result %d is not a sequence",
+				len(results),
+			)
+		}
+
+		result, attributeCount, valueCount, resultBytes, err :=
+			decodeDerefResponseResult(encodedResult.content, len(results))
+		if err != nil {
+			return nil, err
+		}
+		if attributeCount > maxDerefResponseAttributes-totalAttributes {
+			return nil, malformed(
+				"deref response contains more than %d attributes",
+				maxDerefResponseAttributes,
+			)
+		}
+		if valueCount > maxDerefResponseValues-totalValues {
+			return nil, malformed(
+				"deref response contains more than %d attribute values",
+				maxDerefResponseValues,
+			)
+		}
+		if resultBytes > DefaultMaxMessageSize-payloadBytes {
+			return nil, malformed(
+				"deref response payload exceeds %d-byte limit",
+				DefaultMaxMessageSize,
+			)
+		}
+		totalAttributes += attributeCount
+		totalValues += valueCount
+		payloadBytes += resultBytes
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func decodeDerefResponseResult(
+	content []byte,
+	resultIndex int,
+) (DerefResult, int, int, int64, error) {
+	derefAttribute, remaining, err := readDerefBERElement(content)
+	if err != nil {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"decode deref response result %d derefAttr: %v",
+			resultIndex,
+			err,
+		)
+	}
+	if derefAttribute.identifier != 0x04 {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d derefAttr is not an octet string",
+			resultIndex,
+		)
+	}
+	if _, err := canonicalDerefAttributeDescription(string(derefAttribute.content)); err != nil {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d derefAttr is invalid: %v",
+			resultIndex,
+			err,
+		)
+	}
+
+	derefValue, remaining, err := readDerefBERElement(remaining)
+	if err != nil {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"decode deref response result %d derefValue: %v",
+			resultIndex,
+			err,
+		)
+	}
+	if derefValue.identifier != 0x04 {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d derefValue is not an octet string",
+			resultIndex,
+		)
+	}
+	if !utf8.Valid(derefValue.content) {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d derefValue is not valid UTF-8",
+			resultIndex,
+		)
+	}
+
+	result := DerefResult{
+		DerefAttr:  string(derefAttribute.content),
+		DerefValue: string(derefValue.content),
+	}
+	payloadBytes := int64(len(derefAttribute.content) + len(derefValue.content))
+	if len(remaining) == 0 {
+		return result, 0, 0, payloadBytes, nil
+	}
+	encodedAttributes, trailing, err := readDerefBERElement(remaining)
+	if err != nil {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"decode deref response result %d attributes: %v",
+			resultIndex,
+			err,
+		)
+	}
+	if len(trailing) != 0 {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d has extra elements",
+			resultIndex,
+		)
+	}
+	if encodedAttributes.identifier != 0xa0 {
+		return DerefResult{}, 0, 0, 0, malformed(
+			"deref response result %d attributes use an invalid tag",
+			resultIndex,
+		)
+	}
+
+	attributes, valueCount, attributeBytes, err :=
+		decodeDerefResponseAttributes(encodedAttributes.content, resultIndex)
+	if err != nil {
+		return DerefResult{}, 0, 0, 0, err
+	}
+	result.Attributes = attributes
+	return result, len(attributes), valueCount, payloadBytes + attributeBytes, nil
+}
+
+func decodeDerefResponseAttributes(
+	content []byte,
+	resultIndex int,
+) ([]DerefAttribute, int, int64, error) {
+	if len(content) == 0 {
+		return nil, 0, 0, malformed(
+			"deref response result %d has an empty attribute list",
+			resultIndex,
+		)
+	}
+	attributes := make([]DerefAttribute, 0)
+	valueCount := 0
+	payloadBytes := int64(0)
+	remaining := content
+	for len(remaining) != 0 {
+		if len(attributes) == maxDerefAttributesPerResult {
+			return nil, 0, 0, malformed(
+				"deref response result %d has more than %d attributes",
+				resultIndex,
+				maxDerefAttributesPerResult,
+			)
+		}
+		var encodedAttribute derefBERElement
+		var err error
+		encodedAttribute, remaining, err = readDerefBERElement(remaining)
+		if err != nil {
+			return nil, 0, 0, malformed(
+				"decode deref response result %d attribute %d: %v",
+				resultIndex,
+				len(attributes),
+				err,
+			)
+		}
+		if encodedAttribute.identifier != 0x30 {
+			return nil, 0, 0, malformed(
+				"deref response result %d attribute %d is not a sequence",
+				resultIndex,
+				len(attributes),
+			)
+		}
+
+		attributeType, encodedValues, err := readDerefBERElement(encodedAttribute.content)
+		if err != nil || attributeType.identifier != 0x04 {
+			return nil, 0, 0, malformed(
+				"deref response result %d attribute %d has an invalid type",
+				resultIndex,
+				len(attributes),
+			)
+		}
+		if _, err := canonicalDerefAttributeDescription(string(attributeType.content)); err != nil {
+			return nil, 0, 0, malformed(
+				"deref response result %d attribute %d type is invalid: %v",
+				resultIndex,
+				len(attributes),
+				err,
+			)
+		}
+		valueSet, trailing, err := readDerefBERElement(encodedValues)
+		if err != nil || len(trailing) != 0 || valueSet.identifier != 0x31 ||
+			len(valueSet.content) == 0 {
+			return nil, 0, 0, malformed(
+				"deref response result %d attribute %d has an invalid value set",
+				resultIndex,
+				len(attributes),
+			)
+		}
+
+		attribute := DerefAttribute{Type: string(attributeType.content)}
+		payloadBytes += int64(len(attributeType.content))
+		remainingValues := valueSet.content
+		for len(remainingValues) != 0 {
+			if len(attribute.Values) == maxDerefValuesPerAttribute {
+				return nil, 0, 0, malformed(
+					"deref response result %d attribute %d has more than %d values",
+					resultIndex,
+					len(attributes),
+					maxDerefValuesPerAttribute,
+				)
+			}
+			if valueCount == maxDerefResponseValues {
+				return nil, 0, 0, malformed(
+					"deref response contains more than %d attribute values",
+					maxDerefResponseValues,
+				)
+			}
+			var encodedValue derefBERElement
+			encodedValue, remainingValues, err = readDerefBERElement(remainingValues)
+			if err != nil || encodedValue.identifier != 0x04 {
+				return nil, 0, 0, malformed(
+					"deref response result %d attribute %d has an invalid value",
+					resultIndex,
+					len(attributes),
+				)
+			}
+			decodedValue := make([]byte, len(encodedValue.content))
+			copy(decodedValue, encodedValue.content)
+			attribute.Values = append(attribute.Values, decodedValue)
+			valueCount++
+			payloadBytes += int64(len(encodedValue.content))
+		}
+		attributes = append(attributes, attribute)
+	}
+	return attributes, valueCount, payloadBytes, nil
+}
+
 func validateDerefResponse(results []DerefResult) error {
 	if len(results) > maxDerefResults {
 		return fmt.Errorf(

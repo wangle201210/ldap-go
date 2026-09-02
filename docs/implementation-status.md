@@ -753,8 +753,10 @@ implemented `rwm` subset maps suffixes, attribute descriptions, object classes,
 DN-valued attributes, and LDAP URL DNs in both directions; Bind, Search,
 Compare, writes, transactions, ACLs, and inherited sorting pass an OpenLDAP
 differential. Wildcard allowlists and response-side drop mappings are also
-supported. General rewrite contexts and rules, remaining map flags, relay
-chains, and broader proxy/overlay combinations remain. The compatibility
+supported. Unsupported `olcRwmRewrite` and back-meta `olcDbRewrite` directives
+now fail startup or the atomic online configuration transaction instead of
+being silently ignored. General rewrite contexts and rules, remaining map flags,
+relay chains, and broader proxy/overlay combinations remain. The compatibility
 matrix marks these as partial until the remaining schema, ACL, control,
 configuration, and differential cases pass.
 
@@ -817,10 +819,19 @@ fixture cover these forms; arbitrary locale-dependent ordering is not claimed.
 `-t` writes only non-printable values to secure files, while `-tt`, repeated
 `-t`, and higher repetitions write every value. Default and `-L` output
 render paging, Sort, VLV, password-policy, pre/post-read, Sync State/Done,
-unknown controls, and Sync Info intermediate responses; `-LL/-LLL` apply
+dereference results (including binary values), unknown controls, and Sync Info
+intermediate responses; `-LL/-LLL` apply
 OpenLDAP's suppression rules. The wire observer also covers simple, SASL, and
 followed-referral search paths, and entry controls remain associated after
 client-side sorting.
+General `-e` supports the OpenLDAP names `assert`, `authzid`, `manageDSAit`,
+`noop`, `ppolicy`, `preread`, `postread`, `relax`/`manageDIT`, and
+`sessiontracking` in addition to numeric OIDs. Named and numeric duplicates,
+criticality, filters, read-attribute selections, and session metadata are
+validated before connecting. Named `ppolicy` and `sessiontracking` are also
+sent on simple and every SASL Bind request; default session identifiers follow
+OpenLDAP's authorization-ID, authentication-ID, then Bind-DN precedence. A
+live OpenLDAP 2.6.13 command differential pins complete Bind and Search traffic.
 Referral URLs are parsed into RFC 4516 DN, attributes, scope, filter, and
 extension fields. Following OpenLDAP 2.6.13 referral chasing, only DN and scope
 replace the original Search request; malformed URLs map to LDAP parameter error

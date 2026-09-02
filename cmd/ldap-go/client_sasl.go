@@ -1327,7 +1327,7 @@ func (options *ldapClientOptions) bindSASLPlain(
 	defer clear(credentials)
 
 	for round := 0; round < 2; round++ {
-		result, err := exchangeLDAPClientSASLBind(
+		result, err := options.exchangeLDAPClientSASLBind(
 			connection,
 			takeLDAPClientMessageID(messageID),
 			"PLAIN",
@@ -1359,7 +1359,7 @@ func (options *ldapClientOptions) bindSASLExternal(
 	messageID *int64,
 ) error {
 	hasCredentials := options.saslAuthorization != ""
-	result, err := exchangeLDAPClientSASLBind(
+	result, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"EXTERNAL",
@@ -1383,7 +1383,7 @@ func (options *ldapClientOptions) bindSASLCRAMMD5(
 	password []byte,
 	messageID *int64,
 ) error {
-	first, err := exchangeLDAPClientSASLBind(
+	first, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"CRAM-MD5",
@@ -1425,7 +1425,7 @@ func (options *ldapClientOptions) bindSASLCRAMMD5(
 	clear(digest)
 	defer clear(response)
 
-	final, err := exchangeLDAPClientSASLBind(
+	final, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"CRAM-MD5",
@@ -1503,7 +1503,7 @@ func (options *ldapClientOptions) bindSASLSCRAM(
 		return fmt.Errorf("initialize SASL %s nonce: %w", options.saslMechanism, err)
 	}
 
-	first, err := exchangeLDAPClientSASLBind(
+	first, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		options.saslMechanism,
@@ -1533,7 +1533,7 @@ func (options *ldapClientOptions) bindSASLSCRAM(
 
 	clientFinalBytes := []byte(clientFinal)
 	defer clear(clientFinalBytes)
-	final, err := exchangeLDAPClientSASLBind(
+	final, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		options.saslMechanism,
@@ -1563,7 +1563,7 @@ func (options *ldapClientOptions) bindSASLSCRAM(
 		return nil
 	}
 
-	completed, err := exchangeLDAPClientSASLBind(
+	completed, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		options.saslMechanism,
@@ -1693,7 +1693,7 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 	password []byte,
 	messageID *int64,
 ) error {
-	first, err := exchangeLDAPClientSASLBind(
+	first, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"DIGEST-MD5",
@@ -1728,7 +1728,7 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 		defer negotiated.clear()
 	}
 
-	second, err := exchangeLDAPClientSASLBind(
+	second, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"DIGEST-MD5",
@@ -1756,7 +1756,7 @@ func (options *ldapClientOptions) bindSASLDigestMD5(
 		)
 	}
 
-	final, err := exchangeLDAPClientSASLBind(
+	final, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"DIGEST-MD5",
@@ -1804,13 +1804,19 @@ func takeLDAPClientMessageID(next *int64) int64 {
 	return messageID
 }
 
-func exchangeLDAPClientSASLBind(
+func (options *ldapClientOptions) exchangeLDAPClientSASLBind(
 	connection net.Conn,
 	messageID int64,
 	mechanism string,
 	credentials []byte,
 	hasCredentials bool,
 ) (ldapClientSASLResult, error) {
+	controls, err := ldapRawControlsToWire(
+		ldapBindRequestControls(options.generalControls),
+	)
+	if err != nil {
+		return ldapClientSASLResult{}, err
+	}
 	request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
 		ID: messageID,
 		Request: ldapwire.BindRequest{
@@ -1822,6 +1828,7 @@ func exchangeLDAPClientSASLBind(
 				HasSASLCredentials: hasCredentials,
 			},
 		},
+		Controls: controls,
 	})
 	if err != nil {
 		return ldapClientSASLResult{}, err

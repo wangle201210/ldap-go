@@ -48,7 +48,7 @@ func (options *ldapClientOptions) bindSASLGSSAPI(
 		return fmt.Errorf("initialize SASL GSSAPI context: %w", err)
 	}
 	defer clear(initial)
-	first, err := exchangeLDAPClientSASLBind(
+	first, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"GSSAPI",
@@ -68,7 +68,7 @@ func (options *ldapClientOptions) bindSASLGSSAPI(
 		return fmt.Errorf("verify SASL GSSAPI acceptor: %w", err)
 	}
 
-	second, err := exchangeLDAPClientSASLBind(
+	second, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"GSSAPI",
@@ -156,7 +156,7 @@ func (options *ldapClientOptions) bindSASLGSSAPI(
 	}
 	securityState.SendSequence++
 	defer clear(wrapped)
-	final, err := exchangeLDAPClientSASLBind(
+	final, err := options.exchangeLDAPClientSASLBind(
 		connection,
 		takeLDAPClientMessageID(messageID),
 		"GSSAPI",

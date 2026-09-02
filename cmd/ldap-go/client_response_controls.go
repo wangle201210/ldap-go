@@ -66,6 +66,8 @@ func (output *ldapSearchLDIFOutput) writeKnownResponseControl(
 		return output.writeReadEntryControl("preread", control.value)
 	case ldapControlPostRead:
 		return output.writeReadEntryControl("postread", control.value)
+	case ldapwire.DerefControlOID:
+		return output.writeDerefResponseControl(control.value)
 	case ldap.ControlTypeSyncState:
 		return output.writeSyncStateControl(control.value)
 	case ldap.ControlTypeSyncDone:
@@ -73,6 +75,42 @@ func (output *ldapSearchLDIFOutput) writeKnownResponseControl(
 	default:
 		return nil
 	}
+}
+
+func (output *ldapSearchLDIFOutput) writeDerefResponseControl(value []byte) error {
+	results, err := ldapwire.DecodeDerefResponseValue(value)
+	if err != nil {
+		return nil
+	}
+	for _, result := range results {
+		line := make([]byte, 0, len(result.DerefValue)+64)
+		for _, attribute := range result.Attributes {
+			for _, value := range attribute.Values {
+				line = append(line, '<')
+				line = append(line, attribute.Type...)
+				if ldifValueRequiresBase64(value) {
+					line = append(line, ':', '=')
+					start := len(line)
+					line = append(line, make([]byte, base64.StdEncoding.EncodedLen(len(value)))...)
+					base64.StdEncoding.Encode(line[start:], value)
+				} else {
+					line = append(line, '=')
+					line = append(line, value...)
+				}
+				line = append(line, '>', ';')
+			}
+		}
+		line = append(line, result.DerefValue...)
+		if err := writeCommentLDIFAttribute(
+			output.writer,
+			result.DerefAttr,
+			line,
+			false,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (output *ldapSearchLDIFOutput) writeControlExplanation(name, value string) error {

@@ -153,7 +153,7 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	flags.Var(
 		&options.generalControlSpecs,
 		"e",
-		"general LDAP control: [!]<oid>[=<base64>|:<string>|:<file URI>]",
+		"general LDAP control: [!]<name>[=<parameter>] or [!]<oid>[=<base64>|:<string>|:<file URI>]",
 	)
 	flags.Var(
 		&options.generalOptionSpecs,
@@ -240,6 +240,16 @@ func (options *ldapClientOptions) validateWrite(flags *flag.FlagSet) error {
 	return err
 }
 
+func (options *ldapClientOptions) sessionTrackingIdentifier() string {
+	if options.saslAuthorization != "" {
+		return options.saslAuthorization
+	}
+	if options.saslAuthentication != "" {
+		return options.saslAuthentication
+	}
+	return options.bindDN
+}
+
 func (options *ldapClientOptions) validateForWrite(
 	flags *flag.FlagSet,
 	requireConnection bool,
@@ -253,11 +263,15 @@ func (options *ldapClientOptions) validateForWrite(
 	if flagWasSet(flags, "referral-hop-limit") && flagWasSet(flags, "refhoplimit") {
 		return errors.New("-referral-hop-limit and -refhoplimit are aliases and cannot both be set")
 	}
-	controls, err := parseLDAPControlSpecs(
-		options.generalControlSpecs,
-		ldapControlValueOpenLDAPGeneral,
-	)
+	controls, err := parseLDAPGeneralControlSpecs(options.generalControlSpecs)
 	if err != nil {
+		return fmt.Errorf("%s -e: %w", flags.Name(), err)
+	}
+	if err := resolveLDAPSessionTrackingDefaults(
+		controls,
+		options.sessionTrackingIdentifier(),
+	); err != nil {
+		clearLDAPControls(controls)
 		return fmt.Errorf("%s -e: %w", flags.Name(), err)
 	}
 	clearLDAPControls(options.generalControls)
@@ -627,14 +641,17 @@ func (options *ldapClientOptions) connectAndBind(
 		}
 	}
 
+	bindControls := ldapBindRequestControls(options.generalControls)
 	if !hasPassword {
-		if err := connection.UnauthenticatedBind(""); err != nil {
+		request := ldap.NewSimpleBindRequest("", "", bindControls)
+		request.AllowEmptyPassword = true
+		if _, err := connection.SimpleBind(request); err != nil {
 			return closeOnError(fmt.Errorf("anonymous bind: %w", err))
 		}
 		return connection, nil
 	}
 
-	request := ldap.NewSimpleBindRequest(options.bindDN, string(password), nil)
+	request := ldap.NewSimpleBindRequest(options.bindDN, string(password), bindControls)
 	request.AllowEmptyPassword = true
 	defer func() { request.Password = "" }()
 	if _, err := connection.SimpleBind(request); err != nil {
