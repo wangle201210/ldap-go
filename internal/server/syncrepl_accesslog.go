@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -33,12 +34,24 @@ type syncConsumerAccesslogModification struct {
 }
 
 type syncConsumerAccesslogOperation struct {
-	kind          syncConsumerAccesslogOperationKind
-	remoteDN      directory.DN
-	newRemoteDN   *directory.DN
-	deleteOldRDN  bool
-	modifications []syncConsumerAccesslogModification
-	csn           openLDAPCSN
+	kind           syncConsumerAccesslogOperationKind
+	remoteDN       directory.DN
+	newRemoteDN    *directory.DN
+	newRDN         string
+	hasNewSuperior bool
+	deleteOldRDN   bool
+	modifications  []syncConsumerAccesslogModification
+	csn            openLDAPCSN
+}
+
+type syncConsumerAccesslogApplyResult struct {
+	eligible  bool
+	applied   bool
+	requestDN directory.DN
+	newDN     *directory.DN
+	afterDN   *directory.DN
+	before    *directory.Entry
+	after     *directory.Entry
 }
 
 func (server *Server) runSyncConsumerAccesslogSearch(
@@ -161,7 +174,7 @@ func (server *Server) processSyncConsumerAccesslogResponse(
 			return err
 		}
 		if state.State == ldap.SyncStateDelete {
-			if err := server.storeSyncConsumerCookie(
+			if err := server.storeSyncConsumerAccesslogCookie(
 				ctx,
 				config,
 				state.Cookie,
@@ -185,7 +198,7 @@ func (server *Server) processSyncConsumerAccesslogResponse(
 				return errors.New("Sync State control has no accesslog entry")
 			}
 		case *ldap.ControlSyncDone:
-			if err := server.storeSyncConsumerCookie(
+			if err := server.storeSyncConsumerAccesslogCookie(
 				ctx,
 				config,
 				typed.Cookie,
@@ -243,7 +256,7 @@ func (server *Server) processSyncConsumerAccesslogInfo(
 	default:
 		return false, fmt.Errorf("unknown Sync Info value %d", info.Value)
 	}
-	return complete, server.storeSyncConsumerCookie(ctx, config, cookie)
+	return complete, server.storeSyncConsumerAccesslogCookie(ctx, config, cookie)
 }
 
 func (server *Server) applySyncConsumerAccesslogEntry(
@@ -253,6 +266,7 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 	responseCookie []byte,
 ) error {
 	runtime := server.runtime.Load()
+	database := runtimeDatabaseForPartition(runtime, config.partition)
 	operation, err := parseSyncConsumerAccesslogOperation(
 		runtime,
 		config,
@@ -261,9 +275,13 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 	if err != nil {
 		return fmt.Errorf("parse accesslog entry %s: %w", source.DN, err)
 	}
-	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+	var syncChanges []*syncChange
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		syncChanges = nil
 		alreadyApplied, err := syncConsumerAccesslogOperationApplied(
 			writer,
+			runtime,
+			database,
 			config,
 			operation.csn,
 		)
@@ -283,6 +301,14 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 			return updateSyncConsumerCookie(writer, config, cookie)
 		}
 
+		applied, err := prepareSyncConsumerAccesslogApplyResult(
+			writer,
+			config,
+			operation,
+		)
+		if err != nil {
+			return err
+		}
 		switch operation.kind {
 		case syncConsumerAccesslogAdd:
 			err = applySyncConsumerAccesslogAdd(
@@ -317,8 +343,263 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 		if err != nil {
 			return err
 		}
+		if err := completeSyncConsumerAccesslogApplyResult(
+			writer,
+			config,
+			operation,
+			&applied,
+		); err != nil {
+			return err
+		}
+		if applied.applied && database != nil {
+			sourceChange, changeErr := server.recordSyncChangeCSN(
+				writer,
+				runtime,
+				*database,
+				applied.before,
+				applied.after,
+				operation.csn,
+			)
+			if changeErr != nil {
+				return changeErr
+			}
+			syncChanges = appendSyncChanges(syncChanges, sourceChange)
+
+			logSourceChange := &syncChange{csn: operation.csn}
+			logChanges, logErr := server.recordAccesslogWrite(
+				ctx,
+				writer,
+				runtime,
+				*database,
+				syncConsumerAccesslogWriteRecord(operation, applied),
+				logSourceChange,
+			)
+			if logErr != nil {
+				return logErr
+			}
+			syncChanges = append(syncChanges, logChanges...)
+		}
 		return updateSyncConsumerCookie(writer, config, cookie)
 	})
+	if err != nil {
+		return err
+	}
+	for _, change := range syncChanges {
+		server.publishSyncChange(change)
+	}
+	return nil
+}
+
+func (server *Server) storeSyncConsumerAccesslogCookie(
+	ctx context.Context,
+	config syncConsumerConfig,
+	cookie []byte,
+) error {
+	if len(cookie) == 0 {
+		return nil
+	}
+	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		return updateSyncConsumerCookie(writer, config, cookie)
+	})
+}
+
+func prepareSyncConsumerAccesslogApplyResult(
+	writer storage.Writer,
+	config syncConsumerConfig,
+	operation syncConsumerAccesslogOperation,
+) (syncConsumerAccesslogApplyResult, error) {
+	content := syncConsumerWriter(writer, nil, config)
+	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
+	if err != nil {
+		return syncConsumerAccesslogApplyResult{}, err
+	}
+	oldInScope := directory.InScope(searchBase, operation.remoteDN, config.scope)
+	result := syncConsumerAccesslogApplyResult{eligible: oldInScope}
+	if operation.kind == syncConsumerAccesslogModifyDN {
+		if operation.newRemoteDN == nil {
+			return result, nil
+		}
+		newInScope := directory.InScope(
+			searchBase,
+			*operation.newRemoteDN,
+			config.scope,
+		)
+		result.eligible = oldInScope || newInScope
+		if newInScope {
+			newDN, mapErr := mapSyncConsumerAccesslogDN(
+				config,
+				*operation.newRemoteDN,
+			)
+			if mapErr != nil {
+				return syncConsumerAccesslogApplyResult{}, mapErr
+			}
+			result.newDN = &newDN
+			result.afterDN = &newDN
+		} else {
+			newDN := *operation.newRemoteDN
+			result.newDN = &newDN
+		}
+	}
+	if !oldInScope {
+		return result, nil
+	}
+	requestDN, err := mapSyncConsumerAccesslogDN(config, operation.remoteDN)
+	if err != nil {
+		return syncConsumerAccesslogApplyResult{}, err
+	}
+	result.requestDN = requestDN
+	before, found, err := syncConsumerAccesslogOptionalEntry(content, requestDN)
+	if err != nil {
+		return syncConsumerAccesslogApplyResult{}, err
+	}
+	if found {
+		result.before = &before
+	}
+	return result, nil
+}
+
+func completeSyncConsumerAccesslogApplyResult(
+	writer storage.Writer,
+	config syncConsumerConfig,
+	operation syncConsumerAccesslogOperation,
+	result *syncConsumerAccesslogApplyResult,
+) error {
+	if result == nil || !result.eligible {
+		return nil
+	}
+	content := syncConsumerWriter(writer, nil, config)
+	switch operation.kind {
+	case syncConsumerAccesslogAdd:
+		after, found, err := syncConsumerAccesslogOptionalEntry(
+			content,
+			result.requestDN,
+		)
+		if err != nil {
+			return err
+		}
+		if found {
+			result.after = &after
+			result.applied = true
+		}
+	case syncConsumerAccesslogDelete:
+		result.applied = result.before != nil
+	case syncConsumerAccesslogModify:
+		if result.before == nil {
+			return nil
+		}
+		after, found, err := syncConsumerAccesslogOptionalEntry(
+			content,
+			result.requestDN,
+		)
+		if err != nil {
+			return err
+		}
+		if found {
+			result.after = &after
+		}
+		result.applied = true
+	case syncConsumerAccesslogModifyDN:
+		if result.before == nil {
+			return nil
+		}
+		if result.afterDN != nil {
+			after, found, err := syncConsumerAccesslogOptionalEntry(
+				content,
+				*result.afterDN,
+			)
+			if err != nil {
+				return err
+			}
+			if found {
+				result.after = &after
+			}
+		}
+		result.applied = true
+	}
+	return nil
+}
+
+func syncConsumerAccesslogOptionalEntry(
+	reader storage.Reader,
+	dn directory.DN,
+) (directory.Entry, bool, error) {
+	entry, err := reader.Get(dn)
+	switch {
+	case err == nil:
+		return entry.Clone(), true, nil
+	case errors.Is(err, storage.ErrEntryNotFound):
+		return directory.Entry{}, false, nil
+	default:
+		return directory.Entry{}, false, err
+	}
+}
+
+func syncConsumerAccesslogWriteRecord(
+	operation syncConsumerAccesslogOperation,
+	applied syncConsumerAccesslogApplyResult,
+) accesslogWriteRecord {
+	record := accesslogWriteRecord{
+		requestDN:     applied.requestDN,
+		before:        applied.before,
+		after:         applied.after,
+		deleteOldRDN:  operation.deleteOldRDN,
+		modifications: syncConsumerAccesslogLDAPModifications(operation.modifications),
+	}
+	if applied.before != nil && applied.after == nil {
+		record.operation = accesslogDelete
+		record.modifications = nil
+		return record
+	}
+	switch operation.kind {
+	case syncConsumerAccesslogAdd:
+		record.operation = accesslogAdd
+	case syncConsumerAccesslogDelete:
+		record.operation = accesslogDelete
+	case syncConsumerAccesslogModify:
+		record.operation = accesslogModify
+	case syncConsumerAccesslogModifyDN:
+		record.operation = accesslogModifyDN
+		record.newRDN = operation.newRDN
+		if operation.hasNewSuperior && applied.newDN != nil {
+			if newParent, ok := applied.newDN.Parent(); ok {
+				record.newSuperior = &newParent
+			}
+		}
+	}
+	return record
+}
+
+func syncConsumerAccesslogLDAPModifications(
+	modifications []syncConsumerAccesslogModification,
+) []ldapwire.Modification {
+	result := make([]ldapwire.Modification, 0, len(modifications))
+	for _, modification := range modifications {
+		var operation ldapwire.ModificationOperation
+		switch modification.operation {
+		case '+':
+			operation = ldapwire.ModificationAdd
+		case '-':
+			operation = ldapwire.ModificationDelete
+		case '=':
+			operation = ldapwire.ModificationReplace
+		case '#':
+			operation = ldapwire.ModificationIncrement
+		default:
+			continue
+		}
+		values := make([][]byte, len(modification.values))
+		for index := range modification.values {
+			values[index] = bytes.Clone(modification.values[index])
+		}
+		result = append(result, ldapwire.Modification{
+			Operation: operation,
+			Attribute: directory.Attribute{
+				Description: modification.description,
+				Values:      values,
+			},
+		})
+	}
+	return result
 }
 
 func parseSyncConsumerAccesslogOperation(
@@ -443,6 +724,8 @@ func parseSyncConsumerAccesslogOperation(
 		}
 	}
 	operation.newRemoteDN = &newRemoteDN
+	operation.newRDN = string(rawRDN)
+	operation.hasNewSuperior = rawSuperior != nil
 	return operation, nil
 }
 
@@ -967,17 +1250,34 @@ func deleteSyncConsumerAccesslogSubtree(
 
 func syncConsumerAccesslogOperationApplied(
 	reader storage.Reader,
+	runtime *runtimeState,
+	database *runtimeDatabase,
 	config syncConsumerConfig,
 	csn openLDAPCSN,
 ) (bool, error) {
 	raw, err := reader.Metadata(syncConsumerCookieMetadataKey(config))
-	if errors.Is(err, storage.ErrMetadataNotFound) {
+	switch {
+	case err == nil:
+		current, found := parseOpenLDAPSyncCookie(raw).csns[csn.serverID]
+		if found && compareOpenLDAPCSN(current, csn) >= 0 {
+			return true, nil
+		}
+	case errors.Is(err, storage.ErrMetadataNotFound):
+	default:
+		return false, err
+	}
+	if database == nil {
 		return false, nil
 	}
+	provider := effectiveSyncProviderDatabase(runtime, *database)
+	if provider == nil {
+		return false, nil
+	}
+	state, err := syncContextCSNs(reader, provider.partition)
 	if err != nil {
 		return false, err
 	}
-	current, found := parseOpenLDAPSyncCookie(raw).csns[csn.serverID]
+	current, found := state[csn.serverID]
 	return found && compareOpenLDAPCSN(current, csn) >= 0, nil
 }
 
