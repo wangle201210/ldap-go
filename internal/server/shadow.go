@@ -66,6 +66,16 @@ func loadRuntimeShadowSettings(
 			entry.DN,
 		)
 	}
+	if database.multiProvider {
+		for _, consumer := range database.syncConsumers {
+			if consumer.syncData == "accesslog" {
+				return fmt.Errorf(
+					"%s cannot combine delta-syncrepl syncdata=accesslog with writable olcMultiProvider/olcMirrorMode: attribute-level conflict merging is not supported",
+					entry.DN,
+				)
+			}
+		}
+	}
 
 	for _, raw := range entry.Values("olcUpdateRef") {
 		reference, err := validateShadowUpdateRef(string(raw))
