@@ -65,6 +65,8 @@ surface while using ldap-go's bbolt storage:
   'uid=alice,dc=example,dc=com'
 ./bin/ldap-go slapadd -db ./data/ldap-go.db \
   -l data-1.ldif -n 1 -S 1 -w
+./bin/ldap-go slapadd -db ./data/ldap-go.db \
+  -l data-1.ldif -n 1 -j 250001
 ./bin/ldap-go slapcat -db ./data/ldap-go.db \
   -l exported.ldif -n 1
 ./bin/ldap-go slapcat -db ./data/ldap-go.db -n 1 \

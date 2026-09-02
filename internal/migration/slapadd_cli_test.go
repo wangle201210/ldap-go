@@ -106,6 +106,80 @@ sn: Entry
 	}
 }
 
+func TestImportLDIFResumeLineSkipsWholePhysicalRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, continued := range []bool{false, true} {
+		continued := continued
+		name := "atomic"
+		if continued {
+			name = "continue"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedImportDatabaseConfig(t, store)
+			if _, err := ImportLDIF(
+				context.Background(),
+				store,
+				strings.NewReader("dn: dc=example,dc=com\nobjectClass: domain\ndc: example\n\n"),
+				ImportOptions{Database: "1", RequireObjectClass: true},
+			); err != nil {
+				t.Fatalf("seed suffix: %v", err)
+			}
+			input := `this record is deliberately malformed
+
+dn: uid=resumed,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: resumed
+cn: Resumed User
+sn: User
+description: folded value that is
+ continued on the next physical line
+
+`
+			options := ImportOptions{
+				Database:                      "1",
+				ResumeLine:                    3,
+				RequireObjectClass:            true,
+				GenerateOperationalAttributes: true,
+			}
+			if continued {
+				result, err := ImportLDIFContinue(
+					context.Background(), store, strings.NewReader(input), options,
+				)
+				if err != nil || result.Entries != 1 || len(result.Failures) != 0 {
+					t.Fatalf("ImportLDIFContinue() = %#v, %v", result, err)
+				}
+			} else {
+				result, err := ImportLDIF(
+					context.Background(), store, strings.NewReader(input), options,
+				)
+				if err != nil || result.Entries != 1 {
+					t.Fatalf("ImportLDIF() = %#v, %v", result, err)
+				}
+			}
+			assertContinuedImportDNs(
+				t,
+				store,
+				[]string{"uid=resumed,dc=example,dc=com"},
+			)
+		})
+	}
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader("dn: dc=example,dc=com\nobjectClass: domain\ndc: example\n\n"),
+		ImportOptions{ResumeLine: -1},
+	); err == nil || !strings.Contains(err.Error(), "resume line must be non-negative") {
+		t.Fatalf("negative resume line error = %v", err)
+	}
+}
+
 func TestImportLDIFContinueSharesEntryCSNStateAcrossRetries(t *testing.T) {
 	t.Parallel()
 

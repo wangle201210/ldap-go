@@ -1353,6 +1353,23 @@ dc: example
 	if strings.TrimSpace(stdout) != strings.TrimSpace(string(subtreeLDIF)) {
 		t.Fatalf("round-trip output:\n%s\nwant:\n%s", stdout, subtreeLDIF)
 	}
+	resumeInput := `this malformed record must be skipped
+
+dn: uid=resumed,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: resumed
+cn: Resumed User
+sn: User
+
+`
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", sourceDatabase, "-n", "1", "-j", "3"},
+		resumeInput,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") || stderr != "" {
+		t.Fatalf("slapadd -j exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
 }
 
 func TestSlapaddSchemaValidationModes(t *testing.T) {
@@ -1905,6 +1922,7 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		{name: "negative database", args: []string{"slapadd", "-n", "-1"}, message: "must be non-negative"},
 		{name: "empty suffix", args: []string{"slapadd", "-b", ""}, message: "requires a non-empty suffix"},
 		{name: "false dry run", args: []string{"slapadd", "-u=false"}, message: "-u=false is not supported"},
+		{name: "negative resume line", args: []string{"slapadd", "-j", "-1"}, message: "-j must be non-negative"},
 		{name: "empty subtree", args: []string{"slapcat", "-s", ""}, message: "requires a non-empty subtree"},
 		{name: "empty filter", args: []string{"slapcat", "-a", ""}, message: "requires a non-empty LDAP filter"},
 		{name: "invalid filter", args: []string{"slapcat", "-a", "(uid="}, message: "invalid export filter"},
@@ -2390,6 +2408,49 @@ olcSuffix: dc=example,dc=com
 	)
 	if exitCode != 0 || !strings.Contains(stdout, "validated 1 entries") {
 		t.Fatalf("ldap-go slapadd -q -s exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	resumeInput := `this malformed record must be skipped
+
+dn: cn=resumed,dc=example,dc=com
+objectClass: organizationalRole
+cn: resumed
+
+`
+	resumePath := filepath.Join(root, "resume.ldif")
+	if err := os.WriteFile(resumePath, []byte(resumeInput), 0o600); err != nil {
+		t.Fatalf("write resume LDIF: %v", err)
+	}
+	if output, err := exec.Command(
+		slapadd, "-f", configPath, "-j", "3", "-l", resumePath,
+	).CombinedOutput(); err != nil {
+		t.Fatalf("OpenLDAP slapadd -j: %v\n%s", err, output)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1", "-j", "3"},
+		resumeInput,
+	)
+	if exitCode != 0 || !strings.Contains(stdout, "imported 1 entries") || stderr != "" {
+		t.Fatalf("ldap-go slapadd -j exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	referenceResumed, err := exec.Command(
+		slapcat, "-f", configPath, "-a", "(cn=resumed)",
+	).Output()
+	if err != nil {
+		t.Fatalf("OpenLDAP slapcat resumed entry: %v", err)
+	}
+	localResumed, localResumeErr, localResumeCode := runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", databasePath, "-n", "1", "-a", "(cn=resumed)"},
+		"",
+	)
+	if localResumeCode != 0 || !strings.Contains(localResumeErr, "exported 1 entries") ||
+		!strings.Contains(localResumed, "dn: cn=resumed,dc=example,dc=com") ||
+		!strings.Contains(string(referenceResumed), "dn: cn=resumed,dc=example,dc=com") {
+		t.Fatalf(
+			"slapadd -j final entries: local=%q/%q/%d reference=%q",
+			localResumed, localResumeErr, localResumeCode, referenceResumed,
+		)
 	}
 }
 

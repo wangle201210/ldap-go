@@ -78,7 +78,13 @@ func importLDIFContinue(
 		)
 	}
 
-	records, failures, containsConfiguration, err := parseContinueImportRecords(reader)
+	if options.ResumeLine < 0 {
+		return ContinueImportResult{}, errors.New("LDIF resume line must be non-negative")
+	}
+	records, failures, containsConfiguration, err := parseContinueImportRecords(
+		reader,
+		options.ResumeLine,
+	)
 	if err != nil {
 		return ContinueImportResult{}, err
 	}
@@ -95,6 +101,7 @@ func importLDIFContinue(
 	baseOptions := options
 	baseOptions.DryRun = false
 	baseOptions.Replace = false
+	baseOptions.ResumeLine = 0
 	if options.Replace {
 		clearOptions := baseOptions
 		clearOptions.Replace = true
@@ -189,6 +196,7 @@ func importLDIFContinue(
 
 func parseContinueImportRecords(
 	reader io.Reader,
+	resumeLine int,
 ) ([]continueImportRecord, []ContinueImportFailure, bool, error) {
 	buffered := bufio.NewReader(reader)
 	var records []continueImportRecord
@@ -200,6 +208,10 @@ func parseContinueImportRecords(
 
 	flush := func() {
 		if raw.Len() == 0 {
+			return
+		}
+		if recordLine < resumeLine {
+			raw.Reset()
 			return
 		}
 		parsed, parseFailures, configuration := parseContinueImportRecord(

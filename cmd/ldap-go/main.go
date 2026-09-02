@@ -1034,10 +1034,12 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 	skipValueValidation := command == "slapadd"
 	databaseNumber := -1
 	csnServerID := 0
+	resumeLine := 0
 	if command == "slapadd" {
 		flags.StringVar(&openLDAPLDIFPath, "l", "", "source LDIF path")
 		flags.StringVar(&suffix, "b", "", "select the database containing this suffix")
 		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
+		flags.IntVar(&resumeLine, "j", 0, "skip records beginning before this physical line")
 		flags.BoolVar(&dryRun, "u", false, "validate without modifying the database")
 		flags.IntVar(&csnServerID, "S", 0, "server ID for generated entryCSN values")
 		flags.BoolVar(&updateContextCSN, "w", false, "update the suffix contextCSN")
@@ -1095,6 +1097,9 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		}
 		if csnServerID < 0 || csnServerID > 0x0fff {
 			return fmt.Errorf("slapadd server ID must be between 0 and %d", 0x0fff)
+		}
+		if resumeLine < 0 {
+			return errors.New("slapadd option -j must be non-negative")
 		}
 		if quickMode {
 			if valueCheckExplicit && valueCheckEnabled {
@@ -1161,6 +1166,7 @@ func runImport(command string, args []string, stdin io.Reader, stdout, stderr io
 		GenerateOperationalAttributes: command == "slapadd",
 		CSNServerID:                   uint16(csnServerID),
 		UpdateContextCSN:              updateContextCSN && !dryRun,
+		ResumeLine:                    resumeLine,
 	}
 	if command == "slapadd" {
 		importOptions.ValidateTransaction = func(reader storage.Reader) error {

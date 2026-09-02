@@ -1,6 +1,8 @@
 package migration
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +34,7 @@ type ImportOptions struct {
 	GenerateOperationalAttributes bool
 	CSNServerID                   uint16
 	UpdateContextCSN              bool
+	ResumeLine                    int
 	ValidateTransaction           func(storage.Reader) error
 }
 
@@ -68,6 +71,15 @@ func ImportLDIF(
 	reader io.Reader,
 	options ImportOptions,
 ) (ImportResult, error) {
+	if options.ResumeLine < 0 {
+		return ImportResult{}, errors.New("LDIF resume line must be non-negative")
+	}
+	var err error
+	reader, err = resumeLDIFReader(reader, options.ResumeLine)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	options.ResumeLine = 0
 	return importLDIF(
 		ctx,
 		store,
@@ -75,6 +87,45 @@ func ImportLDIF(
 		options,
 		&importCSNGenerator{},
 	)
+}
+
+func resumeLDIFReader(reader io.Reader, resumeLine int) (io.Reader, error) {
+	if reader == nil || resumeLine <= 1 {
+		return reader, nil
+	}
+	buffered := bufio.NewReader(reader)
+	line := 0
+	recordLine := 1
+	var record bytes.Buffer
+	for {
+		value, readErr := buffered.ReadString('\n')
+		if len(value) > 0 {
+			line++
+			if record.Len() == 0 {
+				recordLine = line
+			}
+			record.WriteString(value)
+			if strings.TrimRight(value, "\r\n") == "" {
+				if recordLine >= resumeLine {
+					return io.MultiReader(
+						bytes.NewReader(bytes.Clone(record.Bytes())),
+						buffered,
+					), nil
+				}
+				record.Reset()
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			if record.Len() != 0 && recordLine >= resumeLine {
+				return bytes.NewReader(bytes.Clone(record.Bytes())), nil
+			}
+			return strings.NewReader(""), nil
+		}
+		return nil, fmt.Errorf("read LDIF at line %d: %w", line+1, readErr)
+	}
 }
 
 func importLDIF(
