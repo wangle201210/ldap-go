@@ -586,6 +586,28 @@ func TestLDAPSearchResponseObserverReleasesStreamingResponses(t *testing.T) {
 	}
 }
 
+func TestLDAPSearchResponseObserverIgnoresUnknownMessageIDs(t *testing.T) {
+	t.Parallel()
+
+	observer := &ldapSearchResponseObserver{
+		responses: make(map[int64][]ldapSearchWireResponse),
+	}
+	for messageID := int64(1); messageID <= 1000; messageID++ {
+		observer.observeRead(ldapwire.EncodeSearchResultDone(
+			messageID,
+			ldapwire.Result{Code: ldapwire.ResultSuccess},
+			nil,
+		))
+	}
+	if len(observer.responses) != 0 || len(observer.readBuffer) != 0 {
+		t.Fatalf(
+			"observer retained unknown responses=%d buffered=%d",
+			len(observer.responses),
+			len(observer.readBuffer),
+		)
+	}
+}
+
 func TestOpenLDAPReferenceLDAPSearchRefreshAndPersistFullCancelOutput(t *testing.T) {
 	referenceTool := requireOpenLDAP2613LDAPSearch(t)
 	for _, test := range []struct {

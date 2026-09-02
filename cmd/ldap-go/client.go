@@ -959,11 +959,11 @@ func (connection *ldapSearchObservedConn) Read(buffer []byte) (int, error) {
 }
 
 func (connection *ldapSearchObservedConn) Write(buffer []byte) (int, error) {
-	count, err := connection.Conn.Write(buffer)
-	if count > 0 {
-		connection.observer.observeWrite(buffer[:count])
-	}
-	return count, err
+	// go-ldap writes one complete LDAP frame per call. Register its message ID
+	// before the peer can answer, otherwise a loopback response can race the
+	// post-Write observer update and be mistaken for an unsolicited message.
+	connection.observer.observeWrite(buffer)
+	return connection.Conn.Write(buffer)
 }
 
 func (observer *ldapSearchResponseObserver) observeRead(data []byte) {
@@ -1033,6 +1033,9 @@ func (observer *ldapSearchResponseObserver) consumeFrames(buffer *[]byte, reques
 		if operation.ClassType != ber.ClassApplication {
 			continue
 		}
+		if !observer.hasSearchIDLocked(messageID) {
+			continue
+		}
 		switch operation.Tag {
 		case ldap.ApplicationSearchResultEntry,
 			ldap.ApplicationSearchResultDone,
@@ -1065,6 +1068,15 @@ func (observer *ldapSearchResponseObserver) consumeFrames(buffer *[]byte, reques
 		}
 		observer.responses[messageID] = append(observer.responses[messageID], response)
 	}
+}
+
+func (observer *ldapSearchResponseObserver) hasSearchIDLocked(messageID int64) bool {
+	for _, searchID := range observer.searchIDs {
+		if searchID == messageID {
+			return true
+		}
+	}
+	return false
 }
 
 func ldapBERFrameLength(data []byte) (int, bool, bool) {
