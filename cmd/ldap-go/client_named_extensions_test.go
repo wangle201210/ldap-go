@@ -100,7 +100,7 @@ func TestOpenLDAPReferenceLDAPSearchNamedExtensions(t *testing.T) {
 		)}, nil
 	})
 	arguments := []string{
-		"-H", fixture.uri, "-x", "-b", clientToolBaseDN,
+		"-H", fixture.uri, "-x", "-MM", "-b", clientToolBaseDN,
 		"-E", "!subentries=false",
 		"-E", "sync=ro/csn=one",
 		"-E", "!dontUseCopy",

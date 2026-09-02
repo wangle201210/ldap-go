@@ -1162,6 +1162,8 @@ func runLDAPSearch(
 	flags.SetOutput(stderr)
 	var client ldapClientOptions
 	client.register(flags)
+	client.unsupportedFlags = withoutLDAPClientUnsupportedFlag(client.unsupportedFlags, "M")
+	flags.Lookup("M").Usage = "enable ManageDsaIT control"
 	defer client.clear()
 
 	baseDN := flags.String("b", "", "search base DN")
@@ -1181,10 +1183,28 @@ func runLDAPSearch(
 	includeUFN := flags.Bool("u", false, "include User Friendly entry names")
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "search extension; [!]pr=<size>[/prompt|noprompt] is supported")
+	criticalManageDsaIT := flags.Bool("MM", false, "critical ManageDsaIT control")
 
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
+	if err != nil {
+		return err
+	}
+	if flagWasSet(flags, "M") && !manageDsaIT {
+		return errors.New("-M=false is not supported")
+	}
+	if flagWasSet(flags, "MM") && !*criticalManageDsaIT {
+		return errors.New("-MM=false is not supported")
+	}
+	manageDsaITCount := 0
+	for _, argument := range args {
+		if argument == "-M" {
+			manageDsaITCount++
+		}
+	}
+	manageDsaITCritical := *criticalManageDsaIT || manageDsaITCount > 1
 	if *sizeLimit < 0 {
 		return errors.New("-z must be non-negative")
 	}
@@ -1294,7 +1314,13 @@ func runLDAPSearch(
 			"critical or prompt RFC 2696 paging cannot be combined with referral chasing; use non-critical pr=<size>/noprompt or disable -C",
 		)
 	}
-	controls, err := mergeLDAPControls(client.generalControls, extensionControls)
+	controlGroups := [][]ldap.Control{client.generalControls, extensionControls}
+	if manageDsaIT || *criticalManageDsaIT {
+		controlGroups = append(controlGroups, []ldap.Control{&ldapRawControl{
+			oid: ldapManageDsaITOID, critical: manageDsaITCritical,
+		}})
+	}
+	controls, err := mergeLDAPControls(controlGroups...)
 	if err != nil {
 		return fmt.Errorf("ldapsearch controls: %w", err)
 	}
