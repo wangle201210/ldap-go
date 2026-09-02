@@ -112,6 +112,8 @@ type OfflineSchemaOptions struct {
 	Continue            bool
 	Subtree             string
 	Filter              string
+	Scope               directory.Scope
+	ScopeSet            bool
 }
 
 type OfflineSchemaIssue struct {
@@ -162,6 +164,10 @@ func CheckOfflineSchema(
 			}
 			subtree = &parsed
 		}
+		scope := directory.ScopeWholeSubtree
+		if options.ScopeSet {
+			scope = options.Scope
+		}
 		var filter *directory.Filter
 		if strings.TrimSpace(options.Filter) != "" {
 			compiled, compileErr := ldapwire.CompileFilter(options.Filter)
@@ -182,7 +188,7 @@ func CheckOfflineSchema(
 					return parseErr
 				}
 				if subtree != nil {
-					if !subtree.Equal(entryDN) && !subtree.AncestorOf(entryDN) {
+					if !directory.InScope(*subtree, entryDN, scope) {
 						return nil
 					}
 				}

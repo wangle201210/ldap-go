@@ -1314,6 +1314,26 @@ sn: Run
 		strings.Contains(stdout, "uid=service") {
 		t.Fatalf("slapcat -a exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
+	selectorURL := "ldap:///dc=example,dc=com??one?%28objectClass%3DorganizationalUnit%29"
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", sourceDatabase, "-H", selectorURL},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stderr, "exported 2 entries") ||
+		!strings.Contains(stdout, "dn: ou=People,dc=example,dc=com") ||
+		!strings.Contains(stdout, "dn: ou=Systems,dc=example,dc=com") ||
+		strings.Contains(stdout, "uid=alice") {
+		t.Fatalf("slapcat -H exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapschema", "-db", sourceDatabase, "-H", selectorURL},
+		"",
+	)
+	if exitCode != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("slapschema -H exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
 
 	stdout, stderr, exitCode = runCLIForTest(
 		t,
@@ -1926,6 +1946,9 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		{name: "empty subtree", args: []string{"slapcat", "-s", ""}, message: "requires a non-empty subtree"},
 		{name: "empty filter", args: []string{"slapcat", "-a", ""}, message: "requires a non-empty LDAP filter"},
 		{name: "invalid filter", args: []string{"slapcat", "-a", "(uid="}, message: "invalid export filter"},
+		{name: "offline URL host", args: []string{"slapcat", "-H", "ldap://example.com/dc=example,dc=com"}, message: "cannot contain a host"},
+		{name: "offline URL attributes", args: []string{"slapcat", "-H", "ldap:///dc=example,dc=com?cn?sub"}, message: "cannot select attributes"},
+		{name: "offline URL conflict", args: []string{"slapcat", "-H", "ldap:///dc=example,dc=com", "-s", "dc=example,dc=com"}, message: "cannot be combined"},
 		{name: "empty password file", args: []string{"slappasswd", "-T", ""}, message: "open password file"},
 		{name: "false generation", args: []string{"slappasswd", "-g=false"}, message: "-g=false is not supported"},
 		{name: "duplicate secret", args: []string{"slappasswd", "-s", secret, "-s", "replacement"}, message: "provided more than once"},
@@ -2488,6 +2511,36 @@ cn: resumed
 				expected, localACLOut, localACLErr, localACLCode, referenceACL,
 			)
 		}
+	}
+	offlineURL := "ldap:///dc=example,dc=com??one?%28objectClass%3DorganizationalUnit%29"
+	referenceSelected, err := exec.Command(
+		slapcat, "-f", configPath, "-H", offlineURL,
+	).Output()
+	if err != nil {
+		t.Fatalf("OpenLDAP slapcat -H: %v", err)
+	}
+	localSelected, localSelectedErr, localSelectedCode := runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", databasePath, "-H", offlineURL},
+		"",
+	)
+	if localSelectedCode != 0 || !strings.Contains(localSelectedErr, "exported 2 entries") {
+		t.Fatalf("ldap-go slapcat -H=%d/%q/%q", localSelectedCode, localSelected, localSelectedErr)
+	}
+	referenceSelectedEntries := parseLDAPSearchOutput(t, string(referenceSelected))
+	localSelectedEntries := parseLDAPSearchOutput(t, localSelected)
+	referenceSelectedDNs := make([]string, len(referenceSelectedEntries))
+	localSelectedDNs := make([]string, len(localSelectedEntries))
+	for index := range referenceSelectedEntries {
+		referenceSelectedDNs[index] = referenceSelectedEntries[index].DN
+	}
+	for index := range localSelectedEntries {
+		localSelectedDNs[index] = localSelectedEntries[index].DN
+	}
+	slices.Sort(referenceSelectedDNs)
+	slices.Sort(localSelectedDNs)
+	if !slices.Equal(localSelectedDNs, referenceSelectedDNs) {
+		t.Fatalf("slapcat -H DNs=%q, want OpenLDAP %q", localSelectedDNs, referenceSelectedDNs)
 	}
 }
 

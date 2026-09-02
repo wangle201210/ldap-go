@@ -71,6 +71,8 @@ surface while using ldap-go's bbolt storage:
   -l exported.ldif -n 1
 ./bin/ldap-go slapcat -db ./data/ldap-go.db -n 1 \
   -s 'ou=People,dc=example,dc=com' -a '(objectClass=inetOrgPerson)'
+./bin/ldap-go slapcat -db ./data/ldap-go.db \
+  -H 'ldap:///ou=People,dc=example,dc=com??one?(objectClass=inetOrgPerson)'
 ./bin/ldap-go slapauth -db ./data/ldap-go.db \
   'uid=alice,cn=auth'
 ./bin/ldap-go slapacl -db ./data/ldap-go.db \

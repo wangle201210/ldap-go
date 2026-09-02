@@ -6,15 +6,61 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 type repeatedOfflineOption []string
+
+type offlineLDAPSelector struct {
+	baseDN string
+	scope  directory.Scope
+	filter string
+}
+
+func parseOfflineLDAPURL(raw string) (offlineLDAPSelector, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return offlineLDAPSelector{}, fmt.Errorf("parse LDAP URL: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "ldap") {
+		return offlineLDAPSelector{}, errors.New("offline selector must use ldap://")
+	}
+	if parsed.Host != "" || parsed.User != nil {
+		return offlineLDAPSelector{}, errors.New("offline LDAP URL cannot contain a host or userinfo")
+	}
+	components := []string(nil)
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		components = strings.Split(parsed.RawQuery, "?")
+	}
+	if len(components) > 0 && components[0] != "" {
+		return offlineLDAPSelector{}, errors.New("offline LDAP URL cannot select attributes")
+	}
+	if len(components) > 3 {
+		return offlineLDAPSelector{}, errors.New("offline LDAP URL cannot contain extensions")
+	}
+	direct, err := parseLDAPSearchDirectURL(raw)
+	if err != nil {
+		return offlineLDAPSelector{}, err
+	}
+	if !direct.direct || strings.TrimSpace(direct.baseDN) == "" {
+		return offlineLDAPSelector{}, errors.New("offline LDAP URL requires a non-empty base DN")
+	}
+	if len(direct.attributes) != 0 {
+		return offlineLDAPSelector{}, errors.New("offline LDAP URL cannot select attributes")
+	}
+	return offlineLDAPSelector{
+		baseDN: direct.baseDN,
+		scope:  directory.Scope(direct.scope),
+		filter: direct.filter,
+	}, nil
+}
 
 func (values *repeatedOfflineOption) String() string {
 	return strings.Join(*values, ",")
@@ -341,7 +387,7 @@ func runSlapSchema(args []string, stdout, stderr io.Writer) (runErr error) {
 	filter := flags.String("a", "", "check entries matching this LDAP filter")
 	subtree := flags.String("s", "", "check entries in this subtree")
 	errorPath := flags.String("l", "", "write schema errors to this file")
-	flags.String("H", "", "unsupported LDAP URL selector")
+	selectorURL := flags.String("H", "", "LDAP URL base, scope, and filter selector")
 	verbose := flags.Bool("v", false, "print stable entry IDs")
 	registerOfflineConfigFlags(flags)
 	if err := flags.Parse(args); err != nil {
@@ -353,11 +399,6 @@ func runSlapSchema(args []string, stdout, stderr io.Writer) (runErr error) {
 	if err := rejectOfflineConfigFlags("slapschema", flags); err != nil {
 		return err
 	}
-	if err := rejectUnsupportedFlags("slapschema", flags, []unsupportedFlag{
-		{name: "H", reason: "use -b, -s, and -a with the embedded cn=config database"},
-	}); err != nil {
-		return err
-	}
 	if flagWasSet(flags, "c") && !*continueOnError {
 		return errors.New("slapschema option -c=false is not supported")
 	}
@@ -366,6 +407,21 @@ func runSlapSchema(args []string, stdout, stderr io.Writer) (runErr error) {
 	}
 	if flagWasSet(flags, "s") && strings.TrimSpace(*subtree) == "" {
 		return errors.New("slapschema option -s requires a non-empty subtree DN")
+	}
+	scope := directory.ScopeWholeSubtree
+	scopeSet := false
+	if *selectorURL != "" {
+		if flagWasSet(flags, "a") || flagWasSet(flags, "s") {
+			return errors.New("slapschema option -H cannot be combined with -a or -s")
+		}
+		selector, err := parseOfflineLDAPURL(*selectorURL)
+		if err != nil {
+			return fmt.Errorf("slapschema -H: %w", err)
+		}
+		*subtree = selector.baseDN
+		*filter = selector.filter
+		scope = selector.scope
+		scopeSet = true
 	}
 	selected, err := resolveOfflineDatabaseSelection(
 		"slapschema", flags, *databasePath, *database, *suffix,
@@ -384,6 +440,7 @@ func runSlapSchema(args []string, stdout, stderr io.Writer) (runErr error) {
 		context.Background(), store, server.OfflineSchemaOptions{
 			Database: selected, IncludeSubordinates: !*disableSubordinateGlue,
 			Continue: *continueOnError, Subtree: *subtree, Filter: *filter,
+			Scope: scope, ScopeSet: scopeSet,
 		},
 	)
 	if err != nil {

@@ -815,8 +815,9 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		"",
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
-	var openLDAPLDIFPath, suffix, subtree, filter string
+	var openLDAPLDIFPath, suffix, subtree, filter, selectorURL string
 	var disableSubordinateGlue bool
+	selectorScope := directory.ScopeWholeSubtree
 	databaseNumber := -1
 	if command == "slapcat" {
 		flags.StringVar(&openLDAPLDIFPath, "l", "", "destination LDIF path")
@@ -824,6 +825,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
 		flags.StringVar(&filter, "a", "", "export entries matching this LDAP filter")
 		flags.StringVar(&subtree, "s", "", "export only this subtree")
+		flags.StringVar(&selectorURL, "H", "", "LDAP URL base, scope, and filter selector")
 		registerUnsupportedBool(flags, "c", "continue after export errors")
 		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
 	}
@@ -855,6 +857,18 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 			if _, err := ldapwire.CompileFilter(filter); err != nil {
 				return fmt.Errorf("invalid export filter %q: %w", filter, err)
 			}
+		}
+		if selectorURL != "" {
+			if flagWasSet(flags, "a") || flagWasSet(flags, "s") {
+				return errors.New("slapcat option -H cannot be combined with -a or -s")
+			}
+			selector, err := parseOfflineLDAPURL(selectorURL)
+			if err != nil {
+				return fmt.Errorf("slapcat -H: %w", err)
+			}
+			subtree = selector.baseDN
+			filter = selector.filter
+			selectorScope = selector.scope
 		}
 	}
 	selectedDatabase, err := resolveOfflineDatabaseSelection(
@@ -889,6 +903,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 			stdout,
 			options,
 			subtree,
+			selectorScope,
 		)
 		if err != nil {
 			return err
@@ -896,7 +911,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		_, err = fmt.Fprintf(stderr, "exported %d entries\n", result.Entries)
 		return err
 	}
-	return exportToFile(store, *ldifPath, stderr, options, subtree)
+	return exportToFile(store, *ldifPath, stderr, options, subtree, selectorScope)
 }
 
 func exportToFile(
@@ -905,6 +920,7 @@ func exportToFile(
 	stderr io.Writer,
 	options migration.ExportOptions,
 	subtree string,
+	scope directory.Scope,
 ) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -923,6 +939,7 @@ func exportToFile(
 		temp,
 		options,
 		subtree,
+		scope,
 	)
 	syncErr := temp.Sync()
 	closeErr := temp.Close()
@@ -951,6 +968,7 @@ func exportLDIFWithSubtree(
 	writer io.Writer,
 	options migration.ExportOptions,
 	subtree string,
+	scopes ...directory.Scope,
 ) (migration.ExportResult, error) {
 	if strings.TrimSpace(subtree) == "" {
 		return migration.ExportLDIFWithOptions(ctx, store, writer, options)
@@ -961,6 +979,10 @@ func exportLDIFWithSubtree(
 			err = errors.New("subtree DN must not be empty")
 		}
 		return migration.ExportResult{}, fmt.Errorf("invalid slapcat subtree %q: %w", subtree, err)
+	}
+	scope := directory.ScopeWholeSubtree
+	if len(scopes) != 0 {
+		scope = scopes[0]
 	}
 
 	type exportOutcome struct {
@@ -1002,7 +1024,7 @@ func exportLDIFWithSubtree(
 		if err != nil {
 			return fail(fmt.Errorf("parse exported DN %q: %w", record.Entry.DN, err))
 		}
-		if !base.Equal(entryDN) && !base.AncestorOf(entryDN) {
+		if !directory.InScope(base, entryDN, scope) {
 			continue
 		}
 		if err := ldif.Dump(writer, 76, record.Entry); err != nil {
