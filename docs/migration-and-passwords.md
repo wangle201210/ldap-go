@@ -14,6 +14,14 @@ backend, overlay, module, schema extension, or configuration value. Check the
 
 ## Multi-database migration
 
+Take the exports in a controlled maintenance window. Stopping the source
+OpenLDAP process provides the strongest consistency. If it must remain online,
+make every exported content database read-only, stop application writes, and
+wait for replication to converge before the first `slapcat`; keep that state
+until the final export finishes. An individual online `slapcat` can produce a
+backend-consistent LDIF, but separate `cn=config` and content exports are not a
+cross-database atomic application snapshot.
+
 Export `cn=config` first, followed by each content database:
 
 ```sh
@@ -95,6 +103,15 @@ and publish in one transaction. Structural schema checks are enabled by
 default. `slapadd -o value-check=yes` enables full value-syntax checks;
 `-s` or `-o schema-check=no` disables structural checks while retaining the
 basic `objectClass` requirement.
+
+When native `import` writes or clears `cn=config`, it also validates the final
+configuration hierarchy and builds the runnable server configuration before
+the transaction commits. Invalid or unsupported behavior-bearing settings
+leave the previous config and content partitions unchanged. OpenLDAP-generated
+safe defaults remain importable. Physical MDB values such as `olcDbDirectory`
+and `olcDbMaxSize` are retained migration metadata; they do not choose the
+ldap-go bbolt file or enforce its size, so configure paths and quotas at the
+process/filesystem layer.
 
 The content-database `slapadd -c` path is intentionally non-atomic: it retains
 independent valid records, reports each failure, and exits nonzero when any

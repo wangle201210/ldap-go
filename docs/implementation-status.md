@@ -50,7 +50,7 @@ When `ODBC_PREFIX` is available, the reference build uses explicit unixODBC
 include and library paths. Its live SQLite ODBC differential passes
 Bind/Search/Compare and mapped Add/Modify/leaf-ModifyDN/Delete scenarios,
 including No-Op, rollback failures, and a complete write lifecycle.
-The latest strict run passed 2,081 top-level tests against the pinned commit.
+The latest strict run passed 2,188 top-level tests against the pinned commit.
 The reference environment records `passwd`, `dnssrv`, `asyncmeta`, and
 `{CRYPT}` as required features; missing support fails strict validation rather
 than turning its differential into an optional skip.
@@ -144,13 +144,32 @@ An imported naming-context `olcDatabase=ldap` proxies Bind, Search, Compare,
 writes, Password Modify, Dynamic Refresh, and Who Am I? to ordered remote
 URIs, with Simple identity reuse, root identity assertion, proxy authorization,
 transport failover, health-preferred endpoint recovery, Abandon, and Cancel.
-Transactions and directly attached local overlays are rejected rather than
-silently bypassed. An imported
+Remote Search entries are rebuilt through the local read-ACL path before they
+are returned. Database/global `olcAccess` and an explicit `Config.AccessPolicy`
+cover entry, attribute, and value visibility, effective ProxyAuthz identities,
+group/ACI lookups, paging, sorting, referrals, and pcache. ACL changes take
+effect online and key pcache state by policy fingerprint; ordinary and
+complete-entry ACLs retain one upstream Search, while failed auxiliary lookups
+fail closed. Matching OpenLDAP 2.6.13, the original remote filter is not
+re-evaluated after value hiding, and Compare and writes remain remote-backend
+operations rather than receiving an extra local ACL check. A directly attached
+`rwm` overlay applies the verified suffix, attribute/objectClass,
+DN/nameAndOptionalUID/LDAP-URL, filter, and assertion mapping engine to Bind,
+Search, Compare, writes, and Password Modify in both directions; online
+configuration, controls, and OpenLDAP's outbound referral-URL exception pass a
+live differential. Transactions and other directly attached local response
+overlays are rejected rather than silently bypassed. An imported
 `olcDatabase=meta` routes and unions multiple LDAP targets, including target
 selection/defaults, suffix massage, attribute and object-class maps,
 wildcard/drop maps, subtree/filter rules, failover, quarantine, DN-route cache,
 connection reuse and expiry, health-preferred URI recovery, bind polling,
 controls, Abandon, Cancel, and the OpenLDAP default five-hop referral limit.
+Meta and asyncmeta Search planning supplements upstream attribute selections
+with every local ACL target-filter, DN-attribute, ACI, group, or set dependency,
+uses full values even for `typesOnly`, evaluates the complete mapped entry, and
+then restores the client's original projection. Global/database/explicit
+policies, paging, sorting, no-ACL request identity, auxiliary lookups, and
+failure-closed behavior have local and live OpenLDAP coverage.
 PLAIN, CRAM-MD5, DIGEST-MD5, and SCRAM Bind can read proxy-backed auxiliary
 credentials and authorization rules through `acl-bind`/IDAssert, including
 group and local LDAP-URL rules; native outbound SASL assertion carries the
@@ -662,7 +681,14 @@ cookie, and verifies convergence, idempotency, and consumer write referrals.
 The consumer also supports OpenLDAP accesslog
 delta-syncrepl, including atomic `reqMod` replay, initial full-refresh
 fallback, durable restart, and automatic full recovery when the retained log
-cannot be replayed safely. The local accesslog provider supports successful
+cannot be replayed safely. A single-provider A-to-B-to-C delta cascade records
+the applied data, original remote CSN, context/tombstone state, local accesslog,
+and RID cookie in one B-side transaction, then publishes both source and log
+changes only after commit. Cross-RID replay, bbolt restart, rollback, purge,
+suffix-mapped multi-AVA ModDN, and scope move-in refresh/move-out delete cases
+pass. Delta plus writable multi-provider/mirror mode is rejected at startup,
+offline validation, and online configuration until attribute-level conflict
+history merging is implemented. The local accesslog provider supports successful
 Add/Delete/Modify/ModDN and Password Modify records, old-value selection,
 branch-scoped operation logging, Search/Compare, Bind/Unbind/Abandon,
 database-targeted Extended operations, successful and failed results, periodic
@@ -800,6 +826,14 @@ paging. It accepts OpenLDAP-compatible `-E [!]domainScope` and
 `-E [!]mv=<filter>` for RFC 3876,
 including simple-filter lists. Critical/prompt paging with referral chasing is
 explicitly rejected because each referral requires an independent cookie stream.
+`-E sync=rp[/cookie][/<slimit>]` uses an unbuffered long-lived Search stream,
+emits Entry, Reference, and Sync Info responses immediately, releases observed
+BER frames as they are consumed, and disables the ordinary request timeout
+while idle. The OpenLDAP signed response-limit semantics send RFC 3909 Cancel,
+bound the completion wait, and reproduce target/Cancel results, counters,
+stdout, stderr, and exit status at all four LDIF levels. Simple, SASL PLAIN,
+LDAPS, StartTLS, context cancellation, burst delivery, and repeated race tests
+pass; refreshOnly and ordinary Search retain their previous path.
 Its default output is OpenLDAP-style extended LDIF with query metadata, UFN
 comments, result metadata, SearchReference URLs, and counts. `-L`, `-LL`, and
 `-LLL` progressively suppress extended output; arbitrary repeated `L` forms
@@ -1021,7 +1055,11 @@ member search selection and reverse direct/nested group memberships,
 bounded LDIF/CSV import, LDIF/CSV/JSON export, binary download/upload and safe
 image preview, schema and Monitor views.
 Batch responses report each applied, failed, unknown, or unattempted DN, stop
-on ambiguous transport results, and never claim cross-entry atomicity. The
+on ambiguous transport results, and never claim cross-entry atomicity. Group
+membership changes and binary replace/delete use the same write-result
+classifier: deterministic LDAP errors preserve the session, while a timeout,
+EOF, or network failure after dispatch returns `ldap_result_unknown`, closes
+the LDAP client, retires the session, and rejects direct retry. The
 interface can switch between English and Simplified Chinese,
 uses the browser language on first use, and remembers the local preference.
 LDAP identifiers and directory values are always displayed unchanged. Login
@@ -1403,6 +1441,10 @@ These aliases preserve the implemented OpenLDAP option and exit-code surface;
 they do not make bbolt files binary-compatible with OpenLDAP MDB files.
 Native `ldap-go import` atomically validates value syntax and structural schema
 using the built-in registry plus supported schema imported from `cn=config`.
+When an import writes or clears the config partition, it also validates the
+configuration hierarchy and builds the runnable candidate before committing;
+invalid runtime settings leave the previous config and every content partition
+unchanged. Content-only imports do not revalidate an unchanged config.
 The `slapadd` alias follows the tested OpenLDAP subset: structural checks are on
 by default, `-o value-check=yes` enables full value-syntax checks, and `-s` or
 `-o schema-check=no` disables schema checks while still requiring
@@ -1452,6 +1494,14 @@ partitions. With LastMod enabled, `-w` updates the per-SID
 supports `-w`, and validates the configuration hierarchy, supported schema,
 and the runnable server configuration before the same transaction commits, so
 an invalid supported setting rolls back the whole import.
+
+The shared runtime capability validator rejects behavior-bearing settings that
+ldap-go cannot honor, including SASL channel-binding policy, logfile routing,
+non-default thread/monitor controls, and non-default LMDB durability/resource
+settings. OpenLDAP-generated safe defaults remain importable. Physical
+`olcDbDirectory`, `olcDbMaxSize`, args/pid paths, and similar source metadata do
+not select the bbolt path or impose a quota; process flags, filesystem policy,
+and the service manager own those settings.
 
 Native `ldap-go import`, direct `ImportLDIF` callers, and `slapadd` without
 `-c` remain atomic and stop at the first error. The content-database

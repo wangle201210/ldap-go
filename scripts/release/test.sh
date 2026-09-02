@@ -70,6 +70,7 @@ for document in \
 	docs/migration-and-passwords.md \
 	docs/implementation-status.md \
 	docs/compatibility.md \
+	docs/common-production-scope.md \
 	examples/base.ldif; do
 	[ -r "$root/$document" ] || {
 		printf 'release-test: required document is missing: %s\n' "$document" >&2

@@ -111,7 +111,9 @@ backups, auditing, health checks, and production deployment.
 ## OpenLDAP migration
 
 OpenLDAP backend files are implementation-specific and cannot be copied into
-ldap-go. Use `slapcat` LDIF as the migration contract:
+ldap-go. Export from a stopped or application-read-only source so separately
+captured databases form a consistent migration set, then use `slapcat` LDIF as
+the migration contract:
 
 ```sh
 slapcat -n 0 -l config.ldif
@@ -154,6 +156,7 @@ upgrade checks are documented in [release](docs/release.md).
 | OpenLDAP migration and passwords | [Migration and passwords](docs/migration-and-passwords.md) |
 | Current implementation details | [Implementation status](docs/implementation-status.md) |
 | Supported and unsupported behavior | [Compatibility matrix](docs/compatibility.md) |
+| Common production scope | [Common OpenLDAP production features](docs/common-production-scope.md) |
 | Package and runtime design | [Architecture](docs/architecture.md) |
 | Test suites and OpenLDAP differential setup | [Testing](docs/testing.md) |
 | OpenLDAP 100k performance evidence | [100k comparison](docs/openldap-100k-evidence.md) |

@@ -349,11 +349,18 @@ OpenLDAP's observable auditlog behavior.
 
 Naming-context `ldap` and `meta` databases share an outbound transport
 executor but keep different routing models. Back-ldap selects an ordered remote
-URI list for one naming context. Back-meta first selects one or more target
-configurations, applies suffix, attribute, object-class, filter, and result
-namespace rewrites, and unions Search results. Its implemented RWM subset
-includes attribute/object-class wildcard allowlists and response-side drop
-maps; it does not implement the complete librewrite language.
+URI list for one naming context. An attached RWM instance uses the same mapping
+engine as back-meta before remote dispatch and after response collection. Its
+Search response wrapper then evaluates database/global or explicit local ACLs
+against mapped logical entries and restores the client's attribute projection.
+Back-meta first selects one or more target configurations, applies suffix,
+attribute, object-class, filter, and result namespace rewrites, and unions
+Search results. Before target planning, local ACL dependencies are added to the
+remote attribute selection; target-filter, dnattr, ACI, group, and set checks
+therefore cannot be bypassed by omitting an attribute from the client request.
+The implemented RWM subset includes attribute/object-class wildcard allowlists
+and response-side drop maps; it does not implement the complete librewrite
+language.
 
 Back-meta pools privileged identity-assertion transports under
 `olcDbConnectionPoolMax`. The verified subset shares an eligible transport
@@ -856,6 +863,16 @@ cookie or default Boolean. The consumer's operation timeout covers initial
 refresh only and is removed after refresh-done for persistent searches. SCRAM
 channel-binding variants and negotiated SASL integrity/privacy layers are not
 yet implemented.
+
+An accesslog delta consumer that is also a single-provider syncprov/accesslog
+relay commits the applied entry, original remote CSN, context/tombstone state,
+local accesslog record, and RID cookie together. Only the successful commit is
+published to downstream consumers, so A-to-B-to-C cascades retain one logical
+CSN and cross-RID replay is suppressed by the shared context vector. A rename
+that enters the configured scope is treated as an unsafe log gap, clears the
+cookie, and falls back to a full refresh; a rename leaving scope is cascaded as
+a delete. Writable delta multi-provider mode remains rejected because it needs
+attribute-level conflict-history merging.
 
 The proxy cache is a database-local overlay on back-ldap. Its runtime
 configuration is immutable; a mutex-protected query store is reused only when

@@ -107,7 +107,8 @@ OpenLDAP、TLS/TLCP、备份、审计、健康检查和生产部署见
 ## 从 OpenLDAP 迁移
 
 OpenLDAP 后端数据库文件属于具体实现，不能直接复制到 ldap-go。应使用
-`slapcat` LDIF 作为迁移格式：
+已停止服务或已停止应用写入并设为只读的源库进行导出，确保分别导出的数据库
+属于同一个一致迁移集，再使用 `slapcat` LDIF 作为迁移格式：
 
 ```sh
 slapcat -n 0 -l config.ldif
@@ -148,6 +149,7 @@ make full
 | OpenLDAP 迁移与密码 | [迁移与密码](docs/migration-and-passwords.md) |
 | 当前实现细节 | [实现状态](docs/implementation-status.md) |
 | 已支持和未支持的行为 | [兼容性矩阵](docs/compatibility.md) |
+| 常用生产功能范围 | [常用 OpenLDAP 生产功能](docs/common-production-scope.md) |
 | 包结构和运行时设计 | [架构](docs/architecture.md) |
 | 测试套件与 OpenLDAP 差异测试 | [测试](docs/testing.md) |
 | OpenLDAP 100k 性能证据 | [100k 对比](docs/openldap-100k-evidence.md) |
