@@ -42,6 +42,10 @@ const (
 	maxLDAPSearchBatchCount  = 100000
 	maxLDAPSearchValueSize   = 64 << 20
 	maxLDAPSearchPromptLine  = 32
+	ldapSubentriesControlOID = "1.3.6.1.4.1.4203.1.10.1"
+	ldapSyncRequestOID       = "1.3.6.1.4.1.4203.1.9.1.1"
+	ldapDontUseCopyOID       = "1.3.6.1.1.22"
+	ldapAccountUsabilityOID  = "1.3.6.1.4.1.42.2.27.9.5.8"
 )
 
 func ldapClientURIUsesLDAPI(raw string) bool {
@@ -1699,6 +1703,10 @@ func resolveLDAPSearchExtensions(
 	matchedValuesExtension := ""
 	domainScopeExtension := ""
 	sortExtension := ""
+	subentriesExtension := ""
+	syncExtension := ""
+	dontUseCopyExtension := ""
+	accountUsabilityExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
 		name := strings.TrimLeft(extension, "!")
@@ -1737,6 +1745,27 @@ func resolveLDAPSearchExtensions(
 				)
 			}
 			sortExtension = extension
+			continue
+		}
+		target := (*string)(nil)
+		switch {
+		case strings.EqualFold(name, "subentries"):
+			target = &subentriesExtension
+		case strings.EqualFold(name, "sync"):
+			target = &syncExtension
+		case strings.EqualFold(name, "dontUseCopy"):
+			target = &dontUseCopyExtension
+		case strings.EqualFold(name, "accountUsability"):
+			target = &accountUsabilityExtension
+		}
+		if target != nil {
+			if *target != "" {
+				return ldapSearchPagingOptions{}, nil, fmt.Errorf(
+					"ldapsearch %s extension was provided more than once",
+					name,
+				)
+			}
+			*target = extension
 			continue
 		}
 		controlSpecs = append(controlSpecs, extension)
@@ -1805,6 +1834,42 @@ func resolveLDAPSearchExtensions(
 		}
 		controls = append(controls, control)
 	}
+	for _, named := range []struct {
+		value string
+		parse func(string) (ldap.Control, error)
+	}{
+		{subentriesExtension, parseLDAPSearchSubentriesExtension},
+		{syncExtension, parseLDAPSearchSyncExtension},
+		{dontUseCopyExtension, parseLDAPSearchDontUseCopyExtension},
+		{accountUsabilityExtension, parseLDAPSearchAccountUsabilityExtension},
+	} {
+		if named.value == "" {
+			continue
+		}
+		control, controlErr := named.parse(named.value)
+		if controlErr != nil {
+			clearLDAPControls(controls)
+			return ldapSearchPagingOptions{}, nil, controlErr
+		}
+		duplicate := false
+		for _, existing := range controls {
+			if existing.GetControlType() == control.GetControlType() {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			if raw, ok := control.(*ldapRawControl); ok {
+				raw.clear()
+			}
+			clearLDAPControls(controls)
+			return ldapSearchPagingOptions{}, nil, fmt.Errorf(
+				"LDAP control %s was provided more than once",
+				control.GetControlType(),
+			)
+		}
+		controls = append(controls, control)
+	}
 	paging := ldapSearchPagingOptions{}
 	if pageExtension != "" {
 		paging, err = parseLDAPSearchPagingExtension(pageExtension)
@@ -1860,6 +1925,82 @@ func parseLDAPSearchSortExtension(value string) (ldap.Control, error) {
 		value:    ldapwire.EncodeSortRequestValue(keys),
 		hasValue: true,
 	}, nil
+}
+
+func parseLDAPSearchSubentriesExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !strings.EqualFold(name, "subentries") {
+		return nil, fmt.Errorf("invalid subentries extension %q", value)
+	}
+	visible := true
+	if found {
+		switch strings.ToLower(parameter) {
+		case "true":
+		case "false":
+			visible = false
+		default:
+			return nil, fmt.Errorf("invalid subentries extension value %q", parameter)
+		}
+	}
+	encoded := byte(0)
+	if visible {
+		encoded = 0xff
+	}
+	return &ldapRawControl{
+		oid: ldapSubentriesControlOID, critical: critical,
+		value: []byte{0x01, 0x01, encoded}, hasValue: true,
+	}, nil
+}
+
+func parseLDAPSearchSyncExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !found || !strings.EqualFold(name, "sync") || parameter == "" {
+		return nil, fmt.Errorf("invalid sync extension %q", value)
+	}
+	parts := strings.Split(parameter, "/")
+	request := ldapwire.SyncRequestValue{}
+	switch strings.ToLower(parts[0]) {
+	case "ro":
+		if len(parts) > 2 {
+			return nil, fmt.Errorf("invalid refreshOnly sync extension %q", parameter)
+		}
+		request.Mode = ldapwire.SyncRefreshOnly
+	case "rp":
+		if len(parts) > 2 {
+			return nil, errors.New("sync refreshAndPersist response limits are not implemented")
+		}
+		request.Mode = ldapwire.SyncRefreshAndPersist
+	default:
+		return nil, fmt.Errorf("invalid sync mode %q", parts[0])
+	}
+	if len(parts) == 2 && parts[1] != "" {
+		request.Cookie = []byte(parts[1])
+		request.HasCookie = true
+	}
+	return &ldapRawControl{
+		oid: ldapSyncRequestOID, critical: critical,
+		value: ldapwire.EncodeSyncRequestValue(request), hasValue: true,
+	}, nil
+}
+
+func parseLDAPSearchDontUseCopyExtension(value string) (ldap.Control, error) {
+	if value != "!dontUseCopy" {
+		return nil, errors.New("dontUseCopy requires the critical ! prefix and no value")
+	}
+	return &ldapRawControl{oid: ldapDontUseCopyOID, critical: true}, nil
+}
+
+func parseLDAPSearchAccountUsabilityExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	if !strings.EqualFold(value, "accountUsability") {
+		return nil, fmt.Errorf("invalid accountUsability extension %q", value)
+	}
+	return &ldapRawControl{oid: ldapAccountUsabilityOID, critical: critical}, nil
 }
 
 func parseLDAPSearchDomainScopeExtension(value string) (ldap.Control, error) {
