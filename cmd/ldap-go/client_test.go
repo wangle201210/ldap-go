@@ -354,7 +354,7 @@ func TestLDAPClientPasswordFileLimitAndConflicts(t *testing.T) {
 		{name: "invalid subentries extension", args: []string{"ldapsearch", "-x", "-E", "subentries=maybe"}, message: "invalid subentries extension value"},
 		{name: "invalid deref extension", args: []string{"ldapsearch", "-x", "-E", "deref=seeAlso:"}, message: "invalid deref specification"},
 		{name: "noncritical dontUseCopy", args: []string{"ldapsearch", "-x", "-E", "dontUseCopy"}, message: "requires the critical"},
-		{name: "unsupported sync response limit", args: []string{"ldapsearch", "-x", "-E", "sync=rp//10"}, message: "response limits are not implemented"},
+		{name: "invalid sync response limit", args: []string{"ldapsearch", "-x", "-E", "sync=rp//2147483648"}, message: "invalid sync response limit"},
 		{name: "critical paging size", args: []string{"ldapsearch", "-x", "-E", "!pr=0"}, message: "invalid paging size"},
 		{name: "interactive paging mode", args: []string{"ldapsearch", "-x", "-E", "pr=2/ask"}, message: "invalid paging prompt mode"},
 		{name: "paging conflict", args: []string{"ldapsearch", "-x", "-page-size", "2", "-E", "pr=2"}, message: "mutually exclusive"},

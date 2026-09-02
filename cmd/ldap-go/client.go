@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -1135,6 +1136,59 @@ func (observer *ldapSearchResponseObserver) takeSearchResponses() []ldapSearchWi
 	return responses
 }
 
+func (observer *ldapSearchResponseObserver) takeNextSearchResponse() (
+	int64,
+	ldapSearchWireResponse,
+	bool,
+) {
+	if observer == nil {
+		return 0, ldapSearchWireResponse{}, false
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.searchIDs) == 0 {
+		return 0, ldapSearchWireResponse{}, false
+	}
+	messageID := observer.searchIDs[0]
+	responses := observer.responses[messageID]
+	if len(responses) == 0 {
+		return messageID, ldapSearchWireResponse{}, false
+	}
+	response := responses[0]
+	responses[0] = ldapSearchWireResponse{}
+	if len(responses) == 1 {
+		delete(observer.responses, messageID)
+	} else {
+		observer.responses[messageID] = responses[1:]
+	}
+	return messageID, response, true
+}
+
+func (observer *ldapSearchResponseObserver) finishSearchResponses(
+	messageID int64,
+) []ldapSearchWireResponse {
+	if observer == nil {
+		return nil
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if messageID == 0 && len(observer.searchIDs) > 0 {
+		messageID = observer.searchIDs[0]
+	}
+	responses := observer.responses[messageID]
+	delete(observer.responses, messageID)
+	for index, searchID := range observer.searchIDs {
+		if searchID != messageID {
+			continue
+		}
+		copy(observer.searchIDs[index:], observer.searchIDs[index+1:])
+		observer.searchIDs[len(observer.searchIDs)-1] = 0
+		observer.searchIDs = observer.searchIDs[:len(observer.searchIDs)-1]
+		break
+	}
+	return responses
+}
+
 func (options *ldapClientOptions) addReferralSearchObserver(
 	observer *ldapSearchResponseObserver,
 ) {
@@ -1170,10 +1224,14 @@ func (values *repeatedStringFlag) Set(value string) error {
 }
 
 func runLDAPSearch(
+	ctx context.Context,
 	args []string,
 	stdin io.Reader,
 	stdout, stderr io.Writer,
 ) (runErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	args, ldifLevel, valuesToFilesLevel := normalizeLDAPSearchArgs(args)
 	flags := flag.NewFlagSet("ldapsearch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1326,6 +1384,20 @@ func runLDAPSearch(
 		return err
 	}
 	defer clearLDAPControls(extensionControls)
+	syncOptions, err := ldapSearchSyncOptionsFromExtensions(extensions)
+	if err != nil {
+		return err
+	}
+	if syncOptions.mode == ldapwire.SyncRefreshAndPersist {
+		switch {
+		case paging.size > 0:
+			return errors.New("sync refreshAndPersist cannot be combined with paged results")
+		case flagWasSet(flags, "S"):
+			return errors.New("sync refreshAndPersist cannot be combined with client-side sorting")
+		case client.chaseReferrals:
+			return errors.New("sync refreshAndPersist cannot chase referrals; omit -C to stream references")
+		}
+	}
 	if client.chaseReferrals && paging.size > 0 && (paging.critical || paging.prompt) {
 		return errors.New(
 			"critical or prompt RFC 2696 paging cannot be combined with referral chasing; use non-critical pr=<size>/noprompt or disable -C",
@@ -1428,10 +1500,12 @@ func runLDAPSearch(
 			controls,
 		)
 		if err := runLDAPSearchQuery(
+			ctx,
 			&client,
 			connection,
 			request,
 			paging,
+			syncOptions,
 			promptReader,
 			stdout,
 			stderr,
@@ -1737,6 +1811,29 @@ type ldapSearchPagingOptions struct {
 	prompt   bool
 }
 
+type ldapSearchSyncOptions struct {
+	mode          ldapwire.SyncMode
+	responseLimit int64
+}
+
+func ldapSearchSyncOptionsFromExtensions(
+	extensions repeatedStringFlag,
+) (ldapSearchSyncOptions, error) {
+	for _, extension := range extensions {
+		name := strings.TrimLeft(extension, "!")
+		name, _, _ = strings.Cut(name, "=")
+		if !strings.EqualFold(name, "sync") {
+			continue
+		}
+		options, control, err := parseLDAPSearchSyncExtensionValue(extension)
+		if raw, ok := control.(*ldapRawControl); ok {
+			raw.clear()
+		}
+		return options, err
+	}
+	return ldapSearchSyncOptions{responseLimit: -1}, nil
+}
+
 func resolveLDAPSearchExtensions(
 	flags *flag.FlagSet,
 	pageSize uint64,
@@ -2016,36 +2113,66 @@ func parseLDAPSearchSubentriesExtension(value string) (ldap.Control, error) {
 }
 
 func parseLDAPSearchSyncExtension(value string) (ldap.Control, error) {
+	_, control, err := parseLDAPSearchSyncExtensionValue(value)
+	return control, err
+}
+
+func parseLDAPSearchSyncExtensionValue(
+	value string,
+) (ldapSearchSyncOptions, ldap.Control, error) {
 	critical := strings.HasPrefix(value, "!")
 	value = strings.TrimLeft(value, "!")
 	name, parameter, found := strings.Cut(value, "=")
 	if !found || !strings.EqualFold(name, "sync") || parameter == "" {
-		return nil, fmt.Errorf("invalid sync extension %q", value)
+		return ldapSearchSyncOptions{}, nil, fmt.Errorf("invalid sync extension %q", value)
 	}
 	parts := strings.Split(parameter, "/")
 	request := ldapwire.SyncRequestValue{}
+	options := ldapSearchSyncOptions{responseLimit: -1}
 	switch strings.ToLower(parts[0]) {
 	case "ro":
 		if len(parts) > 2 {
-			return nil, fmt.Errorf("invalid refreshOnly sync extension %q", parameter)
+			return ldapSearchSyncOptions{}, nil, fmt.Errorf(
+				"invalid refreshOnly sync extension %q",
+				parameter,
+			)
 		}
 		request.Mode = ldapwire.SyncRefreshOnly
 	case "rp":
-		if len(parts) > 2 {
-			return nil, errors.New("sync refreshAndPersist response limits are not implemented")
+		if len(parts) > 3 {
+			return ldapSearchSyncOptions{}, nil, fmt.Errorf(
+				"invalid refreshAndPersist sync extension %q",
+				parameter,
+			)
 		}
 		request.Mode = ldapwire.SyncRefreshAndPersist
 	default:
-		return nil, fmt.Errorf("invalid sync mode %q", parts[0])
+		return ldapSearchSyncOptions{}, nil, fmt.Errorf("invalid sync mode %q", parts[0])
 	}
-	if len(parts) == 2 && parts[1] != "" {
+	options.mode = request.Mode
+	if len(parts) >= 2 && parts[1] != "" {
 		request.Cookie = []byte(parts[1])
 		request.HasCookie = true
 	}
-	return &ldapRawControl{
+	if request.Mode == ldapwire.SyncRefreshAndPersist {
+		if len(parts) == 3 && parts[2] != "" {
+			limit, err := strconv.ParseInt(parts[2], 10, 32)
+			if err != nil {
+				clear(request.Cookie)
+				return ldapSearchSyncOptions{}, nil, fmt.Errorf(
+					"invalid sync response limit %q",
+					parts[2],
+				)
+			}
+			options.responseLimit = limit
+		}
+	}
+	control := &ldapRawControl{
 		oid: ldapSyncRequestOID, critical: critical,
 		value: ldapwire.EncodeSyncRequestValue(request), hasValue: true,
-	}, nil
+	}
+	clear(request.Cookie)
+	return options, control, nil
 }
 
 func parseLDAPSearchDontUseCopyExtension(value string) (ldap.Control, error) {
@@ -2433,14 +2560,27 @@ func readLDAPSearchBatchMode(
 }
 
 func runLDAPSearchQuery(
+	ctx context.Context,
 	client *ldapClientOptions,
 	connection *ldap.Conn,
 	request *ldap.SearchRequest,
 	paging ldapSearchPagingOptions,
+	syncOptions ldapSearchSyncOptions,
 	promptReader *bufio.Reader,
 	stdout, stderr io.Writer,
 	output *ldapSearchLDIFOutput,
 ) error {
+	if syncOptions.mode == ldapwire.SyncRefreshAndPersist {
+		return runLDAPSearchPersistQuery(
+			ctx,
+			client,
+			connection,
+			request,
+			stderr,
+			output,
+			syncOptions,
+		)
+	}
 	if paging.size == 0 ||
 		(!paging.critical && !paging.prompt && !output.sort && output.level >= 2) {
 		messageID := output.nextSearchMessageID()
@@ -2530,6 +2670,198 @@ func runLDAPSearchQuery(
 		if provided {
 			pageSize = updated
 		}
+	}
+}
+
+func runLDAPSearchPersistQuery(
+	ctx context.Context,
+	client *ldapClientOptions,
+	connection *ldap.Conn,
+	request *ldap.SearchRequest,
+	stderr io.Writer,
+	output *ldapSearchLDIFOutput,
+	options ldapSearchSyncOptions,
+) error {
+	displayMessageID := output.nextSearchMessageID()
+	streamContext, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	// Conn.SetTimeout is an absolute per-request timer. A persistent search
+	// must remain alive while idle; Cancel gets its own bounded timeout below.
+	connection.SetTimeout(0)
+	defer connection.SetTimeout(client.timeout)
+
+	response := connection.SearchAsync(streamContext, request, 0)
+	searchMessageID := int64(0)
+	defer func() {
+		client.searchObserver.finishSearchResponses(searchMessageID)
+	}()
+
+	persistResponses := int64(-1)
+	var doneResponses []ldapSearchWireResponse
+	for response.Next() {
+		messageID, wireResponse, ok := client.searchObserver.takeNextSearchResponse()
+		if !ok {
+			return errors.New("search response observer lost a refreshAndPersist response")
+		}
+		if searchMessageID == 0 {
+			searchMessageID = messageID
+			displayMessageID = messageID
+		} else if messageID != searchMessageID {
+			return fmt.Errorf(
+				"refreshAndPersist response changed message ID from %d to %d",
+				searchMessageID,
+				messageID,
+			)
+		}
+
+		switch wireResponse.tag {
+		case ldap.ApplicationSearchResultEntry:
+			entry := response.Entry()
+			if entry == nil {
+				return errors.New("refreshAndPersist returned an empty search entry")
+			}
+			output.responses++
+			output.entries++
+			if err := output.writeEntriesWithResponses(
+				[]*ldap.Entry{entry},
+				[]ldapSearchWireResponse{wireResponse},
+			); err != nil {
+				return err
+			}
+		case ldap.ApplicationSearchResultReference:
+			if err := output.writeReferences([]string{response.Referral()}); err != nil {
+				return err
+			}
+			if err := output.writeReferenceControls(
+				[]ldapSearchWireResponse{wireResponse},
+			); err != nil {
+				return err
+			}
+		case ldap.ApplicationIntermediateResponse:
+			if err := output.writeIntermediateResponses(
+				[]ldapSearchWireResponse{wireResponse},
+			); err != nil {
+				return err
+			}
+		case ldap.ApplicationSearchResultDone:
+			doneResponses = append(doneResponses, wireResponse)
+		default:
+			return fmt.Errorf(
+				"refreshAndPersist returned unexpected LDAP response tag %d",
+				wireResponse.tag,
+			)
+		}
+
+		if persistResponses >= 0 {
+			persistResponses++
+		}
+		if wireResponse.tag == ldap.ApplicationIntermediateResponse &&
+			wireResponse.intermediateOID == ldap.ControlTypeSyncInfo {
+			// OpenLDAP starts (and restarts) the persistent response count at
+			// every Sync Info response marking the end of a refresh batch.
+			persistResponses = 0
+		}
+		if options.responseLimit == -1 || persistResponses < options.responseLimit {
+			continue
+		}
+
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			for response.Next() {
+				client.searchObserver.takeNextSearchResponse()
+			}
+			// Next can report an error item before the producer closes its
+			// channel. A second false return synchronizes with that close.
+			_ = response.Next()
+		}()
+		cancelErr := requestLDAPSearchCancel(ctx, client, connection, searchMessageID)
+		stopStream()
+		<-drained
+		client.searchObserver.finishSearchResponses(searchMessageID)
+		if err := ctx.Err(); err != nil {
+			_ = connection.Close()
+			return err
+		}
+		if cancelErr != nil {
+			// RFC 3909 is optional. Closing the connection still terminates the
+			// persistent operation without retaining a background response stream.
+			_ = connection.Close()
+		}
+		return output.writeSummary()
+	}
+
+	_ = response.Next()
+	if err := ctx.Err(); err != nil {
+		client.searchObserver.finishSearchResponses(searchMessageID)
+		return err
+	}
+	for {
+		messageID, wireResponse, ok := client.searchObserver.takeNextSearchResponse()
+		if searchMessageID == 0 && messageID != 0 {
+			searchMessageID = messageID
+			displayMessageID = messageID
+		}
+		if !ok {
+			break
+		}
+		if wireResponse.tag != ldap.ApplicationSearchResultDone {
+			return fmt.Errorf(
+				"refreshAndPersist left an unconsumed LDAP response tag %d",
+				wireResponse.tag,
+			)
+		}
+		doneResponses = append(doneResponses, wireResponse)
+	}
+	client.searchObserver.finishSearchResponses(searchMessageID)
+
+	searchErr := response.Err()
+	if searchErr == nil && len(doneResponses) == 0 {
+		return errors.New("refreshAndPersist stream ended without a search result")
+	}
+	result := &ldap.SearchResult{}
+	outputErr := output.writeResult(
+		result,
+		searchErr,
+		true,
+		displayMessageID,
+		doneResponses,
+	)
+	return ldapSearchResultError(searchErr, outputErr, stderr, output.level)
+}
+
+func requestLDAPSearchCancel(
+	ctx context.Context,
+	client *ldapClientOptions,
+	connection *ldap.Conn,
+	messageID int64,
+) error {
+	timeout := client.timeout
+	if timeout <= 0 || timeout > defaultLDAPClientTimeout {
+		timeout = defaultLDAPClientTimeout
+	}
+	connection.SetTimeout(timeout)
+	defer connection.SetTimeout(client.timeout)
+
+	value := ldapwire.EncodeCancelRequestValue(messageID)
+	defer clear(value)
+	request := ldap.NewExtendedRequest(
+		ldapCancelOID,
+		newLDAPExtendedRequestValue(value),
+	)
+	defer func() { request.Value = nil }()
+	result := make(chan error, 1)
+	go func() {
+		_, err := connection.Extended(request)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		_ = connection.Close()
+		<-result
+		return ctx.Err()
 	}
 }
 
@@ -2907,6 +3239,10 @@ func (output *ldapSearchLDIFOutput) writeResult(
 	if !final {
 		return nil
 	}
+	return output.writeSummary()
+}
+
+func (output *ldapSearchLDIFOutput) writeSummary() error {
 	if output.level >= 2 {
 		return nil
 	}

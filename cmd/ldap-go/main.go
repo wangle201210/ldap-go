@@ -144,7 +144,7 @@ func runWithContextAndSignals(
 	case "slapmodify":
 		err = runSlapModify(args[1:], stdin, stdout, stderr)
 	case "ldapsearch":
-		err = runLDAPSearch(args[1:], stdin, stdout, stderr)
+		err = runLDAPSearch(ctx, args[1:], stdin, stdout, stderr)
 	case "ldapwhoami":
 		err = runLDAPWhoAmI(args[1:], stdin, stdout, stderr)
 	case "ldapcompare":
