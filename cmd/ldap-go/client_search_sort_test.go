@@ -13,6 +13,7 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/server"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -156,6 +157,93 @@ func TestLDAPSearchSortOptionValidation(t *testing.T) {
 	}
 }
 
+func TestLDAPSearchServerSideSortExtension(t *testing.T) {
+	t.Parallel()
+
+	control, err := parseLDAPSearchSortExtension(
+		"!sss=cn:caseIgnoreOrderingMatch/-uid/2.5.4.13:2.5.13.3",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := control.(*ldapRawControl)
+	if !ok || !raw.critical || raw.oid != ldap.ControlTypeServerSideSorting || !raw.hasValue {
+		t.Fatalf("sort control = %#v", control)
+	}
+	keys, err := ldapwire.DecodeSortRequestValue(raw.value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ldapwire.SortKey{
+		{AttributeType: "cn", OrderingRule: "caseIgnoreOrderingMatch"},
+		{AttributeType: "uid", Reverse: true},
+		{AttributeType: "2.5.4.13", OrderingRule: "2.5.13.3"},
+	}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("sort keys = %#v, want %#v", keys, want)
+	}
+	for _, invalid := range []string{
+		"sss", "sss=", "sss=-", "sss=cn:", "sss=cn/", "sss=cn:bad rule",
+	} {
+		if _, err := parseLDAPSearchSortExtension(invalid); err == nil {
+			t.Fatalf("parseLDAPSearchSortExtension(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestLDAPSearchServerSideSortExtensionOnWire(t *testing.T) {
+	t.Parallel()
+
+	requests := make(chan []ldapwire.SortKey, 1)
+	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		if _, search := message.Request.(ldapwire.SearchRequest); !search {
+			return nil, nil
+		}
+		for _, control := range message.Controls {
+			if control.OID != ldap.ControlTypeServerSideSorting {
+				continue
+			}
+			if !control.Critical || !control.HasValue {
+				return nil, testingError("sort request is not critical or has no value")
+			}
+			keys, err := ldapwire.DecodeSortRequestValue(control.Value)
+			if err != nil {
+				return nil, err
+			}
+			requests <- keys
+			return [][]byte{ldapwire.EncodeSearchResultDone(
+				message.ID,
+				ldapwire.Result{Code: ldapwire.ResultSuccess},
+				nil,
+			)}, nil
+		}
+		return nil, testingError("search request omitted sort control")
+	})
+	stdout, stderr, exitCode := runLDAPClientCommand(
+		[]string{
+			"ldapsearch", "-H", fixture.uri, "-x", "-b", clientToolBaseDN,
+			"-E", "!sss=cn/-uid", "-LLL", "(objectClass=*)", "cn",
+		},
+		"",
+	)
+	if exitCode != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("ldapsearch sss exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	want := []ldapwire.SortKey{{AttributeType: "cn"}, {AttributeType: "uid", Reverse: true}}
+	select {
+	case got := <-requests:
+		if !slices.Equal(got, want) {
+			t.Fatalf("wire sort keys = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sort request was not observed")
+	}
+}
+
+type testingError string
+
+func (err testingError) Error() string { return string(err) }
+
 func TestLDAPSearchSortsEachPageLikeOpenLDAP(t *testing.T) {
 	uri := startLDAPClientSortPagingServer(t)
 	stdout, stderr, exitCode := runLDAPClientCommand(
@@ -201,7 +289,8 @@ func TestOpenLDAPReferenceLDAPSearchSortAndUFN(t *testing.T) {
 	arguments := []string{
 		"-H", uri, "-x", "-D", clientToolRootDN, "-w", clientToolRootPassword,
 		"-b", clientToolPeopleDN, "-s", "one", "-S", "cn", "-u",
-		"-E", "pr=2/noprompt", "-LLL", "(objectClass=inetOrgPerson)", "cn",
+		"-E", "pr=2/noprompt", "-E", "sss=cn",
+		"-LLL", "(objectClass=inetOrgPerson)", "cn",
 	}
 	referenceOutput, err := exec.Command(referenceTool, arguments...).CombinedOutput()
 	if err != nil {

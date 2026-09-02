@@ -1698,6 +1698,7 @@ func resolveLDAPSearchExtensions(
 	pageExtension := ""
 	matchedValuesExtension := ""
 	domainScopeExtension := ""
+	sortExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
 		name := strings.TrimLeft(extension, "!")
@@ -1727,6 +1728,15 @@ func resolveLDAPSearchExtensions(
 				)
 			}
 			domainScopeExtension = extension
+			continue
+		}
+		if strings.EqualFold(name, "sss") {
+			if sortExtension != "" {
+				return ldapSearchPagingOptions{}, nil, errors.New(
+					"ldapsearch server-side sorting extension was provided more than once",
+				)
+			}
+			sortExtension = extension
 			continue
 		}
 		controlSpecs = append(controlSpecs, extension)
@@ -1775,6 +1785,26 @@ func resolveLDAPSearchExtensions(
 		}
 		controls = append(controls, control)
 	}
+	if sortExtension != "" {
+		control, controlErr := parseLDAPSearchSortExtension(sortExtension)
+		if controlErr != nil {
+			clearLDAPControls(controls)
+			return ldapSearchPagingOptions{}, nil, controlErr
+		}
+		for _, existing := range controls {
+			if existing.GetControlType() == ldap.ControlTypeServerSideSorting {
+				if raw, ok := control.(*ldapRawControl); ok {
+					raw.clear()
+				}
+				clearLDAPControls(controls)
+				return ldapSearchPagingOptions{}, nil, fmt.Errorf(
+					"LDAP control %s was provided more than once",
+					ldap.ControlTypeServerSideSorting,
+				)
+			}
+		}
+		controls = append(controls, control)
+	}
 	paging := ldapSearchPagingOptions{}
 	if pageExtension != "" {
 		paging, err = parseLDAPSearchPagingExtension(pageExtension)
@@ -1790,6 +1820,46 @@ func resolveLDAPSearchExtensions(
 		paging.size = uint32(pageSize)
 	}
 	return paging, controls, nil
+}
+
+func parseLDAPSearchSortExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !found || !strings.EqualFold(name, "sss") || parameter == "" {
+		return nil, fmt.Errorf("invalid server-side sorting extension %q", value)
+	}
+	rawKeys := strings.Split(parameter, "/")
+	if len(rawKeys) > 64 {
+		return nil, errors.New("server-side sorting extension exceeds 64 keys")
+	}
+	keys := make([]ldapwire.SortKey, 0, len(rawKeys))
+	for _, raw := range rawKeys {
+		key := ldapwire.SortKey{}
+		if strings.HasPrefix(raw, "-") {
+			key.Reverse = true
+			raw = raw[1:]
+		}
+		attribute, orderingRule, hasRule := strings.Cut(raw, ":")
+		if !validLDIFAttributeDescription(attribute) {
+			return nil, fmt.Errorf("invalid server-side sort attribute %q", attribute)
+		}
+		if hasRule {
+			if orderingRule == "" ||
+				(!validLDAPKeyString(orderingRule) && !validNumericOID(orderingRule)) {
+				return nil, fmt.Errorf("invalid server-side sort ordering rule %q", orderingRule)
+			}
+			key.OrderingRule = orderingRule
+		}
+		key.AttributeType = attribute
+		keys = append(keys, key)
+	}
+	return &ldapRawControl{
+		oid:      ldap.ControlTypeServerSideSorting,
+		critical: critical,
+		value:    ldapwire.EncodeSortRequestValue(keys),
+		hasValue: true,
+	}, nil
 }
 
 func parseLDAPSearchDomainScopeExtension(value string) (ldap.Control, error) {
