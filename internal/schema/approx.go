@@ -69,6 +69,13 @@ func (registry *Registry) MatchApproximate(
 	if err != nil {
 		return false, err
 	}
+	if attributeHasOrderedValues(*attribute) {
+		_, content, _, parseErr := ParseOrderedValue(value)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		value = content
+	}
 	if rule, associated := AssociatedApproximateMatchingRule(effective.Equality); associated {
 		return matchOpenLDAPApproximate(rule, value, assertion), nil
 	}

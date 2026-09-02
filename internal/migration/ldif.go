@@ -949,6 +949,9 @@ func prepareImportedEntry(
 	dn directory.DN,
 	skipValueValidation bool,
 ) error {
+	if err := registry.NormalizeOrderedEntryValues(entry); err != nil {
+		return err
+	}
 	if err := ensureImportedNamingValues(registry, entry, dn); err != nil {
 		return err
 	}

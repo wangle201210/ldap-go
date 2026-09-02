@@ -526,7 +526,7 @@ authzFrom: group:cn=proxy users,ou=groups,dc=example,dc=com
 			[]byte("{1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)"),
 		})
 		assertValues(t, entry.Values("authzFrom"), [][]byte{
-			[]byte("group:cn=proxy users,ou=groups,dc=example,dc=com"),
+			[]byte("{0}group:cn=proxy users,ou=groups,dc=example,dc=com"),
 		})
 		return nil
 	}); err != nil {
@@ -540,7 +540,7 @@ authzFrom: group:cn=proxy users,ou=groups,dc=example,dc=com
 	for _, line := range []string{
 		"authzTo: {0}dn.subtree:ou=services,dc=example,dc=com",
 		"authzTo: {1}ldap:///ou=people,dc=example,dc=com??sub?(uid=*)",
-		"authzFrom: group:cn=proxy users,ou=groups,dc=example,dc=com",
+		"authzFrom: {0}group:cn=proxy users,ou=groups,dc=example,dc=com",
 	} {
 		if !strings.Contains(output.String(), line) {
 			t.Fatalf(

@@ -211,10 +211,19 @@ func (server *Server) handleAdd(
 		return err
 	}
 	configurationWrite := isConfigurationDN(dn)
-	validationResult := validateNewEntry(request.Entry, dn)
+	entry := request.Entry.Clone()
+	if err := state.runtime.schema.NormalizeOrderedEntryValues(&entry); err != nil {
+		return server.writeOperationResult(
+			connection,
+			message.ID,
+			ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, err.Error()),
+		)
+	}
+	validationResult := validateNewEntry(entry, dn)
 	if !configurationWrite {
 		validationResult = validateNewEntryWithSchema(
-			request.Entry,
+			entry,
 			dn,
 			state.runtime.schema,
 		)
@@ -232,7 +241,6 @@ func (server *Server) handleAdd(
 		defer server.configMu.Unlock()
 	}
 
-	entry := request.Entry.Clone()
 	entry.DN = dn.String()
 	writeRecord := accesslogWriteRecord{
 		operation:       accesslogAdd,
@@ -3333,6 +3341,18 @@ func schemaAttributeValuesEqual(
 	description string,
 	left, right []byte,
 ) (bool, error) {
+	if registry.HasOrderedValues(description) {
+		_, leftContent, _, err := schema.ParseOrderedValue(left)
+		if err != nil {
+			return false, err
+		}
+		_, rightContent, _, err := schema.ParseOrderedValue(right)
+		if err != nil {
+			return false, err
+		}
+		left = leftContent
+		right = rightContent
+	}
 	leftNormalized, err := registry.NormalizeEqualityValue(description, left)
 	if err != nil {
 		return false, err
@@ -3404,6 +3424,9 @@ func applyModificationWithSchema(
 ) error {
 	if registry == nil {
 		return applyModification(entry, change)
+	}
+	if registry.HasOrderedValues(change.Attribute.Description) {
+		return applyOrderedSchemaModification(entry, change, false, registry)
 	}
 	indexes := schemaExactAttributeIndexes(
 		*entry,
@@ -3524,6 +3547,155 @@ func applyModificationWithSchema(
 		return operationFailed(ldapwire.ResultProtocolError, "unknown modify operation")
 	}
 	return modificationResultError(entry, change, registry, err)
+}
+
+func applyOrderedSchemaModification(
+	entry *directory.Entry,
+	change ldapwire.Modification,
+	permissive bool,
+	registry *schema.Registry,
+) error {
+	indexes := schemaExactAttributeIndexes(
+		*entry, change.Attribute.Description, registry,
+	)
+	description := change.Attribute.Description
+	if len(indexes) != 0 {
+		description = entry.Attributes[indexes[0]].Description
+	}
+	var current [][]byte
+	for _, index := range indexes {
+		current = append(current, cloneByteValues(entry.Attributes[index].Values)...)
+	}
+	if len(current) != 0 {
+		normalized, err := schema.NormalizeOrderedValues(current)
+		if err != nil {
+			return operationFailed(ldapwire.ResultInvalidAttributeSyntax, err.Error())
+		}
+		current = normalized
+	}
+
+	var err error
+	switch change.Operation {
+	case ldapwire.ModificationAdd, ldapwire.ModificationReplace:
+		if change.Operation == ldapwire.ModificationReplace {
+			current = nil
+		} else if len(change.Attribute.Values) == 0 {
+			err = directory.ErrNoSuchAttribute
+			break
+		}
+		for _, raw := range change.Attribute.Values {
+			order, content, indexed, parseErr := schema.ParseOrderedValue(raw)
+			if parseErr != nil {
+				return operationFailed(ldapwire.ResultInvalidAttributeSyntax, parseErr.Error())
+			}
+			duplicate := false
+			for _, existing := range current {
+				equal, compareErr := schemaAttributeValuesEqual(
+					registry, change.Attribute.Description, existing, content,
+				)
+				if compareErr != nil {
+					return operationFailed(ldapwire.ResultInvalidAttributeSyntax, compareErr.Error())
+				}
+				if equal {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				if permissive && change.Operation == ldapwire.ModificationAdd {
+					continue
+				}
+				err = directory.ErrAttributeValueExists
+				break
+			}
+			position := len(current)
+			if indexed && order <= len(current) {
+				position = order
+			}
+			current = append(current, nil)
+			copy(current[position+1:], current[position:])
+			current[position] = schema.FormatOrderedValue(position, content)
+			current = renumberOrderedValues(current)
+		}
+	case ldapwire.ModificationDelete:
+		if len(indexes) == 0 {
+			if permissive {
+				return nil
+			}
+			err = directory.ErrNoSuchAttribute
+			break
+		}
+		if len(change.Attribute.Values) == 0 {
+			current = nil
+			break
+		}
+		remove := make(map[int]struct{})
+		for _, assertion := range change.Attribute.Values {
+			matched := -1
+			for index, existing := range current {
+				if _, already := remove[index]; already {
+					continue
+				}
+				comparison, compareErr := registry.Compare(
+					change.Attribute.Description, "", existing, assertion,
+				)
+				if compareErr != nil {
+					return operationFailed(ldapwire.ResultInvalidAttributeSyntax, compareErr.Error())
+				}
+				if comparison == 0 {
+					matched = index
+					break
+				}
+			}
+			if matched < 0 {
+				if permissive {
+					continue
+				}
+				err = directory.ErrNoSuchAttribute
+				break
+			}
+			remove[matched] = struct{}{}
+		}
+		if err == nil && len(remove) != 0 {
+			remaining := make([][]byte, 0, len(current)-len(remove))
+			for index, value := range current {
+				if _, deleted := remove[index]; !deleted {
+					remaining = append(remaining, value)
+				}
+			}
+			current = renumberOrderedValues(remaining)
+		}
+	case ldapwire.ModificationIncrement:
+		return operationFailed(
+			ldapwire.ResultConstraintViolation,
+			"increment is not supported for ordered values",
+		)
+	default:
+		return operationFailed(ldapwire.ResultProtocolError, "unknown modify operation")
+	}
+	if err != nil {
+		return modificationResultError(entry, change, registry, err)
+	}
+	entry.Attributes = removeSchemaAttributes(entry.Attributes, indexes)
+	if len(current) != 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: description,
+			Values:      current,
+		})
+	}
+	return nil
+}
+
+func renumberOrderedValues(values [][]byte) [][]byte {
+	result := make([][]byte, len(values))
+	for index, value := range values {
+		_, content, _, err := schema.ParseOrderedValue(value)
+		if err != nil {
+			content = value
+		}
+		result[index] = schema.FormatOrderedValue(index, content)
+	}
+	return result
 }
 
 func removeSchemaAttributes(
@@ -3688,6 +3860,11 @@ func applyModificationWithPermissive(
 		registry = registries[0]
 	}
 	if registry != nil {
+		if registry.HasOrderedValues(change.Attribute.Description) {
+			return applyOrderedSchemaModification(
+				entry, change, permissive, registry,
+			)
+		}
 		return applySchemaModificationWithPermissive(
 			entry, change, permissive, registry,
 		)

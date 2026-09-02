@@ -1385,6 +1385,9 @@ func (registry *Registry) Compare(
 	if rule == "" {
 		return 0, fmt.Errorf("attribute %q has no equality matching rule", attributeName)
 	}
+	if attributeHasOrderedValues(*attribute) {
+		return compareOrderedAssertion(rule, left, right)
+	}
 	if strings.EqualFold(attribute.OID, "2.5.4.0") &&
 		canonicalMatchingRule(rule) == "objectidentifiermatch" {
 		candidate, candidateFound := registry.objectClasses[schemaKey(strings.TrimSpace(string(left)))]
@@ -1418,7 +1421,18 @@ func (registry *Registry) NormalizeEqualityValue(
 	if effective.Equality == "" {
 		return bytes.Clone(value), nil
 	}
-	return registry.normalizeWithRuleLocked(effective.Equality, value)
+	if !attributeHasOrderedValues(*attribute) {
+		return registry.normalizeWithRuleLocked(effective.Equality, value)
+	}
+	order, content, indexed, err := ParseOrderedValue(value)
+	if err != nil {
+		return nil, err
+	}
+	normalized, err := registry.normalizeWithRuleLocked(effective.Equality, content)
+	if err != nil || !indexed {
+		return normalized, err
+	}
+	return FormatOrderedValue(order, normalized), nil
 }
 
 // NormalizeDNAttribute implements directory.DNAttributeNormalizer. Attribute
@@ -1626,6 +1640,13 @@ func (registry *Registry) ValidateAttributeValue(
 	if err != nil {
 		return err
 	}
+	if attributeHasOrderedValues(*attribute) {
+		_, content, _, parseErr := ParseOrderedValue(value)
+		if parseErr != nil {
+			return fmt.Errorf("attribute %q: %w", attributeName, parseErr)
+		}
+		value = content
+	}
 	if err := registry.validateSyntax(effective.Syntax, effective.SyntaxLength, value); err != nil {
 		return fmt.Errorf("attribute %q: %w", attributeName, err)
 	}
@@ -1671,6 +1692,9 @@ func (registry *Registry) CompareOrdering(
 	if err != nil {
 		return 0, err
 	}
+	if registry.HasOrderedValues(attributeName) {
+		return compareOrderedAssertion(rule, left, right)
+	}
 	return compareWithRule(rule, left, right)
 }
 
@@ -1692,6 +1716,13 @@ func (registry *Registry) MatchSubstring(
 	}
 	if effective.Substring == "" {
 		return false, fmt.Errorf("attribute %q has no substring matching rule", attributeName)
+	}
+	if attributeHasOrderedValues(*attribute) {
+		_, content, _, parseErr := ParseOrderedValue(value)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		value = content
 	}
 	return matchSubstringWithRule(effective.Substring, value, substring)
 }
