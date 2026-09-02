@@ -43,6 +43,71 @@ type DerefResult struct {
 	Attributes []DerefAttribute
 }
 
+// EncodeDerefRequestValue encodes an OpenLDAP dereference request after
+// applying the same structural bounds and AttributeDescription validation as
+// DecodeDerefRequestValue.
+func EncodeDerefRequestValue(specs []DerefSpec) ([]byte, error) {
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("deref request requires at least one specification")
+	}
+	if len(specs) > maxDerefSpecs {
+		return nil, fmt.Errorf("deref request contains more than %d specifications", maxDerefSpecs)
+	}
+	outer := ber.NewSequence("derefRequest")
+	seen := make(map[string]struct{}, len(specs))
+	totalAttributes := 0
+	for index, spec := range specs {
+		canonical, err := canonicalDerefAttributeDescription(spec.DerefAttr)
+		if err != nil {
+			return nil, fmt.Errorf("deref specification %d derefAttr: %w", index, err)
+		}
+		if _, duplicate := seen[canonical]; duplicate {
+			return nil, fmt.Errorf("derefAttr %q is specified more than once", spec.DerefAttr)
+		}
+		seen[canonical] = struct{}{}
+		if len(spec.Attributes) == 0 || len(spec.Attributes) > maxDerefAttributesPerSpec {
+			return nil, fmt.Errorf(
+				"deref specification %d requires 1..%d attributes",
+				index,
+				maxDerefAttributesPerSpec,
+			)
+		}
+		if len(spec.Attributes) > maxDerefRequestAttributes-totalAttributes {
+			return nil, fmt.Errorf(
+				"deref request contains more than %d requested attributes",
+				maxDerefRequestAttributes,
+			)
+		}
+		totalAttributes += len(spec.Attributes)
+		encodedSpec := ber.NewSequence("derefSpec")
+		encodedSpec.AppendChild(ber.NewString(
+			ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString,
+			spec.DerefAttr, "derefAttr",
+		))
+		attributes := ber.NewSequence("attributes")
+		seenAttributes := make(map[string]struct{}, len(spec.Attributes))
+		for _, attribute := range spec.Attributes {
+			canonicalAttribute, err := canonicalDerefAttributeDescription(attribute)
+			if err != nil {
+				return nil, fmt.Errorf("deref specification %d attribute: %w", index, err)
+			}
+			if _, duplicate := seenAttributes[canonicalAttribute]; duplicate {
+				return nil, fmt.Errorf(
+					"deref specification %d repeats attribute %q", index, attribute,
+				)
+			}
+			seenAttributes[canonicalAttribute] = struct{}{}
+			attributes.AppendChild(ber.NewString(
+				ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString,
+				attribute, "attribute",
+			))
+		}
+		encodedSpec.AppendChild(attributes)
+		outer.AppendChild(encodedSpec)
+	}
+	return outer.Bytes(), nil
+}
+
 // DecodeDerefRequestValue decodes the value of an OpenLDAP dereference
 // request control. Attribute existence and DN syntax are schema concerns and
 // are intentionally left to the server layer.

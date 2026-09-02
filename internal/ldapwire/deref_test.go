@@ -62,6 +62,33 @@ func TestDerefControlOIDAndWireFixtures(t *testing.T) {
 	}
 }
 
+func TestEncodeDerefRequestValueRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := []DerefSpec{
+		{DerefAttr: "seeAlso", Attributes: []string{"uid", "cn"}},
+		{DerefAttr: "manager", Attributes: []string{"mail"}},
+	}
+	encoded, err := EncodeDerefRequestValue(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeDerefRequestValue(encoded)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("deref round trip = %#v, %v; want %#v", got, err, want)
+	}
+	for _, invalid := range [][]DerefSpec{
+		nil,
+		{{DerefAttr: "seeAlso"}},
+		{{DerefAttr: "bad attr", Attributes: []string{"uid"}}},
+		{{DerefAttr: "seeAlso", Attributes: []string{"uid", "UID"}}},
+	} {
+		if _, err := EncodeDerefRequestValue(invalid); err == nil {
+			t.Fatalf("EncodeDerefRequestValue(%#v) succeeded", invalid)
+		}
+	}
+}
+
 func TestDecodeDerefRequestValue(t *testing.T) {
 	t.Parallel()
 

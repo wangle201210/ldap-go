@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"sort"
 	"testing"
@@ -47,6 +48,21 @@ func TestLDAPSearchNamedExtensionsEncodeControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNamedRawControl(t, account, ldapAccountUsabilityOID, false, nil)
+	deref, err := parseLDAPSearchDerefExtension(
+		"!deref=seeAlso:uid,cn;manager:mail",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = assertNamedRawControl(t, deref, ldapwire.DerefControlOID, true, nil)
+	specs, err := ldapwire.DecodeDerefRequestValue(raw.value)
+	wantSpecs := []ldapwire.DerefSpec{
+		{DerefAttr: "seeAlso", Attributes: []string{"uid", "cn"}},
+		{DerefAttr: "manager", Attributes: []string{"mail"}},
+	}
+	if err != nil || !reflect.DeepEqual(specs, wantSpecs) {
+		t.Fatalf("deref specs = %#v, %v; want %#v", specs, err, wantSpecs)
+	}
 }
 
 func assertNamedRawControl(
@@ -105,6 +121,7 @@ func TestOpenLDAPReferenceLDAPSearchNamedExtensions(t *testing.T) {
 		"-E", "sync=ro/csn=one",
 		"-E", "!dontUseCopy",
 		"-E", "accountUsability",
+		"-E", "deref=seeAlso:uid,cn;manager:mail",
 		"-LLL", "(objectClass=*)", "cn",
 	}
 	if output, err := exec.Command(referenceTool, arguments...).CombinedOutput(); err != nil {

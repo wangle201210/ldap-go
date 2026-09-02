@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -187,6 +189,69 @@ func TestLDAPSearchServerSideSortExtension(t *testing.T) {
 	} {
 		if _, err := parseLDAPSearchSortExtension(invalid); err == nil {
 			t.Fatalf("parseLDAPSearchSortExtension(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestLDAPSearchVLVSyntax(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		value string
+		want  ldapwire.VirtualListViewRequest
+	}{
+		{
+			value: "!vlv=2/3/10/100",
+			want: ldapwire.VirtualListViewRequest{
+				BeforeCount: 2, AfterCount: 3, ByOffset: true,
+				Offset: 10, ContentCount: 100,
+			},
+		},
+		{
+			value: "vlv=0/5:Alice",
+			want: ldapwire.VirtualListViewRequest{
+				BeforeCount: 0, AfterCount: 5, AssertionValue: []byte("Alice"),
+			},
+		},
+	} {
+		control, err := parseLDAPSearchVLVExtension(test.value)
+		if err != nil {
+			t.Fatalf("parseLDAPSearchVLVExtension(%q): %v", test.value, err)
+		}
+		raw := control.(*ldapRawControl)
+		got, err := ldapwire.DecodeVirtualListViewRequestValue(raw.value)
+		if err != nil || !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("VLV(%q) = %#v, %v; want %#v", test.value, got, err, test.want)
+		}
+	}
+	for _, invalid := range []string{
+		"vlv", "vlv=", "vlv=0", "vlv=-1/2:Alice", "vlv=0/-1:Alice",
+		"vlv=0/1/0/10", "vlv=0/1/1/-1", "vlv=0/1/1",
+	} {
+		if _, err := parseLDAPSearchVLVExtension(invalid); err == nil {
+			t.Fatalf("parseLDAPSearchVLVExtension(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestOpenLDAPSourceVLVSyntaxContract(t *testing.T) {
+	source := os.Getenv("OPENLDAP_SOURCE")
+	if source == "" {
+		t.Skip("OPENLDAP_SOURCE is not configured")
+	}
+	content, err := os.ReadFile(filepath.Join(source, "clients", "tools", "ldapsearch.c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`[!]vlv=<before>/<after>(/<offset>/<count>|:<value>)`,
+		`if ( sscanf( keyp, "%d/%d", &num1, &num2 ) != 2 )`,
+		`vlvInfo.ldvlv_offset = num1;`,
+		`vlvInfo.ldvlv_attrvalue = &vlvValue;`,
+		`PagedResultsControl incompatible with VLV`,
+	} {
+		if !bytes.Contains(content, []byte(fragment)) {
+			t.Fatalf("pinned OpenLDAP ldapsearch.c lacks %q", fragment)
 		}
 	}
 }

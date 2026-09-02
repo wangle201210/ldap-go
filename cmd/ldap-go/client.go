@@ -1733,6 +1733,8 @@ func resolveLDAPSearchExtensions(
 	syncExtension := ""
 	dontUseCopyExtension := ""
 	accountUsabilityExtension := ""
+	vlvExtension := ""
+	derefExtension := ""
 	controlSpecs := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
 		name := strings.TrimLeft(extension, "!")
@@ -1783,6 +1785,10 @@ func resolveLDAPSearchExtensions(
 			target = &dontUseCopyExtension
 		case strings.EqualFold(name, "accountUsability"):
 			target = &accountUsabilityExtension
+		case strings.EqualFold(name, "vlv"):
+			target = &vlvExtension
+		case strings.EqualFold(name, "deref"):
+			target = &derefExtension
 		}
 		if target != nil {
 			if *target != "" {
@@ -1798,6 +1804,16 @@ func resolveLDAPSearchExtensions(
 	}
 	if flagWasSet(flags, "page-size") && pageExtension != "" {
 		return ldapSearchPagingOptions{}, nil, errors.New("-page-size and -E pr=... are mutually exclusive")
+	}
+	if vlvExtension != "" && sortExtension == "" {
+		return ldapSearchPagingOptions{}, nil, errors.New(
+			"ldapsearch VLV extension requires server-side sorting",
+		)
+	}
+	if vlvExtension != "" && (pageExtension != "" || flagWasSet(flags, "page-size")) {
+		return ldapSearchPagingOptions{}, nil, errors.New(
+			"ldapsearch VLV and paged results are mutually exclusive",
+		)
 	}
 	controls, err := parseLDAPControlSpecs(controlSpecs, ldapControlValueLDIF)
 	if err != nil {
@@ -1868,6 +1884,8 @@ func resolveLDAPSearchExtensions(
 		{syncExtension, parseLDAPSearchSyncExtension},
 		{dontUseCopyExtension, parseLDAPSearchDontUseCopyExtension},
 		{accountUsabilityExtension, parseLDAPSearchAccountUsabilityExtension},
+		{vlvExtension, parseLDAPSearchVLVExtension},
+		{derefExtension, parseLDAPSearchDerefExtension},
 	} {
 		if named.value == "" {
 			continue
@@ -2027,6 +2045,94 @@ func parseLDAPSearchAccountUsabilityExtension(value string) (ldap.Control, error
 		return nil, fmt.Errorf("invalid accountUsability extension %q", value)
 	}
 	return &ldapRawControl{oid: ldapAccountUsabilityOID, critical: critical}, nil
+}
+
+func parseLDAPSearchVLVExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !found || !strings.EqualFold(name, "vlv") || parameter == "" {
+		return nil, fmt.Errorf("invalid VLV extension %q", value)
+	}
+	firstSlash := strings.IndexByte(parameter, '/')
+	if firstSlash <= 0 {
+		return nil, fmt.Errorf("invalid VLV extension value %q", parameter)
+	}
+	before, err := strconv.ParseInt(parameter[:firstSlash], 10, 32)
+	if err != nil || before < 0 {
+		return nil, fmt.Errorf("invalid VLV before count %q", parameter[:firstSlash])
+	}
+	remainder := parameter[firstSlash+1:]
+	request := ldapwire.VirtualListViewRequest{BeforeCount: before}
+	if secondSlash := strings.IndexByte(remainder, '/'); secondSlash >= 0 {
+		after, err := strconv.ParseInt(remainder[:secondSlash], 10, 32)
+		if err != nil || after < 0 {
+			return nil, fmt.Errorf("invalid VLV after count %q", remainder[:secondSlash])
+		}
+		request.AfterCount = after
+		target := strings.Split(remainder[secondSlash+1:], "/")
+		if len(target) != 2 {
+			return nil, fmt.Errorf("invalid VLV offset target %q", remainder[secondSlash+1:])
+		}
+		request.Offset, err = strconv.ParseInt(target[0], 10, 32)
+		if err != nil || request.Offset <= 0 {
+			return nil, fmt.Errorf("invalid VLV offset %q", target[0])
+		}
+		request.ContentCount, err = strconv.ParseInt(target[1], 10, 32)
+		if err != nil || request.ContentCount < 0 {
+			return nil, fmt.Errorf("invalid VLV content count %q", target[1])
+		}
+		request.ByOffset = true
+	} else {
+		colon := strings.IndexByte(remainder, ':')
+		if colon < 0 {
+			return nil, fmt.Errorf("invalid VLV assertion target %q", remainder)
+		}
+		after, err := strconv.ParseInt(remainder[:colon], 10, 32)
+		if err != nil || after < 0 {
+			return nil, fmt.Errorf("invalid VLV after count %q", remainder[:colon])
+		}
+		request.AfterCount = after
+		request.AssertionValue = []byte(remainder[colon+1:])
+	}
+	return &ldapRawControl{
+		oid: ldap.ControlTypeVLVRequest, critical: critical,
+		value: ldapwire.EncodeVirtualListViewRequestValue(request), hasValue: true,
+	}, nil
+}
+
+func parseLDAPSearchDerefExtension(value string) (ldap.Control, error) {
+	critical := strings.HasPrefix(value, "!")
+	value = strings.TrimLeft(value, "!")
+	name, parameter, found := strings.Cut(value, "=")
+	if !found || !strings.EqualFold(name, "deref") || parameter == "" {
+		return nil, fmt.Errorf("invalid deref extension %q", value)
+	}
+	rawSpecs := strings.Split(parameter, ";")
+	specs := make([]ldapwire.DerefSpec, 0, len(rawSpecs))
+	for _, rawSpec := range rawSpecs {
+		derefAttribute, rawAttributes, found := strings.Cut(rawSpec, ":")
+		if !found || derefAttribute == "" || rawAttributes == "" {
+			return nil, fmt.Errorf("invalid deref specification %q", rawSpec)
+		}
+		attributes := strings.Split(rawAttributes, ",")
+		for _, attribute := range attributes {
+			if attribute == "" {
+				return nil, fmt.Errorf("invalid deref attribute list %q", rawAttributes)
+			}
+		}
+		specs = append(specs, ldapwire.DerefSpec{
+			DerefAttr: derefAttribute, Attributes: attributes,
+		})
+	}
+	encoded, err := ldapwire.EncodeDerefRequestValue(specs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid deref extension: %w", err)
+	}
+	return &ldapRawControl{
+		oid: ldapwire.DerefControlOID, critical: critical,
+		value: encoded, hasValue: true,
+	}, nil
 }
 
 func parseLDAPSearchDomainScopeExtension(value string) (ldap.Control, error) {
