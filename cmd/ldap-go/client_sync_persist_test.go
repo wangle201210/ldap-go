@@ -30,6 +30,7 @@ func TestLDAPSearchRefreshAndPersistStreamsAndCancelsAtLimit(t *testing.T) {
 		false,
 		true,
 		cancelResponse,
+		true,
 	)
 	stdout := newLDAPSyncObservedWriter()
 	var stderr bytes.Buffer
@@ -137,7 +138,7 @@ func TestLDAPSearchRefreshAndPersistStreamsAndCancelsAtLimit(t *testing.T) {
 
 	select {
 	case code := <-result:
-		if code != 0 || stderr.String() != "" {
+		if code != 0 || stderr.String() != "ldap_result: Success (0)\n" {
 			t.Fatalf("ldapsearch exit=%d stderr=%q\nstdout:\n%s", code, stderr.String(), stdout.String())
 		}
 	case <-time.After(5 * time.Second):
@@ -149,8 +150,11 @@ func TestLDAPSearchRefreshAndPersistStreamsAndCancelsAtLimit(t *testing.T) {
 		t.Fatal("slimit search connection or server goroutine remained after Cancel")
 	}
 	for _, expected := range []string{
-		"# numResponses: 5\n",
+		"result: 118 Cancelled\n",
+		"# extended result response\n",
+		"# numResponses: 7\n",
 		"# numEntries: 3\n",
+		"# numExtended: 1\n",
 		"# numPartial: 1\n",
 		"# numReferences: 1\n",
 	} {
@@ -200,7 +204,7 @@ func TestLDAPSearchRefreshAndPersistHonorsContextCancellation(t *testing.T) {
 }
 
 func TestLDAPSearchRefreshAndPersistContextInterruptsCancelWait(t *testing.T) {
-	fixture := startLDAPSyncPersistFixtureWithOptions(t, nil, false, false, nil)
+	fixture := startLDAPSyncPersistFixtureWithOptions(t, nil, false, false, nil, false)
 	stdout := newLDAPSyncObservedWriter()
 	var stderr bytes.Buffer
 	ctx, cancel := context.WithCancel(t.Context())
@@ -286,7 +290,7 @@ func TestLDAPSearchRefreshAndPersistDisablesLongLivedRequestTimeout(t *testing.T
 	awaitLDAPClientWireMessage(t, fixture.cancels)
 	select {
 	case code := <-result:
-		if code != 0 || stderr.String() != "" {
+		if code != 0 || stderr.String() != "ldap_result: Success (0)\n" {
 			t.Fatalf("idle persistent search exit=%d stderr=%q", code, stderr.String())
 		}
 	case <-time.After(2 * time.Second):
@@ -350,7 +354,7 @@ func TestLDAPSearchRefreshAndPersistStreamsAfterSASLObserverInstall(t *testing.T
 	}
 	select {
 	case code := <-result:
-		if code != 0 || stderr.String() != "" {
+		if code != 0 || stderr.String() != "Cancelled (118)\nldap_result: Success (0)\n" {
 			t.Fatalf("SASL persistent search exit=%d stderr=%q", code, stderr.String())
 		}
 	case <-time.After(2 * time.Second):
@@ -379,6 +383,7 @@ func TestLDAPSearchRefreshAndPersistOverObservedTLS(t *testing.T) {
 				test.startTLS,
 				true,
 				nil,
+				true,
 			)
 			caPath := filepath.Join(t.TempDir(), "ca.pem")
 			if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
@@ -436,7 +441,7 @@ func TestLDAPSearchRefreshAndPersistOverObservedTLS(t *testing.T) {
 			}
 			select {
 			case code := <-result:
-				if code != 0 || stderr.String() != "" {
+				if code != 0 || stderr.String() != "Cancelled (118)\nldap_result: Success (0)\n" {
 					t.Fatalf("TLS persistent search exit=%d stderr=%q", code, stderr.String())
 				}
 			case <-time.After(2 * time.Second):
@@ -581,34 +586,108 @@ func TestLDAPSearchResponseObserverReleasesStreamingResponses(t *testing.T) {
 	}
 }
 
+func TestOpenLDAPReferenceLDAPSearchRefreshAndPersistFullCancelOutput(t *testing.T) {
+	referenceTool := requireOpenLDAP2613LDAPSearch(t)
+	for _, test := range []struct {
+		name  string
+		level []string
+	}{
+		{name: "default"},
+		{name: "L", level: []string{"-L"}},
+		{name: "LL", level: []string{"-LL"}},
+		{name: "LLL", level: []string{"-LLL"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertLDAPSyncPersistFullCancelMatches(t, referenceTool, test.level)
+		})
+	}
+}
+
+func assertLDAPSyncPersistFullCancelMatches(
+	t *testing.T,
+	referenceTool string,
+	level []string,
+) {
+	t.Helper()
+	arguments := []string{"-x", "-E", "sync=rp/csn=full/2"}
+	arguments = append(arguments, level...)
+	arguments = append(arguments,
+		"-b", "dc=example,dc=com", "(objectClass=*)", "cn",
+	)
+
+	referenceFixture := startLDAPSyncPersistFixture(t)
+	var referenceStdout, referenceStderr bytes.Buffer
+	referenceCommand := exec.Command(
+		referenceTool,
+		append([]string{"-H", referenceFixture.uri}, arguments...)...,
+	)
+	referenceCommand.Stdout = &referenceStdout
+	referenceCommand.Stderr = &referenceStderr
+	if err := referenceCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	referenceSearch := awaitLDAPClientWireMessage(t, referenceFixture.searches)
+	requireLDAPSyncPersistRequest(t, referenceSearch, "csn=full")
+	writeLDAPSyncPersistScenario(t, referenceFixture, referenceSearch.ID)
+	referenceCancel := awaitLDAPClientWireMessage(t, referenceFixture.cancels)
+	if target := requireLDAPSyncCancelTarget(t, referenceCancel); target != referenceSearch.ID {
+		t.Fatalf("OpenLDAP Cancel target = %d, want %d", target, referenceSearch.ID)
+	}
+	referenceErr := referenceCommand.Wait()
+	referenceExit := commandExitCode(referenceErr)
+
+	localFixture := startLDAPSyncPersistFixture(t)
+	var localStdout, localStderr bytes.Buffer
+	localResult := make(chan int, 1)
+	go func() {
+		localResult <- runWithContext(
+			t.Context(),
+			append([]string{"ldapsearch", "-H", localFixture.uri}, arguments...),
+			strings.NewReader(""),
+			&localStdout,
+			&localStderr,
+			func(string) string { return "" },
+		)
+	}()
+	localSearch := awaitLDAPClientWireMessage(t, localFixture.searches)
+	requireLDAPSyncPersistRequest(t, localSearch, "csn=full")
+	writeLDAPSyncPersistScenario(t, localFixture, localSearch.ID)
+	localCancel := awaitLDAPClientWireMessage(t, localFixture.cancels)
+	if target := requireLDAPSyncCancelTarget(t, localCancel); target != localSearch.ID {
+		t.Fatalf("ldap-go Cancel target = %d, want %d", target, localSearch.ID)
+	}
+	var localExit int
+	select {
+	case localExit = <-localResult:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ldap-go full Cancel scenario did not finish")
+	}
+
+	if localExit != referenceExit || localStdout.String() != referenceStdout.String() ||
+		localStderr.String() != referenceStderr.String() {
+		t.Fatalf(
+			"refreshAndPersist Cancel output differs\n"+
+				"ldap-go: exit=%d stdout=%q stderr=%q\n"+
+				"OpenLDAP: exit=%d stdout=%q stderr=%q err=%v",
+			localExit,
+			localStdout.String(),
+			localStderr.String(),
+			referenceExit,
+			referenceStdout.String(),
+			referenceStderr.String(),
+			referenceErr,
+		)
+	}
+}
+
 func TestOpenLDAPReferenceLDAPSearchRefreshAndPersistNegativeLimit(t *testing.T) {
-	if os.Getenv("LDAP_GO_OPENLDAP_REFERENCE_TESTS") == "" {
-		t.Skip("set LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 to run the OpenLDAP sync differential")
-	}
-	if got := os.Getenv("OPENLDAP_REFERENCE_VERIFIED"); got != "1" {
-		t.Fatalf("OPENLDAP_REFERENCE_VERIFIED = %q, want 1", got)
-	}
-	if got := os.Getenv("OPENLDAP_COMMIT"); got != openLDAPClientToolsCommit {
-		t.Fatalf("OPENLDAP_COMMIT = %q, want %q", got, openLDAPClientToolsCommit)
-	}
-	referenceTool := filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", "ldapsearch")
-	if _, err := os.Stat(referenceTool); err != nil {
-		var lookupErr error
-		referenceTool, lookupErr = exec.LookPath("ldapsearch")
-		if lookupErr != nil {
-			t.Fatalf("find OpenLDAP ldapsearch: %v", lookupErr)
-		}
-	}
-	version, err := exec.Command(referenceTool, "-VV").CombinedOutput()
-	if err != nil || !bytes.Contains(version, []byte("ldapsearch 2.6.13")) {
-		t.Fatalf("OpenLDAP reference is not ldapsearch 2.6.13: %v\n%s", err, version)
-	}
+	referenceTool := requireOpenLDAP2613LDAPSearch(t)
 	arguments := []string{
 		"-x", "-E", "sync=rp/csn=negative/-2",
 		"-b", "dc=example,dc=com", "(objectClass=*)", "cn",
 	}
 
-	referenceFixture := startLDAPSyncPersistFixtureWithOptions(t, nil, false, false, nil)
+	referenceFixture := startLDAPSyncPersistFixtureWithOptions(t, nil, false, false, nil, false)
 	referenceStdout := newLDAPSyncObservedWriter()
 	var referenceStderr bytes.Buffer
 	referenceCommand := exec.Command(
@@ -672,7 +751,7 @@ func TestOpenLDAPReferenceLDAPSearchRefreshAndPersistNegativeLimit(t *testing.T)
 	localTarget := requireLDAPSyncCancelTarget(t, localCancel)
 	select {
 	case exitCode := <-localResult:
-		if exitCode != 0 || localStderr.String() != "" {
+		if exitCode != 0 || localStderr.String() != "ldap_result: Success (0)\n" {
 			t.Fatalf("ldap-go ldapsearch exit=%d stderr=%q", exitCode, localStderr.String())
 		}
 	case <-time.After(5 * time.Second):
@@ -727,6 +806,81 @@ func TestOpenLDAPReferenceLDAPSearchRefreshAndPersistNegativeLimit(t *testing.T)
 	)
 }
 
+func requireOpenLDAP2613LDAPSearch(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("LDAP_GO_OPENLDAP_REFERENCE_TESTS") == "" {
+		t.Skip("set LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 to run the OpenLDAP sync differential")
+	}
+	if got := os.Getenv("OPENLDAP_REFERENCE_VERIFIED"); got != "1" {
+		t.Fatalf("OPENLDAP_REFERENCE_VERIFIED = %q, want 1", got)
+	}
+	if got := os.Getenv("OPENLDAP_COMMIT"); got != openLDAPClientToolsCommit {
+		t.Fatalf("OPENLDAP_COMMIT = %q, want %q", got, openLDAPClientToolsCommit)
+	}
+	referenceTool := filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", "ldapsearch")
+	if _, err := os.Stat(referenceTool); err != nil {
+		var lookupErr error
+		referenceTool, lookupErr = exec.LookPath("ldapsearch")
+		if lookupErr != nil {
+			t.Fatalf("find OpenLDAP ldapsearch: %v", lookupErr)
+		}
+	}
+	version, err := exec.Command(referenceTool, "-VV").CombinedOutput()
+	if err != nil || !bytes.Contains(version, []byte("ldapsearch 2.6.13")) {
+		t.Fatalf("OpenLDAP reference is not ldapsearch 2.6.13: %v\n%s", err, version)
+	}
+	return referenceTool
+}
+
+func writeLDAPSyncPersistScenario(
+	t *testing.T,
+	fixture *ldapSyncPersistFixture,
+	messageID int64,
+) {
+	t.Helper()
+	for _, response := range [][]byte{
+		ldapSyncPersistEntry(
+			messageID,
+			"uid=refresh,dc=example,dc=com",
+			"Refresh Entry",
+			ldapwire.SyncStatePresent,
+			0x10,
+		),
+		ldapwire.EncodeSearchResultReference(
+			messageID,
+			[]string{"ldap://ref.example/dc=example,dc=com"},
+			nil,
+		),
+		ldapwire.EncodeIntermediateResponse(
+			messageID,
+			ldap.ControlTypeSyncInfo,
+			ldapwire.EncodeSyncInfoValue(ldapwire.SyncInfoValue{
+				Kind:        ldapwire.SyncInfoRefreshPresent,
+				Cookie:      []byte("csn=refresh"),
+				HasCookie:   true,
+				RefreshDone: true,
+			}),
+			nil,
+		),
+		ldapSyncPersistEntry(
+			messageID,
+			"uid=persist-one,dc=example,dc=com",
+			"Persist One",
+			ldapwire.SyncStateAdd,
+			0x20,
+		),
+		ldapSyncPersistEntry(
+			messageID,
+			"uid=persist-two,dc=example,dc=com",
+			"Persist Two",
+			ldapwire.SyncStateModify,
+			0x30,
+		),
+	} {
+		fixture.send(t, response)
+	}
+}
+
 type ldapSyncPersistFixture struct {
 	uri        string
 	listener   net.Listener
@@ -742,6 +896,7 @@ type ldapSyncPersistFixture struct {
 	startTLS   bool
 	respond    bool
 	cancelGate <-chan struct{}
+	targetDone bool
 }
 
 type ldapSyncReadResult struct {
@@ -750,7 +905,7 @@ type ldapSyncReadResult struct {
 }
 
 func startLDAPSyncPersistFixture(t *testing.T) *ldapSyncPersistFixture {
-	return startLDAPSyncPersistFixtureWithOptions(t, nil, false, true, nil)
+	return startLDAPSyncPersistFixtureWithOptions(t, nil, false, true, nil, true)
 }
 
 func startLDAPSyncPersistFixtureWithOptions(
@@ -758,6 +913,7 @@ func startLDAPSyncPersistFixtureWithOptions(
 	tlsConfig *tls.Config,
 	startTLS, respondToCancel bool,
 	cancelGate <-chan struct{},
+	targetDone bool,
 ) *ldapSyncPersistFixture {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -786,6 +942,7 @@ func startLDAPSyncPersistFixtureWithOptions(
 		startTLS:   startTLS,
 		respond:    respondToCancel,
 		cancelGate: cancelGate,
+		targetDone: targetDone,
 	}
 	go fixture.serve()
 	t.Cleanup(func() {
@@ -937,6 +1094,16 @@ func (fixture *ldapSyncPersistFixture) serve() {
 				return
 			}
 			fixture.cancels <- read.message
+			if fixture.targetDone {
+				if err := ldapwire.Write(connection, ldapwire.EncodeSearchResultDone(
+					target,
+					ldapwire.Result{Code: ldapwire.ResultCanceled},
+					nil,
+				)); err != nil {
+					fixture.done <- err
+					return
+				}
+			}
 			if fixture.respond {
 				<-fixture.cancelGate
 				if err := ldapwire.Write(connection, ldapwire.EncodeExtendedResponse(
