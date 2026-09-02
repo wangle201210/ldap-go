@@ -1237,6 +1237,21 @@ description: retained after failed config replacement
 	if exitCode != 1 || stdout != "" || !strings.Contains(stderr, "olcLogLevel") {
 		t.Fatalf("invalid config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
+	unsupportedConfig := strings.Replace(
+		validConfig,
+		"olcLogLevel: stats",
+		"olcLogLevel: stats\nolcSaslCBinding: tls-unique",
+		1,
+	)
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-database", "0", "-replace"},
+		unsupportedConfig,
+	)
+	if exitCode != 1 || stdout != "" ||
+		!strings.Contains(stderr, "unsupported runtime attribute olcSaslCBinding") {
+		t.Fatalf("unsupported config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
 	orphanConfig := `dn: olcDatabase={1}mdb,cn=config
 objectClass: olcDatabaseConfig
 olcDatabase: {1}mdb

@@ -157,6 +157,9 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	} else if !errors.Is(err, storage.ErrEntryNotFound) {
 		return nil, fmt.Errorf("locate OpenLDAP configuration partition: %w", err)
 	}
+	if err := validateRuntimeConfigurationCapabilities(reader); err != nil {
+		return nil, err
+	}
 	registry := server.baseSchema.Clone()
 	if _, err := schema.LoadOpenLDAPConfigReader(reader, registry); err != nil {
 		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
