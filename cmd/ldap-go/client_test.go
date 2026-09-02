@@ -145,6 +145,20 @@ func TestLDAPWhoAmIAndBindPasswordSources(t *testing.T) {
 	if exitCode != 0 || stdout != "anonymous\n" || stderr != "" {
 		t.Fatalf("anonymous ldapwhoami exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
+	for _, value := range []string{"1", "none", "max"} {
+		stdout, stderr, exitCode = runLDAPClientCommand(
+			[]string{
+				"ldapwhoami", "-H", uri, "-x", "-o", "nettimeout=" + value,
+			},
+			"",
+		)
+		if exitCode != 0 || stdout != "anonymous\n" || stderr != "" {
+			t.Fatalf(
+				"ldapwhoami -o nettimeout=%s exit=%d stdout=%q stderr=%q",
+				value, exitCode, stdout, stderr,
+			)
+		}
+	}
 
 	stdout, stderr, exitCode = runLDAPClientCommand(
 		[]string{
@@ -338,7 +352,11 @@ func TestLDAPClientPasswordFileLimitAndConflicts(t *testing.T) {
 		{name: "critical paging size", args: []string{"ldapsearch", "-x", "-E", "!pr=0"}, message: "invalid paging size"},
 		{name: "interactive paging mode", args: []string{"ldapsearch", "-x", "-E", "pr=2/ask"}, message: "invalid paging prompt mode"},
 		{name: "paging conflict", args: []string{"ldapsearch", "-x", "-page-size", "2", "-E", "pr=2"}, message: "mutually exclusive"},
-		{name: "unsupported LDAP option", args: []string{"ldapsearch", "-x", "-o", "nettimeout=1"}, message: "option -o is not supported"},
+		{name: "unsupported LDAP option", args: []string{"ldapsearch", "-x", "-o", "unknown=1"}, message: "invalid general option name"},
+		{name: "missing network timeout", args: []string{"ldapsearch", "-x", "-o", "nettimeout"}, message: "option value expected"},
+		{name: "negative network timeout", args: []string{"ldapsearch", "-x", "-o", "nettimeout=-1"}, message: "invalid network timeout"},
+		{name: "duplicate network timeout", args: []string{"ldapsearch", "-x", "-o", "nettimeout=1", "-o", "nettimeout=2"}, message: "previously specified"},
+		{name: "network timeout conflict", args: []string{"ldapsearch", "-x", "-o", "nettimeout=1", "-timeout", "1s"}, message: "cannot be combined"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -365,6 +383,7 @@ func TestLDAPClientStartTLSRequiredAndOptional(t *testing.T) {
 	stdout, stderr, exitCode := runLDAPClientCommand(
 		[]string{
 			"ldapwhoami", "-H", secureURI, "-x", "-ZZ",
+			"-o", "nettimeout=none",
 			"-tls-ca", caPath, "-tls-server-name", "localhost",
 			"-D", clientToolRootDN, "-w", clientToolRootPassword,
 		},

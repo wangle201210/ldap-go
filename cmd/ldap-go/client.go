@@ -49,6 +49,13 @@ func ldapClientURIUsesLDAPI(raw string) bool {
 		strings.EqualFold(raw[:len("ldapi://")], "ldapi://")
 }
 
+func ldapClientDeadline(timeout time.Duration) time.Time {
+	if timeout <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(timeout)
+}
+
 type ldapClientOptions struct {
 	uri                  string
 	simple               bool
@@ -65,12 +72,14 @@ type ldapClientOptions struct {
 	tryStartTLS          bool
 	requireStartTLS      bool
 	timeout              time.Duration
+	timeoutDisabled      bool
 	tlsCAFile            string
 	tlsCertificateFile   string
 	tlsPrivateKeyFile    string
 	tlsServerName        string
 	dryRun               bool
 	generalControlSpecs  repeatedStringFlag
+	generalOptionSpecs   repeatedStringFlag
 	generalControls      []ldap.Control
 	chaseReferrals       bool
 	referralHopLimit     int
@@ -142,6 +151,11 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 		"e",
 		"general LDAP control: [!]<oid>[=<base64>|:<string>|:<file URI>]",
 	)
+	flags.Var(
+		&options.generalOptionSpecs,
+		"o",
+		"OpenLDAP client option: nettimeout=<seconds|none|max>",
+	)
 	flags.BoolVar(&options.chaseReferrals, "C", false, "chase LDAP referrals")
 	flags.BoolVar(
 		&options.chaseReferrals,
@@ -173,7 +187,6 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	}{
 		{"d", "LDAP library debug output is not implemented"},
 		{"h", "legacy host selection is not implemented; use -H"},
-		{"o", "generic LDAP library options are not implemented"},
 		{"p", "legacy port selection is not implemented; use -H"},
 		{"P", "only LDAPv3 is implemented"},
 	} {
@@ -262,10 +275,13 @@ func (options *ldapClientOptions) validateForWrite(
 	if options.tryStartTLS && options.requireStartTLS {
 		return errors.New("-Z and -ZZ are mutually exclusive")
 	}
+	if err := options.applyGeneralOptions(flags); err != nil {
+		return err
+	}
 	if flagWasSet(flags, "timeout") && flagWasSet(flags, "network-timeout") {
 		return errors.New("-timeout and -network-timeout are aliases and cannot both be set")
 	}
-	if options.timeout <= 0 {
+	if options.timeout <= 0 && !options.timeoutDisabled {
 		return errors.New("-timeout must be positive")
 	}
 	if flagWasSet(flags, "W") && !options.promptPassword {
@@ -327,6 +343,43 @@ func (options *ldapClientOptions) validateForWrite(
 	}
 	if flagWasSet(flags, "tls-server-name") && options.tlsServerName == "" {
 		return errors.New("-tls-server-name requires a non-empty hostname")
+	}
+	return nil
+}
+
+func (options *ldapClientOptions) applyGeneralOptions(flags *flag.FlagSet) error {
+	seenNetworkTimeout := false
+	for _, raw := range options.generalOptionSpecs {
+		name, value, found := strings.Cut(raw, "=")
+		name = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
+		if name != "nettimeout" {
+			return fmt.Errorf("invalid general option name %q", name)
+		}
+		if seenNetworkTimeout {
+			return errors.New("nettimeout option previously specified")
+		}
+		seenNetworkTimeout = true
+		if !found || value == "" {
+			return errors.New("nettimeout: option value expected")
+		}
+		if flagWasSet(flags, "timeout") || flagWasSet(flags, "network-timeout") {
+			return errors.New("-o nettimeout cannot be combined with -timeout or -network-timeout")
+		}
+		switch strings.ToLower(value) {
+		case "none":
+			options.timeout = 0
+			options.timeoutDisabled = true
+		case "max":
+			options.timeout = time.Duration(1<<31-1) * time.Second
+			options.timeoutDisabled = false
+		default:
+			seconds, err := strconv.ParseInt(value, 10, 32)
+			if err != nil || seconds < 0 {
+				return fmt.Errorf("invalid network timeout %q", value)
+			}
+			options.timeout = time.Duration(seconds) * time.Second
+			options.timeoutDisabled = seconds == 0
+		}
 	}
 	return nil
 }
@@ -798,7 +851,7 @@ func dialObservedLDAPConnection(
 	}
 	if directTLS || startTLS {
 		secured := tls.Client(raw, tlsConfig.Clone())
-		if err := secured.SetDeadline(time.Now().Add(timeout)); err != nil {
+		if err := secured.SetDeadline(ldapClientDeadline(timeout)); err != nil {
 			return closeOnError(err)
 		}
 		if err := secured.Handshake(); err != nil {
@@ -846,7 +899,7 @@ func requestLDAPStartTLS(connection net.Conn, timeout time.Duration) error {
 		"Request Name",
 	))
 	request.AppendChild(extended)
-	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(timeout)); err != nil {
 		return err
 	}
 	encoded := request.Bytes()

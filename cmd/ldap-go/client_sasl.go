@@ -1218,7 +1218,7 @@ func (options *ldapClientOptions) connectAndBindSASL(
 		options.saslMechanism != "GSSAPI" {
 		return closeOnError(fmt.Errorf("SASL %s password was not loaded", options.saslMechanism))
 	}
-	if err := connection.SetDeadline(time.Now().Add(options.timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(options.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set SASL bind deadline: %w", err))
 	}
 	if err := options.bindSASL(
@@ -1253,7 +1253,7 @@ func ldapClientSASLStartTLS(
 	timeout time.Duration,
 	messageID int64,
 ) (net.Conn, error) {
-	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(timeout)); err != nil {
 		return nil, err
 	}
 	request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{

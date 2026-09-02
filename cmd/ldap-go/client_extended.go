@@ -489,7 +489,7 @@ func connectLDAPCompareRaw(
 	}
 	connection = &ldapClientSASLSwitchConnection{connection: connection}
 
-	if err := connection.SetDeadline(time.Now().Add(client.timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(client.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set LDAP bind deadline: %w", err))
 	}
 	if client.simple {
@@ -737,7 +737,7 @@ func (options *ldapClientOptions) connectLDAPRawReferral(
 			connection = upgraded
 		}
 	}
-	if err := connection.SetDeadline(time.Now().Add(options.timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(options.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set referral bind deadline: %w", err))
 	}
 	if err := ldapRawSimpleBind(connection, &messageID, "", nil); err != nil {
@@ -795,7 +795,7 @@ func ldapRawCompare(
 		return ldapCompareResult{}, err
 	}
 	defer clear(request)
-	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := connection.SetDeadline(ldapClientDeadline(timeout)); err != nil {
 		return ldapCompareResult{}, err
 	}
 	defer connection.SetDeadline(time.Time{})
