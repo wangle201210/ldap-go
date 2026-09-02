@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1069,6 +1070,18 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	if previous != nil && runtime.revision <= previous.revision {
 		server.closeCandidateSQLBackends(runtime, previous)
 		return
+	}
+	if server.monitor != nil && (previous == nil ||
+		previous.logConfigured != runtime.logConfigured ||
+		!slices.Equal(previous.logLevels, runtime.logLevels)) {
+		debugLevels, _ := server.monitor.loggingSnapshot()
+		if runtime.logConfigured {
+			server.monitor.setLogging(debugLevels, runtime.logLevels)
+		} else if runtimeHasMonitorDatabase(runtime) {
+			server.monitor.setLogging(debugLevels, []string{"0"})
+		} else {
+			server.monitor.disableLogRouting()
+		}
 	}
 	server.prepareMetaTransportLifecycle(previous, runtime)
 	server.configureMetaTransportOwners(metaBackendTransportOwners(runtime))

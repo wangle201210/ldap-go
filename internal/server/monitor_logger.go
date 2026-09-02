@@ -88,7 +88,7 @@ func (handler *monitorLogHandler) Enabled(ctx context.Context, level slog.Level)
 	if !active {
 		return handler.next.Enabled(ctx, level)
 	}
-	return mask != 0 && handler.next.Enabled(ctx, level)
+	return mask != 0
 }
 
 func (handler *monitorLogHandler) Handle(ctx context.Context, record slog.Record) error {

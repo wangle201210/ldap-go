@@ -133,6 +133,10 @@ func (monitor *monitorState) enableLogRouting() {
 	monitor.mu.Unlock()
 }
 
+func (monitor *monitorState) disableLogRouting() {
+	monitor.logRouteState.Store(0)
+}
+
 func (monitor *monitorState) logRoute() (monitorLogCategory, bool) {
 	state := monitor.logRouteState.Load()
 	return monitorLogCategory(uint32(state)), state&monitorLogRouteActive != 0

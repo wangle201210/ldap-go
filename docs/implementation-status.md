@@ -768,7 +768,11 @@ limits, matched-DN behavior, monitor Log changes, database read-only changes,
 and operation restrictions are covered by an OpenLDAP 2.6.13 differential.
 `monitorLogLevel` names or numeric masks atomically update structured event
 routing; mapped events carry `openldap_category` while the downstream
-`slog.Handler` still controls final severity filtering.
+`slog.Handler` receives the selected records. Global `olcLogLevel` accepts the
+same OpenLDAP names and numeric masks at startup and online, publishes changes
+atomically, restores the previous route on validation failure, and supports
+deletion. A live OpenLDAP differential pins the persisted values and result
+codes for named, numeric, invalid, and deleted configurations.
 On SIGINT, SIGTERM, or Unix SIGHUP, the daemon stops accepting connections,
 completes already accepted ordinary operations, abandons persistent Sync
 searches, and only force-cancels remaining work after `-shutdown-timeout`. The

@@ -53,6 +53,8 @@ type runtimeState struct {
 	rootDSEAttributes    []directory.Attribute
 	reverseLookup        bool
 	gentleHUP            bool
+	logLevels            []string
+	logConfigured        bool
 	syncContexts         map[string]syncCSNState
 	features             runtimeOperationFeatures
 	searchControlSupport requestControlSupport
@@ -426,6 +428,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	logLevels, logConfigured, err := loadOpenLDAPLogLevels(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -472,6 +478,8 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		rootDSEAttributes:    rootDSEAttributes,
 		reverseLookup:        reverseLookup,
 		gentleHUP:            gentleHUP,
+		logLevels:            logLevels,
+		logConfigured:        logConfigured,
 		features:             runtimeFeaturesForDatabases(databases),
 		searchControlSupport: searchControlSupportForDatabases(databases),
 		unindexedValues:      newUnindexedValueCache(16 << 20),
@@ -512,6 +520,18 @@ func runtimeFeaturesForDatabases(databases []runtimeDatabase) runtimeOperationFe
 		features.dnssrvBackend || features.ldapBackend || features.passwdBackend ||
 		features.sockBackend || features.chain || features.pcache || features.noOpSearch
 	return features
+}
+
+func runtimeHasMonitorDatabase(runtime *runtimeState) bool {
+	if runtime == nil {
+		return false
+	}
+	for _, database := range runtime.databases {
+		if isMonitorDatabase(database) {
+			return true
+		}
+	}
+	return false
 }
 
 func loadConnectionPendingRuntimeConfiguration(
@@ -863,6 +883,9 @@ func (server *Server) validateRuntimeConfiguration(
 			return nil, &operationFailure{result: result}
 		}
 		if result, ok := rootDSEConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := logLevelConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
 		return nil, operationFailed(
