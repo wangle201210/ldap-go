@@ -207,7 +207,7 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 2,113 top-level tests against
+The latest pinned local strict run passed 2,118 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
@@ -217,9 +217,10 @@ anonymous, invalid, and root Bind; Search scopes, paging, and limits; Add,
 Compare, Modify, Password Modify, Delete, and ModifyDN; and final-snapshot
 checks. The strict set additionally covers LDAP undefined-filter logic,
 attribute alias/OID authentication and writes, extensible DN attributes,
-`X-ORDERED VALUES`, `slapcat -a/-H`, `slapadd -j`, and `slapacl`. These results
-establish the tested boundary, not complete OpenLDAP feature or diagnostic
-equivalence.
+`X-ORDERED VALUES` and database/overlay `SIBLINGS`, `slapcat -a/-H`,
+`slapadd -j`, `slapacl`, OpenLDAP client `nettimeout`, named ldapsearch controls,
+and Search ManageDsaIT. These results establish the tested boundary, not
+complete OpenLDAP feature or diagnostic equivalence.
 
 `scripts/test-openldap.sh` enables the real-KDC GSSAPI differential when it
 finds MIT `krb5kdc`, `kdb5_util`, `kadmin.local`, and `kinit` plus the Cyrus
