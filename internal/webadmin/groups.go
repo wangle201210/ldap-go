@@ -333,8 +333,10 @@ func (application *Application) patchGroup(
 			Values: append([]string(nil), change.Values...), Status: "applied",
 		})
 	}
-	if err := current.client.Modify(modify); err != nil {
-		writeLDAPError(response, err)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Modify(modify)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, groupPatchResponse{

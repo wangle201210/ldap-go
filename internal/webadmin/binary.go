@@ -189,8 +189,10 @@ func (application *Application) putBinaryAttribute(
 
 	ldapRequest := ldap.NewModifyRequest(input.DN, nil)
 	ldapRequest.Replace(input.Attribute, values)
-	if err := current.client.Modify(ldapRequest); err != nil {
-		writeLDAPError(response, err)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Modify(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, binaryAttributeMutationResponse{
@@ -218,8 +220,10 @@ func (application *Application) deleteBinaryAttribute(
 
 	ldapRequest := ldap.NewModifyRequest(dn, nil)
 	ldapRequest.Delete(attribute, nil)
-	if err := current.client.Modify(ldapRequest); err != nil {
-		writeLDAPError(response, err)
+	if failure, status := application.executeLDAPWrite(request.Context(), current, func(client Client) error {
+		return client.Modify(ldapRequest)
+	}); failure != nil {
+		writeAPIError(response, status, *failure)
 		return
 	}
 	writeJSON(response, http.StatusOK, binaryAttributeMutationResponse{
