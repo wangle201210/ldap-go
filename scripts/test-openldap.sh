@@ -341,7 +341,7 @@ if [ "$test_status" -ne 0 ]; then
 	exit "$test_status"
 fi
 
-skips=$(sed -n 's/^--- SKIP: \([^ (]*\).*/\1/p' "$log")
+skips=$(sed -n 's/^[[:space:]]*--- SKIP: \([^ (]*\).*/\1/p' "$log")
 unexpected_skips=
 for skipped in $skips; do
 	case "$skipped" in

@@ -194,7 +194,7 @@ make openldap
 ```
 
 Missing `slapd`, `slapadd`, `slapcat`, `slaptest`, `lloadd`, or schema files
-and unexpected top-level skips fail the run. Two SCRAM-SHA-256
+and unexpected top-level or nested subtest skips fail the run. Two SCRAM-SHA-256
 cases may be reported as optional skips when the local Cyrus SASL installation
 does not provide that plugin. Feature-gated differentials are optional when the
 selected `slapd -VVV` omits their required backend or overlay: `ldap`, `meta`,
@@ -207,12 +207,16 @@ selects a non-standard schema installation. The reference suite runs package
 tests serially for repeatability; set `LDAP_GO_OPENLDAP_PARALLEL` explicitly
 for a separate concurrency stress pass.
 
-The latest pinned local strict run passed 2,081 top-level tests against
+The latest pinned local strict run passed 2,102 top-level tests against
 OpenLDAP 2.6.13 commit `d172686d3d270bc961b78f3ff00d7019c8dfb094`, including
 SQLite ODBC plus statically enabled passwd, dnssrv, asyncmeta, and `{CRYPT}`.
 Its only allowed skip was the Linux-only TCP user-timeout test on macOS;
 mandatory OpenLDAP differentials, source contracts, TLS, SASL, pcache, and
-replication coverage all passed.
+replication coverage all passed. The SDK state-machine differential also passed
+anonymous, invalid, and root Bind; Search scopes, paging, and limits; Add,
+Compare, Modify, Password Modify, Delete, and ModifyDN; and final-snapshot
+checks. These results establish the tested boundary, not complete OpenLDAP
+feature or diagnostic equivalence.
 
 `scripts/test-openldap.sh` enables the real-KDC GSSAPI differential when it
 finds MIT `krb5kdc`, `kdb5_util`, `kadmin.local`, and `kinit` plus the Cyrus

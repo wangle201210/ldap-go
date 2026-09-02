@@ -40,7 +40,7 @@ openldap-sdk:
 	./scripts/test-openldap-sdk.sh
 
 openldap-strict:
-	LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 ./scripts/test-openldap.sh
+	LDAP_GO_OPENLDAP_STRICT=1 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 ./scripts/test-openldap.sh
 
 openldap-full:
 	./scripts/test-openldap-full.sh

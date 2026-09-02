@@ -7,10 +7,14 @@ Status values:
 
 - `planned`: no passing implementation claim;
 - `partial`: a documented subset has conformance tests;
+- `complete`: the explicitly bounded row is implemented and has comprehensive
+  repository conformance evidence; documented intentional differences and
+  behavior outside that row remain outside this status;
 - `compatible`: standards tests and OpenLDAP differential tests pass;
 - `n/a`: deliberately inapplicable, with rationale recorded.
 
-No row may become `compatible` based only on unit tests.
+`complete` is not an alias for `compatible`. No row may become `compatible`
+based only on unit tests.
 
 ## Completeness audit
 
@@ -23,6 +27,11 @@ Content and `cn=config` values can be preserved by the importer, but only the
 features explicitly listed below have matching runtime behavior. Passing one
 listed differential does not establish compatibility for all OpenLDAP
 functions, configurations, or directory data.
+
+As of this audit, the matrix contains 118 bounded feature rows: 111 are
+`partial`, 7 are `complete`, and 0 are `compatible`. A `complete` row can still
+record an intentional standards or hardening difference from OpenLDAP; it does
+not assert byte-for-byte behavior outside that row's stated evidence.
 
 The current large-round baseline adds versioned phonetic approximate postings,
 option-specific AttributeDescription indexes and `nosubtypes`; encrypted

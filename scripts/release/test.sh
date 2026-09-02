@@ -53,6 +53,9 @@ fi
 grep -F 'release-gate:' "$root/Makefile" >/dev/null
 grep -F 'release-build:' "$root/Makefile" >/dev/null
 grep -F 'release-upgrade-gate:' "$root/Makefile" >/dev/null
+grep -F 'LDAP_GO_OPENLDAP_STRICT=1 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 ./scripts/test-openldap.sh' \
+	"$root/Makefile" >/dev/null
+grep -F "s/^[[:space:]]*--- SKIP:" "$root/scripts/test-openldap.sh" >/dev/null
 grep -F 'cp -R "$root/docs" "$stage/docs"' \
 	"$root/scripts/release/build-artifacts.sh" >/dev/null
 grep -F 'cp -R "$root/examples" "$stage/examples"' \
