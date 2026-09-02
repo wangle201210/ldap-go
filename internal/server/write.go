@@ -269,6 +269,9 @@ func (server *Server) handleAdd(
 				tx, entry, dn, state.runtime.schema,
 			)
 			if siblingErr != nil {
+				if errors.Is(siblingErr, storage.ErrEntryExists) {
+					return operationFailed(ldapwire.ResultEntryAlreadyExists, "")
+				}
 				return operationFailed(
 					ldapwire.ResultNamingViolation,
 					siblingErr.Error(),

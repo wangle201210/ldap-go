@@ -95,6 +95,26 @@ func prepareOrderedConfigAdd(
 		return directory.Entry{}, directory.DN{}, nil,
 			fmt.Errorf("ordered sibling RDN value %q does not match attribute %q", content, entryContent)
 	}
+	if _, getErr := tx.Get(dn); getErr == nil {
+		_, existingValue, existingOrdered := orderedSiblingRDN(dn, registry)
+		if existingOrdered {
+			_, existingContent, _, parseErr := parseOrderedSiblingValue(existingValue)
+			if parseErr != nil {
+				return directory.Entry{}, directory.DN{}, nil, parseErr
+			}
+			equal, compareErr := registry.Compare(
+				attribute, "", []byte(existingContent), []byte(content),
+			)
+			if compareErr != nil {
+				return directory.Entry{}, directory.DN{}, nil, compareErr
+			}
+			if equal == 0 {
+				return directory.Entry{}, directory.DN{}, nil, storage.ErrEntryExists
+			}
+		}
+	} else if !errors.Is(getErr, storage.ErrEntryNotFound) {
+		return directory.Entry{}, directory.DN{}, nil, getErr
+	}
 	parent, ok := dn.Parent()
 	if !ok {
 		return directory.Entry{}, directory.DN{}, nil,
