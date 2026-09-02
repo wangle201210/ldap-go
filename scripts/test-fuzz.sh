@@ -23,7 +23,10 @@ run_target() {
 
 run_target ./internal/ldapwire FuzzReadMessageRoundTrip
 run_target ./internal/ldapwire FuzzDecodeFilterRoundTrip
+run_target ./internal/ldapwire FuzzDecodeDerefRequestValue
+run_target ./internal/ldapwire FuzzDecodeDerefResponseValue
 run_target ./internal/directory FuzzParseDNRoundTrip
 run_target ./internal/schema FuzzSchemaDescriptionRoundTrip
 run_target ./internal/migration FuzzLDIFSemanticRoundTrip
+run_target ./internal/lloadd FuzzParseFrame
 run_target ./internal/server FuzzParseSockResponse

@@ -336,13 +336,6 @@ func (server *Server) evaluateFilterWithPrivilege(
 	return serverFilterResult(result), err
 }
 
-func booleanFilterResult(value bool) filterResult {
-	if value {
-		return filterTrue
-	}
-	return filterFalse
-}
-
 func serverFilterResult(result directory.FilterResult) filterResult {
 	switch result {
 	case directory.FilterTrueResult:
