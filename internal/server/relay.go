@@ -33,6 +33,7 @@ type rwmRuntimeConfiguration struct {
 	classesToRemote       map[string]string
 	classesToLocal        map[string]string
 	classesDropMissing    bool
+	preserveOutboundRefs  bool
 	schema                *schema.Registry
 }
 
@@ -996,7 +997,14 @@ func (configuration *rwmRuntimeConfiguration) mapEntry(
 				attribute.Description,
 				description,
 			) {
-				mapped, err = configuration.mapDNReferenceValue(value, toRemote)
+				mapped, err = configuration.mapDNReferenceValue(
+					value,
+					toRemote,
+					configuration.isNameAndOptionalUIDAttribute(
+						attribute.Description,
+						description,
+					),
+				)
 				if err != nil {
 					return directory.Entry{}, fmt.Errorf(
 						"map %s value in %s: %w",
@@ -1005,7 +1013,8 @@ func (configuration *rwmRuntimeConfiguration) mapEntry(
 						err,
 					)
 				}
-			} else if strings.EqualFold(baseAttributeName(description), "ref") {
+			} else if strings.EqualFold(baseAttributeName(description), "ref") &&
+				(!toRemote || !configuration.preserveOutboundRefs) {
 				mapped = configuration.mapLDAPURLValue(value, toRemote)
 			}
 			values = append(values, mapped)
@@ -1096,21 +1105,37 @@ func (configuration *rwmRuntimeConfiguration) isDNReferenceAttribute(
 		configuration.schema.IsDNReferenceValued(mapped)
 }
 
+func (configuration *rwmRuntimeConfiguration) isNameAndOptionalUIDAttribute(
+	original,
+	mapped string,
+) bool {
+	if configuration.schema == nil {
+		return false
+	}
+	for _, description := range []string{original, mapped} {
+		if configuration.schema.IsDNReferenceValued(description) &&
+			!configuration.schema.IsDNValued(description) {
+			return true
+		}
+	}
+	return false
+}
+
 func (configuration *rwmRuntimeConfiguration) mapDNReferenceValue(
 	value []byte,
 	toRemote bool,
+	nameAndOptionalUID bool,
 ) ([]byte, error) {
 	raw := string(value)
 	dnPart := raw
 	suffix := ""
-	dn, err := directory.ParseDN(dnPart)
-	if err != nil {
+	if nameAndOptionalUID {
 		if index := unescapedHashIndex(raw); index >= 0 {
 			dnPart = raw[:index]
 			suffix = raw[index:]
-			dn, err = directory.ParseDN(dnPart)
 		}
 	}
+	dn, err := directory.ParseDN(dnPart)
 	if err != nil {
 		return nil, err
 	}

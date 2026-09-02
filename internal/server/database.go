@@ -2600,9 +2600,10 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		database := &databases[databaseIndex]
+		directLDAPRWM := database.ldapBackend != nil && overlayType == "rwm"
 		if database.sockBackend != nil ||
 			((database.ldapBackend != nil || database.metaBackend != nil) &&
-				overlayType != "pcache") {
+				overlayType != "pcache" && !directLDAPRWM) {
 			return fmt.Errorf(
 				"%s %s overlay on delegated backend %s is unsupported because local overlays would be bypassed",
 				entry.DN,
@@ -2921,7 +2922,11 @@ func loadRuntimeDatabaseOverlays(
 			if err != nil {
 				return err
 			}
+			configuration.preserveOutboundRefs = database.ldapBackend != nil
 			database.rwm = &configuration
+			if database.ldapBackend != nil {
+				database.ldapBackend.rwm = database.rwm
+			}
 		case "retcode":
 			configuration, err := loadRetcodeRuntimeConfiguration(entry, *database)
 			if err != nil {

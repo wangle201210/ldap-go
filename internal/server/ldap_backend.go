@@ -25,6 +25,7 @@ type ldapBackendRuntimeConfiguration struct {
 	remotes      []chainRemoteConfiguration
 	preferred    *proxyPreferredRemoteState
 	aclDiscovery *ldapBackendACLDiscoveryState
+	rwm          *rwmRuntimeConfiguration
 }
 
 type proxyPreferredRemoteState struct {
@@ -176,7 +177,11 @@ func (server *Server) tryLDAPBackendOperation(
 		return true, writeResultForMessage(connection, message, *failure)
 	}
 	if attempt.hasResult && attempt.result.Code == ldapwire.ResultSuccess {
-		updateLDAPBackendSimpleCredentials(state, forwarded.Request)
+		credentialRequest := forwarded.Request
+		if database.ldapBackend.rwm != nil {
+			credentialRequest = message.Request
+		}
+		updateLDAPBackendSimpleCredentials(state, credentialRequest)
 	}
 	return true, server.writeLDAPBackendAttempt(connection, message, attempt)
 }
@@ -228,6 +233,10 @@ func (server *Server) executeLDAPBackendBind(
 	if configuration == nil {
 		return attempt
 	}
+	forwarded, err := mapLDAPBackendRequestToRemote(configuration.rwm, message)
+	if err != nil {
+		return ldapBackendMappingAttempt(err)
+	}
 	remoteOrder := preferredProxyRemoteOrder(
 		configuration.preferred,
 		len(configuration.remotes),
@@ -237,14 +246,14 @@ func (server *Server) executeLDAPBackendBind(
 		attempts := ldapBackendRemoteAttempts(len(configuration.remotes))
 		for current := 0; current < attempts; current++ {
 			remote := anonymousChainRemote(configured.clone())
-			forwarded := message
-			forwarded.Controls = cloneLDAPControls(message.Controls)
+			candidate := forwarded
+			candidate.Controls = cloneLDAPControls(forwarded.Controls)
 			attempt = server.executeLDAPBackendTarget(
 				ctx,
 				state,
 				*configuration,
 				remote,
-				forwarded,
+				candidate,
 			)
 			if !ldapBackendShouldFailover(ctx, attempt) {
 				break
@@ -257,6 +266,10 @@ func (server *Server) executeLDAPBackendBind(
 			position == len(remoteOrder)-1 {
 			break
 		}
+	}
+	attempt, err = mapLDAPBackendAttemptToLocal(configuration.rwm, attempt)
+	if err != nil {
+		return ldapBackendMappingAttempt(err)
 	}
 	return attempt
 }
@@ -343,6 +356,13 @@ func (server *Server) executeLDAPBackendOperation(
 		}
 		message = prepareLDAPBackendACLSearch(message, database)
 	}
+	mapping := database.ldapBackend.rwm
+	mapped, err := mapLDAPBackendRequestToRemote(mapping, message)
+	if err != nil {
+		result := ldapBackendMappingFailure(err)
+		return chainAttempt{}, message, &result
+	}
+	message = mapped
 	var (
 		attempt   chainAttempt
 		forwarded ldapwire.Message
@@ -365,6 +385,22 @@ func (server *Server) executeLDAPBackendOperation(
 			if failure != nil {
 				return chainAttempt{}, candidate, failure
 			}
+			if mapping != nil {
+				remote, candidate, failure = mapMetaRemoteIdentity(
+					mapping,
+					remote,
+					candidate,
+				)
+				if failure != nil {
+					failure.DiagnosticMessage = strings.Replace(
+						failure.DiagnosticMessage,
+						"back-meta mapping failed",
+						"back-ldap mapping failed",
+						1,
+					)
+					return chainAttempt{}, candidate, failure
+				}
+			}
 			forwarded = candidate
 			attempt = server.executeLDAPBackendTarget(
 				ctx,
@@ -385,7 +421,46 @@ func (server *Server) executeLDAPBackendOperation(
 			break
 		}
 	}
+	attempt, err = mapLDAPBackendAttemptToLocal(mapping, attempt)
+	if err != nil {
+		result := ldapBackendMappingFailure(err)
+		return chainAttempt{}, forwarded, &result
+	}
 	return attempt, forwarded, nil
+}
+
+func mapLDAPBackendRequestToRemote(
+	mapping *rwmRuntimeConfiguration,
+	message ldapwire.Message,
+) (ldapwire.Message, error) {
+	if mapping == nil {
+		return message, nil
+	}
+	return mapMetaRequestToRemote(mapping, message)
+}
+
+func mapLDAPBackendAttemptToLocal(
+	mapping *rwmRuntimeConfiguration,
+	attempt chainAttempt,
+) (chainAttempt, error) {
+	if mapping == nil {
+		return attempt, nil
+	}
+	return mapMetaAttemptToLocal(mapping, attempt)
+}
+
+func ldapBackendMappingFailure(err error) ldapwire.Result {
+	return ldapwire.ResultError(
+		ldapwire.ResultOther,
+		fmt.Sprintf("back-ldap mapping failed: %v", err),
+	)
+}
+
+func ldapBackendMappingAttempt(err error) chainAttempt {
+	return chainAttempt{
+		result:    ldapBackendMappingFailure(err),
+		hasResult: true,
+	}
 }
 
 func ldapBackendRemoteAttempts(remoteCount int) int {
