@@ -167,7 +167,7 @@ func TestLDAPBackendConfigurationValidation(t *testing.T) {
 	}
 }
 
-func TestLDAPBackendRejectsDatabaseLocalACL(t *testing.T) {
+func TestLDAPBackendAcceptsDatabaseLocalACL(t *testing.T) {
 	t.Parallel()
 
 	entry := ldapBackendDatabaseEntry(
@@ -179,9 +179,12 @@ func TestLDAPBackendRejectsDatabaseLocalACL(t *testing.T) {
 		Description: "olcAccess",
 		Values:      stringValues("{0}to * by users read by * none"),
 	})
-	if _, err := loadLDAPBackendRuntimeConfiguration(entry); err == nil ||
-		!strings.Contains(err.Error(), "database-local ACLs would be bypassed") {
-		t.Fatalf("ldap backend olcAccess load error = %v", err)
+	configuration, err := loadLDAPBackendRuntimeConfiguration(entry)
+	if err != nil {
+		t.Fatalf("load ldap backend olcAccess: %v", err)
+	}
+	if configuration.aclDiscovery == nil || !configuration.aclDiscovery.enabled {
+		t.Fatalf("ldap backend olcAccess discovery = %#v", configuration.aclDiscovery)
 	}
 
 	store := storage.NewMemory()
@@ -191,13 +194,14 @@ func TestLDAPBackendRejectsDatabaseLocalACL(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed ldap backend with olcAccess: %v", err)
 	}
-	if _, err := ValidateConfiguration(context.Background(), Config{Store: store}); err == nil || !strings.Contains(err.Error(), "database-local ACLs would be bypassed") {
-		t.Fatalf("ValidateConfiguration olcAccess error = %v", err)
+	if _, err := ValidateConfiguration(context.Background(), Config{Store: store}); err != nil {
+		t.Fatalf("ValidateConfiguration olcAccess: %v", err)
 	}
-	if _, err := New(Config{Store: store}); err == nil ||
-		!strings.Contains(err.Error(), "database-local ACLs would be bypassed") {
-		t.Fatalf("New olcAccess error = %v", err)
+	instance, err := New(Config{Store: store})
+	if err != nil {
+		t.Fatalf("New olcAccess: %v", err)
 	}
+	_ = instance
 }
 
 func TestLDAPBackendRejectsAttachedOverlays(t *testing.T) {
@@ -699,15 +703,13 @@ func TestLDAPBackendRealTopologyResponsesAvailabilityAndRollback(t *testing.T) {
 	}
 	localACL := ldap.NewModifyRequest(ldapBackendTestDatabaseDN, nil)
 	localACL.Add("olcAccess", []string{"{0}to * by users read by * none"})
-	assertLDAPResultCode(
-		t,
-		configClient.Modify(localACL),
-		ldap.LDAPResultConstraintViolation,
-	)
+	if err := configClient.Modify(localACL); err != nil {
+		t.Fatalf("add ldap backend olcAccess: %v", err)
+	}
 	if values := readStoredEntry(t, proxyStore, ldapBackendTestDatabaseDN).Values(
 		"olcAccess",
-	); len(values) != 0 {
-		t.Fatalf("rejected ldap backend olcAccess persisted: %q", values)
+	); len(values) != 1 || string(values[0]) != "{0}to * by users read by * none" {
+		t.Fatalf("ldap backend olcAccess = %q", values)
 	}
 	const unsupportedOverlayDN = "olcOverlay={0}sssvlv," + ldapBackendTestDatabaseDN
 	unsupportedOverlay := ldap.NewAddRequest(unsupportedOverlayDN, nil)

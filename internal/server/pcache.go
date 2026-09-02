@@ -952,6 +952,7 @@ func (server *Server) tryPcacheSearch(
 	if !ok {
 		return false, nil
 	}
+	match.key = ldapBackendACLPcacheKey(database, match.key)
 
 	forwarded := message
 	forwarded.Controls = cloneLDAPControls(message.Controls)

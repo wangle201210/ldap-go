@@ -22,8 +22,9 @@ const (
 )
 
 type ldapBackendRuntimeConfiguration struct {
-	remotes   []chainRemoteConfiguration
-	preferred *proxyPreferredRemoteState
+	remotes      []chainRemoteConfiguration
+	preferred    *proxyPreferredRemoteState
+	aclDiscovery *ldapBackendACLDiscoveryState
 }
 
 type proxyPreferredRemoteState struct {
@@ -34,9 +35,10 @@ type proxyPreferredRemoteState struct {
 func loadLDAPBackendRuntimeConfiguration(
 	entry directory.Entry,
 ) (*ldapBackendRuntimeConfiguration, error) {
-	if len(entry.Values("olcAccess")) != 0 {
+	accessValues := entry.Values("olcAccess")
+	if len(accessValues) != 0 && !isTopLevelLDAPBackendConfiguration(entry.DN) {
 		return nil, fmt.Errorf(
-			"%s olcAccess is not supported by the ldap backend; database-local ACLs would be bypassed",
+			"%s olcAccess is not supported by nested ldap backend configurations",
 			entry.DN,
 		)
 	}
@@ -61,6 +63,19 @@ func loadLDAPBackendRuntimeConfiguration(
 	configuration := &ldapBackendRuntimeConfiguration{
 		remotes:   make([]chainRemoteConfiguration, 0, len(uriValues)),
 		preferred: &proxyPreferredRemoteState{},
+		aclDiscovery: &ldapBackendACLDiscoveryState{
+			sourceValues: cloneLDAPBackendACLValues(accessValues),
+			fingerprint:  ldapBackendACLValuesFingerprint(accessValues),
+		},
+	}
+	var err error
+	configuration.aclDiscovery.enabled,
+		configuration.aclDiscovery.entryAttributes,
+		configuration.aclDiscovery.requiresCompleteEntries,
+		configuration.aclDiscovery.usesGroup,
+		err = loadLDAPBackendACLRequirements(accessValues)
+	if err != nil {
+		return nil, fmt.Errorf("%s olcAccess: %w", entry.DN, err)
 	}
 	for _, value := range uriValues {
 		uri, endpointKey, err := parseChainConfiguredURI(value)
@@ -73,6 +88,15 @@ func loadLDAPBackendRuntimeConfiguration(
 		configuration.remotes = append(configuration.remotes, remote)
 	}
 	return configuration, nil
+}
+
+func isTopLevelLDAPBackendConfiguration(rawDN string) bool {
+	dn, err := directory.ParseDN(rawDN)
+	if err != nil {
+		return false
+	}
+	parent, ok := dn.Parent()
+	return ok && parent.Equal(configurationSuffix)
 }
 
 func (server *Server) tryLDAPBackendOperation(
@@ -104,6 +128,30 @@ func (server *Server) tryLDAPBackendOperation(
 				ldapBackendTransactionDiagnostic,
 			),
 		)
+	}
+	if request, search := message.Request.(ldapwire.SearchRequest); search {
+		localACL, aclErr := server.resolveLDAPBackendACLRequirements(ctx, *database)
+		if aclErr != nil {
+			return true, writeResultForMessage(
+				connection,
+				message,
+				ldapwire.ResultError(
+					ldapwire.ResultOther,
+					"load back-ldap ACL configuration: "+aclErr.Error(),
+				),
+			)
+		}
+		if localACL {
+			connection = newLDAPBackendACLSearchConnection(
+				ctx,
+				connection,
+				server,
+				state,
+				*database,
+				message.ID,
+				request,
+			)
+		}
 	}
 	if _, search := message.Request.(ldapwire.SearchRequest); search &&
 		database.pcache != nil && !database.pcache.disabled {
@@ -285,6 +333,16 @@ func (server *Server) executeLDAPBackendOperation(
 	database runtimeDatabase,
 	message ldapwire.Message,
 ) (chainAttempt, ldapwire.Message, *ldapwire.Result) {
+	if _, search := message.Request.(ldapwire.SearchRequest); search {
+		if _, err := server.resolveLDAPBackendACLRequirements(ctx, database); err != nil {
+			result := ldapwire.ResultError(
+				ldapwire.ResultOther,
+				"load back-ldap ACL configuration: "+err.Error(),
+			)
+			return chainAttempt{}, message, &result
+		}
+		message = prepareLDAPBackendACLSearch(message, database)
+	}
 	var (
 		attempt   chainAttempt
 		forwarded ldapwire.Message
