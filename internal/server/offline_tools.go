@@ -829,7 +829,11 @@ func (server *Server) applyOfflineChange(
 					return err
 				}
 			}
-			if err := applyModification(&entry, modification); err != nil {
+			if err := applyModificationWithSchema(
+				&entry,
+				modification,
+				runtime.schema,
+			); err != nil {
 				return fmt.Errorf("modify %q: %w", change.dn, err)
 			}
 		}

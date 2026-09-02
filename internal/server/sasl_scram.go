@@ -281,7 +281,7 @@ func (server *Server) lookupSASLSCRAMCredentials(
 	}
 	defer clearSASLCredentialEntry(&entry)
 
-	for _, stored := range entry.Values("userPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 		password, ok := auth.ExtractCleartextPassword(stored)
 		if !ok {
 			continue
@@ -297,7 +297,7 @@ func (server *Server) lookupSASLSCRAMCredentials(
 		}
 		return authenticationDN, credentials, nil
 	}
-	for _, stored := range entry.Values("authPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "authPassword") {
 		credentials, ok := parseCyrusSASLSCRAMSecret(
 			stored,
 			saslSCRAMBaseMechanism(mechanism),

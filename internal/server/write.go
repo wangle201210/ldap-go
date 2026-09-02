@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -1185,6 +1186,7 @@ func (server *Server) modifyEntry(
 				&entry,
 				change,
 				permissiveModify,
+				runtime.schema,
 			); failure != nil {
 				return failure
 			}
@@ -3104,7 +3106,7 @@ func validateNewEntryWithSchema(
 	if registry == nil {
 		return validateNewEntry(entry, dn)
 	}
-	if result := validateNewEntryAttributes(entry); result != nil {
+	if result := validateNewEntryAttributesWithSchema(entry, registry); result != nil {
 		return result
 	}
 	for _, rdnValue := range dn.RDNValues() {
@@ -3266,6 +3268,322 @@ func validateNewEntryAttributes(entry directory.Entry) *ldapwire.Result {
 	return nil
 }
 
+func validateNewEntryAttributesWithSchema(
+	entry directory.Entry,
+	registry *schema.Registry,
+) *ldapwire.Result {
+	if len(entry.Attributes) == 0 ||
+		!registry.HasAttributeDescription(entry, "objectClass") {
+		result := ldapwire.ResultError(
+			ldapwire.ResultObjectClassViolation,
+			"objectClass is required",
+		)
+		return &result
+	}
+	for index, attribute := range entry.Attributes {
+		if len(attribute.Values) == 0 {
+			result := ldapwire.ResultError(
+				ldapwire.ResultConstraintViolation,
+				"attribute requires at least one value",
+			)
+			return &result
+		}
+		for previous := 0; previous < index; previous++ {
+			if constraintAttributeDescriptionsEqual(
+				registry,
+				entry.Attributes[previous].Description,
+				attribute.Description,
+			) {
+				result := ldapwire.ResultError(
+					ldapwire.ResultAttributeOrValueExists,
+					fmt.Sprintf(
+						"attribute '%s' provided more than once",
+						schemaCanonicalAttributeDescription(
+							registry,
+							attribute.Description,
+						),
+					),
+				)
+				return &result
+			}
+		}
+		for valueIndex, value := range attribute.Values {
+			for previous := 0; previous < valueIndex; previous++ {
+				equal, err := schemaAttributeValuesEqual(
+					registry,
+					attribute.Description,
+					attribute.Values[previous],
+					value,
+				)
+				if err == nil && equal {
+					result := ldapwire.ResultError(
+						ldapwire.ResultAttributeOrValueExists,
+						"",
+					)
+					return &result
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func schemaAttributeValuesEqual(
+	registry *schema.Registry,
+	description string,
+	left, right []byte,
+) (bool, error) {
+	leftNormalized, err := registry.NormalizeEqualityValue(description, left)
+	if err != nil {
+		return false, err
+	}
+	rightNormalized, err := registry.NormalizeEqualityValue(description, right)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(leftNormalized, rightNormalized), nil
+}
+
+func schemaCanonicalAttributeDescription(
+	registry *schema.Registry,
+	description string,
+) string {
+	parts := strings.Split(description, ";")
+	attribute, found := registry.AttributeType(parts[0])
+	if !found {
+		return description
+	}
+	parts[0] = attribute.Name()
+	return strings.Join(parts, ";")
+}
+
+func schemaExactAttributeIndexes(
+	entry directory.Entry,
+	description string,
+	registry *schema.Registry,
+) []int {
+	var indexes []int
+	for index, attribute := range entry.Attributes {
+		if constraintAttributeDescriptionsEqual(
+			registry,
+			attribute.Description,
+			description,
+		) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+func schemaEntryHasValue(
+	entry directory.Entry,
+	description string,
+	value []byte,
+	registry *schema.Registry,
+) bool {
+	for _, index := range schemaExactAttributeIndexes(entry, description, registry) {
+		for _, existing := range entry.Attributes[index].Values {
+			equal, err := schemaAttributeValuesEqual(
+				registry,
+				description,
+				existing,
+				value,
+			)
+			if err == nil && equal {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func applyModificationWithSchema(
+	entry *directory.Entry,
+	change ldapwire.Modification,
+	registry *schema.Registry,
+) error {
+	if registry == nil {
+		return applyModification(entry, change)
+	}
+	indexes := schemaExactAttributeIndexes(
+		*entry,
+		change.Attribute.Description,
+		registry,
+	)
+	var err error
+	switch change.Operation {
+	case ldapwire.ModificationAdd:
+		if len(change.Attribute.Values) == 0 {
+			err = directory.ErrNoSuchAttribute
+			break
+		}
+		for index, value := range change.Attribute.Values {
+			if schemaEntryHasValue(
+				*entry, change.Attribute.Description, value, registry,
+			) {
+				err = directory.ErrAttributeValueExists
+				break
+			}
+			for previous := 0; previous < index; previous++ {
+				equal, compareErr := schemaAttributeValuesEqual(
+					registry,
+					change.Attribute.Description,
+					change.Attribute.Values[previous],
+					value,
+				)
+				if compareErr == nil && equal {
+					err = directory.ErrAttributeValueExists
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			if len(indexes) == 0 {
+				entry.Attributes = append(entry.Attributes, directory.Attribute{
+					Description: change.Attribute.Description,
+					Values:      cloneByteValues(change.Attribute.Values),
+				})
+			} else {
+				entry.Attributes[indexes[0]].Values = append(
+					entry.Attributes[indexes[0]].Values,
+					cloneByteValues(change.Attribute.Values)...,
+				)
+			}
+		}
+	case ldapwire.ModificationDelete:
+		if len(indexes) == 0 {
+			err = directory.ErrNoSuchAttribute
+			break
+		}
+		if len(change.Attribute.Values) == 0 {
+			entry.Attributes = removeSchemaAttributes(entry.Attributes, indexes)
+			break
+		}
+		for _, value := range change.Attribute.Values {
+			if !schemaEntryHasValue(
+				*entry, change.Attribute.Description, value, registry,
+			) {
+				err = directory.ErrNoSuchAttribute
+				break
+			}
+		}
+		if err == nil {
+			entry.Attributes = deleteSchemaAttributeValues(
+				entry.Attributes,
+				change.Attribute.Description,
+				change.Attribute.Values,
+				registry,
+			)
+		}
+	case ldapwire.ModificationReplace:
+		for index, value := range change.Attribute.Values {
+			for previous := 0; previous < index; previous++ {
+				equal, compareErr := schemaAttributeValuesEqual(
+					registry,
+					change.Attribute.Description,
+					change.Attribute.Values[previous],
+					value,
+				)
+				if compareErr == nil && equal {
+					err = directory.ErrAttributeValueExists
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			entry.Attributes = removeSchemaAttributes(entry.Attributes, indexes)
+			if len(change.Attribute.Values) != 0 {
+				entry.Attributes = append(entry.Attributes, directory.Attribute{
+					Description: change.Attribute.Description,
+					Values:      cloneByteValues(change.Attribute.Values),
+				})
+			}
+		}
+	case ldapwire.ModificationIncrement:
+		if len(change.Attribute.Values) != 1 {
+			return operationFailed(
+				ldapwire.ResultConstraintViolation,
+				"increment requires one value",
+			)
+		}
+		if len(indexes) == 0 {
+			err = directory.ErrNoSuchAttribute
+		} else {
+			err = entry.Increment(
+				entry.Attributes[indexes[0]].Description,
+				change.Attribute.Values[0],
+			)
+		}
+	default:
+		return operationFailed(ldapwire.ResultProtocolError, "unknown modify operation")
+	}
+	return modificationResultError(entry, change, registry, err)
+}
+
+func removeSchemaAttributes(
+	attributes []directory.Attribute,
+	indexes []int,
+) []directory.Attribute {
+	if len(indexes) == 0 {
+		return attributes
+	}
+	remove := make(map[int]struct{}, len(indexes))
+	for _, index := range indexes {
+		remove[index] = struct{}{}
+	}
+	result := attributes[:0]
+	for index, attribute := range attributes {
+		if _, found := remove[index]; !found {
+			result = append(result, attribute)
+		}
+	}
+	return result
+}
+
+func deleteSchemaAttributeValues(
+	attributes []directory.Attribute,
+	description string,
+	values [][]byte,
+	registry *schema.Registry,
+) []directory.Attribute {
+	result := attributes[:0]
+	for _, attribute := range attributes {
+		if !constraintAttributeDescriptionsEqual(
+			registry, attribute.Description, description,
+		) {
+			result = append(result, attribute)
+			continue
+		}
+		remaining := attribute.Values[:0]
+		for _, existing := range attribute.Values {
+			remove := false
+			for _, value := range values {
+				equal, err := schemaAttributeValuesEqual(
+					registry, description, existing, value,
+				)
+				if err == nil && equal {
+					remove = true
+					break
+				}
+			}
+			if !remove {
+				remaining = append(remaining, existing)
+			}
+		}
+		if len(remaining) != 0 {
+			attribute.Values = remaining
+			result = append(result, attribute)
+		}
+	}
+	return result
+}
+
 func applyModification(entry *directory.Entry, change ldapwire.Modification) error {
 	var err error
 	switch change.Operation {
@@ -3283,17 +3601,39 @@ func applyModification(entry *directory.Entry, change ldapwire.Modification) err
 	default:
 		return operationFailed(ldapwire.ResultProtocolError, "unknown modify operation")
 	}
+	return modificationResultError(entry, change, nil, err)
+}
+
+func modificationResultError(
+	entry *directory.Entry,
+	change ldapwire.Modification,
+	registry *schema.Registry,
+	err error,
+) error {
 	switch {
 	case errors.Is(err, directory.ErrNoSuchAttribute):
 		diagnostic := ""
 		if change.Operation == ldapwire.ModificationDelete {
+			description := change.Attribute.Description
+			if registry != nil {
+				description = schemaCanonicalAttributeDescription(
+					registry,
+					description,
+				)
+			}
 			detail := "no such attribute"
-			if entry.HasAttribute(change.Attribute.Description) {
+			hasAttribute := entry.HasAttribute(change.Attribute.Description)
+			if registry != nil {
+				hasAttribute = len(schemaExactAttributeIndexes(
+					*entry, change.Attribute.Description, registry,
+				)) != 0
+			}
+			if hasAttribute {
 				detail = "no such value"
 			}
 			diagnostic = fmt.Sprintf(
 				"modify/delete: %s: %s",
-				change.Attribute.Description,
+				description,
 				detail,
 			)
 		}
@@ -3302,9 +3642,22 @@ func applyModification(entry *directory.Entry, change ldapwire.Modification) err
 			diagnostic,
 		)
 	case errors.Is(err, directory.ErrAttributeValueExists):
+		description := change.Attribute.Description
+		if registry != nil {
+			description = schemaCanonicalAttributeDescription(
+				registry,
+				description,
+			)
+		}
 		valueIndex := 0
 		for index, value := range change.Attribute.Values {
-			if entry.HasValue(change.Attribute.Description, value) {
+			hasValue := entry.HasValue(change.Attribute.Description, value)
+			if registry != nil {
+				hasValue = schemaEntryHasValue(
+					*entry, change.Attribute.Description, value, registry,
+				)
+			}
+			if hasValue {
 				valueIndex = index
 				break
 			}
@@ -3313,7 +3666,7 @@ func applyModification(entry *directory.Entry, change ldapwire.Modification) err
 			ldapwire.ResultAttributeOrValueExists,
 			fmt.Sprintf(
 				"modify/add: %s: value #%d already exists",
-				change.Attribute.Description,
+				description,
 				valueIndex,
 			),
 		)
@@ -3328,7 +3681,17 @@ func applyModificationWithPermissive(
 	entry *directory.Entry,
 	change ldapwire.Modification,
 	permissive bool,
+	registries ...*schema.Registry,
 ) error {
+	var registry *schema.Registry
+	if len(registries) != 0 {
+		registry = registries[0]
+	}
+	if registry != nil {
+		return applySchemaModificationWithPermissive(
+			entry, change, permissive, registry,
+		)
+	}
 	if !permissive {
 		return applyModification(entry, change)
 	}
@@ -3371,6 +3734,86 @@ func applyModificationWithPermissive(
 		return nil
 	}
 	return applyModification(entry, filtered)
+}
+
+func applySchemaModificationWithPermissive(
+	entry *directory.Entry,
+	change ldapwire.Modification,
+	permissive bool,
+	registry *schema.Registry,
+) error {
+	if !permissive {
+		return applyModificationWithSchema(entry, change, registry)
+	}
+	if len(change.Attribute.Values) == 0 {
+		if change.Operation == ldapwire.ModificationDelete &&
+			len(schemaExactAttributeIndexes(
+				*entry, change.Attribute.Description, registry,
+			)) == 0 {
+			return nil
+		}
+		return applyModificationWithSchema(entry, change, registry)
+	}
+
+	filtered := change
+	filtered.Attribute.Values = nil
+	switch change.Operation {
+	case ldapwire.ModificationAdd:
+		for _, value := range change.Attribute.Values {
+			if schemaEntryHasValue(
+				*entry, change.Attribute.Description, value, registry,
+			) || schemaValuesContain(
+				registry,
+				change.Attribute.Description,
+				filtered.Attribute.Values,
+				value,
+			) {
+				continue
+			}
+			filtered.Attribute.Values = append(filtered.Attribute.Values, value)
+		}
+	case ldapwire.ModificationDelete:
+		if len(schemaExactAttributeIndexes(
+			*entry, change.Attribute.Description, registry,
+		)) == 0 {
+			return nil
+		}
+		for _, value := range change.Attribute.Values {
+			if schemaEntryHasValue(
+				*entry, change.Attribute.Description, value, registry,
+			) && !schemaValuesContain(
+				registry,
+				change.Attribute.Description,
+				filtered.Attribute.Values,
+				value,
+			) {
+				filtered.Attribute.Values = append(filtered.Attribute.Values, value)
+			}
+		}
+	default:
+		return applyModificationWithSchema(entry, change, registry)
+	}
+	if len(filtered.Attribute.Values) == 0 {
+		return nil
+	}
+	return applyModificationWithSchema(entry, filtered, registry)
+}
+
+func schemaValuesContain(
+	registry *schema.Registry,
+	description string,
+	values [][]byte,
+	want []byte,
+) bool {
+	for _, value := range values {
+		equal, err := schemaAttributeValuesEqual(
+			registry, description, value, want,
+		)
+		if err == nil && equal {
+			return true
+		}
+	}
+	return false
 }
 
 func schemaValidationResult(err error) ldapwire.Result {

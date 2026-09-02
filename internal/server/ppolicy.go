@@ -561,7 +561,7 @@ func (server *Server) authenticatePasswordBind(
 			}
 		}
 
-		passwordPresent := entry.HasAttribute(policy.attribute)
+		passwordPresent := runtime.schema.HasAttributeDescription(entry, policy.attribute)
 		totpPasswordEnabled := activeTOTPPasswordConfiguration(runtime, database) != nil
 		lastTOTPAuthentication := time.Time{}
 		if totpPasswordEnabled {
@@ -570,7 +570,7 @@ func (server *Server) authenticatePasswordBind(
 				entry,
 			)
 		}
-		for _, stored := range entry.Values(policy.attribute) {
+		for _, stored := range runtime.schema.AttributeValues(entry, policy.attribute) {
 			if !server.allowed(
 				runtime,
 				tx,
@@ -1358,6 +1358,7 @@ func (server *Server) passwordPolicyModificationProcessor(
 			return processed, nil, nil
 		}
 		mutation := buildPasswordPolicyStateMutation(
+			runtime,
 			entry,
 			policy,
 			prepared.passwordAdministrator,
@@ -1986,14 +1987,15 @@ func buildPasswordHistoryValue(
 }
 
 func buildPasswordPolicyStateMutation(
+	runtime *runtimeState,
 	entry directory.Entry,
 	policy passwordPolicy,
 	passwordAdministrator bool,
 	analysis passwordPolicyModificationAnalysis,
 	now time.Time,
 ) entryModificationMutation {
-	history := parsePasswordHistory(entry.Values("pwdHistory"))
-	currentPasswords := entry.Values(policy.attribute)
+	history := parsePasswordHistory(runtime.schema.AttributeValues(entry, "pwdHistory"))
+	currentPasswords := runtime.schema.AttributeValues(entry, policy.attribute)
 	return func(updated *directory.Entry) error {
 		if !analysis.explicitChangedTime {
 			if analysis.lastPasswordOperation ==

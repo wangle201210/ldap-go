@@ -47,7 +47,7 @@ func (server *Server) lookupSASLCleartextPassword(
 		return nil, err
 	}
 	defer clearSASLCredentialEntry(&entry)
-	for _, stored := range entry.Values("userPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 		password, ok := auth.ExtractCleartextPassword(stored)
 		if ok {
 			return password, nil
@@ -89,7 +89,7 @@ func (server *Server) authenticateSASLPassword(
 		return false, err
 	}
 	defer clearSASLCredentialEntry(&entry)
-	for _, stored := range entry.Values("userPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 		if server.verifyStoredPassword(ctx, runtime, stored, password) {
 			return true, nil
 		}

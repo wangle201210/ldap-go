@@ -476,14 +476,14 @@ func (server *Server) remoteAuthSimpleBind(
 		if err != nil {
 			return err
 		}
-		if entry.HasAttribute("userPassword") {
+		if runtime.schema.HasAttributeDescription(entry, "userPassword") {
 			return nil
 		}
-		dnValues := entry.Values(configuration.dnAttribute)
+		dnValues := runtime.schema.AttributeValues(entry, configuration.dnAttribute)
 		if len(dnValues) == 0 || len(dnValues[0]) == 0 {
 			return nil
 		}
-		domainValues := entry.Values(configuration.domainAttribute)
+		domainValues := runtime.schema.AttributeValues(entry, configuration.domainAttribute)
 		if len(domainValues) > 0 {
 			domain = string(domainValues[0])
 			hasDomain = true
@@ -895,7 +895,7 @@ func (server *Server) storeRemoteAuthPassword(
 		if err != nil {
 			return err
 		}
-		if entry.HasAttribute("userPassword") {
+		if runtime.schema.HasAttributeDescription(entry, "userPassword") {
 			return nil
 		}
 		before := entry.Clone()

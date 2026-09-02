@@ -8,6 +8,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -241,6 +242,7 @@ func (server *Server) tryTranslucentModify(
 			request.Changes,
 			configuration.strict,
 			controls.permissiveModify,
+			state.runtime.schema,
 		)
 		if changeErr != nil {
 			return changeErr
@@ -280,19 +282,26 @@ func applyTranslucentModifications(
 	changes []ldapwire.Modification,
 	strict bool,
 	permissive bool,
+	registry *schema.Registry,
 ) (bool, error) {
 	if localExists {
 		changed := false
 		for _, change := range changes {
-			if local.HasAttribute(change.Attribute.Description) {
-				if err := applyModificationWithPermissive(local, change, permissive); err != nil {
+			if len(schemaExactAttributeIndexes(
+				*local, change.Attribute.Description, registry,
+			)) != 0 {
+				if err := applyModificationWithPermissive(
+					local, change, permissive, registry,
+				); err != nil {
 					return false, err
 				}
 				changed = true
 				continue
 			}
 			if change.Operation == ldapwire.ModificationDelete {
-				if !remote.HasAttribute(change.Attribute.Description) {
+				if len(schemaExactAttributeIndexes(
+					remote, change.Attribute.Description, registry,
+				)) == 0 {
 					return false, operationFailed(
 						ldapwire.ResultNoSuchAttribute,
 						"attempt to delete nonexistent attribute",
@@ -308,7 +317,9 @@ func applyTranslucentModifications(
 			}
 			localChange := change
 			localChange.Operation = ldapwire.ModificationAdd
-			if err := applyModificationWithPermissive(local, localChange, permissive); err != nil {
+			if err := applyModificationWithPermissive(
+				local, localChange, permissive, registry,
+			); err != nil {
 				return false, err
 			}
 			changed = true
@@ -321,7 +332,9 @@ func applyTranslucentModifications(
 	for _, change := range changes {
 		switch change.Operation {
 		case ldapwire.ModificationAdd, ldapwire.ModificationReplace:
-			if err := applyModificationWithPermissive(&created, change, permissive); err != nil {
+			if err := applyModificationWithPermissive(
+				&created, change, permissive, registry,
+			); err != nil {
 				return false, err
 			}
 		case ldapwire.ModificationDelete:
@@ -735,13 +748,13 @@ func (server *Server) tryTranslucentPasswordModify(
 		if request.HasOldPassword {
 			if err := validateExternalPasswordMatches(
 				externalMatches,
-				local.Values("userPassword"),
+				state.runtime.schema.AttributeValues(local, "userPassword"),
 				request.OldPassword,
 			); err != nil {
 				return err
 			}
 			matched := false
-			for _, stored := range local.Values("userPassword") {
+			for _, stored := range state.runtime.schema.AttributeValues(local, "userPassword") {
 				if verifyStoredPasswordWithExternalMatches(
 					stored,
 					request.OldPassword,

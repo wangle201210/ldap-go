@@ -395,7 +395,7 @@ func (server *Server) lookupSASLDigestMD5Credentials(
 	}
 	defer clearSASLCredentialEntry(&entry)
 
-	for _, stored := range entry.Values("userPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 		password, ok := auth.ExtractCleartextPassword(stored)
 		if !ok {
 			continue
@@ -403,7 +403,7 @@ func (server *Server) lookupSASLDigestMD5Credentials(
 		credentials.password = password
 		return credentials, nil
 	}
-	for _, stored := range entry.Values(saslDigestMD5SecretAttribute) {
+	for _, stored := range runtime.schema.AttributeValues(entry, saslDigestMD5SecretAttribute) {
 		if len(stored) != md5.Size {
 			continue
 		}

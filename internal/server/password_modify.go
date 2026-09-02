@@ -481,7 +481,7 @@ func (server *Server) entryPasswordMatches(
 	externalMatches externalPasswordMatches,
 ) bool {
 	matched := false
-	for _, stored := range entry.Values("userPassword") {
+	for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 		if server.allowed(
 			runtime,
 			reader,

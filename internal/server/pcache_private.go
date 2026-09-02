@@ -916,7 +916,12 @@ func (server *Server) handlePcachePrivateModify(
 		}
 		after := before.Clone()
 		for _, change := range request.Changes {
-			if err := applyModificationWithPermissive(&after, change, controls.permissiveModify); err != nil {
+			if err := applyModificationWithPermissive(
+				&after,
+				change,
+				controls.permissiveModify,
+				state.runtime.schema,
+			); err != nil {
 				result = pcachePrivateResultFromError(err)
 				return false, true
 			}

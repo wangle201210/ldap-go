@@ -2490,7 +2490,7 @@ func (server *Server) authenticate(
 		if !server.allowed(runtime, tx, "", entry, "userPassword", nil, acl.Auth) {
 			return nil
 		}
-		for _, stored := range entry.Values("userPassword") {
+		for _, stored := range runtime.schema.AttributeValues(entry, "userPassword") {
 			storedPasswords = append(storedPasswords, append([]byte(nil), stored...))
 		}
 		return nil

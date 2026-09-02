@@ -294,6 +294,53 @@ func runCoreReferenceScenario(
 			"(cn:1.2.3:=Dave)", []string{"1.1"}, nil,
 		)),
 	)
+	erinDN := "uid=erin,ou=people,dc=example,dc=com"
+	erin := coreReferencePersonAdd(erinDN, "erin")
+	erin.Attribute("2.5.4.35", []string{"oid-secret"})
+	observations = append(
+		observations,
+		observeCoreError("add OID password", client.Add(erin)),
+		observeCoreBind(t, uri, "OID password bind", erinDN, "oid-secret"),
+		observeCoreBind(t, uri, "invalid OID password bind", erinDN, "wrong"),
+	)
+	passwordModifyResult, passwordModifyErr := client.PasswordModify(
+		ldap.NewPasswordModifyRequest(erinDN, "oid-secret", "new-oid-secret"),
+	)
+	_ = passwordModifyResult
+	observations = append(
+		observations,
+		observeCoreError("OID password modify", passwordModifyErr),
+		observeCoreBind(t, uri, "old OID password after modify", erinDN, "oid-secret"),
+		observeCoreBind(t, uri, "new OID password after modify", erinDN, "new-oid-secret"),
+	)
+	frankDN := "uid=frank,ou=people,dc=example,dc=com"
+	frank := coreReferencePersonAdd(frankDN, "frank")
+	frank.Attribute("userPassword", []string{"Secret", "secret"})
+	observations = append(
+		observations,
+		observeCoreError("add case-distinct passwords", client.Add(frank)),
+		observeCoreBind(t, uri, "first case-distinct password", frankDN, "Secret"),
+		observeCoreBind(t, uri, "second case-distinct password", frankDN, "secret"),
+	)
+	duplicateAlias := coreReferencePersonAdd(
+		"uid=duplicate-alias,ou=people,dc=example,dc=com",
+		"duplicate-alias",
+	)
+	duplicateAlias.Attribute("2.5.4.3", []string{"Alias CN"})
+	duplicateCN := ldap.NewModifyRequest(frankDN, nil)
+	duplicateCN.Add("2.5.4.3", []string{"FRANK"})
+	observations = append(
+		observations,
+		observeCoreError("add duplicate attribute alias", client.Add(duplicateAlias)),
+		observeCoreError("modify duplicate value through OID", client.Modify(duplicateCN)),
+	)
+	replaceCNByOID := ldap.NewModifyRequest(frankDN, nil)
+	replaceCNByOID.Replace("2.5.4.3", []string{"Alias Replaced"})
+	observations = append(
+		observations,
+		observeCoreError("replace attribute through OID", client.Modify(replaceCNByOID)),
+		observeCoreCompare(t, client, "compare replaced attribute name", frankDN, "cn", "ALIAS REPLACED"),
+	)
 
 	missingParent := coreReferencePersonAdd(
 		"uid=orphan,ou=missing,dc=example,dc=com",
