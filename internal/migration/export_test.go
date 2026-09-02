@@ -62,6 +62,67 @@ jpegPhoto:: AP8Q
 	assertStoresEqual(t, source, destination)
 }
 
+func TestExportLDIFFilterUsesImportedSchema(t *testing.T) {
+	t.Parallel()
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	input := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=alice,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice
+sn: Example
+
+dn: uid=bob,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob
+sn: Example
+
+`
+	if _, err := ImportLDIF(
+		context.Background(),
+		store,
+		strings.NewReader(input),
+		ImportOptions{Replace: true},
+	); err != nil {
+		t.Fatalf("ImportLDIF(): %v", err)
+	}
+
+	var output bytes.Buffer
+	result, err := ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		&output,
+		ExportOptions{Filter: "(&(objectClass=inetOrgPerson)(uid=ALICE))"},
+	)
+	if err != nil {
+		t.Fatalf("ExportLDIFWithOptions(filter): %v", err)
+	}
+	if result.Entries != 1 ||
+		!strings.Contains(output.String(), "dn: uid=alice,dc=example,dc=com") ||
+		strings.Contains(output.String(), "uid=bob") {
+		t.Fatalf("filtered export result=%#v output=\n%s", result, output.String())
+	}
+
+	output.Reset()
+	if _, err := ExportLDIFWithOptions(
+		context.Background(),
+		store,
+		&output,
+		ExportOptions{Filter: "(uid="},
+	); err == nil || !strings.Contains(err.Error(), "invalid export filter") {
+		t.Fatalf("invalid export filter error = %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("invalid filter wrote %d output bytes", output.Len())
+	}
+}
+
 func TestExportLDIFDefaultSelectionRequiresContentDatabase(t *testing.T) {
 	t.Parallel()
 

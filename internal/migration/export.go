@@ -10,6 +10,7 @@ import (
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/go-ldap/ldif"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -21,6 +22,7 @@ type ExportOptions struct {
 	Database              string
 	SelectDefaultDatabase bool
 	IncludeSubordinates   bool
+	Filter                string
 }
 
 func ExportLDIF(
@@ -43,8 +45,33 @@ func ExportLDIFWithOptions(
 
 	var entries []directory.Entry
 	err := store.View(ctx, func(tx storage.Reader) error {
+		matchEntry := func(directory.Entry) (bool, error) { return true, nil }
+		if options.Filter != "" {
+			filter, err := ldapwire.CompileFilter(options.Filter)
+			if err != nil {
+				return fmt.Errorf("invalid export filter %q: %w", options.Filter, err)
+			}
+			registry, err := importedSchemaRegistry(tx, nil)
+			if err != nil {
+				return err
+			}
+			matchEntry = func(entry directory.Entry) (bool, error) {
+				return filter.MatchWith(entry, registry)
+			}
+		}
 		appendTarget := func(target databaseTarget) error {
 			return tx.ForEachIn(target.partition, func(entry directory.Entry) error {
+				matched, err := matchEntry(entry)
+				if err != nil {
+					return fmt.Errorf(
+						"evaluate export filter for %q: %w",
+						entry.DN,
+						err,
+					)
+				}
+				if !matched {
+					return nil
+				}
 				entries = append(entries, entry)
 				return nil
 			})
@@ -101,6 +128,17 @@ func ExportLDIFWithOptions(
 
 		seen := make(map[string]string)
 		return tx.ForEachPartition(func(partition string, entry directory.Entry) error {
+			matched, err := matchEntry(entry)
+			if err != nil {
+				return fmt.Errorf(
+					"evaluate export filter for %q: %w",
+					entry.DN,
+					err,
+				)
+			}
+			if !matched {
+				return nil
+			}
 			dn, err := directory.ParseDN(entry.DN)
 			if err != nil {
 				return err

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1302,6 +1303,20 @@ sn: Run
 
 	stdout, stderr, exitCode = runCLIForTest(
 		t,
+		[]string{
+			"slapcat", "-db", sourceDatabase, "-n", "1",
+			"-a", "(&(objectClass=inetOrgPerson)(uid=ALICE))",
+		},
+		"",
+	)
+	if exitCode != 0 || !strings.Contains(stderr, "exported 1 entries") ||
+		!strings.Contains(stdout, "dn: uid=alice,ou=People,dc=example,dc=com") ||
+		strings.Contains(stdout, "uid=service") {
+		t.Fatalf("slapcat -a exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
 		[]string{"slapadd", "-db", targetDatabase, "-n", "1"},
 		`dn: dc=example,dc=com
 objectClass: domain
@@ -1891,6 +1906,8 @@ func TestOpenLDAPAliasesRejectUnsupportedAndConflictingOptions(t *testing.T) {
 		{name: "empty suffix", args: []string{"slapadd", "-b", ""}, message: "requires a non-empty suffix"},
 		{name: "false dry run", args: []string{"slapadd", "-u=false"}, message: "-u=false is not supported"},
 		{name: "empty subtree", args: []string{"slapcat", "-s", ""}, message: "requires a non-empty subtree"},
+		{name: "empty filter", args: []string{"slapcat", "-a", ""}, message: "requires a non-empty LDAP filter"},
+		{name: "invalid filter", args: []string{"slapcat", "-a", "(uid="}, message: "invalid export filter"},
 		{name: "empty password file", args: []string{"slappasswd", "-T", ""}, message: "open password file"},
 		{name: "false generation", args: []string{"slappasswd", "-g=false"}, message: "-g=false is not supported"},
 		{name: "duplicate secret", args: []string{"slappasswd", "-s", secret, "-s", "replacement"}, message: "provided more than once"},
@@ -2209,6 +2226,59 @@ ou: two
 		if !strings.Contains(string(referenceData), "dn: "+dn+"\n") {
 			t.Fatalf("OpenLDAP -c omitted %q:\n%s", dn, referenceData)
 		}
+	}
+	filter := "(|(dc=EXAMPLE)(ou=ONE))"
+	referenceFiltered, err := exec.Command(
+		slapcat,
+		"-f", configPath,
+		"-a", filter,
+	).Output()
+	if err != nil {
+		t.Fatalf("OpenLDAP slapcat -a: %v", err)
+	}
+	localDatabase := filepath.Join(root, "ldap-go.db")
+	seedOpenLDAPAliasDatabase(t, localDatabase)
+	localImportOut, localImportErr, localImportCode := runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", localDatabase, "-n", "1"},
+		string(referenceData),
+	)
+	if localImportCode != 0 || !strings.Contains(localImportOut, "imported 3 entries") ||
+		localImportErr != "" {
+		t.Fatalf(
+			"ldap-go reference import exit=%d stdout=%q stderr=%q",
+			localImportCode,
+			localImportOut,
+			localImportErr,
+		)
+	}
+	localFiltered, localFilterErr, localFilterCode := runCLIForTest(
+		t,
+		[]string{"slapcat", "-db", localDatabase, "-n", "1", "-a", filter},
+		"",
+	)
+	if localFilterCode != 0 || !strings.Contains(localFilterErr, "exported 2 entries") {
+		t.Fatalf(
+			"ldap-go slapcat -a exit=%d stdout=%q stderr=%q",
+			localFilterCode,
+			localFiltered,
+			localFilterErr,
+		)
+	}
+	referenceEntries := parseLDAPSearchOutput(t, string(referenceFiltered))
+	localEntries := parseLDAPSearchOutput(t, localFiltered)
+	referenceDNs := make([]string, len(referenceEntries))
+	localDNs := make([]string, len(localEntries))
+	for index := range referenceEntries {
+		referenceDNs[index] = referenceEntries[index].DN
+	}
+	for index := range localEntries {
+		localDNs[index] = localEntries[index].DN
+	}
+	slices.Sort(referenceDNs)
+	slices.Sort(localDNs)
+	if !slices.Equal(localDNs, referenceDNs) {
+		t.Fatalf("slapcat -a DNs = %q, want OpenLDAP %q", localDNs, referenceDNs)
 	}
 
 	quick := exec.Command(

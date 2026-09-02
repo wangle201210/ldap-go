@@ -29,6 +29,7 @@ import (
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/gmtransport"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/server"
@@ -812,13 +813,14 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		"",
 		"OpenLDAP database index, olcDatabase value, or config entry DN",
 	)
-	var openLDAPLDIFPath, suffix, subtree string
+	var openLDAPLDIFPath, suffix, subtree, filter string
 	var disableSubordinateGlue bool
 	databaseNumber := -1
 	if command == "slapcat" {
 		flags.StringVar(&openLDAPLDIFPath, "l", "", "destination LDIF path")
 		flags.StringVar(&suffix, "b", "", "select the database containing this suffix")
 		flags.IntVar(&databaseNumber, "n", -1, "select a database by number")
+		flags.StringVar(&filter, "a", "", "export entries matching this LDAP filter")
 		flags.StringVar(&subtree, "s", "", "export only this subtree")
 		registerUnsupportedBool(flags, "c", "continue after export errors")
 		flags.BoolVar(&disableSubordinateGlue, "g", false, "disable subordinate gluing")
@@ -844,6 +846,14 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		if flagWasSet(flags, "s") && strings.TrimSpace(subtree) == "" {
 			return errors.New("slapcat option -s requires a non-empty subtree DN")
 		}
+		if flagWasSet(flags, "a") && strings.TrimSpace(filter) == "" {
+			return errors.New("slapcat option -a requires a non-empty LDAP filter")
+		}
+		if filter != "" {
+			if _, err := ldapwire.CompileFilter(filter); err != nil {
+				return fmt.Errorf("invalid export filter %q: %w", filter, err)
+			}
+		}
 	}
 	selectedDatabase, err := resolveOfflineDatabaseSelection(
 		command,
@@ -868,6 +878,7 @@ func runExport(command string, args []string, stdout, stderr io.Writer) error {
 		Database:              selectedDatabase,
 		SelectDefaultDatabase: command == "slapcat",
 		IncludeSubordinates:   command == "slapcat" && !disableSubordinateGlue,
+		Filter:                filter,
 	}
 	if *ldifPath == "-" {
 		result, err := exportLDIFWithSubtree(
