@@ -2452,6 +2452,43 @@ cn: resumed
 			localResumed, localResumeErr, localResumeCode, referenceResumed,
 		)
 	}
+	slapacl := filepath.Join(filepath.Dir(slapadd), "slapacl")
+	if _, err := os.Stat(slapacl); err != nil {
+		t.Fatalf("OpenLDAP slapacl is unavailable: %v", err)
+	}
+	referenceACL, err := exec.Command(
+		slapacl,
+		"-f", configPath,
+		"-D", "cn=observer,dc=example,dc=com",
+		"-b", "cn=resumed,dc=example,dc=com",
+		"cn/read", "cn",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("OpenLDAP slapacl: %v\n%s", err, referenceACL)
+	}
+	localACLOut, localACLErr, localACLCode := runCLIForTest(
+		t,
+		[]string{
+			"slapacl", "-db", databasePath,
+			"-D", "cn=observer,dc=example,dc=com",
+			"-b", "cn=resumed,dc=example,dc=com",
+			"cn/read", "cn",
+		},
+		"",
+	)
+	for _, expected := range []string{
+		"read access to cn: ALLOWED",
+		"cn: read(=rscxd)",
+	} {
+		if localACLCode != 0 || localACLOut != "" ||
+			!strings.Contains(localACLErr, expected) ||
+			!strings.Contains(string(referenceACL), expected) {
+			t.Fatalf(
+				"slapacl differential missing %q: local=%q/%q/%d reference=%q",
+				expected, localACLOut, localACLErr, localACLCode, referenceACL,
+			)
+		}
+	}
 }
 
 func TestUsageListsOpenLDAPOfflineAliases(t *testing.T) {
@@ -2461,10 +2498,112 @@ func TestUsageListsOpenLDAPOfflineAliases(t *testing.T) {
 	if exitCode != 0 || stderr != "" {
 		t.Fatalf("help exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
-	for _, command := range []string{"slapadd", "slapcat", "slappasswd", "slapindex"} {
+	for _, command := range []string{"slapacl", "slapadd", "slapcat", "slappasswd", "slapindex"} {
 		if !strings.Contains(stdout, command) {
 			t.Errorf("help does not list %s: %q", command, stdout)
 		}
+	}
+}
+
+func TestSlapACLChecksAccessAndRedactsPasswords(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "slapacl.db")
+	config := `dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcAuthzRegexp: {0}^uid=([^,]+),cn=auth$ uid=$1,dc=example,dc=com
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=com
+olcRootDN: cn=admin,dc=example,dc=com
+olcAccess: {0}to attrs=cn by dn.exact="uid=alice,dc=example,dc=com" read by * none
+olcAccess: {1}to attrs=userPassword by self auth by * none
+olcAccess: {2}to * by users read by * none
+
+`
+	stdout, stderr, exitCode := runCLIForTest(
+		t,
+		[]string{"import", "-db", databasePath, "-replace"},
+		config,
+	)
+	if exitCode != 0 {
+		t.Fatalf("seed slapacl config exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	data := `dn: dc=example,dc=com
+objectClass: domain
+dc: example
+
+dn: uid=alice,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Example
+sn: Example
+userPassword: alice-secret
+
+dn: uid=bob,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Example
+sn: Example
+userPassword: bob-secret
+
+`
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{"slapadd", "-db", databasePath, "-n", "1"},
+		data,
+	)
+	if exitCode != 0 {
+		t.Fatalf("seed slapacl data exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	before, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapacl", "-db", databasePath,
+			"-U", "alice", "-b", "uid=bob,dc=example,dc=com",
+			"2.5.4.3/read:Bob Example", "cn/write",
+		},
+		"",
+	)
+	if exitCode != 0 || stdout != "" ||
+		!strings.Contains(stderr, `authcDN: "uid=alice,dc=example,dc=com"`) ||
+		!strings.Contains(stderr, "read access to cn=Bob Example: ALLOWED") ||
+		!strings.Contains(stderr, "write access to cn: DENIED") {
+		t.Fatalf("slapacl checks exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+
+	stdout, stderr, exitCode = runCLIForTest(
+		t,
+		[]string{
+			"slapacl", "-db", databasePath,
+			"-D", "uid=alice,dc=example,dc=com",
+			"-b", "uid=alice,dc=example,dc=com",
+		},
+		"",
+	)
+	if exitCode != 0 || stdout != "" ||
+		!strings.Contains(stderr, "userPassword=****:") ||
+		strings.Contains(stderr, "alice-secret") {
+		t.Fatalf("slapacl default output exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	after, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("slapacl modified the database")
 	}
 }
 

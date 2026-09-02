@@ -137,6 +137,8 @@ func runWithContextAndSignals(
 		err = runImport(args[0], args[1:], stdin, stdout, stderr)
 	case "slapauth":
 		err = runSlapAuth(args[1:], stdout, stderr)
+	case "slapacl":
+		err = runSlapACL(args[1:], stdout, stderr)
 	case "slapschema":
 		err = runSlapSchema(args[1:], stdout, stderr)
 	case "slapmodify":
@@ -2290,6 +2292,7 @@ commands:
   import   atomically import slapcat-compatible LDIF
   slapadd  OpenLDAP-style alias for import
 	  slapauth  check configured SASL authentication and authorization identities
+	  slapacl   check configured ACL access without starting the server
 	  slapschema  check stored entries against the configured schema
 	  slapmodify  atomically apply offline LDIF change records
 	  ldapsearch  search a remote LDAP directory and print LDIF

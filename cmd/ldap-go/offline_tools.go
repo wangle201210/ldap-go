@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/server"
@@ -42,6 +43,186 @@ func rejectOfflineConfigFlags(command string, flags *flag.FlagSet) error {
 		{name: "d", reason: "the embedded offline runtime has no OpenLDAP debug subsystem"},
 		{name: "o", reason: "OpenLDAP process and syslog tool options do not apply to ldap-go"},
 	})
+}
+
+func runSlapACL(args []string, stdout, stderr io.Writer) (runErr error) {
+	flags := flag.NewFlagSet("slapacl", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	databasePath := flags.String("db", "data/ldap-go.db", "database path")
+	targetDN := flags.String("b", "", "target entry DN")
+	authenticationDN := flags.String("D", "", "authentication DN")
+	authenticationID := flags.String("U", "", "authentication ID")
+	authorizationID := flags.String("X", "", "authorization ID")
+	dryRun := flags.Bool("u", false, "use an empty synthetic target entry")
+	verbose := flags.Bool("v", false, "print normalized identities")
+	flags.String("f", "", "unsupported OpenLDAP slapd.conf path")
+	flags.String("F", "", "unsupported OpenLDAP config directory")
+	flags.String("d", "", "unsupported OpenLDAP debug level")
+	var rawOptions repeatedOfflineOption
+	flags.Var(&rawOptions, "o", "ACL session option name=value")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := rejectUnsupportedFlags("slapacl", flags, []unsupportedFlag{
+		{name: "f", reason: "ldap-go loads cn=config from -db and cannot consume slapd.conf"},
+		{name: "F", reason: "ldap-go loads cn=config from -db and cannot consume an OpenLDAP config directory"},
+		{name: "d", reason: "the embedded offline runtime has no OpenLDAP debug subsystem"},
+	}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*targetDN) == "" {
+		return errors.New("slapacl option -b requires a non-empty target DN")
+	}
+	if *authenticationDN != "" && *authenticationID != "" {
+		return errors.New("slapacl options -D and -U are mutually exclusive")
+	}
+	if flagWasSet(flags, "D") && *authenticationDN == "" {
+		return errors.New("slapacl option -D requires a non-empty authentication DN")
+	}
+	if flagWasSet(flags, "U") && *authenticationID == "" {
+		return errors.New("slapacl option -U requires a non-empty authentication ID")
+	}
+	if flagWasSet(flags, "X") && *authorizationID == "" {
+		return errors.New("slapacl option -X requires a non-empty authorization ID")
+	}
+	if flagWasSet(flags, "u") && !*dryRun {
+		return errors.New("slapacl option -u=false is not supported")
+	}
+	if flagWasSet(flags, "v") && !*verbose {
+		return errors.New("slapacl option -v=false is not supported")
+	}
+
+	request := server.OfflineACLRequest{
+		TargetDN: *targetDN, AuthenticationDN: *authenticationDN,
+		AuthenticationID: *authenticationID, AuthorizationID: *authorizationID,
+		DryRun: *dryRun,
+	}
+	for _, raw := range rawOptions {
+		if err := applySlapACLOption(&request, raw); err != nil {
+			return err
+		}
+	}
+	if request.AuthorizationDN != "" && request.AuthorizationID != "" {
+		return errors.New("slapacl options -X and -o authzDN are mutually exclusive")
+	}
+	for _, raw := range flags.Args() {
+		check, err := parseSlapACLCheck(raw)
+		if err != nil {
+			return err
+		}
+		request.Checks = append(request.Checks, check)
+	}
+
+	store, err := storage.OpenBoltReadOnly(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, store.Close()) }()
+	report, err := server.CheckOfflineACL(context.Background(), store, request)
+	if err != nil {
+		return err
+	}
+	if report.AuthenticationDN != "" &&
+		(*verbose || *authenticationDN != "" || *authenticationID != "") {
+		if _, err := fmt.Fprintf(stderr, "authcDN: \"%s\"\n", report.AuthenticationDN); err != nil {
+			return err
+		}
+	}
+	if report.AuthorizationDN != "" {
+		if _, err := fmt.Fprintf(stderr, "authzDN: \"%s\"\n", report.AuthorizationDN); err != nil {
+			return err
+		}
+	}
+	for _, result := range report.Checks {
+		value := string(result.Value)
+		if result.HasValue && result.Access == "" &&
+			strings.EqualFold(strings.Split(result.Attribute, ";")[0], "userPassword") {
+			value = "****"
+		}
+		nameValue := result.Attribute
+		if result.HasValue {
+			nameValue += "=" + value
+		}
+		if result.Access != "" {
+			status := "DENIED"
+			if result.Allowed {
+				status = "ALLOWED"
+			}
+			if _, err := fmt.Fprintf(
+				stderr, "%s access to %s: %s\n", result.Access, nameValue, status,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(stderr, "%s: %s\n", nameValue, result.Mask); err != nil {
+			return err
+		}
+	}
+	_ = stdout
+	return nil
+}
+
+func applySlapACLOption(request *server.OfflineACLRequest, raw string) error {
+	name, value, found := strings.Cut(raw, "=")
+	name = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
+	if !found || name == "" {
+		return fmt.Errorf("invalid slapacl option %q; expected name=value", raw)
+	}
+	switch name {
+	case "authzdn":
+		if strings.TrimSpace(value) == "" {
+			return errors.New("slapacl authzDN option requires a non-empty DN")
+		}
+		request.AuthorizationDN = value
+	case "domain":
+		request.Domain = value
+	case "peername":
+		request.PeerName = value
+	case "sockname":
+		request.SockName = value
+	case "sockurl":
+		request.SockURL = value
+	case "ssf", "transport_ssf", "tls_ssf", "sasl_ssf":
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return fmt.Errorf("slapacl option %s requires a non-negative integer", name)
+		}
+		switch name {
+		case "ssf":
+			request.SSF = parsed
+		case "transport_ssf":
+			request.TransportSSF = parsed
+		case "tls_ssf":
+			request.TLSSSF = parsed
+		case "sasl_ssf":
+			request.SASLSSF = parsed
+		}
+	default:
+		return fmt.Errorf("unsupported slapacl option %q", name)
+	}
+	return nil
+}
+
+func parseSlapACLCheck(raw string) (server.OfflineACLCheckRequest, error) {
+	check := server.OfflineACLCheckRequest{}
+	attributeAccess, value, hasValue := strings.Cut(raw, ":")
+	attribute, access, hasAccess := strings.Cut(attributeAccess, "/")
+	check.Attribute = strings.TrimSpace(attribute)
+	if check.Attribute == "" {
+		return check, fmt.Errorf("invalid slapacl attribute request %q", raw)
+	}
+	if hasAccess {
+		check.Access = strings.TrimSpace(access)
+		if check.Access == "" {
+			return check, fmt.Errorf("invalid slapacl access in %q", raw)
+		}
+	}
+	if hasValue {
+		check.Value = []byte(value)
+		check.HasValue = true
+	}
+	return check, nil
 }
 
 func runSlapAuth(args []string, stdout, stderr io.Writer) (runErr error) {

@@ -1375,6 +1375,9 @@ go run ./cmd/ldap-go slapdn -db ./data/ldap-go.db 'uid=alice,dc=example,dc=com'
 go run ./cmd/ldap-go slapadd -db ./data/ldap-go.db -l data-1.ldif -n 1 -S 1 -w
 go run ./cmd/ldap-go slapcat -db ./data/ldap-go.db -l exported.ldif -n 1
 go run ./cmd/ldap-go slapauth -db ./data/ldap-go.db 'uid=alice,cn=auth'
+go run ./cmd/ldap-go slapacl -db ./data/ldap-go.db \
+  -D 'uid=alice,dc=example,dc=com' \
+  -b 'uid=bob,dc=example,dc=com' 'mail/read'
 go run ./cmd/ldap-go slapschema -db ./data/ldap-go.db -v
 go run ./cmd/ldap-go slapmodify -db ./data/ldap-go.db -l changes.ldif -j 1 -w
 go run ./cmd/ldap-go slapindex -db ./data/ldap-go.db cn uid
