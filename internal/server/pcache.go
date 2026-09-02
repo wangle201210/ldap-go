@@ -1866,74 +1866,7 @@ func pcacheResponseFilterMatches(
 	filter directory.Filter,
 	entry directory.Entry,
 ) (bool, error) {
-	switch filter.Kind {
-	case directory.FilterAnd:
-		for _, child := range filter.Children {
-			matches, err := pcacheResponseFilterMatches(registry, child, entry)
-			if err != nil || !matches {
-				return matches, err
-			}
-		}
-		return true, nil
-	case directory.FilterOr:
-		for _, child := range filter.Children {
-			matches, err := pcacheResponseFilterMatches(registry, child, entry)
-			if err != nil {
-				return false, err
-			}
-			if matches {
-				return true, nil
-			}
-		}
-		return false, nil
-	case directory.FilterNot:
-		if len(filter.Children) != 1 {
-			return false, errors.New("not filter requires exactly one child")
-		}
-		matches, err := pcacheResponseFilterMatches(
-			registry,
-			filter.Children[0],
-			entry,
-		)
-		return !matches, err
-	case directory.FilterExtensible:
-		if !filter.DNAttributes {
-			return filter.MatchWith(entry, registry)
-		}
-		withDNAttributes, err := pcacheEntryWithDNAttributes(registry, entry)
-		if err != nil {
-			return false, err
-		}
-		filter.DNAttributes = false
-		return filter.MatchWith(withDNAttributes, registry)
-	default:
-		return filter.MatchWith(entry, registry)
-	}
-}
-
-func pcacheEntryWithDNAttributes(
-	registry *schema.Registry,
-	entry directory.Entry,
-) (directory.Entry, error) {
-	dn, err := registry.NormalizeDN(entry.DN)
-	if err != nil {
-		return directory.Entry{}, err
-	}
-	result := entry.Clone()
-	for dn.Depth() > 0 {
-		for _, value := range dn.RDNValues() {
-			result.Attributes = append(result.Attributes, directory.Attribute{
-				Description: value.Type,
-				Values:      [][]byte{bytes.Clone(value.Value)},
-			})
-		}
-		parent, ok := dn.Parent()
-		if !ok {
-			break
-		}
-		dn = parent
-	}
-	return result, nil
+	return filter.MatchWith(entry, registry)
 }
 
 func (server *Server) writePcacheResponse(

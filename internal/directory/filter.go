@@ -48,6 +48,10 @@ type OrderingMatcher interface {
 	CompareOrdering(attribute, matchingRule string, left, right []byte) (int, error)
 }
 
+type DNAttributesResolver interface {
+	WithDNAttributes(entry Entry) (Entry, error)
+}
+
 type FilterResult uint8
 
 const (
@@ -232,6 +236,18 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 		return FilterFalseResult, nil
 
 	case FilterExtensible:
+		if filter.DNAttributes {
+			resolver, ok := matcher.(DNAttributesResolver)
+			if !ok {
+				return FilterUndefinedResult, nil
+			}
+			withDNAttributes, err := resolver.WithDNAttributes(entry)
+			if err != nil {
+				return FilterUndefinedResult, err
+			}
+			filter.DNAttributes = false
+			return filter.EvaluateWith(withDNAttributes, matcher)
+		}
 		if filter.Attribute != "" {
 			undefined := false
 			for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {

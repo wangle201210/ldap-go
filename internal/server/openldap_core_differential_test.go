@@ -293,6 +293,18 @@ func runCoreReferenceScenario(
 			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
 			"(cn:1.2.3:=Dave)", []string{"1.1"}, nil,
 		)),
+		observeCoreSearch(t, client, "DN attribute ancestor RDN", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(ou:dn:caseIgnoreMatch:=people)", []string{"1.1"}, nil,
+		)),
+		observeCoreSearch(t, client, "DN attribute any AVA", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(:dn:caseIgnoreMatch:=people)", []string{"1.1"}, nil,
+		)),
+		observeCoreSearch(t, client, "DN attribute disabled", ldap.NewSearchRequest(
+			daveDN, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+			"(ou:caseIgnoreMatch:=people)", []string{"1.1"}, nil,
+		)),
 	)
 	erinDN := "uid=erin,ou=people,dc=example,dc=com"
 	erin := coreReferencePersonAdd(erinDN, "erin")
