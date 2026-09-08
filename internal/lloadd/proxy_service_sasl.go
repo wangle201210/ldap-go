@@ -90,6 +90,10 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 	config.SecurityProperties = securityProperties
 
 	switch config.SASLMechanism {
+	case "EXTERNAL":
+		if err := validateServiceSASLExternalConfig(config); err != nil {
+			return RuntimeBindConfig{}, err
+		}
 	case "PLAIN":
 		if len(config.Credentials) == 0 {
 			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
@@ -179,6 +183,8 @@ func (backend *runtimeBackend) bindServiceSASL(
 ) (net.Conn, error) {
 	config := backend.proxy.config.Bind
 	switch config.SASLMechanism {
+	case "EXTERNAL":
+		return connection, backend.bindServiceSASLExternal(connection, nextMessageID)
 	case "PLAIN":
 		return connection, backend.bindServiceSASLPlain(connection, nextMessageID)
 	case "CRAM-MD5":

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,34 @@ const (
 )
 
 var ErrProxyClosed = errors.New("lloadd proxy is closed")
+
+var backendTLSSessionCacheGeneration atomic.Uint64
+
+type generationClientSessionCache struct {
+	cache  tls.ClientSessionCache
+	prefix string
+}
+
+func (cache *generationClientSessionCache) Get(key string) (*tls.ClientSessionState, bool) {
+	return cache.cache.Get(cache.prefix + key)
+}
+
+func (cache *generationClientSessionCache) Put(key string, state *tls.ClientSessionState) {
+	cache.cache.Put(cache.prefix+key, state)
+}
+
+func isolateBackendTLSSessionCache(config *tls.Config) {
+	if config.ClientSessionCache == nil {
+		return
+	}
+	// tls.Config.Clone shares its cache. Namespace it so sessions can resume
+	// within this proxy generation but cannot retain a retired TLS identity.
+	generation := backendTLSSessionCacheGeneration.Add(1)
+	config.ClientSessionCache = &generationClientSessionCache{
+		cache:  config.ClientSessionCache,
+		prefix: "\x00lloadd-backend-generation:" + strconv.FormatUint(generation, 10) + "\x00",
+	}
+}
 
 type DialContextFunc func(context.Context, string, string) (net.Conn, error)
 
@@ -506,6 +535,7 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 	}
 	if config.BackendTLS != nil {
 		config.BackendTLS = config.BackendTLS.Clone()
+		isolateBackendTLSSessionCache(config.BackendTLS)
 	}
 	if config.ClientTLS != nil {
 		clientTLS, err := cloneClientTLSConfig(config.ClientTLS)
