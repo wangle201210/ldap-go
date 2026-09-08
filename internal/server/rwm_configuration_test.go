@@ -36,8 +36,8 @@ func TestRWMUnsupportedRewriteDirectiveRejectedAtStartup(t *testing.T) {
 			dn:          rwmOverlayConfigDN,
 			attribute:   "olcRwmRewrite",
 			valid:       `{0}rwm-suffixmassage "dc=virtual,dc=test" "dc=example,dc=com"`,
-			unsupported: `{1}rewriteEngine on`,
-			directive:   "rewriteEngine",
+			unsupported: `{1}rewriteMap ldap lookup ldap:///dc=test`,
+			directive:   "rewriteMap",
 		},
 		{
 			name:        "back-meta target",
@@ -45,8 +45,8 @@ func TestRWMUnsupportedRewriteDirectiveRejectedAtStartup(t *testing.T) {
 			dn:          rwmMetaTargetDN,
 			attribute:   "olcDbRewrite",
 			valid:       `{0}suffixmassage "dc=meta,dc=test" "dc=example,dc=com"`,
-			unsupported: `{1}rewriteContext default`,
-			directive:   "rewriteContext",
+			unsupported: `{1}rewriteMap ldap lookup ldap:///dc=test`,
+			directive:   "rewriteMap",
 		},
 	}
 
@@ -83,8 +83,8 @@ func TestRWMUnsupportedRewriteDirectiveOnlineModificationRollsBack(t *testing.T)
 			dn:          rwmOverlayConfigDN,
 			attribute:   "olcRwmRewrite",
 			valid:       `{0}rwm-suffixmassage "dc=virtual,dc=test" "dc=example,dc=com"`,
-			unsupported: `{1}rewriteRule "(.*)" "$1" :`,
-			directive:   "rewriteRule",
+			unsupported: `{1}rewriteRule "(.*)" "${&&session($1)}$1" :`,
+			directive:   "session variables",
 		},
 		{
 			name:        "back-meta target",
@@ -139,14 +139,14 @@ func TestRWMUnsupportedRewriteDirectiveOnlineAddRollsBack(t *testing.T) {
 			seed:      seedRWMRelayConfiguration,
 			dn:        rwmOverlayConfigDN,
 			attribute: "olcRwmRewrite",
-			directive: "rewriteContext",
+			directive: "rewriteMap",
 			request: func() *ldap.AddRequest {
 				request := ldap.NewAddRequest(rwmOverlayConfigDN, nil)
 				request.Attribute("objectClass", []string{"olcOverlayConfig", "olcRwmConfig"})
 				request.Attribute("olcOverlay", []string{"{0}rwm"})
 				request.Attribute("olcRwmRewrite", []string{
 					`{0}rwm-suffixmassage "dc=virtual,dc=test" "dc=example,dc=com"`,
-					`{1}rewriteContext default`,
+					`{1}rewriteMap ldap lookup ldap:///dc=test`,
 				})
 				return request
 			},
@@ -156,7 +156,7 @@ func TestRWMUnsupportedRewriteDirectiveOnlineAddRollsBack(t *testing.T) {
 			seed:      seedRWMBackMetaConfiguration,
 			dn:        rwmMetaTargetDN,
 			attribute: "olcDbRewrite",
-			directive: "rewriteRule",
+			directive: "rewriteMap",
 			request: func() *ldap.AddRequest {
 				request := ldap.NewAddRequest(rwmMetaTargetDN, nil)
 				request.Attribute("objectClass", []string{"olcMetaTargetConfig"})
@@ -164,7 +164,7 @@ func TestRWMUnsupportedRewriteDirectiveOnlineAddRollsBack(t *testing.T) {
 				request.Attribute("olcDbURI", []string{"ldap://127.0.0.1:1/dc=meta,dc=test"})
 				request.Attribute("olcDbRewrite", []string{
 					`{0}suffixmassage "dc=meta,dc=test" "dc=example,dc=com"`,
-					`{1}rewriteRule "(.*)" "$1" :`,
+					`{1}rewriteMap ldap lookup ldap:///dc=test`,
 				})
 				return request
 			},
@@ -323,7 +323,7 @@ func assertUnsupportedRWMRewriteError(
 	directive string,
 ) {
 	t.Helper()
-	for _, fragment := range []string{dn, attribute, "unsupported rewrite directive", directive} {
+	for _, fragment := range []string{dn, attribute, directive} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("error %q does not contain %q", err, fragment)
 		}

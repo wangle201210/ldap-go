@@ -266,6 +266,7 @@ func (server *Server) handleStartTLS(
 		return errors.New("secure transport returned a nil connection")
 	}
 	state.connection = secured
+	state.saslChannelBinding = server.captureSASLCBinding(secured)
 	state.secure = true
 	state.tlsSSF = connectionSecurityStrength(secured, true)
 	state.externalSSF = max(state.transportSSF, state.tlsSSF)

@@ -59,6 +59,7 @@ Web 管理控制台。
 ## 环境要求
 
 - Go 1.26 或更高版本。
+- 生产二进制使用 `CGO_ENABLED=0` 构建，不需要 C 编译器。
 - OpenLDAP 客户端工具仅在手动互操作测试时需要。
 - Node.js 和 Chromium 仅在运行 Web 管理端浏览器测试时需要。
 - 构建固定版本 OpenLDAP 差异测试环境所需的原生依赖见
@@ -70,7 +71,7 @@ Web 管理控制台。
 
 ```sh
 mkdir -p ./bin ./data
-go build -o ./bin/ldap-go ./cmd/ldap-go
+CGO_ENABLED=0 go build -o ./bin/ldap-go ./cmd/ldap-go
 
 ./bin/ldap-go import \
   -db ./data/ldap-go.db \
@@ -123,6 +124,16 @@ slapcat -n 1 -l data-1.ldif
 多数据库迁移、离线工具、校验行为和密码哈希策略见
 [迁移与密码指南](docs/migration-and-passwords.md)。
 
+如果仍使用旧版 `slapd.conf`，先通过纯 Go 转换器生成并校验配置，再导入目录数据：
+
+```sh
+CGO_ENABLED=0 go run ./cmd/slapdconf-convert \
+  -f /path/to/slapd.conf -out ./config.ldif
+```
+
+支持的指令、严格失败规则和直接数据库输出方式见
+[slapd.conf 转换](docs/slapdconf-conversion.md)。
+
 ## 开发与测试
 
 运行常规本地检查：
@@ -147,6 +158,8 @@ make full
 | --- | --- |
 | 运行和生产运维 | [运行指南](docs/operations.md) |
 | OpenLDAP 迁移与密码 | [迁移与密码](docs/migration-and-passwords.md) |
+| 旧版 `slapd.conf` 转换 | [slapd.conf 转换](docs/slapdconf-conversion.md) |
+| 纯 Go 构建与平台审计 | [纯 Go 构建](docs/pure-go-builds.md) |
 | 当前实现细节 | [实现状态](docs/implementation-status.md) |
 | 已支持和未支持的行为 | [兼容性矩阵](docs/compatibility.md) |
 | 常用生产功能范围 | [常用 OpenLDAP 生产功能](docs/common-production-scope.md) |

@@ -63,6 +63,7 @@ for the reproducible comparison method.
 ## Requirements
 
 - Go 1.26 or newer.
+- Production binaries build with `CGO_ENABLED=0`; a C compiler is not required.
 - OpenLDAP client tools are optional for manual interoperability checks.
 - Node.js and Chromium are needed only for Web administration browser tests.
 - Building the pinned OpenLDAP differential environment requires the native
@@ -74,7 +75,7 @@ Build the binary, import the example directory, and start an LDAP listener:
 
 ```sh
 mkdir -p ./bin ./data
-go build -o ./bin/ldap-go ./cmd/ldap-go
+CGO_ENABLED=0 go build -o ./bin/ldap-go ./cmd/ldap-go
 
 ./bin/ldap-go import \
   -db ./data/ldap-go.db \
@@ -129,6 +130,17 @@ The supported multi-database flow, offline aliases, validation behavior, and
 password hash policy are documented in
 [migration and passwords](docs/migration-and-passwords.md).
 
+For a legacy `slapd.conf`, convert and validate the configuration in pure Go
+before importing directory data:
+
+```sh
+CGO_ENABLED=0 go run ./cmd/slapdconf-convert \
+  -f /path/to/slapd.conf -out ./config.ldif
+```
+
+See [slapd.conf conversion](docs/slapdconf-conversion.md) for supported
+directives, strict failure behavior, and direct database output.
+
 ## Development
 
 Run the normal local checks:
@@ -154,6 +166,8 @@ upgrade checks are documented in [release](docs/release.md).
 | --- | --- |
 | Running and production operations | [Operations](docs/operations.md) |
 | OpenLDAP migration and passwords | [Migration and passwords](docs/migration-and-passwords.md) |
+| Legacy `slapd.conf` conversion | [slapd.conf conversion](docs/slapdconf-conversion.md) |
+| Pure-Go builds and platform audit | [Pure-Go builds](docs/pure-go-builds.md) |
 | Current implementation details | [Implementation status](docs/implementation-status.md) |
 | Supported and unsupported behavior | [Compatibility matrix](docs/compatibility.md) |
 | Common production scope | [Common OpenLDAP production features](docs/common-production-scope.md) |

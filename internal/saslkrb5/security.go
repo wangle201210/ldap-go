@@ -363,6 +363,8 @@ type IntegrityConnection struct {
 	writeMu        sync.Mutex
 	readMu         sync.Mutex
 	readPending    []byte
+	writeErr       error
+	readErr        error
 	confidential   bool
 	acceptorSubkey bool
 	closeOnce      sync.Once
@@ -437,7 +439,7 @@ func newSecurityConnection(
 	return layer, nil
 }
 
-func (connection *IntegrityConnection) Write(value []byte) (int, error) {
+func (connection *IntegrityConnection) Write(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
@@ -446,6 +448,11 @@ func (connection *IntegrityConnection) Write(value []byte) (int, error) {
 	if len(connection.key.KeyValue) == 0 {
 		return 0, net.ErrClosed
 	}
+	if connection.writeErr != nil {
+		return 0, connection.writeErr
+	}
+	// A failed frame write leaves the stream at an unknown boundary.
+	defer func() { connection.writeErr = err }()
 	written := 0
 	for written < len(value) {
 		if connection.sendSequence == math.MaxUint64 {
@@ -481,7 +488,7 @@ func (connection *IntegrityConnection) Write(value []byte) (int, error) {
 	return written, nil
 }
 
-func (connection *IntegrityConnection) Read(value []byte) (int, error) {
+func (connection *IntegrityConnection) Read(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
@@ -490,6 +497,10 @@ func (connection *IntegrityConnection) Read(value []byte) (int, error) {
 	if len(connection.key.KeyValue) == 0 {
 		return 0, net.ErrClosed
 	}
+	if connection.readErr != nil {
+		return 0, connection.readErr
+	}
+	defer func() { connection.readErr = err }()
 	for len(connection.readPending) == 0 {
 		if connection.recvSequence == math.MaxUint64 {
 			return 0, errors.New("GSSAPI sequence space is exhausted")

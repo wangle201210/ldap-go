@@ -198,7 +198,9 @@ func (tx *memoryTx) putInWithEqualityIndexes(
 		); err != nil {
 			return err
 		}
-		delete(tx.entries, key)
+		if err := tx.deleteEntry(key); err != nil {
+			return err
+		}
 		delete(tx.dnIdentities, key)
 		delete(tx.dnSources, key)
 	}
@@ -247,7 +249,9 @@ func (tx *memoryTx) deleteInWithEqualityIndexes(
 	); err != nil {
 		return err
 	}
-	delete(tx.entries, key)
+	if err := tx.deleteEntry(key); err != nil {
+		return err
+	}
 	delete(tx.dnIdentities, key)
 	delete(tx.dnSources, key)
 	return nil

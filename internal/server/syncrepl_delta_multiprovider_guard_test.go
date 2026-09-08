@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,8 +18,7 @@ import (
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
-const deltaMultiProviderUnsupportedDiagnostic = "cannot combine delta-syncrepl syncdata=accesslog with writable " +
-	"olcMultiProvider/olcMirrorMode: attribute-level conflict merging is not supported"
+const deltaMultiProviderUnsupportedDiagnostic = "writable delta-syncrepl requires a local accesslog recording all writes"
 
 func TestDeltaMultiProviderGuardRejectsStartupAndOfflineValidation(t *testing.T) {
 	for _, backend := range []string{"memory", "bbolt"} {
@@ -115,6 +115,64 @@ func TestDeltaMultiProviderGuardAllowsSupportedCombinations(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestDeltaMultiProviderConfigurationRestrictions(t *testing.T) {
+	for _, mode := range []string{"olcMultiProvider", "olcMirrorMode"} {
+		for _, change := range []struct {
+			name, dn, attribute, value, diagnostic string
+		}{
+			{name: "supported"},
+			{name: "filtered", attribute: "olcSyncrepl", value: deltaMultiProviderGuardSyncreplValue(0, 1, "dc=example,dc=com", true) + ` filter="(uid=alice)"`, diagnostic: "unfiltered full-suffix"},
+			{name: "partial attributes", attribute: "olcSyncrepl", value: deltaMultiProviderGuardSyncreplValue(0, 1, "dc=example,dc=com", true) + ` attrs="cn,sn"`, diagnostic: "unfiltered full-suffix"},
+			{name: "standard mixed with delta", attribute: "olcSyncrepl", diagnostic: "unfiltered full-suffix"},
+			{name: "partial logging", dn: "olcOverlay={1}accesslog,olcDatabase={1}mdb,cn=config", attribute: "olcAccessLogOps", value: "add", diagnostic: "recording all writes"},
+			{name: "lastmod disabled", attribute: "olcLastMod", value: "FALSE", diagnostic: "olcLastMod"},
+		} {
+			t.Run(mode+"/"+change.name, func(t *testing.T) {
+				_, store := newDeltaMPRServer(t, "memory", 1)
+				if err := store.Update(context.Background(), func(writer storage.Writer) error {
+					writer = storage.WriterInPartition(writer, storage.OpenLDAPConfigPartition)
+					dn, _ := directory.ParseDN("olcDatabase={1}mdb,cn=config")
+					entry, err := writer.Get(dn)
+					if err != nil {
+						return err
+					}
+					entry.ReplaceValues("olcMultiProvider", nil)
+					entry.ReplaceValues(mode, stringValues("TRUE"))
+					if change.dn == "" && change.attribute != "" {
+						entry.ReplaceValues(change.attribute, stringValues(change.value))
+						if change.name == "standard mixed with delta" {
+							entry.ReplaceValues("olcSyncrepl", stringValues(deltaMultiProviderGuardSyncreplValue(0, 1, "dc=example,dc=com", true), deltaMultiProviderGuardSyncreplValue(1, 2, "dc=example,dc=com", false)))
+						}
+					}
+					if err := writer.Put(entry, true); err != nil {
+						return err
+					}
+					if change.dn != "" {
+						dn, _ = directory.ParseDN(change.dn)
+						entry, err = writer.Get(dn)
+						if err != nil {
+							return err
+						}
+						entry.ReplaceValues(change.attribute, stringValues(change.value))
+						return writer.Put(entry, true)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				_, err := ValidateConfiguration(context.Background(), Config{Store: store})
+				if change.diagnostic == "" {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), change.diagnostic) {
+					t.Fatalf("error = %v, want %q", err, change.diagnostic)
+				}
+			})
+		}
 	}
 }
 
@@ -259,10 +317,7 @@ func TestOpenLDAP2613DeltaMultiProviderConflictSourceContract(t *testing.T) {
 	if source == "" {
 		t.Skip("OPENLDAP_SOURCE must name the pinned OpenLDAP 2.6.13 checkout")
 	}
-	scriptPath := filepath.Join(
-		source, "tests", "scripts", "test063-delta-multiprovider",
-	)
-	script, err := os.ReadFile(scriptPath)
+	script, err := exec.Command("git", "-C", source, "show", "d172686d3d270bc961b78f3ff00d7019c8dfb094:tests/scripts/test063-delta-multiprovider").Output()
 	if err != nil {
 		t.Fatalf("read pinned OpenLDAP test063: %v", err)
 	}
@@ -271,8 +326,7 @@ func TestOpenLDAP2613DeltaMultiProviderConflictSourceContract(t *testing.T) {
 		t.Fatalf("pinned OpenLDAP test063 SHA-256 = %s, want %s", got, wantScriptHash)
 	}
 
-	syncreplPath := filepath.Join(source, "servers", "slapd", "syncrepl.c")
-	syncrepl, err := os.ReadFile(syncreplPath)
+	syncrepl, err := exec.Command("git", "-C", source, "show", "d172686d3d270bc961b78f3ff00d7019c8dfb094:servers/slapd/syncrepl.c").Output()
 	if err != nil {
 		t.Fatalf("read pinned OpenLDAP syncrepl.c: %v", err)
 	}

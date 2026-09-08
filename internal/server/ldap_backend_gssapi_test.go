@@ -317,7 +317,12 @@ func runLDAPBackendGSSAPITestServer(
 	key types.EncryptionKey,
 	state saslkrb5.SecurityState,
 	done chan<- error,
+	layers ...byte,
 ) {
+	layer := byte(saslkrb5.SecurityIntegrity)
+	if len(layers) != 0 {
+		layer = layers[0]
+	}
 	fail := func(err error) { done <- err }
 	first, err := ldapwire.ReadMessage(connection, ldapwire.DefaultMaxMessageSize)
 	if err != nil {
@@ -343,7 +348,7 @@ func runLDAPBackendGSSAPITestServer(
 		return
 	}
 	offer, err := saslkrb5.Wrap(
-		[]byte{saslkrb5.SecurityNone | saslkrb5.SecurityIntegrity, 0, 16, 0},
+		[]byte{saslkrb5.SecurityNone | layer, 0, 16, 0},
 		key, true, state.AcceptorSubkey, state.ReceiveSequence,
 	)
 	if err != nil {
@@ -379,7 +384,7 @@ func runLDAPBackendGSSAPITestServer(
 	}
 	selection, maximum, authorizationID, err := saslkrb5.DecodeNegotiation(selectionToken)
 	clear(selectionToken)
-	if err != nil || selection != saslkrb5.SecurityIntegrity ||
+	if err != nil || selection != layer ||
 		authorizationID != "dn:uid=alice,dc=example,dc=com" {
 		fail(fmt.Errorf("selection = %d/%d/%q: %v", selection, maximum, authorizationID, err))
 		return
@@ -395,13 +400,18 @@ func runLDAPBackendGSSAPITestServer(
 		ReceiveSequence: state.SendSequence + 1,
 		AcceptorSubkey:  state.AcceptorSubkey,
 	}
-	secured, err := saslkrb5.NewIntegrityConnection(
+	constructor := saslkrb5.NewIntegrityConnection
+	if layer == saslkrb5.SecurityConfidentiality {
+		constructor = saslkrb5.NewConfidentialityConnection
+	}
+	secured, err := constructor(
 		connection, key, true, serverState, maximum, 4096,
 	)
 	if err != nil {
 		fail(err)
 		return
 	}
+	defer secured.Close()
 	payload := make([]byte, len("secured request"))
 	if _, err := io.ReadFull(secured, payload); err != nil {
 		fail(err)

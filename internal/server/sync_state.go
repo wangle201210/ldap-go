@@ -1069,7 +1069,11 @@ func (server *Server) activateRuntime(runtime *runtimeState) {
 	previous := server.runtime.Load()
 	if previous != nil && runtime.revision <= previous.revision {
 		server.closeCandidateSQLBackends(runtime, previous)
+		runtime.preparedLogFile.close()
 		return
+	}
+	if server.monitor != nil && runtime.preparedLogFile != nil {
+		server.monitor.installLogFile(runtime.preparedLogFile, runtime.logFile)
 	}
 	if server.monitor != nil && (previous == nil ||
 		previous.logConfigured != runtime.logConfigured ||

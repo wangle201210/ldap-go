@@ -97,9 +97,9 @@ func TestLDAPBackendRWMOnlineConfigurationRollback(t *testing.T) {
 
 	assertLDAPBackendRWMLocalSearch(t, proxyURI)
 	modify := ldap.NewModifyRequest(ldapBackendRWMOverlayDN, nil)
-	modify.Replace("olcRwmRewrite", []string{"{0}rewriteContext default"})
+	modify.Replace("olcRwmRewrite", []string{"{0}rewriteMap ldap lookup ldap:///dc=test"})
 	err := config.Modify(modify)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "unsupported rewrite directive") {
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "rewritemap is not implemented") {
 		t.Fatalf("invalid online RWM Modify error = %v", err)
 	}
 	assertLDAPBackendRWMLocalSearch(t, proxyURI)

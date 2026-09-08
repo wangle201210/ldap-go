@@ -28,6 +28,10 @@ security-sensitive edge cases.
 
 ## OpenLDAP differential tests
 
+The [logfile checks](logging.md) cover startup, online configuration, rollback,
+descriptor lifetime, unsafe paths, size/age rotation, concurrent handover,
+structured attributes, and external OpenLDAP logfile semantics.
+
 The same operation sequence runs against a locally built, pinned OpenLDAP 2.6.x
 reference `slapd` and `ldap-go`. Results are normalized only where values are
 intentionally server-generated, then compared for:
@@ -753,6 +757,22 @@ multi-target connection categories or dynamic topology, GSSAPI server Bind,
 SASL security layers, complete referral rebind behavior, or the full
 librewrite language.
 
+Common librewrite coverage runs without CGO:
+
+```sh
+CGO_ENABLED=0 go test ./internal/server -run 'TestRWM|TestLDAPBackendRWM|TestMetaProxy' -count=1
+CGO_ENABLED=0 go test ./internal/server -run '^$' -fuzz '^FuzzRWMRewrite$' -fuzztime=20s -parallel=2
+LDAP_GO_OPENLDAP_REWRITE="$OPENLDAP_BUILD/libraries/librewrite/rewrite" \
+  CGO_ENABLED=0 go test ./internal/server -run 'TestOpenLDAPReferenceRWMRewrite' -count=1
+```
+
+Use the pinned OpenLDAP 2.6.13 reference build for the last command. The shared
+cases compare captures, substitutions, ordered flags, pass accounting, and
+subcontexts against its `rewrite` executable. LDAP tests cover named contexts,
+CRUD, filter rewriting, and valid/invalid online replacements on relay,
+back-ldap, and back-meta. Resource tests check input/output size, nested
+templates, ambiguous regex work, and concurrent operation-variable isolation.
+
 The optional pbind differential requires a slapd built with `back_ldap`; its
 `slapd -VVV` output must list `ldap`. It starts a ldap-go credential provider,
 then runs equivalent OpenLDAP and ldap-go pbind front ends against it. Correct
@@ -944,6 +964,35 @@ transaction rollback, No-Op exclusion, online configuration rollback,
 restart-safe request timestamps, branch-scoped operations, purge/minCSN
 movement, stale Sync-cookie rejection, frontend Extended exclusion, and a
 complete ldap-go accesslog provider to delta-syncrepl consumer topology.
+
+Writable delta multi-provider coverage includes the OpenLDAP conflict matrix,
+schema equality, original-operation forwarding, atomic failure, concurrent
+cross-RID replay, UUID conflicts, and bbolt close/reopen with purge and cookie
+state. `TestDeltaMultiProviderTCPTopologies` applies disconnected writes and
+replicates over TCP through three-node rings and meshes on memory and bbolt.
+`TestDeltaMultiProviderBootstrapRetriesInterruptedRefreshAfterRestart` uses a
+pure-Go LDAP provider that disconnects after a newer entry but before an older
+entry, closes and reopens bbolt, verifies an empty-cookie retry, and proves both
+entries arrive before accesslog starts. Companion tests cover durable success,
+failed marker-write rollback, gap reset, and configuration identity changes.
+`TestOpenLDAPDeltaMultiProviderModifyReplayDifferential` compares late replay
+into a writable Go peer with the same modifications applied chronologically
+by an external OpenLDAP 2.6.13 process. The pinned source contract uses
+`git show d172686d3d270bc961b78f3ff00d7019c8dfb094`, independently of checkout
+modifications. Focused verification commands are:
+
+```sh
+CGO_ENABLED=0 OPENLDAP_SOURCE=/Users/wanna/mine/github/openldap-reference \
+  LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 go test ./internal/server \
+  -run 'TestDeltaMultiProvider|TestSyncConsumerAccesslog|TestSyncConsumerChangelog|TestAccesslog|TestLDAPGo.*(Accesslog|Delta)|TestOpenLDAP.*Delta' \
+  -count=1 -timeout=180s
+CGO_ENABLED=1 go test -race ./internal/server \
+  -run 'TestDeltaMultiProvider|TestSyncConsumerAccesslogCascade' \
+  -count=3 -timeout=180s
+```
+
+CGO is enabled only for Go's race detector; production build and replication
+execution are verified with `CGO_ENABLED=0`.
 
 The DSEE retro changelog suite is different from the gated OpenLDAP accesslog
 fixture. `TestSyncConsumerChangelogProtocolSnapshotReplayRestartAndPersist`

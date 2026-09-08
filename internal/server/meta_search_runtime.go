@@ -332,6 +332,9 @@ func (server *Server) runMetaSearchTarget(
 				packet,
 				ldapwire.Result{},
 			)
+			if rwmRewriteDropsEntry(packet, mapErr) {
+				return nil
+			}
 			if mapErr != nil {
 				return mapErr
 			}

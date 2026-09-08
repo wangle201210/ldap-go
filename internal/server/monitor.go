@@ -50,6 +50,9 @@ type monitorState struct {
 	debugLevels      []string
 	logLevels        []string
 	logRouteState    atomic.Uint64
+	logFile          atomic.Pointer[openLDAPLogFile]
+	logFileMu        sync.RWMutex
+	logFileClosed    bool
 
 	operations [len(monitorOperationNames)]monitorOperationCounter
 	bytes      atomic.Uint64
@@ -140,6 +143,22 @@ func (monitor *monitorState) disableLogRouting() {
 func (monitor *monitorState) logRoute() (monitorLogCategory, bool) {
 	state := monitor.logRouteState.Load()
 	return monitorLogCategory(uint32(state)), state&monitorLogRouteActive != 0
+}
+
+func (monitor *monitorState) configureLogFile(
+	configuration openLDAPLogFileConfiguration,
+	clock func() time.Time,
+) error {
+	next, err := monitor.prepareLogFile(configuration, clock)
+	if err != nil {
+		return err
+	}
+	monitor.installLogFile(next, configuration)
+	return nil
+}
+
+func (monitor *monitorState) configuredLogFile() *openLDAPLogFile {
+	return monitor.logFile.Load()
 }
 
 func (monitor *monitorState) registerConnection(
@@ -735,6 +754,12 @@ func (server *Server) monitorDatabaseEntries(
 			startedAt,
 		)
 		backendType := databaseTypeName(database)
+		if database.monitoringRegistered && backendType == "mdb" {
+			addMonitorAttribute(&entry, "objectClass", "olmMDBDatabase")
+			entry.Attributes = append(entry.Attributes, directory.Attribute{
+				Description: "olmMDBEntries",
+			})
+		}
 		restrictions := effectiveDatabaseRestrictions(database)
 		readOnly := restrictions&restrictWrites == restrictWrites
 		addMonitorAttribute(&entry, "monitoredInfo", backendType)
@@ -972,6 +997,26 @@ func (server *Server) monitorOverlayEntries(
 		addMonitorAttribute(&entry, "monitorRuntimeConfig", "TRUE")
 		entries = append(entries, entry)
 	}
+	for _, monitored := range monitorRuntimeDatabases(runtime.databases) {
+		database := runtime.databases[monitored.runtimeIndex]
+		for index, overlay := range runtimeDatabaseOverlayNames(database) {
+			name := fmt.Sprintf("Overlay %d", index)
+			entry := newMonitorEntry(
+				fmt.Sprintf("cn=%s,cn=Database %d,cn=Databases,cn=Monitor", name, monitored.monitorIndex),
+				name, "monitoredObject", startedAt,
+			)
+			addMonitorAttribute(&entry, "monitoredInfo", overlay)
+			addMonitorAttribute(&entry, "seeAlso", fmt.Sprintf("cn=Overlay %d,cn=Overlays,cn=Monitor", sort.SearchStrings(ordered, overlay)))
+			for _, suffix := range database.suffixes {
+				attribute := "namingContexts"
+				if isMonitorDatabase(database) {
+					attribute = "monitorContext"
+				}
+				addMonitorAttribute(&entry, attribute, suffix.String())
+			}
+			entries = append(entries, entry)
+		}
+	}
 	return entries
 }
 
@@ -1200,7 +1245,22 @@ func databaseTypeName(database runtimeDatabase) string {
 	return name
 }
 
+type monitorOverlay struct {
+	name  string
+	order int
+}
+
 func runtimeDatabaseOverlayNames(database runtimeDatabase) []string {
+	if len(database.monitorOverlays) != 0 {
+		overlays := append([]monitorOverlay(nil), database.monitorOverlays...)
+		// OpenLDAP's overlay chain is the reverse of configuration order.
+		sort.SliceStable(overlays, func(i, j int) bool { return overlays[i].order > overlays[j].order })
+		names := make([]string, len(overlays))
+		for index, overlay := range overlays {
+			names[index] = overlay.name
+		}
+		return names
+	}
 	var names []string
 	if database.allOperationalAttrs {
 		names = append(names, "allop")
@@ -1388,6 +1448,14 @@ func (server *Server) searchMonitor(
 	result := ldapwire.Result{Code: ldapwire.ResultSuccess}
 	var selected []monitorSearchCandidate
 	deadline := timeLimitDeadline(request.TimeLimit)
+	entryLimit := limit
+	if paging != nil {
+		remaining := limit - paging.count
+		if remaining < 0 {
+			remaining = 0
+		}
+		entryLimit = min(paging.size, remaining)
+	}
 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
 		baseEntry, exists := byDN[base.Key()]
 		if !exists {
@@ -1426,6 +1494,18 @@ func (server *Server) searchMonitor(
 			}
 			return nil
 		}
+		if monitorFilterRequiresDatabaseCount(
+			server,
+			state.runtime,
+			reader,
+			state.boundDN,
+			baseEntry,
+			controls.assertion,
+		) {
+			if err := populateDatabaseMonitoring(reader, state.runtime, base, &baseEntry); err != nil {
+				return err
+			}
+		}
 		if err := server.checkAssertion(
 			state.runtime,
 			reader,
@@ -1438,12 +1518,45 @@ func (server *Server) searchMonitor(
 		}
 
 		for _, candidate := range all {
+			if len(selected) > entryLimit {
+				break
+			}
 			if expired(deadline) {
 				result.Code = ldapwire.ResultTimeLimitExceeded
 				break
 			}
 			if !directory.InScope(base, candidate.dn, request.Scope) {
 				continue
+			}
+			if paging != nil && paging.cursor.valid &&
+				candidate.dn.Key() <= paging.cursor.dnKey {
+				continue
+			}
+			if candidate.dn.Equal(base) {
+				candidate.entry = baseEntry
+			}
+			if !server.allowed(
+				state.runtime,
+				reader,
+				state.boundDN,
+				candidate.entry,
+				"entry",
+				nil,
+				acl.Read,
+			) {
+				continue
+			}
+			if monitorFilterRequiresDatabaseCount(
+				server,
+				state.runtime,
+				reader,
+				state.boundDN,
+				candidate.entry,
+				&request.Filter,
+			) {
+				if err := populateDatabaseMonitoring(reader, state.runtime, candidate.dn, &candidate.entry); err != nil {
+					return err
+				}
 			}
 			matches, matchErr := server.filterMatches(
 				state.runtime,
@@ -1457,35 +1570,30 @@ func (server *Server) searchMonitor(
 				result.DiagnosticMessage = matchErr.Error()
 				break
 			}
-			if !matches || !server.allowed(
-				state.runtime,
-				reader,
-				state.boundDN,
-				candidate.entry,
-				"entry",
-				nil,
-				acl.Read,
-			) {
+			if !matches {
 				continue
 			}
-			if paging != nil && paging.cursor.valid &&
-				candidate.dn.Key() <= paging.cursor.dnKey {
-				continue
+			if len(selected) < entryLimit {
+				readable := server.attributesWithPrivilege(
+					state.runtime,
+					reader,
+					state.boundDN,
+					candidate.entry,
+					acl.Read,
+					request.TypesOnly,
+				)
+				candidate.entry = server.selectEntry(
+					state.runtime,
+					readable,
+					request.Attributes,
+					request.TypesOnly,
+				)
+				if !request.TypesOnly && candidate.entry.HasAttribute("olmMDBEntries") {
+					if err := populateDatabaseMonitoring(reader, state.runtime, candidate.dn, &candidate.entry); err != nil {
+						return err
+					}
+				}
 			}
-			readable := server.attributesWithPrivilege(
-				state.runtime,
-				reader,
-				state.boundDN,
-				candidate.entry,
-				acl.Read,
-				request.TypesOnly,
-			)
-			candidate.entry = server.selectEntry(
-				state.runtime,
-				readable,
-				request.Attributes,
-				request.TypesOnly,
-			)
 			selected = append(selected, candidate)
 		}
 		return nil
@@ -1500,14 +1608,6 @@ func (server *Server) searchMonitor(
 		selected = nil
 	}
 
-	entryLimit := limit
-	if paging != nil {
-		remaining := limit - paging.count
-		if remaining < 0 {
-			remaining = 0
-		}
-		entryLimit = min(paging.size, remaining)
-	}
 	hasMore := false
 	if len(selected) > entryLimit {
 		selected = selected[:entryLimit]

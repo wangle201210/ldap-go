@@ -43,19 +43,24 @@ staticcheck, fuzz smoke, and six cgo-disabled platform builds also passed.
 
 These are not silently presented as supported common paths:
 
-- Delta-syncrepl plus writable multi-provider/mirror mode is rejected because
-  OpenLDAP-compatible attribute-history conflict merging is not implemented.
-  Use standard syncrepl, single-provider delta, or non-delta multi-provider.
+- Writable delta multi-provider/mirror mode supports attribute-level Modify
+  merging with complete local accesslog history and full-suffix replication.
+  Delete/rename, increment, ordered values, request controls, and history gaps
+  fail closed. This remains a limited compatibility path, not a general
+  replacement for the standard multi-provider topology.
 - Syncrepl SASL integrity/confidentiality layers without TLS are not
   implemented. Use TLS, TLCP, or LDAPI when replication transport SSF is
   required.
-- General librewrite contexts/rules are not implemented. Supported suffix/map
-  forms work; unsupported RWM directives fail configuration instead of being
-  ignored.
-- Behavior-bearing `cn=config` values that ldap-go cannot honor, including SASL
-  channel-binding policy, logfile routing, and non-default thread, monitor, or
-  LMDB durability/resource settings, fail validation instead of becoming silent
-  no-ops. OpenLDAP-generated defaults remain importable.
+- Relay, back-ldap RWM, and back-meta share the common librewrite DSL:
+  engine/context/rule directives, aliases, captures, ordered actions, bounded
+  recursion, operation variables, parameters, and subcontext calls. POSIX basic
+  regex (`R`), external/legacy rewrite maps, session variables, and non-POSIX
+  regex extensions fail configuration. This is not the full librewrite language.
+- `olcSaslCBinding`, the four logfile settings, per-database `olcMonitoring`,
+  and `olcDbMaxEntrySize` have startup, online rollback, restart, and focused
+  OpenLDAP evidence. Behavior-bearing settings that remain unsupported,
+  including non-default thread controls and LMDB-specific durability/resource
+  settings, fail validation instead of becoming silent no-ops.
 - Native OpenLDAP C backend/overlay/password ABI modules, `back-perl`, SLAPI,
   and arbitrary third-party modules are outside a pure-Go server boundary and
   fail closed.

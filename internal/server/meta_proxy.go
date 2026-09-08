@@ -18,7 +18,7 @@ func mapMetaRequestToRemote(
 	message.Controls = cloneLDAPControls(message.Controls)
 	switch request := message.Request.(type) {
 	case ldapwire.BindRequest:
-		name, err := mapMetaDNString(mapping, request.Name, true)
+		name, err := mapMetaDNStringContext(mapping, request.Name, true, "bindDN")
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
@@ -29,12 +29,16 @@ func mapMetaRequestToRemote(
 		)
 		message.Request = request
 	case ldapwire.SearchRequest:
-		base, err := mapMetaDNString(mapping, request.BaseDN, true)
+		base, err := mapMetaDNStringContext(mapping, request.BaseDN, true, "searchDN")
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
 		request.BaseDN = base
 		request.Filter, err = mapMetaFilter(mapping, request.Filter, true)
+		if err != nil {
+			return ldapwire.Message{}, err
+		}
+		request.Filter, err = mapping.rewriteFilter(request.Filter)
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
@@ -58,7 +62,7 @@ func mapMetaRequestToRemote(
 		request.Entry = entry
 		message.Request = request
 	case ldapwire.ModifyRequest:
-		dn, err := mapMetaDNString(mapping, request.DN, true)
+		dn, err := mapMetaDNStringContext(mapping, request.DN, true, "modifyDN")
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
@@ -69,6 +73,7 @@ func mapMetaRequestToRemote(
 				mapping,
 				request.Changes[index].Attribute,
 				true,
+				"modifyAttrDN",
 			)
 			if err != nil {
 				return ldapwire.Message{}, err
@@ -77,31 +82,46 @@ func mapMetaRequestToRemote(
 		}
 		message.Request = request
 	case ldapwire.DeleteRequest:
-		dn, err := mapMetaDNString(mapping, request.DN, true)
+		dn, err := mapMetaDNStringContext(mapping, request.DN, true, "deleteDN")
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
 		request.DN = dn
 		message.Request = request
 	case ldapwire.ModifyDNRequest:
-		dn, err := mapMetaDNString(mapping, request.DN, true)
+		dnContext := "renameDN"
+		if mapping != nil && mapping.responseDNContext == "searchResult" {
+			dnContext = "modrDN"
+		}
+		dn, err := mapMetaDNStringContext(mapping, request.DN, true, dnContext)
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
 		request.DN = dn
 		if request.HasNewSuperior {
-			request.NewSuperior, err = mapMetaDNString(
+			request.NewSuperior, err = mapMetaDNStringContext(
 				mapping,
 				request.NewSuperior,
 				true,
+				"newSuperiorDN",
 			)
 			if err != nil {
 				return ldapwire.Message{}, err
 			}
 		}
+		if dnContext == "renameDN" {
+			request.NewRDN, err = mapMetaDNStringContext(mapping, request.NewRDN, true, "newRDN")
+			if err != nil {
+				return ldapwire.Message{}, err
+			}
+			newRDN, err := directory.ParseDN(request.NewRDN)
+			if err != nil || newRDN.Depth() != 1 {
+				return ldapwire.Message{}, operationFailed(ldapwire.ResultOther, "RWM newRDN produced an invalid RDN")
+			}
+		}
 		message.Request = request
 	case ldapwire.CompareRequest:
-		dn, err := mapMetaDNString(mapping, request.DN, true)
+		dn, err := mapMetaDNStringContext(mapping, request.DN, true, "compareDN")
 		if err != nil {
 			return ldapwire.Message{}, err
 		}
@@ -113,6 +133,7 @@ func mapMetaRequestToRemote(
 				Values:      [][]byte{request.Assertion},
 			},
 			true,
+			"compareAttrDN",
 		)
 		if err != nil {
 			return ldapwire.Message{}, err
@@ -145,7 +166,7 @@ func mapMetaExtendedRequest(
 		if err != nil || !decoded.HasUserIdentity {
 			return request, err
 		}
-		mapped, err := mapMetaDNString(mapping, string(decoded.UserIdentity), true)
+		mapped, err := mapMetaDNStringContext(mapping, string(decoded.UserIdentity), true, "extendedDN")
 		if err != nil {
 			return request, err
 		}
@@ -160,7 +181,7 @@ func mapMetaExtendedRequest(
 		if err != nil {
 			return request, err
 		}
-		mapped, err := mapMetaDNString(mapping, decoded.EntryName, true)
+		mapped, err := mapMetaDNStringContext(mapping, decoded.EntryName, true, "extendedDN")
 		if err != nil {
 			return request, err
 		}
@@ -179,18 +200,22 @@ func mapMetaDNString(
 	raw string,
 	toRemote bool,
 ) (string, error) {
-	if raw == "" {
-		return "", nil
+	context := "default"
+	if !toRemote {
+		context = "searchEntryDN"
+		if mapping != nil && mapping.responseDNContext != "" {
+			context = mapping.responseDNContext
+		}
 	}
+	return mapMetaDNStringContext(mapping, raw, toRemote, context)
+}
+
+func mapMetaDNStringContext(mapping *rwmRuntimeConfiguration, raw string, toRemote bool, context string) (string, error) {
 	dn, err := directory.ParseDN(raw)
 	if err != nil {
 		return "", err
 	}
-	if toRemote {
-		dn, err = mapping.mapDNToRemote(dn)
-	} else {
-		dn, err = mapping.mapDNToLocal(dn)
-	}
+	dn, err = mapping.mapDNContext(context, dn, toRemote)
 	if err != nil {
 		return "", err
 	}
@@ -201,6 +226,7 @@ func mapMetaAttribute(
 	mapping *rwmRuntimeConfiguration,
 	attribute directory.Attribute,
 	toRemote bool,
+	contexts ...string,
 ) (directory.Attribute, error) {
 	entry := directory.Entry{
 		DN: "cn=meta-mapping",
@@ -209,15 +235,14 @@ func mapMetaAttribute(
 			Values:      cloneByteValues(attribute.Values),
 		}},
 	}
-	var (
-		mapped directory.Entry
-		err    error
-	)
-	if toRemote {
-		mapped, err = mapping.mapEntryToRemote(entry)
-	} else {
-		mapped, err = mapping.mapEntryToLocal(entry)
+	context := "addAttrDN"
+	if !toRemote {
+		context = "searchAttrDN"
 	}
+	if len(contexts) != 0 {
+		context = contexts[0]
+	}
+	mapped, err := mapping.mapEntryContexts(entry, toRemote, "", context)
 	if err != nil {
 		return directory.Attribute{}, err
 	}
@@ -251,6 +276,10 @@ func mapMetaFilter(
 	if mappedDescription == "" {
 		return metaComputedFalseFilter(), nil
 	}
+	if filter.Kind == directory.FilterPresent || filter.Kind == directory.FilterSubstrings {
+		filter.Attribute = mappedDescription
+		return filter, nil
+	}
 	if metaObjectClassDescription(filter.Attribute) ||
 		metaObjectClassDescription(mappedDescription) {
 		filter.Attribute = mappedDescription
@@ -269,6 +298,7 @@ func mapMetaFilter(
 			Values:      [][]byte{filter.Assertion},
 		},
 		toRemote,
+		"searchFilterAttrDN",
 	)
 	if err != nil {
 		return directory.Filter{}, err
@@ -315,14 +345,28 @@ func mapMetaAttemptToLocal(
 		}
 		attempt.localResult = &mapped
 	}
+	packets := make([]*ber.Packet, 0, len(attempt.packets))
 	for index, packet := range attempt.packets {
 		mapped, err := mapMetaResponsePacket(mapping, packet, attempt.result)
+		if rwmRewriteDropsEntry(packet, err) {
+			continue
+		}
 		if err != nil {
+			attempt.packets = append(packets, attempt.packets[index:]...)
 			return attempt, err
 		}
-		attempt.packets[index] = mapped
+		packets = append(packets, mapped)
 	}
+	attempt.packets = packets
 	return attempt, nil
+}
+
+func rwmRewriteDropsEntry(packet *ber.Packet, err error) bool {
+	if metaPacketTag(packet) != ldapwire.ApplicationSearchResultEntry {
+		return false
+	}
+	failure := asOperationFailure(err)
+	return failure != nil && failure.result.Code == ldapwire.ResultUnwillingToPerform
 }
 
 func mapMetaResponsePacket(
@@ -360,7 +404,11 @@ func mapMetaResponsePacket(
 			return nil, err
 		}
 		for index := range referrals {
-			referrals[index] = string(mapping.mapLDAPURLValue([]byte(referrals[index]), false))
+			value, err := mapping.mapLDAPURLValue([]byte(referrals[index]), false, "referralDN")
+			if err != nil {
+				return nil, err
+			}
+			referrals[index] = string(value)
 		}
 		encoded = ldapwire.EncodeSearchResultReference(0, referrals, controls)
 	case ldapwire.ApplicationSearchResultDone,
@@ -436,17 +484,26 @@ func mapMetaResult(
 	mapping *rwmRuntimeConfiguration,
 	result ldapwire.Result,
 ) (ldapwire.Result, error) {
-	matched, err := mapMetaDNString(mapping, result.MatchedDN, false)
+	matched := result.MatchedDN
+	var err error
+	if matched != "" {
+		matched, err = mapMetaDNStringContext(mapping, matched, false, "matchedDN")
+	}
 	if err != nil {
 		return ldapwire.Result{}, err
 	}
 	result.MatchedDN = matched
 	result.Referrals = append([]string(nil), result.Referrals...)
 	for index := range result.Referrals {
-		result.Referrals[index] = string(mapping.mapLDAPURLValue(
+		value, err := mapping.mapLDAPURLValue(
 			[]byte(result.Referrals[index]),
 			false,
-		))
+			"referralDN",
+		)
+		if err != nil {
+			return ldapwire.Result{}, err
+		}
+		result.Referrals[index] = string(value)
 	}
 	return result, nil
 }

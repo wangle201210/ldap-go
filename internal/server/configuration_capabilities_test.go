@@ -22,7 +22,7 @@ func TestRuntimeConfigurationCapabilitiesRejectHighImpactNoOps(t *testing.T) {
 			t.Cleanup(func() { _ = store.Close() })
 			seedOnlineConfiguration(t, store)
 			target := "cn=config"
-			if strings.HasPrefix(attribute, "olcdb") || attribute == "olcmonitoring" {
+			if strings.HasPrefix(attribute, "olcdb") {
 				target = "olcDatabase={1}mdb,cn=config"
 			}
 			setUnsupportedRuntimeConfigurationAttribute(
@@ -55,12 +55,8 @@ func TestRuntimeConfigurationCapabilitiesOnlineRollback(t *testing.T) {
 	for _, test := range []struct {
 		dn, attribute, value string
 	}{
-		{"cn=config", "olcSaslCBinding", "tls-unique"},
-		{"cn=config", "olcLogFile", "/var/log/slapd.log"},
 		{"cn=config", "olcThreads", "32"},
-		{"olcDatabase={1}mdb,cn=config", "olcDbMaxEntrySize", "1048576"},
 		{"olcDatabase={1}mdb,cn=config", "olcDbNoSync", "TRUE"},
-		{"olcDatabase={1}mdb,cn=config", "olcMonitoring", "FALSE"},
 	} {
 		active := instance.runtime.Load()
 		request := ldap.NewModifyRequest(test.dn, nil)

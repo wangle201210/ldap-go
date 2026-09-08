@@ -20,6 +20,8 @@ var (
 type Attribute struct {
 	Description string   `json:"description"`
 	Values      [][]byte `json:"values"`
+	// RawNormalized records shared raw/normalized storage for generated values.
+	RawNormalized bool `json:"-"`
 }
 
 // Entry is the storage-neutral representation of one LDAP entry.
@@ -42,6 +44,7 @@ func (e Entry) Clone() Entry {
 	for i, attribute := range e.Attributes {
 		out.Attributes[i].Description = attribute.Description
 		out.Attributes[i].Values = cloneValues(attribute.Values)
+		out.Attributes[i].RawNormalized = attribute.RawNormalized
 	}
 	return out
 }
@@ -275,6 +278,7 @@ func (e *Entry) ReplaceValues(description string, values [][]byte) {
 		return
 	}
 	e.Attributes[index].Values = cloneValues(values)
+	e.Attributes[index].RawNormalized = false
 }
 
 func (e *Entry) Increment(description string, increment []byte) error {

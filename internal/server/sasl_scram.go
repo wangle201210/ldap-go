@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -87,8 +86,9 @@ func (server *Server) handleSASLSCRAMStep(
 	if session.scramConversation == nil {
 		if err := server.initializeSASLSCRAMConversation(
 			ctx,
-			state.connection,
+			state,
 			session,
+			request.Authentication.SASLCredentials,
 		); err != nil {
 			clearSASLSession(state)
 			return err
@@ -170,8 +170,9 @@ func (server *Server) handleSASLSCRAMStep(
 
 func (server *Server) initializeSASLSCRAMConversation(
 	ctx context.Context,
-	connection net.Conn,
+	state *connectionState,
 	session *serverSASLSession,
+	first []byte,
 ) error {
 	generator, ok := saslSCRAMHashGenerator(session.mechanism)
 	if !ok {
@@ -199,7 +200,7 @@ func (server *Server) initializeSASLSCRAMConversation(
 	if err != nil {
 		return err
 	}
-	binding, bindingAvailable := saslSCRAMTLSChannelBinding(connection)
+	binding, bindingAvailable := saslSCRAMConnectionBinding(state, first)
 	if saslSCRAMIsPlus(session.mechanism) {
 		if !bindingAvailable {
 			return errors.New("SCRAM-PLUS requires verified standard TLS channel binding")
@@ -422,29 +423,4 @@ func saslSCRAMBaseMechanism(mechanism string) string {
 
 func saslSCRAMIsPlus(mechanism string) bool {
 	return strings.HasSuffix(mechanism, "-PLUS")
-}
-
-func saslSCRAMTLSChannelBinding(
-	connection net.Conn,
-) (scram.ChannelBinding, bool) {
-	applicationData := connectionTLSChannelBinding(connection)
-	if len(applicationData) == 0 {
-		return scram.ChannelBinding{}, false
-	}
-	defer clear(applicationData)
-	prefix := []byte(saslSCRAMTLSEndpointPrefix)
-	if !bytes.HasPrefix(applicationData, prefix) ||
-		len(applicationData) == len(prefix) {
-		return scram.ChannelBinding{}, false
-	}
-	return scram.ChannelBinding{
-		Type: scram.ChannelBindingTLSServerEndpoint,
-		Data: bytes.Clone(applicationData[len(prefix):]),
-	}, true
-}
-
-func saslSCRAMPlusAvailable(connection net.Conn) bool {
-	binding, ok := saslSCRAMTLSChannelBinding(connection)
-	clear(binding.Data)
-	return ok
 }

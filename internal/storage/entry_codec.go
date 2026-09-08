@@ -36,7 +36,7 @@ func encodeEntry(entry directory.Entry, identity, source string) ([]byte, error)
 		}
 	}
 	encoded := make([]byte, 0, capacity)
-	encoded = append(encoded, entryBinaryPrefix...)
+	encoded = appendEntryNormalizationHeader(encoded, entry)
 	encoded = appendEntryBinaryField(encoded, []byte(entry.DN))
 	var binding []byte
 	if identity != "" {
@@ -61,6 +61,9 @@ func appendEntryBinaryField(destination, value []byte) []byte {
 }
 
 func decodeStoredEntry(value []byte) (storedEntry, error) {
+	if bytes.HasPrefix(value, entryBinaryV3Prefix) {
+		return decodeNormalizedStoredEntry(value)
+	}
 	if bytes.HasPrefix(value, entryBinaryPrefix) {
 		owned := bytes.Clone(value[len(entryBinaryPrefix):])
 		stored, err := decodeBinaryStoredEntry(owned)

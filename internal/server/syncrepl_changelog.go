@@ -475,7 +475,13 @@ func (server *Server) applySyncConsumerChangelogEntry(
 		case syncConsumerAccesslogDelete:
 			err = applySyncConsumerAccesslogDelete(writer, config, operation)
 		case syncConsumerAccesslogModify:
-			err = applySyncConsumerAccesslogModify(runtime, writer, config, operation)
+			err = applySyncConsumerAccesslogModify(
+				runtime,
+				writer,
+				config,
+				operation,
+				false,
+			)
 		case syncConsumerAccesslogModifyDN:
 			err = applySyncConsumerAccesslogModifyDN(runtime, writer, config, operation)
 		default:

@@ -889,7 +889,7 @@ func (server *Server) applyOfflineChange(
 		}
 	case offlineChangeModifyDN:
 		return server.applyOfflineModifyDN(
-			ctx, tx, runtime, databaseIndex, database, dn, actor, change, options,
+			ctx, writer, tx, runtime, databaseIndex, database, dn, actor, change, options,
 		)
 	default:
 		return errors.New("unsupported offline change operation")
@@ -899,6 +899,7 @@ func (server *Server) applyOfflineChange(
 
 func (server *Server) applyOfflineModifyDN(
 	ctx context.Context,
+	writer storage.Writer,
 	tx storage.Writer,
 	runtime *runtimeState,
 	databaseIndex int,
@@ -1024,7 +1025,7 @@ func (server *Server) applyOfflineModifyDN(
 		return moves[left].newDN.Depth() < moves[right].newDN.Depth()
 	})
 	for _, move := range moves {
-		if err := tx.Put(move.entry, false); err != nil {
+		if err := putRenamedDatabaseEntry(writer, tx, database, move.entry, move.oldDN.Equal(oldDN)); err != nil {
 			return fmt.Errorf("store renamed DN %q: %w", move.newDN.String(), err)
 		}
 	}

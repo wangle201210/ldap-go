@@ -608,7 +608,7 @@ func mapMetaRemoteIdentity(
 	message ldapwire.Message,
 ) (chainRemoteConfiguration, ldapwire.Message, *ldapwire.Result) {
 	if remote.bind.bindDN != "" {
-		mapped, err := mapMetaDNString(mapping, remote.bind.bindDN, true)
+		mapped, err := mapMetaDNStringContext(mapping, remote.bind.bindDN, true, "bindDN")
 		if err != nil {
 			result := metaBackendMappingFailure(err)
 			return remote, message, &result
@@ -618,7 +618,7 @@ func mapMetaRemoteIdentity(
 	authorizationID := remote.bind.authorizationID
 	if len(authorizationID) > 3 &&
 		strings.EqualFold(authorizationID[:3], "dn:") {
-		mapped, err := mapMetaDNString(mapping, authorizationID[3:], true)
+		mapped, err := mapMetaDNStringContext(mapping, authorizationID[3:], true, "bindDN")
 		if err != nil {
 			result := metaBackendMappingFailure(err)
 			return remote, message, &result
@@ -634,7 +634,7 @@ func mapMetaRemoteIdentity(
 		if len(value) < 3 || !strings.EqualFold(value[:3], "dn:") || len(value) == 3 {
 			continue
 		}
-		mapped, err := mapMetaDNString(mapping, value[3:], true)
+		mapped, err := mapMetaDNStringContext(mapping, value[3:], true, "bindDN")
 		if err != nil {
 			result := metaBackendMappingFailure(err)
 			return remote, message, &result
@@ -676,6 +676,9 @@ func metaModifyDNUsesTarget(
 }
 
 func metaBackendMappingFailure(err error) ldapwire.Result {
+	if failure := asOperationFailure(err); failure != nil {
+		return failure.result
+	}
 	return ldapwire.ResultError(
 		ldapwire.ResultOther,
 		fmt.Sprintf("back-meta mapping failed: %v", err),

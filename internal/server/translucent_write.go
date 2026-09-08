@@ -594,7 +594,7 @@ func (server *Server) tryTranslucentModifyDN(
 				}
 				item.entry.EnsureRDNValues(storedNewDN)
 			}
-			if err := tx.Put(item.entry, false); err != nil {
+			if err := putRenamedDatabaseEntry(writer, tx, *database, item.entry, item.oldDN.Equal(comparisonOldDN)); err != nil {
 				return err
 			}
 		}

@@ -167,9 +167,21 @@ func (server *Server) runSyncConsumerCycle(
 	if len(healthValues) != 0 && healthValues[0] != nil {
 		health = healthValues[0]
 	}
+	accesslogBootstrapComplete := false
+	var err error
+	if config.syncData == "accesslog" {
+		accesslogBootstrapComplete, err =
+			server.prepareSyncConsumerAccesslogBootstrap(ctx, config)
+		if err != nil {
+			return err
+		}
+	}
 	cookie, err := server.loadSyncConsumerCookie(ctx, config)
 	if err != nil {
 		return err
+	}
+	if config.syncData == "accesslog" && !accesslogBootstrapComplete {
+		cookie = nil
 	}
 	if len(cookie) != 0 {
 		health.loadedCookie(cookie)
@@ -231,11 +243,21 @@ func (server *Server) runSyncConsumerCycle(
 		}
 	}
 
-	rawSASL := config.bindMethod == "sasl" &&
-		!strings.EqualFold(config.saslMechanism, "GSSAPI")
-	if rawSASL {
-		if err := bindSyncConsumerSASL(transport, config, provider); err != nil {
-			return err
+	saslBound := config.bindMethod == "sasl"
+	if saslBound {
+		var bindErr error
+		if strings.EqualFold(config.saslMechanism, "GSSAPI") {
+			bindErr = bindSyncConsumerGSSAPISecurity(
+				ctx,
+				transport,
+				config,
+				provider,
+			)
+		} else {
+			bindErr = bindSyncConsumerSASL(transport, config, provider)
+		}
+		if bindErr != nil {
+			return bindErr
 		}
 	}
 	if err := transport.clearDeadline(); err != nil {
@@ -248,7 +270,7 @@ func (server *Server) runSyncConsumerCycle(
 	if config.operationTimeout > 0 {
 		connection.SetTimeout(config.operationTimeout)
 	}
-	if !rawSASL {
+	if !saslBound {
 		if err := bindSyncConsumer(
 			connection,
 			config,
@@ -273,7 +295,7 @@ func (server *Server) runSyncConsumerCycle(
 			cookie,
 		)
 	case "accesslog":
-		if len(cookie) == 0 {
+		if !accesslogBootstrapComplete {
 			if err := server.runSyncConsumerStandardSearch(
 				ctx,
 				connection,
@@ -287,11 +309,25 @@ func (server *Server) runSyncConsumerCycle(
 			if err != nil {
 				return err
 			}
-			if len(cookie) == 0 {
-				return errors.New(
-					"accesslog fallback refresh produced no sync cookie",
-				)
+			accesslogBootstrapComplete, err = server.syncConsumerAccesslogBootstrapComplete(
+				ctx,
+				config,
+			)
+			if err != nil {
+				return err
 			}
+			if !accesslogBootstrapComplete {
+				return errors.New("accesslog fallback refresh did not commit bootstrap completion")
+			}
+		}
+		if len(cookie) == 0 {
+			cookie, err = server.syncConsumerDeltaInitialCookie(ctx, config)
+			if err != nil {
+				return err
+			}
+		}
+		if len(cookie) == 0 {
+			return errors.New("accesslog bootstrap produced no sync cookie")
 		}
 		return server.runSyncConsumerAccesslogSearch(
 			ctx,
@@ -1275,6 +1311,17 @@ func (server *Server) finishSyncConsumerRefresh(
 		if err := updateSyncConsumerCookie(writer, config, cookie); err != nil {
 			return err
 		}
+		if config.syncData == "accesslog" {
+			if err := writer.SetMetadata(
+				syncConsumerAccesslogBootstrapMetadataKey(config),
+				syncConsumerAccesslogBootstrapValue(
+					syncConsumerAccesslogBootstrapComplete,
+					config,
+				),
+			); err != nil {
+				return err
+			}
+		}
 		if database != nil && deletionCSN != nil {
 			for index := range deletions {
 				before := deletions[index].entry
@@ -1483,6 +1530,9 @@ func syncConsumerWriter(
 ) storage.Writer {
 	if database != nil {
 		return writerForDatabase(writer, *database)
+	}
+	if config.entryLimit.bytes != 0 {
+		writer = &entryLimitWriter{Writer: writer, partition: config.partition, limit: config.entryLimit}
 	}
 	if config.normalizer != nil {
 		return storage.WriterInPartitionWithNormalizer(

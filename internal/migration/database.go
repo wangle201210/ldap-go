@@ -8,10 +8,12 @@ import (
 	"strings"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/mdbentry"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
 type databaseTarget struct {
+	maxEntrySize    uint64
 	name            string
 	backend         string
 	configDN        directory.DN
@@ -145,6 +147,10 @@ func loadDatabaseTargetsWithNormalizer(
 				index:    index,
 				hasIndex: hasIndex,
 				lastMod:  true,
+			}
+			target.maxEntrySize, err = mdbentry.Configuration(entry)
+			if err != nil {
+				return err
 			}
 			if target.backend == "config" {
 				target.partition = storage.OpenLDAPConfigPartition

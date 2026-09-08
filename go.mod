@@ -2,6 +2,9 @@ module github.com/wangle201210/ldap-go
 
 go 1.26.0
 
+// OpenLDAP/Cyrus uses the SCRAM channel-binding name "ldap".
+replace github.com/xdg-go/scram => ./third_party/xdg-go-scram
+
 require (
 	gitee.com/Trisia/gotlcp v1.5.0
 	github.com/creack/pty v1.1.24

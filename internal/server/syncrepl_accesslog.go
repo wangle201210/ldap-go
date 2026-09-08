@@ -3,12 +3,16 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/google/uuid"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -17,6 +21,22 @@ import (
 var errSyncConsumerAccesslogGap = errors.New(
 	"accesslog change cannot be replayed safely",
 )
+
+const syncConsumerAccesslogBootstrapMetadataPrefix = "openldap/syncrepl/accesslog-bootstrap/"
+
+type syncConsumerAccesslogBootstrapStatus uint8
+
+const (
+	syncConsumerAccesslogBootstrapMissing syncConsumerAccesslogBootstrapStatus = iota
+	syncConsumerAccesslogBootstrapInProgress
+	syncConsumerAccesslogBootstrapComplete
+	syncConsumerAccesslogBootstrapUnknown
+)
+
+type syncConsumerAccesslogBootstrapState struct {
+	status          syncConsumerAccesslogBootstrapStatus
+	identityMatches bool
+}
 
 type syncConsumerAccesslogOperationKind uint8
 
@@ -52,6 +72,318 @@ type syncConsumerAccesslogApplyResult struct {
 	afterDN   *directory.DN
 	before    *directory.Entry
 	after     *directory.Entry
+}
+
+type syncConsumerAccesslogConflictHistory struct {
+	csn           openLDAPCSN
+	modifications []syncConsumerAccesslogModification
+}
+
+func validateDeltaMultiProviderDatabases(databases []runtimeDatabase) error {
+	for _, database := range databases {
+		if !database.multiProvider {
+			continue
+		}
+		delta := false
+		for _, consumer := range database.syncConsumers {
+			delta = delta || consumer.syncData == "accesslog"
+		}
+		if !delta {
+			continue
+		}
+		log := database.accesslog
+		if log == nil || log.operations&accesslogWrites != accesslogWrites {
+			return fmt.Errorf("%s writable delta-syncrepl requires a local accesslog recording all writes", database.name)
+		}
+		if !databaseUsesLocalContentStorage(database) || !database.syncProvider || !database.lastMod ||
+			log.targetDatabaseIndex < 0 || log.targetDatabaseIndex >= len(databases) ||
+			!databaseUsesLocalContentStorage(databases[log.targetDatabaseIndex]) ||
+			!databases[log.targetDatabaseIndex].syncProvider {
+			return fmt.Errorf("%s writable delta-syncrepl requires local content and accesslog databases with syncprov and lastmod", database.name)
+		}
+		for _, consumer := range database.syncConsumers {
+			if consumer.syncData != "accesslog" || consumer.suffixMap != nil ||
+				len(database.suffixes) != 1 || !consumer.searchBase.Equal(database.suffixes[0]) ||
+				consumer.scope != directory.ScopeWholeSubtree ||
+				!strings.EqualFold(consumer.filterText, "(objectclass=*)") ||
+				len(consumer.attributes) != 2 || consumer.attributes[0] != "*" || consumer.attributes[1] != "+" ||
+				len(consumer.exAttributes) != 0 || consumer.attributesOnly ||
+				!strings.EqualFold(consumer.logFilterText, "(&(objectClass=auditWriteObject)(reqResult=0))") {
+				return fmt.Errorf("%s writable delta-syncrepl requires unfiltered full-suffix accesslog consumers without attribute selection or suffixmassage", database.name)
+			}
+		}
+	}
+	return nil
+}
+
+func syncConsumerAccesslogBootstrapMetadataKey(config syncConsumerConfig) string {
+	partition := base64.RawURLEncoding.EncodeToString([]byte(config.partition))
+	return fmt.Sprintf(
+		"%s%s/%03d",
+		syncConsumerAccesslogBootstrapMetadataPrefix,
+		partition,
+		config.rid,
+	)
+}
+
+func syncConsumerAccesslogBootstrapIdentity(config syncConsumerConfig) []byte {
+	digest := sha256.New()
+	write := func(value string) {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = digest.Write(size[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	write(config.partition)
+	write(fmt.Sprint(config.rid))
+	write(config.databaseID)
+	write(config.syncData)
+	write(config.bindMethod)
+	write(config.bindDN)
+	write(config.saslMechanism)
+	write(config.authenticationID)
+	write(config.authorizationID)
+	write(config.realm)
+	write(config.searchBase.String())
+	write(config.localBase.String())
+	if config.suffixMap != nil {
+		write(config.suffixMap.String())
+	} else {
+		write("")
+	}
+	write(fmt.Sprint(config.scope))
+	write(config.filterText)
+	write(fmt.Sprint(len(config.attributes)))
+	for _, value := range config.attributes {
+		write(value)
+	}
+	write(fmt.Sprint(len(config.exAttributes)))
+	for _, value := range config.exAttributes {
+		write(value)
+	}
+	write(fmt.Sprint(
+		config.attributesOnly,
+		config.schemaChecking,
+		config.manageDSAit,
+	))
+	if config.logBase != nil {
+		write(config.logBase.String())
+	} else {
+		write("")
+	}
+	write(config.logFilterText)
+	return digest.Sum(nil)
+}
+
+func syncConsumerAccesslogBootstrapValue(
+	status syncConsumerAccesslogBootstrapStatus,
+	config syncConsumerConfig,
+) []byte {
+	var prefix string
+	switch status {
+	case syncConsumerAccesslogBootstrapInProgress:
+		prefix = "in-progress:"
+	case syncConsumerAccesslogBootstrapComplete:
+		prefix = "complete:"
+	default:
+		return nil
+	}
+	return append([]byte(prefix), syncConsumerAccesslogBootstrapIdentity(config)...)
+}
+
+func syncConsumerAccesslogBootstrapStateReader(
+	reader storage.Reader,
+	config syncConsumerConfig,
+) (syncConsumerAccesslogBootstrapState, error) {
+	raw, err := reader.Metadata(syncConsumerAccesslogBootstrapMetadataKey(config))
+	switch {
+	case errors.Is(err, storage.ErrMetadataNotFound):
+		return syncConsumerAccesslogBootstrapState{
+			status: syncConsumerAccesslogBootstrapMissing,
+		}, nil
+	case err != nil:
+		return syncConsumerAccesslogBootstrapState{}, err
+	}
+	for _, candidate := range []syncConsumerAccesslogBootstrapStatus{
+		syncConsumerAccesslogBootstrapInProgress,
+		syncConsumerAccesslogBootstrapComplete,
+	} {
+		value := syncConsumerAccesslogBootstrapValue(candidate, config)
+		prefixLength := len(value) - sha256.Size
+		if len(raw) >= prefixLength && bytes.Equal(raw[:prefixLength], value[:prefixLength]) {
+			return syncConsumerAccesslogBootstrapState{
+				status:          candidate,
+				identityMatches: bytes.Equal(raw, value),
+			}, nil
+		}
+	}
+	return syncConsumerAccesslogBootstrapState{
+		status: syncConsumerAccesslogBootstrapUnknown,
+	}, nil
+}
+
+func syncConsumerAccesslogBootstrapCompleteReader(
+	reader storage.Reader,
+	config syncConsumerConfig,
+) (bool, error) {
+	state, err := syncConsumerAccesslogBootstrapStateReader(reader, config)
+	return state.status == syncConsumerAccesslogBootstrapComplete &&
+		state.identityMatches, err
+}
+
+func (server *Server) syncConsumerAccesslogBootstrapComplete(
+	ctx context.Context,
+	config syncConsumerConfig,
+) (bool, error) {
+	var complete bool
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		complete, err = syncConsumerAccesslogBootstrapCompleteReader(reader, config)
+		return err
+	})
+	return complete, err
+}
+
+func (server *Server) prepareSyncConsumerAccesslogBootstrap(
+	ctx context.Context,
+	config syncConsumerConfig,
+) (bool, error) {
+	state := syncConsumerAccesslogBootstrapState{}
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		state, err = syncConsumerAccesslogBootstrapStateReader(reader, config)
+		return err
+	})
+	if err != nil || state.status == syncConsumerAccesslogBootstrapComplete &&
+		state.identityMatches {
+		return state.status == syncConsumerAccesslogBootstrapComplete &&
+			state.identityMatches, err
+	}
+	complete := false
+	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
+		current, err := syncConsumerAccesslogBootstrapStateReader(writer, config)
+		if err != nil {
+			return err
+		}
+		if current.status == syncConsumerAccesslogBootstrapComplete &&
+			current.identityMatches {
+			complete = true
+			return nil
+		}
+		if err := deleteSyncConsumerMetadata(
+			writer,
+			syncConsumerCookieMetadataKey(config),
+		); err != nil {
+			return err
+		}
+		database := runtimeDatabaseForPartition(
+			server.runtime.Load(),
+			config.partition,
+		)
+		if current.status != syncConsumerAccesslogBootstrapInProgress {
+			adopt, err := syncConsumerAccesslogBootstrapCanAdopt(
+				writer,
+				database,
+			)
+			if err != nil {
+				return err
+			}
+			if adopt {
+				complete = true
+				return writer.SetMetadata(
+					syncConsumerAccesslogBootstrapMetadataKey(config),
+					syncConsumerAccesslogBootstrapValue(
+						syncConsumerAccesslogBootstrapComplete,
+						config,
+					),
+				)
+			}
+		}
+		return writer.SetMetadata(
+			syncConsumerAccesslogBootstrapMetadataKey(config),
+			syncConsumerAccesslogBootstrapValue(
+				syncConsumerAccesslogBootstrapInProgress,
+				config,
+			),
+		)
+	})
+	return complete, err
+}
+
+func syncConsumerAccesslogBootstrapCanAdopt(
+	reader storage.Reader,
+	database *runtimeDatabase,
+) (bool, error) {
+	if database == nil || !database.multiProvider {
+		return false, nil
+	}
+	state, err := syncContextCSNs(reader, database.partition)
+	if err != nil {
+		return false, err
+	}
+	if len(state) != 0 {
+		return true, nil
+	}
+	hasEntries := false
+	err = readerForDatabase(reader, *database).ForEach(
+		func(directory.Entry) error {
+			hasEntries = true
+			return nil
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	if hasEntries {
+		return false, fmt.Errorf(
+			"%w: writable database has entries but no authoritative contextCSN",
+			errSyncConsumerAccesslogGap,
+		)
+	}
+	return false, nil
+}
+
+func deleteSyncConsumerMetadata(writer storage.Writer, key string) error {
+	err := writer.DeleteMetadata(key)
+	if errors.Is(err, storage.ErrMetadataNotFound) {
+		return nil
+	}
+	return err
+}
+
+func (server *Server) syncConsumerDeltaInitialCookie(ctx context.Context, config syncConsumerConfig) ([]byte, error) {
+	database := runtimeDatabaseForPartition(server.runtime.Load(), config.partition)
+	if database == nil || !database.multiProvider {
+		return nil, nil
+	}
+	var cookie []byte
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		complete, err := syncConsumerAccesslogBootstrapCompleteReader(reader, config)
+		if err != nil || !complete {
+			return err
+		}
+		state, err := syncContextCSNs(reader, database.partition)
+		if err == nil && len(state) != 0 {
+			cookie = composeOpenLDAPSyncCookie(config.rid, state)
+		}
+		if err == nil && len(state) == 0 {
+			return readerForDatabase(reader, *database).ForEach(func(entry directory.Entry) error {
+				return fmt.Errorf("%w: writable database contains %s without a bootstrap contextCSN", errSyncConsumerAccesslogGap, entry.DN)
+			})
+		}
+		return err
+	})
+	return cookie, err
+}
+
+func (server *Server) syncConsumerAccesslogFailure(ctx context.Context, config syncConsumerConfig, cause error) error {
+	database := runtimeDatabaseForPartition(server.runtime.Load(), config.partition)
+	if database != nil && database.multiProvider {
+		// A full-entry refresh cannot recover attribute history on a writable peer.
+		// Keep the last committed cookie so reconnects cannot silently use that path.
+		return fmt.Errorf("writable delta-syncrepl stopped: %w", cause)
+	}
+	return errors.Join(fmt.Errorf("%w: %v", errSyncConsumerAccesslogGap, cause), server.resetSyncConsumerCookie(ctx, config))
 }
 
 func (server *Server) runSyncConsumerAccesslogSearch(
@@ -101,6 +433,7 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 			"reqDeleteOldRDN",
 			"reqNewSuperior",
 			"reqControls",
+			"reqEntryUUID",
 			"entryCSN",
 		},
 		controls,
@@ -126,11 +459,7 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 			response.Entry(),
 			response.Controls(),
 		); err != nil {
-			resetErr := server.resetSyncConsumerCookie(ctx, config)
-			return errors.Join(
-				fmt.Errorf("%w: %v", errSyncConsumerAccesslogGap, err),
-				resetErr,
-			)
+			return server.syncConsumerAccesslogFailure(ctx, config, err)
 		}
 		if refresh.complete {
 			watchdog.markComplete()
@@ -141,11 +470,7 @@ func (server *Server) runSyncConsumerAccesslogSearch(
 	}
 	if err := response.Err(); err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultSyncRefreshRequired) {
-			resetErr := server.resetSyncConsumerCookie(ctx, config)
-			return errors.Join(
-				fmt.Errorf("%w: provider requested a refresh", errSyncConsumerAccesslogGap),
-				resetErr,
-			)
+			return server.syncConsumerAccesslogFailure(ctx, config, err)
 		}
 		return fmt.Errorf("accesslog syncrepl search: %w", err)
 	}
@@ -273,7 +598,7 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 		source,
 	)
 	if err != nil {
-		return fmt.Errorf("parse accesslog entry %s: %w", source.DN, err)
+		return fmt.Errorf("parse accesslog entry: %w", err)
 	}
 	var syncChanges []*syncChange
 	err = server.config.Store.Update(ctx, func(writer storage.Writer) error {
@@ -309,33 +634,74 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 		if err != nil {
 			return err
 		}
-		switch operation.kind {
+		effectiveOperation := operation
+		softDeletes := false
+		if database != nil && database.multiProvider {
+			if err := validateSyncConsumerDeltaOperation(runtime, operation, applied.before, source); err != nil {
+				return err
+			}
+			if operation.kind == syncConsumerAccesslogAdd {
+				for _, mod := range operation.modifications {
+					if !constraintAttributeDescriptionsEqual(runtime.schema, mod.description, "entryUUID") || len(mod.values) != 1 {
+						continue
+					}
+					identifier := string(mod.values[0])
+					if _, deleted, err := syncTombstoneCSN(writer, database.partition, identifier); err != nil {
+						return err
+					} else if deleted {
+						return fmt.Errorf("%w: writable delta add conflicts with a deleted UUID", errSyncConsumerAccesslogGap)
+					}
+					if _, found, err := syncConsumerEntryByUUID(syncConsumerReader(writer, database, config), database.partition, identifier); err != nil {
+						return err
+					} else if found {
+						return fmt.Errorf("%w: writable delta add conflicts with an existing UUID", errSyncConsumerAccesslogGap)
+					}
+				}
+			}
+		}
+		if operation.kind == syncConsumerAccesslogModify &&
+			database != nil && database.multiProvider && applied.before != nil {
+			effectiveOperation, softDeletes, err =
+				resolveSyncConsumerDeltaMultiProviderModify(
+					writer,
+					runtime,
+					*database,
+					config,
+					operation,
+					*applied.before,
+				)
+			if err != nil {
+				return err
+			}
+		}
+		switch effectiveOperation.kind {
 		case syncConsumerAccesslogAdd:
 			err = applySyncConsumerAccesslogAdd(
 				runtime,
 				writer,
 				config,
-				operation,
+				effectiveOperation,
 			)
 		case syncConsumerAccesslogDelete:
 			err = applySyncConsumerAccesslogDelete(
 				writer,
 				config,
-				operation,
+				effectiveOperation,
 			)
 		case syncConsumerAccesslogModify:
 			err = applySyncConsumerAccesslogModify(
 				runtime,
 				writer,
 				config,
-				operation,
+				effectiveOperation,
+				softDeletes,
 			)
 		case syncConsumerAccesslogModifyDN:
 			err = applySyncConsumerAccesslogModifyDN(
 				runtime,
 				writer,
 				config,
-				operation,
+				effectiveOperation,
 			)
 		default:
 			err = errors.New("unknown accesslog operation")
@@ -346,7 +712,7 @@ func (server *Server) applySyncConsumerAccesslogEntry(
 		if err := completeSyncConsumerAccesslogApplyResult(
 			writer,
 			config,
-			operation,
+			effectiveOperation,
 			&applied,
 		); err != nil {
 			return err
@@ -842,6 +1208,503 @@ func syncConsumerAccesslogAttributeExcluded(
 	return syncConsumerAttributeExcluded(runtime, config, description)
 }
 
+func validateSyncConsumerDeltaOperation(
+	runtime *runtimeState,
+	operation syncConsumerAccesslogOperation,
+	current *directory.Entry,
+	source *ldap.Entry,
+) error {
+	if operation.kind == syncConsumerAccesslogModifyDN || operation.kind == syncConsumerAccesslogDelete {
+		return fmt.Errorf("%w: writable delta delete/rename conflict resolution is not implemented", errSyncConsumerAccesslogGap)
+	}
+	if len(source.GetEqualFoldRawAttributeValues("reqControls")) != 0 {
+		return fmt.Errorf("%w: writable delta request controls are not implemented", errSyncConsumerAccesslogGap)
+	}
+	if current != nil {
+		uuids := current.Values("entryUUID")
+		if uuid := source.GetEqualFoldAttributeValue("reqEntryUUID"); uuid != "" &&
+			(len(uuids) != 1 || !strings.EqualFold(uuid, string(uuids[0]))) {
+			return fmt.Errorf("%w: writable delta entryUUID mismatch", errSyncConsumerAccesslogGap)
+		}
+	}
+	csnMods := 0
+	uuidMods := 0
+	for _, mod := range operation.modifications {
+		if mod.operation == '#' || runtime.schema.HasOrderedValues(mod.description) {
+			return fmt.Errorf("%w: writable delta increment/ordered-value merging is not implemented", errSyncConsumerAccesslogGap)
+		}
+		if constraintAttributeDescriptionsEqual(runtime.schema, mod.description, "entryCSN") {
+			csnMods++
+			if (mod.operation != '=' && mod.operation != '+') || len(mod.values) != 1 || string(mod.values[0]) != operation.csn.raw {
+				return fmt.Errorf("%w: reqMod entryCSN does not match operation CSN", errSyncConsumerAccesslogGap)
+			}
+		}
+		if constraintAttributeDescriptionsEqual(runtime.schema, mod.description, "entryUUID") {
+			uuidMods++
+			if operation.kind == syncConsumerAccesslogModify {
+				return fmt.Errorf("%w: writable delta cannot modify entryUUID", errSyncConsumerAccesslogGap)
+			}
+			if (mod.operation != '+' && mod.operation != '=') || len(mod.values) != 1 || uuid.Validate(string(mod.values[0])) != nil {
+				return fmt.Errorf("%w: invalid writable delta add entryUUID", errSyncConsumerAccesslogGap)
+			}
+		}
+	}
+	if csnMods != 1 {
+		return fmt.Errorf("%w: writable delta requires exactly one entryCSN modification", errSyncConsumerAccesslogGap)
+	}
+	if operation.kind == syncConsumerAccesslogAdd && uuidMods != 1 {
+		return fmt.Errorf("%w: writable delta add requires entryUUID", errSyncConsumerAccesslogGap)
+	}
+	return nil
+}
+
+func resolveSyncConsumerDeltaMultiProviderModify(
+	writer storage.Writer,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	config syncConsumerConfig,
+	operation syncConsumerAccesslogOperation,
+	current directory.Entry,
+) (syncConsumerAccesslogOperation, bool, error) {
+	values := current.Values("entryCSN")
+	if len(values) != 1 {
+		return operation, false, fmt.Errorf(
+			"%w: %s has %d entryCSN values",
+			errSyncConsumerAccesslogGap,
+			current.DN,
+			len(values),
+		)
+	}
+	currentCSN, err := parseOpenLDAPCSN(string(values[0]))
+	if err != nil {
+		return operation, false, fmt.Errorf(
+			"%w: parse current entryCSN for %s: %v",
+			errSyncConsumerAccesslogGap,
+			current.DN,
+			err,
+		)
+	}
+	if compareOpenLDAPCSN(operation.csn, currentCSN) == 0 {
+		return operation, false, fmt.Errorf("%w: entryCSN already present without committed cookie", errSyncConsumerAccesslogGap)
+	}
+	if compareOpenLDAPCSN(operation.csn, currentCSN) > 0 {
+		return operation, true, nil
+	}
+
+	resolved := operation
+	resolved.modifications = duplicateOlderSyncConsumerAccesslogModifications(
+		runtime,
+		operation.modifications,
+	)
+	history, err := loadSyncConsumerDeltaMultiProviderHistory(
+		writer,
+		runtime,
+		database,
+		config,
+		operation.csn,
+		operation.remoteDN,
+		currentCSN,
+	)
+	if err != nil {
+		return operation, false, err
+	}
+	for _, newer := range history {
+		resolved.modifications, err = resolveSyncConsumerDeltaMultiProviderMods(
+			runtime,
+			current,
+			resolved.modifications,
+			newer.modifications,
+		)
+		if err != nil {
+			return operation, false, err
+		}
+	}
+	return resolved, true, nil
+}
+
+func duplicateOlderSyncConsumerAccesslogModifications(
+	runtime *runtimeState,
+	modifications []syncConsumerAccesslogModification,
+) []syncConsumerAccesslogModification {
+	result := make([]syncConsumerAccesslogModification, 0, len(modifications)+1)
+	for _, modification := range modifications {
+		if runtime != nil && syncConsumerDeltaOperationalAttribute(
+			runtime,
+			modification.description,
+		) {
+			continue
+		}
+		if modification.operation == '=' {
+			result = append(result, syncConsumerAccesslogModification{
+				description: modification.description,
+				operation:   '-',
+			})
+			if len(modification.values) == 0 {
+				continue
+			}
+			modification.operation = '+'
+		}
+		modification.values = cloneSyncConsumerAccesslogValues(
+			modification.values,
+		)
+		result = append(result, modification)
+	}
+	return result
+}
+
+func syncConsumerDeltaOperationalAttribute(
+	runtime *runtimeState,
+	description string,
+) bool {
+	for _, operational := range []string{
+		"entryCSN",
+		"modifiersName",
+		"modifyTimestamp",
+	} {
+		if constraintAttributeDescriptionsEqual(
+			runtime.schema,
+			description,
+			operational,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func syncConsumerDeltaHistoryFloorKey(partition string) string {
+	return "openldap/sync/delta-history-floor/" + partition
+}
+
+func loadSyncConsumerDeltaMultiProviderHistory(
+	writer storage.Writer,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	config syncConsumerConfig,
+	incoming openLDAPCSN,
+	remoteDN directory.DN,
+	currentCSN openLDAPCSN,
+) ([]syncConsumerAccesslogConflictHistory, error) {
+	configuration := database.accesslog
+	if configuration == nil ||
+		configuration.targetDatabaseIndex < 0 ||
+		configuration.targetDatabaseIndex >= len(runtime.databases) {
+		return nil, fmt.Errorf(
+			"%w: delta multi-provider database %s has no local accesslog",
+			errSyncConsumerAccesslogGap,
+			database.name,
+		)
+	}
+	targetDN, err := mapSyncConsumerAccesslogDN(config, remoteDN)
+	if err != nil {
+		return nil, err
+	}
+	target := runtime.databases[configuration.targetDatabaseIndex]
+	rawFloor, err := writer.Metadata(syncConsumerDeltaHistoryFloorKey(target.partition))
+	if err != nil && !errors.Is(err, storage.ErrMetadataNotFound) {
+		return nil, err
+	}
+	if len(rawFloor) != 0 {
+		floor, err := parseOpenLDAPCSN(string(rawFloor))
+		if err != nil || compareOpenLDAPCSN(floor, incoming) >= 0 {
+			return nil, fmt.Errorf("%w: local accesslog conflict history was purged through %s", errSyncConsumerAccesslogGap, rawFloor)
+		}
+	}
+	logReader := writerForDatabase(writer, target)
+	container, err := logReader.Get(configuration.targetSuffix)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: read local accesslog container: %v",
+			errSyncConsumerAccesslogGap,
+			err,
+		)
+	}
+	minimums := container.Values("minCSN")
+	if len(minimums) == 0 {
+		return nil, fmt.Errorf(
+			"%w: local accesslog has no minCSN",
+			errSyncConsumerAccesslogGap,
+		)
+	}
+	// minCSN is either the first logged change for a SID, or its last
+	// purged change. A retained row distinguishes those two cases.
+	boundaries := make(map[string]bool)
+	for _, raw := range minimums {
+		minimum, parseErr := parseOpenLDAPCSN(string(raw))
+		if parseErr != nil {
+			return nil, fmt.Errorf(
+				"%w: parse local accesslog minCSN %q: %v",
+				errSyncConsumerAccesslogGap,
+				raw,
+				parseErr,
+			)
+		}
+		if compareOpenLDAPCSN(minimum, incoming) >= 0 {
+			boundaries[minimum.raw] = false
+		}
+	}
+
+	localConfig := config
+	localConfig.suffixMap = nil
+	var history []syncConsumerAccesslogConflictHistory
+	currentFound := false
+	err = logReader.ForEach(func(entry directory.Entry) error {
+		entryDN, parseErr := syncConsumerParseDN(logReader, entry.DN)
+		if parseErr != nil {
+			return parseErr
+		}
+		if !configuration.targetSuffix.AncestorOf(entryDN) {
+			return nil
+		}
+		if values := entry.Values("entryCSN"); len(values) == 1 {
+			if _, found := boundaries[string(values[0])]; found {
+				boundaries[string(values[0])] = true
+			}
+		}
+		rawDN := entry.Values("reqDN")
+		if len(rawDN) == 0 {
+			return nil
+		}
+		if len(rawDN) != 1 {
+			return fmt.Errorf("accesslog entry %s has %d reqDN values", entry.DN, len(rawDN))
+		}
+		requestDN, parseErr := parseRuntimeDN(
+			string(rawDN[0]),
+			database.dnNormalizer,
+		)
+		if parseErr != nil {
+			return fmt.Errorf("accesslog entry %s reqDN: %w", entry.DN, parseErr)
+		}
+		if !requestDN.Equal(targetDN) {
+			return nil
+		}
+		matches, matchErr := config.logFilter.MatchWith(entry, runtime.schema)
+		if matchErr != nil {
+			return fmt.Errorf("match local accesslog entry %s: %w", entry.DN, matchErr)
+		}
+		if !matches {
+			return nil
+		}
+		rawCSN := entry.Values("entryCSN")
+		if len(rawCSN) != 1 {
+			return fmt.Errorf("accesslog entry %s has %d entryCSN values", entry.DN, len(rawCSN))
+		}
+		csn, parseErr := parseOpenLDAPCSN(string(rawCSN[0]))
+		if parseErr != nil {
+			return fmt.Errorf("accesslog entry %s entryCSN: %w", entry.DN, parseErr)
+		}
+		if compareOpenLDAPCSN(csn, incoming) < 0 {
+			return nil
+		}
+		requestTypes := entry.Values("reqType")
+		if len(requestTypes) != 1 || !strings.EqualFold(string(requestTypes[0]), "modify") {
+			return fmt.Errorf("non-modify history for %s at %s", entry.DN, csn.raw)
+		}
+		currentFound = currentFound || compareOpenLDAPCSN(csn, currentCSN) == 0
+		modifications, parseErr := parseSyncConsumerAccesslogModifications(
+			runtime,
+			localConfig,
+			entry.Values("reqMod"),
+		)
+		if parseErr != nil {
+			return fmt.Errorf("accesslog entry %s reqMod: %w", entry.DN, parseErr)
+		}
+		if len(modifications) == 0 {
+			return fmt.Errorf("accesslog entry %s has no modifications", entry.DN)
+		}
+		for _, mod := range modifications {
+			if mod.operation == '#' || runtime.schema.HasOrderedValues(mod.description) {
+				return fmt.Errorf("unsupported increment/ordered-value history at %s", entry.DN)
+			}
+		}
+		if len(modifications) != 0 {
+			history = append(history, syncConsumerAccesslogConflictHistory{
+				csn:           csn,
+				modifications: modifications,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: query local accesslog conflict history: %v",
+			errSyncConsumerAccesslogGap,
+			err,
+		)
+	}
+	for boundary, retained := range boundaries {
+		if !retained {
+			return nil, fmt.Errorf("%w: local accesslog history is unavailable before %s", errSyncConsumerAccesslogGap, boundary)
+		}
+	}
+	if !currentFound {
+		return nil, fmt.Errorf("%w: current entryCSN %s is missing from local history", errSyncConsumerAccesslogGap, currentCSN.raw)
+	}
+	sort.Slice(history, func(left, right int) bool {
+		return compareOpenLDAPCSN(history[left].csn, history[right].csn) < 0
+	})
+	return history, nil
+}
+
+func resolveSyncConsumerDeltaMultiProviderMods(
+	runtime *runtimeState,
+	current directory.Entry,
+	older []syncConsumerAccesslogModification,
+	newer []syncConsumerAccesslogModification,
+) ([]syncConsumerAccesslogModification, error) {
+	for _, committed := range newer {
+		for index := 0; index < len(older); {
+			candidate := &older[index]
+			if !constraintAttributeDescriptionsEqual(
+				runtime.schema,
+				candidate.description,
+				committed.description,
+			) {
+				index++
+				continue
+			}
+			drop := false
+			if committed.operation == '-' || committed.operation == '=' {
+				if committed.operation == '=' || len(committed.values) == 0 {
+					drop = true
+				} else if candidate.operation == '-' && len(candidate.values) != 0 ||
+					candidate.operation == '+' {
+					var err error
+					candidate.values, err = subtractSyncConsumerDeltaValues(
+						runtime,
+						candidate.description,
+						candidate.values,
+						committed.values,
+					)
+					if err != nil {
+						return nil, err
+					}
+					drop = len(candidate.values) == 0
+				}
+			}
+			if !drop && (committed.operation == '+' || committed.operation == '=') {
+				singleValue, err := syncConsumerDeltaSingleValue(
+					runtime,
+					candidate.description,
+				)
+				if err != nil {
+					return nil, err
+				}
+				if singleValue {
+					drop = true
+				} else {
+					if candidate.operation == '-' && len(candidate.values) == 0 {
+						candidate.values = syncConsumerDeltaCurrentValues(
+							runtime,
+							current,
+							candidate.description,
+						)
+						if len(candidate.values) == 0 {
+							drop = true
+						}
+					}
+					if !drop {
+						candidate.values, err = subtractSyncConsumerDeltaValues(
+							runtime,
+							candidate.description,
+							candidate.values,
+							committed.values,
+						)
+						if err != nil {
+							return nil, err
+						}
+						drop = len(candidate.values) == 0
+					}
+				}
+			}
+			if drop {
+				older = append(older[:index], older[index+1:]...)
+				continue
+			}
+			index++
+		}
+	}
+	return older, nil
+}
+
+func subtractSyncConsumerDeltaValues(
+	runtime *runtimeState,
+	description string,
+	values,
+	committed [][]byte,
+) ([][]byte, error) {
+	remaining := make([][]byte, 0, len(values))
+	for _, value := range values {
+		matched := false
+		for _, newer := range committed {
+			equal, err := schemaAttributeValuesEqual(
+				runtime.schema,
+				description,
+				value,
+				newer,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"compare delta conflict value for %s: %w",
+					description,
+					err,
+				)
+			}
+			if equal {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			remaining = append(remaining, bytes.Clone(value))
+		}
+	}
+	return remaining, nil
+}
+
+func syncConsumerDeltaSingleValue(
+	runtime *runtimeState,
+	description string,
+) (bool, error) {
+	attribute, found, err := runtime.schema.EffectiveAttributeType(description)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("unknown delta conflict attribute %q", description)
+	}
+	return attribute.SingleValue, nil
+}
+
+func syncConsumerDeltaCurrentValues(
+	runtime *runtimeState,
+	entry directory.Entry,
+	description string,
+) [][]byte {
+	var result [][]byte
+	for _, attribute := range entry.Attributes {
+		if constraintAttributeDescriptionsEqual(
+			runtime.schema,
+			attribute.Description,
+			description,
+		) {
+			result = append(
+				result,
+				cloneSyncConsumerAccesslogValues(attribute.Values)...,
+			)
+		}
+	}
+	return result
+}
+
+func cloneSyncConsumerAccesslogValues(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for index := range values {
+		cloned[index] = bytes.Clone(values[index])
+	}
+	return cloned
+}
+
 func applySyncConsumerAccesslogAdd(
 	runtime *runtimeState,
 	writer storage.Writer,
@@ -883,6 +1746,7 @@ func applySyncConsumerAccesslogAdd(
 		runtime,
 		&entry,
 		operation.modifications,
+		false,
 	); err != nil {
 		return err
 	}
@@ -947,6 +1811,7 @@ func applySyncConsumerAccesslogModify(
 	writer storage.Writer,
 	config syncConsumerConfig,
 	operation syncConsumerAccesslogOperation,
+	softDeletes bool,
 ) error {
 	content := syncConsumerWriter(writer, nil, config)
 	searchBase, err := storage.NormalizeReaderDN(content, config.searchBase)
@@ -968,6 +1833,7 @@ func applySyncConsumerAccesslogModify(
 		runtime,
 		&entry,
 		operation.modifications,
+		softDeletes,
 	); err != nil {
 		return err
 	}
@@ -1086,6 +1952,7 @@ func applySyncConsumerAccesslogModifyDN(
 			runtime,
 			&item.entry,
 			operation.modifications,
+			false,
 		); err != nil {
 			return err
 		}
@@ -1111,7 +1978,7 @@ func applySyncConsumerAccesslogModifyDN(
 		return moves[i].newDN.Depth() < moves[j].newDN.Depth()
 	})
 	for _, item := range moves {
-		if err := content.Put(item.entry, false); err != nil {
+		if err := putRenamedSyncConsumerEntry(writer, content, config, item.entry, item.oldDN.Equal(oldDN)); err != nil {
 			return err
 		}
 	}
@@ -1122,8 +1989,27 @@ func applySyncConsumerAccesslogModifications(
 	runtime *runtimeState,
 	entry *directory.Entry,
 	modifications []syncConsumerAccesslogModification,
+	softDeletes bool,
 ) error {
 	for _, modification := range modifications {
+		if softDeletes && runtime != nil {
+			changes := syncConsumerAccesslogLDAPModifications([]syncConsumerAccesslogModification{modification})
+			if len(changes) != 1 {
+				return fmt.Errorf("unknown modification operation %q", modification.operation)
+			}
+			change := changes[0]
+			singleValue, err := syncConsumerDeltaSingleValue(runtime, modification.description)
+			if err != nil {
+				return err
+			}
+			if singleValue && change.Operation == ldapwire.ModificationAdd {
+				change.Operation = ldapwire.ModificationReplace
+			}
+			if err := applyModificationWithPermissive(entry, change, change.Operation == ldapwire.ModificationDelete, runtime.schema); err != nil {
+				return err
+			}
+			continue
+		}
 		singleValue := false
 		if runtime != nil {
 			if attributeType, found := runtime.schema.AttributeType(
@@ -1151,7 +2037,8 @@ func applySyncConsumerAccesslogModifications(
 				modification.description,
 				modification.values,
 			)
-			if singleValue && errors.Is(err, directory.ErrNoSuchAttribute) {
+			if (softDeletes || singleValue) &&
+				errors.Is(err, directory.ErrNoSuchAttribute) {
 				err = nil
 			}
 		case '=':
@@ -1327,10 +2214,14 @@ func (server *Server) resetSyncConsumerCookie(
 	config syncConsumerConfig,
 ) error {
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
-		err := writer.DeleteMetadata(syncConsumerCookieMetadataKey(config))
-		if errors.Is(err, storage.ErrMetadataNotFound) {
-			return nil
+		for _, key := range []string{
+			syncConsumerCookieMetadataKey(config),
+			syncConsumerAccesslogBootstrapMetadataKey(config),
+		} {
+			if err := deleteSyncConsumerMetadata(writer, key); err != nil {
+				return err
+			}
 		}
-		return err
+		return nil
 	})
 }

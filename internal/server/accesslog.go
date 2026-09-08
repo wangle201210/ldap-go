@@ -1709,6 +1709,25 @@ func (server *Server) purgeAccesslogDatabase(
 				if !exists || compareOpenLDAPCSN(current, csn) < 0 {
 					minCSNs[csn.serverID] = csn
 				}
+				// minCSN may still identify a retained first row when an older
+				// forwarded operation is purged. Keep a separate conflict floor.
+				key := syncConsumerDeltaHistoryFloorKey(target.partition)
+				raw, err := writer.Metadata(key)
+				if err != nil && !errors.Is(err, storage.ErrMetadataNotFound) {
+					return err
+				}
+				if len(raw) != 0 {
+					floor, err := parseOpenLDAPCSN(string(raw))
+					if err != nil {
+						return err
+					}
+					if compareOpenLDAPCSN(floor, csn) >= 0 {
+						continue
+					}
+				}
+				if err := writer.SetMetadata(key, []byte(csn.raw)); err != nil {
+					return err
+				}
 			}
 		}
 		values := make([][]byte, 0, len(minCSNs))

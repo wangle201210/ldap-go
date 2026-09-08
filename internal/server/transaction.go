@@ -1288,10 +1288,22 @@ func (server *Server) commitLDAPTransaction(
 			HasFailedMessageID: true,
 		}
 	}
+	effectiveOperations, clearEffectiveOperations, rewriteFailure :=
+		prepareRWMRewriteTransactionOperations(
+			transaction.runtime,
+			transaction.operations,
+		)
+	defer clearEffectiveOperations()
+	if rewriteFailure != nil {
+		return rewriteFailure.result, ldapwire.TransactionEndResponseValue{
+			FailedMessageID:    rewriteFailure.messageID,
+			HasFailedMessageID: true,
+		}
+	}
 	transactionContext, releaseSeqmods, err := acquireLDAPTransactionSeqmods(
 		ctx,
 		transaction.runtime,
-		transaction.operations,
+		effectiveOperations,
 	)
 	if err != nil {
 		server.config.Logger.Error("LDAP transaction seqmod acquisition failed", "error", err)
@@ -1454,6 +1466,14 @@ func (server *Server) executeTransactionOperation(
 	state *connectionState,
 	message ldapwire.Message,
 ) error {
+	if handled, err := server.tryRWMRewriteRelayOperation(
+		ctx,
+		connection,
+		state,
+		message,
+	); handled {
+		return err
+	}
 	switch request := message.Request.(type) {
 	case ldapwire.AddRequest:
 		return server.handleAdd(ctx, connection, state, message, request)

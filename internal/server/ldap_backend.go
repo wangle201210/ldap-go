@@ -450,6 +450,9 @@ func mapLDAPBackendAttemptToLocal(
 }
 
 func ldapBackendMappingFailure(err error) ldapwire.Result {
+	if failure := asOperationFailure(err); failure != nil {
+		return failure.result
+	}
 	return ldapwire.ResultError(
 		ldapwire.ResultOther,
 		fmt.Sprintf("back-ldap mapping failed: %v", err),

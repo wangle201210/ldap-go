@@ -686,9 +686,13 @@ the applied data, original remote CSN, context/tombstone state, local accesslog,
 and RID cookie in one B-side transaction, then publishes both source and log
 changes only after commit. Cross-RID replay, bbolt restart, rollback, purge,
 suffix-mapped multi-AVA ModDN, and scope move-in refresh/move-out delete cases
-pass. Delta plus writable multi-provider/mirror mode is rejected at startup,
-offline validation, and online configuration until attribute-level conflict
-history merging is implemented. The local accesslog provider supports successful
+pass. Delta plus writable multi-provider/mirror mode supports attribute-level
+Modify conflict merging against complete local accesslog history, with
+schema equality, original-operation forwarding, atomic cookies, and retained
+purge boundaries. Configuration rejects partial replication or incomplete
+write logging; unsupported delete/rename, increment, ordered-value, and
+request-control replay fails closed without resetting cookies. The local
+accesslog provider supports successful
 Add/Delete/Modify/ModDN and Password Modify records, old-value selection,
 branch-scoped operation logging, Search/Compare, Bind/Unbind/Abandon,
 database-targeted Extended operations, successful and failed results, periodic
@@ -776,12 +780,13 @@ specific No-Op responses. A `back-null`-enabled OpenLDAP build passes the same
 operation sequence. Relay databases can expose an existing local database
 under another suffix, with explicit or suffix-massage-selected targets. The
 implemented `rwm` subset maps suffixes, attribute descriptions, object classes,
-DN-valued attributes, and LDAP URL DNs in both directions; Bind, Search,
-Compare, writes, transactions, ACLs, and inherited sorting pass an OpenLDAP
-differential. Wildcard allowlists and response-side drop mappings are also
-supported. Unsupported `olcRwmRewrite` and back-meta `olcDbRewrite` directives
-now fail startup or the atomic online configuration transaction instead of
-being silently ignored. General rewrite contexts and rules, remaining map flags,
+DN-valued attributes, and LDAP URL DNs in both directions. Relay, back-ldap,
+and back-meta also execute the common librewrite engine/context/rule DSL with
+captures, ordered actions, bounded recursion, operation variables, parameters,
+and subcontext calls; ordinary and transactional writes enforce the original
+database restrictions before delegation. Local content databases reject named
+operation rules they cannot execute while retaining suffix and map behavior.
+POSIX basic regex, external/legacy maps, session variables, remaining map flags,
 relay chains, and broader proxy/overlay combinations remain. The compatibility
 matrix marks these as partial until the remaining schema, ACL, control,
 configuration, and differential cases pass.
@@ -801,6 +806,16 @@ same OpenLDAP names and numeric masks at startup and online, publishes changes
 atomically, restores the previous route on validation failure, and supports
 deletion. A live OpenLDAP differential pins the persisted values and result
 codes for named, numeric, invalid, and deleted configurations.
+`olcLogFile`, `olcLogFileFormat`, `olcLogFileOnly`, and `olcLogFileRotate`
+configure the same structured event stream at startup and online. Logfiles are
+prepared before commit, then installed without reopening; failed transactions
+close candidate descriptors and preserve the previous route. Same-path changes
+retain the descriptor and rotation state. Debug/default, syslog UTC/localtime,
+and fixed-nine-digit RFC3339 UTC prefixes, append mode, `0640` creation,
+size/age rotation, and `.01` through `.99` retention are implemented in Go.
+The logger serializes writes, rotation, destination replacement, and shutdown.
+See [logfile compatibility](logging.md) for differential evidence and deliberate
+security and failure-handling differences from OpenLDAP.
 On SIGINT, SIGTERM, or Unix SIGHUP, the daemon stops accepting connections,
 completes already accepted ordinary operations, abandons persistent Sync
 searches, and only force-cancels remaining work after `-shutdown-timeout`. The
@@ -1503,9 +1518,8 @@ and the runnable server configuration before the same transaction commits, so
 an invalid supported setting rolls back the whole import.
 
 The shared runtime capability validator rejects behavior-bearing settings that
-ldap-go cannot honor, including SASL channel-binding policy, logfile routing,
-non-default thread/monitor controls, and non-default LMDB durability/resource
-settings. OpenLDAP-generated safe defaults remain importable. Physical
+ldap-go cannot honor, including non-default thread controls and LMDB-specific
+durability/resource settings. OpenLDAP-generated safe defaults remain importable. Physical
 `olcDbDirectory`, `olcDbMaxSize`, args/pid paths, and similar source metadata do
 not select the bbolt path or impose a quota; process flags, filesystem policy,
 and the service manager own those settings.

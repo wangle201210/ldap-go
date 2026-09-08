@@ -99,6 +99,8 @@ type saslDigestMD5IntegrityConnection struct {
 	sendSeq     uint64
 	receiveSeq  uint64
 	readPending []byte
+	writeErr    error
+	readErr     error
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -184,12 +186,17 @@ func saslDigestMD5SealingKey(
 	return key, nil
 }
 
-func (connection *saslDigestMD5IntegrityConnection) Write(value []byte) (int, error) {
+func (connection *saslDigestMD5IntegrityConnection) Write(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
 	connection.writeMu.Lock()
 	defer connection.writeMu.Unlock()
+	if connection.writeErr != nil {
+		return 0, connection.writeErr
+	}
+	// A partial frame cannot be retried with the same sequence number.
+	defer func() { connection.writeErr = err }()
 
 	written := 0
 	for written < len(value) {
@@ -248,12 +255,16 @@ func writeSASLDigestMD5Frame(writer io.Writer, frame []byte) error {
 	return nil
 }
 
-func (connection *saslDigestMD5IntegrityConnection) Read(value []byte) (int, error) {
+func (connection *saslDigestMD5IntegrityConnection) Read(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
 	connection.readMu.Lock()
 	defer connection.readMu.Unlock()
+	if connection.readErr != nil {
+		return 0, connection.readErr
+	}
+	defer func() { connection.readErr = err }()
 
 	for len(connection.readPending) == 0 {
 		message, err := connection.readFrame()
@@ -276,6 +287,7 @@ func (connection *saslDigestMD5IntegrityConnection) Close() error {
 		connection.closeErr = connection.Conn.Close()
 		connection.writeMu.Lock()
 		connection.readMu.Lock()
+		connection.writeErr, connection.readErr = net.ErrClosed, net.ErrClosed
 		clear(connection.sendKey[:])
 		clear(connection.receiveKey[:])
 		clear(connection.readPending)
@@ -379,6 +391,8 @@ type saslDigestMD5PrivacyConnection struct {
 	sendSeq     uint64
 	receiveSeq  uint64
 	readPending []byte
+	writeErr    error
+	readErr     error
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -553,12 +567,17 @@ func saslDigestMD5CBC(
 	clear(nextIV[:])
 }
 
-func (connection *saslDigestMD5PrivacyConnection) Write(value []byte) (int, error) {
+func (connection *saslDigestMD5PrivacyConnection) Write(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
 	connection.writeMu.Lock()
 	defer connection.writeMu.Unlock()
+	if connection.writeErr != nil {
+		return 0, connection.writeErr
+	}
+	// Encryption advances cipher state even when the transport write fails.
+	defer func() { connection.writeErr = err }()
 	written := 0
 	for written < len(value) {
 		if connection.sendSeq > math.MaxUint32 {
@@ -620,12 +639,16 @@ func (connection *saslDigestMD5PrivacyConnection) encodeFrame(
 	return frame
 }
 
-func (connection *saslDigestMD5PrivacyConnection) Read(value []byte) (int, error) {
+func (connection *saslDigestMD5PrivacyConnection) Read(value []byte) (count int, err error) {
 	if len(value) == 0 {
 		return 0, nil
 	}
 	connection.readMu.Lock()
 	defer connection.readMu.Unlock()
+	if connection.readErr != nil {
+		return 0, connection.readErr
+	}
+	defer func() { connection.readErr = err }()
 	for len(connection.readPending) == 0 {
 		message, err := connection.readFrame()
 		if err != nil {
@@ -647,6 +670,7 @@ func (connection *saslDigestMD5PrivacyConnection) Close() error {
 		connection.closeErr = connection.Conn.Close()
 		connection.writeMu.Lock()
 		connection.readMu.Lock()
+		connection.writeErr, connection.readErr = net.ErrClosed, net.ErrClosed
 		clear(connection.sendKey[:])
 		clear(connection.receiveKey[:])
 		if connection.sendCipher != nil {

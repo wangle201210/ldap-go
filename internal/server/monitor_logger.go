@@ -79,8 +79,10 @@ func parseMonitorLogMaskNumber(value string) (uint32, bool) {
 }
 
 type monitorLogHandler struct {
-	next    slog.Handler
-	monitor *monitorState
+	next       slog.Handler
+	monitor    *monitorState
+	attributes []byte
+	groups     []string
 }
 
 func (handler *monitorLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -93,28 +95,58 @@ func (handler *monitorLogHandler) Enabled(ctx context.Context, level slog.Level)
 
 func (handler *monitorLogHandler) Handle(ctx context.Context, record slog.Record) error {
 	mask, active := handler.monitor.logRoute()
-	if !active {
-		return handler.next.Handle(ctx, record)
+	if active {
+		categories, label := monitorLogEventCategory(record.Message)
+		if mask&categories == 0 {
+			return nil
+		}
+		record = record.Clone()
+		record.AddAttrs(slog.String("openldap_category", label))
 	}
-	categories, label := monitorLogEventCategory(record.Message)
-	if mask&categories == 0 {
+	var encoded []byte
+	if handler.monitor.configuredLogFile() != nil {
+		encoded = formatOpenLDAPLogMessage(record, handler.attributes, handler.groups)
+	}
+	handler.monitor.logFileMu.RLock()
+	fileOnly := false
+	if file := handler.monitor.configuredLogFile(); file != nil {
+		if encoded == nil {
+			// Retry outside the lock if a destination appeared while checking.
+			handler.monitor.logFileMu.RUnlock()
+			encoded = formatOpenLDAPLogMessage(record, handler.attributes, handler.groups)
+			handler.monitor.logFileMu.RLock()
+			file = handler.monitor.configuredLogFile()
+		}
+		if file != nil {
+			fileOnly = file.writeMessage(encoded) == nil && file.configuration.only
+		}
+	}
+	handler.monitor.logFileMu.RUnlock()
+	if fileOnly {
 		return nil
 	}
-	record.AddAttrs(slog.String("openldap_category", label))
 	return handler.next.Handle(ctx, record)
 }
 
 func (handler *monitorLogHandler) WithAttrs(attributes []slog.Attr) slog.Handler {
+	encoded := appendOpenLDAPLogAttributes(append([]byte(nil), handler.attributes...), handler.groups, attributes)
 	return &monitorLogHandler{
-		next:    handler.next.WithAttrs(attributes),
-		monitor: handler.monitor,
+		next:       handler.next.WithAttrs(attributes),
+		monitor:    handler.monitor,
+		attributes: encoded,
+		groups:     append([]string(nil), handler.groups...),
 	}
 }
 
 func (handler *monitorLogHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return handler
+	}
 	return &monitorLogHandler{
-		next:    handler.next.WithGroup(name),
-		monitor: handler.monitor,
+		next:       handler.next.WithGroup(name),
+		monitor:    handler.monitor,
+		attributes: handler.attributes,
+		groups:     append(append([]string(nil), handler.groups...), name),
 	}
 }
 

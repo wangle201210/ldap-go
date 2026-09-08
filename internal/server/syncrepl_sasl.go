@@ -67,13 +67,18 @@ type syncConsumerDIGESTMD5 struct {
 	realm            string
 	host             string
 	password         []byte
-	maxBufferSize    uint32
+	properties       syncConsumerSASLSecurityProperties
+	externalSSF      uint32
 	random           io.Reader
 
 	started         bool
 	done            bool
 	valid           bool
 	expectedRspauth string
+	qop             string
+	cipher          saslDigestMD5Cipher
+	peerMaxBuffer   uint32
+	sessionKey      []byte
 }
 
 func defaultSyncConsumerSASLSecurityProperties() syncConsumerSASLSecurityProperties {
@@ -222,6 +227,10 @@ func bindSyncConsumerSASL(
 	if err != nil {
 		return err
 	}
+	defer clearSyncConsumerSASLConversation(conversation)
+	if digest, ok := conversation.(*syncConsumerDIGESTMD5); ok {
+		digest.externalSSF = transport.ssf
+	}
 	if err := validateSyncConsumerSASLSecurity(
 		config.securityProperties,
 		mechanism,
@@ -234,6 +243,7 @@ func bindSyncConsumerSASL(
 	if err != nil {
 		return fmt.Errorf("start SASL %s conversation: %w", mechanism, err)
 	}
+	defer func() { clear(response) }()
 	for round := 0; round < syncConsumerMaxSASLRounds; round++ {
 		result, err := sendSyncConsumerSASLBind(
 			transport,
@@ -241,18 +251,22 @@ func bindSyncConsumerSASL(
 			response,
 			hasResponse,
 		)
+		clear(response)
+		response = nil
 		if err != nil {
 			return fmt.Errorf("SASL %s bind: %w", mechanism, err)
 		}
 		switch result.code {
 		case ldap.LDAPResultSaslBindInProgress:
 			if conversation.Done() {
+				clear(result.saslCredentials)
 				return fmt.Errorf(
 					"SASL %s server requested another response after client completion",
 					mechanism,
 				)
 			}
 			response, err = conversation.Next(result.saslCredentials)
+			clear(result.saslCredentials)
 			if err != nil {
 				return fmt.Errorf(
 					"process SASL %s challenge: %w",
@@ -262,8 +276,13 @@ func bindSyncConsumerSASL(
 			}
 			hasResponse = true
 		case ldap.LDAPResultSuccess:
+			if conversation.Done() && len(result.saslCredentials) != 0 {
+				clear(result.saslCredentials)
+				return fmt.Errorf("SASL %s server returned unexpected completion data", mechanism)
+			}
 			if !conversation.Done() {
 				response, err = conversation.Next(result.saslCredentials)
+				clear(result.saslCredentials)
 				if err != nil {
 					return fmt.Errorf(
 						"verify SASL %s completion: %w",
@@ -284,8 +303,21 @@ func bindSyncConsumerSASL(
 					mechanism,
 				)
 			}
+			if digest, ok := conversation.(*syncConsumerDIGESTMD5); ok {
+				if err := installSyncConsumerDIGESTMD5Security(
+					transport,
+					digest,
+				); err != nil {
+					return fmt.Errorf(
+						"install SASL DIGEST-MD5 %s security layer: %w",
+						digest.qop,
+						err,
+					)
+				}
+			}
 			return nil
 		default:
+			clear(result.saslCredentials)
 			return fmt.Errorf("SASL %s bind: %w", mechanism, result.err())
 		}
 	}
@@ -383,7 +415,7 @@ func newSyncConsumerSASLConversationForProvider(
 			realm:            config.realm,
 			host:             host,
 			password:         bytes.Clone(config.credentials),
-			maxBufferSize:    config.securityProperties.maxBufferSize,
+			properties:       config.securityProperties,
 			random:           rand.Reader,
 		}, nil
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
@@ -442,6 +474,20 @@ func validateSyncConsumerSASLSecurity(
 	mechanism string,
 	externalSSF uint32,
 ) error {
+	if properties.minSSF > properties.maxSSF {
+		return fmt.Errorf(
+			"SASL minssf=%d exceeds maxssf=%d",
+			properties.minSSF,
+			properties.maxSSF,
+		)
+	}
+	if properties.maxBufferSize > maxSASLDigestMD5BufferSize {
+		return fmt.Errorf(
+			"SASL maxbufsize=%d exceeds the RFC limit %d",
+			properties.maxBufferSize,
+			maxSASLDigestMD5BufferSize,
+		)
+	}
 	switch {
 	case properties.noDictionary && mechanism != "GSSAPI":
 		return errors.New(
@@ -465,11 +511,21 @@ func validateSyncConsumerSASLSecurity(
 		return errors.New(
 			"SASL PLAIN is disabled by secprops=noplain without TLS, TLCP, or ldapi",
 		)
+	case properties.minSSF > externalSSF && mechanism == "GSSAPI":
+		return nil
+	case properties.minSSF > externalSSF &&
+		mechanism == "DIGEST-MD5" &&
+		properties.maxBufferSize != 0 &&
+		properties.minSSF-externalSSF <= saslDigestMD5RC4SSF &&
+		properties.maxSSF > externalSSF &&
+		properties.maxSSF-externalSSF >= properties.minSSF-externalSSF:
+		return nil
 	case properties.minSSF > externalSSF:
 		return fmt.Errorf(
-			"SASL minssf=%d exceeds transport SSF %d; SASL security layers are not implemented",
+			"SASL minssf=%d cannot be satisfied by transport SSF %d and mechanism %s",
 			properties.minSSF,
 			externalSSF,
+			mechanism,
 		)
 	default:
 		return nil
@@ -642,16 +698,20 @@ func (conversation *syncConsumerDIGESTMD5) respond(
 		strings.EqualFold(stale, "true") {
 		return nil, errors.New("DIGEST-MD5 server marked the nonce stale")
 	}
-	qop := directives["qop"]
-	if qop == "" {
-		qop = saslDigestMD5AuthenticationQOP
+	offeredQOP := directives["qop"]
+	if offeredQOP == "" {
+		offeredQOP = saslDigestMD5AuthenticationQOP
 	}
-	if !syncConsumerDIGESTMD5QOPContains(qop, saslDigestMD5AuthenticationQOP) {
-		return nil, fmt.Errorf(
-			"DIGEST-MD5 challenge qop %q does not offer auth",
-			qop,
-		)
+	qop, selectedCipher, err := selectSyncConsumerDIGESTMD5Security(
+		offeredQOP,
+		directives["cipher"],
+		conversation.properties,
+		conversation.externalSSF,
+	)
+	if err != nil {
+		return nil, err
 	}
+	peerMaxBuffer := uint32(saslDigestMD5DefaultMaxBuffer)
 	if rawMax, present := directives["maxbuf"]; present {
 		maximum, err := strconv.ParseUint(rawMax, 10, 32)
 		if err != nil || maximum <= 16 || maximum > maxSASLDigestMD5BufferSize {
@@ -660,15 +720,28 @@ func (conversation *syncConsumerDIGESTMD5) respond(
 				rawMax,
 			)
 		}
+		peerMaxBuffer = uint32(maximum)
 	}
-	if conversation.maxBufferSize != 0 &&
-		(conversation.maxBufferSize <= 16 ||
-			conversation.maxBufferSize > maxSASLDigestMD5BufferSize) {
+	if conversation.properties.maxBufferSize != 0 &&
+		(conversation.properties.maxBufferSize <= 16 ||
+			conversation.properties.maxBufferSize > maxSASLDigestMD5BufferSize) {
 		return nil, fmt.Errorf(
 			"DIGEST-MD5 maxbuf %d is outside [17..%d]",
-			conversation.maxBufferSize,
+			conversation.properties.maxBufferSize,
 			maxSASLDigestMD5BufferSize,
 		)
+	}
+	if qop != saslDigestMD5AuthenticationQOP {
+		minimumPeer, minimumLocal := uint32(saslDigestMD5IntegrityOverhead+1), uint32(saslDigestMD5IntegrityOverhead+1)
+		if qop == saslDigestMD5ConfidentialityQOP {
+			minimumPeer = 26
+			if selectedCipher.mode != saslDigestMD5CipherModeRC4 {
+				minimumPeer, minimumLocal = 30, 26
+			}
+		}
+		if peerMaxBuffer < minimumPeer || conversation.properties.maxBufferSize < minimumLocal {
+			return nil, fmt.Errorf("DIGEST-MD5 maxbuf is too small for %s %s", qop, selectedCipher.name)
+		}
 	}
 
 	realm := conversation.realm
@@ -695,10 +768,11 @@ func (conversation *syncConsumerDIGESTMD5) respond(
 		nonce:            nonce,
 		cnonce:           cnonce,
 		nonceCount:       1,
-		qop:              saslDigestMD5AuthenticationQOP,
+		qop:              qop,
 		digestURI:        "ldap/" + conversation.host,
 		authorization:    conversation.authorizationID,
 		hasAuthorization: conversation.authorizationID != "",
+		cipher:           selectedCipher.name,
 	}
 	secret := calculateSASLDigestMD5Secret(
 		response.username,
@@ -707,12 +781,21 @@ func (conversation *syncConsumerDIGESTMD5) respond(
 		true,
 	)
 	digest, rspauth := calculateSASLDigestMD5Exchange(secret, response)
+	if qop != saslDigestMD5AuthenticationQOP {
+		conversation.sessionKey = calculateSASLDigestMD5SessionKey(
+			secret,
+			response,
+		)
+	}
 	clear(secret)
 	conversation.expectedRspauth = rspauth
+	conversation.qop = qop
+	conversation.cipher = selectedCipher
+	conversation.peerMaxBuffer = peerMaxBuffer
 	return formatSyncConsumerDIGESTMD5Response(
 		response,
 		digest,
-		conversation.maxBufferSize,
+		conversation.properties.maxBufferSize,
 		charsetOffered,
 	), nil
 }
@@ -720,6 +803,9 @@ func (conversation *syncConsumerDIGESTMD5) respond(
 func (conversation *syncConsumerDIGESTMD5) verifyServer(
 	challenge []byte,
 ) ([]byte, error) {
+	if len(challenge) == 0 || len(challenge) >= maxSASLDigestMD5ChallengeSize {
+		return nil, errors.New("DIGEST-MD5 rspauth size is invalid")
+	}
 	directives, err := parseSASLDigestMD5Directives(challenge)
 	if err != nil {
 		return nil, fmt.Errorf("parse DIGEST-MD5 rspauth: %w", err)
@@ -821,6 +907,9 @@ func formatSyncConsumerDIGESTMD5Response(
 			`,authzid="%s"`,
 			quoteSASLDigestMD5Value(response.authorization),
 		)
+	}
+	if response.cipher != "" {
+		fmt.Fprintf(&value, ",cipher=%s", response.cipher)
 	}
 	if maxBufferSize != 0 {
 		fmt.Fprintf(&value, ",maxbuf=%d", maxBufferSize)

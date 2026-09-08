@@ -57,6 +57,12 @@ func (server *Server) handleSASLBind(
 		))
 	}
 
+	if session == nil && state.saslAuthenticated {
+		// slap_sasl_bind reopens a completed Cyrus context without restoring
+		// SASL_CHANNEL_BINDING. Keep the TLS context's policy until this point.
+		state.saslChannelBinding = nil
+	}
+
 	switch mechanism {
 	case "EXTERNAL":
 		clearSASLSession(state)
@@ -181,7 +187,7 @@ func (server *Server) handleSASLBind(
 	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
 		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		if saslSCRAMIsPlus(mechanism) {
-			if !saslSCRAMPlusAvailable(state.connection) {
+			if len(state.saslChannelBinding) == 0 {
 				clearSASLSession(state)
 				return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 					message.ID,
@@ -612,7 +618,7 @@ func supportedSASLMechanisms(state *connectionState) []string {
 		"SCRAM-SHA-256",
 		"SCRAM-SHA-1",
 	} {
-		if saslSCRAMPlusAvailable(state.connection) {
+		if len(state.saslChannelBinding) != 0 {
 			plus := mechanism + "-PLUS"
 			if saslMechanismPolicyFailure(
 				properties,

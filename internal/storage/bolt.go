@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 
 var (
 	entriesBucket             = []byte("entries")
+	entryCountsBucket         = []byte("entries:count")
 	metaBucket                = []byte("metadata")
 	equalityIndexBucket       = []byte("indexes:eq")
 	equalityIndexConfigBucket = []byte("indexes:eq:config")
@@ -80,11 +82,13 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 	db.NoGrowSync = runtime.GOOS == "darwin"
 	store := &Bolt{db: db, pathLock: pathLock}
 	var (
-		initialRevision uint64
-		needsBuckets    bool
+		initialRevision  uint64
+		needsBuckets     bool
+		needsEntryCounts bool
 	)
 	if err := db.View(func(tx *bolt.Tx) error {
 		initialRevision = uint64(tx.ID())
+		needsEntryCounts = tx.Bucket(entryCountsBucket) == nil
 		for _, name := range [][]byte{
 			entriesBucket,
 			metaBucket,
@@ -97,6 +101,7 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 				break
 			}
 		}
+		needsBuckets = needsBuckets || needsEntryCounts
 		return nil
 	}); err != nil {
 		_ = store.Close()
@@ -108,6 +113,10 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 			if _, err := tx.CreateBucketIfNotExists(entriesBucket); err != nil {
 				return err
 			}
+			counts, err := tx.CreateBucketIfNotExists(entryCountsBucket)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.CreateBucketIfNotExists(metaBucket); err != nil {
 				return err
 			}
@@ -117,8 +126,13 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 			if _, err := tx.CreateBucketIfNotExists(equalityIndexConfigBucket); err != nil {
 				return err
 			}
-			_, err := tx.CreateBucketIfNotExists(equalityIndexRefBucket)
-			return err
+			if _, err := tx.CreateBucketIfNotExists(equalityIndexRefBucket); err != nil {
+				return err
+			}
+			if needsEntryCounts {
+				return rebuildBoltEntryCounts(tx.Bucket(entriesBucket), counts)
+			}
+			return nil
 		}); err != nil {
 			_ = store.Close()
 			return nil, fmt.Errorf("initialize database: %w", err)
@@ -346,6 +360,7 @@ type boltTx struct {
 	tx                   *bolt.Tx
 	fillPercent          float64
 	entries              *bolt.Bucket
+	entryCounts          *bolt.Bucket
 	meta                 *bolt.Bucket
 	equalityIndexes      *bolt.Bucket
 	equalityIndexConfigs *bolt.Bucket
@@ -364,11 +379,105 @@ func newBoltTx(ctx context.Context, tx *bolt.Tx) *boltTx {
 		ctx:                  ctx,
 		tx:                   tx,
 		entries:              tx.Bucket(entriesBucket),
+		entryCounts:          tx.Bucket(entryCountsBucket),
 		meta:                 tx.Bucket(metaBucket),
 		equalityIndexes:      tx.Bucket(equalityIndexBucket),
 		equalityIndexConfigs: tx.Bucket(equalityIndexConfigBucket),
 		equalityIndexRefs:    tx.Bucket(equalityIndexRefBucket),
 	}
+}
+
+func boltEntryCountKey(partition string) []byte {
+	return append([]byte{0}, partition...)
+}
+
+func rebuildBoltEntryCounts(entries, counts *bolt.Bucket) error {
+	if entries == nil || counts == nil {
+		return ErrPartitionEntryCountUnavailable
+	}
+	byPartition := make(map[string]uint64)
+	if err := entries.ForEach(func(key, value []byte) error {
+		if value == nil {
+			return fmt.Errorf("entries bucket contains nested bucket %q", key)
+		}
+		partition, _ := splitPartitionedEntryKey(string(key))
+		byPartition[partition]++
+		return nil
+	}); err != nil {
+		return err
+	}
+	for partition, count := range byPartition {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], count)
+		if err := counts.Put(boltEntryCountKey(partition), encoded[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tx *boltTx) PartitionEntryCount(partition string) (uint64, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if tx.entryCounts == nil {
+		return 0, ErrPartitionEntryCountUnavailable
+	}
+	encoded := tx.entryCounts.Get(boltEntryCountKey(partition))
+	if encoded == nil {
+		return 0, nil
+	}
+	if len(encoded) != 8 {
+		return 0, fmt.Errorf("partition %q has invalid entry count", partition)
+	}
+	return binary.BigEndian.Uint64(encoded), nil
+}
+
+func (tx *boltTx) setPartitionEntryCount(partition string, count uint64) error {
+	if tx.entryCounts == nil {
+		return ErrPartitionEntryCountUnavailable
+	}
+	key := boltEntryCountKey(partition)
+	if count == 0 {
+		return tx.entryCounts.Delete(key)
+	}
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], count)
+	return tx.entryCounts.Put(key, encoded[:])
+}
+
+func (tx *boltTx) putEntry(key, value []byte) error {
+	exists := tx.entries.Get(key) != nil
+	if err := tx.entries.Put(key, value); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	partition, _ := splitPartitionedEntryKey(string(key))
+	count, err := tx.PartitionEntryCount(partition)
+	if err != nil {
+		return err
+	}
+	return tx.setPartitionEntryCount(partition, count+1)
+}
+
+func (tx *boltTx) deleteEntry(key []byte) error {
+	if tx.entries.Get(key) == nil {
+		return nil
+	}
+	partition, _ := splitPartitionedEntryKey(string(key))
+	count, err := tx.PartitionEntryCount(partition)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("partition %q entry count underflow", partition)
+	}
+	if err := tx.entries.Delete(key); err != nil {
+		return err
+	}
+	return tx.setPartitionEntryCount(partition, count-1)
 }
 
 func (tx *boltTx) setFillPercent(fillPercent float64) {
@@ -385,6 +494,7 @@ func (tx *boltTx) applyFillPercent() {
 	}
 	for _, bucket := range []*bolt.Bucket{
 		tx.entries,
+		tx.entryCounts,
 		tx.meta,
 		tx.equalityIndexes,
 		tx.equalityIndexConfigs,
@@ -838,6 +948,9 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 			)
 		}
 	}
+	if err := tx.setPartitionEntryCount(partition, uint64(report.Entries)); err != nil {
+		return DNIdentityMigrationReport{}, err
+	}
 	if err := tx.setSchemaAwareDNIdentityReady(partition); err != nil {
 		return DNIdentityMigrationReport{}, err
 	}
@@ -964,7 +1077,7 @@ func (tx *boltTx) putInWithDN(
 		if err != nil {
 			return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 		}
-		return tx.entries.Put(key, value)
+		return tx.putEntry(key, value)
 	}
 	existingKeys := make(map[string]struct{})
 	if tx.entries.Get(key) != nil {
@@ -1000,14 +1113,14 @@ func (tx *boltTx) putInWithDN(
 	if err != nil {
 		return fmt.Errorf("encode entry %q: %w", entry.DN, err)
 	}
-	if err := tx.entries.Put(key, value); err != nil {
+	if err := tx.putEntry(key, value); err != nil {
 		return err
 	}
 	for existingKey := range existingKeys {
 		if existingKey == string(key) {
 			continue
 		}
-		if err := tx.entries.Delete([]byte(existingKey)); err != nil {
+		if err := tx.deleteEntry([]byte(existingKey)); err != nil {
 			return err
 		}
 	}
@@ -1074,7 +1187,7 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
 				return err
 			}
-			if err := tx.entries.Delete(key); err != nil {
+			if err := tx.deleteEntry(key); err != nil {
 				return err
 			}
 			return tx.invalidateEqualityIndexes(partition)
@@ -1118,7 +1231,7 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 	if foundKey == nil {
 		return ErrEntryNotFound
 	}
-	if err := tx.entries.Delete(foundKey); err != nil {
+	if err := tx.deleteEntry(foundKey); err != nil {
 		return err
 	}
 	return tx.invalidateEqualityIndexes(partition)
@@ -1136,6 +1249,14 @@ func (tx *boltTx) Clear() error {
 		return err
 	}
 	tx.entries = bucket
+	if err := tx.tx.DeleteBucket(entryCountsBucket); err != nil {
+		return err
+	}
+	counts, err := tx.tx.CreateBucket(entryCountsBucket)
+	if err != nil {
+		return err
+	}
+	tx.entryCounts = counts
 	if err := tx.tx.DeleteBucket(metaBucket); err != nil {
 		return err
 	}

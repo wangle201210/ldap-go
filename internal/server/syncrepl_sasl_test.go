@@ -287,7 +287,7 @@ func TestSyncConsumerDIGESTMD5RejectsInvalidChallenges(t *testing.T) {
 		{
 			name:      "unsupported qop",
 			challenge: `nonce="one",algorithm=md5-sess,qop="auth-int,auth-conf"`,
-			want:      "does not offer auth",
+			want:      "offers no qop or cipher satisfying",
 		},
 		{
 			name:      "unoffered configured realm",

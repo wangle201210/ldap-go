@@ -27,6 +27,8 @@ type rwmSuffixMapping struct {
 
 type rwmRuntimeConfiguration struct {
 	suffix                *rwmSuffixMapping
+	rewrite               *rwmRewriteEngine
+	responseDNContext     string
 	attributesToRemote    map[string]string
 	attributesToLocal     map[string]string
 	attributesDropMissing bool
@@ -68,11 +70,13 @@ func loadRWMRuntimeConfiguration(
 	database runtimeDatabase,
 ) (rwmRuntimeConfiguration, error) {
 	configuration := rwmRuntimeConfiguration{
+		responseDNContext:  "searchEntryDN",
 		attributesToRemote: make(map[string]string),
 		attributesToLocal:  make(map[string]string),
 		classesToRemote:    make(map[string]string),
 		classesToLocal:     make(map[string]string),
 	}
+	rewrite := newRWMRewriteEngine()
 	for _, raw := range entry.Values("olcRwmRewrite") {
 		value, err := stripRWMOrderingPrefix(string(raw))
 		if err != nil {
@@ -92,16 +96,34 @@ func loadRWMRuntimeConfiguration(
 		}
 		if len(words) == 0 {
 			return rwmRuntimeConfiguration{}, fmt.Errorf(
-				"%s olcRwmRewrite contains an empty unsupported rewrite directive; only suffixmassage is supported (map uses olcRwmMap)",
+				"%s olcRwmRewrite contains an empty rewrite directive",
 				entry.DN,
 			)
 		}
 		if !strings.EqualFold(words[0], "rwm-suffixmassage") &&
 			!strings.EqualFold(words[0], "suffixmassage") {
+			if database.relay == nil && database.ldapBackend == nil {
+				return rwmRuntimeConfiguration{}, fmt.Errorf(
+					"%s olcRwmRewrite common rewrite directives are not supported on local backend %s; only suffixmassage and olcRwmMap are supported",
+					entry.DN,
+					database.name,
+				)
+			}
+			if err := rewrite.parseDirective(words); err == nil {
+				continue
+			} else {
+				return rwmRuntimeConfiguration{}, fmt.Errorf(
+					"%s olcRwmRewrite %s: %w",
+					entry.DN,
+					words[0],
+					err,
+				)
+			}
+		}
+		if len(words) != 2 && len(words) != 3 {
 			return rwmRuntimeConfiguration{}, fmt.Errorf(
-				"%s olcRwmRewrite contains unsupported rewrite directive %q; only suffixmassage is supported (map uses olcRwmMap)",
+				"%s rwm suffixmassage expects [local] remote DN",
 				entry.DN,
-				words[0],
 			)
 		}
 		if configuration.suffix != nil {
@@ -125,10 +147,7 @@ func loadRWMRuntimeConfiguration(
 			localRaw = words[1]
 			remoteRaw = words[2]
 		default:
-			return rwmRuntimeConfiguration{}, fmt.Errorf(
-				"%s rwm suffixmassage expects [local] remote DN",
-				entry.DN,
-			)
+			panic("suffixmassage arity was validated")
 		}
 		local, err := parseRuntimeDN(localRaw, database.dnNormalizer)
 		if err != nil || local.Depth() == 0 {
@@ -154,6 +173,12 @@ func loadRWMRuntimeConfiguration(
 			)
 		}
 		configuration.suffix = &rwmSuffixMapping{local: local, remote: remote}
+		if err := rewrite.addSuffixMapping(configuration.suffix, configuration.responseDNContext); err != nil {
+			return rwmRuntimeConfiguration{}, fmt.Errorf("%s olcRwmRewrite suffixmassage: %w", entry.DN, err)
+		}
+	}
+	if rewrite.configured {
+		configuration.rewrite = rewrite
 	}
 
 	for _, raw := range entry.Values("olcRwmMap") {
@@ -627,6 +652,7 @@ func writerForDatabase(
 			writer:           backend,
 		}
 	}
+	writer = withDatabaseEntryLimit(writer, database)
 	partitioned := storage.WriterInPartition(writer, database.partition)
 	if database.dnNormalizer != nil && databaseUsesSchemaAwareContentStorage(database) {
 		partitioned = storage.WriterInPartitionWithNormalizerLegacy(
@@ -892,49 +918,64 @@ func (writer *rwmStorageWriter) DeleteMetadata(key string) error {
 func (configuration *rwmRuntimeConfiguration) mapDNToRemote(
 	dn directory.DN,
 ) (directory.DN, error) {
-	if configuration == nil || configuration.suffix == nil {
-		return dn, nil
-	}
-	local, err := configuration.normalizeDN(configuration.suffix.local)
-	if err != nil {
-		return directory.DN{}, err
-	}
-	remote, err := configuration.normalizeDN(configuration.suffix.remote)
-	if err != nil {
-		return directory.DN{}, err
-	}
-	comparisonDN, err := configuration.normalizeDN(dn)
-	if err != nil {
-		return directory.DN{}, err
-	}
-	if !local.Equal(comparisonDN) && !local.AncestorOf(comparisonDN) {
-		return dn, nil
-	}
-	return comparisonDN.ReplaceAncestor(local, remote)
+	return configuration.mapDNContext("default", dn, true)
 }
 
 func (configuration *rwmRuntimeConfiguration) mapDNToLocal(
 	dn directory.DN,
 ) (directory.DN, error) {
-	if configuration == nil || configuration.suffix == nil {
+	if configuration == nil {
 		return dn, nil
 	}
-	local, err := configuration.normalizeDN(configuration.suffix.local)
-	if err != nil {
-		return directory.DN{}, err
+	context := configuration.responseDNContext
+	if context == "" {
+		context = "searchEntryDN"
 	}
-	remote, err := configuration.normalizeDN(configuration.suffix.remote)
-	if err != nil {
-		return directory.DN{}, err
+	return configuration.mapDNContext(context, dn, false)
+}
+
+func (configuration *rwmRuntimeConfiguration) mapDNContext(context string, dn directory.DN, toRemote bool) (directory.DN, error) {
+	if configuration != nil && configuration.rewrite != nil {
+		return configuration.rewriteDN(context, dn, true)
 	}
-	comparisonDN, err := configuration.normalizeDN(dn)
-	if err != nil {
-		return directory.DN{}, err
+	if toRemote {
+		return configuration.mapDNToRemoteSuffixOnly(dn)
 	}
-	if !remote.Equal(comparisonDN) && !remote.AncestorOf(comparisonDN) {
+	return configuration.mapDNToLocalSuffixOnly(dn)
+}
+
+func (configuration *rwmRuntimeConfiguration) rewriteDN(
+	context string,
+	dn directory.DN,
+	fallbackToDefault bool,
+) (directory.DN, error) {
+	if configuration == nil || !configuration.rewrite.active() {
 		return dn, nil
 	}
-	return comparisonDN.ReplaceAncestor(remote, local)
+	var (
+		value   string
+		changed bool
+		err     error
+	)
+	if fallbackToDefault {
+		value, changed, err = configuration.rewrite.rewrite(context, dn.String())
+	} else {
+		value, changed, err = configuration.rewrite.rewriteDefinedContext(context, dn.String())
+	}
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !changed {
+		return dn, nil
+	}
+	mapped, err := directory.ParseDN(value)
+	if err != nil {
+		return directory.DN{}, operationFailed(
+			ldapwire.ResultOther,
+			fmt.Sprintf("RWM context %s produced invalid DN %q", context, value),
+		)
+	}
+	return configuration.normalizeDN(mapped)
 }
 
 func (configuration *rwmRuntimeConfiguration) normalizeDN(
@@ -944,6 +985,25 @@ func (configuration *rwmRuntimeConfiguration) normalizeDN(
 		return dn, nil
 	}
 	return directory.ParseDNWithNormalizer(dn.String(), configuration.schema)
+}
+
+func (configuration *rwmRuntimeConfiguration) rewriteFilter(filter directory.Filter) (directory.Filter, error) {
+	if configuration == nil || !configuration.rewrite.active() {
+		return filter, nil
+	}
+	value, err := encodeSockFilter(filter)
+	if err != nil {
+		return directory.Filter{}, err
+	}
+	value, changed, err := configuration.rewrite.rewrite("searchFilter", value)
+	if err != nil || !changed {
+		return filter, err
+	}
+	mapped, err := ldapwire.CompileFilter(value)
+	if err != nil {
+		return directory.Filter{}, operationFailed(ldapwire.ResultOther, "RWM searchFilter produced an invalid filter")
+	}
+	return mapped, nil
 }
 
 func (configuration *rwmRuntimeConfiguration) mapEntryToRemote(
@@ -962,14 +1022,23 @@ func (configuration *rwmRuntimeConfiguration) mapEntry(
 	entry directory.Entry,
 	toRemote bool,
 ) (directory.Entry, error) {
+	dnContext, attrContext := "addDN", "addAttrDN"
+	if !toRemote {
+		dnContext, attrContext = "searchEntryDN", "searchAttrDN"
+		if configuration != nil && configuration.responseDNContext != "" {
+			dnContext = configuration.responseDNContext
+		}
+	}
+	return configuration.mapEntryContexts(entry, toRemote, dnContext, attrContext)
+}
+
+func (configuration *rwmRuntimeConfiguration) mapEntryContexts(entry directory.Entry, toRemote bool, dnContext, attrContext string) (directory.Entry, error) {
 	dn, err := directory.ParseDN(entry.DN)
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	if toRemote {
-		dn, err = configuration.mapDNToRemote(dn)
-	} else {
-		dn, err = configuration.mapDNToLocal(dn)
+	if dnContext != "" {
+		dn, err = configuration.mapDNContext(dnContext, dn, toRemote)
 	}
 	if err != nil {
 		return directory.Entry{}, err
@@ -1004,8 +1073,13 @@ func (configuration *rwmRuntimeConfiguration) mapEntry(
 						attribute.Description,
 						description,
 					),
+					attrContext,
 				)
 				if err != nil {
+					if !toRemote && asOperationFailure(err) != nil &&
+						asOperationFailure(err).result.Code == ldapwire.ResultUnwillingToPerform {
+						continue
+					}
 					return directory.Entry{}, fmt.Errorf(
 						"map %s value in %s: %w",
 						attribute.Description,
@@ -1015,7 +1089,10 @@ func (configuration *rwmRuntimeConfiguration) mapEntry(
 				}
 			} else if strings.EqualFold(baseAttributeName(description), "ref") &&
 				(!toRemote || !configuration.preserveOutboundRefs) {
-				mapped = configuration.mapLDAPURLValue(value, toRemote)
+				mapped, err = configuration.mapLDAPURLValue(value, toRemote, "referralAttrDN")
+				if err != nil {
+					return directory.Entry{}, err
+				}
 			}
 			values = append(values, mapped)
 		}
@@ -1125,6 +1202,7 @@ func (configuration *rwmRuntimeConfiguration) mapDNReferenceValue(
 	value []byte,
 	toRemote bool,
 	nameAndOptionalUID bool,
+	context string,
 ) ([]byte, error) {
 	raw := string(value)
 	dnPart := raw
@@ -1139,11 +1217,7 @@ func (configuration *rwmRuntimeConfiguration) mapDNReferenceValue(
 	if err != nil {
 		return nil, err
 	}
-	if toRemote {
-		dn, err = configuration.mapDNToRemote(dn)
-	} else {
-		dn, err = configuration.mapDNToLocal(dn)
-	}
+	dn, err = configuration.mapDNContext(context, dn, toRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -1153,30 +1227,75 @@ func (configuration *rwmRuntimeConfiguration) mapDNReferenceValue(
 func (configuration *rwmRuntimeConfiguration) mapLDAPURLValue(
 	value []byte,
 	toRemote bool,
-) []byte {
+	context string,
+) ([]byte, error) {
 	parsed, err := url.Parse(string(value))
 	if err != nil || parsed.Scheme == "" || parsed.Path == "" {
-		return bytes.Clone(value)
+		return bytes.Clone(value), nil
 	}
 	rawDN, err := url.PathUnescape(strings.TrimPrefix(parsed.EscapedPath(), "/"))
 	if err != nil || rawDN == "" {
-		return bytes.Clone(value)
+		return bytes.Clone(value), nil
 	}
 	dn, err := directory.ParseDN(rawDN)
 	if err != nil {
-		return bytes.Clone(value)
+		return bytes.Clone(value), nil
 	}
-	if toRemote {
-		dn, err = configuration.mapDNToRemote(dn)
-	} else {
-		dn, err = configuration.mapDNToLocal(dn)
-	}
+	dn, err = configuration.mapDNContext(context, dn, toRemote)
 	if err != nil {
-		return bytes.Clone(value)
+		return nil, err
 	}
 	parsed.Path = "/" + dn.String()
 	parsed.RawPath = ""
-	return []byte(parsed.String())
+	return []byte(parsed.String()), nil
+}
+
+func (configuration *rwmRuntimeConfiguration) mapDNToRemoteSuffixOnly(
+	dn directory.DN,
+) (directory.DN, error) {
+	if configuration == nil || configuration.suffix == nil {
+		return dn, nil
+	}
+	local, err := configuration.normalizeDN(configuration.suffix.local)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	remote, err := configuration.normalizeDN(configuration.suffix.remote)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	comparisonDN, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !local.Equal(comparisonDN) && !local.AncestorOf(comparisonDN) {
+		return comparisonDN, nil
+	}
+	return comparisonDN.ReplaceAncestor(local, remote)
+}
+
+func (configuration *rwmRuntimeConfiguration) mapDNToLocalSuffixOnly(
+	dn directory.DN,
+) (directory.DN, error) {
+	if configuration == nil || configuration.suffix == nil {
+		return dn, nil
+	}
+	local, err := configuration.normalizeDN(configuration.suffix.local)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	remote, err := configuration.normalizeDN(configuration.suffix.remote)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	comparisonDN, err := configuration.normalizeDN(dn)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	if !remote.Equal(comparisonDN) && !remote.AncestorOf(comparisonDN) {
+		return comparisonDN, nil
+	}
+	return comparisonDN.ReplaceAncestor(remote, local)
 }
 
 func baseAttributeName(description string) string {

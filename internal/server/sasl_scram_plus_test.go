@@ -294,8 +294,7 @@ func TestSASLSCRAMPlusRejectsReplayedClientFinal(t *testing.T) {
 		[]byte(clientFirst),
 		true,
 	)
-	if err != nil || second.code != ldap.LDAPResultSaslBindInProgress ||
-		bytes.Equal(second.saslCredentials, first.saslCredentials) {
+	if err != nil || second.code != ldap.LDAPResultAuthMethodNotSupported {
 		t.Fatalf("second server-first = %#v, %v", second, err)
 	}
 	replayed, err := sendSyncConsumerSASLBind(
@@ -304,7 +303,7 @@ func TestSASLSCRAMPlusRejectsReplayedClientFinal(t *testing.T) {
 		[]byte(clientFinal),
 		true,
 	)
-	if err != nil || replayed.code != ldap.LDAPResultInvalidCredentials {
+	if err != nil || replayed.code != ldap.LDAPResultAuthMethodNotSupported {
 		t.Fatalf("replayed client-final = %#v, %v", replayed, err)
 	}
 }
@@ -343,7 +342,7 @@ func TestSASLSCRAMPlusRejectsTLCPStyleTransportWithoutStandardBinding(t *testing
 	defer local.Close()
 	defer remote.Close()
 	connection := saslSCRAMTLCPStyleConnection{Conn: local}
-	if saslSCRAMPlusAvailable(connection) {
+	if len(saslCBindingEndpoint.applicationData(connection)) != 0 {
 		t.Fatal("TLCP-style secure transport exposed a standard TLS SCRAM binding")
 	}
 }
@@ -388,6 +387,7 @@ func TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding(t *testing.T) {
 			store := storage.NewMemory()
 			seedDirectory(t, store)
 			seedSASLSCRAMConfiguration(t, store, mechanism)
+			setUnsupportedRuntimeConfigurationAttribute(t, store, "cn=config", saslCBindingAttribute, "tls-endpoint")
 			authority := newGlobalTLSTestAuthority(t)
 			certificate := issueSASLSCRAMPlusNativeCertificate(t, authority)
 			address, stop := startServer(t, store, Config{TLSConfig: &tls.Config{
@@ -500,6 +500,7 @@ func startSASLSCRAMPlusTestServer(
 	store := storage.NewMemory()
 	seedDirectory(t, store)
 	seedSASLSCRAMConfiguration(t, store, mechanism)
+	setUnsupportedRuntimeConfigurationAttribute(t, store, "cn=config", saslCBindingAttribute, "tls-endpoint")
 	authority := newGlobalTLSTestAuthority(t)
 	certificate := authority.issue(t, "localhost", true)
 	address, stop := startServer(t, store, Config{TLSConfig: &tls.Config{

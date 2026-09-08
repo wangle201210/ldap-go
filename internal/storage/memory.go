@@ -14,6 +14,7 @@ import (
 type Memory struct {
 	mu                   sync.RWMutex
 	entries              map[string]directory.Entry
+	entryCounts          map[string]uint64
 	dnIdentities         map[string]string
 	dnSources            map[string]string
 	equalityIndexConfigs map[string]EqualityIndexConfig
@@ -27,6 +28,7 @@ type Memory struct {
 func NewMemory() *Memory {
 	return &Memory{
 		entries:              make(map[string]directory.Entry),
+		entryCounts:          make(map[string]uint64),
 		dnIdentities:         make(map[string]string),
 		dnSources:            make(map[string]string),
 		equalityIndexConfigs: make(map[string]EqualityIndexConfig),
@@ -50,6 +52,7 @@ func (store *Memory) View(ctx context.Context, fn func(Reader) error) error {
 	return fn(&memoryTx{
 		ctx:                  ctx,
 		entries:              store.entries,
+		entryCounts:          store.entryCounts,
 		dnIdentities:         store.dnIdentities,
 		dnSources:            store.dnSources,
 		equalityIndexConfigs: store.equalityIndexConfigs,
@@ -87,6 +90,7 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	tx := &memoryTx{
 		ctx:                  ctx,
 		entries:              cloneEntryMap(store.entries),
+		entryCounts:          cloneEntryCounts(store.entryCounts),
 		dnIdentities:         cloneStringMap(store.dnIdentities),
 		dnSources:            cloneStringMap(store.dnSources),
 		equalityIndexConfigs: cloneEqualityIndexConfigs(store.equalityIndexConfigs),
@@ -102,6 +106,7 @@ func (store *Memory) Update(ctx context.Context, fn func(Writer) error) error {
 	}
 
 	store.entries = tx.entries
+	store.entryCounts = tx.entryCounts
 	store.dnIdentities = tx.dnIdentities
 	store.dnSources = tx.dnSources
 	store.equalityIndexConfigs = tx.equalityIndexConfigs
@@ -117,6 +122,7 @@ func (store *Memory) Close() error {
 	defer store.mu.Unlock()
 	store.closed = true
 	store.entries = nil
+	store.entryCounts = nil
 	store.dnIdentities = nil
 	store.dnSources = nil
 	store.equalityIndexConfigs = nil
@@ -129,6 +135,7 @@ func (store *Memory) Close() error {
 type memoryTx struct {
 	ctx                  context.Context
 	entries              map[string]directory.Entry
+	entryCounts          map[string]uint64
 	dnIdentities         map[string]string
 	dnSources            map[string]string
 	equalityIndexConfigs map[string]EqualityIndexConfig
@@ -144,6 +151,42 @@ func (tx *memoryTx) StorageSnapshotRevision() (uint64, bool) {
 		return 0, false
 	}
 	return tx.revision, true
+}
+
+func (tx *memoryTx) PartitionEntryCount(partition string) (uint64, error) {
+	if err := tx.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return tx.entryCounts[partition], nil
+}
+
+func (tx *memoryTx) putEntry(
+	partition,
+	key string,
+	entry directory.Entry,
+) {
+	if _, exists := tx.entries[key]; !exists {
+		tx.entryCounts[partition]++
+	}
+	tx.entries[key] = entry
+}
+
+func (tx *memoryTx) deleteEntry(key string) error {
+	if _, exists := tx.entries[key]; !exists {
+		return nil
+	}
+	partition, _ := splitPartitionedEntryKey(key)
+	count := tx.entryCounts[partition]
+	if count == 0 {
+		return fmt.Errorf("partition %q entry count underflow", partition)
+	}
+	delete(tx.entries, key)
+	if count == 1 {
+		delete(tx.entryCounts, partition)
+	} else {
+		tx.entryCounts[partition] = count - 1
+	}
+	return nil
 }
 
 func (tx *memoryTx) Get(dn directory.DN) (directory.Entry, error) {
@@ -441,7 +484,7 @@ func (tx *memoryTx) putInWithDN(
 		if _, exists := tx.entries[key]; exists && !replace {
 			return ErrEntryExists
 		}
-		tx.entries[key] = entry.Clone()
+		tx.putEntry(partition, key, entry.Clone())
 		tx.dnIdentities[key] = identity
 		tx.dnSources[key] = entry.DN
 		return nil
@@ -459,7 +502,7 @@ func (tx *memoryTx) putInWithDN(
 	if len(existingKeys) > 0 && !replace {
 		return ErrEntryExists
 	}
-	tx.entries[key] = entry.Clone()
+	tx.putEntry(partition, key, entry.Clone())
 	if isSchemaAwareDNKey(identity) {
 		tx.dnIdentities[key] = identity
 		tx.dnSources[key] = entry.DN
@@ -469,7 +512,9 @@ func (tx *memoryTx) putInWithDN(
 	}
 	for existingKey := range existingKeys {
 		if existingKey != key {
-			delete(tx.entries, existingKey)
+			if err := tx.deleteEntry(existingKey); err != nil {
+				return err
+			}
 			delete(tx.dnIdentities, existingKey)
 			delete(tx.dnSources, existingKey)
 		}
@@ -504,7 +549,9 @@ func (tx *memoryTx) Delete(dn directory.DN) error {
 	if foundKey == "" {
 		return ErrEntryNotFound
 	}
-	delete(tx.entries, foundKey)
+	if err := tx.deleteEntry(foundKey); err != nil {
+		return err
+	}
 	delete(tx.dnIdentities, foundKey)
 	delete(tx.dnSources, foundKey)
 	partition, _ := splitPartitionedEntryKey(foundKey)
@@ -534,7 +581,9 @@ func (tx *memoryTx) DeleteIn(partition string, dn directory.DN) error {
 			if err := validateDirectIdentityLookup(dn.Key(), dn); err != nil {
 				return err
 			}
-			delete(tx.entries, key)
+			if err := tx.deleteEntry(key); err != nil {
+				return err
+			}
 			delete(tx.dnIdentities, key)
 			delete(tx.dnSources, key)
 			tx.invalidateEqualityIndexes(partition)
@@ -571,7 +620,9 @@ func (tx *memoryTx) DeleteIn(partition string, dn directory.DN) error {
 	if foundKey == "" {
 		return ErrEntryNotFound
 	}
-	delete(tx.entries, foundKey)
+	if err := tx.deleteEntry(foundKey); err != nil {
+		return err
+	}
 	delete(tx.dnIdentities, foundKey)
 	delete(tx.dnSources, foundKey)
 	tx.invalidateEqualityIndexes(partition)
@@ -583,6 +634,7 @@ func (tx *memoryTx) Clear() error {
 		return errorsReadOnly()
 	}
 	tx.entries = make(map[string]directory.Entry)
+	tx.entryCounts = make(map[string]uint64)
 	tx.dnIdentities = make(map[string]string)
 	tx.dnSources = make(map[string]string)
 	tx.equalityIndexConfigs = make(map[string]EqualityIndexConfig)
@@ -768,6 +820,11 @@ func (tx *memoryTx) migrateSchemaAwareDNIdentitiesIn(
 		tx.dnIdentities[entry.newKey] = entry.identity
 		tx.dnSources[entry.newKey] = entry.entry.DN
 	}
+	if report.Entries == 0 {
+		delete(tx.entryCounts, partition)
+	} else {
+		tx.entryCounts[partition] = uint64(report.Entries)
+	}
 	tx.setSchemaAwareDNIdentityReady(partition)
 	if indexed {
 		config, err := normalizeEqualityIndexConfig(indexSchema.EqualityIndexConfiguration())
@@ -818,6 +875,14 @@ func cloneEntryMap(entries map[string]directory.Entry) map[string]directory.Entr
 	cloned := make(map[string]directory.Entry, len(entries))
 	for key, entry := range entries {
 		cloned[key] = entry.Clone()
+	}
+	return cloned
+}
+
+func cloneEntryCounts(counts map[string]uint64) map[string]uint64 {
+	cloned := make(map[string]uint64, len(counts))
+	for partition, count := range counts {
+		cloned[partition] = count
 	}
 	return cloned
 }

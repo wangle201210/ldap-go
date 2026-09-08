@@ -290,6 +290,16 @@ func (transport *syncConsumerTransport) replaceConnection(connection net.Conn) {
 	transport.connection = connection
 }
 
+func (transport *syncConsumerTransport) installSASLSecurityLayer(
+	connection net.Conn,
+	ssf uint32,
+) {
+	transport.replaceConnection(connection)
+	if ssf > transport.ssf {
+		transport.ssf = ssf
+	}
+}
+
 func (transport *syncConsumerTransport) close() error {
 	return transport.currentConnection().Close()
 }

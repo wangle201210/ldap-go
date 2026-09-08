@@ -342,6 +342,11 @@ func putPartitionEntryWithEqualityIndexes(
 	} else if !errors.Is(err, ErrEntryNotFound) {
 		return true, err
 	}
+	if before == nil || replace {
+		if err := validateStorageEntry(writer, partition, entry); err != nil {
+			return true, err
+		}
+	}
 	if err := indexed.putInWithEqualityIndexes(
 		partition,
 		entry,

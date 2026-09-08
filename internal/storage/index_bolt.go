@@ -276,7 +276,7 @@ func (tx *boltTx) putInWithEqualityIndexes(
 		); err != nil {
 			return err
 		}
-		if err := tx.entries.Delete([]byte(key)); err != nil {
+		if err := tx.deleteEntry([]byte(key)); err != nil {
 			return err
 		}
 	}
@@ -331,7 +331,7 @@ func (tx *boltTx) deleteInWithEqualityIndexes(
 	); err != nil {
 		return err
 	}
-	return tx.entries.Delete([]byte(key))
+	return tx.deleteEntry([]byte(key))
 }
 
 func (tx *boltTx) rebuildEqualityIndexes(

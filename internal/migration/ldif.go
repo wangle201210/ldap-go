@@ -16,6 +16,7 @@ import (
 	"github.com/go-ldap/ldif"
 	"github.com/google/uuid"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/mdbentry"
 	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -477,6 +478,9 @@ func importLDIF(
 				return err
 			}
 		}
+		if err := validateImportedEntrySizes(tx, importedContent, options.Schema); err != nil {
+			return err
+		}
 		discardedPartitions := make(map[string]struct{})
 		for _, imported := range importedContent {
 			if imported.target.discardsOfflineImport() {
@@ -631,16 +635,16 @@ func applyImportedOperationalAttributes(
 			entry.ReplaceValues("creatorsName", [][]byte{[]byte(imported.toolTarget.rootDN)})
 		}
 		if len(entry.Values("createTimestamp")) == 0 {
-			entry.ReplaceValues("createTimestamp", [][]byte{[]byte(timestamp)})
+			entry.ReplaceRawNormalizedValues("createTimestamp", [][]byte{[]byte(timestamp)})
 		}
 		if len(entry.Values("entryCSN")) == 0 {
-			entry.ReplaceValues("entryCSN", [][]byte{[]byte(csns.next(serverID))})
+			entry.ReplaceRawNormalizedValues("entryCSN", [][]byte{[]byte(csns.next(serverID))})
 		}
 		if len(entry.Values("modifiersName")) == 0 {
 			entry.ReplaceValues("modifiersName", [][]byte{[]byte(imported.toolTarget.rootDN)})
 		}
 		if len(entry.Values("modifyTimestamp")) == 0 {
-			entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
+			entry.ReplaceRawNormalizedValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 		}
 		if err := storage.PutInWithDN(
 			tx,
@@ -915,6 +919,9 @@ func updateImportedContextCSN(
 		values[index] = maximum[uint16(sid)]
 	}
 	contextEntry.ReplaceValues("contextCSN", values)
+	if err := mdbentry.Check(contextEntry, registry, target.maxEntrySize); err != nil {
+		return fmt.Errorf("store contextCSN on %q: %w", contextEntry.DN, err)
+	}
 	if target.config {
 		if err := tx.PutIn(target.partition, contextEntry, true); err != nil {
 			return fmt.Errorf("store contextCSN on %q: %w", contextDN.String(), err)

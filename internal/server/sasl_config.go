@@ -28,6 +28,7 @@ const (
 )
 
 type saslRuntimeConfiguration struct {
+	channelBinding      saslCBindingPolicy
 	host                string
 	realm               string
 	securityProperties  saslSecurityProperties
@@ -51,6 +52,11 @@ func loadSASLRuntimeConfiguration(
 			"load global SASL configuration: %w",
 			err,
 		)
+	}
+
+	configuration.channelBinding, err = saslCBindingEntryPolicy(entry)
+	if err != nil {
+		return saslRuntimeConfiguration{}, err
 	}
 
 	hostValues := entry.Values("olcSaslHost")

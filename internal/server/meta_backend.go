@@ -857,11 +857,13 @@ func loadMetaBackendSuffixRewrite(
 	normalizer directory.DNAttributeNormalizer,
 ) (*rwmRuntimeConfiguration, error) {
 	configuration := &rwmRuntimeConfiguration{
+		responseDNContext:  "searchResult",
 		attributesToRemote: make(map[string]string),
 		attributesToLocal:  make(map[string]string),
 		classesToRemote:    make(map[string]string),
 		classesToLocal:     make(map[string]string),
 	}
+	rewrite := newRWMRewriteEngine()
 	var mapping *rwmSuffixMapping
 	for _, raw := range entry.Values("olcDbSuffixMassage") {
 		words, err := splitRWMConfigurationWords(string(raw))
@@ -885,6 +887,9 @@ func loadMetaBackendSuffixRewrite(
 			return nil, err
 		}
 		mapping = parsed
+		if err := rewrite.addSuffixMapping(mapping, configuration.responseDNContext); err != nil {
+			return nil, fmt.Errorf("%s olcDbSuffixMassage: %w", entry.DN, err)
+		}
 	}
 	for _, raw := range entry.Values("olcDbRewrite") {
 		value, err := stripRWMOrderingPrefix(string(raw))
@@ -897,17 +902,22 @@ func loadMetaBackendSuffixRewrite(
 		}
 		if len(words) == 0 {
 			return nil, fmt.Errorf(
-				"%s olcDbRewrite contains an empty unsupported rewrite directive; only suffixmassage is supported (map uses olcDbMap)",
+				"%s olcDbRewrite contains an empty rewrite directive",
 				entry.DN,
 			)
 		}
 		if !strings.EqualFold(words[0], "suffixmassage") &&
 			!strings.EqualFold(words[0], "rwm-suffixmassage") {
-			return nil, fmt.Errorf(
-				"%s olcDbRewrite contains unsupported rewrite directive %q; only suffixmassage is supported (map uses olcDbMap)",
-				entry.DN,
-				words[0],
-			)
+			if err := rewrite.parseDirective(words); err == nil {
+				continue
+			} else {
+				return nil, fmt.Errorf(
+					"%s olcDbRewrite %s: %w",
+					entry.DN,
+					words[0],
+					err,
+				)
+			}
 		}
 		if len(words) != 3 {
 			return nil, fmt.Errorf(
@@ -928,6 +938,12 @@ func loadMetaBackendSuffixRewrite(
 		if err != nil {
 			return nil, err
 		}
+		if err := rewrite.addSuffixMapping(mapping, configuration.responseDNContext); err != nil {
+			return nil, fmt.Errorf("%s olcDbRewrite suffixmassage: %w", entry.DN, err)
+		}
+	}
+	if rewrite.configured {
+		configuration.rewrite = rewrite
 	}
 	for _, raw := range entry.Values("olcDbMap") {
 		value, err := stripRWMOrderingPrefix(string(raw))
@@ -1408,12 +1424,15 @@ func cloneMetaRWMRuntimeConfiguration(
 		return nil
 	}
 	clone := &rwmRuntimeConfiguration{
+		rewrite:               configuration.rewrite,
+		responseDNContext:     configuration.responseDNContext,
 		attributesToRemote:    cloneMetaStringMap(configuration.attributesToRemote),
 		attributesToLocal:     cloneMetaStringMap(configuration.attributesToLocal),
 		attributesDropMissing: configuration.attributesDropMissing,
 		classesToRemote:       cloneMetaStringMap(configuration.classesToRemote),
 		classesToLocal:        cloneMetaStringMap(configuration.classesToLocal),
 		classesDropMissing:    configuration.classesDropMissing,
+		preserveOutboundRefs:  configuration.preserveOutboundRefs,
 		schema:                configuration.schema,
 	}
 	if configuration.suffix != nil {

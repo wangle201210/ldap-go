@@ -437,6 +437,10 @@ func New(config Config) (*Server, error) {
 	if err := server.seedAccesslogClock(runtime); err != nil {
 		return nil, fmt.Errorf("initialize accesslog clock: %w", err)
 	}
+	runtime.preparedLogFile, err = server.monitor.prepareLogFile(runtime.logFile, server.clock)
+	if err != nil {
+		return nil, err
+	}
 	runtime.revision = server.nextRuntimeRevision()
 	server.activateRuntime(runtime)
 	started = true
@@ -465,6 +469,7 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if listener == nil {
 		return errors.New("listener is required")
 	}
+	defer server.monitor.closeLogFile()
 	if err := server.syncConsumers.start(ctx); err != nil {
 		return err
 	}
@@ -615,6 +620,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			return
 		}
 		state.connection = secured
+		state.saslChannelBinding = server.captureSASLCBinding(secured)
 		state.secure = true
 		state.tlsSSF = connectionSecurityStrength(secured, true)
 		state.externalSSF = max(state.transportSSF, state.tlsSSF)
@@ -1794,6 +1800,9 @@ func (server *Server) dispatch(
 			return false, err
 		}
 	}
+	if handled, err := server.tryRWMRewriteRelayOperation(ctx, connection, state, message); handled {
+		return false, err
+	}
 	switch request := message.Request.(type) {
 	case ldapwire.UnbindRequest:
 		return true, nil
@@ -2188,13 +2197,17 @@ func (server *Server) handleBind(
 		}
 	}
 	if request.Authentication.IsSASL {
-		return server.handleSASLBind(
+		err := server.handleSASLBind(
 			ctx,
 			connection,
 			state,
 			message,
 			request,
 		)
+		if state.authMechanism != "" {
+			state.saslAuthenticated = true
+		}
+		return err
 	}
 	clearSASLSession(state)
 	if anonymous {
@@ -2603,6 +2616,8 @@ type connectionState struct {
 	gssapiAvailable            bool
 	externalDN                 string
 	saslSession                *serverSASLSession
+	saslChannelBinding         []byte
+	saslAuthenticated          bool
 	pagedSearch                *pagedSearchState
 	virtualListViews           map[string]*virtualListViewState
 	sortSessionCounts          map[*serverSideSortLimiter]int

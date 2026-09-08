@@ -24,6 +24,7 @@ type runtimeDatabase struct {
 	partition              string
 	suffixes               []directory.DN
 	dnNormalizer           directory.DNAttributeNormalizer
+	entryLimit             databaseEntryLimit
 	ldapBackend            *ldapBackendRuntimeConfiguration
 	metaBackend            *metaBackendRuntimeConfiguration
 	asyncMetaBackend       *asyncMetaBackendRuntimeConfiguration
@@ -40,6 +41,10 @@ type runtimeDatabase struct {
 	rootPasswordSet        bool
 	disabled               bool
 	hidden                 bool
+	monitoring             bool
+	monitoringConfigured   bool
+	monitoringRegistered   bool
+	monitorOverlays        []monitorOverlay
 	subordinate            bool
 	advertise              bool
 	readOnly               bool
@@ -276,6 +281,9 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 			// that are intentionally outside the content schema registry.
 			database.dnNormalizer = nil
 		}
+		if err := loadDatabaseEntryLimit(entry, &database, normalizer); err != nil {
+			return err
+		}
 		if !isConfigDatabase(database) &&
 			!isMonitorDatabase(database) &&
 			!isNullDatabase(database) &&
@@ -410,6 +418,9 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 		}
 		database.hidden, _, err = singleBoolean(entry, "olcHidden")
 		if err != nil {
+			return err
+		}
+		if err := loadDatabaseMonitoring(entry, &database); err != nil {
 			return err
 		}
 		var subordinatePresent bool
@@ -576,6 +587,9 @@ func loadRuntimeDatabasesReaderWithNormalizer(
 		return nil, err
 	}
 	if err := resolveAccesslogDatabases(databases); err != nil {
+		return nil, err
+	}
+	if err := validateDeltaMultiProviderDatabases(databases); err != nil {
 		return nil, err
 	}
 	if err := validateDatabasePartitions(databases); err != nil {
@@ -2600,6 +2614,11 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		database := &databases[databaseIndex]
+		order, _, _, err := parseOrderedSiblingValue(string(overlayValues[0]))
+		if err != nil {
+			return err
+		}
+		database.monitorOverlays = append(database.monitorOverlays, monitorOverlay{name: overlayType, order: order})
 		directLDAPRWM := database.ldapBackend != nil && overlayType == "rwm"
 		if database.sockBackend != nil ||
 			((database.ldapBackend != nil || database.metaBackend != nil) &&

@@ -55,6 +55,8 @@ type runtimeState struct {
 	gentleHUP            bool
 	logLevels            []string
 	logConfigured        bool
+	logFile              openLDAPLogFileConfiguration
+	preparedLogFile      *preparedOpenLDAPLogFile
 	syncContexts         map[string]syncCSNState
 	features             runtimeOperationFeatures
 	searchControlSupport requestControlSupport
@@ -188,6 +190,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	configureDatabaseMonitoring(databases)
 	security, requires, err := loadFrontendSecurityConfiguration(reader, databases)
 	if err != nil {
 		return nil, err
@@ -435,6 +438,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	if err != nil {
 		return nil, err
 	}
+	logFile, err := loadOpenLDAPLogFileConfiguration(reader)
+	if err != nil {
+		return nil, err
+	}
 	if server.config.RootDN != "" {
 		if err := applyBootstrapRoot(
 			databases,
@@ -483,6 +490,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		gentleHUP:            gentleHUP,
 		logLevels:            logLevels,
 		logConfigured:        logConfigured,
+		logFile:              logFile,
 		features:             runtimeFeaturesForDatabases(databases),
 		searchControlSupport: searchControlSupportForDatabases(databases),
 		unindexedValues:      newUnindexedValueCache(16 << 20),
@@ -867,6 +875,12 @@ func (server *Server) validateRuntimeConfiguration(
 ) (runtime *runtimeState, returnErr error) {
 	runtime, err := server.buildRuntimeState(writer)
 	if err != nil {
+		if result, ok := maxEntrySizeConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
+		if result, ok := monitoringConfigurationResult(err); ok {
+			return nil, &operationFailure{result: result}
+		}
 		if result, ok := collectConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
@@ -888,7 +902,7 @@ func (server *Server) validateRuntimeConfiguration(
 		if result, ok := rootDSEConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
-		if result, ok := logLevelConfigurationResult(err); ok {
+		if result, ok := logConfigurationResult(err); ok {
 			return nil, &operationFailure{result: result}
 		}
 		return nil, operationFailed(
@@ -910,8 +924,10 @@ func (server *Server) validateRuntimeConfiguration(
 		ctx = provider.StorageContext()
 	}
 	coordinator := sqlBackendTransactionCoordinatorFromContext(ctx)
+	candidateRuntime := runtime
 	cleanupCandidate := func() {
-		server.closeCandidateSQLBackends(runtime, previous)
+		server.closeCandidateSQLBackends(candidateRuntime, previous)
+		candidateRuntime.preparedLogFile.close()
 	}
 	defer func() {
 		if returnErr != nil {
@@ -923,6 +939,7 @@ func (server *Server) validateRuntimeConfiguration(
 		}
 	}()
 	applyMetaBackendOnlineConfigurationState(previous, runtime)
+	preserveDatabaseMonitoring(previous, runtime)
 	reuseSQLBackendOnlineConfigurationState(previous, runtime)
 	if err := server.validateSQLBackends(ctx, runtime); err != nil {
 		return nil, operationFailed(
@@ -961,6 +978,13 @@ func (server *Server) validateRuntimeConfiguration(
 			ldapwire.ResultConstraintViolation,
 			"invalid sync provider state: "+err.Error(),
 		)
+	}
+	if server.monitor != nil {
+		prepared, err := server.monitor.prepareLogFile(runtime.logFile, server.clock)
+		if err != nil {
+			return nil, operationFailed(ldapwire.ResultOther, err.Error())
+		}
+		runtime.preparedLogFile = prepared
 	}
 	runtime.revision = server.nextRuntimeRevision()
 	if coordinator != nil {

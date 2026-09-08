@@ -358,9 +358,15 @@ attribute, object-class, filter, and result namespace rewrites, and unions
 Search results. Before target planning, local ACL dependencies are added to the
 remote attribute selection; target-filter, dnattr, ACI, group, and set checks
 therefore cannot be bypassed by omitting an attribute from the client request.
-The implemented RWM subset includes attribute/object-class wildcard allowlists
-and response-side drop maps; it does not implement the complete librewrite
-language.
+The implemented RWM subset includes attribute/object-class wildcard allowlists,
+response-side drop maps, and a common pure-Go librewrite interpreter. Compiled
+contexts and rules are immutable runtime configuration; each rewrite invocation
+owns its variables, recursion depth, pass count, and expansion/regex work budget.
+Relay applies active DSL rules at the LDAP operation boundary. Proxy requests
+and responses select OpenLDAP's operation-specific contexts. Invalid online
+configuration leaves both the persisted configuration and active runtime intact.
+POSIX basic regex, external/legacy maps, session variables, and regex extensions
+remain unsupported and fail closed.
 
 Back-meta pools privileged identity-assertion transports under
 `olcDbConnectionPoolMax`. The verified subset shares an eligible transport
@@ -871,8 +877,22 @@ published to downstream consumers, so A-to-B-to-C cascades retain one logical
 CSN and cross-RID replay is suppressed by the shared context vector. A rename
 that enters the configured scope is treated as an unsafe log gap, clears the
 cookie, and falls back to a full refresh; a rename leaving scope is cascaded as
-a delete. Writable delta multi-provider mode remains rejected because it needs
-attribute-level conflict-history merging.
+a delete. Writable delta multi-provider Modify replay resolves older changes
+against the local accesslog in the same storage transaction. It preserves the
+newer entryCSN and modification operational attributes, applies schema-aware
+value conflict rules, and forwards the original modifications. Configuration
+requires complete local write logging and full-suffix accesslog consumers.
+Delete/rename, increment, ordered values, request controls, missing history,
+and UUID conflicts fail closed. Replay failures preserve the cookie rather
+than attempting a full-entry refresh over writable data.
+Before the first accesslog search, each consumer/database pair must have a
+durable bootstrap-completion marker bound to its replication configuration.
+The explicit in-progress marker is stored before refresh; Sync Done atomically
+replaces it with completion state and the final cookie. An interrupted empty
+bootstrap therefore retries a cookie-less standard refresh after restart
+instead of deriving an accesslog position from partial per-entry contextCSNs.
+A markerless writable database with authoritative context is adopted without a
+full refresh, preserving local writes during upgrades and first configuration.
 
 The proxy cache is a database-local overlay on back-ldap. Its runtime
 configuration is immutable; a mutex-protected query store is reused only when

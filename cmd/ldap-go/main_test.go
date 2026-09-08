@@ -1240,7 +1240,7 @@ description: retained after failed config replacement
 	unsupportedConfig := strings.Replace(
 		validConfig,
 		"olcLogLevel: stats",
-		"olcLogLevel: stats\nolcSaslCBinding: tls-unique",
+		"olcLogLevel: stats\nolcSaslCBinding: unsupported-policy",
 		1,
 	)
 	stdout, stderr, exitCode = runCLIForTest(
@@ -1249,7 +1249,7 @@ description: retained after failed config replacement
 		unsupportedConfig,
 	)
 	if exitCode != 1 || stdout != "" ||
-		!strings.Contains(stderr, "unsupported runtime attribute olcSaslCBinding") {
+		!strings.Contains(stderr, "olcSaslCBinding: unsupported policy") {
 		t.Fatalf("unsupported config import exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
 	}
 	orphanConfig := `dn: olcDatabase={1}mdb,cn=config

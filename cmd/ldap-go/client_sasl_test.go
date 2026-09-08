@@ -881,6 +881,7 @@ func startLDAPClientToolSASLServer(t *testing.T, tlsConfig *tls.Config) string {
 				{Description: "olcSaslHost", Values: clientToolValues("ldap.example.test")},
 				{Description: "olcSaslRealm", Values: clientToolValues("example.com")},
 				{Description: "olcSaslSecProps", Values: clientToolValues("none")},
+				{Description: "olcSaslCBinding", Values: clientToolValues("tls-endpoint")},
 				{Description: "olcAuthzRegexp", Values: clientToolValues(
 					`{0}^uid=([^,]+),cn=example\.com,cn=plain,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,
 					`{1}^uid=([^,]+),cn=example\.com,cn=digest-md5,cn=auth$ uid=$1,ou=people,dc=example,dc=com`,

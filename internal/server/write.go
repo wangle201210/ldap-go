@@ -372,6 +372,15 @@ func (server *Server) handleAdd(
 				return err
 			}
 		}
+		if configurationWrite {
+			if err := validateSASLCBindingEntry(entry); err != nil {
+				return err
+			}
+			canonicalizeSASLCBindingAttribute(&entry)
+			if err := canonicalizeMaxEntrySize(&entry); err != nil {
+				return err
+			}
+		}
 		if !configurationWrite {
 			if err := state.runtime.schema.ValidateEntry(entry); err != nil {
 				return operationFailureFromSchema(err)
@@ -1226,6 +1235,20 @@ func (server *Server) modifyEntry(
 				continue
 			}
 			beforeChange := entry.Clone()
+			if configurationWrite {
+				if handled, err := applyMaxEntrySizeModification(&entry, change, permissiveModify); handled {
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				if handled, err := applyMonitoringModification(&entry, change, permissiveModify); handled {
+					if err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if failure := applyModificationWithPermissive(
 				&entry,
 				change,
@@ -1242,6 +1265,12 @@ func (server *Server) modifyEntry(
 				); present {
 					sqlModify.changes = append(sqlModify.changes, effective)
 				}
+			}
+			if configurationWrite {
+				if err := validateSASLCBindingEntry(entry); err != nil {
+					return err
+				}
+				canonicalizeSASLCBindingAttribute(&entry)
 			}
 		}
 		var sqlProcessedEntry directory.Entry
@@ -1360,6 +1389,7 @@ func (server *Server) modifyEntry(
 				return fmt.Errorf("reload runtime after modifying %q: %w", entry.DN, err)
 			}
 			applyMetaBackendOnlineURIModification(nextRuntime, dn, processedChanges)
+			applyMonitoringOnlineChanges(nextRuntime, dn, processedChanges)
 		}
 		sourceChange, changeErr := server.recordSyncChangeContext(
 			ctx,
@@ -2670,7 +2700,7 @@ func (server *Server) handleModifyDN(
 					}
 				}
 			}
-			if err := tx.Put(item.entry, false); err != nil {
+			if err := putRenamedDatabaseEntry(writer, tx, *database, item.entry, item.oldDN.Equal(comparisonOldDN)); err != nil {
 				return err
 			}
 			if item.oldDN.Equal(comparisonOldDN) {
@@ -3109,6 +3139,27 @@ func (server *Server) handleCompare(
 			acl.Compare,
 		) {
 			return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+		}
+		if monitorEntries != nil &&
+			state.runtime.schema.AttributeDescriptionSubtype(
+				"olmMDBEntries",
+				request.Attribute,
+			) {
+			if err := populateDatabaseMonitoring(reader, state.runtime, dn, &entry); err != nil {
+				return err
+			}
+		}
+		if monitorEntries != nil && monitorFilterRequiresDatabaseCount(
+			server,
+			state.runtime,
+			reader,
+			state.boundDN,
+			entry,
+			controls.assertion,
+		) {
+			if err := populateDatabaseMonitoring(reader, state.runtime, dn, &entry); err != nil {
+				return err
+			}
 		}
 		if err := server.checkAssertion(
 			state.runtime,
@@ -4174,9 +4225,9 @@ func (server *Server) applyCreateOperationalAttributesContext(
 	}
 	timestamp := time.Now().UTC().Format("20060102150405Z")
 	entry.ReplaceValues("entryUUID", [][]byte{[]byte(uuid)})
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
-	entry.ReplaceValues("createTimestamp", [][]byte{[]byte(timestamp)})
-	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
+	entry.ReplaceRawNormalizedValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
+	entry.ReplaceRawNormalizedValues("createTimestamp", [][]byte{[]byte(timestamp)})
+	entry.ReplaceRawNormalizedValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("creatorsName", [][]byte{[]byte(actor)})
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
 	return nil
@@ -4199,8 +4250,8 @@ func (server *Server) applyModifyOperationalAttributesContext(
 	serverID uint16,
 ) {
 	timestamp := time.Now().UTC().Format("20060102150405Z")
-	entry.ReplaceValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
-	entry.ReplaceValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
+	entry.ReplaceRawNormalizedValues("entryCSN", [][]byte{[]byte(server.nextCSNContext(ctx, serverID))})
+	entry.ReplaceRawNormalizedValues("modifyTimestamp", [][]byte{[]byte(timestamp)})
 	entry.ReplaceValues("modifiersName", [][]byte{[]byte(actor)})
 }
 

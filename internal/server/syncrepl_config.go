@@ -59,10 +59,12 @@ type syncConsumerTLSConfig struct {
 }
 
 type syncConsumerConfig struct {
+	entryLimit databaseEntryLimit
 	order      int
 	rid        int
 	partition  string
 	normalizer directory.DNAttributeNormalizer
+	databaseID string
 
 	providerURLs   []string
 	searchBase     directory.DN
@@ -971,6 +973,8 @@ func loadSyncConsumerConfigs(
 		if err != nil {
 			return nil, fmt.Errorf("%s olcSyncrepl: %w", entry.DN, err)
 		}
+		config.databaseID = syncConsumerDatabaseIdentity(entry)
+		config.entryLimit = database.entryLimit
 		if config.order != int(^uint(0)>>1) {
 			if _, exists := orders[config.order]; exists {
 				return nil, fmt.Errorf(
@@ -990,6 +994,15 @@ func loadSyncConsumerConfigs(
 		return configs[left].rid < configs[right].rid
 	})
 	return configs, nil
+}
+
+func syncConsumerDatabaseIdentity(entry directory.Entry) string {
+	identity := entry.DN
+	values := entry.Values("entryUUID")
+	if len(values) == 1 {
+		identity += "\x00entryUUID=" + string(values[0])
+	}
+	return identity
 }
 
 func validateSyncConsumerRIDs(databases []runtimeDatabase) error {

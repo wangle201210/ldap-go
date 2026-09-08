@@ -204,6 +204,7 @@ var builtinAttributeTypes = []string{
 
 var builtinHiddenAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.35 NAME 'olcPasswordCryptSaltFormat' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
+	"( 1.3.6.1.4.1.4203.1.12.2.3.0.100 NAME 'olcSaslCBinding' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.2.0.19 NAME 'olcSyncUseSubentry' DESC 'Store sync context in a subentry' EQUALITY booleanMatch SYNTAX " + SyntaxBoolean + " SINGLE-VALUE )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.30 NAME 'olcModuleLoad' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " X-ORDERED 'VALUES' )",
 	"( 1.3.6.1.4.1.4203.1.12.2.3.0.1 NAME 'olcAccess' EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " X-ORDERED 'VALUES' )",
@@ -274,6 +275,7 @@ var builtinHiddenAttributeTypes = []string{
 	"( 1.3.6.1.4.1.4203.666.1.55.1 NAME 'monitoredInfo' DESC 'monitored info' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX " + SyntaxDirectoryString + "{32768} NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.55.2 NAME 'managedInfo' DESC 'monitor managed info' SUP name )",
 	"( 1.3.6.1.4.1.4203.666.1.55.3 NAME 'monitorCounter' DESC 'monitor counter' EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX " + SyntaxInteger + " NO-USER-MODIFICATION USAGE dSAOperation )",
+	"( 1.3.6.1.4.1.4203.666.1.55.0.1.1.6 NAME 'olmMDBEntries' DESC 'Number of entries in DB' SUP monitorCounter NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.55.4 NAME 'monitorOpCompleted' DESC 'monitor completed operations' SUP monitorCounter NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.55.5 NAME 'monitorOpInitiated' DESC 'monitor initiated operations' SUP monitorCounter NO-USER-MODIFICATION USAGE dSAOperation )",
 	"( 1.3.6.1.4.1.4203.666.1.55.6 NAME 'monitorConnectionNumber' DESC 'monitor connection number' SUP monitorCounter NO-USER-MODIFICATION USAGE dSAOperation )",
@@ -341,6 +343,7 @@ var builtinHiddenObjectClasses = []string{
 	"( 1.3.6.1.4.1.4203.666.3.16.6 NAME 'monitorConnection' DESC 'monitor connection class' SUP monitor STRUCTURAL )",
 	"( 1.3.6.1.4.1.4203.666.3.16.7 NAME 'managedObject' DESC 'monitor managed entity class' SUP monitor STRUCTURAL )",
 	"( 1.3.6.1.4.1.4203.666.3.16.8 NAME 'monitoredObject' DESC 'monitor monitored entity class' SUP monitor STRUCTURAL )",
+	"( 1.3.6.1.4.1.4203.666.3.16.0.1.1.2 NAME 'olmMDBDatabase' SUP top AUXILIARY MAY olmMDBEntries )",
 	"( 1.3.6.1.4.1.4203.666.11.4.3.0 NAME 'errAbsObject' SUP top ABSTRACT MUST errCode MAY ( cn $ description $ errOp $ errText $ errSleepTime $ errMatchedDN $ errUnsolicitedOID $ errUnsolicitedData $ errDisconnect ) )",
 	"( 1.3.6.1.4.1.4203.666.11.4.3.1 NAME 'errObject' SUP errAbsObject STRUCTURAL )",
 	"( 1.3.6.1.4.1.4203.666.11.4.3.2 NAME 'errAuxObject' SUP errAbsObject AUXILIARY )",
