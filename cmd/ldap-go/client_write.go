@@ -166,7 +166,7 @@ func runLDAPModify(
 	}
 	criticalManageDsaIT := flags.Bool("MM", false, "critical ManageDsaIT control")
 
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -522,7 +522,7 @@ func runLDAPDelete(
 	recursive := flags.Bool("r", false, "recursively delete each DN")
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "operation control: [!]<oid>[=:<string>|::<base64>|:<file URI>]")
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {
@@ -627,7 +627,7 @@ func runLDAPModRDN(
 	deleteOldRDN := flags.Bool("r", false, "delete old RDN attribute values")
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "operation control: [!]<oid>[=:<string>|::<base64>|:<file URI>]")
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {

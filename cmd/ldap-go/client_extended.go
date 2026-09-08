@@ -44,7 +44,7 @@ func runOnlineBackup(
 	var client ldapClientOptions
 	client.register(flags)
 	defer client.clear()
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validate(flags); err != nil {
@@ -133,7 +133,7 @@ func runLDAPCompare(
 	if ldapCompareHasHistoricalExtensionOption(args) {
 		return rejectLDAPCompareExtension(stderr, flags)
 	}
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {
@@ -991,7 +991,7 @@ func runLDAPPasswd(
 	passwordOptions.register(flags)
 	defer passwordOptions.clear()
 
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {
@@ -1543,7 +1543,7 @@ func runLDAPExop(
 	var passwordOptions ldapPasswordCLIOptions
 	passwordOptions.register(flags)
 	defer passwordOptions.clear()
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validateWrite(flags); err != nil {

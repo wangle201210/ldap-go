@@ -54,7 +54,7 @@ func runHealth(
 	)
 	jsonOutput := flags.Bool("json", false, "emit a machine-readable JSON report")
 	defer client.clear()
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validate(flags); err != nil {

@@ -64,6 +64,8 @@ func ldapClientDeadline(timeout time.Duration) time.Time {
 
 type ldapClientOptions struct {
 	uri                  string
+	hostSpecs            repeatedStringFlag
+	portSpecs            repeatedStringFlag
 	simple               bool
 	bindDN               string
 	saslMechanism        string
@@ -101,6 +103,8 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	options.timeout = defaultLDAPClientTimeout
 	options.referralHopLimit = defaultLDAPReferralHops
 	flags.StringVar(&options.uri, "H", options.uri, "LDAP URI or whitespace-separated URI list")
+	flags.Var(&options.hostSpecs, "h", "historical LDAP host (use -H for LDAPS or URI lists)")
+	flags.Var(&options.portSpecs, "p", "historical LDAP port with -h (default 389; 0 uses the default)")
 	flags.BoolVar(&options.simple, "x", false, "use simple authentication")
 	flags.StringVar(&options.bindDN, "D", "", "bind DN")
 	flags.StringVar(&options.saslMechanism, "Y", "", "SASL mechanism")
@@ -192,8 +196,6 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 		name, reason string
 	}{
 		{"d", "LDAP library debug output is not implemented"},
-		{"h", "legacy host selection is not implemented; use -H"},
-		{"p", "legacy port selection is not implemented; use -H"},
 		{"P", "only LDAPv3 is implemented"},
 	} {
 		flags.String(option.name, "", "unsupported: "+option.reason)
@@ -1385,7 +1387,7 @@ func runLDAPSearch(
 	flags.Var(&extensions, "E", "search extension; [!]pr=<size>[/prompt|noprompt] is supported")
 	criticalManageDsaIT := flags.Bool("MM", false, "critical ManageDsaIT control")
 
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
@@ -1888,7 +1890,7 @@ func runLDAPWhoAmI(
 	var client ldapClientOptions
 	client.register(flags)
 	defer client.clear()
-	if err := flags.Parse(args); err != nil {
+	if err := client.parse(flags, args); err != nil {
 		return err
 	}
 	if err := client.validate(flags); err != nil {
