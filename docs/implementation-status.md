@@ -889,6 +889,13 @@ does not register the option, so all `ldapcompare -E` forms are compatibly
 rejected before connecting rather than sent as a control. `ldapexop passwd`
 uses the same old/new password, prompt/file, control, dry-run, target identity,
 and generated-password response behavior as `ldappasswd`.
+Client `-H` accepts a bounded comma/space-separated URI list. Every endpoint is
+validated before the first dial, then tried in order with an independent
+network-timeout budget across ordinary/observed Search, raw Compare, Simple and
+SASL Bind, LDAPS, StartTLS, and LDAPI. Network/TLS failures advance to the next
+URI; every LDAP server result stops. The
+selected endpoint is retained for health output and referral-loop accounting.
+An RFC 4516 Search URL containing a DN or query remains a single-endpoint form.
 Interactive SASL callbacks, every native GSS credential provider,
 and the complete historical ldap-tools option set remain outside this subset.
 

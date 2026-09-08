@@ -1066,9 +1066,10 @@ func (options *ldapClientOptions) validateSASL(
 			)
 		}
 		if ldapClientSCRAMIsPlus(options.saslMechanism) {
-			parsed, err := url.Parse(options.uri)
-			if err != nil || (!strings.EqualFold(parsed.Scheme, "ldaps") &&
-				!options.tryStartTLS && !options.requireStartTLS) {
+			if !ldapClientURIListSupportsTLS(
+				options.uri,
+				options.tryStartTLS || options.requireStartTLS,
+			) {
 				return errors.New(
 					"SCRAM-PLUS requires verified TLS; use ldaps:// or StartTLS",
 				)
@@ -1084,7 +1085,7 @@ func (options *ldapClientOptions) validateSASL(
 		if passwordSources != 0 {
 			return errors.New("SASL EXTERNAL does not use -w, -W, or -y")
 		}
-		if !ldapClientURIUsesLDAPI(options.uri) &&
+		if !ldapClientURIListUsesOnlyLDAPI(options.uri) &&
 			(options.tlsCertificateFile == "" || options.tlsPrivateKeyFile == "") {
 			return errors.New("SASL EXTERNAL requires -tls-cert and -tls-key or an ldapi:// URI")
 		}
@@ -1169,7 +1170,9 @@ func (options *ldapClientOptions) connectAndBindSASL(
 
 	connection, err := dial(parsedURI.Scheme == "ldaps")
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", dialURI, err)
+		return nil, markLDAPClientTransportError(
+			fmt.Errorf("connect to %s: %w", dialURI, err),
+		)
 	}
 	closeOnError := func(err error) (*ldap.Conn, error) {
 		_ = connection.Close()
@@ -1281,7 +1284,7 @@ func ldapClientSASLStartTLS(
 	}
 	upgraded := tls.Client(connection, config.Clone())
 	if err := upgraded.Handshake(); err != nil {
-		return nil, err
+		return nil, markLDAPClientTransportError(err)
 	}
 	return upgraded, nil
 }

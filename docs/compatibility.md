@@ -46,7 +46,12 @@ admission; and slapauth, slapschema, slapmodify, and attribute-selective
 slapindex. The latest round adds X.501 collective administrative areas,
 pcache private/persistent query state, safe remaining back-sql directives,
 online-handle bbolt backup with cross-process restore locking, terminal lloadd
-Monitor counters, and historical ldapmodify/slapmodify resume behavior. These
+Monitor counters, historical ldapmodify/slapmodify resume behavior, and
+bounded comma/space-separated client `-H` URI lists with ordered initial
+failover across ordinary/observed Search, raw Compare, Simple/SASL Bind,
+LDAPS, StartTLS, and LDAPI. URI lists are atomically validated; network/TLS
+failures advance, while every LDAP server result stops.
+These
 are implemented and tested within the boundaries below. They
 do not make the project 100% OpenLDAP-compatible: the native Perl/C module ABI,
 real-KDC proxy/replication/lloadd matrices, dependency-specific GSSAPI

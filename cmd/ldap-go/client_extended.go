@@ -53,8 +53,8 @@ func runOnlineBackup(
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if !ldapClientURIUsesLDAPI(client.uri) {
-		return errors.New("online-backup requires an ldapi:// URI")
+	if !ldapClientURIListUsesOnlyLDAPI(client.uri) {
+		return errors.New("online-backup requires an ldapi:// URI list")
 	}
 	connection, err := client.connectAndBind(flags, stdin, stderr)
 	if err != nil {
@@ -430,7 +430,7 @@ func connectLDAPCompareRaw(
 	stdin io.Reader,
 	stderr io.Writer,
 ) (*ldapRawCompareConnection, error) {
-	parsedURI, dialURI, tlsConfig, err := client.connectionConfiguration(flags)
+	endpoints, err := client.connectionConfigurations(flags)
 	if err != nil {
 		return nil, err
 	}
@@ -439,13 +439,49 @@ func connectLDAPCompareRaw(
 		return nil, err
 	}
 	defer clear(password)
+	attempts := make([]error, 0, len(endpoints))
+	for index, endpoint := range endpoints {
+		connection, err := connectLDAPCompareRawEndpoint(
+			client,
+			endpoint,
+			password,
+			hasPassword,
+			stderr,
+		)
+		if err == nil {
+			client.uri = endpoint.dialURI
+			return connection, nil
+		}
+		attempts = append(attempts, err)
+		if !ldapClientFailoverRetryable(err) {
+			return nil, err
+		}
+		if index == len(endpoints)-1 {
+			return nil, ldapClientFailoverError(attempts)
+		}
+	}
+	return nil, ldapClientFailoverError(attempts)
+}
+
+func connectLDAPCompareRawEndpoint(
+	client *ldapClientOptions,
+	endpoint ldapClientEndpoint,
+	password []byte,
+	hasPassword bool,
+	stderr io.Writer,
+) (*ldapRawCompareConnection, error) {
+	parsedURI := endpoint.parsedURI
+	dialURI := endpoint.dialURI
+	tlsConfig := endpoint.tlsConfig
 
 	dial := func(useTLS bool) (net.Conn, error) {
 		return dialLDAPRawConnection(parsedURI, tlsConfig, client.timeout, useTLS)
 	}
 	connection, err := dial(parsedURI.Scheme == "ldaps")
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", dialURI, err)
+		return nil, markLDAPClientTransportError(
+			fmt.Errorf("connect to %s: %w", dialURI, err),
+		)
 	}
 	closeOnError := func(err error) (*ldapRawCompareConnection, error) {
 		_ = connection.Close()
@@ -538,6 +574,12 @@ func dialLDAPRawConnection(
 	timeout time.Duration,
 	useTLS bool,
 ) (net.Conn, error) {
+	if parsedURI.Scheme == "ldapi" {
+		if useTLS {
+			return nil, errors.New("TLS cannot be used with an ldapi:// URI")
+		}
+		return (&net.Dialer{Timeout: timeout}).Dial("unix", parsedURI.Path)
+	}
 	address := parsedURI.Host
 	if parsedURI.Port() == "" {
 		port := "389"

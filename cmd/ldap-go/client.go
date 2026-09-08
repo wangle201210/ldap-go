@@ -100,7 +100,7 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	options.uri = defaultLDAPClientURI
 	options.timeout = defaultLDAPClientTimeout
 	options.referralHopLimit = defaultLDAPReferralHops
-	flags.StringVar(&options.uri, "H", options.uri, "LDAP URI")
+	flags.StringVar(&options.uri, "H", options.uri, "LDAP URI or whitespace-separated URI list")
 	flags.BoolVar(&options.simple, "x", false, "use simple authentication")
 	flags.StringVar(&options.bindDN, "D", "", "bind DN")
 	flags.StringVar(&options.saslMechanism, "Y", "", "SASL mechanism")
@@ -238,7 +238,7 @@ func (options *ldapClientOptions) validateWrite(flags *flag.FlagSet) error {
 	if !options.dryRun {
 		return nil
 	}
-	_, _, _, err := options.connectionConfiguration(flags)
+	_, err := options.connectionConfigurations(flags)
 	return err
 }
 
@@ -540,7 +540,7 @@ func (options *ldapClientOptions) connectAndBind(
 	stdin io.Reader,
 	stderr io.Writer,
 ) (*ldap.Conn, error) {
-	parsedURI, dialURI, tlsConfig, err := options.connectionConfiguration(flags)
+	endpoints, err := options.connectionConfigurations(flags)
 	if err != nil {
 		return nil, err
 	}
@@ -549,6 +549,38 @@ func (options *ldapClientOptions) connectAndBind(
 		return nil, err
 	}
 	defer clear(password)
+	attempts := make([]error, 0, len(endpoints))
+	for index, endpoint := range endpoints {
+		connection, err := options.connectAndBindEndpoint(
+			endpoint,
+			password,
+			hasPassword,
+			stderr,
+		)
+		if err == nil {
+			options.uri = endpoint.dialURI
+			return connection, nil
+		}
+		attempts = append(attempts, err)
+		if !ldapClientFailoverRetryable(err) {
+			return nil, err
+		}
+		if index == len(endpoints)-1 {
+			return nil, ldapClientFailoverError(attempts)
+		}
+	}
+	return nil, ldapClientFailoverError(attempts)
+}
+
+func (options *ldapClientOptions) connectAndBindEndpoint(
+	endpoint ldapClientEndpoint,
+	password []byte,
+	hasPassword bool,
+	stderr io.Writer,
+) (*ldap.Conn, error) {
+	parsedURI := endpoint.parsedURI
+	dialURI := endpoint.dialURI
+	tlsConfig := endpoint.tlsConfig
 	if !options.simple {
 		return options.connectAndBindSASL(
 			parsedURI,
@@ -588,7 +620,10 @@ func (options *ldapClientOptions) connectAndBind(
 		return connection, nil
 	}
 
-	var connection *ldap.Conn
+	var (
+		connection *ldap.Conn
+		err        error
+	)
 	if options.observeSearch && (options.tryStartTLS || options.requireStartTLS) {
 		connection, options.searchObserver, err = dialObservedLDAPConnection(
 			dialURI,
@@ -665,11 +700,25 @@ func (options *ldapClientOptions) connectAndBind(
 func (options *ldapClientOptions) connectionConfiguration(
 	flags *flag.FlagSet,
 ) (*url.URL, string, *tls.Config, error) {
-	if ldapClientURIUsesLDAPI(options.uri) {
+	values, err := parseLDAPClientURIList(options.uri)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if len(values) != 1 {
+		return nil, "", nil, errors.New("operation requires exactly one LDAP URI")
+	}
+	return options.connectionConfigurationForURI(flags, values[0])
+}
+
+func (options *ldapClientOptions) connectionConfigurationForURI(
+	flags *flag.FlagSet,
+	rawURI string,
+) (*url.URL, string, *tls.Config, error) {
+	if ldapClientURIUsesLDAPI(rawURI) {
 		if !platformSupportsLDAPI() {
 			return nil, "", nil, errors.New("ldapi:// Unix sockets are not supported on this platform")
 		}
-		path, err := lloadd.ParseLDAPIAddress(options.uri)
+		path, err := lloadd.ParseLDAPIAddress(rawURI)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("parse LDAPI URI: %w", err)
 		}
@@ -683,11 +732,11 @@ func (options *ldapClientOptions) connectionConfiguration(
 			flagWasSet(flags, "tls-key") || flagWasSet(flags, "tls-server-name") {
 			return nil, "", nil, errors.New("TLS options cannot be used with an ldapi:// URI")
 		}
-		return &url.URL{Scheme: "ldapi", Path: path}, options.uri, &tls.Config{
+		return &url.URL{Scheme: "ldapi", Path: path}, rawURI, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}, nil
 	}
-	parsed, err := url.Parse(options.uri)
+	parsed, err := url.Parse(rawURI)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("parse LDAP URI: %w", err)
 	}
@@ -697,6 +746,19 @@ func (options *ldapClientOptions) connectionConfiguration(
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" {
 		return nil, "", nil, errors.New("-H LDAP URI requires a network host")
+	}
+	if strings.Contains(parsed.Hostname(), ":") && !strings.HasPrefix(parsed.Host, "[") {
+		return nil, "", nil, errors.New("-H LDAP URI IPv6 hosts must use square brackets")
+	}
+	port := parsed.Port()
+	if port == "" && strings.HasSuffix(parsed.Host, ":") {
+		return nil, "", nil, errors.New("-H LDAP URI requires a non-empty network port")
+	}
+	if port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return nil, "", nil, errors.New("-H LDAP URI port must be between 1 and 65535")
+		}
 	}
 	if parsed.User != nil {
 		return nil, "", nil, errors.New("LDAP URI userinfo is not supported; use -D and a password option")
@@ -710,13 +772,6 @@ func (options *ldapClientOptions) connectionConfiguration(
 	if parsed.Scheme == "ldaps" && (options.tryStartTLS || options.requireStartTLS) {
 		return nil, "", nil, errors.New("-Z and -ZZ cannot be used with an ldaps:// URI")
 	}
-	tlsRequested := parsed.Scheme == "ldaps" || options.tryStartTLS || options.requireStartTLS
-	if !tlsRequested && (flagWasSet(flags, "tls-ca") ||
-		flagWasSet(flags, "tls-cert") || flagWasSet(flags, "tls-key") ||
-		flagWasSet(flags, "tls-server-name")) {
-		return nil, "", nil, errors.New("TLS options require ldaps://, -Z, or -ZZ")
-	}
-
 	tlsConfig, err := options.clientTLSConfig(parsed.Hostname())
 	if err != nil {
 		return nil, "", nil, err
@@ -1635,6 +1690,25 @@ type ldapSearchDirectURL struct {
 }
 
 func parseLDAPSearchDirectURL(rawURI string) (ldapSearchDirectURL, error) {
+	values, err := parseLDAPSearchInitialURIList(rawURI)
+	if err != nil {
+		return ldapSearchDirectURL{}, err
+	}
+	if len(values) != 1 {
+		for _, value := range values {
+			direct, err := parseLDAPSearchDirectURL(value)
+			if err != nil {
+				return ldapSearchDirectURL{}, err
+			}
+			if direct.direct {
+				return ldapSearchDirectURL{}, errors.New(
+					"an RFC 4516 LDAP search URL cannot be combined with other -H URIs",
+				)
+			}
+		}
+		return ldapSearchDirectURL{}, nil
+	}
+	rawURI = values[0]
 	if ldapClientURIUsesLDAPI(rawURI) {
 		if _, err := lloadd.ParseLDAPIAddress(rawURI); err != nil {
 			return ldapSearchDirectURL{}, fmt.Errorf("parse LDAPI search URL: %w", err)
