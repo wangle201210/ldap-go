@@ -5,7 +5,7 @@ package main
 import "os"
 
 func lloaddShutdownSignals() []os.Signal {
-	return []os.Signal{os.Interrupt}
+	return mainShutdownSignals()
 }
 
 func lloaddManagementSignals() []os.Signal {

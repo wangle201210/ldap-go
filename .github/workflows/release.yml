@@ -32,11 +32,17 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Run real LDAP Web administration tests
+        env:
+          CGO_ENABLED: '0'
         run: npm run test:e2e
       - name: Validate release scripts
         run: make release-check
-      - name: Run core and race gates
-        run: make fmt-check vet platform-builds test race
+      - name: Run pure-Go core gates
+        env:
+          CGO_ENABLED: '0'
+        run: make fmt-check vet platform-builds test
+      - name: Run race gate
+        run: make race
       - name: Gate tagged release against N-1
         run: make release-upgrade-gate
       - name: Upload gate evidence

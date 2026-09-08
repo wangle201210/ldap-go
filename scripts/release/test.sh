@@ -12,6 +12,21 @@ for script in "$root"/scripts/release/*.sh; do
 	}
 done
 
+for name in build-artifacts.sh upgrade-gate.sh; do
+	script=$root/scripts/release/$name
+	build_count=$(grep -c 'go build' "$script" || true)
+	purego_count=$(grep -c '^[[:space:]]*CGO_ENABLED=0 .*go build' "$script" || true)
+	if [ "$build_count" -eq 0 ] || [ "$build_count" -ne "$purego_count" ]; then
+		printf 'release-test: every go build must explicitly set CGO_ENABLED=0: %s\n' "$name" >&2
+		exit 1
+	fi
+done
+
+(
+	cd "$root"
+	CGO_ENABLED=0 go test ./internal/buildcontract -count=1
+)
+
 targets=$($root/scripts/release/build-artifacts.sh --list-targets)
 target_count=$(printf '%s\n' "$targets" | awk 'NF == 2 { count++ } END { print count + 0 }')
 [ "$target_count" -eq 6 ] || {
@@ -51,6 +66,8 @@ if RELEASE_VERSION='invalid/version' \
 fi
 
 grep -F 'release-gate:' "$root/Makefile" >/dev/null
+grep -F -x 'export CGO_ENABLED' "$root/Makefile" >/dev/null
+grep -F 'release-gate: override CGO_ENABLED := 0' "$root/Makefile" >/dev/null
 grep -F 'release-build:' "$root/Makefile" >/dev/null
 grep -F 'release-upgrade-gate:' "$root/Makefile" >/dev/null
 grep -F 'LDAP_GO_OPENLDAP_STRICT=1 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 ./scripts/test-openldap.sh' \

@@ -2,10 +2,14 @@
 
 package main
 
-import "os"
+import (
+	"os"
+	"syscall"
+)
 
 func mainShutdownSignals() []os.Signal {
-	return []os.Signal{os.Interrupt}
+	// Windows delivers console close, logoff, and shutdown events as SIGTERM.
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
 func serveShutdownSignals() []os.Signal {

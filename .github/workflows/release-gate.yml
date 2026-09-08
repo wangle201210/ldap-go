@@ -22,6 +22,8 @@ jobs:
   webadmin-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -65,8 +67,12 @@ jobs:
           cache: true
       - name: Validate release scripts
         run: make release-check
-      - name: Run core and race gates
-        run: make fmt-check vet platform-builds test race
+      - name: Run pure-Go core gates
+        env:
+          CGO_ENABLED: '0'
+        run: make fmt-check vet platform-builds test
+      - name: Run race gate
+        run: make race
       - name: Run N-1 database and data portability gate
         run: make release-upgrade-gate
       - name: Preserve upgrade evidence

@@ -84,6 +84,8 @@ release-upgrade-gate:
 release-build:
 	./scripts/release/build-artifacts.sh
 
+export CGO_ENABLED
+release-gate: override CGO_ENABLED := 0
 release-gate: release-check release-upgrade-gate release-build webadmin-e2e
 
 compat: fmt-check vet platform-builds test openldap fuzz-smoke
