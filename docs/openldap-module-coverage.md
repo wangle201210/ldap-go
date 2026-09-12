@@ -57,9 +57,10 @@ The pinned source contains these top-level contrib directories:
 
 The password implementations listed above, `allop`, `lastbind`, `noopsrch`,
 and `nops` have the documented data/protocol compatibility. The global
-`authzid` Bind overlay and opt-in simple `vc` extension now have pure-Go
+`authzid` Bind overlay, `allowed` operational projection, and opt-in simple `vc` extension now have pure-Go
 implementations; VC SASL/cookies remain unsupported. See
-[configuration and evidence](verify-credentials.md). The remaining contrib modules execute
+[VC configuration](verify-credentials.md) and [allowed projection](allowed-overlay.md).
+The remaining contrib modules execute
 OpenLDAP C `Entry`, overlay, SLAPI,
 dynamic ACL, matching-rule, PAM/NSS, Kerberos, or extended-operation ABIs and
 are rejected. Loading them as `.so`/`.la` would require embedding slapd rather

@@ -319,6 +319,15 @@ unsupported. See [server configuration and bounds](verify-credentials.md) and
 
 ## Implemented subset evidence
 
+The optional `allowed` overlay generates schema-derived allowed attribute and
+auxiliary-class lists and the ACL-writable subsets. Explicit/OID/operational
+selection, typesOnly, local paging, identity separation, Root DSE/frontend
+scope, online ACL reload, and conflicting-schema rollback have local coverage.
+The values are output-only, read-protected, non-writable, and excluded from
+Sync data. Incomplete configuration-class schemas and delegated backend
+combinations remain explicit boundaries. See
+[configuration and exact meanings](allowed-overlay.md).
+
 The first runnable subset includes bounded BER framing; LDAPv3 anonymous/simple
 Bind; Root DSE; base, one-level, and subtree Search; boolean, equality,
 presence, substring, ordering, approximate, and basic extensible filters;

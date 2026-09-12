@@ -162,6 +162,44 @@ claimed. These explicit exclusions are reported as skips, not passing tests.
 
 ## OpenLDAP differential tests
 
+`TestAllowed*` covers schema selection and aliases, inheritance, effective
+identity isolation, typesOnly, paging, frontend/data scope, module activation,
+ACL reload, incompatible-schema rollback, non-persistence, and rejection of
+writes to generated operational attributes. Schema registration and snapshot
+tests also check hidden classes and copy isolation.
+`BenchmarkAllowedUnrequestedProjection` measures only the no-projection fast
+path and reports allocations; it does not replace the main performance suite.
+
+The optional native allowed-module differential uses:
+
+```sh
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_ALLOWED_DOCKER_TESTS=1 \
+  OPENLDAP_SOURCE=/path/to/openldap-git \
+  go test ./internal/server -run '^TestOpenLDAPAllowedReference$' \
+  -count=1 -timeout=20m -v
+```
+
+It builds the pinned native module in a disposable Docker oracle. Source
+hashes and release identity are checked. Attribute values are compared as LDAP
+sets. The two servers have different built-in auxiliary inventories: each
+endpoint's complete expected inventory is checked separately, while the shared
+custom class fixture is compared exactly. This does not claim that both
+servers load identical built-in schemas.
+The corpus separately asserts known native ACL-cache discrepancies:
+objectClass-value hiding, generated-value filtering, and all-value denial.
+Go retains per-value ACL enforcement. These cases prove the documented
+difference rather than equality; other fixture values are compared directly.
+The completed native run has 86 groups across frontend and database placement:
+80 groups compare equal under the documented set/inventory normalization, and
+6 groups assert the exact expected ACL-cache difference on each side.
+The native corpus also exposed missing Root DSE/subschema definitions, now
+corrected by adding the Root DSE object class and subschema matching-rule
+attributes. The Root DSE class is rejected on ordinary content entries.
+`TestAllowedNativeCorpus` runs the Go-side expectations, including strict
+value ACL behavior, in ordinary CI without Docker. Complete publication of
+matching-rule descriptions and use definitions is a separate remaining schema
+capability; declaring their attribute types does not assert that inventory.
+
 `TestRWMRewriteMap*` covers the built-in escape mapper, configuration order,
 case-insensitive names, nested calls, failed-map actions, work/output limits,
 and online rollback. The `TestOpenLDAPReferenceRWMRewriteMap*` corpus compares
