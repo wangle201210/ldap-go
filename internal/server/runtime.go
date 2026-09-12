@@ -44,6 +44,8 @@ type runtimeState struct {
 	allowed              *allowedSchemaPlan
 	matchingRules        []string
 	matchingRuleUses     []string
+	ldapSyntaxes         []string
+	rdnAttributes        map[string]bool
 	sasl                 saslRuntimeConfiguration
 	connectionPending    connectionPendingRuntimeConfiguration
 	incomingLimits       incomingLimits
@@ -531,6 +533,20 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	runtime.matchingRules, runtime.matchingRuleUses, err = registry.MatchingRuleSchema()
 	if err != nil {
 		return nil, fmt.Errorf("prepare matching rule schema: %w", err)
+	}
+	runtime.ldapSyntaxes, err = registry.LDAPSyntaxDescriptions()
+	if err != nil {
+		return nil, fmt.Errorf("prepare LDAP syntax schema: %w", err)
+	}
+	rdnAttributes, err := registry.RDNAttributeDescriptions()
+	if err != nil {
+		return nil, fmt.Errorf("prepare RDN syntax attributes: %w", err)
+	}
+	if len(rdnAttributes) > 0 {
+		runtime.rdnAttributes = make(map[string]bool, len(rdnAttributes))
+		for _, description := range rdnAttributes {
+			runtime.rdnAttributes[description] = true
+		}
 	}
 	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err

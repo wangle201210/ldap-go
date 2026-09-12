@@ -1173,6 +1173,8 @@ func canonicalIndexMatchingRule(rule string) string {
 		return "integermatch"
 	case "2.5.13.15":
 		return "integerorderingmatch"
+	case "2.5.13.16":
+		return "bitstringmatch"
 	case "2.5.13.17":
 		return "octetstringmatch"
 	case "2.5.13.18":

@@ -212,6 +212,10 @@ func (server *Server) handleAdd(
 	}
 	configurationWrite := isConfigurationDN(dn)
 	entry := request.Entry.Clone()
+	if err := prettyRDNEntry(state.runtime, &entry); err != nil {
+		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse,
+			ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, err.Error()))
+	}
 	if err := state.runtime.schema.NormalizeOrderedEntryValues(&entry); err != nil {
 		return server.writeOperationResult(
 			connection,
@@ -1050,6 +1054,11 @@ func (server *Server) modifyEntry(
 	postcondition entryModificationPostcondition,
 	accesslogRecord *accesslogWriteRecord,
 ) (*runtimeState, []*syncChange, error) {
+	prepared, prettyErr := prettyRDNModifications(runtime, changes)
+	if prettyErr != nil {
+		return nil, nil, operationFailed(ldapwire.ResultInvalidAttributeSyntax, prettyErr.Error())
+	}
+	changes = prepared
 	configurationWrite := isConfigurationDN(dn)
 	var sqlModify *sqlBackendModifyContext
 	if database.sqlBackend != nil {

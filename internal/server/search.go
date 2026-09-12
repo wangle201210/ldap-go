@@ -3616,6 +3616,11 @@ func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 			Description: "matchingRuleUse", Values: stringValues(runtime.matchingRuleUses...),
 		})
 	}
+	if len(runtime.ldapSyntaxes) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "ldapSyntaxes", Values: stringValues(runtime.ldapSyntaxes...),
+		})
+	}
 	if descriptions := registry.NameFormDescriptions(); len(descriptions) > 0 {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "nameForms",

@@ -424,6 +424,7 @@ done
 
 mandatory_tests='TestOpenLDAPReferenceCoreProtocolDifferential
 TestOpenLDAPMatchingRulesReference
+TestOpenLDAPSyntaxPublicationReference
 TestLDAPVCOpenLDAPNativeDifferential
 TestLDAPLDIFWrapOpenLDAP
 TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential
