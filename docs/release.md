@@ -5,6 +5,13 @@ The gate builds both the previous release and the current tree, creates a real
 bbolt fixture with the previous binary, and verifies that the current binary
 can consume it without relying on binary file compatibility with OpenLDAP.
 
+The upgrade gate proves forward readability, not downgrade compatibility.
+Since commit `c8d37a7`, writes that retain attribute-normalization provenance
+can produce V3 entry records. Current binaries read JSON, V1, V2, and V3;
+older binaries cannot read V3. Keep an offline pre-upgrade backup for rollback,
+or export LDIF with the current binary and validate reimport into the older
+version. Do not reopen an upgraded writable database with an older binary.
+
 ## Local Checks
 
 Run the script contract checks first:

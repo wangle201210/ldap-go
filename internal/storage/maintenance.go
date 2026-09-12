@@ -460,7 +460,7 @@ func checkBoltDatabase(
 	normalizer directory.DNAttributeNormalizer,
 ) (CheckReport, error) {
 	var report CheckReport
-	partitions := make(map[string]struct{})
+	partitions := make(map[string]uint64)
 	err := database.View(func(tx *bolt.Tx) error {
 		var physicalErr error
 		for checkErr := range tx.Check() {
@@ -543,7 +543,7 @@ func checkBoltDatabase(
 				)
 			}
 			logicalEntries[logicalKey] = string(key)
-			partitions[partition] = struct{}{}
+			partitions[partition]++
 			report.Entries++
 			return nil
 		}); err != nil {
@@ -613,12 +613,15 @@ func checkBoltDatabase(
 				)
 			}
 		}
-		return checkBoltEqualityIndexes(
+		if err := checkBoltEqualityIndexes(
 			ctx,
 			tx,
 			normalizer,
 			&report,
-		)
+		); err != nil {
+			return err
+		}
+		return checkBoltEntryCounts(ctx, tx, partitions)
 	})
 	if err != nil {
 		return CheckReport{}, err

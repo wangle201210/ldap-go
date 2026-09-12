@@ -106,6 +106,13 @@ Offline backup and integrity commands operate directly on a stopped database:
 ./bin/ldap-go rebuild -db ./data/restored.db
 ```
 
+Integrity checks also compare the persisted per-partition entry counts with
+the actual entries. Missing individual counts, mismatches, invalid encodings,
+and nested count buckets reject backup, restore, and rebuild before replacing
+any destination. A legacy database with no count bucket remains readable;
+its first writable open builds the derived counts. `rebuild` compacts valid
+data and does not repair corrupted counts.
+
 For a running server, preconfigure a private destination and request a snapshot
 through an authenticated LDAPI connection:
 

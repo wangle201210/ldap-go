@@ -48,9 +48,10 @@ These are not silently presented as supported common paths:
   Delete/rename, increment, ordered values, request controls, and history gaps
   fail closed. This remains a limited compatibility path, not a general
   replacement for the standard multi-provider topology.
-- Syncrepl SASL integrity/confidentiality layers without TLS are not
-  implemented. Use TLS, TLCP, or LDAPI when replication transport SSF is
-  required.
+- Syncrepl DIGEST-MD5 and GSSAPI support integrity/confidentiality layers
+  without TLS, including protected reconnect and cookie persistence tests.
+  The local external Cyrus/OpenSSL 3DES decoder crashes, so that native
+  interoperability case remains unverified even though pure-Go vectors pass.
 - Relay, back-ldap RWM, and back-meta share the common librewrite DSL:
   engine/context/rule directives, aliases, captures, ordered actions, bounded
   recursion, operation variables, parameters, and subcontext calls. POSIX basic
@@ -71,10 +72,10 @@ These are not silently presented as supported common paths:
 - Every backend/overlay order, operating-system runtime, ODBC driver, Kerberos
   provider, and fault schedule still requires deployment-specific qualification.
 
-OpenLDAP-specific process tuning and logfile rotation directives are not a
-portable LDAP behavior contract; configure ldap-go process concurrency through
-its command flags and route or rotate process output through the service
-manager. Exact historical client options and interactive VLV iteration remain
+Configure ldap-go process concurrency through its command flags. The supported
+OpenLDAP logfile routing/rotation settings are documented in [logging.md](logging.md);
+service-manager output routing remains another deployment option.
+Exact historical client options and interactive VLV iteration remain
 compatibility conveniences rather than blockers for the common server paths
 above.
 

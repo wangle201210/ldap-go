@@ -436,13 +436,16 @@ func seedLegacyV1Entry(
 	switch store := fixture.store.(type) {
 	case *Memory:
 		store.mu.Lock()
+		if _, exists := store.entries[key]; !exists {
+			store.entryCounts[partition]++
+		}
 		store.entries[key] = entry.Clone()
 		delete(store.dnIdentities, key)
 		delete(store.dnSources, key)
 		store.mu.Unlock()
 	case *Bolt:
 		if err := store.db.Update(func(tx *bolt.Tx) error {
-			return tx.Bucket(entriesBucket).Put([]byte(key), value)
+			return newBoltTx(context.Background(), tx).putEntry([]byte(key), value)
 		}); err != nil {
 			t.Fatalf("seed legacy Bolt entry: %v", err)
 		}
@@ -466,6 +469,9 @@ func putSchemaAwareDirect(
 	switch backend := store.(type) {
 	case *Memory:
 		backend.mu.Lock()
+		if _, exists := backend.entries[key]; !exists {
+			backend.entryCounts[partition]++
+		}
 		backend.entries[key] = entry.Clone()
 		backend.dnIdentities[key] = dn.Key()
 		backend.dnSources[key] = entry.DN
@@ -482,7 +488,7 @@ func putSchemaAwareDirect(
 			)); err != nil {
 				return err
 			}
-			return tx.Bucket(entriesBucket).Put([]byte(key), value)
+			return newBoltTx(context.Background(), tx).putEntry([]byte(key), value)
 		}); err != nil {
 			t.Fatalf("inject schema-aware fixture %q: %v", entry.DN, err)
 		}
