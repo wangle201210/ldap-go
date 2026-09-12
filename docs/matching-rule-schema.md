@@ -11,10 +11,10 @@ is required. Both attributes are operational: request them explicitly, by OID
 ```
 
 `matchingRules` describes the OID, canonical name, and assertion syntax of each
-published rule. The current catalog contains 32 public rules covering the
-implemented string, numeric, Boolean, DN, unique-member, time, UUID,
+published rule. The current catalog contains 33 public rules covering the
+implemented string, numeric, Boolean, bit-string, DN, unique-member, time, UUID,
 first-component, and substring matching families. Hidden OpenLDAP rules remain
-hidden, and unsupported certificate/bit-string/custom-module rules are not
+hidden, and unsupported certificate/custom-module rules are not
 advertised. Internal compatibility names without a native OID are not assigned
 invented identifiers.
 

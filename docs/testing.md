@@ -223,10 +223,33 @@ ACLs, hidden exclusions, and invalid/unknown assertions. Only schema-set order
 and differing built-in attribute inventories are normalized. This is not a
 claim that every native rule is implemented.
 
-The completed native run compares 252 SDK operations and all 32 Go-published
+The completed native run compares 252 SDK operations and all 33 Go-published
 descriptors. `TestMatchingRuleNativeCorpus` keeps those observed expectations
 in ordinary Go CI without an external process. Persistent substring tests run
 264 real searches across indexed, scanned, reopened, and rebuilt bbolt states.
+
+`TestOpenLDAPSyntaxPublicationReference` compares syntax discovery and value
+handling against the verified 2.6.13 reference build:
+
+```sh
+. /path/to/openldap-reference.env
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  go test ./internal/server -run '^TestOpenLDAPSyntaxPublicationReference$' \
+  -count=1 -timeout=2m -v
+```
+
+The completed corpus has 232 SDK observations and 36 syntax descriptors in
+its configured fixture, including custom substitutions. It checks metadata,
+selectors, ACLs, Compare/filter/NOT, successful and failed writes, unchanged
+bytes for blob values, and native RDN readback formatting.
+`TestSyntaxPublicationGoContract` runs the same expected behavior locally.
+Additional tests cover metadata bounds, cloning, non-execution of validators
+during discovery, online snapshot updates, Bit String equality/index persistence,
+RDN attribute inheritance, and modification rollback.
+
+The native reference runner requires both syntax and matching-rule discovery
+differentials. All Go builds and tests run with cgo disabled; the reference
+server remains an external process. See [syntax scope](syntax-discovery.md).
 
 `TestRWMRewriteMap*` covers the built-in escape mapper, configuration order,
 case-insensitive names, nested calls, failed-map actions, work/output limits,
