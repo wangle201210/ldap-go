@@ -65,6 +65,7 @@ const (
 	supportsLazyCommit
 	supportsNoOpSearch
 	supportsPasswordHashScheme
+	supportsAuthzid
 )
 
 type requestControls struct {
@@ -79,6 +80,7 @@ type requestControls struct {
 	subentries                *bool
 	sync                      *syncRequestControl
 	passwordPolicy            bool
+	authzid                   bool
 	passwordHashScheme        string
 	passwordHashSchemePresent bool
 	accountUsability          bool
@@ -143,6 +145,26 @@ func parseRequestControlsWithDisallows(
 	parsed.chaining = chaining
 	for _, control := range controls {
 		switch control.OID {
+		case authzidRequestControlOID:
+			if supported&supportsAuthzid == 0 {
+				if control.Critical {
+					return unsupportedCriticalControl()
+				}
+				continue
+			}
+			if parsed.authzid {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"authzid control specified multiple times",
+				)
+			}
+			if control.HasValue {
+				return requestControls{}, controlResult(
+					ldapwire.ResultProtocolError,
+					"authzid control value not absent",
+				)
+			}
+			parsed.authzid = true
 		case chainingBehaviorControlOID:
 			continue
 		case assertionControlOID:

@@ -1204,7 +1204,7 @@ func (server *Server) populateObservedAccesslogRequest(
 		entry.ReplaceValues("reqId", stringValues(strconv.FormatInt(typed.MessageID, 10)))
 	case ldapwire.ExtendedRequest:
 		entry.ReplaceValues("reqType", stringValues("extended{"+typed.Name+"}"))
-		if typed.HasValue && typed.Name != passwordModifyOID {
+		if typed.HasValue && typed.Name != passwordModifyOID && typed.Name != ldapwire.VerifyCredentialsOID {
 			entry.ReplaceValues("reqData", [][]byte{bytes.Clone(typed.Value)})
 		}
 	}

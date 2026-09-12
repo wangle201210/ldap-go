@@ -423,9 +423,10 @@ func parsePasswordPolicyTime(value []byte) (time.Time, bool) {
 }
 
 type passwordBindResult struct {
-	authenticated bool
-	restricted    bool
-	controls      []ldapwire.Control
+	authenticated   bool
+	authenticatedDN string
+	restricted      bool
+	controls        []ldapwire.Control
 }
 
 type passwordBindEvaluation struct {
@@ -461,8 +462,13 @@ func (server *Server) authenticatePasswordBind(
 		return result, nil
 	}
 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
+		authenticatedDN := dn.String()
+		if database.rootDN != nil && database.rootPasswordSet &&
+			databaseDNEqual(*database, *database.rootDN, dn) {
+			authenticatedDN = database.rootDN.String()
+		}
 		if activeTOTPPasswordConfiguration(runtime, database) != nil {
-			return server.authenticateTOTPPasswordDatabaseRoot(
+			result, err := server.authenticateTOTPPasswordDatabaseRoot(
 				ctx,
 				runtime,
 				*database,
@@ -470,7 +476,10 @@ func (server *Server) authenticatePasswordBind(
 				password,
 				rootPassword,
 			)
+			result.authenticatedDN = authenticatedDN
+			return result, err
 		}
+		result.authenticatedDN = authenticatedDN
 		result.authenticated = server.verifyStoredPassword(
 			ctx,
 			runtime,
@@ -517,6 +526,7 @@ func (server *Server) authenticatePasswordBind(
 			runtime.schema.EntryHasObjectClass(entry, "referral") {
 			return nil
 		}
+		result.authenticatedDN = entry.DN
 
 		before := entry.Clone()
 		policy, hasPolicy := loadPasswordPolicy(

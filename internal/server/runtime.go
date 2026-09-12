@@ -40,6 +40,7 @@ type runtimeState struct {
 	passwordHashSchemes  []string
 	passwordCryptSalt    string
 	externalPasswords    externalPasswordRuntimeConfiguration
+	verifyCredentials    bool
 	sasl                 saslRuntimeConfiguration
 	connectionPending    connectionPendingRuntimeConfiguration
 	incomingLimits       incomingLimits
@@ -69,6 +70,7 @@ type runtimeState struct {
 }
 
 type runtimeOperationFeatures struct {
+	authzid           bool
 	sockOverlay       bool
 	metaBackend       bool
 	dnssrvBackend     bool
@@ -168,6 +170,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	}
 	if err := validateOpenLDAPModuleConfiguration(reader); err != nil {
 		return nil, fmt.Errorf("validate OpenLDAP module configuration: %w", err)
+	}
+	verifyCredentials, err := loadVerifyCredentialsModule(reader)
+	if err != nil {
+		return nil, err
 	}
 	secureTransport, err := server.loadGlobalTLSConfiguration(reader)
 	if err != nil {
@@ -475,6 +481,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		passwordHashSchemes:  passwordHashSchemes,
 		passwordCryptSalt:    passwordCryptSalt,
 		externalPasswords:    externalPasswords,
+		verifyCredentials:    verifyCredentials,
 		sasl:                 sasl,
 		connectionPending:    connectionPending,
 		incomingLimits:       incomingLimits,
@@ -516,6 +523,7 @@ func runtimeFeaturesForDatabases(databases []runtimeDatabase) runtimeOperationFe
 	var features runtimeOperationFeatures
 	for index := range databases {
 		database := &databases[index]
+		features.authzid = features.authzid || (database.authzidOverlay && databaseType(database.name) == "frontend")
 		features.sockOverlay = features.sockOverlay || len(database.sockOverlays) != 0
 		features.metaBackend = features.metaBackend || database.metaBackend != nil
 		features.dnssrvBackend = features.dnssrvBackend || database.dnssrvBackend != nil

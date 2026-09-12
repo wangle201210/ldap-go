@@ -25,6 +25,7 @@ var supportedRuntimeOverlayTypes = map[string]struct{}{
 	"allop":       {},
 	"auditlog":    {},
 	"autoca":      {},
+	"authzid":     {},
 	"chain":       {},
 	"collect":     {},
 	"constraint":  {},

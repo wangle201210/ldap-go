@@ -560,7 +560,7 @@ func compatibleModule(raw string) bool {
 	}
 	_, supported := map[string]struct{}{
 		"argon2": {}, "pw-apr1": {}, "pw-netscape": {}, "pw-pbkdf2": {},
-		"pw-radius": {}, "pw-sha2": {}, "pw-totp": {},
+		"pw-radius": {}, "pw-sha2": {}, "pw-totp": {}, "vc": {},
 	}[name]
 	return supported
 }
@@ -657,7 +657,7 @@ var mdbDirectiveSpecs = map[string]directiveSpec{
 }
 
 var overlayObjectClasses = map[string]string{
-	"accesslog": "olcAccessLogConfig", "allop": "", "auditlog": "olcAuditlogConfig",
+	"accesslog": "olcAccessLogConfig", "allop": "", "auditlog": "olcAuditlogConfig", "authzid": "",
 	"autoca": "olcAutoCAConfig", "chain": "", "collect": "olcCollectConfig",
 	"constraint": "olcConstraintConfig", "dds": "olcDDSConfig", "deref": "",
 	"dyngroup": "olcDynGroupConfig", "dynlist": "olcDynListConfig", "glue": "", "homedir": "olcHomedirConfig",

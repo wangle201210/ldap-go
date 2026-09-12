@@ -89,6 +89,7 @@ type runtimeDatabase struct {
 	homedir                *homedirRuntimeConfiguration
 	explicitGlue           bool
 	allOperationalAttrs    bool
+	authzidOverlay         bool
 	lastBindOverlay        bool
 	lastBindForwardUpdates bool
 	nopsOverlay            bool
@@ -2614,6 +2615,9 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		database := &databases[databaseIndex]
+		if overlayType == "authzid" && databaseType(database.name) != "frontend" {
+			return fmt.Errorf("%s slapo-authzid must be global", entry.DN)
+		}
 		order, _, _, err := parseOrderedSiblingValue(string(overlayValues[0]))
 		if err != nil {
 			return err
@@ -2631,6 +2635,11 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		switch overlayType {
+		case "authzid":
+			if database.authzidOverlay {
+				return fmt.Errorf("%s configures a duplicate authzid overlay for %s", entry.DN, database.name)
+			}
+			database.authzidOverlay = true
 		case "allop":
 			if database.allOperationalAttrs {
 				return fmt.Errorf("%s configures a duplicate allop overlay for %s", entry.DN, database.name)

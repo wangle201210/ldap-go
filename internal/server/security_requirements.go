@@ -721,7 +721,7 @@ func requestControlFailureBeforeSecurity(
 			support = supportsManageDsaIT | supportsPasswordPolicy | supportsPasswordHashScheme
 		}
 	case ldapwire.BindRequest:
-		support = supportsPasswordPolicy
+		support = bindRequestControlSupport(runtime)
 	default:
 		return nil
 	}

@@ -55,6 +55,9 @@ func compatibleOpenLDAPModuleDeclaration(module string) bool {
 	if module == "" {
 		return false
 	}
+	if verifyCredentialsModuleName(module) {
+		return true
+	}
 	for _, passwordModule := range compatibleOpenLDAPPasswordModules {
 		if openLDAPPasswordModuleName(module, passwordModule) {
 			return true

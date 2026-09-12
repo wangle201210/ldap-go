@@ -33,8 +33,8 @@ Verify credentials without changing the connection's authorization identity.
 DN omitted verifies anonymous credentials; cred omitted prompts for the user's password.
 -D/-w/-W/-y and -Y/-U/-X/-R/-O authenticate the connection, not the verified user.
 
-Requires an external server with the OpenLDAP vc module. The ldap-go server
-does not implement this extension.
+Requires the vc module on OpenLDAP or ldap-go (olcModuleLoad: vc.la).
+The ldap-go server disables this extension until the module is configured.
 VC-specific -E sasl/mech/realm/authcid/authzid/secprops and cookie/SASL continuation
 are unsupported, as the pinned OpenLDAP interactive VC API is not implemented.
 Verification failures return nonzero, including an inner failure with outer success.

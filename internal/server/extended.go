@@ -85,6 +85,21 @@ func (server *Server) handleExtended(
 		return server.handleTransactionEnd(ctx, connection, state, message, request)
 	case passwordModifyOID:
 		return server.handlePasswordModify(ctx, connection, state, message, request)
+	case ldapwire.VerifyCredentialsOID:
+		defer clear(request.Value)
+		if frontendRestricts(state.runtime, restrictExtended) {
+			return server.writeLDAPResultResponse(connection, message.ID,
+				ldapwire.ApplicationExtendedResponse,
+				ldapwire.ResultError(ldapwire.ResultUnwillingToPerform, "operation restricted"),
+				"", nil, nil)
+		}
+		if state.runtime.verifyCredentials {
+			return server.handleVerifyCredentials(ctx, connection, state, message, request)
+		}
+		return server.writeLDAPResultResponse(connection, message.ID,
+			ldapwire.ApplicationExtendedResponse,
+			ldapwire.ResultError(ldapwire.ResultProtocolError, "unsupported extended operation"),
+			"", nil, nil)
 	case dynamicRefreshOID:
 		return server.handleDynamicRefresh(ctx, connection, state, message, request)
 	case whoAmIOID:

@@ -1466,6 +1466,11 @@ func (server *Server) dispatch(
 			),
 		)
 	}
+	var authzidFailure *ldapwire.Result
+	connection, authzidFailure = prepareAuthzidBind(connection, state, &message)
+	if authzidFailure != nil {
+		return false, writeResultForMessage(connection, message, *authzidFailure)
+	}
 	if search, ok := message.Request.(ldapwire.SearchRequest); ok {
 		if failure := invalidSearchParameterResult(search); failure != nil {
 			return false, writeResultForMessage(connection, message, *failure)
@@ -2043,7 +2048,7 @@ func (server *Server) handleBind(
 	clearSearchSessions(state)
 	controls, controlFailure := parseRequestControls(
 		message.Controls,
-		supportsPasswordPolicy,
+		bindRequestControlSupport(state.runtime),
 	)
 	if controlFailure != nil {
 		clearSASLSession(state)
@@ -2453,6 +2458,7 @@ func (server *Server) handleBind(
 	if bindResult.restricted {
 		state.passwordPolicyRestrictedDN = requestDN.String()
 	}
+	setAuthzidBindDN(connection, bindResult.authenticatedDN)
 	return ldapwire.Write(connection, ldapwire.EncodeBindResponse(
 		message.ID,
 		ldapwire.Result{Code: ldapwire.ResultSuccess},

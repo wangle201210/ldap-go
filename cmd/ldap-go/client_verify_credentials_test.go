@@ -341,7 +341,7 @@ func TestLDAPVCLimitsAndLocalValidation(t *testing.T) {
 		}
 	}
 	_, help, _ := runLDAPClientCommand([]string{"ldapvc", "-help"}, "")
-	for _, text := range []string{"external server", "does not implement", "cookie/SASL continuation", "-a", "-b", "-E"} {
+	for _, text := range []string{"vc module", "until the module is configured", "cookie/SASL continuation", "-a", "-b", "-E"} {
 		if !strings.Contains(help, text) {
 			t.Fatalf("help missing %q", text)
 		}
@@ -440,7 +440,7 @@ func TestLDAPVCTransportFailureAndFailover(t *testing.T) {
 	}
 }
 
-func TestLDAPVCTLSAndOwnServerLimitation(t *testing.T) {
+func TestLDAPVCTLSAndDisabledServerModule(t *testing.T) {
 	config, ca := newLDAPClientToolTLSConfig(t)
 	caPath := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caPath, ca, 0o600); err != nil {
