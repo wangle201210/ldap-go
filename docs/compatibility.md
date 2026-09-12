@@ -302,15 +302,19 @@ isolation. Unverified TLS, downgrade, TLCP, and other channel-binding types are
 rejected. See [configuration and evidence](lloadd-scram-plus.md).
 
 The built-in `ldapvc` client supports simple Verify Credentials against an
-external OpenLDAP `vc` module, independently of the connection's Simple/SASL
+OpenLDAP or ldap-go `vc` module, independently of the connection's Simple/SASL
 Bind. It includes anonymous verification, password prompting, `-a` authorization
 identity and `-b` password-policy controls, general request controls, bounded BER
 responses, and secret-redacted output. Inner credential failures return nonzero
 even when the outer operation succeeds; native 2.6.13 returns zero in that case.
 Anonymous requests explicitly encode empty simple authentication, correcting
 the native client's omitted mandatory authentication field.
-The ldap-go server's VC extension, VC-specific interactive SASL/cookies, and
-verification referral chasing remain unsupported. See
+The server's opt-in simple VC extension reuses isolated Bind dispatch, keeps
+the caller identity and transport state intact, and applies real password-policy
+and lastbind effects. It is hidden from Root DSE like native `vc`. The global
+`authzid` overlay supplies Bind and nested VC authorization-identity controls.
+VC-specific interactive SASL/cookies and verification referral chasing remain
+unsupported. See [server configuration and bounds](verify-credentials.md) and
 [usage and exit-status differences](operations.md#verify-credentials-on-openldap).
 
 ## Implemented subset evidence

@@ -355,6 +355,12 @@ skips=$(sed -n 's/^[[:space:]]*--- SKIP: \([^ (]*\).*/\1/p' "$log")
 unexpected_skips=
 for skipped in $skips; do
 	case "$skipped" in
+		TestOpenLDAPVerifyCredentialsReference)
+			# VC/authzid are built in a separate disposable Docker oracle.
+			if [ "${LDAP_GO_OPENLDAP_VC_DOCKER_TESTS:-0}" = "1" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
 		TestServiceSASLSCRAMPlusOpenLDAP2613NativeProvider)
 			if [ "$lloadd_scram_plus_native" = "1" ]; then
 				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"

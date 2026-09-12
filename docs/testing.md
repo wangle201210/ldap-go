@@ -71,9 +71,46 @@ The strict reference runner also requires
 `TestServiceSASLSCRAMPlusOpenLDAP2613NativeProvider`: a real pinned slapd/Cyrus
 endpoint provider, LDAPS/StartTLS, all three hashes, Who Am I, and Search.
 
+`TestVerifyCredentials*` covers module opt-in, hidden Root DSE publication,
+unchanged caller identity, real password-policy lockout, internal zero-SSF
+semantics, malformed requests, and exclusion of credential-bearing accesslog
+data. `TestAuthzid*` covers the global Bind overlay, simple/SASL identity
+responses, duplicate/value errors, disclosure restrictions, configuration scope,
+and preservation of existing SASL credentials and controls.
+`TestLDAPVCProjectServerModule` runs the built-in command against the enabled
+Go module; the real lloadd-to-Go topology checks service/user isolation and
+reconnects. See [configuration and limits](verify-credentials.md).
+
+`TestOpenLDAPVerifyCredentialsReference` builds optional vc/authzid modules
+from pinned OpenLDAP 2.6.13 in a disposable Docker container, using OpenSSL,
+MDB, and ppolicy, without Cyrus SASL. It checks outer/inner results, nested
+controls, caller identity, hidden discovery, and internal security semantics:
+
+```sh
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_VC_DOCKER_TESTS=1 \
+  OPENLDAP_SOURCE=/path/to/openldap-git \
+  go test ./internal/server -run '^TestOpenLDAPVerifyCredentialsReference$' \
+  -count=1 -timeout=20m -v
+```
+
+Docker and network access for the native build dependencies are required.
+The ordinary reference runner reports this separately gated test as a skip
+unless enabled; once enabled it must pass. Native C compilation does not
+enable cgo in the Go build.
+
+The current native/Go corpus passes 87 cases on each side across configurations
+without authzid, with global authzid, and with `simple_bind=128` plus outer
+StartTLS. It compares outer/inner result codes, diagnostics, control values,
+and preserved caller identity. Password-expiry warnings are independently
+checked against the same seeded expiry time before normalizing the remaining
+seconds, since the two servers run sequentially. Native SASL rejection is
+tested using a build without Cyrus; it is not evidence for VC SASL negotiation.
+`TestVerifyCredentialsNativeCorpus` also runs those observed expectations
+against Go in the ordinary suite without requiring Docker.
+
 `TestLDAPVC*` covers independent connection authentication, nested and outer
 controls, verified TLS, failover, prompts, dry runs, malformed BER, depth/size
-limits, redacted diagnostics, and rejection by the current ldap-go server.
+limits, redacted diagnostics, and rejection when the Go VC module is disabled.
 `TestLDAPCompareRawSimpleBindControlsRegression` verifies the shared raw
 connector transmits Bind-specific controls while keeping ordinary controls on
 the operation. To compare the VC request bytes and result output with a native
@@ -98,8 +135,8 @@ passed in a disposable Linux arm64 container built from commit
 The native server used no TLS/Cyrus for that test; verified TLS and connection
 SASL are covered separately by the Go protocol fixtures. The real module test
 uses explicit DN/password operands and does not prove anonymous module
-behavior. A successful raw-wire fixture is not evidence that the ldap-go
-server implements VC.
+behavior. These external tests are distinct from the current Go server's
+simple VC implementation and its local integration coverage.
 
 To run the module test with an existing configured native build, compile its
 optional modules first. Native module compilation is separate from Go and

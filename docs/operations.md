@@ -72,9 +72,9 @@ provided by this mode.
 
 ## Verify credentials on OpenLDAP
 
-`ldap-go ldapvc` checks a user's credentials through an external OpenLDAP server
-with the `vc` module loaded, without changing the connection's authorization
-identity. The ldap-go server does not yet implement this extension.
+`ldap-go ldapvc` checks a user's credentials through OpenLDAP or ldap-go with
+the `vc` module configured, without changing the connection's authorization
+identity. See [module and authzid configuration](verify-credentials.md).
 
 ```sh
 ./bin/ldap-go ldapvc -x -H ldaps://directory.example.com:636 \
