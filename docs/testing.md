@@ -196,9 +196,37 @@ The native corpus also exposed missing Root DSE/subschema definitions, now
 corrected by adding the Root DSE object class and subschema matching-rule
 attributes. The Root DSE class is rejected on ordinary content entries.
 `TestAllowedNativeCorpus` runs the Go-side expectations, including strict
-value ACL behavior, in ordinary CI without Docker. Complete publication of
-matching-rule descriptions and use definitions is a separate remaining schema
-capability; declaring their attribute types does not assert that inventory.
+value ACL behavior, in ordinary CI without Docker. Implemented matching-rule
+descriptions and use definitions are now published as described in
+[matching-rule discovery](matching-rule-schema.md).
+
+`TestMatchingRule*` and `TestBuiltinMatchingRule*` cover bounded parsing,
+formatting, the pinned native catalog, inherited/compatible syntax applicability,
+hidden exclusions, limits, copy isolation, concurrent registration, operational
+selection, aliases, and online schema refresh/rollback.
+`TestSubstringMatchingRuleNumericOIDs` checks normal and prepared matchers,
+including byte-exact octet strings. The wire fixture verifies named and numeric
+substring rules through persistent indexed searches.
+
+The live differential requires the verified reference environment:
+
+```sh
+. /path/to/openldap-reference.env
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  go test ./internal/server -run '^TestOpenLDAPMatchingRulesReference$' \
+  -count=1 -timeout=2m -v
+```
+
+It checks the complete Go-published rule subset against native descriptors,
+exact APPLIES sets for shared fixture attributes, name/OID queries, typesOnly,
+ACLs, hidden exclusions, and invalid/unknown assertions. Only schema-set order
+and differing built-in attribute inventories are normalized. This is not a
+claim that every native rule is implemented.
+
+The completed native run compares 252 SDK operations and all 32 Go-published
+descriptors. `TestMatchingRuleNativeCorpus` keeps those observed expectations
+in ordinary Go CI without an external process. Persistent substring tests run
+264 real searches across indexed, scanned, reopened, and rebuilt bbolt states.
 
 `TestRWMRewriteMap*` covers the built-in escape mapper, configuration order,
 case-insensitive names, nested calls, failed-map actions, work/output limits,
