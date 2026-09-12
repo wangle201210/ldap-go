@@ -235,8 +235,13 @@ provider must enable `olcSaslCBinding: tls-endpoint`. Cleartext, TLCP, optional
 StartTLS downgrade, `tls_reqcert=never/allow`, mismatched bindings, malformed
 proofs, and excessive iteration counts fail authentication. Local transport,
 reconnect/restart, cookie preservation, and nine OpenLDAP 2.6.13 policy/hash
-cases pass. Other binding types and SCRAM message extensions remain outside
-this consumer implementation.
+cases pass. Ordinary SCRAM and PLUS both check nonce extension, canonical
+salt/verifier encoding, 4 KiB challenge size, 1 KiB salt size, and the existing
+4096-iteration minimum plus a 10,000,000-iteration work ceiling before deriving
+keys. Optional RFC 5802 extension fields remain in the proof transcript and
+unknown optional attributes are ignored; malformed extensions, duplicate or
+reserved fields, and unknown mandatory extensions fail authentication. Other
+channel-binding types remain outside this consumer implementation.
 
 | Area | Status | Required evidence |
 | --- | --- | --- |

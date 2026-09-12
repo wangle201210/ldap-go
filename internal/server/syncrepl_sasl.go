@@ -59,7 +59,6 @@ type syncConsumerCRAMMD5 struct {
 type syncConsumerSCRAM struct {
 	conversation *scram.ClientConversation
 	started      bool
-	plus         bool
 	clientNonce  string
 	proofSent    bool
 	hashSize     int
@@ -463,7 +462,6 @@ func newSyncConsumerSASLConversationForProvider(
 		}
 		return mechanism, &syncConsumerSCRAM{
 			conversation: conversation,
-			plus:         plus,
 			hashSize:     generator().Size(),
 		}, nil
 	default:
@@ -946,7 +944,7 @@ func (conversation *syncConsumerSCRAM) Initial() ([]byte, bool, error) {
 	}
 	conversation.started = true
 	response, err := conversation.conversation.Step("")
-	if conversation.plus && err == nil {
+	if err == nil {
 		_, conversation.clientNonce, _ = strings.Cut(response, ",r=")
 	}
 	return []byte(response), true, err
@@ -958,10 +956,8 @@ func (conversation *syncConsumerSCRAM) Next(
 	if !conversation.started {
 		return nil, errors.New("conversation has not started")
 	}
-	if conversation.plus {
-		if err := conversation.validateChallenge(challenge); err != nil {
-			return nil, err
-		}
+	if err := conversation.validateChallenge(challenge); err != nil {
+		return nil, err
 	}
 	response, err := conversation.conversation.Step(string(challenge))
 	if err == nil {

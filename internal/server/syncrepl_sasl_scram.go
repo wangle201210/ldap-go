@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wangle201210/ldap-go/internal/saslkrb5"
 	"github.com/xdg-go/scram"
@@ -64,45 +65,70 @@ func (conversation *syncConsumerSCRAM) validateChallenge(challenge []byte) error
 	// Bound parsing and PBKDF2 work before calling xdg-go/scram. Its parser
 	// accepts ignored fields and an unchanged nonce, and has no iteration cap.
 	if len(challenge) == 0 || len(challenge) > maxSASLSCRAMSecretSize {
-		return errors.New("SCRAM-PLUS challenge has invalid size")
+		return errors.New("SCRAM challenge has invalid size")
 	}
 	fields := strings.Split(string(challenge), ",")
 	if conversation.proofSent {
-		if len(fields) != 1 || !strings.HasPrefix(fields[0], "v=") {
-			return errors.New("SCRAM-PLUS server-final must contain only a verifier")
+		if !strings.HasPrefix(fields[0], "v=") {
+			return errors.New("SCRAM server-final must contain a verifier")
+		}
+		if err := validateSyncConsumerSCRAMExtensions(fields[1:]); err != nil {
+			return err
 		}
 		proof, err := base64.StdEncoding.Strict().DecodeString(fields[0][2:])
 		defer clear(proof)
 		if err != nil || len(proof) != conversation.hashSize ||
 			base64.StdEncoding.EncodeToString(proof) != fields[0][2:] {
-			return errors.New("SCRAM-PLUS server verifier is malformed")
+			return errors.New("SCRAM server verifier is malformed")
 		}
 		return nil
 	}
-	if len(fields) != 3 || !strings.HasPrefix(fields[0], "r=") ||
+	if len(fields) < 3 || !strings.HasPrefix(fields[0], "r=") ||
 		!strings.HasPrefix(fields[1], "s=") || !strings.HasPrefix(fields[2], "i=") {
-		return errors.New("SCRAM-PLUS server-first must contain only r, s, and i fields")
+		return errors.New("SCRAM server-first must start with r, s, and i fields")
+	}
+	if err := validateSyncConsumerSCRAMExtensions(fields[3:]); err != nil {
+		return err
 	}
 	nonce := fields[0][2:]
 	if len(nonce) <= len(conversation.clientNonce) || !strings.HasPrefix(nonce, conversation.clientNonce) {
-		return errors.New("SCRAM-PLUS server nonce did not strictly extend the client nonce")
+		return errors.New("SCRAM server nonce did not strictly extend the client nonce")
 	}
 	for _, character := range []byte(nonce) {
 		if character < 0x21 || character > 0x7e {
-			return errors.New("SCRAM-PLUS server nonce is malformed")
+			return errors.New("SCRAM server nonce is malformed")
 		}
 	}
 	salt, err := base64.StdEncoding.Strict().DecodeString(fields[1][2:])
 	defer clear(salt)
 	if err != nil || len(salt) == 0 || len(salt) > 1024 ||
 		base64.StdEncoding.EncodeToString(salt) != fields[1][2:] {
-		return errors.New("SCRAM-PLUS server salt is malformed")
+		return errors.New("SCRAM server salt is malformed")
 	}
 	rawIterations := fields[2][2:]
 	iterations, err := strconv.ParseUint(rawIterations, 10, 32)
 	if err != nil || iterations < defaultSASLSCRAMIterations || iterations > maxSASLSCRAMIterations ||
 		strconv.FormatUint(iterations, 10) != rawIterations {
-		return fmt.Errorf("SCRAM-PLUS iterations must be between %d and %d", defaultSASLSCRAMIterations, maxSASLSCRAMIterations)
+		return fmt.Errorf("SCRAM iterations must be between %d and %d", defaultSASLSCRAMIterations, maxSASLSCRAMIterations)
+	}
+	return nil
+}
+
+// RFC 5802 section 7 permits optional extensions after the mandatory fields.
+// Validate their framing without removing bytes from the proof transcript.
+func validateSyncConsumerSCRAMExtensions(fields []string) error {
+	var seen [128]bool
+	for _, field := range fields {
+		if len(field) < 3 || field[1] != '=' ||
+			!(field[0] >= 'a' && field[0] <= 'z' || field[0] >= 'A' && field[0] <= 'Z') ||
+			!utf8.ValidString(field[2:]) || strings.IndexByte(field, 0) >= 0 {
+			return errors.New("SCRAM extension has invalid syntax")
+		}
+		name := field[0]
+		if seen[name] || strings.ContainsRune("aceimnprsv", rune(name)) {
+			return errors.New("SCRAM extension repeats a field or uses a reserved attribute")
+		}
+		seen[name] = true
 	}
 	return nil
 }

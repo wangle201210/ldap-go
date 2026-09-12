@@ -22,6 +22,15 @@ schema parsers must include malformed-input and resource-limit tests.
 
 ## Protocol conformance
 
+`TestSyncConsumerSCRAMOptionalExtensionsTranscript` independently computes
+the PBKDF2/HMAC proofs for all three ordinary and PLUS hashes, including the
+unchanged optional extension bytes. Invalid-challenge cases verify that work
+above the configured implementation ceiling, unchanged nonces, malformed
+encoding, duplicate fields, and unknown mandatory extensions do not produce
+a client proof. The optional-extension grammar follows
+[RFC 5802 section 7](https://www.rfc-editor.org/rfc/rfc5802.html#section-7);
+these are protocol fixtures, not a claim that native slapd emits those fields.
+
 `TestDeltaIncrement*` verifies atomic rejection of unsafe writable multi-provider
 Increment replay, including incoming/history cases, cross-RID retries,
 ring/mesh topology stopping, original logs, cookies, and bbolt restart.
