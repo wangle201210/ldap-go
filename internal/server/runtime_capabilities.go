@@ -23,6 +23,7 @@ var supportedRuntimeDatabaseTypes = map[string]struct{}{
 var supportedRuntimeOverlayTypes = map[string]struct{}{
 	"accesslog":   {},
 	"allop":       {},
+	"allowed":     {},
 	"auditlog":    {},
 	"autoca":      {},
 	"authzid":     {},

@@ -41,6 +41,7 @@ type runtimeState struct {
 	passwordCryptSalt    string
 	externalPasswords    externalPasswordRuntimeConfiguration
 	verifyCredentials    bool
+	allowed              *allowedSchemaPlan
 	sasl                 saslRuntimeConfiguration
 	connectionPending    connectionPendingRuntimeConfiguration
 	incomingLimits       incomingLimits
@@ -165,8 +166,22 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		return nil, err
 	}
 	registry := server.baseSchema.Clone()
+	allowedSchema, err := allowedSchemaConfigured(reader)
+	if err != nil {
+		return nil, err
+	}
+	if allowedSchema {
+		if err := schema.RegisterOpenLDAPAllowedSchema(registry); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := schema.LoadOpenLDAPConfigReader(reader, registry); err != nil {
 		return nil, fmt.Errorf("load OpenLDAP schema configuration: %w", err)
+	}
+	if allowedSchema {
+		if err := schema.RegisterOpenLDAPAllowedSchema(registry); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateOpenLDAPModuleConfiguration(reader); err != nil {
 		return nil, fmt.Errorf("validate OpenLDAP module configuration: %w", err)
@@ -506,6 +521,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		searchBases:          newSearchBaseCache(),
 		searchEntryClasses:   searchEntryClasses,
 		searchSelections:     newPreparedAttributeSelectionCache(),
+	}
+	runtime.allowed, err = buildAllowedSchemaPlan(registry, databases)
+	if err != nil {
+		return nil, err
 	}
 	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err

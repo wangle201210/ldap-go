@@ -2118,6 +2118,10 @@ func (server *Server) handleSearch(
 						request.TypesOnly,
 					)
 				}
+				if syncSearch == nil {
+					readable = server.applyAllowedAttributes(state.runtime, tx, state.boundDN,
+						responseEntry, readable, request.Attributes, request.TypesOnly)
+				}
 				if database.dds != nil {
 					readable = projectDDSRemainingTTL(
 						readable,
@@ -3029,6 +3033,8 @@ func (server *Server) continueSortedPagedSearch(
 					request.TypesOnly,
 				)
 			}
+			readable = server.applyAllowedAttributes(state.runtime, tx, state.boundDN,
+				responseEntry, readable, request.Attributes, request.TypesOnly)
 			if database.dds != nil {
 				readable = projectDDSRemainingTTL(readable, responseEntry, time.Now())
 			}
@@ -3220,6 +3226,8 @@ func (server *Server) searchRootDSE(
 			acl.Read,
 			request.TypesOnly && !sorting.active(),
 		)
+		readable = server.applyAllowedAttributes(state.runtime, tx, state.boundDN,
+			entry, readable, request.Attributes, request.TypesOnly)
 		value := server.selectEntry(
 			state.runtime,
 			readable,
@@ -3359,6 +3367,8 @@ func (server *Server) searchSubschema(
 			acl.Read,
 			request.TypesOnly && !sorting.active(),
 		)
+		readable = server.applyAllowedAttributes(state.runtime, tx, state.boundDN,
+			entry, readable, request.Attributes, request.TypesOnly)
 		value := server.selectEntry(
 			state.runtime,
 			readable,
@@ -3447,7 +3457,7 @@ func (server *Server) rootDSE(
 	entry := directory.Entry{
 		DN: "",
 		Attributes: []directory.Attribute{
-			{Description: "objectClass", Values: [][]byte{[]byte("top")}},
+			{Description: "objectClass", Values: stringValues("top", "OpenLDAProotDSE")},
 			{Description: "subschemaSubentry", Values: [][]byte{[]byte("cn=Subschema")}},
 			{Description: "supportedLDAPVersion", Values: [][]byte{[]byte("3")}},
 			{Description: "vendorName", Values: [][]byte{[]byte("ldap-go")}},

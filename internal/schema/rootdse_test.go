@@ -33,4 +33,10 @@ func TestRootDSESchemaAndPlacement(t *testing.T) {
 	if !known || !slices.Contains(attributes, "matchingRules") || !slices.Contains(attributes, "matchingRuleUse") {
 		t.Fatalf("subschema incomplete: %v", attributes)
 	}
+	for _, name := range []string{"matchingRules", "matchingRuleUse"} {
+		attribute, known := registry.AttributeType(name)
+		if !known || attribute.Usage != UsageDirectoryOperation || attribute.Equality != "objectIdentifierFirstComponentMatch" {
+			t.Fatalf("subschema attribute declaration missing: %s", name)
+		}
+	}
 }

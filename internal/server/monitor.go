@@ -1582,6 +1582,8 @@ func (server *Server) searchMonitor(
 					acl.Read,
 					request.TypesOnly,
 				)
+				readable = server.applyAllowedAttributes(state.runtime, reader, state.boundDN,
+					candidate.entry, readable, request.Attributes, request.TypesOnly)
 				candidate.entry = server.selectEntry(
 					state.runtime,
 					readable,

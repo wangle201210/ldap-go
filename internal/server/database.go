@@ -89,6 +89,7 @@ type runtimeDatabase struct {
 	homedir                *homedirRuntimeConfiguration
 	explicitGlue           bool
 	allOperationalAttrs    bool
+	allowedOverlay         bool
 	authzidOverlay         bool
 	lastBindOverlay        bool
 	lastBindForwardUpdates bool
@@ -2635,6 +2636,11 @@ func loadRuntimeDatabaseOverlays(
 			)
 		}
 		switch overlayType {
+		case "allowed":
+			if database.allowedOverlay {
+				return fmt.Errorf("%s configures a duplicate allowed overlay for %s", entry.DN, database.name)
+			}
+			database.allowedOverlay = true
 		case "authzid":
 			if database.authzidOverlay {
 				return fmt.Errorf("%s configures a duplicate authzid overlay for %s", entry.DN, database.name)

@@ -657,7 +657,7 @@ var mdbDirectiveSpecs = map[string]directiveSpec{
 }
 
 var overlayObjectClasses = map[string]string{
-	"accesslog": "olcAccessLogConfig", "allop": "", "auditlog": "olcAuditlogConfig", "authzid": "",
+	"accesslog": "olcAccessLogConfig", "allop": "", "allowed": "", "auditlog": "olcAuditlogConfig", "authzid": "",
 	"autoca": "olcAutoCAConfig", "chain": "", "collect": "olcCollectConfig",
 	"constraint": "olcConstraintConfig", "dds": "olcDDSConfig", "deref": "",
 	"dyngroup": "olcDynGroupConfig", "dynlist": "olcDynListConfig", "glue": "", "homedir": "olcHomedirConfig",

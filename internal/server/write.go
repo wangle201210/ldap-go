@@ -4389,6 +4389,13 @@ func isProtectedOperationalAttribute(
 	}
 	key := strings.ToLower(strings.TrimSpace(base))
 	if attributeType, ok := registry.AttributeType(base); ok {
+		if attributeType.NoUserModification {
+			switch attributeType.OID {
+			case "1.2.840.113556.1.4.911", "1.2.840.113556.1.4.912",
+				"1.2.840.113556.1.4.913", "1.2.840.113556.1.4.914":
+				return true
+			}
+		}
 		key = strings.ToLower(attributeType.OID)
 	}
 	_, protected := protectedOperationalAttributes[key]
