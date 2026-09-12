@@ -318,7 +318,17 @@ case "$test_parallel" in
 	''|*[!0-9]*|0) die "LDAP_GO_OPENLDAP_PARALLEL must be a positive integer" ;;
 esac
 printf 'Running OpenLDAP reference differentials and related topology tests...\n'
+lloadd_scram_plus_native=${LDAP_GO_LLOADD_SCRAM_PLUS_NATIVE_TESTS:-$strict}
+case "$lloadd_scram_plus_native" in
+	0|1) ;;
+	*) die "LDAP_GO_LLOADD_SCRAM_PLUS_NATIVE_TESTS must be 0 or 1" ;;
+esac
+if [ "$strict" = "1" ] && [ "$lloadd_scram_plus_native" != "1" ]; then
+	die "strict mode requires the lloadd SCRAM-PLUS native provider test"
+fi
 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+LDAP_GO_LDIF_WRAP_EXTERNAL=1 \
+LDAP_GO_LLOADD_SCRAM_PLUS_NATIVE_TESTS=$lloadd_scram_plus_native \
 go test -p=1 \
 		./internal/server \
 		./internal/lloadd \
@@ -345,6 +355,25 @@ skips=$(sed -n 's/^[[:space:]]*--- SKIP: \([^ (]*\).*/\1/p' "$log")
 unexpected_skips=
 for skipped in $skips; do
 	case "$skipped" in
+		TestServiceSASLSCRAMPlusOpenLDAP2613NativeProvider)
+			if [ "$lloadd_scram_plus_native" = "1" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
+		TestLDAPVCExternalOpenLDAPModule)
+			# A separately provisioned vc-module endpoint is not part of the
+			# reference build. Once explicitly supplied, it must run.
+			if [ -n "${LDAP_GO_OPENLDAP_VC_URI:-}" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
+		TestLDAPURLToolExternal)
+			# This separate corpus includes BSD getopt byte-for-byte output;
+			# it does not claim GNU getopt parity on the Linux reference runner.
+			if [ "${LDAP_GO_LDAPURL_EXTERNAL:-0}" = "1" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
 		TestBackendTCPUserTimeoutLinux)
 			# The kernel option is Linux-only; Darwin and Windows exercise the
 			# explicit unsupported-platform path in separate tests.
@@ -383,6 +412,8 @@ for skipped in $skips; do
 done
 
 mandatory_tests='TestOpenLDAPReferenceCoreProtocolDifferential
+TestLDAPVCOpenLDAPNativeDifferential
+TestLDAPLDIFWrapOpenLDAP
 TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential
 TestOpenLDAPReferenceUnknownOperationDisconnect
 TestOpenLDAPReferenceLDAPSearchSortAndUFN
@@ -467,6 +498,10 @@ fi
 if [ "$scram_channel_binding_reference" = "1" ]; then
 	mandatory_tests="$mandatory_tests
 TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding"
+fi
+if [ "$lloadd_scram_plus_native" = "1" ]; then
+	mandatory_tests="$mandatory_tests
+TestServiceSASLSCRAMPlusOpenLDAP2613NativeProvider"
 fi
 
 missing_tests=

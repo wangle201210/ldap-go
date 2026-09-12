@@ -62,6 +62,67 @@ Tests derive expected behavior from the applicable RFC. They cover result codes,
 response ordering, connection state, controls, limits, cancellation, and
 security-sensitive edge cases.
 
+`TestServiceSASLSCRAMPlus*` covers lloadd service authentication over verified
+TLS, malformed and oversized challenges, proof failures, trust/name/revocation,
+pool identities, reconnects, and certificate rotation. Independent PBKDF2/HMAC
+fixtures preserve optional extension fields in all three hashes. See the
+[lloadd SCRAM-PLUS configuration and scope](lloadd-scram-plus.md).
+The strict reference runner also requires
+`TestServiceSASLSCRAMPlusOpenLDAP2613NativeProvider`: a real pinned slapd/Cyrus
+endpoint provider, LDAPS/StartTLS, all three hashes, Who Am I, and Search.
+
+`TestLDAPVC*` covers independent connection authentication, nested and outer
+controls, verified TLS, failover, prompts, dry runs, malformed BER, depth/size
+limits, redacted diagnostics, and rejection by the current ldap-go server.
+`TestLDAPCompareRawSimpleBindControlsRegression` verifies the shared raw
+connector transmits Bind-specific controls while keeping ordinary controls on
+the operation. To compare the VC request bytes and result output with a native
+2.6.13 client:
+
+```sh
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  OPENLDAP_LDAPVC=/path/to/openldap-2.6.13/bin/ldapvc \
+  go test ./cmd/ldap-go -run '^TestLDAPVCOpenLDAPNativeDifferential$' -count=1
+```
+
+The corpus explicitly checks the intentional exit-status difference for an
+inner credential failure and native's omitted authentication field on anonymous
+requests. `TestLDAPVCExternalOpenLDAPModule` uses a real vc-enabled server and a
+disposable user, configured through
+`LDAP_GO_OPENLDAP_VC_URI`, `LDAP_GO_OPENLDAP_VC_DN`, and
+`LDAP_GO_OPENLDAP_VC_PASSWORD_FILE`. It can also automatically start a temporary
+server when `OPENLDAP_BUILD` contains built `vc` and `authzid` modules. Correct
+and incorrect passwords must return 0 and 1 respectively. This module test
+passed in a disposable Linux arm64 container built from commit
+`d172686d3d270bc961b78f3ff00d7019c8dfb094`, with MDB, ppolicy, vc, and authzid.
+The native server used no TLS/Cyrus for that test; verified TLS and connection
+SASL are covered separately by the Go protocol fixtures. The real module test
+uses explicit DN/password operands and does not prove anonymous module
+behavior. A successful raw-wire fixture is not evidence that the ldap-go
+server implements VC.
+
+To run the module test with an existing configured native build, compile its
+optional modules first. Native module compilation is separate from Go and
+does not enable cgo:
+
+```sh
+make -C "$OPENLDAP_BUILD/contrib/slapd-modules/vc"
+make -C "$OPENLDAP_BUILD/contrib/slapd-modules/authzid"
+CGO_ENABLED=0 go test ./cmd/ldap-go \
+  -run '^TestLDAPVCExternalOpenLDAPModule$' -count=1 -v
+```
+
+The native build must have dynamic modules, MDB, and ppolicy enabled, and its
+runtime library paths must be configured. `OPENLDAP_SOURCE` supplies the
+matching schema directory for an out-of-tree build.
+
+The full `scripts/test-openldap.sh` runner requires the native VC client
+differential and enables the LDIF-wrap differential automatically. The separate
+VC-module endpoint test may skip only when its endpoint was not supplied.
+The offline ldapurl corpus, which includes BSD getopt diagnostics, remains
+separately enabled with `LDAP_GO_LDAPURL_EXTERNAL=1`; GNU getopt parity is not
+claimed. These explicit exclusions are reported as skips, not passing tests.
+
 ## OpenLDAP differential tests
 
 `TestRWMRewriteMap*` covers the built-in escape mapper, configuration order,
