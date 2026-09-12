@@ -81,6 +81,7 @@ type ldapClientOptions struct {
 	requireStartTLS      bool
 	timeout              time.Duration
 	timeoutDisabled      bool
+	ldifWrap             uint64
 	tlsCAFile            string
 	tlsCertificateFile   string
 	tlsPrivateKeyFile    string
@@ -164,7 +165,7 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	flags.Var(
 		&options.generalOptionSpecs,
 		"o",
-		"OpenLDAP client option: nettimeout=<seconds|none|max>",
+		"OpenLDAP client option: nettimeout=<seconds|none|max>, ldif-wrap=<columns|no>",
 	)
 	flags.BoolVar(&options.chaseReferrals, "C", false, "chase LDAP referrals")
 	flags.BoolVar(
@@ -374,6 +375,14 @@ func (options *ldapClientOptions) applyGeneralOptions(flags *flag.FlagSet) error
 	for _, raw := range options.generalOptionSpecs {
 		name, value, found := strings.Cut(raw, "=")
 		name = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
+		if name == "ldif_wrap" {
+			width, err := parseLDAPLDIFWrap(value, found)
+			if err != nil {
+				return err
+			}
+			options.ldifWrap = width
+			continue
+		}
 		if name != "nettimeout" {
 			return fmt.Errorf("invalid general option name %q", name)
 		}
@@ -1576,7 +1585,7 @@ func runLDAPSearch(
 	}
 
 	output := &ldapSearchLDIFOutput{
-		writer:        stdout,
+		writer:        client.ldifWriter(stdout),
 		typesOnly:     *typesOnly,
 		level:         ldifLevel,
 		valueFiles:    valueFiles,
@@ -3357,7 +3366,7 @@ func (output *ldapSearchLDIFOutput) ensureStarted() error {
 			return err
 		}
 	case 1, 2:
-		if err := writeFoldedLDIFLine(output.writer, []byte("version: 1")); err != nil {
+		if _, err := io.WriteString(output.writer, "version: 1\n"); err != nil {
 			return err
 		}
 		if _, err := io.WriteString(output.writer, "\n"); err != nil {
@@ -3752,6 +3761,10 @@ func writeCommentLDIFAttribute(
 		line = append(line, ' ')
 		line = append(line, value...)
 	}
+	if configured, ok := writer.(*ldapLDIFWidthWriter); ok {
+		prefix := len(line) - len(value)
+		return configured.writeLine(line, prefix, true)
+	}
 	return writeFoldedLDIFLineWithWidth(writer, line, ldapSearchLDIFLineWidth+1)
 }
 
@@ -3773,7 +3786,7 @@ func writeBase64LDIFAttribute(
 		line = append(line, ' ')
 		line = append(line, encoded...)
 	}
-	return writeFoldedLDIFLine(writer, line)
+	return writeLDAPLDIFConfiguredLine(writer, line, true)
 }
 
 func (output *ldapSearchLDIFOutput) writeEntries(entries []*ldap.Entry) error {
@@ -4263,7 +4276,7 @@ func writeLDIFURLAttribute(writer io.Writer, name, reference string) error {
 	line = append(line, name...)
 	line = append(line, ':', '<', ' ')
 	line = append(line, reference...)
-	return writeFoldedLDIFLine(writer, line)
+	return writeLDAPLDIFConfiguredLine(writer, line, true)
 }
 
 func writeLDIFAttribute(writer io.Writer, name string, value []byte) error {
@@ -4301,7 +4314,7 @@ func ldifValueRequiresBase64(value []byte) bool {
 }
 
 func writeFoldedLDIFLine(writer io.Writer, line []byte) error {
-	return writeFoldedLDIFLineWithWidth(writer, line, ldapSearchLDIFLineWidth)
+	return writeLDAPLDIFConfiguredLine(writer, line, false)
 }
 
 func writeFoldedLDIFLineWithWidth(writer io.Writer, line []byte, lineWidth int) error {

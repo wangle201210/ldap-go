@@ -211,6 +211,16 @@ published hardware baseline is claimed.
 
 ## Replication and operations
 
+Syncrepl accepts `SCRAM-SHA-1-PLUS`, `SCRAM-SHA-256-PLUS`, and
+`SCRAM-SHA-512-PLUS` over verified standard LDAPS or StartTLS. It uses Cyrus's
+`p=ldap` binding name with `tls-server-end-point:` application data, so the
+provider must enable `olcSaslCBinding: tls-endpoint`. Cleartext, TLCP, optional
+StartTLS downgrade, `tls_reqcert=never/allow`, mismatched bindings, malformed
+proofs, and excessive iteration counts fail authentication. Local transport,
+reconnect/restart, cookie preservation, and nine OpenLDAP 2.6.13 policy/hash
+cases pass. Other binding types and SCRAM message extensions remain outside
+this consumer implementation.
+
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Syncrepl consumer | partial | ordered `olcSyncrepl` loading plus ldap-go, OpenLDAP 2.6.13 standard, accesslog delta, and protocol-level fake DSEE initial/persist/restart/recovery topologies pass. The supported two-node single-writer matrix covers bidirectional multi-URI failover, multi-retry offline recovery, four repeated consumer restarts with monotonic cookies, and trusted/untrusted/trusted LDAPS certificate rotation recovery. A real-process qualification uses separate bbolt databases and OS processes for initial refresh, consumer SIGKILL/cookie recovery, provider outage/restart, session-log gap, Modify/Delete/Add replay, and final subtree convergence; a 128-write heavy mode is available. Tag-based Sync Info, timeout, DIGEST realm/proof, and schema-aware routing pass; real Oracle DSEE remains unverified |
@@ -225,6 +235,16 @@ published hardware baseline is claimed.
 | `lloadd` behavior | partial | Bounded BER, pools/scheduling/limits, ProxyAuthz, affinity, Abandon/Cancel, LDAPI, recovery, backpressure, Verify Credentials, TLS, keepalive, and TCP user timeout pass. Service SASL includes EXTERNAL over LDAPS/StartTLS client certificates or LDAPI peer credentials, PLAIN/CRAM/DIGEST/SCRAM, and GSSAPI password/FILE keytab/FILE ccache with RFC 4752 layers and a 16-worker credential-initialization bound. EXTERNAL authorization, failed-pool isolation, certificate rotation, TLS session-cache generation isolation, two-user failover, and regular/bind pool separation pass pure-Go tests and pinned OpenLDAP cases. OpenLDAP/Cyrus source plus a temporary-KDC experiment confirms its TLS `critical=0` channel-binding input is wire-inert, matching the Go client's NULL binding. Monitor atomically enforces `received = completed + failed + rejected + pending` with abandoned as a completed subset, exposes schema-valid abandon/generation/uptime operational attributes, and preserves ACL/paging/Sort/VLV without retaining retired schema registries; bytes/PDU and OS worker internals are not fabricated. Trusted listeners require physical-source allowlists and accept strict PROXY v1/v2 stream headers. V2 UNIX dispatch is an extension; DGRAM/UDP, embedded ABI, and exact scheduling remain |
 
 ## Command-line compatibility
+
+Common client `-o ldif-wrap=<columns|no>` (also `ldif_wrap`) controls generated
+LDIF. Ordinary and Base64 values, named comments, control responses, Compare
+controls, and extended results are covered; direct status/version/password
+text retains the reference behavior. Width zero and a valueless option restore
+the 78-column default, repeated options use the final value, and integers
+above uint32 or invalid values are rejected before connecting. External tests
+compare OpenLDAP 2.6.13 output at widths 2/5/20/78/0/no/uint32-max; width 1
+has pure-Go round-trip coverage because the local native allocator can abort
+at that width.
 
 The built-in offline `ldapurl` constructs URL components or parses `-H`.
 Its bounded corpus compares stdout, stderr, and exit status with Homebrew

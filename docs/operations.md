@@ -93,6 +93,18 @@ for functional and security boundaries.
 
 ## Offline LDAP URLs
 
+The LDAP client's LDIF output accepts `-o ldif-wrap=no` for unfolded values or
+`-o ldif-wrap=120` for a chosen width. `ldif_wrap` is an alias; zero or a bare
+`-o ldif-wrap` restores the default of 78. Repeated settings use the final
+value. Attribute-name prefixes remain intact even when wider than the chosen
+width. Base64 encoding and the values obtained by importing the LDIF are
+unchanged. For example:
+
+```sh
+./bin/ldap-go ldapsearch -x -H ldap://127.0.0.1:1389 \
+  -b dc=example,dc=com -LLL -o ldif-wrap=no '(objectClass=*)'
+```
+
 The built-in `ldapurl` constructs a URL or prints the components of `-H`.
 It runs without a server or network connection:
 

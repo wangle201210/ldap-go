@@ -22,6 +22,25 @@ schema parsers must include malformed-input and resource-limit tests.
 
 ## Protocol conformance
 
+`TestLDAPLDIFWrap*` checks per-command folding, preserved LDIF values, small
+widths, writer failures, and native output for Search, controls, Compare, and
+extended results. Enable the external test using:
+
+```sh
+CGO_ENABLED=0 LDAP_GO_LDIF_WRAP_EXTERNAL=1 \
+  OPENLDAP_LDAPSEARCH=/path/to/openldap-2.6.13/bin/ldapsearch \
+  go test ./cmd/ldap-go -run '^TestLDAPLDIFWrap' -count=1
+```
+
+`TestSyncConsumerSCRAMPlus*` and `TestSyncreplSCRAMPlus*` cover all three
+SCRAM-PLUS hashes, trust/hostname checks, TLS 1.2/1.3, LDAPS/StartTLS,
+downgrade and proof failures, bounded challenges, and persistent reconnects.
+`TestOpenLDAP2613SyncreplSCRAMPlus` compares provider policies `tls-endpoint`,
+`none`, and `tls-unique` against the pinned external server; only the matching
+endpoint policy authenticates. It uses the existing
+`LDAP_GO_OPENLDAP_REFERENCE_TESTS=1` gate and `OPENLDAP_SLAPD`,
+`OPENLDAP_SLAPADD`, `OPENLDAP_SCHEMA_DIR`, and `SASL_PATH` overrides.
+
 Tests derive expected behavior from the applicable RFC. They cover result codes,
 response ordering, connection state, controls, limits, cancellation, and
 security-sensitive edge cases.

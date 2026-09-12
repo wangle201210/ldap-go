@@ -139,6 +139,7 @@ func runLDAPCompare(
 	if err := client.validateWrite(flags); err != nil {
 		return err
 	}
+	stdout = client.ldifWriter(stdout)
 	manageDsaIT, err := ldapBooleanFlagValue(flags, "M")
 	if err != nil {
 		return err
@@ -351,6 +352,16 @@ func writeLDAPCompareOutput(
 		}
 	}
 	for _, control := range result.controls {
+		if _, configured := writer.(*ldapLDIFWidthWriter); configured {
+			value := control.OID + " " + strconv.FormatBool(control.Critical)
+			if control.HasValue && len(control.Value) > 0 {
+				value += " " + base64.StdEncoding.EncodeToString(control.Value)
+			}
+			if err := writeLDIFAttribute(writer, "control", []byte(value)); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := fmt.Fprintf(writer, "control: %s %t", control.OID, control.Critical); err != nil {
 			return err
 		}
@@ -1577,6 +1588,7 @@ func runLDAPExop(
 			invocation.passwdUser,
 		)
 	}
+	stdout = client.ldifWriter(stdout)
 
 	connection, err := client.connectAndBind(flags, stdin, stderr)
 	if err != nil {

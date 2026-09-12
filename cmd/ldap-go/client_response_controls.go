@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,10 @@ func (output *ldapSearchLDIFOutput) writeOpenLDAPResponseControls(
 			}
 			if output.level == 0 {
 				if err := writeLDIFAttribute(output.writer, "control", []byte(value)); err != nil {
+					return err
+				}
+			} else if configured, ok := output.writer.(*ldapLDIFWidthWriter); ok {
+				if err := configured.writeLine([]byte("# control: "+value), len("# control"), true); err != nil {
 					return err
 				}
 			} else if err := writeCommentLDIFAttribute(
@@ -302,7 +307,7 @@ func (output *ldapSearchLDIFOutput) writeReadEntryControl(kind string, value []b
 	if err != nil {
 		return nil
 	}
-	if err := writeFoldedLDIFLine(output.writer, []byte("# ==> "+kind)); err != nil {
+	if err := writeLDAPReadControlMarker(output.writer, "# ==> ", kind); err != nil {
 		return err
 	}
 	if err := writeLDIFAttribute(output.writer, "dn", entry.dn); err != nil {
@@ -326,7 +331,15 @@ func (output *ldapSearchLDIFOutput) writeReadEntryControl(kind string, value []b
 			}
 		}
 	}
-	return writeFoldedLDIFLine(output.writer, []byte("# <== "+kind))
+	return writeLDAPReadControlMarker(output.writer, "# <== ", kind)
+}
+
+func writeLDAPReadControlMarker(writer io.Writer, prefix, kind string) error {
+	line := []byte(prefix + kind)
+	if configured, ok := writer.(*ldapLDIFWidthWriter); ok {
+		return configured.writeLine(line, len(prefix), true)
+	}
+	return writeFoldedLDIFLine(writer, line)
 }
 
 func decodeLDAPReadControlEntry(value []byte) (ldapReadControlEntry, error) {
@@ -505,6 +518,10 @@ func (output *ldapSearchLDIFOutput) writeSyncInfoIntermediate(
 }
 
 func writeLDAPSyncCookie(writer io.Writer, cookie []byte) error {
+	if configured, ok := writer.(*ldapLDIFWidthWriter); ok {
+		// OpenLDAP prints this diagnostic directly rather than through ldif_put.
+		writer = &ldapLDIFWidthWriter{Writer: configured.Writer, width: math.MaxUint64}
+	}
 	return writeCommentLDIFAttribute(
 		writer,
 		"cookie",
