@@ -377,6 +377,11 @@ func (server *Server) syncConsumerDeltaInitialCookie(ctx context.Context, config
 }
 
 func (server *Server) syncConsumerAccesslogFailure(ctx context.Context, config syncConsumerConfig, cause error) error {
+	if failure := asOperationFailure(cause); failure != nil && failure.result.Code == ldapwire.ResultAdminLimitExceeded {
+		// A local entry limit is not a log gap. Retry the rejected change from
+		// the committed cookie after the administrator raises the limit.
+		return fmt.Errorf("accesslog syncrepl stopped: %w", cause)
+	}
 	database := runtimeDatabaseForPartition(server.runtime.Load(), config.partition)
 	if database != nil && database.multiProvider {
 		// A full-entry refresh cannot recover attribute history on a writable peer.
