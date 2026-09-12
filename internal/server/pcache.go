@@ -1519,6 +1519,8 @@ func pcacheNormalizeOptionalSubstringPart(
 
 func pcacheSubstringNormalizer(rule string) (func([]byte) []byte, bool) {
 	switch strings.ToLower(strings.TrimSpace(rule)) {
+	case "octetstringsubstringsmatch", "2.5.13.19":
+		return bytes.Clone, true
 	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch",
 		"caseignorelistsubstringsmatch", "2.5.13.4", "1.3.6.1.4.1.1466.109.114.3",
 		"2.5.13.12":
@@ -1526,7 +1528,7 @@ func pcacheSubstringNormalizer(rule string) (func([]byte) []byte, bool) {
 			return bytes.ToLower([]byte(strings.Join(strings.Fields(string(value)), " ")))
 		}, true
 	case "caseexactsubstringsmatch", "caseexactia5substringsmatch",
-		"2.5.13.7", "1.3.6.1.4.1.1466.109.114.4":
+		"2.5.13.7", "1.3.6.1.4.1.1466.109.114.4", "1.3.6.1.4.1.4203.1.2.1":
 		return func(value []byte) []byte {
 			return []byte(strings.Join(strings.Fields(string(value)), " "))
 		}, true

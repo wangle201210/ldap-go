@@ -42,6 +42,8 @@ type runtimeState struct {
 	externalPasswords    externalPasswordRuntimeConfiguration
 	verifyCredentials    bool
 	allowed              *allowedSchemaPlan
+	matchingRules        []string
+	matchingRuleUses     []string
 	sasl                 saslRuntimeConfiguration
 	connectionPending    connectionPendingRuntimeConfiguration
 	incomingLimits       incomingLimits
@@ -525,6 +527,10 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	runtime.allowed, err = buildAllowedSchemaPlan(registry, databases)
 	if err != nil {
 		return nil, err
+	}
+	runtime.matchingRules, runtime.matchingRuleUses, err = registry.MatchingRuleSchema()
+	if err != nil {
+		return nil, fmt.Errorf("prepare matching rule schema: %w", err)
 	}
 	if err := loadAutoCAAuthorities(directoryReader, runtime); err != nil {
 		return nil, err

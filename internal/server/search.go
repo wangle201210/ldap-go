@@ -3606,6 +3606,16 @@ func (server *Server) subschemaEntry(runtime *runtimeState) directory.Entry {
 			Values:      stringValues(descriptions...),
 		})
 	}
+	if len(runtime.matchingRules) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "matchingRules", Values: stringValues(runtime.matchingRules...),
+		})
+	}
+	if len(runtime.matchingRuleUses) > 0 {
+		entry.Attributes = append(entry.Attributes, directory.Attribute{
+			Description: "matchingRuleUse", Values: stringValues(runtime.matchingRuleUses...),
+		})
+	}
 	if descriptions := registry.NameFormDescriptions(); len(descriptions) > 0 {
 		entry.Attributes = append(entry.Attributes, directory.Attribute{
 			Description: "nameForms",

@@ -1177,6 +1177,8 @@ func canonicalIndexMatchingRule(rule string) string {
 		return "octetstringmatch"
 	case "2.5.13.18":
 		return "octetstringorderingmatch"
+	case "2.5.13.19":
+		return "octetstringsubstringsmatch"
 	case "2.5.13.20":
 		return "telephonenumbermatch"
 	case "2.5.13.21":
@@ -1189,6 +1191,10 @@ func canonicalIndexMatchingRule(rule string) string {
 		return "caseexactia5match"
 	case "1.3.6.1.4.1.1466.109.114.2":
 		return "caseignoreia5match"
+	case "1.3.6.1.4.1.1466.109.114.3":
+		return "caseignoreia5substringsmatch"
+	case "1.3.6.1.4.1.4203.1.2.1":
+		return "caseexactia5substringsmatch"
 	case "1.3.6.1.1.16.2":
 		return "uuidmatch"
 	case "1.3.6.1.1.16.3":
@@ -1211,6 +1217,7 @@ func substringIndexRulesEquivalent(equality, substring string) bool {
 		"caseignoreia5substringsmatch":   "caseignoreia5match",
 		"caseexactia5substringsmatch":    "caseexactia5match",
 		"numericstringsubstringsmatch":   "numericstringmatch",
+		"octetstringsubstringsmatch":     "octetstringmatch",
 		"telephonenumbersubstringsmatch": "telephonenumbermatch",
 	}
 	return pairs[substring] == equality

@@ -423,6 +423,7 @@ for skipped in $skips; do
 done
 
 mandatory_tests='TestOpenLDAPReferenceCoreProtocolDifferential
+TestOpenLDAPMatchingRulesReference
 TestLDAPVCOpenLDAPNativeDifferential
 TestLDAPLDIFWrapOpenLDAP
 TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential

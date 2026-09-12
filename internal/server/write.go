@@ -3210,6 +3210,13 @@ func (server *Server) handleCompare(
 				request.Assertion,
 			)
 			if compareErr != nil {
+				var assertionError *schema.MatchingRuleAssertionError
+				if errors.As(compareErr, &assertionError) {
+					if assertionError.Unknown {
+						return nil
+					}
+					return operationFailed(ldapwire.ResultInvalidAttributeSyntax, assertionError.Error())
+				}
 				return operationFailed(ldapwire.ResultInappropriateMatching, compareErr.Error())
 			}
 			if comparison == 0 {
