@@ -546,7 +546,7 @@ func connectLDAPCompareRawEndpoint(
 			bindDN = client.bindDN
 			bindPassword = password
 		}
-		if err := ldapRawSimpleBind(connection, &messageID, bindDN, bindPassword); err != nil {
+		if err := ldapRawSimpleBind(connection, &messageID, bindDN, bindPassword, ldapBindRequestControls(client.generalControls)); err != nil {
 			if hasPassword {
 				return closeOnError(fmt.Errorf("bind as %s: %w", client.bindDN, err))
 			}
@@ -611,7 +611,12 @@ func ldapRawSimpleBind(
 	messageID *int64,
 	dn string,
 	password []byte,
+	controls []ldap.Control,
 ) error {
+	wireControls, err := ldapRawControlsToWire(controls)
+	if err != nil {
+		return err
+	}
 	request, err := ldapwire.EncodeRequestMessage(ldapwire.Message{
 		ID: *messageID,
 		Request: ldapwire.BindRequest{
@@ -621,11 +626,15 @@ func ldapRawSimpleBind(
 				Simple: password,
 			},
 		},
+		Controls: wireControls,
 	})
 	if err != nil {
 		return err
 	}
 	defer clear(request)
+	if int64(len(request)) > ldapwire.DefaultMaxMessageSize {
+		return errors.New("LDAP bind request exceeds the message size limit")
+	}
 	if err := ldapwire.Write(connection, request); err != nil {
 		return err
 	}
@@ -793,7 +802,7 @@ func (options *ldapClientOptions) connectLDAPRawReferral(
 	if err := connection.SetDeadline(ldapClientDeadline(options.timeout)); err != nil {
 		return closeOnError(fmt.Errorf("set referral bind deadline: %w", err))
 	}
-	if err := ldapRawSimpleBind(connection, &messageID, "", nil); err != nil {
+	if err := ldapRawSimpleBind(connection, &messageID, "", nil, nil); err != nil {
 		return closeOnError(fmt.Errorf(
 			"anonymous bind to referral %s: %w",
 			target.endpoint,

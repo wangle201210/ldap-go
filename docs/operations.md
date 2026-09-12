@@ -70,6 +70,36 @@ SASL prompt. Explicit `-W` still requests password input, matching OpenLDAP.
 selection, interactive `-I`, and LDAP configuration-file defaults are not
 provided by this mode.
 
+## Verify credentials on OpenLDAP
+
+`ldap-go ldapvc` checks a user's credentials through an external OpenLDAP server
+with the `vc` module loaded, without changing the connection's authorization
+identity. The ldap-go server does not yet implement this extension.
+
+```sh
+./bin/ldap-go ldapvc -x -H ldaps://directory.example.com:636 \
+  -tls-ca /etc/ldap/ca.pem -a -b 'uid=alice,ou=people,dc=example,dc=com'
+```
+
+This prompts for Alice's password. `-a` requests the verified authorization
+identity; `-b` requests password-policy information. An optional final password
+operand is supported, but the prompt avoids exposing it in the process argument
+list. Omitting both operands verifies anonymous credentials.
+
+If the server requires an authenticated connection, use the normal `-D/-W/-y`
+or `-Y/-U` options for that separate identity. Those options do not select the
+password being verified. The command supports verified LDAPS/StartTLS and
+connection failover; it does not chase verification referrals. `-n` validates
+locally without connecting or prompting.
+
+Both an outer LDAP error and a failed inner credential check return a nonzero
+exit status. OpenLDAP 2.6.13's `ldapvc` returns zero for an inner failure when
+the outer operation succeeds; scripts must account for this intentional
+difference. VC-specific interactive SASL (`-E`) and continuation cookies remain
+unsupported. Normal connection SASL remains available.
+Anonymous verification sends an explicit empty simple-authentication field;
+native 2.6.13 omits that mandatory field when its credential pointer is absent.
+
 ## Web administration
 
 Web Admin is an LDAP client process. It does not open ldap-go or OpenLDAP

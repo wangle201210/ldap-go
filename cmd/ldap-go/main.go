@@ -153,6 +153,8 @@ func runWithContextAndSignals(
 		err = runLDAPPasswd(args[1:], stdin, stdout, stderr)
 	case "ldapexop":
 		err = runLDAPExop(args[1:], stdin, stdout, stderr)
+	case "ldapvc":
+		err = runLDAPVC(args[1:], stdin, stdout, stderr)
 	case "ldapmodify", "ldapadd":
 		err = runLDAPModify(args[0], args[1:], stdin, stdout, stderr)
 	case "ldapdelete":
@@ -2327,6 +2329,7 @@ commands:
 	  ldapcompare  compare an LDAP attribute assertion
 	  ldappasswd  change or generate an LDAP user password
 	  ldapexop  issue an LDAP extended operation
+	  ldapvc  verify credentials using an external OpenLDAP vc module
 	  ldapmodify  apply ordered LDAP LDIF change records
   ldapadd  add LDIF entries or apply explicit change records
   ldapdelete  delete LDAP entries by DN
