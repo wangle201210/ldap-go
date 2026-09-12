@@ -18,7 +18,7 @@ import (
 func TestBuiltinMatchingRuleCatalog(t *testing.T) {
 	registry := NewRegistry()
 	rules, uses, err := registry.MatchingRuleSchema()
-	if err != nil || len(rules) != 32 || len(uses) != 0 {
+	if err != nil || len(rules) != 33 || len(uses) != 0 {
 		t.Fatalf("empty registry publication: rules=%d uses=%d err=%v", len(rules), len(uses), err)
 	}
 	seen := make(map[string]bool)
@@ -53,7 +53,7 @@ func TestBuiltinMatchingRuleCatalog(t *testing.T) {
 	}
 	for _, unknown := range []string{
 		"caseIgnoreIA5OrderingMatch", "caseExactIA5OrderingMatch",
-		"certificateExactMatch", "bitStringMatch", "1.2.3.999", "", " caseIgnoreMatch", "caseIgnoreMatch;lang-en",
+		"certificateExactMatch", "1.2.3.999", "", " caseIgnoreMatch", "caseIgnoreMatch;lang-en",
 	} {
 		if rule, ok := BuiltinMatchingRule(unknown); ok {
 			t.Errorf("unexpected rule %q: %#v", unknown, rule)
@@ -302,7 +302,7 @@ func TestMatchingRuleSchemaSnapshotAndConcurrentRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules, uses, err := registry.MatchingRuleSchema()
-	if err != nil || len(rules) != 32 || len(uses) == 0 {
+	if err != nil || len(rules) != 33 || len(uses) == 0 {
 		t.Fatalf("builtin publication: rules=%d uses=%d err=%v", len(rules), len(uses), err)
 	}
 	cloned := registry.Clone()

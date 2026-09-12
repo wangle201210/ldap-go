@@ -44,6 +44,7 @@ func builtinMatchingRuleDefinitions() []builtinMatchingRuleDefinition {
 		{"2.5.13.13", "booleanMatch", SyntaxBoolean, true, false, ""},
 		{"2.5.13.14", "integerMatch", SyntaxInteger, true, false, ""},
 		{"2.5.13.15", "integerOrderingMatch", SyntaxInteger, true, false, ""},
+		{"2.5.13.16", "bitStringMatch", SyntaxBitString, true, false, ""},
 		{"2.5.13.17", "octetStringMatch", SyntaxOctetString, true, false, ""},
 		{"2.5.13.18", "octetStringOrderingMatch", SyntaxOctetString, true, false, ""},
 		{"2.5.13.19", "octetStringSubstringsMatch", SyntaxOctetString, false, false, ""},

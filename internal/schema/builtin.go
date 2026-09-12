@@ -5,7 +5,11 @@ import "fmt"
 const (
 	SyntaxACIItem                = "1.3.6.1.4.1.1466.115.121.1.1"
 	SyntaxOpenLDAPACI            = "1.3.6.1.4.1.4203.666.2.1"
+	SyntaxAudio                  = "1.3.6.1.4.1.1466.115.121.1.4"
+	SyntaxBinary                 = "1.3.6.1.4.1.1466.115.121.1.5"
 	SyntaxBoolean                = "1.3.6.1.4.1.1466.115.121.1.7"
+	SyntaxBitString              = "1.3.6.1.4.1.1466.115.121.1.6"
+	SyntaxLDAPSyntaxDescription  = "1.3.6.1.4.1.1466.115.121.1.54"
 	SyntaxCertificate            = "1.3.6.1.4.1.1466.115.121.1.8"
 	SyntaxCertificateList        = "1.3.6.1.4.1.1466.115.121.1.9"
 	SyntaxCertificatePair        = "1.3.6.1.4.1.1466.115.121.1.10"
@@ -16,11 +20,14 @@ const (
 	SyntaxDITContentRule         = "1.3.6.1.4.1.1466.115.121.1.16"
 	SyntaxDITStructureRule       = "1.3.6.1.4.1.1466.115.121.1.17"
 	SyntaxDistinguishedName      = "1.3.6.1.4.1.1466.115.121.1.12"
+	SyntaxRDN                    = "1.2.36.79672281.1.5.0"
+	SyntaxDeliveryMethod         = "1.3.6.1.4.1.1466.115.121.1.14"
 	SyntaxDirectoryString        = "1.3.6.1.4.1.1466.115.121.1.15"
 	SyntaxFacsimileTelephone     = "1.3.6.1.4.1.1466.115.121.1.22"
 	SyntaxGeneralizedTime        = "1.3.6.1.4.1.1466.115.121.1.24"
 	SyntaxIA5String              = "1.3.6.1.4.1.1466.115.121.1.26"
 	SyntaxInteger                = "1.3.6.1.4.1.1466.115.121.1.27"
+	SyntaxJPEG                   = "1.3.6.1.4.1.1466.115.121.1.28"
 	SyntaxMatchingRule           = "1.3.6.1.4.1.1466.115.121.1.30"
 	SyntaxMatchingRuleUse        = "1.3.6.1.4.1.1466.115.121.1.31"
 	SyntaxNameAndOptionalUID     = "1.3.6.1.4.1.1466.115.121.1.34"
@@ -28,6 +35,7 @@ const (
 	SyntaxNameForm               = "1.3.6.1.4.1.1466.115.121.1.35"
 	SyntaxObjectClass            = "1.3.6.1.4.1.1466.115.121.1.37"
 	SyntaxOID                    = "1.3.6.1.4.1.1466.115.121.1.38"
+	SyntaxOtherMailbox           = "1.3.6.1.4.1.1466.115.121.1.39"
 	SyntaxOctetString            = "1.3.6.1.4.1.1466.115.121.1.40"
 	SyntaxPostalAddress          = "1.3.6.1.4.1.1466.115.121.1.41"
 	SyntaxPrintableString        = "1.3.6.1.4.1.1466.115.121.1.44"
@@ -40,6 +48,8 @@ const (
 	SyntaxAttributeCertificate   = "1.3.6.1.4.1.4203.666.11.10.2.1"
 	SyntaxPKCS8PrivateKey        = "1.2.840.113549.1.8.1.1"
 	SyntaxOpenLDAPVoid           = "1.3.6.1.4.1.4203.1.1.1"
+	SyntaxNISNetgroupTriple      = "1.3.6.1.1.1.0.0"
+	SyntaxBootParameter          = "1.3.6.1.1.1.0.1"
 )
 
 func NewBuiltinRegistry() (*Registry, error) {
@@ -175,6 +185,7 @@ var builtinAttributeTypes = []string{
 	"( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' EQUALITY caseExactIA5Match SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
 	"( 2.5.21.5 NAME 'attributeTypes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxAttributeType + " USAGE directoryOperation )",
 	"( 2.5.21.4 NAME 'matchingRules' DESC 'RFC4512: matching rules' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxMatchingRule + " USAGE directoryOperation )",
+	"( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes' DESC 'RFC4512: LDAP syntaxes' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxLDAPSyntaxDescription + " USAGE directoryOperation )",
 	"( 2.5.21.8 NAME 'matchingRuleUse' DESC 'RFC4512: matching rule uses' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxMatchingRuleUse + " USAGE directoryOperation )",
 	"( 2.5.21.6 NAME 'objectClasses' EQUALITY objectIdentifierFirstComponentMatch SYNTAX " + SyntaxObjectClass + " USAGE directoryOperation )",
 	"( 2.5.21.1 NAME 'dITStructureRules' EQUALITY integerFirstComponentMatch SYNTAX " + SyntaxDITStructureRule + " USAGE directoryOperation )",

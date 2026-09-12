@@ -1406,8 +1406,22 @@ func (registry *Registry) Compare(
 		}
 		right = []byte(assertion)
 	}
+	if attribute.OID == "1.3.6.1.4.1.1466.101.120.16" &&
+		canonicalMatchingRule(rule) == "objectidentifierfirstcomponentmatch" &&
+		(len(right) == 0 || right[0] < '0' || right[0] > '9' || !validObjectIdentifier(string(right))) {
+		return 0, &MatchingRuleAssertionError{}
+	}
 	if attributeHasOrderedValues(*attribute) {
 		return compareOrderedAssertion(rule, left, right)
+	}
+	if canonicalMatchingRule(rule) == "bitstringmatch" {
+		if !validBitString(right) {
+			return 0, &MatchingRuleAssertionError{}
+		}
+		if matchingRule != "" && effective.Syntax != SyntaxBitString &&
+			canonicalMatchingRule(effective.Equality) != "bitstringmatch" {
+			return 0, fmt.Errorf("bitStringMatch is incompatible with attribute %q", attributeName)
+		}
 	}
 	if strings.EqualFold(attribute.OID, "2.5.4.0") &&
 		canonicalMatchingRule(rule) == "objectidentifiermatch" {
@@ -3146,6 +3160,18 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	switch syntax {
 	case "", SyntaxOctetString, SyntaxAuthenticationPassword:
 		return nil
+	case SyntaxAudio, SyntaxBinary, SyntaxJPEG:
+		return validateBlob(value)
+	case SyntaxOtherMailbox:
+		return validateSyntax(SyntaxIA5String, 0, value)
+	case SyntaxDeliveryMethod:
+		return validateDeliveryMethod(value)
+	case SyntaxRDN:
+		return validateRDN(value)
+	case SyntaxNISNetgroupTriple:
+		return validateNISNetgroupTriple(value)
+	case SyntaxBootParameter:
+		return validateBootParameter(value)
 	case SyntaxOpenLDAPACI:
 		if _, err := aci.Parse(string(value)); err != nil {
 			return fmt.Errorf("value is not valid OpenLDAP ACI: %w", err)
@@ -3243,6 +3269,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	case SyntaxMatchingRuleUse:
 		if _, err := ParseMatchingRuleUse(string(value)); err != nil {
 			return fmt.Errorf("value is not a matching rule use description: %w", err)
+		}
+	case SyntaxBitString:
+		if !validBitString(value) {
+			return errors.New("value is not a Bit String")
 		}
 	case SyntaxOID:
 		if !validObjectIdentifier(string(value)) {
@@ -3408,7 +3438,7 @@ func compareWithRule(rule string, left, right []byte) (int, error) {
 			normalizeNumericString(left),
 			normalizeNumericString(right),
 		), nil
-	case "octetstringmatch", "octetstringorderingmatch":
+	case "octetstringmatch", "octetstringorderingmatch", "bitstringmatch":
 		return bytes.Compare(left, right), nil
 	case "authzmatch":
 		normalizedLeft, leftErr := normalizeWithRule(rule, left)
@@ -3512,6 +3542,7 @@ func normalizeWithRule(rule string, value []byte) ([]byte, error) {
 	case "numericstringmatch", "numericstringorderingmatch":
 		return normalizeNumericString(value), nil
 	case "octetstringmatch", "octetstringorderingmatch",
+		"bitstringmatch",
 		"objectidentifierfirstcomponentmatch", "integerfirstcomponentmatch":
 		return bytes.Clone(value), nil
 	case "authzmatch":
@@ -3572,6 +3603,7 @@ func supportedMatchingRule(rule string) bool {
 		"integerorderingmatch",
 		"integerfirstcomponentmatch",
 		"booleanmatch",
+		"bitstringmatch",
 		"distinguishednamematch",
 		"uniquemembermatch",
 		"uuidmatch",
@@ -3629,6 +3661,8 @@ func canonicalMatchingRule(rule string) string {
 		return "integermatch"
 	case "2.5.13.15":
 		return "integerorderingmatch"
+	case "2.5.13.16":
+		return "bitstringmatch"
 	case "2.5.13.17":
 		return "octetstringmatch"
 	case "2.5.13.18":

@@ -14,6 +14,7 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 	validated := []string{
 		SyntaxOpenLDAPACI,
 		SyntaxBoolean,
+		SyntaxBitString,
 		SyntaxCountryString,
 		SyntaxAttributeType,
 		SyntaxAuthenticationPassword,
@@ -21,6 +22,8 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 		SyntaxDITContentRule,
 		SyntaxDITStructureRule,
 		SyntaxDistinguishedName,
+		SyntaxRDN,
+		SyntaxDeliveryMethod,
 		SyntaxDirectoryString,
 		SyntaxFacsimileTelephone,
 		SyntaxGeneralizedTime,
@@ -34,6 +37,9 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 		SyntaxObjectClass,
 		SyntaxOID,
 		SyntaxOctetString,
+		SyntaxOtherMailbox,
+		SyntaxNISNetgroupTriple,
+		SyntaxBootParameter,
 		SyntaxPostalAddress,
 		SyntaxPrintableString,
 		SyntaxSubtreeSpecification,
@@ -54,6 +60,21 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 		})
 	}
 
+	for _, syntax := range []LDAPSyntax{
+		{OID: SyntaxAudio, Description: "Audio"},
+		{OID: SyntaxBinary, Description: "Binary", BEREncoded: true},
+		{OID: SyntaxJPEG, Description: "JPEG"},
+	} {
+		syntax.validator = validateBlob
+		syntax.validatorIdentity = syntax.OID
+		syntax.Extensions = map[string][]string{"X-NOT-HUMAN-READABLE": {"TRUE"}}
+		registry.addBuiltinLDAPSyntax(syntax)
+	}
+
+	registry.addBuiltinLDAPSyntax(LDAPSyntax{
+		OID:         SyntaxLDAPSyntaxDescription,
+		Description: "LDAP Syntax Description",
+	})
 	registry.addBuiltinLDAPSyntax(LDAPSyntax{
 		OID:                    SyntaxACIItem,
 		Description:            "ACI Item",
@@ -239,6 +260,11 @@ func (registry *Registry) validateSyntax(
 	}
 	if syntax.validator == nil {
 		return fmt.Errorf("no validator for syntax %s", syntax.OID)
+	}
+	// UTF8StringValidate in OpenLDAP distinguishes the concrete built-in
+	// Directory String object from X-SUBST copies for the empty-value check.
+	if !syntax.builtin && syntax.validatorIdentity == SyntaxDirectoryString && len(value) == 0 {
+		return nil
 	}
 	return syntax.validator(value)
 }
