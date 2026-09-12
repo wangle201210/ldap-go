@@ -351,6 +351,7 @@ var builtinHiddenObjectClasses = []string{
 
 var builtinObjectClasses = []string{
 	"( 2.5.6.0 NAME 'top' ABSTRACT MUST objectClass )",
+	"( 1.3.6.1.4.1.4203.1.4.1 NAME ( 'OpenLDAProotDSE' 'LDAProotDSE' ) DESC 'OpenLDAP Root DSE object' SUP top STRUCTURAL MAY cn )",
 	"( 0.9.2342.19200300.100.4.13 NAME 'domain' SUP top STRUCTURAL MUST dc MAY ( userPassword $ description ) )",
 	"( 2.5.6.5 NAME 'organizationalUnit' SUP top STRUCTURAL MUST ou MAY ( userPassword $ description ) )",
 	"( 2.5.6.6 NAME 'person' SUP top STRUCTURAL MUST ( sn $ cn ) MAY ( userPassword $ telephoneNumber $ seeAlso $ description ) )",
@@ -364,7 +365,7 @@ var builtinObjectClasses = []string{
 	"( 2.16.840.1.113730.3.2.33 NAME 'groupOfURLs' SUP top STRUCTURAL MUST cn MAY ( memberURL $ businessCategory $ description $ o $ ou $ owner $ seeAlso ) )",
 	"( 1.3.6.1.4.1.4203.666.11.8.2.1 NAME 'dgIdentityAux' SUP top AUXILIARY MAY ( dgIdentity $ dgAuthz ) )",
 	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' SUP top AUXILIARY MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ description ) )",
-	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITStructureRules $ dITContentRules $ nameForms ) )",
+	"( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( objectClasses $ attributeTypes $ dITStructureRules $ dITContentRules $ nameForms $ matchingRules $ matchingRuleUse ) )",
 	"( 2.5.17.0 NAME 'subentry' DESC 'RFC3672: subentry' SUP top STRUCTURAL MUST ( cn $ subtreeSpecification ) )",
 	"( 2.5.17.2 NAME 'collectiveAttributeSubentry' DESC 'RFC3671: collective attribute subentry' AUXILIARY )",
 	"( 1.3.6.1.4.1.4203.666.3.6 NAME 'syncProviderSubentry' DESC 'Persistent Info for SyncRepl Producer' AUXILIARY MAY contextCSN )",

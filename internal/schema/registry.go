@@ -1049,6 +1049,19 @@ func (registry *Registry) DNIdentityFingerprint() [sha256.Size]byte {
 	return result
 }
 
+// ObjectClasses returns all definitions, including hidden object classes, in
+// stable OID order. The snapshot does not share mutable data with the registry.
+func (registry *Registry) ObjectClasses() []ObjectClass {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	objectClasses := uniqueObjectClasses(registry.objectClasses)
+	for index := range objectClasses {
+		objectClasses[index] = cloneObjectClass(objectClasses[index])
+	}
+	return objectClasses
+}
+
 func (registry *Registry) ObjectClassDescriptions() []string {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -1912,6 +1925,10 @@ func (registry *Registry) ValidateEntryWithOptions(
 
 	if err := registry.validateStructuralClasses(classes); err != nil {
 		return err
+	}
+	if entry.DN != "" && registry.hasCollectedObjectClass(classes, "1.3.6.1.4.1.4203.1.4.1") {
+		return &Violation{Kind: ViolationStructuralObjectClass, Attribute: "objectClass",
+			Message: "objectClass \"1.3.6.1.4.1.4203.1.4.1\" only allowed in the root DSE"}
 	}
 	structuralClass, err := registry.mostSpecificStructuralClass(classes)
 	if err != nil {
