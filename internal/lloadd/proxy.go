@@ -94,6 +94,7 @@ type RuntimeConfig struct {
 	BackendTLS             *tls.Config
 	Logger                 *slog.Logger
 	DialContext            DialContextFunc
+	backendTLSVerification *serviceSCRAMPlusTLSVerification
 }
 
 type RuntimeRestriction uint8
@@ -534,7 +535,9 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 		config.DialContext = dialer.DialContext
 	}
 	if config.BackendTLS != nil {
-		config.BackendTLS = config.BackendTLS.Clone()
+		cloned := config.BackendTLS.Clone()
+		config.backendTLSVerification = config.backendTLSVerification.clone(config.BackendTLS, cloned)
+		config.BackendTLS = cloned
 		isolateBackendTLSSessionCache(config.BackendTLS)
 	}
 	if config.ClientTLS != nil {
@@ -551,6 +554,10 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 		return nil, bindErr
 	}
 	config.Bind = normalizedBind
+	if err := validateServiceSCRAMPlusTLSConfig(config); err != nil {
+		clear(config.Bind.Credentials)
+		return nil, err
+	}
 	config.RestrictExtended = cloneRuntimeRestrictions(config.RestrictExtended)
 	config.RestrictControls = cloneRuntimeRestrictions(config.RestrictControls)
 	for oid, restriction := range config.RestrictExtended {
@@ -609,6 +616,10 @@ func NewProxy(config RuntimeConfig) (*Proxy, error) {
 					tierIndex,
 					backendIndex,
 				)
+			}
+			if serviceSCRAMPlus(config.Bind.SASLMechanism) &&
+				runtimeLDAPURLScheme(normalized.URI) != "ldaps" && !normalized.StartTLS {
+				return nil, errors.New("upstream SASL SCRAM-PLUS requires LDAPS or StartTLS")
 			}
 			if runtimeLDAPURLScheme(normalized.URI) != "ldapi" &&
 				config.UpstreamTCPUserTimeout > 0 && runtime.GOOS != "linux" {

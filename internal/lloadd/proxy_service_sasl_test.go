@@ -64,10 +64,10 @@ func TestRuntimeServiceSASLRejectsUnsupportedModes(t *testing.T) {
 		message string
 	}{
 		{
-			name: "SCRAM PLUS",
-			bind: RuntimeBindConfig{Method: "sasl", SASLMechanism: "SCRAM-SHA-256-PLUS",
+			name: "unknown SCRAM PLUS hash",
+			bind: RuntimeBindConfig{Method: "sasl", SASLMechanism: "SCRAM-SHA-384-PLUS",
 				AuthenticationID: "service", Credentials: []byte("hidden")},
-			message: "SCRAM-PLUS is not supported",
+			message: "unsupported upstream SASL mechanism",
 		},
 		{
 			name: "security layer",

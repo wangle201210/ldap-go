@@ -169,6 +169,16 @@ func (config Config) RuntimeConfig() (RuntimeConfig, error) {
 			return RuntimeConfig{}, fmt.Errorf("lloadd upstream TLS: %w", err)
 		}
 		runtime.BackendTLS = backendTLS
+		if serviceSCRAMPlus(runtime.Bind.SASLMechanism) {
+			policy := strings.ToLower(strings.TrimSpace(config.BindConf.TLS.RequireCert))
+			if policy == "never" || policy == "allow" {
+				return RuntimeConfig{}, errors.New("upstream SASL SCRAM-PLUS requires certificate verification; tls_reqcert=never/allow is unsupported")
+			}
+			runtime.backendTLSVerification = &serviceSCRAMPlusTLSVerification{
+				config: backendTLS,
+				verify: backendTLS.VerifyConnection,
+			}
+		}
 	}
 	if len(runtime.RestrictExtended) == 0 {
 		runtime.RestrictExtended = nil

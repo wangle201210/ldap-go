@@ -139,7 +139,8 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 		if config.AuthenticationID == "" {
 			return RuntimeBindConfig{}, errors.New("upstream SASL DIGEST-MD5 requires authcid")
 		}
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		if len(config.Credentials) == 0 {
 			return RuntimeBindConfig{}, errors.New("upstream SASL credentials are required")
 		}
@@ -167,10 +168,6 @@ func normalizeRuntimeServiceBind(config RuntimeBindConfig) (RuntimeBindConfig, e
 		}
 		settings.clear()
 	default:
-		if strings.HasPrefix(config.SASLMechanism, "SCRAM-") &&
-			strings.HasSuffix(config.SASLMechanism, "-PLUS") {
-			return RuntimeBindConfig{}, errors.New("upstream SASL SCRAM-PLUS is not supported by the auth-only proxy")
-		}
 		return RuntimeBindConfig{}, fmt.Errorf("unsupported upstream SASL mechanism %q", config.SASLMechanism)
 	}
 	return config, nil
@@ -191,7 +188,8 @@ func (backend *runtimeBackend) bindServiceSASL(
 		return connection, backend.bindServiceSASLCRAMMD5(connection, nextMessageID)
 	case "DIGEST-MD5":
 		return connection, backend.bindServiceSASLDigestMD5(connection, nextMessageID)
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		return connection, backend.bindServiceSASLSCRAM(connection, nextMessageID)
 	case "GSSAPI":
 		return backend.bindServiceSASLGSSAPI(ctx, connection, nextMessageID)
@@ -1181,6 +1179,14 @@ func (backend *runtimeBackend) bindServiceSASLSCRAM(
 	}
 	client.WithMinIterations(serviceSCRAMMinIterations)
 	conversation := client.NewConversation()
+	if serviceSCRAMPlus(config.SASLMechanism) {
+		binding, err := backend.serviceSCRAMPlusChannelBinding(connection)
+		if err != nil {
+			return err
+		}
+		defer clear(binding.Data)
+		conversation = client.NewConversationWithChannelBinding(binding)
+	}
 	clientFirst, err := conversation.Step("")
 	if err != nil {
 		return fmt.Errorf("initialize service SASL %s conversation", config.SASLMechanism)
@@ -1206,7 +1212,11 @@ func (backend *runtimeBackend) bindServiceSASLSCRAM(
 	if !first.hasServerCredentials {
 		return fmt.Errorf("service SASL %s server omitted server-first", config.SASLMechanism)
 	}
-	if err := validateServiceSCRAMServerFirst(first.serverCredentials, clientNonce); err != nil {
+	validateFirst := validateServiceSCRAMServerFirst
+	if serviceSCRAMPlus(config.SASLMechanism) {
+		validateFirst = validateServiceSCRAMPlusServerFirst
+	}
+	if err := validateFirst(first.serverCredentials, clientNonce); err != nil {
 		return fmt.Errorf("service SASL %s server-first: %w", config.SASLMechanism, err)
 	}
 	clientFinal, err := conversation.Step(string(first.serverCredentials))
@@ -1232,7 +1242,11 @@ func (backend *runtimeBackend) bindServiceSASLSCRAM(
 	if !final.hasServerCredentials {
 		return fmt.Errorf("service SASL %s server omitted server-final proof", config.SASLMechanism)
 	}
-	if err := validateServiceSCRAMServerFinal(final.serverCredentials, generator().Size()); err != nil {
+	validateFinal := validateServiceSCRAMServerFinal
+	if serviceSCRAMPlus(config.SASLMechanism) {
+		validateFinal = validateServiceSCRAMPlusServerFinal
+	}
+	if err := validateFinal(final.serverCredentials, generator().Size()); err != nil {
 		return fmt.Errorf("service SASL %s server-final: %w", config.SASLMechanism, err)
 	}
 	if response, err := conversation.Step(string(final.serverCredentials)); err != nil || response != "" || !conversation.Done() || !conversation.Valid() {
@@ -1263,11 +1277,11 @@ func (backend *runtimeBackend) bindServiceSASLSCRAM(
 
 func serviceSCRAMGenerator(mechanism string) (scram.HashGeneratorFcn, bool) {
 	switch mechanism {
-	case "SCRAM-SHA-1":
+	case "SCRAM-SHA-1", "SCRAM-SHA-1-PLUS":
 		return scram.SHA1, true
-	case "SCRAM-SHA-256":
+	case "SCRAM-SHA-256", "SCRAM-SHA-256-PLUS":
 		return scram.SHA256, true
-	case "SCRAM-SHA-512":
+	case "SCRAM-SHA-512", "SCRAM-SHA-512-PLUS":
 		return scram.SHA512, true
 	default:
 		return nil, false
@@ -1276,7 +1290,7 @@ func serviceSCRAMGenerator(mechanism string) (scram.HashGeneratorFcn, bool) {
 
 func serviceSCRAMClientNonce(clientFirst string) (string, error) {
 	fields := strings.Split(clientFirst, ",")
-	if len(fields) != 4 || fields[0] != "n" ||
+	if len(fields) != 4 || (fields[0] != "n" && fields[0] != "p=ldap") ||
 		(fields[1] != "" && !strings.HasPrefix(fields[1], "a=")) ||
 		!strings.HasPrefix(fields[2], "n=") || !strings.HasPrefix(fields[3], "r=") {
 		return "", errors.New("SCRAM client-first message is malformed")
