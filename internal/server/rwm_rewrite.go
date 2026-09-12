@@ -32,6 +32,7 @@ type rwmRewriteEngine struct {
 	maxPassesPerRule int
 	contexts         map[string]*rwmRewriteContext
 	parameters       map[string]string
+	maps             map[string]*rwmRewriteMap
 	current          *rwmRewriteContext
 	ruleCount        int
 }
@@ -64,6 +65,7 @@ type rwmRewriteTemplatePart struct {
 	capture int
 	nested  rwmRewriteTemplate
 	context *rwmRewriteContext
+	mapper  *rwmRewriteMap
 }
 
 type rwmRewriteTemplatePartKind uint8
@@ -76,6 +78,7 @@ const (
 	rwmRewriteSetAndGetVariable
 	rwmRewriteGetVariable
 	rwmRewriteGetParameter
+	rwmRewriteBuiltinMap
 )
 
 type rwmRewriteOperation struct {
@@ -84,6 +87,7 @@ type rwmRewriteOperation struct {
 	variables      map[string]string
 	expansionSteps int
 	regexSteps     int
+	mapSteps       int
 }
 
 var errRWMRewriteRejected = errors.New("RWM rewrite rejected the value")
@@ -94,6 +98,7 @@ func newRWMRewriteEngine() *rwmRewriteEngine {
 		maxPassesPerRule: rwmRewriteDefaultMaxPasses,
 		contexts:         make(map[string]*rwmRewriteContext),
 		parameters:       make(map[string]string),
+		maps:             make(map[string]*rwmRewriteMap),
 	}
 	engine.current = engine.addContext("default")
 	// OpenLDAP RWM creates searchFilter as an explicit empty context so it does
@@ -250,7 +255,7 @@ func (engine *rwmRewriteEngine) parseDirective(words []string) error {
 		return nil
 
 	case "rewritemap":
-		return errors.New("rewriteMap is not implemented; use olcRwmMap/olcDbMap or supported variables")
+		return engine.parseMap(words)
 	default:
 		return fmt.Errorf("unsupported rewrite directive %q", words[0])
 	}
@@ -528,7 +533,16 @@ func parseRWMRewriteExpression(expression string, depth int) (rwmRewriteTemplate
 		name, err := validateRWMRewriteMapName(expression[1:])
 		return rwmRewriteTemplatePart{kind: rwmRewriteGetParameter, value: name}, err
 	default:
-		return rwmRewriteTemplatePart{}, fmt.Errorf("unsupported rewrite map expression %q", expression)
+		// librewrite/map.c ignores text following the final closing parenthesis.
+		if end := strings.LastIndexByte(expression, ')'); end >= 0 {
+			expression = expression[:end+1]
+		}
+		name, argument, err := parseRWMRewriteCall(expression)
+		if err != nil {
+			return rwmRewriteTemplatePart{}, fmt.Errorf("rewrite map: %w", err)
+		}
+		nested, err := parseRWMRewriteTemplateDepth(argument, depth)
+		return rwmRewriteTemplatePart{kind: rwmRewriteBuiltinMap, value: name, nested: nested}, err
 	}
 }
 
@@ -564,6 +578,12 @@ func (engine *rwmRewriteEngine) bindTemplateContexts(template rwmRewriteTemplate
 			part.context = engine.contexts[strings.ToLower(part.value)].resolved()
 			if part.context == nil {
 				return fmt.Errorf("rewrite subcontext %q is not defined", part.value)
+			}
+		}
+		if part.kind == rwmRewriteBuiltinMap {
+			part.mapper = engine.maps[strings.ToLower(part.value)]
+			if part.mapper == nil {
+				return fmt.Errorf("rewrite map %q is not defined", part.value)
 			}
 		}
 		if err := engine.bindTemplateContexts(part.nested); err != nil {
@@ -694,7 +714,7 @@ func (engine *rwmRewriteEngine) applyContext(context *rwmRewriteContext, input s
 	operation.depth++
 	defer func() { operation.depth-- }()
 
-	current := input
+	current := rwmRewriteCString(input)
 	var result string
 	produced := false
 	for index := 0; index < len(context.rules) && operation.passes < engine.maxPasses; index, operation.passes = index+1, operation.passes+1 {
@@ -719,7 +739,9 @@ func (engine *rwmRewriteEngine) applyContext(context *rwmRewriteContext, input s
 				current = before
 				break
 			}
-			current = next
+			// Rule results become C strings in librewrite; nested substitutions
+			// retain their berval lengths until this boundary.
+			current = rwmRewriteCString(next)
 			if !rule.recurse {
 				break
 			}
@@ -806,7 +828,7 @@ func (engine *rwmRewriteEngine) expandTemplate(
 			if _, exists := operation.variables[key]; !exists && len(operation.variables) >= rwmRewriteMaximumVariables {
 				return "", fmt.Errorf("rewrite variable count exceeds %d", rwmRewriteMaximumVariables)
 			}
-			operation.variables[key] = argument
+			operation.variables[key] = rwmRewriteCString(argument)
 			if part.kind == rwmRewriteSetAndGetVariable {
 				value = argument
 			}
@@ -821,6 +843,15 @@ func (engine *rwmRewriteEngine) expandTemplate(
 			value, found = engine.parameters[strings.ToLower(part.value)]
 			if !found {
 				return "", fmt.Errorf("rewrite parameter %q is not set", part.value)
+			}
+		case rwmRewriteBuiltinMap:
+			argument, err := engine.expandTemplate(part.nested, input, indices, operation)
+			if err != nil {
+				return "", err
+			}
+			value, err = part.mapper.apply(argument, operation)
+			if err != nil {
+				return "", fmt.Errorf("rewrite map %s failed: %w", part.value, err)
 			}
 		default:
 			return "", errors.New("invalid rewrite substitution part")

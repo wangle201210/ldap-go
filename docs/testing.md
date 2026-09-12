@@ -22,6 +22,14 @@ schema parsers must include malformed-input and resource-limit tests.
 
 ## Protocol conformance
 
+`TestDeltaIncrement*` verifies atomic rejection of unsafe writable multi-provider
+Increment replay, including incoming/history cases, cross-RID retries,
+ring/mesh topology stopping, original logs, cookies, and bbolt restart.
+`TestOpenLDAP2613DeltaIncrement*` requires the verified pinned reference build
+and asserts the native mixed-operation divergence rather than treating it as
+convergence. Both `OPENLDAP_COMMIT` and the source-file hashes must match
+`d172686d3d270bc961b78f3ff00d7019c8dfb094`.
+
 `TestLDAPLDIFWrap*` checks per-command folding, preserved LDIF values, small
 widths, writer failures, and native output for Search, controls, Compare, and
 extended results. Enable the external test using:
@@ -46,6 +54,19 @@ response ordering, connection state, controls, limits, cancellation, and
 security-sensitive edge cases.
 
 ## OpenLDAP differential tests
+
+`TestRWMRewriteMap*` covers the built-in escape mapper, configuration order,
+case-insensitive names, nested calls, failed-map actions, work/output limits,
+and online rollback. The `TestOpenLDAPReferenceRWMRewriteMap*` corpus compares
+the same behavior with the standalone rewrite executable from pinned 2.6.13,
+including 525 DN byte/syntax inputs:
+
+```sh
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_REWRITE=/path/to/openldap-build/libraries/librewrite/rewrite \
+  go test ./internal/server -run '^TestOpenLDAPReferenceRWMRewriteMap' -count=1
+```
+
+The native executable is an external test oracle; production uses Go only.
 
 The [logfile checks](logging.md) cover startup, online configuration, rollback,
 descriptor lifetime, unsafe paths, size/age rotation, concurrent handover,

@@ -786,6 +786,14 @@ captures, ordered actions, bounded recursion, operation variables, parameters,
 and subcontext calls; ordinary and transactional writes enforce the original
 database restrictions before delegation. Local content databases reject named
 operation rules they cannot execute while retaining suffix and map behavior.
+The built-in `rewriteMap escape` supports ordered `escape2dn`, `escape2filter`,
+`unescapedn`, and `unescapefilter` pipelines. Definitions use
+`rewriteMap escape name operation [operation ...]` and substitutions call
+`${name(argument)}`. The implementation retains bounded input/output, map
+counts, pipeline length, nested substitution depth, and total expansion work.
+Map failures participate in existing rewrite error handling and atomic online
+configuration rollback. LDAP-backed and dynamically registered native maps
+remain unsupported.
 POSIX basic regex, external/legacy maps, session variables, remaining map flags,
 relay chains, and broader proxy/overlay combinations remain. The compatibility
 matrix marks these as partial until the remaining schema, ACL, control,

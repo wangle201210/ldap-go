@@ -176,6 +176,13 @@ published hardware baseline is claimed.
 
 ## Overlays
 
+The RWM `rewriteMap escape` built-in executes `escape2dn`, `escape2filter`,
+`unescapedn`, and `unescapefilter`, including ordered pipelines and nested map
+calls. It is bounded to 64 map definitions, 16 operations per map, 1 MiB
+input/output, and the shared rewrite work/depth limits. Unsupported mapper
+types and unknown operations fail configuration. This adds the native built-in
+escape mapper; it does not implement LDAP lookup maps or arbitrary modules.
+
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | accesslog | partial | successful Add/Delete/Modify/ModDN and Password Modify, failed writes, Search/Compare, Bind/Unbind/Abandon, database-targeted Extended, request/result/control/referral fields, atomic successful source/log commits, `reqMod`, `reqOld`/`reqOldAttr`, branch `olcAccessLogBase`, `olcAccessLogSuccess`, `auditContext`, source-derived multi-SID context/min CSNs, purge, stale-cookie rejection, online rollback, ldap-go delta topology, and OpenLDAP 2.6.13 record differentials pass; arbitrary unknown-operation routing, cross-overlay ordering, and broader fault matrices remain |
@@ -210,6 +217,16 @@ published hardware baseline is claimed.
 | OTP-related contrib password modules | partial | OpenLDAP pw-totp `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; fixed 30-second/six-digit credentials, current/previous-window rules, non-replicated `authTimestamp`, root/ordinary/TOTP successful-Bind timestamp updates, Password Modify hashing, database/frontend and duplicate placement, online disable/delete/restart, and a dynamically built pinned OpenLDAP 2.6.13 module differential pass; SHA-2 nested passwords are supported; ldap-go intentionally makes first-use replay prevention atomic where OpenLDAP's separate check/update can admit concurrent attempts; other unsupported nested/dynamic schemes, replication topologies, proxy databases, and arbitrary overlay ordering remain |
 
 ## Replication and operations
+
+Writable multi-provider delta Increment remains rejected. The pinned 2.6.13
+native interleaving tests demonstrate that an older Replace to 20 followed by
+Increment 2, starting from 10, can finish at 22 or 20 depending on delivery
+order. Increment/Add and Increment/Delete interleavings also diverge or enter
+full-refresh fallback. The tests assert values, consumed CSNs, accesslog
+rewrites, and fallback behavior; they are evidence of this upstream limitation,
+not a claim of successful ldap-go Increment replay. Incoming increments and
+unsafe increment history retain the committed data, accesslogs, and cookie
+unchanged in memory and bbolt. Existing single-provider behavior is unchanged.
 
 Syncrepl accepts `SCRAM-SHA-1-PLUS`, `SCRAM-SHA-256-PLUS`, and
 `SCRAM-SHA-512-PLUS` over verified standard LDAPS or StartTLS. It uses Cyrus's
