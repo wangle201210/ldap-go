@@ -56,6 +56,20 @@ peer-credential identity from the accepted kernel socket. It grants no
 privilege by itself; configure `olcAuthzRegexp` and ACLs for selected UID/GID
 identities.
 
+Built-in clients accept `-Q` for noninteractive SASL, for example:
+
+```sh
+./bin/ldap-go ldapwhoami -Q -Y EXTERNAL \
+  -H ldapi://%2Fvar%2Frun%2Fldap-go%2Fldapi/
+```
+
+Supply an explicit `-Y` mechanism and, for password mechanisms, the required
+identity and password source. Missing information fails without an automatic
+SASL prompt. Explicit `-W` still requests password input, matching OpenLDAP.
+`-Q` cannot be combined with simple authentication (`-x`). Automatic mechanism
+selection, interactive `-I`, and LDAP configuration-file defaults are not
+provided by this mode.
+
 ## Web administration
 
 Web Admin is an LDAP client process. It does not open ldap-go or OpenLDAP

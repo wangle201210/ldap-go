@@ -69,6 +69,7 @@ type ldapClientOptions struct {
 	simple               bool
 	bindDN               string
 	saslMechanism        string
+	saslQuiet            bool
 	saslAuthentication   string
 	saslAuthorization    string
 	saslRealm            string
@@ -109,6 +110,7 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 	flags.BoolVar(&options.simple, "x", false, "use simple authentication")
 	flags.StringVar(&options.bindDN, "D", "", "bind DN")
 	flags.StringVar(&options.saslMechanism, "Y", "", "SASL mechanism")
+	flags.BoolVar(&options.saslQuiet, "Q", false, "SASL noninteractive mode; use explicit -Y and credentials")
 	flags.StringVar(&options.saslAuthentication, "U", "", "SASL authentication identity")
 	flags.StringVar(&options.saslAuthorization, "X", "", "SASL authorization identity")
 	flags.StringVar(&options.saslRealm, "R", "", "SASL realm")
@@ -208,7 +210,6 @@ func (options *ldapClientOptions) register(flags *flag.FlagSet) {
 		{"I", "SASL interactive mode is not implemented"},
 		{"M", "ManageDsaIT is not implemented by these client commands"},
 		{"N", "SASL reverse-DNS control is not implemented"},
-		{"Q", "SASL quiet mode is not implemented"},
 		{"v", "verbose result rendering is not implemented"},
 		{"V", "per-command version output is not implemented; use ldap-go version"},
 	} {
@@ -261,6 +262,12 @@ func (options *ldapClientOptions) validateForWrite(
 ) error {
 	if err := rejectUnsupportedFlags(flags.Name(), flags, options.unsupportedFlags); err != nil {
 		return err
+	}
+	if flagWasSet(flags, "Q") && !options.saslQuiet {
+		return errors.New("-Q=false is not supported")
+	}
+	if options.saslQuiet && options.simple {
+		return errors.New("-Q cannot be combined with -x")
 	}
 	if options.referralHopLimit < 0 {
 		return errors.New("-referral-hop-limit must be non-negative")

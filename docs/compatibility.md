@@ -236,6 +236,14 @@ this consumer implementation.
 
 ## Command-line compatibility
 
+Client `-Q` accepts noninteractive SASL with explicitly configured mechanisms
+and credentials, including certificate EXTERNAL. Missing data fails before
+automatic prompts, `-x` is incompatible, and explicit `-W` remains a password
+input request. PLAIN/CRAM/DIGEST/SCRAM Search/Compare/Who Am I and mutual-TLS
+EXTERNAL have local coverage; quiet PLAIN output matches the native 2.6.13
+client. Automatic mechanism selection, configuration-file defaults, and
+interactive `-I` remain unsupported.
+
 Common client `-o ldif-wrap=<columns|no>` (also `ldif_wrap`) controls generated
 LDIF. Ordinary and Base64 values, named comments, control responses, Compare
 controls, and extended results are covered; direct status/version/password

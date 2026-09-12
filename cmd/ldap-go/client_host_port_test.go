@@ -298,7 +298,7 @@ func TestLDAPClientHostPortArgumentBoundaries(t *testing.T) {
 			t.Fatalf("-%s remains unsupported", option.name)
 		}
 	}
-	for _, name := range []string{"d", "P", "I", "M", "N", "Q", "v", "V"} {
+	for _, name := range []string{"d", "P", "I", "M", "N", "v", "V"} {
 		if !slices.ContainsFunc(options.unsupportedFlags, func(option unsupportedFlag) bool { return option.name == name }) {
 			t.Fatalf("unrelated unsupported flag -%s removed", name)
 		}
