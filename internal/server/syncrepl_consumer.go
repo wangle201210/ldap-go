@@ -228,6 +228,7 @@ func (server *Server) runSyncConsumerCycle(
 		); startErr != nil {
 			var resultError *ldap.Error
 			if config.startTLS == syncConsumerStartTLSCritical ||
+				(config.bindMethod == "sasl" && saslSCRAMIsPlus(strings.ToUpper(config.saslMechanism))) ||
 				!errors.As(startErr, &resultError) {
 				return fmt.Errorf("start TLS: %w", startErr)
 			}

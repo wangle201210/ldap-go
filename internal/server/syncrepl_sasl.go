@@ -59,6 +59,10 @@ type syncConsumerCRAMMD5 struct {
 type syncConsumerSCRAM struct {
 	conversation *scram.ClientConversation
 	started      bool
+	plus         bool
+	clientNonce  string
+	proofSent    bool
+	hashSize     int
 }
 
 type syncConsumerDIGESTMD5 struct {
@@ -223,6 +227,7 @@ func bindSyncConsumerSASL(
 	mechanism, conversation, err := newSyncConsumerSASLConversationForProvider(
 		config,
 		providerURL,
+		transport,
 	)
 	if err != nil {
 		return err
@@ -337,6 +342,7 @@ func newSyncConsumerSASLConversation(
 func newSyncConsumerSASLConversationForProvider(
 	config syncConsumerConfig,
 	provider string,
+	transports ...*syncConsumerTransport,
 ) (string, syncConsumerSASLConversation, error) {
 	mechanism := strings.ToUpper(config.saslMechanism)
 	switch mechanism {
@@ -418,20 +424,28 @@ func newSyncConsumerSASLConversationForProvider(
 			properties:       config.securityProperties,
 			random:           rand.Reader,
 		}, nil
-	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case "SCRAM-SHA-1", "SCRAM-SHA-256", "SCRAM-SHA-512",
+		"SCRAM-SHA-1-PLUS", "SCRAM-SHA-256-PLUS", "SCRAM-SHA-512-PLUS":
 		if config.authenticationID == "" {
 			return "", nil, fmt.Errorf(
 				"SASL %s requires authcid",
 				mechanism,
 			)
 		}
-		generator := scram.SHA1
-		switch mechanism {
-		case "SCRAM-SHA-256":
-			generator = scram.SHA256
-		case "SCRAM-SHA-512":
-			generator = scram.SHA512
+		plus := saslSCRAMIsPlus(mechanism)
+		var binding scram.ChannelBinding
+		if plus {
+			var transport *syncConsumerTransport
+			if len(transports) != 0 {
+				transport = transports[0]
+			}
+			var err error
+			binding, err = syncConsumerSCRAMChannelBinding(transport, config, provider)
+			if err != nil {
+				return "", nil, err
+			}
 		}
+		generator, _ := saslSCRAMHashGenerator(mechanism)
 		client, err := generator.NewClient(
 			config.authenticationID,
 			string(config.credentials),
@@ -443,8 +457,14 @@ func newSyncConsumerSASLConversationForProvider(
 				mechanism,
 			)
 		}
+		conversation := client.NewConversation()
+		if plus {
+			conversation = client.NewConversationWithChannelBinding(binding)
+		}
 		return mechanism, &syncConsumerSCRAM{
-			conversation: client.NewConversation(),
+			conversation: conversation,
+			plus:         plus,
+			hashSize:     generator().Size(),
 		}, nil
 	default:
 		return "", nil, fmt.Errorf(
@@ -926,6 +946,9 @@ func (conversation *syncConsumerSCRAM) Initial() ([]byte, bool, error) {
 	}
 	conversation.started = true
 	response, err := conversation.conversation.Step("")
+	if conversation.plus && err == nil {
+		_, conversation.clientNonce, _ = strings.Cut(response, ",r=")
+	}
 	return []byte(response), true, err
 }
 
@@ -935,7 +958,15 @@ func (conversation *syncConsumerSCRAM) Next(
 	if !conversation.started {
 		return nil, errors.New("conversation has not started")
 	}
+	if conversation.plus {
+		if err := conversation.validateChallenge(challenge); err != nil {
+			return nil, err
+		}
+	}
 	response, err := conversation.conversation.Step(string(challenge))
+	if err == nil {
+		conversation.proofSent = true
+	}
 	return []byte(response), err
 }
 
