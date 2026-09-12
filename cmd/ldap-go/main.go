@@ -159,6 +159,8 @@ func runWithContextAndSignals(
 		err = runLDAPDelete(args[1:], stdin, stdout, stderr)
 	case "ldapmodrdn":
 		err = runLDAPModRDN(args[1:], stdin, stdout, stderr)
+	case "ldapurl":
+		err = runLDAPURL(args[1:], stdout, stderr)
 	case "lloadd":
 		err = runLloadd(args[1:], stdout, stderr)
 	case "export", "slapcat":
@@ -2329,6 +2331,7 @@ commands:
   ldapadd  add LDIF entries or apply explicit change records
   ldapdelete  delete LDAP entries by DN
   ldapmodrdn  rename or move LDAP entries
+  ldapurl  construct an LDAP URL or parse one with -H (offline)
   lloadd   run the LDAP-aware reverse proxy/load balancer
   export   atomically export a directory database as LDIF
   slapcat  OpenLDAP-style alias for export

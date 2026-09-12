@@ -226,6 +226,13 @@ published hardware baseline is claimed.
 
 ## Command-line compatibility
 
+The built-in offline `ldapurl` constructs URL components or parses `-H`.
+Its bounded corpus compares stdout, stderr, and exit status with Homebrew
+OpenLDAP 2.6.13 in the C locale. Parser permissiveness is confined to the
+offline tool; network-client validation is unchanged. GNU getopt diagnostics,
+`cldap`, and inputs beyond the documented resource limits are outside this
+claim. See [usage](operations.md#offline-ldap-urls).
+
 | Area | Status | Required evidence |
 | --- | --- | --- |
 | Server daemon and config validation | partial | TCP, StartTLS, implicit TLS/TLCP, and Unix LDAPI listeners share one lifecycle. Per-listener transport selection supports plain/StartTLS LDAP plus LDAPS plus LDAPI in one process, or plain LDAP plus TLCP plus LDAPI; a real three-listener test verifies independent handshakes and Bind. Standard TLS and TLCP still require separate processes. `serve -ldapi` requires an absolute non-existing socket path, applies an explicit default `0660` mode, unlinks on close, publishes all listener URLs to Monitor/runtime selection, and participates in normal/gentle signal shutdown. Built-in simple/PLAIN/EXTERNAL clients and pinned OpenLDAP `ldapsearch`/`ldapwhoami` interoperate over escaped-authority LDAPI. Linux `SO_PEERCRED` and macOS/FreeBSD `LOCAL_PEERCRED` generate OpenLDAP's exact GID+UID EXTERNAL identity and feed ordered `olcAuthzRegexp`; unmapped peers receive no implicit root privilege. Explicit `-systemd-activation` strictly validates PID/fd/name metadata, adopts TCP/Unix stream descriptors from fd 3, uses exact fd names to select per-listener transport, preserves manager-owned socket paths, supports multi-listener Monitor/runtime publication, and rejects manual listener conflicts; a pre-opened `NOTIFY_SOCKET` emits READY after Server initialization and STOPPING when drain begins, including inside chroot. Unix `-u/-g/-r` opens listeners first, pins and enters the jail, resolves its passwd/group database, applies groups/GID/UID, then loads every runtime file; manual chrooted LDAPI requires socket activation. Optional exclusive/fsynced `-pidfile` has replacement-safe cleanup and duplicate-instance rejection. Complete slapd diagnostics and privileged root CI on every Unix platform remain |
@@ -920,6 +927,13 @@ completed data identity and final cookie. A markerless writable database with
 authoritative context is adopted without full refresh, while a genuinely empty
 interrupted bootstrap retries with an empty cookie. Provider URI-only changes
 preserve completion. Per-entry contextCSNs never bypass in-progress bootstrap.
+
+Local `olcDbMaxEntrySize` rejection preserves the last committed accesslog
+cookie and bootstrap state, and propagates `adminLimitExceeded`. It does not
+trigger log-gap recovery. TCP protocol fixtures cover standard/accesslog
+bootstrap, Add/Modify/rename, memory/bbolt, blocked later changes, restart,
+and replay after increasing the limit. These tests qualify the consumer
+behavior; they do not assert native OpenLDAP behavior for every limit failure.
 
 DSEE retro changelog mode uses `syncdata=changelog` and requires `logbase` but
 not an accesslog `logfilter`. It reads `firstChangeNumber` and

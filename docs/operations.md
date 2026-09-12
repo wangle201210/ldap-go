@@ -91,6 +91,24 @@ Non-loopback HTTP requires `-tls-cert`, `-tls-key`, and a canonical
 `-public-url`. See the [Web Admin feature matrix](webadmin-feature-matrix.md)
 for functional and security boundaries.
 
+## Offline LDAP URLs
+
+The built-in `ldapurl` constructs a URL or prints the components of `-H`.
+It runs without a server or network connection:
+
+```sh
+./bin/ldap-go ldapurl -S ldaps -h directory.example \
+  -b 'ou=people,dc=example,dc=com' -a 'uid,mail' -s sub -f '(uid=alice)'
+./bin/ldap-go ldapurl -H 'ldaps://directory.example:636/ou=people,dc=example,dc=com?uid,mail?sub?(uid=alice)'
+```
+
+Construction supports `-S`, `-h`, `-p`, `-b`, `-a`, `-s`, `-f`, and repeated
+`-E` extensions. `-H` cannot be mixed with construction flags. The tool
+matches the tested OpenLDAP 2.6.13 offline serialization rules, including
+permissive parsing; it does not validate LDAP DN/filter syntax or guarantee
+that a generated URL can be dialed. Network clients retain their stricter
+validation. Inputs are limited to 64 KiB total, 256 arguments, and 64 extensions.
+
 ## Backup and recovery
 
 Offline backup and integrity commands operate directly on a stopped database:

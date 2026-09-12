@@ -76,6 +76,26 @@ or hide wire details that those lower-level tests must continue to expose.
 
 ## Migration tests
 
+`TestEntryCountMaintenance*` checks per-partition count corruption, backup and
+restore publication rejection, source/destination preservation, legacy files
+without counters, and valid maintenance round trips. The count comparison
+shares the offline entry scan and does not add work to ordinary LDAP queries.
+
+`TestSyncreplMaxEntrySize*` uses TCP protocol fixtures to check that local
+entry-size rejection does not advance past the rejected change or discard
+an accesslog cookie. It covers initial refresh, Add/Modify/rename, restart,
+memory/bbolt, and retry after increasing the configured limit.
+
+```sh
+CGO_ENABLED=0 go test ./internal/storage -run '^TestEntryCountMaintenance' -count=1
+CGO_ENABLED=0 go test ./internal/server -run '^TestSyncreplMaxEntrySize' -count=1
+CGO_ENABLED=0 LDAP_GO_LDAPURL_EXTERNAL=1 go test ./cmd/ldap-go -run '^TestLDAPURLToolExternal$' -count=1
+```
+
+The last command requires an external `ldapurl` and sibling `ldapsearch` from
+OpenLDAP 2.6.13; `OPENLDAP_LDAPURL` selects an explicit path. Its current
+diagnostic comparison targets the Homebrew C-locale/BSD getopt build.
+
 Fixtures are generated with `slapadd` and `slapcat`, imported unchanged into
 `ldap-go`, exported again, and compared semantically. Fixtures cover custom
 schema, binary and base64 values, folded lines, attribute options, referrals,
