@@ -1235,8 +1235,16 @@ func validateSyncConsumerDeltaOperation(
 	csnMods := 0
 	uuidMods := 0
 	for _, mod := range operation.modifications {
-		if mod.operation == '#' || runtime.schema.HasOrderedValues(mod.description) {
-			return fmt.Errorf("%w: writable delta increment/ordered-value merging is not implemented", errSyncConsumerAccesslogGap)
+		if mod.operation == '#' {
+			// OpenLDAP 2.6.13 mods_dup preserves increments, but
+			// syncrepl_resolve_cb cannot merge them with add/replace/delete.
+			// Even a newer increment is unsafe: a later-arriving older replace
+			// can overwrite its result. Keep both incoming and history guards.
+			// See TestOpenLDAP2613DeltaIncrementInterleavings.
+			return fmt.Errorf("%w: writable delta increment on %s is unsafe with out-of-order add/replace/delete", errSyncConsumerAccesslogGap, mod.description)
+		}
+		if runtime.schema.HasOrderedValues(mod.description) {
+			return fmt.Errorf("%w: writable delta ordered-value merging is not implemented", errSyncConsumerAccesslogGap)
 		}
 		if constraintAttributeDescriptionsEqual(runtime.schema, mod.description, "entryCSN") {
 			csnMods++
@@ -1518,8 +1526,11 @@ func loadSyncConsumerDeltaMultiProviderHistory(
 			return fmt.Errorf("accesslog entry %s has no modifications", entry.DN)
 		}
 		for _, mod := range modifications {
-			if mod.operation == '#' || runtime.schema.HasOrderedValues(mod.description) {
-				return fmt.Errorf("unsupported increment/ordered-value history at %s", entry.DN)
+			if mod.operation == '#' {
+				return fmt.Errorf("unsafe writable delta increment history for %s at %s", mod.description, entry.DN)
+			}
+			if runtime.schema.HasOrderedValues(mod.description) {
+				return fmt.Errorf("unsupported ordered-value history at %s", entry.DN)
 			}
 		}
 		if len(modifications) != 0 {
