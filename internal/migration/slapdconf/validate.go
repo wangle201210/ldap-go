@@ -90,6 +90,10 @@ func (document Document) locateError(err error) error {
 			if len(attribute.Values) == 0 {
 				continue
 			}
+			// Some runtime diagnostics identify only the attribute, without a DN.
+			if score == 0 && strings.Contains(message, strings.ToLower(attribute.Name)) {
+				score = 1
+			}
 			if attribute.Name == "olcDatabase" && strings.Contains(message, strings.ToLower(attribute.Values[0])) {
 				score = len(entry.DN)
 			}

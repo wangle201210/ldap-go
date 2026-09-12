@@ -48,6 +48,15 @@ go run ./cmd/ldap-go config-test -db /path/to/ldap-go.db
   `monitoring`, and security policy.
 - Global `logfile`, `logfile-format`, `logfile-only`, and `logfile-rotate`
   settings map to ldap-go's validated file logger and rotation configuration.
+- Global `sasl-cbinding none|tls-unique|tls-endpoint` maps to the single-valued
+  `olcSaslCBinding` on `cn=config` (OID `1.3.6.1.4.1.4203.1.12.2.3.0.100`),
+  including when written after a backend, database, or overlay declaration.
+  Values are ASCII case-insensitive; spelling is preserved after double quotes
+  and escapes are decoded. Omission leaves the runtime default of `none`.
+  Empty values, surrounding whitespace inside quotes, unknown policies (including
+  `tls-server-end-point` and `tls-exporter`), extra arguments, and repeated
+  directives fail with source file and line information. Repeated identical
+  values also fail, following the converter's single-value contract.
 - TLS certificate/key/CA files, protocol minimum, verification, cipher and
   group settings, subject to ldap-go's runtime TLS support. Both certificate
   and key are required: standalone OpenLDAP TLS defaults are rejected because
@@ -67,6 +76,16 @@ source file and line information. There is no ignore-unknown mode. For example,
 LMDB durability flags, checkpoint scheduling, SLAPI plugins, and slurpd settings
 are rejected. Duplicate single-valued settings are rejected rather than silently
 choosing one. This is a strict conversion path, not a general OpenLDAP emulator.
+
+The SASL channel-binding mapping follows OpenLDAP 2.6.13
+(`d172686d3d270bc961b78f3ff00d7019c8dfb094`): `doc/man/man5/slapd.conf.5`
+documents the policy names, `servers/slapd/bconfig.c` declares the global
+single-valued string attribute, and `libraries/libldap/cyrus.c` compares the
+policy names without trimming or tokenizing them. ldap-go deliberately rejects
+unsupported policies that OpenLDAP's `servers/slapd/sasl.c` silently ignores.
+This setting selects channel-binding metadata; it does not require TLS files
+for conversion or initiate TLS, SASL authentication, or network connections
+during conversion, validation, or offline import (including import dry-run).
 
 The library lives in `internal/migration/slapdconf`: `ParseFile`, `ConvertFile`,
 `ConvertFileContext`, `Document.WriteLDIF`, and transactional `Document.Import`.
