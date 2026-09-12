@@ -1398,6 +1398,14 @@ func (registry *Registry) Compare(
 	if rule == "" {
 		return 0, fmt.Errorf("attribute %q has no equality matching rule", attributeName)
 	}
+	if (attribute.OID == "2.5.21.4" || attribute.OID == "2.5.21.8") &&
+		canonicalMatchingRule(rule) == "objectidentifierfirstcomponentmatch" {
+		assertion, err := matchingRuleAssertionOID(right)
+		if err != nil {
+			return 0, err
+		}
+		right = []byte(assertion)
+	}
 	if attributeHasOrderedValues(*attribute) {
 		return compareOrderedAssertion(rule, left, right)
 	}
@@ -1782,7 +1790,9 @@ func (registry *Registry) PrepareSubstringMatcher(
 			Final:   bytes.Clone(substring.Final),
 		},
 	}
-	switch strings.ToLower(effective.Substring) {
+	switch canonicalMatchingRule(effective.Substring) {
+	case "octetstringsubstringsmatch":
+		matcher.normalize = bytes.Clone
 	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
 		matcher.normalize = normalizeCaseIgnore
 	case "caseignorelistsubstringsmatch":
@@ -3167,6 +3177,10 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 		if !validPostalAddress(value) {
 			return errors.New("value is not a postal address")
 		}
+	case SyntaxCountryString:
+		if len(value) != 2 || !validPrintableString(value) {
+			return errors.New("value is not a two-character Country String")
+		}
 	case SyntaxPrintableString:
 		if !validPrintableString(value) {
 			return errors.New("value is not a Printable String")
@@ -3221,6 +3235,14 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 	case SyntaxObjectClass:
 		if _, err := ParseObjectClass(string(value)); err != nil {
 			return fmt.Errorf("value is not an object class description: %w", err)
+		}
+	case SyntaxMatchingRule:
+		if _, err := ParseMatchingRule(string(value)); err != nil {
+			return fmt.Errorf("value is not a matching rule description: %w", err)
+		}
+	case SyntaxMatchingRuleUse:
+		if _, err := ParseMatchingRuleUse(string(value)); err != nil {
+			return fmt.Errorf("value is not a matching rule use description: %w", err)
 		}
 	case SyntaxOID:
 		if !validObjectIdentifier(string(value)) {
@@ -3583,10 +3605,14 @@ func canonicalMatchingRule(rule string) string {
 		return "caseignorematch"
 	case "2.5.13.3":
 		return "caseignoreorderingmatch"
+	case "2.5.13.4":
+		return "caseignoresubstringsmatch"
 	case "2.5.13.5":
 		return "caseexactmatch"
 	case "2.5.13.6":
 		return "caseexactorderingmatch"
+	case "2.5.13.7":
+		return "caseexactsubstringsmatch"
 	case "2.5.13.8":
 		return "numericstringmatch"
 	case "2.5.13.9":
@@ -3607,6 +3633,8 @@ func canonicalMatchingRule(rule string) string {
 		return "octetstringmatch"
 	case "2.5.13.18":
 		return "octetstringorderingmatch"
+	case "2.5.13.19":
+		return "octetstringsubstringsmatch"
 	case "2.5.13.20":
 		return "telephonenumbermatch"
 	case "2.5.13.21":
@@ -3619,6 +3647,10 @@ func canonicalMatchingRule(rule string) string {
 		return "caseexactia5match"
 	case "1.3.6.1.4.1.1466.109.114.2":
 		return "caseignoreia5match"
+	case "1.3.6.1.4.1.1466.109.114.3":
+		return "caseignoreia5substringsmatch"
+	case "1.3.6.1.4.1.4203.1.2.1":
+		return "caseexactia5substringsmatch"
 	case "1.3.6.1.1.16.2":
 		return "uuidmatch"
 	case "1.3.6.1.1.16.3":
@@ -3711,7 +3743,9 @@ func matchSubstringWithRule(
 	substring directory.Substring,
 ) (bool, error) {
 	var normalize func([]byte) []byte
-	switch strings.ToLower(rule) {
+	switch canonicalMatchingRule(rule) {
+	case "octetstringsubstringsmatch":
+		normalize = bytes.Clone
 	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
 		normalize = normalizeCaseIgnore
 	case "caseignorelistsubstringsmatch":

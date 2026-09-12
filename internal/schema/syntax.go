@@ -14,6 +14,7 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 	validated := []string{
 		SyntaxOpenLDAPACI,
 		SyntaxBoolean,
+		SyntaxCountryString,
 		SyntaxAttributeType,
 		SyntaxAuthenticationPassword,
 		SyntaxAuthz,
@@ -25,6 +26,8 @@ func (registry *Registry) installBuiltinLDAPSyntaxes() {
 		SyntaxGeneralizedTime,
 		SyntaxIA5String,
 		SyntaxInteger,
+		SyntaxMatchingRule,
+		SyntaxMatchingRuleUse,
 		SyntaxNameAndOptionalUID,
 		SyntaxNumericString,
 		SyntaxNameForm,
