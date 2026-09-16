@@ -10,6 +10,15 @@ Web 管理控制台。
 项目仍在持续开发中，并非 OpenLDAP 的完整替代品。实际支持范围以
 [兼容性矩阵](docs/compatibility.md)为准。
 
+## 明确不复刻的范围
+
+- **OpenLDAP MDB/LMDB**：不复刻其存储引擎、原生数据库文件及索引格式。
+  ldap-go 使用 bbolt，目录数据通过 `slapcat` LDIF 迁移，不直接复制 MDB 文件。
+- **第三方模块**：不再新增第三方模块的复刻，也不兼容其原生模块加载 ABI。
+  已有的纯 Go 实现继续保留，实际支持范围见[模块覆盖清单](docs/openldap-module-coverage.md)。
+
+以上是明确的项目范围排除项，不作为待补齐功能，也不计入其余复刻目标的完成度缺口。
+
 ## 主要能力
 
 - LDAPv3 Bind、Search、Compare、Add、Modify、Delete、ModifyDN、StartTLS、

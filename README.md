@@ -11,6 +11,19 @@ The project is under active development and is not a complete OpenLDAP drop-in
 replacement. Treat the [compatibility matrix](docs/compatibility.md) as the
 authoritative support boundary.
 
+## Explicit non-goals
+
+- **OpenLDAP MDB/LMDB:** reimplementing its storage engine, native database files,
+  and index format is outside the project scope. ldap-go uses bbolt; migrate
+  directory data through `slapcat` LDIF rather than copying MDB files.
+- **Third-party modules:** further reimplementation of third-party modules and
+  compatibility with their native module-loading ABIs are outside the project
+  scope. Existing pure-Go implementations remain available within the
+  [documented module coverage](docs/openldap-module-coverage.md).
+
+These are deliberate scope exclusions, not pending features or gaps to count
+against completion of the in-scope OpenLDAP functionality.
+
 ## Highlights
 
 - LDAPv3 Bind, Search, Compare, Add, Modify, Delete, ModifyDN, StartTLS,
