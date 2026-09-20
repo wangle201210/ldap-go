@@ -17,7 +17,7 @@ func TestBuiltinOpenLDAPModuleSchema(t *testing.T) {
 	if !found || moduleLoad.OID != "1.3.6.1.4.1.4203.1.12.2.3.0.30" ||
 		moduleLoad.Equality != "caseIgnoreMatch" ||
 		moduleLoad.Syntax != SyntaxDirectoryString || moduleLoad.SingleValue ||
-		!moduleLoad.Hidden ||
+		moduleLoad.Hidden ||
 		!reflect.DeepEqual(moduleLoad.Extensions, map[string][]string{
 			"X-ORDERED": {"VALUES"},
 		}) {
@@ -28,14 +28,14 @@ func TestBuiltinOpenLDAPModuleSchema(t *testing.T) {
 	if !found || modulePath.OID != "1.3.6.1.4.1.4203.1.12.2.3.0.31" ||
 		modulePath.Equality != "caseExactMatch" ||
 		modulePath.Syntax != SyntaxDirectoryString || !modulePath.SingleValue ||
-		!modulePath.Hidden {
+		modulePath.Hidden {
 		t.Fatalf("olcModulePath = %#v, found %t", modulePath, found)
 	}
 
 	moduleList, found := registry.ObjectClass("olcModuleList")
 	if !found || moduleList.OID != "1.3.6.1.4.1.4203.1.12.2.4.0.8" ||
 		moduleList.Description != "OpenLDAP dynamic module info" ||
-		moduleList.Kind != ObjectClassStructural || !moduleList.Hidden ||
+		moduleList.Kind != ObjectClassStructural || moduleList.Hidden ||
 		!reflect.DeepEqual(moduleList.Superiors, []string{"olcConfig"}) ||
 		!reflect.DeepEqual(moduleList.May, []string{
 			"cn", "olcModulePath", "olcModuleLoad",

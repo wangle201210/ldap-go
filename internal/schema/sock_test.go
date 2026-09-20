@@ -270,20 +270,7 @@ func newSockConfigTestRegistry() (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !registry.HasAttributeType("olcDatabase") {
-		if err := registry.ParseAndRegisterAttributeType(
-			"( 1.3.6.1.4.1.4203.1.12.2.3.2.0.1 NAME 'olcDatabase' " +
-				"EQUALITY caseIgnoreMatch SYNTAX " + SyntaxDirectoryString + " SINGLE-VALUE )",
-		); err != nil {
-			return nil, err
-		}
-	}
-	if err := registry.ParseAndRegisterObjectClass(
-		"( 1.3.6.1.4.1.4203.1.12.2.4.0.4 NAME 'olcDatabaseConfig' " +
-			"SUP olcConfig STRUCTURAL MUST olcDatabase )",
-	); err != nil {
-		return nil, err
-	}
+	// The built-in catalog supplies the native configuration parents.
 	if err := RegisterOpenLDAPSockSchema(registry); err != nil {
 		return nil, err
 	}

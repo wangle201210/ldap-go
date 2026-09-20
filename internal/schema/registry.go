@@ -1406,6 +1406,13 @@ func (registry *Registry) Compare(
 		}
 		right = []byte(assertion)
 	}
+	if (attribute.OID == "2.5.21.5" || attribute.OID == "2.5.21.6") && canonicalMatchingRule(rule) == "objectidentifierfirstcomponentmatch" {
+		assertion, err := registry.schemaDescriptionAssertionOIDLocked(attribute.OID, right)
+		if err != nil {
+			return 0, err
+		}
+		right = []byte(assertion)
+	}
 	if attribute.OID == "1.3.6.1.4.1.1466.101.120.16" &&
 		canonicalMatchingRule(rule) == "objectidentifierfirstcomponentmatch" &&
 		(len(right) == 0 || right[0] < '0' || right[0] > '9' || !validObjectIdentifier(string(right))) {

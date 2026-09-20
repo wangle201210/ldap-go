@@ -100,6 +100,9 @@ func NewBuiltinRegistry() (*Registry, error) {
 			)
 		}
 	}
+	if err := RegisterOpenLDAPConfigurationSchema(registry); err != nil {
+		return nil, fmt.Errorf("register OpenLDAP configuration schema: %w", err)
+	}
 	if err := RegisterOpenLDAPOTPSchema(registry); err != nil {
 		return nil, fmt.Errorf("register OpenLDAP OTP schema: %w", err)
 	}
@@ -173,6 +176,9 @@ var builtinAttributeTypes = []string{
 	"( 0.9.2342.19200300.100.1.25 NAME ( 'dc' 'domainComponent' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " SINGLE-VALUE )",
 	"( 0.9.2342.19200300.100.1.3 NAME ( 'mail' 'rfc822Mailbox' ) EQUALITY caseIgnoreIA5Match SUBSTR caseIgnoreIA5SubstringsMatch SYNTAX " + SyntaxIA5String + " )",
 	"( 2.5.4.35 NAME 'userPassword' EQUALITY octetStringMatch SYNTAX " + SyntaxOctetString + " )",
+	"( 2.5.4.38 NAME 'authorityRevocationList' DESC 'RFC2256: X.509 authority revocation list, use ;binary' SYNTAX " + SyntaxCertificateList + " )",
+	"( 2.5.4.39 NAME 'certificateRevocationList' DESC 'RFC2256: X.509 certificate revocation list, use ;binary' SYNTAX " + SyntaxCertificateList + " )",
+	"( 2.5.4.40 NAME 'crossCertificatePair' DESC 'RFC2256: X.509 cross certificate pair, use ;binary' SYNTAX " + SyntaxCertificatePair + " )",
 	"( 1.3.6.1.4.1.4203.1.3.4 NAME 'authPassword' DESC 'RFC3112: authentication password attribute' EQUALITY 1.3.6.1.4.1.4203.1.2.2 SYNTAX " + SyntaxAuthenticationPassword + " )",
 	"( 0.9.2342.19200300.100.1.60 NAME 'jpegPhoto' SYNTAX " + SyntaxOctetString + " )",
 	"( 1.3.6.1.4.1.250.1.57 NAME 'labeledURI' DESC 'RFC2079: Uniform Resource Identifier with optional label' EQUALITY caseExactMatch SYNTAX " + SyntaxDirectoryString + " )",
