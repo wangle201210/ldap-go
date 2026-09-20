@@ -210,12 +210,6 @@ func TestLDAPClientAliasFailuresAndWriteRules(t *testing.T) {
 			result:    ldap.LDAPResultAliasProblem,
 			matchedDN: "cn=loop-a,ou=aliases,dc=example,dc=com",
 		},
-		{
-			name:      "depth",
-			dn:        "cn=depth-0,ou=aliases,dc=example,dc=com",
-			result:    ldap.LDAPResultAliasDereferencingProblem,
-			matchedDN: "cn=depth-3,ou=aliases,dc=example,dc=com",
-		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := client.Search(ldap.NewSearchRequest(
@@ -243,6 +237,9 @@ func TestLDAPClientAliasFailuresAndWriteRules(t *testing.T) {
 			}
 		})
 	}
+	depthResult := aliasSearch(t, client, "cn=depth-0,ou=aliases,dc=example,dc=com",
+		ldap.ScopeBaseObject, ldap.DerefAlways, "(objectClass=*)")
+	assertAliasDNs(t, depthResult, nil)
 
 	bad := ldap.NewAddRequest(
 		"cn=bad-alias,dc=example,dc=com",

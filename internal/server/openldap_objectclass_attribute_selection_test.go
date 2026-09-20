@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
@@ -115,22 +118,79 @@ userPassword: secret
 		})
 	}
 
-	referenceRead := observeObjectClassAttributeSelectionReadControls(
-		t,
-		trimLDAPURI(referenceURI),
-	)
-	implementationRead := observeObjectClassAttributeSelectionReadControls(t, goAddress)
-	if referenceRead.code != uint16(ldap.LDAPResultUndefinedAttributeType) {
-		t.Fatalf("OpenLDAP RFC 4529 read-control result = %#v", referenceRead)
+	for _, oid := range []string{preReadControlOID, postReadControlOID} {
+		for _, critical := range []bool{true, false} {
+			for _, attributes := range [][]string{
+				{"@person"}, {"@inetOrgPerson"}, {"@2.16.840.1.113730.3.2.2"},
+				{"@notInSchema"}, {"@extensibleObject"}, {"@person", "description"},
+				{"1.1", "@person"}, {"cn", "description"},
+				{"@"}, {"@ person"}, {"@person "}, {"@person;x-test"},
+			} {
+				if !critical && slices.ContainsFunc(attributes, func(attribute string) bool {
+					return strings.HasPrefix(attribute, "@")
+				}) {
+					// 2.6.13 keeps these names in a freed BER buffer. Compare only
+					// defined native behavior; the safe projection has local tests.
+					// TestOpenLDAPReadControlNameLifetimeSource pins this exception.
+					continue
+				}
+				t.Run(fmt.Sprintf("read/%s/critical=%t/%v", oid, critical, attributes), func(t *testing.T) {
+					reference := observeObjectClassAttributeSelectionReadControls(
+						t, trimLDAPURI(referenceURI), oid, critical, attributes,
+					)
+					implementation := observeObjectClassAttributeSelectionReadControls(
+						t, goAddress, oid, critical, attributes,
+					)
+					if !reflect.DeepEqual(reference, implementation) {
+						t.Fatalf("read-control mismatch\nOpenLDAP: %#v\nldap-go: %#v", reference, implementation)
+					}
+				})
+			}
+		}
 	}
-	preCN := implementationRead.pre["cn"]
-	postDescription := implementationRead.post["description"]
-	if implementationRead.code != uint16(ldap.LDAPResultSuccess) ||
-		len(preCN) != 1 || preCN[0] != "Object Class Selection" ||
-		len(postDescription) != 1 || postDescription[0] != "RFC 4529 read control" ||
-		len(implementationRead.pre["uid"]) != 0 ||
-		len(implementationRead.post["uid"]) != 1 {
-		t.Fatalf("ldap-go RFC 4529 read-control result = %#v", implementationRead)
+
+	for _, test := range []struct {
+		name      string
+		oid       string
+		operation *ber.Packet
+	}{
+		{"Add", postReadControlOID, rawAddRequest(readControlTestEntry("uid=ocselect-added,ou=people,dc=example,dc=com", "ocselect-added"))},
+		{"Modify missing", preReadControlOID, rawModifyReplaceRequest("uid=ocselect-missing,ou=people,dc=example,dc=com", "description", "unreachable")},
+		{"Delete", preReadControlOID, rawDeleteRequest(openLDAPObjectClassSelectionDN)},
+		{"Delete missing", preReadControlOID, rawDeleteRequest("uid=ocselect-missing,ou=people,dc=example,dc=com")},
+		{"ModifyDN pre", preReadControlOID, rawModifyDNRequest(openLDAPObjectClassSelectionDN, "uid=ocselect-renamed", true)},
+		{"ModifyDN post", postReadControlOID, rawModifyDNRequest(openLDAPObjectClassSelectionDN, "uid=ocselect-renamed", true)},
+	} {
+		t.Run("read/write rejection/"+test.name, func(t *testing.T) {
+			for _, address := range []string{trimLDAPURI(referenceURI), goAddress} {
+				client, err := ldap.DialURL("ldap://" + address)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+					t.Fatal(err)
+				}
+				search := ldap.NewSearchRequest("ou=people,dc=example,dc=com", ldap.ScopeWholeSubtree,
+					ldap.NeverDerefAliases, 0, 0, false, "(uid=ocselect*)", []string{"*", "+"}, nil)
+				before, err := client.Search(search)
+				if err != nil || len(before.Entries) != 1 {
+					t.Fatalf("read original entries = %#v, %v", before, err)
+				}
+				connection := dialAndBindRawLDAP(t, address, "cn=admin,dc=example,dc=com", "secret")
+				defer connection.Close()
+				response := sendRawLDAPOperation(t, connection, 2, test.operation,
+					rawReadControl(test.oid, true, "@person"))
+				assertRawLDAPResult(t, response, int64(ldap.LDAPResultUndefinedAttributeType))
+				if diagnostic := rawLDAPDiagnostic(response); diagnostic != "AttributeDescription contains inappropriate characters" {
+					t.Fatalf("read-control diagnostic = %q", diagnostic)
+				}
+				after, err := client.Search(search)
+				if err != nil || !reflect.DeepEqual(before.Entries, after.Entries) {
+					t.Fatalf("rejected read control changed entries or operational attributes: before=%#v after=%#v err=%v", before, after, err)
+				}
+			}
+		})
 	}
 }
 
@@ -202,16 +262,33 @@ func objectClassSelectionEqual(left, right map[string][]string) bool {
 }
 
 type objectClassSelectionReadObservation struct {
-	code uint16
-	pre  map[string][]string
-	post map[string][]string
+	code       uint16
+	diagnostic string
+	attributes map[string][]string
+	stored     string
 }
 
 func observeObjectClassAttributeSelectionReadControls(
 	t *testing.T,
 	address string,
+	oid string,
+	critical bool,
+	attributes []string,
 ) objectClassSelectionReadObservation {
 	t.Helper()
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	reset := ldap.NewModifyRequest(openLDAPObjectClassSelectionDN, nil)
+	reset.Replace("description", []string{"before read control"})
+	if err := client.Modify(reset); err != nil {
+		t.Fatal(err)
+	}
 	connection := dialAndBindRawLDAP(
 		t,
 		address,
@@ -228,19 +305,45 @@ func observeObjectClassAttributeSelectionReadControls(
 			"description",
 			"RFC 4529 read control",
 		),
-		rawReadControl(preReadControlOID, true, "@person"),
-		rawReadControl(postReadControlOID, true, "@inetOrgPerson"),
+		rawReadControl(oid, critical, attributes...),
 	)
 	observation := objectClassSelectionReadObservation{
-		code: uint16(rawLDAPResultCode(t, response.Children[1])),
+		code:       uint16(rawLDAPResultCode(t, response.Children[1])),
+		diagnostic: rawLDAPDiagnostic(response),
+	}
+	wantCode := uint16(ldap.LDAPResultSuccess)
+	for _, attribute := range attributes {
+		if critical && strings.HasPrefix(attribute, "@") {
+			wantCode = uint16(ldap.LDAPResultUndefinedAttributeType)
+		}
+	}
+	if observation.code != wantCode {
+		t.Fatalf("read-control result = %#v, want code %d", observation, wantCode)
 	}
 	if observation.code == uint16(ldap.LDAPResultSuccess) {
-		observation.pre = objectClassSelectionEntryAttributes(
-			rawReadControlEntry(t, response, preReadControlOID),
+		entry := rawReadControlEntry(t, response, oid)
+		if entry.DN != openLDAPObjectClassSelectionDN {
+			t.Fatalf("read-control DN = %q", entry.DN)
+		}
+		observation.attributes = objectClassSelectionEntryAttributes(
+			entry,
 		)
-		observation.post = objectClassSelectionEntryAttributes(
-			rawReadControlEntry(t, response, postReadControlOID),
-		)
+	} else if len(response.Children) != 2 {
+		t.Fatalf("failed read-control returned controls: %#v", response)
+	}
+	result, err := client.Search(ldap.NewSearchRequest(openLDAPObjectClassSelectionDN,
+		ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
+		"(objectClass=*)", []string{"description"}, nil))
+	if err != nil || len(result.Entries) != 1 {
+		t.Fatalf("read persisted entry = %#v, %v", result, err)
+	}
+	observation.stored = result.Entries[0].GetAttributeValue("description")
+	wantStored := "before read control"
+	if wantCode == uint16(ldap.LDAPResultSuccess) {
+		wantStored = "RFC 4529 read control"
+	}
+	if observation.stored != wantStored {
+		t.Fatalf("persisted description = %q, want %q", observation.stored, wantStored)
 	}
 	return observation
 }

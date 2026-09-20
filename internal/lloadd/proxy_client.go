@@ -653,6 +653,10 @@ func (client *clientConnection) handleCancel(frame proxyFrame) {
 		reject(ldapwire.ResultProtocolError, "message ID parse failed")
 		return
 	}
+	if targetID < 0 {
+		reject(ldapwire.ResultProtocolError, "message ID invalid")
+		return
+	}
 
 	client.mu.Lock()
 	target := client.ops[targetID]

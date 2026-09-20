@@ -869,6 +869,14 @@ func parseReadControl(
 			name+" control attribute selection is invalid",
 		)
 	}
+	for _, attribute := range attributes {
+		if control.Critical && strings.HasPrefix(attribute, "@") {
+			return nil, controlResult(
+				ldapwire.ResultUndefinedAttributeType,
+				"AttributeDescription contains inappropriate characters",
+			)
+		}
+	}
 	return &readControlRequest{
 		attributes: attributes,
 		critical:   control.Critical,
@@ -924,6 +932,9 @@ func (server *Server) readResponseControl(
 	if request == nil {
 		return nil, nil
 	}
+	// Critical @objectClass selectors are rejected during control parsing.
+	// Keep noncritical names owned by Go: native 2.6.13 frees their BER buffer
+	// before its response projection, so that path is not a stable oracle.
 	attributes := expandObjectClassAttributeSelection(
 		runtime.schema,
 		request.attributes,

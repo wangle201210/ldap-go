@@ -249,6 +249,7 @@ func dereferenceAlias(
 	searchVisited map[string]struct{},
 ) (directory.Entry, *aliasDerefFailure, error) {
 	current := start
+	depthResult := ldapwire.ResultAliasDereferencingProblem
 	for registry.EntryHasObjectClass(current, "alias") {
 		currentDN, err := directory.ParseDN(current.DN)
 		if err != nil {
@@ -268,7 +269,7 @@ func dereferenceAlias(
 		}
 		if state.depth >= maxDepth {
 			return directory.Entry{}, &aliasDerefFailure{
-				code:       ldapwire.ResultAliasDereferencingProblem,
+				code:       depthResult,
 				diagnostic: "maximum deref depth exceeded",
 				matched:    current,
 			}, nil
@@ -343,6 +344,9 @@ func dereferenceAlias(
 		if err != nil {
 			return directory.Entry{}, nil, err
 		}
+		// MDB preserves the last successful lookup's result when the next
+		// alias reaches the depth limit; no entry is returned in either case.
+		depthResult = ldapwire.ResultSuccess
 		current = target
 	}
 	return current, nil, nil

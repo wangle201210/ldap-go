@@ -180,14 +180,9 @@ func TestLDAPReadControlsObjectClassAttributeSelection(t *testing.T) {
 		rawReadControl(preReadControlOID, true, "@person"),
 		rawReadControl(postReadControlOID, true, "@inetOrgPerson"),
 	)
-	assertRawLDAPResult(t, response, int64(ldap.LDAPResultSuccess))
-	preRead := rawReadControlEntry(t, response, preReadControlOID)
-	postRead := rawReadControlEntry(t, response, postReadControlOID)
-	if singleRawValue(t, preRead, "cn") != "Alice Example" ||
-		singleRawValue(t, postRead, "cn") != "Alice RFC 4529" ||
-		!preRead.HasAttribute("sn") || preRead.HasAttribute("uid") ||
-		!postRead.HasAttribute("uid") || postRead.HasAttribute("userPassword") {
-		t.Fatalf("RFC 4529 read controls = pre %#v, post %#v", preRead, postRead)
+	assertRawLDAPResult(t, response, int64(ldapwire.ResultUndefinedAttributeType))
+	if got := string(readStoredEntry(t, store, aliceDN).Values("cn")[0]); got != "Alice Example" {
+		t.Fatalf("critical class read control changed entry: cn=%q", got)
 	}
 
 	response = sendRawLDAPOperation(
@@ -198,7 +193,21 @@ func TestLDAPReadControlsObjectClassAttributeSelection(t *testing.T) {
 		rawReadControl(postReadControlOID, true, "@notInSchema"),
 	)
 	assertRawLDAPResult(t, response, int64(ldapwire.ResultUndefinedAttributeType))
-	if got := string(readStoredEntry(t, store, aliceDN).Values("cn")[0]); got != "Alice RFC 4529" {
+	if got := string(readStoredEntry(t, store, aliceDN).Values("cn")[0]); got != "Alice Example" {
 		t.Fatalf("critical unknown-class read control did not roll back: cn=%q", got)
+	}
+
+	response = sendRawLDAPOperation(t, connection, 4,
+		rawModifyReplaceRequest(aliceDN, "cn", "Alice RFC 4529"),
+		rawReadControl(preReadControlOID, false, "@person"),
+		rawReadControl(postReadControlOID, false, "@inetOrgPerson", "cn"))
+	assertRawLDAPResult(t, response, int64(ldap.LDAPResultSuccess))
+	preRead := rawReadControlEntry(t, response, preReadControlOID)
+	postRead := rawReadControlEntry(t, response, postReadControlOID)
+	if singleRawValue(t, preRead, "cn") != "Alice Example" ||
+		singleRawValue(t, postRead, "cn") != "Alice RFC 4529" ||
+		!preRead.HasAttribute("sn") || preRead.HasAttribute("uid") ||
+		!postRead.HasAttribute("uid") || postRead.HasAttribute("userPassword") {
+		t.Fatalf("noncritical class read controls = pre %#v, post %#v", preRead, postRead)
 	}
 }

@@ -55,6 +55,24 @@ func TestLDAPAbandonStopsSearchWithoutResponse(t *testing.T) {
 
 func TestLDAPCancelStopsSearchWithRFC3909Responses(t *testing.T) {
 	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		value []byte
+	}{
+		{"exact value", ldapwire.EncodeCancelRequestValue(2)},
+		{"outer trailing data", append(ldapwire.EncodeCancelRequestValue(2), 0xff)},
+		{"outer second ID", append(ldapwire.EncodeCancelRequestValue(2), ldapwire.EncodeCancelRequestValue(3)...)},
+		{"inner second ID", []byte{0x30, 6, 2, 1, 2, 2, 1, 3}},
+		{"inner trailing data", []byte{0x30, 4, 2, 1, 2, 0xff}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testLDAPCancelStopsSearch(t, test.value)
+		})
+	}
+}
+
+func testLDAPCancelStopsSearch(t *testing.T, value []byte) {
+	t.Helper()
 
 	store := newCancelBlockingStore(storage.NewMemory())
 	t.Cleanup(func() { _ = store.Close() })
@@ -83,7 +101,7 @@ func TestLDAPCancelStopsSearchWithRFC3909Responses(t *testing.T) {
 		3,
 		rawExtendedRequest(
 			cancelOID,
-			ldapwire.EncodeCancelRequestValue(2),
+			value,
 			true,
 		),
 		nil,
@@ -176,12 +194,11 @@ func TestLDAPCancelRequestFailures(t *testing.T) {
 			diagnostic: "message ID not found",
 		},
 		{
-			name:       "Cancel itself",
-			messageID:  6,
-			value:      ldapwire.EncodeCancelRequestValue(6),
-			hasValue:   true,
-			want:       int64(ldap.LDAPResultCannotCancel),
-			diagnostic: "Cancel operations cannot be canceled",
+			name:      "Cancel itself",
+			messageID: 6,
+			value:     ldapwire.EncodeCancelRequestValue(6),
+			hasValue:  true,
+			want:      int64(ldap.LDAPResultSuccess),
 		},
 	}
 	for _, test := range tests {
@@ -210,6 +227,46 @@ func TestLDAPCancelRequestFailures(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestLDAPCancelBoundaryRequestsPreserveRunningSearch(t *testing.T) {
+	t.Parallel()
+	store := newCancelBlockingStore(storage.NewMemory())
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stop := startServer(t, store, Config{})
+	defer stop()
+	connection := dialAndBindRawLDAP(t, address, "", "")
+	defer connection.Close()
+
+	gate := store.blockNextSearch()
+	writeRawLDAPRequest(t, connection, 2, rawCancellationSearch(t), nil)
+	gate.waitUntilBlocked(t)
+	for _, test := range []struct {
+		messageID int64
+		value     []byte
+		code      int64
+	}{
+		{3, append(ldapwire.EncodeCancelRequestValue(3), ldapwire.EncodeCancelRequestValue(2)...), 0},
+		{4, append(ldapwire.EncodeCancelRequestValue(99), ldapwire.EncodeCancelRequestValue(2)...), 119},
+		{5, []byte{0x30, 6, 2, 1, 99, 2, 1, 2}, 119},
+		{6, ldapwire.EncodeCancelRequestValue(-2), 2},
+	} {
+		response := sendRawLDAPOperation(t, connection, test.messageID,
+			rawExtendedRequest(cancelOID, test.value, true))
+		assertRawLDAPEnvelope(t, response, test.messageID, ldapwire.ApplicationExtendedResponse, test.code)
+		select {
+		case <-gate.resumed:
+			t.Fatalf("Cancel %d stopped an unrelated Search", test.messageID)
+		default:
+		}
+	}
+
+	writeRawLDAPRequest(t, connection, 7, rawExtendedRequest(cancelOID, ldapwire.EncodeCancelRequestValue(2), true), nil)
+	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, connection), 2, ldapwire.ApplicationSearchResultDone, int64(ldap.LDAPResultCanceled))
+	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, connection), 7, ldapwire.ApplicationExtendedResponse, int64(ldap.LDAPResultSuccess))
+	response := sendRawLDAPOperation(t, connection, 8, rawExtendedRequest(whoAmIOID, nil, false))
+	assertRawLDAPEnvelope(t, response, 8, ldapwire.ApplicationExtendedResponse, int64(ldap.LDAPResultSuccess))
 }
 
 func TestLDAPCancelCannotCrossConnections(t *testing.T) {

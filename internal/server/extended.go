@@ -331,11 +331,16 @@ func (server *Server) handleCancel(
 			)
 			break
 		}
-		if targetID == message.ID {
+		if targetID < 0 {
 			result = ldapwire.ResultError(
-				ldapwire.ResultCannotCancel,
-				"Cancel operations cannot be canceled",
+				ldapwire.ResultProtocolError,
+				"message ID invalid",
 			)
+			break
+		}
+		if targetID == message.ID {
+			// OpenLDAP acknowledges self-cancel without canceling another
+			// operation or waiting for this request's own response.
 			break
 		}
 		target, result = operations.cancel(targetID)

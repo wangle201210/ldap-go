@@ -573,15 +573,18 @@ func TestProxyCancelRejectsMalformedRequestValuesWithoutClosingAssociation(t *te
 		name     string
 		value    []byte
 		hasValue bool
+		want     ldapwire.ResultCode
 	}{
-		{name: "missing requestValue"},
-		{name: "empty requestValue", value: []byte{}, hasValue: true},
-		{name: "empty sequence", value: []byte{0x30, 0x00}, hasValue: true},
-		{name: "zero cancelID", value: ldapwire.EncodeCancelRequestValue(0), hasValue: true},
+		{name: "missing requestValue", want: ldapwire.ResultProtocolError},
+		{name: "empty requestValue", value: []byte{}, hasValue: true, want: ldapwire.ResultProtocolError},
+		{name: "empty sequence", value: []byte{0x30, 0x00}, hasValue: true, want: ldapwire.ResultProtocolError},
+		{name: "negative cancelID", value: ldapwire.EncodeCancelRequestValue(-1), hasValue: true, want: ldapwire.ResultProtocolError},
+		{name: "zero cancelID", value: ldapwire.EncodeCancelRequestValue(0), hasValue: true, want: ldapwire.ResultNoSuchOperation},
 		{
 			name:     "trailing BER",
 			value:    append(ldapwire.EncodeCancelRequestValue(1), 0x00),
 			hasValue: true,
+			want:     ldapwire.ResultNoSuchOperation,
 		},
 	}
 
@@ -603,12 +606,11 @@ func TestProxyCancelRejectsMalformedRequestValuesWithoutClosingAssociation(t *te
 				connection,
 				111,
 				TagExtendedResponse,
-				ldapwire.ResultProtocolError,
+				test.want,
 			)
 
-			// RFC 3909 specifies protocolError, not association termination. The
-			// Search is also a deterministic ordering barrier proving that the bad
-			// Cancel was not forwarded before the next request.
+			// The next Search verifies the association survives and is an ordering
+			// barrier proving an invalid or unknown Cancel was not forwarded.
 			proxyCancelBarrierSearch(t, connection, requests, 112)
 		})
 	}
