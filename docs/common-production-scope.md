@@ -116,8 +116,10 @@ These are not silently presented as supported common paths:
   replacement for the standard multi-provider topology.
 - Syncrepl DIGEST-MD5 and GSSAPI support integrity/confidentiality layers
   without TLS, including protected reconnect and cookie persistence tests.
-  The local external Cyrus/OpenSSL 3DES decoder crashes, so that native
-  interoperability case remains unverified even though pure-Go vectors pass.
+  The unmodified local Cyrus 3DES provider cannot initialize safely. A pinned,
+  isolated parity-only repair now provides native self-checks and bidirectional
+  3DES interoperability evidence on Linux and Darwin; this is explicitly not an
+  unmodified-Cyrus result. See [the behavior audit](openldap-behavior-audit.md).
 - Relay, back-ldap RWM, and back-meta share the common librewrite DSL:
   engine/context/rule directives, aliases, captures, ordered actions, bounded
   recursion, operation variables, parameters, and subcontext calls. POSIX basic

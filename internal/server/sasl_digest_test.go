@@ -571,6 +571,7 @@ func TestOpenLDAPClientSASLDigestMD5Bind(t *testing.T) {
 			openLDAPReferenceTestsEnv,
 		)
 	}
+	useCyrus3DESReference(t)
 	ldapWhoAmI := ""
 	if path, err := exec.LookPath("ldapwhoami"); err == nil {
 		ldapWhoAmI = path

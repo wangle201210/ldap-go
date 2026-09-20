@@ -152,6 +152,28 @@ Non-loopback HTTP requires `-tls-cert`, `-tls-key`, and a canonical
 `-public-url`. See the [Web Admin feature matrix](webadmin-feature-matrix.md)
 for functional and security boundaries.
 
+Online `olcRootDSE` changes follow OpenLDAP's callback behavior: append a valid
+LDIF path with an Add modification. Delete and Replace are rejected, including
+Replace when the attribute is absent. Removing paths requires an offline
+configuration change and restart; failed online requests leave both stored
+configuration and the active Root DSE unchanged.
+
+## Search URLs
+
+By default `ldapsearch -H` selects connection targets, matching OpenLDAP 2.6.13;
+use `-b`, `-s`, positional filters, and attribute operands for the query.
+The ldap-go-only `-url-search` option enables RFC 4516 query components from a
+single URL. Explicit command arguments still override those components:
+
+```sh
+./bin/ldap-go ldapsearch -x -url-search \
+  -H 'ldaps://directory.example.com/dc%3Dexample%2Cdc%3Dcom?uid,cn?sub?%28uid%3Dalice%29' \
+  -tls-ca /etc/ldap/ca.pem -LLL
+```
+
+Scripts relying on the previous implicit URL-query behavior must add
+`-url-search`; ordinary OpenLDAP-compatible commands keep their native defaults.
+
 ## Offline LDAP URLs
 
 The LDAP client's LDIF output accepts `-o ldif-wrap=no` for unfolded values or

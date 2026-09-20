@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, HAPROXY_SOURCE, HAPROXY_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_REBUILD, and LDAP_GO_OPENLDAP_GSSAPI_AUTO"
+	die "this script accepts configuration through OPENLDAP_SOURCE, OPENLDAP_SOURCE_CACHE, HAPROXY_SOURCE, HAPROXY_SOURCE_CACHE, OPENLDAP_ALLOW_UNVERIFIED_REFERENCE, BUILD, PREFIX, JOBS, OPENSSL_PREFIX, LIBTOOL_PREFIX, CYRUS_SASL_PREFIX, LIBEVENT_PREFIX, ODBC_PREFIX, OPENLDAP_ENV_FILE, LDAP_GO_OPENLDAP_REBUILD, LDAP_GO_OPENLDAP_PREPARE_ONLY, LDAP_GO_CYRUS_3DES_REFERENCE_DIR, and LDAP_GO_OPENLDAP_GSSAPI_AUTO"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -19,6 +19,11 @@ verified_tag=OPENLDAP_REL_ENG_2_6_13
 verified_haproxy_revision=23cc52d34b89fa1f2ec2c4b3ac1526bae84aff93
 verified_haproxy_document_sha256=d8d5a58d4cde4d4993246a4bc6462854f51c7131ab2b2b58be94406f4f060a3b
 rebuild=${LDAP_GO_OPENLDAP_REBUILD:-0}
+prepare_only=${LDAP_GO_OPENLDAP_PREPARE_ONLY:-0}
+case "$prepare_only" in
+	0|1) ;;
+	*) die "LDAP_GO_OPENLDAP_PREPARE_ONLY must be 0 or 1" ;;
+esac
 case "$rebuild" in
 	0|1) ;;
 	*) die "LDAP_GO_OPENLDAP_REBUILD must be 0 or 1, got: $rebuild" ;;
@@ -175,6 +180,23 @@ if [ "$haproxy_digest" != "$verified_haproxy_document_sha256" ]; then
 fi
 HAPROXY_COMMIT=$verified_haproxy_revision
 export HAPROXY_SOURCE HAPROXY_COMMIT
+
+# Preserve real client basenames; libtool wrappers hide ldapadd's alias and
+# expose .libs paths in diagnostics.
+client_tools=${OPENLDAP_BUILD_WORK:-$OPENLDAP_BUILD}/clients/tools/.libs
+reference_tools=$OPENLDAP_BUILD/reference-tools
+mkdir -p "$reference_tools"
+for client_name in ldapsearch ldapmodify ldapadd ldapdelete ldapmodrdn ldapcompare ldapwhoami ldappasswd ldapexop ldapurl ldapvc; do
+	client_binary=$client_name
+	[ "$client_name" != ldapadd ] || client_binary=ldapmodify
+	[ -x "$client_tools/$client_binary" ] || die "native client binary is missing: $client_tools/$client_binary"
+	ln -sf "$client_tools/$client_binary" "$reference_tools/$client_name"
+done
+
+if [ "$prepare_only" = 1 ]; then
+	printf 'Reference prepared: %s; tests were not run.\n' "$env_file"
+	exit 0
+fi
 
 LDAP_GO_OPENLDAP_STRICT=1
 LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1

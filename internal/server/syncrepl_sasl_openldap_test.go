@@ -12,6 +12,7 @@ import (
 
 func TestOpenLDAPSyncreplDIGESTMD5SecurityLayers(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
+	useCyrus3DESReference(t)
 	// Cyrus uses OpenSSL's legacy provider for the RFC 2831 RC4/DES ciphers.
 	// This configuration belongs only to the disposable reference process.
 	opensslConfig := filepath.Join(t.TempDir(), "openssl.cnf")

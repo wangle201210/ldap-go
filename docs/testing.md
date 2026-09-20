@@ -174,6 +174,21 @@ reference-cache volume. Its image includes the MIT KDC, Cyrus GSSAPI plugin and
 plugin viewer, SQLite ODBC, and module-build dependencies; C is used only by the
 external reference server, while Go builds use `CGO_ENABLED=0`.
 
+Nightly first uses `LDAP_GO_OPENLDAP_PREPARE_ONLY=1` to prepare the reference
+without claiming any tests ran. `scripts/test-cyrus-3des-reference.sh` then
+qualifies a temporary, explicitly parity-repaired Cyrus plugin. The full suite
+selects it only for DIGEST-MD5 reference tests through
+`LDAP_GO_CYRUS_3DES_REFERENCE_DIR`; all other native mechanisms keep their
+ordinary plugins. Provenance, the patch and source hashes, native self-checks,
+and interoperability logs are retained. Omitting the variable preserves the
+unmodified provider's failures. See [the audit's reproduction commands](openldap-behavior-audit.md#复现).
+
+Strict runs also execute the host/port, quiet-SASL and URI-list client
+comparisons. The prepared reference exposes real client basenames and the
+`ldapadd` alias, avoiding libtool-wrapper argv/diagnostic artifacts. Root-only
+permission fixtures may be reported as skipped by a non-root suite; nightly
+executes them separately with root and a root suite cannot skip them silently.
+
 `TestOpenLDAPConfiguration*` checks the pinned core catalog (111 attributes,
 nine classes), inheritance and attribute references, public visibility,
 idempotent registration, semantic OID aliases, clone isolation, conflict rollback,

@@ -47,14 +47,19 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Configure temporary build directory
-        run: echo "BUILD=$RUNNER_TEMP/ldap-go-openldap-reference-2.6.13" >> "$GITHUB_ENV"
+        run: |
+          printf '%s\n' \
+            "BUILD=$RUNNER_TEMP/ldap-go-openldap-reference-2.6.13" \
+            "OPENLDAP_ENV_FILE=$RUNNER_TEMP/ldap-go-openldap-reference-2.6.13/openldap-reference.env" \
+            "CYRUS_3DES_ARTIFACT_DIR=$RUNNER_TEMP/ldap-go-cyrus-3des" \
+            "LDAP_GO_CYRUS_3DES_REFERENCE_DIR=$RUNNER_TEMP/ldap-go-cyrus-3des" >> "$GITHUB_ENV"
       - name: Install pinned-reference build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl git libevent-dev libltdl-dev \
+            autoconf automake build-essential ca-certificates curl git libevent-dev libltdl-dev \
             krb5-admin-server krb5-kdc krb5-user \
             libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit \
             libsqliteodbc libssl-dev libtool pkg-config sasl2-bin sqlite3 unixodbc-dev
@@ -68,7 +73,13 @@ jobs:
           go test -c -o "$RUNNER_TEMP/ldap-go-privileges.test" ./cmd/ldap-go
           sudo "$RUNNER_TEMP/ldap-go-privileges.test" -test.v -test.timeout=2m \
             -test.run='^(TestApplyServePrivilegesAllThreads|TestApplyServePrivilegesSubprocess|TestApplyServeChrootSubprocess|TestProductionDatabasePermissionFinding)$'
-      - name: Run pinned strict OpenLDAP differential gate
+      - name: Prepare the pinned OpenLDAP reference
+        env:
+          LDAP_GO_OPENLDAP_PREPARE_ONLY: '1'
+        run: ./scripts/test-openldap-full.sh
+      - name: Qualify the isolated parity-repaired Cyrus 3DES provider
+        run: ./scripts/test-cyrus-3des-reference.sh
+      - name: Run strict OpenLDAP gate with the declared 3DES provider repair
         run: |
           set -o pipefail
           ./scripts/test-openldap-full.sh 2>&1 | tee nightly-openldap.log
@@ -81,6 +92,9 @@ jobs:
             nightly-openldap.log
             nightly-openldap-failure.log
             nightly-openldap-tests.log
+            ${{ env.CYRUS_3DES_ARTIFACT_DIR }}/provenance.txt
+            ${{ env.CYRUS_3DES_ARTIFACT_DIR }}/provider.patch
+            ${{ env.CYRUS_3DES_ARTIFACT_DIR }}/*.log
           if-no-files-found: warn
           retention-days: 14
 

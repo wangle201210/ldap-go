@@ -77,7 +77,7 @@ remaining compatible with other registered `database/sql` drivers.
 | LDAPv2 controls and hidden discovery | complete | A Controls wrapper on LDAPv2 Bind/Search/update returns the same-message operation response with `protocolError` and closes the connection; criticality and internal value syntax are not inspected first. Empty wrappers, malformed Controls, failed-auth v2 state, silent controlled Abandon/Unbind, control-free Abandon, and v2-to-v3 rebind match pinned OpenLDAP 2.6.13. `ControlsPresent` survives wire round trips. Release-hidden Relax and Transaction Specification controls are omitted from Root DSE while transaction Start/End extensions remain published |
 | Lazy Commit | complete | Hidden control `1.2.840.113556.1.4.619` accepts critical/noncritical absent-value requests on Search, Compare, Add, Delete, Modify, and ModifyDN; duplicate/value errors, unsupported Bind/Extended behavior, proxy preservation, No-Op composition, and Root DSE hiding match OpenLDAP 2.6.13. Pinned source evidence proves slapd requests transaction-local `MDB_NOMETASYNC`, but bundled LMDB masks it out with `MDB_TXN_BEGIN_FLAGS=MDB_RDONLY` and commit reads only environment flags. Therefore the release behavior is a durability no-op; ldap-go preserves normal bbolt durability rather than substituting the weaker non-equivalent `DB.NoSync` |
 | Bind: SASL | partial | EXTERNAL, PLAIN, CRAM-MD5, SCRAM-SHA-1/256/512 and all three `-PLUS` variants, DIGEST-MD5 `auth`/`auth-int` plus RC4/DES/3DES `auth-conf`, and pure-Go GSSAPI no-layer/integrity/confidentiality pass vector, local, race, SSF, and native-client tests. SCRAM-PLUS enforces RFC 5802/5929 `tls-server-end-point` over verified standard TLS, rejects TLCP, downgrade, binding mismatch, and replay, and passes native OpenLDAP 2.6.13/Cyrus tests for all three hashes. DIGEST block ciphers cover Cyrus EDE2/CBC vectors, padding/MAC/sequence/maxbuf and key cleanup; native Cyrus DES passes, while the local Cyrus/OpenSSL 3 3DES provider crashes before its first frame and is recorded as an environment defect. An auto-discovered MIT KDC topology provisions isolated service/client credentials and verifies native OpenLDAP/Cyrus GSSAPI no-layer, integrity, and confidentiality Binds. Platform stores, delegation, and real-KDC proxy/replication/lloadd matrices remain |
-| Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, and typesOnly pass. Structurally valid Search requests with invalid scope, derefAliases, sizeLimit, or timeLimit return same-message `protocolError` with OpenLDAP diagnostics and leave the connection usable; only BER/type/int32 decoding failures disconnect. `olcRootDSE` reads ordinary LDIF with empty-DN records, schema-validates defined values, permits valid undefined attributes, merges records within the active file, preserves OpenLDAP's last-path-wins multi-file behavior, appends values after dynamic capability generation, and does not reread an unchanged path during unrelated online rebuilds. Missing/invalid online ADD rolls back with `other(80)`. ldap-go intentionally permits atomic DELETE/REPLACE instead of reproducing OpenLDAP 2.6.13's undeletable in-memory Root DSE defect |
+| Search and SearchResultReference | partial | scope, named-referral, all alias deref modes, limits, attributes, and typesOnly pass. Structurally valid Search requests with invalid scope, derefAliases, sizeLimit, or timeLimit return same-message `protocolError` with OpenLDAP diagnostics and leave the connection usable; only BER/type/int32 decoding failures disconnect. `olcRootDSE` reads ordinary LDIF with empty-DN records, schema-validates defined values, permits valid undefined attributes, merges records within the active file, preserves OpenLDAP's last-path-wins multi-file behavior, appends values after dynamic capability generation, and does not reread an unchanged path during unrelated online rebuilds. Missing/invalid online ADD rolls back with `other(80)`. Online DELETE/REPLACE rejection now matches native results and diagnostics, including absent attributes, partial value deletion and numeric OIDs; prior changes in a rejected request roll back |
 | Filters and matching | partial | RFC 4515 corpus and schema-aware differential tests. Equality, substring, approximate, ordering, and extensible evaluation uses LDAP true/false/undefined logic: an unavailable or incompatible matching rule does not fail Search, and NOT does not turn undefined into a match. `>=`/`<=` resolve the attribute's ordering rule instead of reusing equality. Extensible `dnAttributes` evaluates AVAs from every RDN in the entry DN, for typed and type-omitted assertions, through the same shared evaluator used by Search, Assertion, Sync, ACL filters, pCache, and overlays. A pinned OpenLDAP 2.6.13 differential covers missing ordering/substring rules, NOT-of-undefined, an unknown extensible rule, ancestor-RDN matching, and disabled `dnAttributes`. Complete custom module-provided matching rules remain unsupported |
 | Modify | partial | Atomic modification and error-order differential tests pass; add/delete/replace/increment and permissive modify resolve equivalent attribute names/OIDs/options and use the attribute equality rule for duplicate and requested-value handling across local, pCache, translucent, and offline paths. Case-ignore aliases and case-exact `octetStringMatch` password values pass pinned OpenLDAP differentials. Empty-DN Root DSE requests return OpenLDAP's exact same-message unwilling result and keep the connection usable |
 | Add | partial | Parent/schema/ACL/operational-attribute tests pass. Schema-equivalent duplicate descriptions such as `cn` plus `2.5.4.3` are rejected with OpenLDAP's result and diagnostic, while case-distinct `userPassword` values remain distinct under `octetStringMatch`; pinned OpenLDAP differentials cover both. Empty-DN Root DSE requests parse structurally and return `entryAlreadyExists` after attribute/control validation |
@@ -87,8 +87,8 @@ remaining compatible with other registered `database/sql` drivers.
 | Abandon and cancellation | partial | active Search, response suppression, same-connection, and state-barrier tests pass |
 | Unbind and disconnect notices | partial | connection-state tests |
 | Referrals, aliases, and ManageDsaIT | partial | RFC 3296 named referrals, RFC 4511/4512 aliases, ManageDsaIT, and chain-overlay integration tests pass. Global `olcReferral` preserves slapd.conf order/duplicates, enforces online `cn=config` single-value and URL rules with atomic rollback, publishes Root DSE `ref`, rewrites request DN and all four Search scopes, preserves non-LDAP values, and covers no-backend/no-ancestor Search, Compare, Add, Modify, Delete, ModifyDN, StartTLS fallback, transaction admission, frontend chain, shadow, retcode, and back-dnssrv fallback. Pinned OpenLDAP 2.6.13 process differentials cover configured/unconfigured results, defaultSearchBase, LDAP/LDAPS/LDAPI/PLDAP/non-LDAP values, malformed LDAPI compatibility, duplicate ordered values, ManageDsaIT, and online Add/Replace/Delete failures. Relay failure modes and arbitrary cross-overlay ordering remain |
-| LDAP URLs and attribute options | partial | RFC 4516 referral and direct-search DN/attributes/scope/filter/extensions parsing, strict percent decoding, malformed-URL result 89, critical-extension handling, and schema-aware Search projection pass. Referral chasing preserves OpenLDAP 2.6.13 DN/scope-only replacement. `ldapsearch -H ldap://host/` keeps normal CLI semantics; non-empty URL query components provide an explicit RFC 4516 direct-search extension because the pinned OpenLDAP CLI ignores them. The complete attribute-option matrix remains |
-| Object-class attribute selection | complete | RFC 4529 `@objectClass` selection covers inherited MUST/MAY attributes, names/numeric OIDs, subtypes/options, `extensibleObject`, `1.1`, `typesOnly`, ACL filtering, Root DSE publication, Search and RFC 4527 read controls. Request-entry expansion covers local, SQL, proxy/sock, ordinary pCache, and private pCache paths; incomplete pCache attrsets fail closed. Search matches pinned OpenLDAP 2.6.13; ldap-go intentionally accepts the selector in pre/post-read where that OpenLDAP version returns `undefinedAttributeType` contrary to RFC 4529 |
+| LDAP URLs and attribute options | partial | RFC 4516 referral and direct-search DN/attributes/scope/filter/extensions parsing, strict percent decoding, malformed-URL result 89, critical-extension handling, and schema-aware Search projection pass. Referral chasing preserves OpenLDAP 2.6.13 DN/scope-only replacement. Default `ldapsearch -H` uses connection targets and ignores URL query components like native 2.6.13; the explicit `-url-search` project option retains direct RFC 4516 searches. The complete attribute-option matrix remains |
+| Object-class attribute selection | complete | RFC 4529 `@objectClass` selection covers inherited MUST/MAY attributes, names/numeric OIDs, subtypes/options, `extensibleObject`, `1.1`, `typesOnly`, ACL filtering, Root DSE publication and Search. Request-entry expansion covers local, SQL, proxy/sock, ordinary pCache, and private pCache paths; incomplete pCache attrsets fail closed. Critical pre/post-read selectors return native `undefinedAttributeType` before writes. Noncritical selectors retain safe schema/ACL projection; native 2.6.13 borrows these names from a freed BER buffer, so allocator-dependent results are excluded under the documented memory-safety exception |
 
 ## Controls and extended operations
 
@@ -221,11 +221,11 @@ escape mapper; it does not implement LDAP lookup maps or arbitrary modules.
 | OTP-related contrib password modules | partial | OpenLDAP pw-totp `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; fixed 30-second/six-digit credentials, current/previous-window rules, non-replicated `authTimestamp`, root/ordinary/TOTP successful-Bind timestamp updates, Password Modify hashing, database/frontend and duplicate placement, online disable/delete/restart, and a dynamically built pinned OpenLDAP 2.6.13 module differential pass; SHA-2 nested passwords are supported; ldap-go intentionally makes first-use replay prevention atomic where OpenLDAP's separate check/update can admit concurrent attempts; other unsupported nested/dynamic schemes, replication topologies, proxy databases, and arbitrary overlay ordering remain |
 
 RWM capture parity is bounded to the tested Linux/glibc and Darwin cases.
-The case-sensitive (`:C`) differential covers ambiguous alternatives, repeated
-groups, stale nested captures, and ordinary DN suffixes on both platforms.
-Darwin's default case-insensitive mode still differs for some nested repeated
-captures, and musl is not qualified. See the
-[behavior audit](openldap-behavior-audit.md) for a concrete remaining difference.
+The 114-case differential covers default and case-sensitive (`:C`) modes,
+ambiguous alternatives, repeated groups, nested tag sharing and ordinary DN
+suffixes on both platforms. Darwin's shared end-tag behavior is reproduced
+without native regex calls. Musl and further libc/locale combinations are not
+qualified. See the [behavior audit](openldap-behavior-audit.md).
 
 ## Replication and operations
 
@@ -316,17 +316,18 @@ The built-in `ldapvc` client supports simple Verify Credentials against an
 OpenLDAP or ldap-go `vc` module, independently of the connection's Simple/SASL
 Bind. It includes anonymous verification, password prompting, `-a` authorization
 identity and `-b` password-policy controls, general request controls, bounded BER
-responses, and secret-redacted output. Inner credential failures return nonzero
-even when the outer operation succeeds; native 2.6.13 returns zero in that case.
-Anonymous requests explicitly encode empty simple authentication, correcting
-the native client's omitted mandatory authentication field.
+responses, and secret-redacted output. Default exit status and request encoding
+match native 2.6.13, including outer success with an inner failure and omitted
+authentication when no operands are supplied. Explicit empty DN and credential
+operands perform anonymous verification. The ldap-go-only `-require-verified`
+option retains nonzero exit status for an inner failure.
 The server's opt-in simple VC extension reuses isolated Bind dispatch, keeps
 the caller identity and transport state intact, and applies real password-policy
 and lastbind effects. It is hidden from Root DSE like native `vc`. The global
 `authzid` overlay supplies Bind and nested VC authorization-identity controls.
 VC-specific interactive SASL/cookies and verification referral chasing remain
 unsupported. See [server configuration and bounds](verify-credentials.md) and
-[usage and exit-status differences](operations.md#verify-credentials-on-openldap).
+[usage and exit-status policy](operations.md#verify-credentials-on-openldap).
 
 ## Implemented subset evidence
 
@@ -654,10 +655,12 @@ updates validate and roll back atomically, survive restart, and accept a real
 OpenLDAP 2.6.13 differentials cover static and in-directory operation results,
 synthetic-search ACLs, successful Bind identity, and stored-value parsing.
 
-OpenLDAP 2.6.13 emits an invalid duplicate response sequence for an
-in-directory Extended operation; common Go clients report an unexpected
-response. ldap-go intentionally returns one protocol-valid ExtendedResponse
-instead. Global `olcReferral` fallback for a referral item without `ref`,
+For in-directory Password Modify, ldap-go reproduces native 2.6.13's internal
+SearchResultEntry followed by the actual ExtendedResponse, including the
+SDK's unexpected-response result. The entry respects entry/attribute/value
+ACLs, old-password validation remains authoritative, and later message IDs stay
+independent. A simulated Modify failure rolls back instead of reproducing the
+native failure-then-commit integrity defect. Global `olcReferral` fallback for a referral item without `ref`,
 multiple/frontend instance ordering, glued searches, and composition with
 other controls and overlays still need broader parity tests, so the row remains
 `partial`.
@@ -794,12 +797,12 @@ distinct, preserving OpenLDAP MDB's observable duplicate-entry behavior.
 Paging, server-side sorting, VLV, Add-parent, ModifyDN-superior, ordinary
 Modify/Compare/Delete, and Bind rejection have TCP coverage. Process-level
 OpenLDAP 2.6.13 differentials cover all four modes, base descendants, broken
-targets, loops, and overlapping scopes. One intentional edge-case difference
-is recorded: after a positive `olcMaxDerefDepth` is exceeded, OpenLDAP 2.6.13
-MDB can emit success with a matched DN and the diagnostic `maximum deref depth
-exceeded` because a successful intermediate lookup overwrites result code 36.
-`ldap-go` consistently returns `aliasDereferencingProblem` (36) for that
-failure. Referral chasing is handled by an imported `chain` overlay.
+targets, loops, and overlapping scopes. The depth boundary matches the pinned
+MDB result: after a successful intermediate lookup, exceeding a positive limit
+can return success with a matched DN and `maximum deref depth exceeded`, while
+an immediate depth-zero failure returns code 36. No entry is returned at that
+boundary. Depth and ACL protections remain active. Referral chasing is handled
+by an imported `chain` overlay.
 
 RFC 3672 `subentry`, `subtreeSpecification`, and `administrativeRole` schema
 definitions are built in, and the Subentries control is advertised through
@@ -1319,10 +1322,11 @@ migration requires a corresponding OpenLDAP password module or patch.
 The upstream PBKDF2 schemes generate 10,000 iterations with a random 16-byte
 salt and 20, 32, or 64 derived bytes for SHA-1, SHA-256, or SHA-512. The
 `{PBKDF2}` name aliases `{PBKDF2-SHA1}`. Pinned dynamic-module tests exercise
-Password Modify and imported Simple Bind in both directions. Verification is
-intentionally stricter than OpenLDAP 2.6.13 for selected manually constructed
-values: ldap-go rejects non-decimal iteration text, extra fields, and
-iterations above 1,000,000 before deriving a key. Adapted Base64 whitespace,
+Password Modify and imported Simple Bind in both directions. Verification
+matches native whitespace, optional positive sign, decimal-prefix parsing,
+trailing fields and NUL termination within a 4 KiB payload bound. Negative,
+overflowing or above-1,000,000 iteration counts are rejected before key
+derivation as explicit resource-safety exceptions. Adapted Base64 whitespace,
 padding, and nonzero tail-bit behavior are matched directly against the pinned
 module. OpenLDAP's module uses unbounded `atoi` and `memcmp`; ldap-go keeps the
 work bound and compares derived keys in constant time.
@@ -1479,8 +1483,10 @@ use normal entry and attribute read ACLs, honor `*`, `+`, `1.1`, explicit
 attributes, and the empty default selection, and are only returned after a
 successful commit. Tests cover old/new values and DNs, operational attributes,
 password-value filtering, malformed and duplicate controls, operation
-applicability, and rollback after a critical post-read failure. OpenLDAP
-differential fixtures remain pending.
+applicability, and rollback after a critical post-read failure. Native selector
+and rejection-order fixtures cover the declared subset. Noncritical unresolved
+names in native 2.6.13 outlive their BER buffer; this allocator-dependent path
+is a pinned memory-safety exception, not an equality claim.
 
 RFC 4511 Abandon and RFC 3909 Cancel use a connection-local operation registry.
 The connection reader can accept either request while bounded operation workers
@@ -1492,17 +1498,17 @@ or responseValue. Message IDs cannot cross LDAP associations. Bind is an
 abandon-and-discard fence, StartTLS rejects outstanding operations, and
 complete BER PDUs share one write lock.
 
-Request values use strict BER for `SEQUENCE { cancelID MessageID }`; absent,
+Request values use native bounded BER parsing for `SEQUENCE { cancelID MessageID }`; absent,
 empty, malformed, unknown, finalizing, pending, and non-cancelable targets map
 to the RFC result codes. Deterministic TCP tests pause the storage scan and
 cover response ordering, connection reuse, Root DSE discovery, and cross-
 connection rejection. Process-level probes against OpenLDAP 2.6.13 match
 result codes, diagnostics, and target-before-Cancel response ordering for
-normal cases. Two strict RFC differences are intentional: `ldap-go` rejects
-trailing bytes after cancelRequestValue and returns `cannotCancel` when a
-Cancel targets its own message ID; OpenLDAP 2.6.13 accepts the trailing data
-and returns success for self-cancel despite RFC 3909 declaring Cancel
-non-cancelable.
+normal cases. Native-permitted trailing data and tag/length encodings are
+accepted within the current request value; signed 32-bit bounds and malformed
+length checks remain enforced. Self-cancel returns native success without
+canceling another operation. Thirty native boundary cases compare results,
+diagnostics and subsequent connection use on both reference platforms.
 
 Explicit Abandon interrupts active or pending Search, Compare, update, and
 Extended operations other than Bind/Unbind/Abandon itself, suppressing the

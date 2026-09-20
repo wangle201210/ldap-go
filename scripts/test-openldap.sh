@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_OPENLDAP_FAILURE_LOG, LDAP_GO_OPENLDAP_TEST_LOG, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
+	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_OPENLDAP_FAILURE_LOG, LDAP_GO_OPENLDAP_TEST_LOG, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, LDAP_GO_CYRUS_3DES_REFERENCE_DIR, and the exported OpenLDAP reference environment"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -308,6 +308,15 @@ else
 fi
 printf 'Execution:          strict=%s package-parallelism=1 test-parallelism=%s\n' \
 	"$strict" "${LDAP_GO_OPENLDAP_PARALLEL:-1}"
+if [ -n "${LDAP_GO_CYRUS_3DES_REFERENCE_DIR:-}" ]; then
+	printf '3DES provider:      locally parity-repaired Cyrus, scoped to DIGEST-MD5 tests (%s)\n' "$LDAP_GO_CYRUS_3DES_REFERENCE_DIR"
+fi
+if [ "$strict" = 1 ]; then
+	LDAP_GO_HOST_PORT_EXTERNAL=1
+	LDAP_GO_SASL_QUIET_EXTERNAL=1
+	LDAP_GO_URI_REVIEW_EXTERNAL=1
+	export LDAP_GO_HOST_PORT_EXTERNAL LDAP_GO_SASL_QUIET_EXTERNAL LDAP_GO_URI_REVIEW_EXTERNAL
+fi
 
 if [ -n "${LDAP_GO_OPENLDAP_TEST_LOG:-}" ]; then
 	log=$LDAP_GO_OPENLDAP_TEST_LOG
@@ -361,6 +370,19 @@ skips=$(sed -n 's/^[[:space:]]*--- SKIP: \([^ (]*\).*/\1/p' "$log")
 unexpected_skips=
 for skipped in $skips; do
 	case "$skipped" in
+		TestApplyServePrivilegesAllThreads|\
+		TestProductionDatabasePermissionFinding/root-owned_link_cannot_hide_writable_target_ancestry)
+			# A non-root runner cannot create these fixtures. Nightly executes
+			# them separately as root; a root run must never silently skip them.
+			if [ "$(id -u)" = 0 ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
+		TestCyrus2128SASLCBindingSource)
+			if [ -n "${CYRUS_SASL_SOURCE:-}" ]; then
+				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
+			fi
+			;;
 		TestOpenLDAPAllowedReference)
 			if [ "${LDAP_GO_OPENLDAP_ALLOWED_DOCKER_TESTS:-0}" = "1" ]; then
 				unexpected_skips="${unexpected_skips}${unexpected_skips:+ }$skipped"
@@ -440,6 +462,14 @@ TestOpenLDAPReferenceFilterAbsentAttributeAssertions
 TestOpenLDAPReferencePasswordPolicyAdministratorDeleteAdd
 TestLDAPGoSyncreplOpenLDAPProviderSubtreeRename
 TestOpenLDAPReferenceRWMRewriteCaptures
+TestOpenLDAPReadControlNameLifetimeSource
+TestOpenLDAPReferenceCancelRequestBoundaries
+TestOpenLDAPReferenceAliasDepthBoundary
+TestOpenLDAPReferencePBKDF2ImportFormats
+TestOpenLDAPReferenceDIGESTMD5Native3DES
+TestOpenLDAPReferenceRootDSEOnlineRemoval
+TestOpenLDAPReferenceRetcodePasswordModifyStages
+TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential
 TestOpenLDAPLDAPCompareReferenceExitCodes
 TestOpenLDAPLDAPExopFileAndResponseReference
 TestOpenLDAPReferenceUnknownOperationDisconnect
@@ -511,6 +541,9 @@ TestPcacheExtensibleTemplateSemantics
 TestPcacheSchemaFilterKeyCanonicalization
 TestPcacheTemplateSupportsExtensibleFilters'
 strict_mandatory_tests='TestOpenLDAPGlobalTLSConfigurationRebuildsContextSourceContract
+TestLDAPClientHostPortExternal
+TestLDAPClientSASLQuietOpenLDAP
+TestLDAPURIListReviewExternal
 TestOpenLDAPReferencePcachePhaseOne
 TestOpenLDAPReferenceSQLBackend
 TestOpenLDAPReferenceSQLBackendModifyDNAutocommitFailure'

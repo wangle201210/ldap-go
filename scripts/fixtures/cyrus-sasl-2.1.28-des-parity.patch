@@ -1,0 +1,11 @@
+--- a/plugins/digestmd5.c
++++ b/plugins/digestmd5.c
+@@ -873,4 +873,8 @@ static void slidebits(unsigned char *keybuf, unsigned char *inbuf)
+     keybuf[5] = (inbuf[4]<<3) | (inbuf[5]>>5);
+     keybuf[6] = (inbuf[5]<<2) | (inbuf[6]>>6);
+     keybuf[7] = (inbuf[6]<<1);
++#ifdef WITH_SSL_DES
++    /* Local reference-only repair: parity bits do not carry key material. */
++    DES_set_odd_parity((DES_cblock *) keybuf);
++#endif
+ }

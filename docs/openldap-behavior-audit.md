@@ -1,144 +1,114 @@
 # 已实现功能的 OpenLDAP 行为核验
 
-核验基准为 OpenLDAP **2.6.13**，源码提交
-`d172686d3d270bc961b78f3ff00d7019c8dfb094`。本页补充
-[功能兼容矩阵](compatibility.md)，不把功能已经实现、测试通过和所有行为完全一致
-视为同一件事。
+参考版本为 OpenLDAP **2.6.13**，源码提交
+`d172686d3d270bc961b78f3ff00d7019c8dfb094`。
 
-## 判定标准
+本轮按用户确认的范围处理：**排除安全和数据完整性缺陷，其余已知业务差异对齐**。
+不复制权限泄露、失败后部分提交、悬空内存读取或无界资源消耗。
+功能范围仍以[兼容矩阵](compatibility.md)为准；MDB 文件格式及新增第三方模块不在复刻范围。
 
-- **实测一致**：对独立启动的两端执行相同请求，比较结果码、返回数据、响应控制、
-  连接状态及最终目录状态；结论只适用于该测试覆盖的配置和操作组合。
-- **已知差异**：测试分别断言两端结果，或文档明确说明扩展和安全约束。
-  这类测试通过表示差异没有意外变化，不表示两端相等。
-- **未证明一致**：只有本地测试、源码契约、编译验证或部分组合的对照。
-  不可从单一场景推导全部后端、Overlay 顺序、复制拓扑和平台都一致。
+## 已收敛的差异
 
-业务数据比较允许规范化 LDAP 不保证的条目、属性及普通多值顺序。
-排序请求必须另外检查顺序。分页 cookie、随机盐、时间戳和自动生成 UUID 等
-不能简单逐字节比较，必须验证它们对应的行为。相同 SDK 测试会忽略诊断文本及
-密码哈希字节，不替代原始 BER、命令行或密码重新 Bind 测试。
-
-## 2026-09-20 新增核验与修复
-
-本轮在已有测试之外确认并修复了四类非预期差异：
-
-| 场景 | 修复内容 | 回归证据 |
-| --- | --- | --- |
-| 缺失属性与无效过滤断言组合 | 保留 LDAP Undefined，防止 NOT 将非法断言转为匹配；有效但缺失的属性仍为 False。 | [84 个原生组合](../internal/server/openldap_filter_absent_attribute_test.go)、[普通 CI 断言测试](../internal/schema/filter_assertion_test.go) |
-| 管理员 Delete+Add 修改密码 | 管理员按存储值匹配删除哈希；普通用户仍按 ppolicy 校验明文旧密码。失败不会改变密码及策略时间。 | [两端 8 个场景](../internal/server/ppolicy_admin_modify_reference_test.go) |
-| syncrepl 父条目改名 | 同一事务移动已有子孙条目并更新父条目和 cookie，保留子条目 UUID/CSN；目标冲突整体回滚。 | [原生 provider 到 bbolt](../internal/server/syncrepl_subtree_rename_openldap_test.go)、[冲突回滚](../internal/server/syncrepl_subtree_test.go) |
-| rewrite 歧义与重复捕获 | Linux 使用经 glibc 对照的捕获选择；BSD 路径保留迭代历史并清除重复分组中的过期子捕获，保留工作预算。 | [双平台各 23 个 `:C` 原生用例](../internal/server/rwm_rewrite_capture_reference_test.go)，两端各 46 项完整 RWM 顶层测试通过 |
-
-这也说明此前已有的全量回归不能证明所有未覆盖组合正确。新增四个原生回归被纳入
-严格套件的必跑清单，不能通过跳过测试获得成功结果。
-
-Linux 实跑还修复了两处运行和运维检查问题：
-
-- purego/fakecgo 环境下，Linux 权限切换改用 libc 的全线程凭据同步接口，
-  不再触发 `AllThreadsSyscall` panic。root 子进程检查已有、新建线程的
-  UID/GID/附加组及不可恢复 root；全程 `CGO_ENABLED=0`。
-- 生产权限检查同时检查 root 所有符号链接指向路径的祖先权限，避免漏掉
-  可被其他用户写入的目标目录。此检查是 ldap-go 的运维能力，不是原生 LDAP 协议。
-
-修正的测试环境条件没有改变预期业务结果：写超时使用足够大的响应和可排空的
-接收窗口；原生 SHA-2 模块编译关闭严格别名优化并校验标准摘要；SQL 两端使用
-ODBC 可执行的独立取键查询，继续比较相同的结果码、数据库状态和回滚。
-
-### 原生 3DES 对照阻塞
-
-本机 macOS 的 Cyrus SASL 2.1.28_2 / OpenSSL 3.6.2 在 DIGEST-MD5
-SSF 112 路径发生原生空指针崩溃。独立的“原生 ldapwhoami → 原生 slapd”
-同样崩溃，SSF 1、55、128 对照成功，因而不能将这一失败归因于 ldap-go。
-源码显示 `init_3des` 可返回失败，部分调用路径仍继续使用未初始化的上下文；
-未进一步断言其初始化失败的具体底层原因。
-
-Linux/arm64 的 Debian Bookworm 原生环境（Cyrus 2.1.28+dfsg-10、
-OpenSSL 3.0.20）在同一 SSF 112 独立测试中返回
-`couldn't init cipher '3des'`，LDAP 结果码 80。
-这一原生互操作用例仍未通过，不能把本地算法向量通过写成原生互操作已经验证。
-严格门槛继续保留失败，不降级为通过或跳过。
-
-### 最终验证记录
-
-生产代码冻结于 `afdc90f`（包含 `48f9028`、`bb051c9`）；随后仅补齐工具发现、
-测试门槛、CI 和文档。所有 Go 构建与测试使用 `CGO_ENABLED=0`。
-
-| 验证 | 结果 |
+| 功能 | 当前行为与证据 |
 | --- | --- |
-| 最终全仓 Go 测试、`go vet` | 通过 |
-| 六平台编译 | Linux amd64/arm64、Darwin amd64/arm64、Windows amd64、FreeBSD amd64 通过；不等于各平台运行行为完全一致 |
-| Linux/arm64 完整严格套件 | 2,437 条顶层 Test 通过记录、1 条失败、11 条跳过；失败为上述原生 3DES 初始化问题，整体命令返回失败 |
-| 补跑 Linux 工具发现空缺 | 修正 `saslpluginviewer` 名称、SASL 插件目录及客户端硬编码 Homebrew 路径后，SCRAM-PLUS、ldapcompare、ldapexop 三项在 Linux 和 macOS 均通过；不将它们伪装成之前完整运行中已执行 |
-| `allowed` / Verify Credentials 容器对照 | 两个顶层测试通过；`allowed` 的 80 组相等与 6 组预期 ACL 差异分开统计 |
-| 完整安装的 macOS OpenLDAP 2.6.13 客户端 | host/port、SASL quiet、URI list、ldapurl 四组补充对照通过；ldapurl 的 GNU getopt 输出未据此获得兼容声明 |
-| RWM 定向模糊测试 | 5 秒、11,838 次执行通过；不是穷举输入证明 |
+| 缺失属性上的无效过滤断言 | 保留 LDAP Undefined，NOT 不会错误匹配；[84 个原生组合](../internal/server/openldap_filter_absent_attribute_test.go)。 |
+| 管理员 Delete+Add 改密 | 按存储值删除旧哈希，普通用户仍执行密码策略；[原生与本地回归](../internal/server/ppolicy_admin_modify_reference_test.go)。 |
+| syncrepl 子树改名 | 父条目、已有子孙条目及 cookie 同事务更新，子条目 UUID/CSN 不变；[原生 provider 对照](../internal/server/syncrepl_subtree_rename_openldap_test.go)。 |
+| rewrite 捕获 | 对齐 Linux/glibc 和 Darwin 的已测捕获语义，涵盖默认模式、`:C`、歧义、重复、嵌套和共享结束标签；[双平台各 114 个用例](../internal/server/rwm_rewrite_capture_reference_test.go)。 |
+| Cancel | 对齐自取消、尾随数据、原生接受的 BER 编码、结果码和诊断；保留请求边界、长度和整数界限，取消不能跨连接；[30 个原生边界用例](../internal/server/openldap_cancel_boundaries_test.go)。 |
+| critical pre/post-read 的 `@objectClass` | 修改前返回原生 `undefinedAttributeType`，目录数据保持不变；[对照及失败原子性验证](../internal/server/openldap_objectclass_attribute_selection_test.go)。 |
+| 别名深度边界 | 对齐深度零和成功中间查找后的原生结果码、matchedDN、诊断和条目集；深度限制及 ACL 保持生效；[32 个组合](../internal/server/openldap_alias_depth_test.go)。 |
+| `olcRootDSE` 在线修改 | 对齐原版拒绝删除、替换的结果码及诊断，包括空属性、部分删除、数值 OID 和多值情况；[16 步原生对照](../internal/server/openldap_root_dse_modify_test.go)及本地同批修改回滚验证。ADD 保持可用。 |
+| `retcode` 目录内 Password Modify | 对齐内部 SearchResultEntry 与实际 ExtendedResponse 的包序列，实际改密、错误旧密码、ACL 过滤和后续消息 ID；[12 个原生场景](../internal/server/retcode_password_modify_reference_test.go)。 |
+| PBKDF2 导入格式 | 对齐空白、正号、十进制数字前缀、额外字段和 NUL 终止；正确与错误密码均比较真实 Bind；[双平台各 104 个组合](../internal/server/openldap_pbkdf2_password_test.go)。 |
+| `ldapsearch -H` | 默认与原版一样用于连接目标；完整 URL 搜索须显式指定 `-url-search`；[16 组原生场景](../cmd/ldap-go/client_url_test.go)。 |
+| `ldapvc` | 默认退出码依外层 LDAP 结果，省略操作数时编码与原版一致；显式空 DN、空密码用于匿名验证；[请求及退出码精确比较](../cmd/ldap-go/client_verify_credentials_external_test.go)。 |
+| Linux 运行与检查 | 修复纯 Go/fakecgo 环境下的降权 panic，验证所有现有及新建线程的凭据；修复权限检查遗漏符号链接目标祖先的问题。这些是运行正确性改进。 |
 
-完整套件还会按前置条件跳过 Cyrus 源码契约和另行提供 VC 模块端点的客户端
-集成等可选测试。单独补跑和源码/单元测试不能被算成一次“无跳过全通过”。
+此前依赖 ldap-go 扩展默认行为的脚本需注意：
 
-本地保留的主要日志：
+- 完整 RFC 4516 URL 搜索使用 `ldapsearch -url-search -H ...`。
+- 要求内层验证失败也返回非零时，使用 `ldapvc -require-verified ...`。
+- 匿名 VC 验证传入两个明确的空操作数 `'' ''`。省略操作数会复刻原版缺失认证字段的请求，原生模块会拒绝它。
 
-- `/tmp/ldap-go-compatibility-linux-verified-20260920-tests.log`：完整 Linux 运行。
-- `/tmp/ldap-go-compatibility-linux-discovery-20260920.log`：三项工具发现补跑。
-- `/tmp/ldap-go-compatibility-docker-20260920.log`：两个容器对照。
-- `/tmp/ldap-go-compatibility-final-local-20260920.log`：最终全仓 Go 测试。
-- `/tmp/ldap-go-native-3des-audit-20260920/result.log`：独立纯原生 3DES 复现。
+详见[操作指南](operations.md)。
 
-临时日志不是仓库内永久资产。后续复现使用下面的脚本和 nightly 上传的日志，
-每次重新报告实际失败、跳过及预期差异。
+## 保留的安全例外
 
-## 已知不同的行为
+这些不计作“两端完全相同”，也不通过放宽测试掩盖：
 
-以下是现有实现中已经记录的具体差异，不是未实现功能清单。原生程序的缺陷也可能
-被客户端观察到，因此不能因为 ldap-go 的结果更严格就将其算作“相同”。
+| 范围 | 保留行为 |
+| --- | --- |
+| `allowed`、`deref` | 逐值执行 ACL，过滤原生部分路径会泄露的值。 |
+| SQL Tree Delete、`retcode` 模拟 Modify 失败 | 报告失败时完整回滚，不复制原生失败后仍提交全部或部分写入的缺陷。 |
+| `collect` | 检查每项修改及带选项的基础属性，阻止写保护绕过。 |
+| 非关键 read-control 的未识别选择器 | Go 持有名称并做确定的 schema/ACL 投影。原生 `parseReadAttrs` 的 `ber_scanf("{M}")` 借用名称在 `ber_free(ber, 1)` 后仍被使用，其结果取决于分配器；不以这条路径的输出作精确对照。安全例外由[固定源码校验](../internal/server/openldap_read_control_lifetime_test.go)约束，不执行内存错误复现。 |
+| `olcSecurity` 和配置失败回滚 | 成功提交的配置与运行时保持一致，不保留原生安全设置删除后仍使用旧值或失败后只发布部分运行状态的缺陷。`olcRootDSE` 的正常拒绝行为已经对齐，不作为例外。 |
+| PBKDF2、嵌套组及协议资源 | PBKDF2 保留 1,000,000 次计算上限、4 KiB 编码边界、负数/溢出防护和恒定时间比较；图遍历、BER 和并发资源仍有上限。 |
+| OTP 并发重放 | 检查与更新时间原子化，不复制原生检查和更新之间的竞争窗口。 |
 
-| 范围 | 差异与影响 | 现有证据 |
-| --- | --- | --- |
-| `allowed`、`deref` 的值级 ACL | ldap-go 过滤被拒绝的值；原生部分缓存或响应路径仍会泄露相关值。 | [allowed 对照](../internal/server/allowed_reference_test.go)、[deref 对照](../internal/server/openldap_deref_test.go) |
-| SQL Tree Delete 中途权限失败 | ldap-go 拒绝并回滚完整子树；原生部分场景可能返回成功并留下删除前缀。 | [Tree Delete 说明](compatibility.md#controls-and-extended-operations) |
-| `collect` 属性写保护 | ldap-go 检查每项修改和带选项的基础属性，阻止原生的绕过组合。 | [collect 对照](../internal/server/openldap_collect_test.go) |
-| `@objectClass` pre/post-read 选择器 | ldap-go 按 RFC 接受；原生 2.6.13 返回未定义属性错误。普通 Search 选择器另有一致性对照。 | [选择器对照](../internal/server/openldap_objectclass_attribute_selection_test.go) |
-| Cancel 的畸形值和自取消 | ldap-go 拒绝尾随字节、自取消返回 `cannotCancel`；原生接受这些边界输入。 | [Cancel 边界](compatibility.md) |
-| 别名解引用超过深度 | ldap-go 返回 `aliasDereferencingProblem`；原生部分路径意外返回成功并附带错误诊断。 | [别名边界](compatibility.md) |
-| `retcode` 的目录内扩展操作 | ldap-go 只发送一个合法 ExtendedResponse；原生可发送重复、非法响应序列。 | [retcode 对照](../internal/server/openldap_retcode_test.go) |
-| `olcRootDSE`、`olcSecurity` 在线删除或替换 | ldap-go 原子更新配置和运行时；不保留原生部分字段删除后仍生效或无法删除的状态。 | [Root DSE 配置](../internal/server/root_dse_configuration_test.go)、[安全配置对照](../internal/server/openldap_security_requirements_test.go) |
-| 手工构造的 PBKDF2 哈希 | ldap-go 限制迭代成本，并拒绝某些原生接受的异常格式。 | [密码模块对照](../internal/server/openldap_pbkdf2_password_test.go) |
-| OTP 首次并发重放 | ldap-go 原子检查并更新重放状态；不复刻原生分离检查和更新的竞争窗口。 | [OTP 范围](compatibility.md#overlays) |
-| `nestgroup` 等资源边界 | ldap-go 对图遍历及资源消耗设置明确上限，超过时拒绝请求。 | [Overlay 范围](compatibility.md) |
-| `ldapvc` 客户端 | 内层密码验证失败时 ldap-go 返回非零退出码；原生可返回零。匿名请求的认证字段编码也不同。 | [CLI 对照](../cmd/ldap-go/client_verify_credentials_external_test.go) |
-| 非默认 `olcThreads` 等配置 | 原生调整线程；ldap-go 拒绝不支持的值，不将其当成无效果配置接受。 | [配置 Schema 对照](configuration-schema.md) |
-| Darwin 忽略大小写的特殊重复捕获 | 默认忽略大小写模式下，`^((a)\|b)*$` 匹配 `ab` 的 `$1/$2`，原生得到 `b/ab`，ldap-go 得到 `b/`。上述 23 例使用 `:C`，没有证明此模式完全相同；musl 捕获语义也未验证。 | [捕获实现与范围](../internal/server/rwm_rewrite_regex.go) |
+非默认原生线程调度选项未实现时继续明确拒绝；“Schema 中存在该字段”不表示已实现运行行为。
+SM3/TLCP、逐次密码哈希选择控制、bbolt 在线备份和 Web 页面属于项目能力，
+没有对应的默认原生 OpenLDAP 功能可供逐项相等比较。
 
-SM3/TLCP、逐次密码哈希选择控制、bbolt 在线备份扩展和 Web 管理页面是本项目
-能力，不存在可据此直接声称逐项相同的原生 OpenLDAP 页面或默认功能。
-MDB 文件格式和新增第三方模块仍是项目明确排除项。
+## 3DES 参考环境
 
-SASL PLAIN 不执行 Simple Bind 的 `ppolicy` 锁定和过期策略，是已实测的
-**两端一致边界**，不是上述差异之一。依赖这些策略的普通用户应按
-[部署说明](operations.md#password-policy-authentication)配置 TLS + Simple Bind。
+原版 Cyrus 2.1.28 的 DES 奇偶校验问题使本机原生 3DES 无法完成验证：
+macOS 出现空指针崩溃，Linux 返回 `couldn't init cipher '3des'`。
+原生客户端到原生服务的自检也会失败，不能据此修改 Go 密码逻辑。
+
+[专项脚本](../scripts/test-cyrus-3des-reference.sh)只在临时目录构建参考插件，
+使用固定 Cyrus 源码及一个[公开记录的奇偶校验补丁](../scripts/fixtures/cyrus-sasl-2.1.28-des-parity.patch)。
+OpenLDAP 源码不变，Go 生产实现不链接 Cyrus，也不使用 cgo。
+补丁不改变有效密钥位；先通过纯原生自检，再比较 Go 与原生的双向交互。
+双平台各 11 个原生/互操作子场景通过，无跳过。
+
+完整回归通过 `LDAP_GO_CYRUS_3DES_REFERENCE_DIR` 仅为三个 DIGEST-MD5 测试选择此插件；
+其它 SASL 测试保留普通参考环境。测试验证来源记录和修补后源码摘要，并输出参考类型。
+**这是声明了参考插件修补的结果，不是未修改 Cyrus 的通过结果。**
+
+## 验证范围
+
+- 最终全仓 Go 测试通过，所有 Go 构建和测试均使用 `CGO_ENABLED=0`。
+- Linux/arm64 最终严格套件通过，2,460 个顶层 Test 通过、零失败；macOS/arm64 严格套件 2,455 个顶层 Test 通过，随后新增的 Root DSE 专项及配置回归也通过。不将平台编译当作运行验证。
+- 最终全仓 `go vet`、六平台编译、脚本检查和 nightly 工作流检查通过。
+- `allowed` 和 Verify Credentials 容器对照通过。`allowed` 为 80 组精确一致、6 组明确 ACL 安全差异。
+- RWM 双平台各 47 项定向顶层测试通过，20 秒 fuzz 的 29,583 次执行通过。
+- 普通套件会如实报告依赖条件不满足的可选测试。仅 root 可执行的场景由 Linux root 运行及 nightly 的独立 root 步骤验证。
+- 计数包含本地、源码契约及原生对照测试，不能当作“完全一致的功能数量”。排序不保证的集合可规范化；cookie、随机盐、UUID 和时间戳需比较对应行为，而非原始字节。
+- 未穷举所有输入、Overlay 顺序、驱动、libc、语言环境和平台组合；musl、FreeBSD 没有新增原生运行证据。
 
 ## 复现
 
+先准备固定原生环境（明确不执行测试）：
+
 ```sh
 CGO_ENABLED=0 OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
-  LDAP_GO_OPENLDAP_TEST_LOG=/path/to/openldap-tests.log \
-  ./scripts/test-openldap-full.sh
-
-CGO_ENABLED=0 OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
-  ./scripts/test-openldap-sdk.sh
-
-CGO_ENABLED=0 OPENLDAP_SOURCE=/path/to/openldap-git \
-  LDAP_GO_OPENLDAP_ALLOWED_DOCKER_TESTS=1 \
-  LDAP_GO_OPENLDAP_VC_DOCKER_TESTS=1 \
-  go test ./internal/server -count=1 -timeout=30m -v \
-  -run '^(TestOpenLDAPAllowedReference|TestOpenLDAPVerifyCredentialsReference)$'
+  LDAP_GO_OPENLDAP_PREPARE_ONLY=1 ./scripts/test-openldap-full.sh
 ```
 
-第三条命令使用可丢弃容器编译原生对照服务器，不将 C 代码链接到 ldap-go。
-完整严格套件包含本地、源码契约和原生对照测试，其顶层通过数量不能称作
-“完全一致的功能数量”。跳过项和预期差异必须单独核对。
+构建并验证隔离的 3DES 参考插件，产物目录必须尚不存在：
 
-Nightly CI 分别保留严格套件的完整逐项日志和两个容器对照的日志。
-`allowed` 两种放置方式各有 40 组精确一致、3 组明确断言的 ACL 缓存差异；
-不能将全部 86 组报告为相等。
+```sh
+OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
+  CYRUS_3DES_ARTIFACT_DIR=/path/to/new-cyrus-reference \
+  ./scripts/test-cyrus-3des-reference.sh
+```
+
+运行完整对照并保留逐项日志：
+
+```sh
+CGO_ENABLED=0 OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
+  LDAP_GO_CYRUS_3DES_REFERENCE_DIR=/path/to/new-cyrus-reference \
+  LDAP_GO_OPENLDAP_TEST_LOG=/path/to/openldap-tests.log \
+  ./scripts/test-openldap-full.sh
+```
+
+省略 `LDAP_GO_CYRUS_3DES_REFERENCE_DIR` 可重现未修改提供方的结果，包括其原生 3DES 故障。
+Nightly 保存逐项日志、参考来源记录、补丁和构建/互操作日志。历史失败记录仍可在版本历史中查看。
+
+本轮本地日志包括 `/tmp/ldap-go-final-parity-linux-20260920-tests.log`、
+`/tmp/ldap-go-safe-parity-final-macos-20260920-tests.log`、
+`/tmp/ldap-go-rootdse-final-macos-20260920.log` 和
+`/tmp/ldap-go-final-parity-local-20260920.log`。临时日志不作为仓库内永久资产，
+后续验证以同样的复现命令及 CI 上传的日志为准。
