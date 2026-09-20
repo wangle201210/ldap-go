@@ -209,7 +209,9 @@ func observeIdleTimeoutClose(t *testing.T, address string) time.Duration {
 
 func TestOpenLDAPReferenceWriteTimeout(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
-	largeValue := bytes.Repeat([]byte{0xa5}, 2<<20)
+	// Exceed Linux's usual TCP send buffer as well as the client's receive
+	// window, so a successful buffered write cannot masquerade as a timeout.
+	largeValue := bytes.Repeat([]byte{0xa5}, 8<<20)
 	extraData := `
 dn: uid=large,ou=people,dc=example,dc=com
 objectClass: top
@@ -288,7 +290,9 @@ func observeBlockedWriteTimeout(
 	)
 	defer connection.Close()
 	if tcp, ok := connection.(*net.TCPConn); ok {
-		_ = tcp.SetReadBuffer(1024)
+		if err := tcp.SetReadBuffer(64 << 10); err != nil {
+			t.Fatalf("limit receive buffer: %v", err)
+		}
 	}
 	if err := connection.SetDeadline(time.Time{}); err != nil {
 		t.Fatalf("clear connection deadline: %v", err)
@@ -307,6 +311,13 @@ func observeBlockedWriteTimeout(
 		nil,
 	)
 	time.Sleep(2200 * time.Millisecond)
+	if tcp, ok := connection.(*net.TCPConn); ok {
+		// Drain bytes queued before the timeout without retaining the tiny
+		// receive window used to block the server.
+		if err := tcp.SetReadBuffer(1 << 20); err != nil {
+			t.Fatalf("restore receive buffer: %v", err)
+		}
+	}
 	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline(): %v", err)
 	}

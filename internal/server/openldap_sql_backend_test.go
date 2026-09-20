@@ -209,6 +209,7 @@ concat_pattern "?||?"
 subtree_cond "UPPER(ldap_entries.dn) LIKE '%%'||UPPER(?)"
 has_ldapinfo_dn_ru no
 autocommit no
+create_needs_select yes
 `,
 		filepath.Join(tools.schemaDir, "core.schema"),
 		filepath.Join(tools.schemaDir, "cosine.schema"),
@@ -230,7 +231,7 @@ autocommit no
 	}
 	uri := "ldap://" + address
 	var logs bytes.Buffer
-	command := exec.Command(tools.slapd, "-f", configPath, "-h", uri, "-d", "0")
+	command := exec.Command(tools.slapd, "-f", configPath, "-h", uri, "-d", "1")
 	command.Env = append(os.Environ(),
 		"ODBCSYSINI="+root,
 		"ODBCINSTINI=odbcinst.ini",
@@ -267,7 +268,12 @@ autocommit no
 			<-done
 		}
 	}
-	t.Cleanup(stop)
+	t.Cleanup(func() {
+		stop()
+		if t.Failed() {
+			t.Logf("OpenLDAP SQL reference log:\n%s", logs.String())
+		}
+	})
 
 	deadline := time.Now().Add(8 * time.Second)
 	for {
@@ -315,6 +321,7 @@ func startLDAPGoSQLDifferentialServer(t *testing.T, databaseName string) string 
 			{Description: "olcSqlSubtreeCond", Values: stringValues("UPPER(ldap_entries.dn) LIKE UPPER(?)")},
 			{Description: "olcSqlHasLDAPinfoDnRu", Values: stringValues("FALSE")},
 			{Description: "olcSqlAutocommit", Values: stringValues("FALSE")},
+			{Description: "olcSqlCreateNeedsSelect", Values: stringValues("TRUE")},
 			{Description: "olcAccess", Values: stringValues(
 				"{0}to attrs=userPassword by anonymous auth by self write by * none",
 				"{1}to * by * read",
@@ -1139,7 +1146,7 @@ func seedSQLDifferentialDatabase(t *testing.T, databaseName string) {
 	statements := []string{
 		`CREATE TABLE ldap_oc_mappings (
 			id INTEGER PRIMARY KEY, name TEXT NOT NULL, keytbl TEXT NOT NULL,
-			keycol TEXT NOT NULL, create_proc TEXT, delete_proc TEXT,
+			keycol TEXT NOT NULL, create_proc TEXT, create_keyval TEXT, delete_proc TEXT,
 			expect_return INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE ldap_attr_mappings (
@@ -1188,11 +1195,13 @@ func seedSQLDifferentialDatabase(t *testing.T, databaseName string) {
 			BEGIN
 				SELECT RAISE(ABORT, 'forced ldap_entries delete failure');
 			END`,
+		// SQLite ODBC 0.9998 reports no result columns for INSERT RETURNING.
+		// Use back-sql's separate key query on both servers, in the same transaction.
 		`INSERT INTO ldap_oc_mappings VALUES
-			(1,'domain','domains','id',NULL,NULL,0),
-			(2,'organizationalUnit','organizational_units','id',NULL,NULL,0),
+			(1,'domain','domains','id',NULL,NULL,NULL,0),
+			(2,'organizationalUnit','organizational_units','id',NULL,NULL,NULL,0),
 			(3,'inetOrgPerson','persons','id',
-			 'INSERT INTO persons DEFAULT VALUES RETURNING id',
+			 'INSERT INTO persons DEFAULT VALUES','SELECT last_insert_rowid()',
 			 'DELETE FROM persons WHERE id=?',0)`,
 		`INSERT INTO ldap_attr_mappings VALUES
 			(1,1,'dc','domains.dc','domains',NULL,NULL,NULL,0,0,'UPPER(domains.dc)'),

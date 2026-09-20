@@ -99,17 +99,17 @@ func applyServePrivileges(configuration *servePrivilegeConfig) error {
 		return err
 	}
 	if identity.setUID && os.Getuid() == 0 {
-		if err := syscall.Setgroups(identity.groups); err != nil {
+		if err := serveSetgroups(identity.groups); err != nil {
 			return fmt.Errorf("set supplementary groups: %w", err)
 		}
 	}
 	if identity.setGID {
-		if err := syscall.Setgid(identity.gid); err != nil {
+		if err := serveSetgid(identity.gid); err != nil {
 			return fmt.Errorf("set gid %d: %w", identity.gid, err)
 		}
 	}
 	if identity.setUID {
-		if err := syscall.Setuid(identity.uid); err != nil {
+		if err := serveSetuid(identity.uid); err != nil {
 			return fmt.Errorf("set uid %d: %w", identity.uid, err)
 		}
 	}

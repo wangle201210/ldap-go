@@ -91,6 +91,24 @@ func inspectProductionPathAncestors(path string) *productionPermissionAssessment
 			status: productionCheckUnknown, summary: "path ancestry could not be resolved",
 		}
 	}
+	if issue := inspectProductionAncestorChain(absolute); issue != nil {
+		return issue
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return &productionPermissionAssessment{
+			status: productionCheckUnknown, summary: "path ancestry could not be resolved",
+		}
+	}
+	// Root-owned system links are permitted, but their target's ancestry must
+	// satisfy the same permission checks as the supplied path.
+	if resolved != absolute {
+		return inspectProductionAncestorChain(resolved)
+	}
+	return nil
+}
+
+func inspectProductionAncestorChain(absolute string) *productionPermissionAssessment {
 	parent := filepath.Dir(filepath.Clean(absolute))
 	direct := true
 	for {

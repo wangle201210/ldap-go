@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -99,7 +98,7 @@ func TestApplyServePrivilegesSubprocess(t *testing.T) {
 			t.Fatal(err)
 		}
 		if startedAsRoot && os.Geteuid() != 0 {
-			if err := syscall.Setuid(0); err == nil {
+			if err := serveSetuid(0); err == nil {
 				t.Fatal("dropped process recovered uid 0")
 			}
 		}
@@ -113,8 +112,12 @@ func TestApplyServePrivilegesSubprocess(t *testing.T) {
 	}
 	target := current
 	if os.Geteuid() == 0 {
-		if nobody, lookupErr := user.Lookup("nobody"); lookupErr == nil {
-			target = nobody
+		target, err = user.Lookup("nobody")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target.Uid == "0" {
+			t.Fatal("privilege test requires a non-root nobody account")
 		}
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestApplyServePrivilegesSubprocess$")

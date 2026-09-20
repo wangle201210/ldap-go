@@ -386,6 +386,11 @@ func TestProductionDatabasePermissionFinding(t *testing.T) {
 		if err := os.Symlink(realParent, link); err != nil {
 			t.Fatalf("symlink parent: %v", err)
 		}
+		if os.Geteuid() == 0 {
+			if err := os.Lchown(link, 65534, -1); err != nil {
+				t.Fatalf("make symlink untrusted: %v", err)
+			}
+		}
 		path := filepath.Join(link, "directory.db")
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatalf("write database: %v", err)
@@ -393,6 +398,35 @@ func TestProductionDatabasePermissionFinding(t *testing.T) {
 		finding := productionDatabasePermissionFinding(path)
 		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "symbolic-link") {
 			t.Fatalf("finding = %#v, want intermediate symlink failure", finding)
+		}
+	})
+
+	t.Run("root-owned link cannot hide writable target ancestry", func(t *testing.T) {
+		if os.Geteuid() != 0 {
+			t.Skip("requires root to create a trusted symbolic link")
+		}
+		targetRoot := t.TempDir()
+		target := filepath.Join(targetRoot, "private")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(t.TempDir(), "linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(link, "directory.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if finding := productionDatabasePermissionFinding(path); finding.Status != productionCheckPass {
+			t.Fatalf("private trusted target: %#v", finding)
+		}
+		if err := os.Chmod(targetRoot, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		finding := productionDatabasePermissionFinding(path)
+		if finding.Status != productionCheckFail || !productionFindingHasEvidence(finding, "0777") {
+			t.Fatalf("unsafe trusted target: %#v", finding)
 		}
 	})
 }

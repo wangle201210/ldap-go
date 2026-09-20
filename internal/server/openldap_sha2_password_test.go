@@ -2,6 +2,9 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +84,12 @@ func TestOpenLDAPReferenceSHA2PasswordModule(t *testing.T) {
 			if !auth.VerifyPassword([]byte(generated[0]), []byte(modifiedPassword)) {
 				t.Fatalf("ldap-go rejected OpenLDAP-generated %s password", scheme)
 			}
+			assertReferencePasswordBind(
+				t,
+				openLDAPURI,
+				"uid=bob,ou=people,dc=example,dc=com",
+				modifiedPassword,
+			)
 
 			ldapGoStore := storage.NewMemory()
 			t.Cleanup(func() { _ = ldapGoStore.Close() })
@@ -299,6 +308,9 @@ func buildOpenLDAPSHA2PasswordModule(t *testing.T) string {
 		"LDFLAGS="+ldflags,
 		"UNIX_LIB="+ldflags,
 		"CC=cc",
+		// sha2.c aliases its byte buffer through word pointers. GCC -O2 can
+		// otherwise generate incorrect SHA256 digests on Linux arm64.
+		"OPT=-g -O2 -fno-strict-aliasing",
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build OpenLDAP pw-sha2 module: %v\n%s", err, output)
@@ -307,7 +319,43 @@ func buildOpenLDAPSHA2PasswordModule(t *testing.T) string {
 	if info, err := os.Stat(module); err != nil || info.IsDir() {
 		t.Fatalf("pw-sha2 module was not built at %s", module)
 	}
+	assertOpenLDAPSHA2PasswordModuleDigests(t, module)
 	return module
+}
+
+func assertOpenLDAPSHA2PasswordModuleDigests(t *testing.T, module string) {
+	t.Helper()
+	slappasswd := os.Getenv("OPENLDAP_SLAPPASSWD")
+	if slappasswd == "" {
+		var err error
+		slappasswd, err = exec.LookPath("slappasswd")
+		if err != nil {
+			t.Fatalf("find OpenLDAP slappasswd for SHA2 oracle self-check: %v", err)
+		}
+	}
+	for _, password := range []string{"secret", strings.Repeat("a", 56), strings.Repeat("a", 112)} {
+		sha256Digest := sha256.Sum256([]byte(password))
+		sha384Digest := sha512.Sum384([]byte(password))
+		sha512Digest := sha512.Sum512([]byte(password))
+		for _, test := range []struct {
+			scheme string
+			digest []byte
+		}{
+			{"{SHA256}", sha256Digest[:]},
+			{"{SHA384}", sha384Digest[:]},
+			{"{SHA512}", sha512Digest[:]},
+		} {
+			command := exec.Command(slappasswd, "-o", "module-load="+module, "-h", test.scheme, "-s", password)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("OpenLDAP SHA2 oracle self-check failed for %s: %v\n%s", test.scheme, err, output)
+			}
+			want := test.scheme + base64.StdEncoding.EncodeToString(test.digest)
+			if got := strings.TrimSpace(string(output)); got != want {
+				t.Fatalf("OpenLDAP SHA2 oracle is unusable: %s with %d-byte input = %q, want standard digest %q", test.scheme, len(password), got, want)
+			}
+		}
+	}
 }
 
 func assertOpenLDAPSHA2PasswordSourceContract(t *testing.T) {
