@@ -44,13 +44,15 @@ type rwmRewriteContext struct {
 }
 
 type rwmRewriteRule struct {
-	pattern         *regexp.Regexp
-	program         *syntax.Prog
-	captureChildren [10][]int
-	substitution    rwmRewriteTemplate
-	recurse         bool
-	actions         []rwmRewriteAction
-	maxPasses       int
+	pattern            *regexp.Regexp
+	program            *syntax.Prog
+	captureChildren    [10][]int
+	captureEndParent   [10]int
+	captureEndBoundary map[uint32][]int
+	substitution       rwmRewriteTemplate
+	recurse            bool
+	actions            []rwmRewriteAction
+	maxPasses          int
 }
 
 type rwmRewriteAction struct {
@@ -394,6 +396,7 @@ func compileRWMRewriteRule(
 	}
 	rule.pattern = compiled
 	rule.program = program
+	rule.configureCaptureTags(pattern, !caseSensitive)
 	rule.substitution = template
 	return rule, nil
 }

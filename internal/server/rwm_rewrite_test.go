@@ -292,7 +292,14 @@ func TestRWMRewriteAdditionalBoundsAndIsolation(t *testing.T) {
 }
 
 func FuzzRWMRewrite(f *testing.F) {
-	for _, seed := range [][3]string{{"^(a|aa)(a?)$", "$1/$2", "aa"}, {".*", "${&*value($0)}", "x"}, {"(.*)", "${>default($0)}", "x"}, {".*", "$0{bad}", ""}} {
+	for _, seed := range [][3]string{
+		{"^(a|aa)(a?)$", "$1/$2", "aa"}, {".*", "${&*value($0)}", "x"},
+		{"(.*)", "${>default($0)}", "x"}, {".*", "$0{bad}", ""},
+		{`^((a)|b)*$`, "$1/$2", "ab"},
+		{`^[][()]((a)|b)*$`, "$1/$2", "]ab"},
+		{`^[[:alpha:]]((a)|b)*$`, "$1/$2", "xab"},
+		{`^\(((a)|b)*\)$`, "$1/$2", "(ab)"},
+	} {
 		f.Add(seed[0], seed[1], seed[2])
 	}
 	f.Fuzz(func(t *testing.T, pattern, replacement, input string) {

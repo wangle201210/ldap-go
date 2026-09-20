@@ -30,20 +30,26 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 		previous *epsilonPath
 	}
 	type state struct {
-		pc       uint32
-		position int
-		captures []int
-		history  [10]*rwmRewriteCaptureHistory
-		epsilon  *epsilonPath
+		pc           uint32
+		position     int
+		captures     []int
+		history      [10]*rwmRewriteCaptureHistory
+		endPositions [10]int
+		epsilon      *epsilonPath
 	}
 	captures := make([]int, 2*(min(rule.pattern.NumSubexp(), 9)+1))
 	for index := range captures {
 		captures[index] = -1
 	}
 	captures[0], captures[1] = span[0], span[1]
-	pending := []state{{pc: uint32(rule.program.Start), position: span[0], captures: captures}}
+	initial := state{pc: uint32(rule.program.Start), position: span[0], captures: captures}
+	for group := range initial.endPositions {
+		initial.endPositions[group] = -1
+	}
+	pending := []state{initial}
 	var best []int
 	var bestHistory [10]*rwmRewriteCaptureHistory
+	var bestEndPositions [10]int
 	for len(pending) > 0 {
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
@@ -54,6 +60,9 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 				return nil, fmt.Errorf("rewrite regex work exceeds %d steps", rwmRewriteMaximumRegexSteps)
 			}
 			instruction := &rule.program.Inst[current.pc]
+			for _, group := range rule.captureEndBoundary[current.pc] {
+				current.endPositions[group] = current.position
+			}
 			switch instruction.Op {
 			case syntax.InstAlt, syntax.InstAltMatch, syntax.InstCapture, syntax.InstEmptyWidth, syntax.InstNop:
 				for previous := current.epsilon; previous != nil; previous = previous.previous {
@@ -80,6 +89,7 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 					if instruction.Arg%2 == 0 {
 						for _, child := range rule.captureChildren[group] {
 							current.captures[2*child], current.captures[2*child+1] = -1, -1
+							current.endPositions[child] = -1
 						}
 					} else {
 						current.history[group] = &rwmRewriteCaptureHistory{
@@ -123,6 +133,7 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 					}
 					if best == nil || prefer {
 						best, bestHistory = current.captures, current.history
+						bestEndPositions = current.endPositions
 					}
 				}
 				break path
@@ -134,7 +145,110 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 	if best == nil {
 		return nil, fmt.Errorf("rewrite regex capture selection failed")
 	}
+	for group := 1; group < len(best)/2; group++ {
+		if best[2*group] < 0 && bestHistory[group] != nil && bestEndPositions[group] >= 0 {
+			best[2*group], best[2*group+1] = bestHistory[group].start, bestEndPositions[group]
+		}
+		parent := rule.captureEndParent[group]
+		if parent >= 0 && bestHistory[group] != nil && best[2*parent+1] >= 0 {
+			best[2*group], best[2*group+1] = bestHistory[group].start, best[2*parent+1]
+		}
+	}
 	return best, nil
+}
+
+// Darwin TRE merges consecutive unions, including the union generated for an
+// ICASE letter. A captured union used as a whole branch retains its start tag
+// and shares its enclosing union's end tag across repetitions. Go's parsed AST
+// folds both [a] and a to the same node, so preserve this source-level distinction.
+func (rule *rwmRewriteRule) configureCaptureTags(pattern string, foldCase bool) {
+	for group := range rule.captureEndParent {
+		rule.captureEndParent[group] = -1
+	}
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	type capture struct {
+		start, end, parent, branchStart int
+		union, wholeBranch              bool
+	}
+	groups := []capture{{start: -1, end: len(pattern)}}
+	stack := []int{0}
+	for index := 0; index < len(pattern); index++ {
+		parent := stack[len(stack)-1]
+		switch pattern[index] {
+		case '\\':
+			index++
+		case '[':
+			index++
+			if index < len(pattern) && pattern[index] == '^' {
+				index++
+			}
+			if index < len(pattern) && pattern[index] == ']' {
+				index++
+			}
+			for index < len(pattern) && pattern[index] != ']' {
+				if pattern[index] == '\\' {
+					index++
+				} else if pattern[index] == '[' && index+1 < len(pattern) && pattern[index+1] == ':' {
+					for index+1 < len(pattern) && !(pattern[index] == ':' && pattern[index+1] == ']') {
+						index++
+					}
+					index++
+				}
+				index++
+			}
+		case '(':
+			groups = append(groups, capture{start: index, parent: parent,
+				branchStart: index + 1, wholeBranch: index == groups[parent].branchStart})
+			stack = append(stack, len(groups)-1)
+		case ')':
+			groups[parent].end = index
+			stack = stack[:len(stack)-1]
+		case '|':
+			groups[parent].union = true
+			groups[parent].branchStart = index + 1
+		}
+	}
+	for group := 1; group < min(len(groups), len(rule.captureEndParent)); group++ {
+		current := groups[group]
+		hasChildren := group+1 < len(groups) && groups[group+1].start < current.end
+		if current.union && hasChildren && current.end+1 < len(pattern) {
+			switch pattern[current.end+1] {
+			case '?', '*', '{':
+				// The optional/repeated union's exit also writes its shared end
+				// tag when its body is skipped in a later parent iteration.
+				for _, instruction := range rule.program.Inst {
+					if instruction.Op == syntax.InstCapture && instruction.Arg == uint32(2*group+1) {
+						if rule.captureEndBoundary == nil {
+							rule.captureEndBoundary = make(map[uint32][]int)
+						}
+						rule.captureEndBoundary[instruction.Out] = append(rule.captureEndBoundary[instruction.Out], group)
+					}
+				}
+			}
+		}
+		body := pattern[current.start+1 : current.end]
+		foldedLetter := foldCase && len(body) == 1 && (body[0] >= 'a' && body[0] <= 'z' || body[0] >= 'A' && body[0] <= 'Z')
+		if !current.union && !foldedLetter || !current.wholeBranch || !groups[current.parent].union {
+			continue
+		}
+		branchEnd := current.end + 1
+		if current.union && hasChildren && branchEnd < len(pattern) {
+			switch pattern[branchEnd] {
+			case '?', '*', '+':
+				branchEnd++
+			case '{':
+				for branchEnd < len(pattern) && pattern[branchEnd] != '}' {
+					branchEnd++
+				}
+				branchEnd++
+			}
+		}
+		if branchEnd == groups[current.parent].end || branchEnd < len(pattern) && pattern[branchEnd] == '|' {
+			rule.captureEndParent[group] = current.parent
+		}
+	}
 }
 
 // Bound counted-repeat expansion before regexp compiles or simplifies the AST.
