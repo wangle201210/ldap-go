@@ -2,8 +2,13 @@ package auth
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -34,6 +39,20 @@ func TestOpenLDAPPBKDF2KnownVectors(t *testing.T) {
 		}
 		if VerifyPassword(stored, []byte("wrong")) {
 			t.Fatalf("VerifyPassword(%s) accepted an incorrect password", test.scheme)
+		}
+	}
+}
+
+func TestOpenLDAPPBKDF2PayloadWorkBound(t *testing.T) {
+	for _, terminator := range []string{"$", "\x00"} {
+		payload := openLDAPPBKDF2SHA1Vector + terminator
+		payload += strings.Repeat("x", maxOpenLDAPPBKDF2PayloadSize-len(payload))
+		stored := []byte(OpenLDAPPBKDF2SHA1HashScheme + payload)
+		if !VerifyPassword(stored, []byte("secret")) {
+			t.Fatalf("bounded native suffix %q rejected", terminator)
+		}
+		if VerifyPassword(append(stored, 'x'), []byte("secret")) {
+			t.Fatalf("oversized native suffix %q accepted", terminator)
 		}
 	}
 }
@@ -135,6 +154,41 @@ func TestVerifyOpenLDAPPBKDF2Base64Forms(t *testing.T) {
 	}
 }
 
+func TestVerifyOpenLDAPPBKDF2ImportedFormats(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ scheme, payload string }{
+		{OpenLDAPPBKDF2HashScheme, openLDAPPBKDF2SHA1Vector},
+		{OpenLDAPPBKDF2SHA1HashScheme, openLDAPPBKDF2SHA1Vector},
+		{OpenLDAPPBKDF2SHA256HashScheme, openLDAPPBKDF2SHA256Vector},
+		{OpenLDAPPBKDF2SHA512HashScheme, openLDAPPBKDF2SHA512Vector},
+	} {
+		fields := strings.Split(test.payload, "$")
+		suffix := "$" + fields[1] + "$" + fields[2]
+		for _, payload := range []string{
+			"+10000" + suffix,
+			" \t\n\r\v\f+10000" + suffix,
+			strings.Repeat("0", 150) + "10000" + suffix,
+			"10000junk" + suffix,
+			"10000.5" + suffix,
+			"10000e2" + suffix,
+			"10000 " + suffix,
+			"10000" + strings.Repeat("x", 150) + suffix,
+			"10000" + suffix + "$ignored",
+			"10000" + suffix + "$$",
+			"10000" + suffix + "$" + strings.Repeat("x", 1024),
+			"10000" + suffix + "\x00ignored",
+		} {
+			stored := []byte(test.scheme + payload)
+			if !VerifyPassword(stored, []byte("secret")) {
+				t.Errorf("VerifyPassword(%q) rejected compatible import", stored)
+			}
+			if VerifyPassword(stored, []byte("wrong")) {
+				t.Errorf("VerifyPassword(%q) accepted wrong password", stored)
+			}
+		}
+	}
+}
+
 func TestVerifyOpenLDAPPBKDF2RejectsMalformedValues(t *testing.T) {
 	t.Parallel()
 
@@ -143,16 +197,15 @@ func TestVerifyOpenLDAPPBKDF2RejectsMalformedValues(t *testing.T) {
 		"",
 		"0$" + fields[1] + "$" + fields[2],
 		"-1$" + fields[1] + "$" + fields[2],
-		"+1$" + fields[1] + "$" + fields[2],
-		" 1$" + fields[1] + "$" + fields[2],
-		"1junk$" + fields[1] + "$" + fields[2],
+		"+ 10000$" + fields[1] + "$" + fields[2],
+		"junk10000$" + fields[1] + "$" + fields[2],
+		"\u00a010000$" + fields[1] + "$" + fields[2],
 		"10000001$" + fields[1] + "$" + fields[2],
 		"1000001$" + fields[1] + "$" + fields[2],
 		"999999999$" + fields[1] + "$" + fields[2],
 		"10000$" + fields[1],
 		"10000$$" + fields[2],
 		"10000$" + fields[1] + "$",
-		"10000$" + fields[1] + "$" + fields[2] + "$ignored",
 		"10000$" + fields[1] + "$" + fields[2] + "garbage",
 		"10000$QJTEclnXgh9Cz3ChCWpdAh$" + fields[2],
 		"10000$" + fields[1] + "$9.s98jwFJM.NXJK9ca/oJ5AyoAR",
@@ -160,6 +213,9 @@ func TestVerifyOpenLDAPPBKDF2RejectsMalformedValues(t *testing.T) {
 		"10000$" + fields[1][:10] + " \t" + fields[1][10:] + "$" + fields[2],
 		"10000$" + fields[1] + "$" + strings.Repeat("A", 89),
 		"10000\x00$" + fields[1] + "$" + fields[2],
+		"10000$" + fields[1] + "\x00$" + fields[2],
+		"4294977296$" + fields[1] + "$" + fields[2],
+		"-4294957296$" + fields[1] + "$" + fields[2],
 	} {
 		stored := []byte(OpenLDAPPBKDF2SHA1HashScheme + payload)
 		if VerifyPassword(stored, []byte("secret")) {
@@ -220,11 +276,26 @@ func TestParseOpenLDAPPBKDF2IterationLimit(t *testing.T) {
 		{value: "0001", want: 1, ok: true},
 		{value: "10000", want: 10_000, ok: true},
 		{value: "1000000", want: MaxOpenLDAPPBKDF2Iterations, ok: true},
+		{value: "+1", want: 1, ok: true},
+		{value: "1junk", want: 1, ok: true},
+		{value: " \t\n\r\v\f+10000rest", want: 10000, ok: true},
+		{value: strings.Repeat("0", 150) + "10000", want: 10000, ok: true},
+		{value: "  +0001000000.9", want: MaxOpenLDAPPBKDF2Iterations, ok: true},
+		{value: "10000e2", want: 10000, ok: true},
 		{value: "1000001"},
+		{value: "  +0001000001ignored"},
 		{value: "10000001"},
 		{value: "999999999"},
-		{value: "+1"},
-		{value: "1junk"},
+		{value: "4294977296"},
+		{value: "184467440737095516160000"},
+		{value: "-1"},
+		{value: "-4294957296"},
+		{value: "0x2710"},
+		{value: "0"},
+		{value: "+ 1"},
+		{value: "+"},
+		{value: ""},
+		{value: "\u00a010000"},
 	} {
 		got, ok := parseOpenLDAPPBKDF2Iterations(test.value)
 		if got != test.want || ok != test.ok {
@@ -236,6 +307,19 @@ func TestParseOpenLDAPPBKDF2IterationLimit(t *testing.T) {
 				test.want,
 				test.ok,
 			)
+		}
+	}
+}
+
+func TestVerifyOpenLDAPPBKDF2IterationCostLimit(t *testing.T) {
+	t.Parallel()
+	salt := make([]byte, 16)
+	for _, iterations := range []int{MaxOpenLDAPPBKDF2Iterations, MaxOpenLDAPPBKDF2Iterations + 1} {
+		derived := pbkdf2.Key([]byte("secret"), salt, iterations, sha256.Size, sha256.New)
+		stored := OpenLDAPPBKDF2SHA256HashScheme + "  +000" + strconv.Itoa(iterations) + "ignored$" +
+			base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(derived)
+		if got, want := VerifyPassword([]byte(stored), []byte("secret")), iterations <= MaxOpenLDAPPBKDF2Iterations; got != want {
+			t.Errorf("VerifyPassword at %d iterations = %t, want %t", iterations, got, want)
 		}
 	}
 }

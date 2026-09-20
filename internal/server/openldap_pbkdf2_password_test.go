@@ -2,9 +2,12 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,9 +15,121 @@ import (
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/storage"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const openLDAPPBKDF2PasswordCommit = "d172686d3d270bc961b78f3ff00d7019c8dfb094"
+
+// This is a deliberate resource-limit difference, not a parity assertion.
+func TestOpenLDAPReferencePBKDF2CostLimitException(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	module := buildOpenLDAPPBKDF2PasswordModule(t)
+	assertOpenLDAPPBKDF2PasswordSourceContract(t)
+	salt := make([]byte, 16)
+	iterations := auth.MaxOpenLDAPPBKDF2Iterations + 1
+	derived := pbkdf2.Key([]byte("secret"), salt, iterations, sha256.Size, sha256.New)
+	stored := auth.OpenLDAPPBKDF2SHA256HashScheme + strconv.Itoa(iterations) + "$" +
+		base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(derived)
+	uri, stop := startOpenLDAPReferenceServerWithConfig(t, tools, nil,
+		"moduleload "+module, "", "userPassword: "+stored+"\n")
+	defer stop()
+	assertReferencePasswordBind(t, uri, "uid=bob,ou=people,dc=example,dc=com", "secret")
+	if auth.VerifyPassword([]byte(stored), []byte("secret")) {
+		t.Fatal("ldap-go accepted iterations above its authentication work limit")
+	}
+}
+
+func TestOpenLDAPReferencePBKDF2ImportFormats(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	module := buildOpenLDAPPBKDF2PasswordModule(t)
+	assertOpenLDAPPBKDF2PasswordSourceContract(t)
+	nativeURI, stopNative := startOpenLDAPReferenceServerWithConfig(t, tools, nil,
+		"moduleload "+module, "", "")
+	defer stopNative()
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	address, stopGo := startServer(t, store, Config{
+		RootDN: "cn=admin,dc=example,dc=com", RootPassword: []byte("secret"),
+	})
+	defer stopGo()
+	admins := []*ldap.Conn{
+		dialAndBindReferencePassword(t, nativeURI, "cn=admin,dc=example,dc=com", "secret"),
+		dialAndBindReferencePassword(t, "ldap://"+address, "cn=admin,dc=example,dc=com", "secret"),
+	}
+	clients := []*ldap.Conn{dialReferencePassword(t, nativeURI), dialReferencePassword(t, "ldap://"+address)}
+	for _, connection := range append(admins, clients...) {
+		defer connection.Close()
+	}
+	for _, scheme := range []string{
+		auth.OpenLDAPPBKDF2HashScheme, auth.OpenLDAPPBKDF2SHA1HashScheme,
+		auth.OpenLDAPPBKDF2SHA256HashScheme, auth.OpenLDAPPBKDF2SHA512HashScheme,
+	} {
+		t.Run(scheme, func(t *testing.T) {
+			stored, err := auth.HashPasswordOpenLDAPPBKDF2([]byte("secret"), scheme, 10000,
+				bytes.NewReader(make([]byte, 16)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := strings.Split(strings.TrimPrefix(string(stored), scheme), "$")
+			suffix := "$" + fields[1] + "$" + fields[2]
+			for _, test := range []struct {
+				name, payload string
+				accept        bool
+			}{
+				{"decimal", "10000" + suffix, true},
+				{"leading zero", "010000" + suffix, true},
+				{"long leading zeros", strings.Repeat("0", 150) + "10000" + suffix, true},
+				{"plus", "+10000" + suffix, true},
+				{"leading space", " 10000" + suffix, true},
+				{"C whitespace", "\t\n\v\f\r +10000" + suffix, true},
+				{"trailing text", "10000junk" + suffix, true},
+				{"trailing space", "10000 " + suffix, true},
+				{"fraction suffix", "10000.5" + suffix, true},
+				{"exponent suffix", "10000e2" + suffix, true},
+				{"long trailing text", "10000" + strings.Repeat("x", 150) + suffix, true},
+				{"additional field", "10000" + suffix + "$ignored", true},
+				{"empty additional fields", "10000" + suffix + "$$", true},
+				{"long additional field", "10000" + suffix + "$" + strings.Repeat("x", 1024), true},
+				{"NUL after digest", "10000" + suffix + "\x00ignored", true},
+				{"NUL before salt", "10000\x00" + suffix, false},
+				{"NUL before digest", "10000$" + fields[1] + "\x00$" + fields[2], false},
+				{"negative", "-10000" + suffix, false},
+				{"zero", "0" + suffix, false},
+				{"hexadecimal", "0x2710" + suffix, false},
+				{"missing number", "+" + suffix, false},
+				{"unicode whitespace", "\u00a010000" + suffix, false},
+				{"sign space", "+ 10000" + suffix, false},
+				{"wrong iteration prefix", "1e4" + suffix, false},
+				{"missing digest", "10000$" + fields[1], false},
+				{"invalid digest suffix", "10000" + suffix + "!", false},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					value := scheme + test.payload
+					for _, admin := range admins {
+						modify := ldap.NewModifyRequest(aliceDN, nil)
+						modify.Replace("userPassword", []string{value})
+						if err := admin.Modify(modify); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for _, password := range []string{"secret", "wrong"} {
+						nativeCode := otpLDAPResultCode(clients[0].Bind(aliceDN, password))
+						goCode := otpLDAPResultCode(clients[1].Bind(aliceDN, password))
+						wantCode := uint16(ldap.LDAPResultInvalidCredentials)
+						if test.accept && password == "secret" {
+							wantCode = ldap.LDAPResultSuccess
+						}
+						if nativeCode != goCode || nativeCode != wantCode {
+							t.Errorf("Bind(%q): OpenLDAP=%d ldap-go=%d, want both %d", password,
+								nativeCode, goCode, wantCode)
+						}
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestOpenLDAPReferencePBKDF2PasswordModule(t *testing.T) {
 	tools := requireOpenLDAPReferenceTools(t)
@@ -242,6 +357,8 @@ func assertOpenLDAPPBKDF2PasswordSourceContract(t *testing.T) {
 		`#define PBKDF2_SHA1_DK_SIZE 20`,
 		`#define PBKDF2_SHA256_DK_SIZE 32`,
 		`#define PBKDF2_SHA512_DK_SIZE 64`,
+		`iteration = atoi(passwd->bv_val);`,
+		`p[i] && p[i] != '$'`,
 		`BER_BVC("{PBKDF2}")`,
 		`BER_BVC("{PBKDF2-SHA1}")`,
 		`BER_BVC("{PBKDF2-SHA256}")`,

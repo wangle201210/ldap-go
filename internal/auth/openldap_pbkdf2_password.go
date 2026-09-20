@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -11,7 +12,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -26,7 +26,7 @@ const (
 	OpenLDAPPBKDF2DefaultIterations = 10_000
 	MaxOpenLDAPPBKDF2Iterations     = 1_000_000
 	openLDAPPBKDF2SaltSize          = 16
-	maxOpenLDAPPBKDF2PayloadSize    = 8 + 1 + 24 + 1 + 88
+	maxOpenLDAPPBKDF2PayloadSize    = 4096
 )
 
 type openLDAPPBKDF2Parameters struct {
@@ -89,19 +89,26 @@ func verifyOpenLDAPPBKDF2(scheme string, payload, password []byte) bool {
 	if !ok {
 		return false
 	}
-	fields := strings.Split(string(payload), "$")
-	if len(fields) != 3 || len(fields[1]) > 24 || len(fields[2]) > 88 {
+	// pw-pbkdf2 reads a C string and stops the digest at the next '$'.
+	payload, _, _ = bytes.Cut(payload, []byte{0})
+	iterationText, remainder, found := bytes.Cut(payload, []byte{'$'})
+	if !found {
 		return false
 	}
-	iterations, ok := parseOpenLDAPPBKDF2Iterations(fields[0])
+	saltText, digestText, found := bytes.Cut(remainder, []byte{'$'})
+	digestText, _, _ = bytes.Cut(digestText, []byte{'$'})
+	if !found || len(saltText) > 24 || len(digestText) > 88 {
+		return false
+	}
+	iterations, ok := parseOpenLDAPPBKDF2Iterations(string(iterationText))
 	if !ok {
 		return false
 	}
-	salt, err := decodeOpenLDAPPBKDF2Base64(fields[1])
+	salt, err := decodeOpenLDAPPBKDF2Base64(string(saltText))
 	if err != nil || len(salt) != openLDAPPBKDF2SaltSize {
 		return false
 	}
-	expected, err := decodeOpenLDAPPBKDF2Base64(fields[2])
+	expected, err := decodeOpenLDAPPBKDF2Base64(string(digestText))
 	if err != nil || len(expected) != parameters.keyLength {
 		return false
 	}
@@ -131,19 +138,19 @@ func openLDAPPBKDF2SchemeParameters(
 }
 
 func parseOpenLDAPPBKDF2Iterations(value string) (int, bool) {
-	if len(value) == 0 || len(value) > 8 {
-		return 0, false
-	}
-	for index := range len(value) {
-		if value[index] < '0' || value[index] > '9' {
+	// Match atoi's ASCII whitespace, optional '+' and decimal prefix, while
+	// rejecting negative values, overflow and excessive work before deriving a key.
+	value = strings.TrimLeft(value, " \t\n\r\v\f")
+	value = strings.TrimPrefix(value, "+")
+	iterations := 0
+	for index := 0; index < len(value) && value[index] >= '0' && value[index] <= '9'; index++ {
+		digit := int(value[index] - '0')
+		if iterations > (MaxOpenLDAPPBKDF2Iterations-digit)/10 {
 			return 0, false
 		}
+		iterations = iterations*10 + digit
 	}
-	iterations, err := strconv.Atoi(value)
-	if err != nil || iterations < 1 || iterations > MaxOpenLDAPPBKDF2Iterations {
-		return 0, false
-	}
-	return iterations, true
+	return iterations, iterations > 0
 }
 
 func decodeOpenLDAPPBKDF2Base64(value string) ([]byte, error) {
