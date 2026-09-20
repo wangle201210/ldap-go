@@ -10,7 +10,7 @@ and [compatibility matrix](compatibility.md).
 
 ```sh
 mkdir -p ./bin ./data
-go build -o ./bin/ldap-go ./cmd/ldap-go
+CGO_ENABLED=0 go build -o ./bin/ldap-go ./cmd/ldap-go
 
 ./bin/ldap-go import \
   -db ./data/ldap-go.db \
@@ -69,6 +69,22 @@ SASL prompt. Explicit `-W` still requests password input, matching OpenLDAP.
 `-Q` cannot be combined with simple authentication (`-x`). Automatic mechanism
 selection, interactive `-I`, and LDAP configuration-file defaults are not
 provided by this mode.
+
+### Password-policy authentication
+
+For school/company applications using directory passwords and the `ppolicy`
+overlay, use Simple Bind (`-x`) over verified LDAPS or StartTLS. The policy
+applies to Simple Bind and password writes; password-based SASL authentication
+uses a separate credential path and does not inherit its lockout, expiry,
+failed-attempt accounting, or forced-password-change session restrictions.
+Do not configure `olcAuthzRegexp` mappings that let these policy-managed users
+authenticate through an alternative SASL password mechanism. TLS protects the
+transport but does not add password-policy enforcement to that mechanism.
+
+SASL EXTERNAL and GSSAPI use certificate or Kerberos identities; their credential
+revocation/lifetime policies belong to those identity systems. Keep their
+mapping and authorization rules explicit. See the
+[authentication boundary](compatibility.md) for supported combinations.
 
 ## Verify credentials on OpenLDAP
 

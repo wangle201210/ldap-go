@@ -1432,6 +1432,15 @@ Netscape expired/expiring controls. Configuration, policy, and account state
 survive `slapcat`-style LDIF import/export/reimport, and online overlay changes
 replace the runtime atomically.
 
+SASL password authentication does not inherit this Simple Bind policy path.
+`TestOpenLDAP2613SASLPlainPasswordPolicyBoundary` verifies against native
+OpenLDAP 2.6.13 that mapped directory-auxprop PLAIN can authenticate locked or
+expired accounts and does not record failed passwords in `pwdFailureTime`.
+The same accounts are rejected and failures recorded through Simple Bind.
+Do not map policy-managed directory users into alternative SASL password
+mechanisms when relying on these restrictions. Use Simple Bind over verified
+TLS for that deployment; see [operations.md](operations.md#password-policy-authentication).
+
 Two extension paths remain. OpenLDAP native `check_password()` shared objects
 use slapd's C `Entry` ABI and are preserved during migration but are not loaded
 by the Go server. A configured `olcPPolicyCheckModule` therefore fails closed

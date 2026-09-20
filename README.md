@@ -11,6 +11,13 @@ The project is under active development and is not a complete OpenLDAP drop-in
 replacement. Treat the [compatibility matrix](docs/compatibility.md) as the
 authoritative support boundary.
 
+Common school/company directory workflows have passed the
+[practical acceptance checks](docs/common-production-scope.md#practical-acceptance-on-2026-09-20):
+10,000-user import/query/paging/persistence, crash recovery, single-writer
+replication recovery, backup/restore, Web administration, and a same-SDK
+OpenLDAP differential. This is a bounded functional acceptance, not complete
+OpenLDAP parity or a capacity guarantee for every deployment.
+
 ## Explicit non-goals
 
 - **OpenLDAP MDB/LMDB:** reimplementing its storage engine, native database files,

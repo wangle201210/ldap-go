@@ -10,6 +10,12 @@ Web 管理控制台。
 项目仍在持续开发中，并非 OpenLDAP 的完整替代品。实际支持范围以
 [兼容性矩阵](docs/compatibility.md)为准。
 
+面向学校、公司日常目录服务的
+[常用功能验收](docs/common-production-scope.md#practical-acceptance-on-2026-09-20)
+已通过：一万条用户数据的导入、查询、分页与持久化，故障恢复、单写复制恢复、
+备份还原、Web 管理，以及使用同一 SDK 的 OpenLDAP 差异测试。
+这代表明确范围内的功能验收，不代表全部 OpenLDAP 功能一致或任意部署的容量保证。
+
 ## 明确不复刻的范围
 
 - **OpenLDAP MDB/LMDB**：不复刻其存储引擎、原生数据库文件及索引格式。
