@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -89,6 +90,52 @@ func TestRootDSEFileLastPathMergeAndOnlineAdd(t *testing.T) {
 	entry = searchRootDSEConfigurationEntry(t, client)
 	if got := entry.GetAttributeValues("description"); !slices.Equal(got, []string{"third-only"}) {
 		t.Fatalf("description after failed ADD = %q", got)
+	}
+}
+
+func TestRootDSEOnlineRemovalRollsBackOIDAndPriorChanges(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "root.ldif")
+	writeRootDSETestFile(t, file, "dn:\ndescription: preserved\n")
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	const attributeOID = "1.3.6.1.4.1.4203.1.12.2.3.0.51"
+	if err := store.Update(t.Context(), func(writer storage.Writer) error {
+		entry, err := writer.Get(configurationSuffix)
+		if err != nil {
+			return err
+		}
+		entry.ReplaceValues(attributeOID, stringValues(file))
+		return writer.Put(entry, true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	address, stop := startServer(t, store, Config{})
+	t.Cleanup(stop)
+	client, err := ldap.DialURL("ldap://" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Bind("cn=config", "config-secret"); err != nil {
+		t.Fatal(err)
+	}
+	request := ldap.NewSearchRequest("cn=config", ldap.ScopeBaseObject, ldap.NeverDerefAliases,
+		1, 2, false, "(objectClass=*)", []string{"*", "+"}, nil)
+	before, err := client.Search(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modify := ldap.NewModifyRequest("cn=config", nil)
+	modify.Replace("olcIdleTimeout", []string{"3"})
+	modify.Delete(attributeOID, []string{file})
+	assertLDAPResultCode(t, client.Modify(modify), ldap.LDAPResultOther)
+	after, err := client.Search(request)
+	if err != nil || !reflect.DeepEqual(before.Entries, after.Entries) {
+		t.Fatalf("rejected root DSE removal changed configuration: %v", err)
+	}
+	if got := searchRootDSEConfigurationEntry(t, client).GetAttributeValues("description"); !slices.Equal(got, []string{"preserved"}) {
+		t.Fatalf("rejected root DSE removal changed runtime: %q", got)
 	}
 }
 

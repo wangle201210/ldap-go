@@ -18,6 +18,51 @@ import (
 
 const maxRootDSEFileSize = int64(16 << 20)
 
+func validateRootDSEOnlineRemoval(registry *schema.Registry, before, after directory.Entry, change ldapwire.Modification) error {
+	if !strings.EqualFold(change.Attribute.Description, "olcRootDSE") {
+		return nil
+	}
+	before = canonicalConfigurationEntry(registry, before)
+	after = canonicalConfigurationEntry(registry, after)
+	switch change.Operation {
+	case ldapwire.ModificationReplace:
+		if len(before.Values("olcRootDSE")) == 0 {
+			code := ldapwire.ResultOther
+			if len(change.Attribute.Values) == 0 {
+				code = ldapwire.ResultNoSuchAttribute
+			}
+			return operationFailed(code, "modify/delete: olcRootDSE: no such attribute")
+		}
+		// Native cn=config invokes its unsupported delete callback even when
+		// Replace would add the first value. Add remains available.
+		return operationFailed(ldapwire.ResultOther, "")
+	case ldapwire.ModificationDelete:
+		if !slices.EqualFunc(before.Values("olcRootDSE"), after.Values("olcRootDSE"), bytes.Equal) {
+			if len(after.Values("olcRootDSE")) > 0 {
+				// Native propagates the callback's raw failure code for a
+				// partial value deletion, but maps whole-attribute failure to 80.
+				return operationFailed(ldapwire.ResultOperationsError, "")
+			}
+			return operationFailed(ldapwire.ResultOther, "")
+		}
+	}
+	return nil
+}
+
+func rootDSEModificationFailure(registry *schema.Registry, before directory.Entry, change ldapwire.Modification, err error) error {
+	failure := asOperationFailure(err)
+	if !strings.EqualFold(change.Attribute.Description, "olcRootDSE") || failure == nil ||
+		failure.result.Code != ldapwire.ResultNoSuchAttribute {
+		return err
+	}
+	before = canonicalConfigurationEntry(registry, before)
+	diagnostic := "modify/delete: olcRootDSE: no such value"
+	if len(before.Values("olcRootDSE")) == 0 {
+		diagnostic = "modify/delete: olcRootDSE: no such attribute"
+	}
+	return operationFailed(ldapwire.ResultNoSuchAttribute, diagnostic)
+}
+
 type rootDSEConfigurationError struct {
 	err error
 }

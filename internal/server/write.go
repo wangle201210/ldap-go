@@ -1279,6 +1279,9 @@ func (server *Server) modifyEntry(
 				permissiveModify,
 				runtime.schema,
 			); failure != nil {
+				if configurationWrite {
+					return rootDSEModificationFailure(runtime.schema, beforeChange, change, failure)
+				}
 				return failure
 			}
 			if sqlModify != nil {
@@ -1291,6 +1294,9 @@ func (server *Server) modifyEntry(
 				}
 			}
 			if configurationWrite {
+				if err := validateRootDSEOnlineRemoval(runtime.schema, beforeChange, entry, change); err != nil {
+					return err
+				}
 				if err := validateSASLCBindingEntry(entry); err != nil {
 					return err
 				}
