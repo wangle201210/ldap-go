@@ -281,11 +281,16 @@ func TestOpenLDAPLDAPCompareVerboseBehavior(t *testing.T) {
 
 func openLDAPCompareBinary(t *testing.T) string {
 	t.Helper()
+	return openLDAPClientBinary(t, "ldapcompare")
+}
+
+func openLDAPClientBinary(t *testing.T, name string) string {
+	t.Helper()
 	candidates := []string{
-		filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", "ldapcompare"),
-		"/opt/homebrew/opt/openldap/bin/ldapcompare",
+		filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", name),
+		filepath.Join("/opt/homebrew/opt/openldap/bin", name),
 	}
-	if path, err := exec.LookPath("ldapcompare"); err == nil {
+	if path, err := exec.LookPath(name); err == nil {
 		candidates = append(candidates, path)
 	}
 	for _, candidate := range candidates {
@@ -296,6 +301,6 @@ func openLDAPCompareBinary(t *testing.T) string {
 			return candidate
 		}
 	}
-	t.Skip("OpenLDAP 2.6.13 ldapcompare is unavailable")
+	t.Skipf("OpenLDAP 2.6.13 %s is unavailable", name)
 	return ""
 }

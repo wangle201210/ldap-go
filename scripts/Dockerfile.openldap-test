@@ -6,14 +6,22 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        curl \
         git \
+        krb5-admin-server \
+        krb5-kdc \
+        krb5-user \
         libcrypt-dev \
         libevent-dev \
+        libltdl-dev \
         libssl-dev \
         libsasl2-dev \
         libsasl2-modules \
+        libsasl2-modules-gssapi-mit \
         libsqliteodbc \
+        libtool \
         pkg-config \
+        sasl2-bin \
         shellcheck \
         sqlite3 \
         unixodbc \
@@ -25,6 +33,7 @@ RUN printf '%s\n' 'export PATH=/usr/local/go/bin:/go/bin:$PATH' \
     > /etc/profile.d/ldap-go-go-path.sh
 
 ENV PATH=/usr/local/go/bin:/go/bin:${PATH} \
+    CGO_ENABLED=0 \
     GOPROXY=https://goproxy.cn,direct \
     OPENLDAP_SOURCE_CACHE=/var/cache/ldap-go-openldap/source \
     BUILD=/var/cache/ldap-go-openldap/build \

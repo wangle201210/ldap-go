@@ -8,7 +8,7 @@ die() {
 }
 
 if [ "$#" -ne 0 ]; then
-	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_OPENLDAP_FAILURE_LOG, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
+	die "this script accepts configuration through OPENLDAP_ENV_FILE, HAPROXY_SOURCE, HAPROXY_COMMIT, LDAP_GO_OPENLDAP_STRICT, LDAP_GO_FAIL_ON_OPTIONAL_SKIP, LDAP_GO_OPENLDAP_PARALLEL, LDAP_GO_OPENLDAP_FAILURE_LOG, LDAP_GO_OPENLDAP_TEST_LOG, LDAP_GO_SQLITE_ODBC_DRIVER, LDAP_GO_OPENLDAP_GSSAPI_AUTO, and the exported OpenLDAP reference environment"
 fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -309,8 +309,14 @@ fi
 printf 'Execution:          strict=%s package-parallelism=1 test-parallelism=%s\n' \
 	"$strict" "${LDAP_GO_OPENLDAP_PARALLEL:-1}"
 
-log=$(mktemp "${TMPDIR:-/tmp}/ldap-go-openldap.XXXXXX")
-trap 'rm -f "$log"' EXIT HUP INT TERM
+if [ -n "${LDAP_GO_OPENLDAP_TEST_LOG:-}" ]; then
+	log=$LDAP_GO_OPENLDAP_TEST_LOG
+	: >"$log" || die "cannot write test log: $log"
+	printf 'Full test log:      %s\n' "$log"
+else
+	log=$(mktemp "${TMPDIR:-/tmp}/ldap-go-openldap.XXXXXX")
+	trap 'rm -f "$log"' EXIT HUP INT TERM
+fi
 
 test_status=0
 test_parallel=${LDAP_GO_OPENLDAP_PARALLEL:-1}
@@ -430,6 +436,12 @@ TestLDAPVCOpenLDAPNativeDifferential
 TestLDAPLDIFWrapOpenLDAP
 TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential
 TestOpenLDAP2613SASLPlainPasswordPolicyBoundary
+TestOpenLDAPReferenceFilterAbsentAttributeAssertions
+TestOpenLDAPReferencePasswordPolicyAdministratorDeleteAdd
+TestLDAPGoSyncreplOpenLDAPProviderSubtreeRename
+TestOpenLDAPReferenceRWMRewriteCaptures
+TestOpenLDAPLDAPCompareReferenceExitCodes
+TestOpenLDAPLDAPExopFileAndResponseReference
 TestOpenLDAPReferenceUnknownOperationDisconnect
 TestOpenLDAPReferenceLDAPSearchSortAndUFN
 TestOpenLDAPReferenceLDAPSearchLegacyOutputAndContinuousMode

@@ -16,6 +16,10 @@ Status values:
 `complete` is not an alias for `compatible`. No row may become `compatible`
 based only on unit tests.
 
+The [implemented-behavior audit](openldap-behavior-audit.md) records confirmed
+semantic fixes, intentional differences, and the distinction between passing
+tests and proof of behavioral equality.
+
 ## Completeness audit
 
 The reproducible verification baseline is the OpenLDAP 2.6.13 release commit,
@@ -215,6 +219,13 @@ escape mapper; it does not implement LDAP lookup maps or arbitrary modules.
 | unique | partial | URI and legacy config, independent domains/multiple URIs, `strict`/`ignore`/`serialize`, Add/Modify/ModifyDN, managed Relax, atomic concurrency, online/restart/rollback, real `slapcat` import, and OpenLDAP 2.6.13 differentials pass; cross-overlay ordering and auditing pre-existing duplicates remain |
 | valsort | partial | alpha/numeric/weighted ordering, hidden raw control, Add/Modify validation, Paging/Sort/VLV, Sync bypass, online/restart, real `slapcat` import, and OpenLDAP 2.6.13 differential pass; global/glue and cross-overlay ordering matrices remain |
 | OTP-related contrib password modules | partial | OpenLDAP pw-totp `{TOTP1}`, `{TOTP256}`, `{TOTP512}`, and all three `ANDPW` variants; fixed 30-second/six-digit credentials, current/previous-window rules, non-replicated `authTimestamp`, root/ordinary/TOTP successful-Bind timestamp updates, Password Modify hashing, database/frontend and duplicate placement, online disable/delete/restart, and a dynamically built pinned OpenLDAP 2.6.13 module differential pass; SHA-2 nested passwords are supported; ldap-go intentionally makes first-use replay prevention atomic where OpenLDAP's separate check/update can admit concurrent attempts; other unsupported nested/dynamic schemes, replication topologies, proxy databases, and arbitrary overlay ordering remain |
+
+RWM capture parity is bounded to the tested Linux/glibc and Darwin cases.
+The case-sensitive (`:C`) differential covers ambiguous alternatives, repeated
+groups, stale nested captures, and ordinary DN suffixes on both platforms.
+Darwin's default case-insensitive mode still differs for some nested repeated
+captures, and musl is not qualified. See the
+[behavior audit](openldap-behavior-audit.md) for a concrete remaining difference.
 
 ## Replication and operations
 

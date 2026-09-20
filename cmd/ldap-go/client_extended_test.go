@@ -174,10 +174,7 @@ func TestLDAPCompareStartTLS(t *testing.T) {
 }
 
 func TestOpenLDAPLDAPCompareReferenceExitCodes(t *testing.T) {
-	const ldapcompare = "/opt/homebrew/opt/openldap/bin/ldapcompare"
-	if _, err := os.Stat(ldapcompare); err != nil {
-		t.Skipf("OpenLDAP ldapcompare is unavailable: %v", err)
-	}
+	ldapcompare := openLDAPClientBinary(t, "ldapcompare")
 	uri := startLDAPClientToolServer(t, nil)
 	passwordPath := filepath.Join(t.TempDir(), "bind-password")
 	if err := os.WriteFile(passwordPath, []byte(clientToolRootPassword), 0o600); err != nil {
@@ -915,10 +912,7 @@ func TestLDAPExopFileValueAndForcedBinaryOutput(t *testing.T) {
 }
 
 func TestOpenLDAPLDAPExopFileAndResponseReference(t *testing.T) {
-	const ldapexop = "/opt/homebrew/opt/openldap/bin/ldapexop"
-	if _, err := os.Stat(ldapexop); err != nil {
-		t.Skipf("OpenLDAP ldapexop is unavailable: %v", err)
-	}
+	ldapexop := openLDAPClientBinary(t, "ldapexop")
 	requestValue := []byte{0x00, 0xff, 'r'}
 	valuePath := filepath.Join(t.TempDir(), "reference value.bin")
 	if err := os.WriteFile(valuePath, requestValue, 0o600); err != nil {

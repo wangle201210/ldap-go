@@ -54,6 +54,10 @@ exec docker run \
 		--env PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 		--env "GOPROXY=$goproxy" \
 		--env LDAP_GO_FAIL_ON_OPTIONAL_SKIP=1 \
+	--env CGO_ENABLED=0 \
+	--env GOCACHE=/var/cache/ldap-go-openldap/go-build \
+	--env GOMODCACHE=/var/cache/ldap-go-openldap/go-mod \
+	--env LDAP_GO_OPENLDAP_TEST_LOG=/var/cache/ldap-go-openldap/last-test.log \
 	--env OPENLDAP_SOURCE_CACHE=/var/cache/ldap-go-openldap/source \
 	--env BUILD=/var/cache/ldap-go-openldap/build \
 	"$image" \

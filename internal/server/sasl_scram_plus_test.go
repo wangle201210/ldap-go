@@ -373,7 +373,6 @@ func TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding(t *testing.T) {
 		t.Skip("OpenLDAP ldapwhoami is not installed")
 	}
 
-	pluginRoot := filepath.Dir(filepath.Dir(pluginViewer))
 	for _, mechanism := range []string{
 		"SCRAM-SHA-1",
 		"SCRAM-SHA-256",
@@ -421,9 +420,8 @@ func TestOpenLDAPCyrusSASLSCRAMTLSChannelBinding(t *testing.T) {
 				"-U", "alice",
 				"-w", "secret",
 			)
-			command.Env = append(os.Environ(),
-				"SASL_PATH="+filepath.Join(pluginRoot, "lib", "sasl2"),
-			)
+			// Inherit SASL_PATH or the library's default. The viewer location
+			// does not identify Debian's multiarch plugin directory.
 			output, err := command.CombinedOutput()
 			if err != nil {
 				t.Fatalf("native ldapwhoami %s channel binding: %v\n%s", mechanism, err, output)
@@ -441,6 +439,8 @@ func findSASLPluginViewer(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{
 		"pluginviewer",
+		"saslpluginviewer",
+		"/usr/sbin/saslpluginviewer",
 		"/opt/homebrew/opt/cyrus-sasl/sbin/pluginviewer",
 		"/usr/local/opt/cyrus-sasl/sbin/pluginviewer",
 	} {

@@ -162,6 +162,18 @@ claimed. These explicit exclusions are reported as skips, not passing tests.
 
 ## OpenLDAP differential tests
 
+See the [implemented-behavior audit](openldap-behavior-audit.md) for the current
+semantic regression cases and explicit differences. Set
+`LDAP_GO_OPENLDAP_TEST_LOG=/path/to/openldap-tests.log` to retain the complete
+verbose test log on success or failure; the parent directory must exist and the
+file is overwritten. The existing failure-summary log remains available.
+Nightly CI uploads the full log and separately runs the opt-in `allowed` and
+Verify Credentials container differentials with cgo disabled.
+The Docker runner retains its complete log as `last-test.log` in its named
+reference-cache volume. Its image includes the MIT KDC, Cyrus GSSAPI plugin and
+plugin viewer, SQLite ODBC, and module-build dependencies; C is used only by the
+external reference server, while Go builds use `CGO_ENABLED=0`.
+
 `TestOpenLDAPConfiguration*` checks the pinned core catalog (111 attributes,
 nine classes), inheritance and attribute references, public visibility,
 idempotent registration, semantic OID aliases, clone isolation, conflict rollback,

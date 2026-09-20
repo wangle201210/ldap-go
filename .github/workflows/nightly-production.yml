@@ -24,6 +24,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CGO_ENABLED: '0'
+
 concurrency:
   group: nightly-production-${{ github.ref }}
   cancel-in-progress: false
@@ -35,6 +38,7 @@ jobs:
     env:
       OPENLDAP_SOURCE_CACHE: ${{ github.workspace }}/.cache/openldap-source-2.6.13
       LDAP_GO_OPENLDAP_FAILURE_LOG: ${{ github.workspace }}/nightly-openldap-failure.log
+      LDAP_GO_OPENLDAP_TEST_LOG: ${{ github.workspace }}/nightly-openldap-tests.log
       JOBS: "2"
     steps:
       - uses: actions/checkout@v4
@@ -53,12 +57,17 @@ jobs:
             build-essential ca-certificates curl git libevent-dev libltdl-dev \
             krb5-admin-server krb5-kdc krb5-user \
             libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit \
-            libsqliteodbc libssl-dev libtool pkg-config sqlite3 unixodbc-dev
+            libsqliteodbc libssl-dev libtool pkg-config sasl2-bin sqlite3 unixodbc-dev
       - name: Cache pinned OpenLDAP source
         uses: actions/cache@v4
         with:
           path: .cache/openldap-source-2.6.13
           key: openldap-source-2.6.13-d172686d3d270bc961b78f3ff00d7019c8dfb094
+      - name: Verify root privilege transitions and directory permissions
+        run: |
+          go test -c -o "$RUNNER_TEMP/ldap-go-privileges.test" ./cmd/ldap-go
+          sudo "$RUNNER_TEMP/ldap-go-privileges.test" -test.v -test.timeout=2m \
+            -test.run='^(TestApplyServePrivilegesAllThreads|TestApplyServePrivilegesSubprocess|TestApplyServeChrootSubprocess|TestProductionDatabasePermissionFinding)$'
       - name: Run pinned strict OpenLDAP differential gate
         run: |
           set -o pipefail
@@ -71,6 +80,41 @@ jobs:
           path: |
             nightly-openldap.log
             nightly-openldap-failure.log
+            nightly-openldap-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  module-differentials:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENLDAP_SOURCE: ${{ github.workspace }}/.cache/openldap-module-source
+      LDAP_GO_OPENLDAP_ALLOWED_DOCKER_TESTS: '1'
+      LDAP_GO_OPENLDAP_VC_DOCKER_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check out pinned native module source
+        uses: actions/checkout@v4
+        with:
+          repository: OPENLDAP/openldap
+          ref: d172686d3d270bc961b78f3ff00d7019c8dfb094
+          path: .cache/openldap-module-source
+      - name: Compare allowed and Verify Credentials against native modules
+        run: |
+          set -o pipefail
+          go test ./internal/server -count=1 -timeout=30m -v \
+            -run '^(TestOpenLDAPAllowedReference|TestOpenLDAPVerifyCredentialsReference)$' \
+            2>&1 | tee nightly-openldap-modules.log
+      - name: Preserve native module evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-openldap-modules-${{ github.sha }}
+          path: nightly-openldap-modules.log
           if-no-files-found: warn
           retention-days: 14
 
