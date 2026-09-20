@@ -104,7 +104,7 @@ func ValidateConfigurationReader(
 	}()
 
 	listenerURLs, err := configurationValidationListenerURLs(
-		reader,
+		configurationAttributeReader{Reader: reader, registry: validator.baseSchema},
 		config.ListenerURLs,
 	)
 	if err != nil {

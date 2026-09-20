@@ -149,7 +149,7 @@ func TestDatabaseUnsupportedLimitSelectorOnlineRollback(t *testing.T) {
 			nil,
 		))
 		if err != nil || len(stored.Entries) != 1 ||
-			!slices.Equal(stored.Entries[0].GetAttributeValues("olcLimits"), []string{valid}) {
+			!slices.Equal(stored.Entries[0].GetAttributeValues("olcLimits"), []string{"{0}" + valid}) {
 			t.Fatalf("olcLimits after rollback = %#v, %v", stored, err)
 		}
 	}

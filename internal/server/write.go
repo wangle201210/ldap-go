@@ -212,6 +212,13 @@ func (server *Server) handleAdd(
 	}
 	configurationWrite := isConfigurationDN(dn)
 	entry := request.Entry.Clone()
+	if configurationWrite {
+		if err := validateConfigurationAttributeOptions(state.runtime.schema, entry.Attributes); err != nil {
+			failure := asOperationFailure(err)
+			return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse, failure.result)
+		}
+		entry = canonicalConfigurationEntry(state.runtime.schema, entry)
+	}
 	if err := prettyRDNEntry(state.runtime, &entry); err != nil {
 		return server.writeOperationResult(connection, message.ID, ldapwire.ApplicationAddResponse,
 			ldapwire.ResultError(ldapwire.ResultInvalidAttributeSyntax, err.Error()))
@@ -1060,6 +1067,14 @@ func (server *Server) modifyEntry(
 	}
 	changes = prepared
 	configurationWrite := isConfigurationDN(dn)
+	if configurationWrite {
+		for _, change := range changes {
+			if err := validateConfigurationAttributeOptions(runtime.schema, []directory.Attribute{change.Attribute}); err != nil {
+				return nil, nil, err
+			}
+		}
+		changes = canonicalConfigurationModifications(runtime.schema, changes)
+	}
 	var sqlModify *sqlBackendModifyContext
 	if database.sqlBackend != nil {
 		sqlModify = &sqlBackendModifyContext{dn: dn}
@@ -3219,7 +3234,7 @@ func (server *Server) handleCompare(
 				request.Assertion,
 			)
 			if compareErr != nil {
-				var assertionError *schema.MatchingRuleAssertionError
+				var assertionError *schema.SchemaDescriptionAssertionError
 				if errors.As(compareErr, &assertionError) {
 					if assertionError.Unknown {
 						return nil
