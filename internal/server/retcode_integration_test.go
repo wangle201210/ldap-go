@@ -741,7 +741,7 @@ func TestRetcodeOverlayInDirectoryPasswordModifyTransaction(t *testing.T) {
 	)
 
 	response := endRawLDAPTransaction(t, connection, 4, true, identifier)
-	assertRawLDAPResult(t, response, int64(ldapwire.ResultUnwillingToPerform))
+	assertRawLDAPResult(t, response, int64(ldapwire.ResultObjectClassViolation))
 	value, present := rawExtendedResponseValue(response)
 	if !present {
 		t.Fatal("failed retcode transaction response value is absent")

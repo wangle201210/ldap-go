@@ -11,9 +11,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
 	"github.com/wangle201210/ldap-go/internal/migration"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
@@ -230,6 +233,49 @@ retcode-indir on`},
 		},
 	)
 	const extendedDN = "cn=Extended Error Directory,ou=people,dc=example,dc=com"
+	// retcode's internal Modify search emits an entry before the outer
+	// Password Modify result when errOp only names "extended".
+	for _, endpoint := range []struct{ address, password string }{
+		{strings.TrimPrefix(openLDAPURI, "ldap://"), "secret"},
+		{ldapGoAddress, "admin-secret"},
+	} {
+		conn := dialAndBindRawLDAP(t, endpoint.address, "cn=admin,dc=example,dc=com", endpoint.password)
+		defer conn.Close()
+		if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		writeRawLDAPRequest(t, conn, 2, rawExtendedRequest(ldapwire.PasswordModifyOID,
+			rawRetcodePasswordModifyRequestValue([]byte(extendedDN), []byte("replacement")), true))
+		{
+			packet, err := ber.ReadPacket(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, err := ber.ParseInt64(packet.Children[0].Data.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if id != 2 || uint64(packet.Children[1].Tag) != ldapwire.ApplicationSearchResultEntry ||
+				packet.Children[1].Children[0].Data.String() != extendedDN {
+				t.Fatalf("unexpected native internal search response: %q", packet.Bytes())
+			}
+		}
+		packet, err := ber.ReadPacket(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertRetcodeWireResponse(t, packet, 2, ldapwire.ApplicationExtendedResponse, ldap.LDAPResultObjectClassViolation)
+		if op := packet.Children[1]; len(op.Children) != 3 || op.Children[1].Data.Len() != 0 || op.Children[2].Data.Len() != 0 {
+			t.Fatalf("unexpected extended result fields: %q", packet.Bytes())
+		}
+		// A subsequent, independent operation must retain its own message ID.
+		writeRawLDAPRequest(t, conn, 3, rawExtendedRequest(whoAmIOID, nil, false))
+		packet, err = ber.ReadPacket(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertRetcodeWireResponse(t, packet, 3, ldapwire.ApplicationExtendedResponse, ldap.LDAPResultSuccess)
+	}
 	_, openLDAPExtendedErr := openLDAP.PasswordModify(ldap.NewPasswordModifyRequest(
 		extendedDN,
 		"",
@@ -243,8 +289,8 @@ retcode-indir on`},
 	if openLDAPCode := overlayLDAPResultCode(t, openLDAPExtendedErr); openLDAPCode != ldap.ErrorUnexpectedResponse {
 		t.Fatalf("OpenLDAP in-directory extended result = %d, want client unexpected response", openLDAPCode)
 	}
-	if ldapGoCode := overlayLDAPResultCode(t, ldapGoExtendedErr); ldapGoCode != ldap.LDAPResultUnwillingToPerform {
-		t.Fatalf("ldap-go in-directory extended result = %d, want unwillingToPerform", ldapGoCode)
+	if ldapGoCode := overlayLDAPResultCode(t, ldapGoExtendedErr); ldapGoCode != ldap.ErrorUnexpectedResponse {
+		t.Fatalf("ldap-go in-directory extended result = %d, want client unexpected response", ldapGoCode)
 	}
 }
 

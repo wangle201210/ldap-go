@@ -525,6 +525,12 @@ func (server *Server) tryRetcodeOperation(
 		if !configuration.inDirectory || database == &placeholder {
 			continue
 		}
+		if request, ok := message.Request.(ldapwire.ExtendedRequest); ok &&
+			request.Name == passwordModifyOID {
+			// Password Modify reaches directory retcode through its internal
+			// Modify, after checking the old password.
+			continue
+		}
 		if manageDsaIT && operation == retcodeOperationAdd {
 			continue
 		}
@@ -590,6 +596,81 @@ func (server *Server) tryRetcodeOperation(
 		)
 	}
 	return false, nil
+}
+
+type retcodePasswordModifyResponse struct {
+	entry   *directory.Entry
+	failure *retcodeItem
+}
+
+func (server *Server) prepareRetcodePasswordModify(
+	state *connectionState,
+	database runtimeDatabase,
+	target directory.DN,
+	reader storage.Reader,
+	entry directory.Entry,
+	changes []ldapwire.Modification,
+	response *retcodePasswordModifyResponse,
+) error {
+	if !state.runtime.schema.EntryHasObjectClass(entry, "errAbsObject") ||
+		state.runtime.schema.EntryHasObjectClass(entry, "referral") {
+		return nil
+	}
+	for _, configuration := range retcodeConfigurationsForDatabase(state.runtime.databases, database) {
+		if !configuration.inDirectory || databaseDNAtOrBelow(database, target, configuration.parent) {
+			continue
+		}
+		if !server.allowed(state.runtime, reader, state.boundDN, entry, "entry", nil, acl.Search) {
+			continue
+		}
+		matches, err := server.filterMatches(state.runtime, reader, state.boundDN, entry, directory.Filter{
+			Kind: directory.FilterEquality, Attribute: "objectClass", Assertion: []byte("errAbsObject"),
+		})
+		if err != nil {
+			return err
+		}
+		if !matches {
+			continue
+		}
+		item, applies := retcodeItemFromDirectoryEntry(state.runtime, entry, retcodeOperationModify)
+		if applies && (item.code != ldapwire.ResultSuccess || item.preDisconnect) {
+			// A simulated failure must not bypass write ACLs or commit a password
+			// change after reporting an error, even if the native overlay does.
+			if !server.canApplyModifications(state.runtime, reader, state.boundDN, entry, changes) {
+				return operationFailed(ldapwire.ResultInsufficientAccessRights, "")
+			}
+			response.failure = &item
+			return &operationFailure{result: buildRetcodeResult(state.runtime, ldapwire.ModifyRequest{}, item)}
+		}
+		if applies && !state.transactionPreflight {
+			retcodeSleep(item.sleepSeconds)
+		}
+		if server.allowed(state.runtime, reader, state.boundDN, entry, "entry", nil, acl.Read) {
+			selected := server.attributesWithPrivilege(state.runtime, reader, state.boundDN,
+				withSubschemaReference(entry), acl.Read, false)
+			selected = server.selectEntry(state.runtime, selected, []string{"*", "+"}, false)
+			selected = selected.Clone()
+			response.entry = &selected
+		}
+		return nil
+	}
+	return nil
+}
+
+func (server *Server) writeRetcodePasswordModifyEntry(
+	connection net.Conn,
+	messageID int64,
+	response retcodePasswordModifyResponse,
+) error {
+	if response.entry == nil {
+		return nil
+	}
+	if _, capturing := connection.(ldapResultResponseWriter); capturing {
+		// Transactions capture one final result; internal search entries must
+		// neither escape before commit nor corrupt the transaction response.
+		return nil
+	}
+	return server.writeSearchEntry(connection, messageID, *response.entry, nil)
 }
 
 func applySuccessfulRetcodeBind(

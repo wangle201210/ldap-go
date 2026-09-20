@@ -358,6 +358,18 @@ func (server *Server) handlePasswordModify(
 			)
 		}
 	}
+	var retcodeResponse retcodePasswordModifyResponse
+	if state.runtime.features.retcode {
+		passwordPrecondition := precondition
+		precondition = func(reader storage.Reader, entry directory.Entry) error {
+			if passwordPrecondition != nil {
+				if err := passwordPrecondition(reader, entry); err != nil {
+					return err
+				}
+			}
+			return server.prepareRetcodePasswordModify(state, *database, target, reader, entry, changes, &retcodeResponse)
+		}
+	}
 	writeRecord := &accesslogWriteRecord{
 		operation:       accesslogModify,
 		session:         state.connectionID,
@@ -389,12 +401,30 @@ func (server *Server) handlePasswordModify(
 		nil,
 		writeRecord,
 	)
+	if retcodeResponse.failure != nil {
+		return server.writeRetcodeResult(connection, state.runtime, message, *retcodeResponse.failure)
+	}
 	if err != nil {
+		if writeErr := server.writeRetcodePasswordModifyEntry(connection, message.ID, retcodeResponse); writeErr != nil {
+			return writeErr
+		}
+		if retcodeResponse.entry != nil {
+			if failure := asOperationFailure(err); failure != nil {
+				// The native internal-search callback clears diagnostic text before
+				// the outer extended operation sends the actual Modify result.
+				result := failure.result
+				result.DiagnosticMessage = ""
+				return server.writePasswordModifyResultWithControls(connection, message.ID, result, nil, failure.controls)
+			}
+		}
 		return server.finishPasswordModify(connection, message.ID, nil, err)
 	}
 	server.finishWriteEffects(ctx, nextRuntime, syncChanges...)
 	server.finishAuditlogWrite(state, *database, *writeRecord)
 	state.passwordPolicyRestrictedDN = ""
+	if writeErr := server.writeRetcodePasswordModifyEntry(connection, message.ID, retcodeResponse); writeErr != nil {
+		return writeErr
+	}
 
 	var responseValue []byte
 	if generated {
