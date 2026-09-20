@@ -1,0 +1,31 @@
+{
+  "report_version": 1,
+  "result": "pass",
+  "finished_at": "2026-09-20T08:32:27Z",
+  "openldap_version": "2.6.13",
+  "openldap_commit": "d172686d3d270bc961b78f3ff00d7019c8dfb094",
+  "entries": 10000,
+  "page_size": 1000,
+  "workloads": {
+    "indexed_searches": 10000,
+    "unindexed_searches": 20,
+    "paged_traversals": 5,
+    "modifications": 1000,
+    "concurrency": 8,
+    "searches_per_connection": 1000,
+    "data_parity": 1
+  },
+  "timings_ms": {
+    "ldap_go": {"import": 1152, "reindex": 1226, "import_plus_index": 2378, "startup": 180, "indexed": 972, "indexed_cold": 1702, "unindexed": 39, "unindexed_cold": 64, "paged": 463, "paged_cold": 215, "concurrent": 371, "modify": 838},
+    "openldap": {"import": 60101, "reindex": 52798, "import_plus_index": 112899, "startup": 139, "indexed": 821, "indexed_cold": 818, "unindexed": 99, "unindexed_cold": 83, "paged": 401, "paged_cold": 124, "concurrent": 409, "modify": 9565}
+  },
+  "resources": {
+    "ldap_go": {"rss_bytes": 49758208, "rss_quiescent_bytes": 25182208, "database_bytes": 14843904},
+    "openldap": {"rss_bytes": 23379968, "rss_quiescent_bytes": 18530304, "database_bytes": 9838592}
+  },
+  "correctness": {
+    "ldap_go": {"indexed_results": 10000, "unique_entries": 10000, "modified_entries": 1000},
+    "openldap": {"indexed_results": 10000, "unique_entries": 10000, "modified_entries": 1000},
+    "data_parity": {"enabled": 1, "canonical_entries": 10002, "checks": 15, "checksum": "1377398505", "canonical_bytes": 4282504}
+  }
+}

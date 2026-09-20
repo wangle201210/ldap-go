@@ -1,5 +1,9 @@
 # OpenLDAP 100k comparison evidence
 
+For the later revision comparison and a separate objectClass paging workload,
+see the [2026-09-20 performance audit](performance-audit-20260920.md). The table
+below remains the complete September 1 fresh-import comparison.
+
 This evidence was produced on 2026-09-01 (Asia/Shanghai) from ldap-go commit
 `38f3fb2` on an Apple M1 Pro,
 Darwin 24.6.0 arm64 host. Both servers used the same OpenLDAP 2.6.13 client

@@ -71,6 +71,9 @@ Web 管理控制台。
 与结果解释见 [100k 对比证据](docs/openldap-100k-evidence.md)，复现方法见
 [生产资格测试](docs/production-qualification.md#openldap-performance-comparison)。
 
+[2026-09-20 性能复核](docs/performance-audit-20260920.md) 补充了修复前后对比、
+10 万条快照查询测试，以及当前仍存在的性能短板。
+
 ## 环境要求
 
 - Go 1.26 或更高版本。

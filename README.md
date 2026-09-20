@@ -80,6 +80,9 @@ the [100k evidence](docs/openldap-100k-evidence.md) for the exact workload and
 interpretation, and [production qualification](docs/production-qualification.md#openldap-performance-comparison)
 for the reproducible comparison method.
 
+The [2026-09-20 performance audit](docs/performance-audit-20260920.md) adds
+revision comparisons, 100k snapshot queries, and remaining performance limits.
+
 ## Requirements
 
 - Go 1.26 or newer.
