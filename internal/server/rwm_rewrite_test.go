@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -227,10 +228,27 @@ func TestRWMRewriteAdditionalBoundsAndIsolation(t *testing.T) {
 	})
 	t.Run("ambiguous regex work", func(t *testing.T) {
 		engine := mustRWMRewriteEngine(t, []string{"rewriteEngine", "on"}, []string{"rewriteRule", `^((a|aa)*)$`, `$1`, ":"})
-		_, _, err := engine.rewrite("default", strings.Repeat("a", 32))
+		got, _, err := engine.rewrite("default", strings.Repeat("a", 32))
+		if runtime.GOOS == "linux" {
+			// The linear matcher does not enumerate exponentially many captures.
+			if err != nil || got != strings.Repeat("a", 32) {
+				t.Fatalf("linear ambiguous match = %q, %v", got, err)
+			}
+			return
+		}
 		failure := asOperationFailure(err)
 		if failure == nil || !strings.Contains(failure.result.DiagnosticMessage, "regex work") {
 			t.Fatalf("unbounded ambiguous regex: %v", err)
+		}
+	})
+	t.Run("shared regex work budget", func(t *testing.T) {
+		rule, err := compileRWMRewriteRule(`^(a)$`, "$1", ":", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operation := &rwmRewriteOperation{regexSteps: rwmRewriteMaximumRegexSteps - 1}
+		if _, err := rule.match("a", operation); err == nil || !strings.Contains(err.Error(), "regex work") {
+			t.Fatalf("shared regex work budget bypassed: %v", err)
 		}
 	})
 	t.Run("variables isolated between concurrent operations", func(t *testing.T) {

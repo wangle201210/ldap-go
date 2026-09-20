@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -23,13 +24,25 @@ type rwmRewriteCompatibilityCase struct {
 }
 
 func rwmRewriteCompatibilityCases() []rwmRewriteCompatibilityCase {
+	longestCapture, nestedCapture := "aa/", "aa/aa/"
+	absentRepeated, absentAlternative, evenRepeated := "b/", "b//b", "aa/"
+	if runtime.GOOS == "linux" {
+		// Verified against glibc's regexec; BSD chooses different submatches.
+		longestCapture, nestedCapture = "a/a", "aa/a/"
+		absentRepeated, absentAlternative, evenRepeated = "b/a", "b/a/b", "a/"
+	}
 	rule := func(pattern, substitution, flags string) []string {
 		return []string{"rewriteRule", pattern, substitution, flags}
 	}
 	return []rwmRewriteCompatibilityCase{
 		{name: "longest whole match", directives: [][]string{rule(`a|aa`, `$0`, ":")}, input: "zaaz", want: "aa"},
-		{name: "longest capture", directives: [][]string{rule(`^(a|aa)(a?)$`, `$1/$2`, ":")}, input: "aa", want: "aa/"},
-		{name: "nested capture", directives: [][]string{rule(`^((a|aa)*)(a?)$`, `$1/$2/$3`, ":")}, input: "aa", want: "aa/aa/"},
+		{name: "longest capture", directives: [][]string{rule(`^(a|aa)(a?)$`, `$1/$2`, ":")}, input: "aa", want: longestCapture},
+		{name: "nested capture", directives: [][]string{rule(`^((a|aa)*)(a?)$`, `$1/$2/$3`, ":")}, input: "aa", want: nestedCapture},
+		{name: "repeated nested capture reset", directives: [][]string{rule(`^((a)?b)*$`, `$1/$2`, ":C")}, input: "abb", want: absentRepeated},
+		{name: "repeated alternative capture reset", directives: [][]string{rule(`^((a)|(b))*$`, `$1/$2/$3`, ":C")}, input: "ab", want: absentAlternative},
+		{name: "uncaptured final alternative reset", directives: [][]string{rule(`^((a)|b)*$`, `$1/$2`, ":C")}, input: "ab", want: absentRepeated},
+		{name: "odd capture iteration priority", directives: [][]string{rule(`^(a|aa)*(a?)$`, `$1/$2`, ":C")}, input: "aaa", want: "a/"},
+		{name: "even capture iteration priority", directives: [][]string{rule(`^(a|aa)*(a?)$`, `$1/$2`, ":C")}, input: "aaaa", want: evenRepeated},
 		{name: "optional absent capture", directives: [][]string{rule(`^(a)?(b)$`, `$1:$2:$9`, ":")}, input: "b", want: ":b:"},
 		{name: "whole match and percent", directives: [][]string{rule(`^(a)(b)$`, `%0:$2:%1`, ":")}, input: "ab", want: "ab:b:a"},
 		{name: "mixed escapes", directives: [][]string{rule(`.*`, `$$:%%:$%:%$`, ":")}, input: "a", want: "$:%:%:$"},

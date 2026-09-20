@@ -44,12 +44,13 @@ type rwmRewriteContext struct {
 }
 
 type rwmRewriteRule struct {
-	pattern      *regexp.Regexp
-	program      *syntax.Prog
-	substitution rwmRewriteTemplate
-	recurse      bool
-	actions      []rwmRewriteAction
-	maxPasses    int
+	pattern         *regexp.Regexp
+	program         *syntax.Prog
+	captureChildren [10][]int
+	substitution    rwmRewriteTemplate
+	recurse         bool
+	actions         []rwmRewriteAction
+	maxPasses       int
 }
 
 type rwmRewriteAction struct {
@@ -379,6 +380,7 @@ func compileRWMRewriteRule(
 		return nil, fmt.Errorf("rewriteRule pattern %q: %w", pattern, err)
 	}
 	compiled.Longest()
+	rule.captureChildren = rwmRewriteCaptureChildren(parsed)
 	program, err := syntax.Compile(parsed.Simplify())
 	if err != nil {
 		return nil, fmt.Errorf("rewriteRule pattern %q: %w", pattern, err)

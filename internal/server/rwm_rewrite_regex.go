@@ -3,19 +3,23 @@ package server
 import (
 	"fmt"
 	"regexp/syntax"
+	"runtime"
 	"slices"
 	"unicode/utf8"
 )
 
 const rwmRewriteMaximumRegexSteps = 4 << 20
 
-// Go's regexp finds the POSIX leftmost-longest whole match, but deliberately
-// does not choose POSIX longest submatches. Enumerate the capture paths within
-// that span with a shared work bound; ambiguous expressions cannot run forever.
+// Linux follows the tested glibc capture selection using Go's leftmost-longest
+// matcher. Other targets retain BSD-style capture selection within that span.
+// This does not establish compatibility with musl's regexec implementation.
 func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) ([]int, error) {
 	operation.regexSteps += (len(input) + 1) * len(rule.program.Inst)
 	if operation.regexSteps > rwmRewriteMaximumRegexSteps {
 		return nil, fmt.Errorf("rewrite regex work exceeds %d steps", rwmRewriteMaximumRegexSteps)
+	}
+	if runtime.GOOS == "linux" {
+		return rule.pattern.FindStringSubmatchIndex(input), nil
 	}
 	span := rule.pattern.FindStringIndex(input)
 	if span == nil || rule.pattern.NumSubexp() == 0 {
@@ -29,6 +33,7 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 		pc       uint32
 		position int
 		captures []int
+		history  [10]*rwmRewriteCaptureHistory
 		epsilon  *epsilonPath
 	}
 	captures := make([]int, 2*(min(rule.pattern.NumSubexp(), 9)+1))
@@ -38,6 +43,7 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 	captures[0], captures[1] = span[0], span[1]
 	pending := []state{{pc: uint32(rule.program.Start), position: span[0], captures: captures}}
 	var best []int
+	var bestHistory [10]*rwmRewriteCaptureHistory
 	for len(pending) > 0 {
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
@@ -70,6 +76,17 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 				if int(instruction.Arg) < len(current.captures) {
 					current.captures = slices.Clone(current.captures)
 					current.captures[instruction.Arg] = current.position
+					group := int(instruction.Arg) / 2
+					if instruction.Arg%2 == 0 {
+						for _, child := range rule.captureChildren[group] {
+							current.captures[2*child], current.captures[2*child+1] = -1, -1
+						}
+					} else {
+						current.history[group] = &rwmRewriteCaptureHistory{
+							start: current.captures[instruction.Arg-1], end: current.position,
+							previous: current.history[group],
+						}
+					}
 				}
 				current.pc = instruction.Out
 			case syntax.InstEmptyWidth:
@@ -99,8 +116,14 @@ func (rule *rwmRewriteRule) match(input string, operation *rwmRewriteOperation) 
 				current.pc = instruction.Out
 				current.epsilon = nil
 			case syntax.InstMatch:
-				if current.position == span[1] && rwmRewritePreferCaptures(current.captures, best) {
-					best = current.captures
+				if current.position == span[1] {
+					prefer, err := rwmRewritePreferCaptureHistory(current.history, bestHistory, operation)
+					if err != nil {
+						return nil, err
+					}
+					if best == nil || prefer {
+						best, bestHistory = current.captures, current.history
+					}
 				}
 				break path
 			default:
@@ -129,24 +152,64 @@ func rwmRewritePatternCost(expression *syntax.Regexp) int {
 	return min(cost, 8193)
 }
 
-func rwmRewritePreferCaptures(candidate, best []int) bool {
-	if best == nil {
-		return true
+type rwmRewriteCaptureHistory struct {
+	start, end int
+	previous   *rwmRewriteCaptureHistory
+}
+
+func rwmRewriteCaptureChildren(expression *syntax.Regexp) [10][]int {
+	var children [10][]int
+	var visit func(*syntax.Regexp, []int)
+	visit = func(node *syntax.Regexp, parents []int) {
+		if node.Op == syntax.OpCapture && node.Cap < len(children) {
+			for _, parent := range parents {
+				children[parent] = append(children[parent], node.Cap)
+			}
+			parents = append(slices.Clone(parents), node.Cap)
+		}
+		for _, child := range node.Sub {
+			visit(child, parents)
+		}
 	}
-	for index := 2; index < len(candidate); index += 2 {
-		candidateLength, bestLength := -1, -1
-		if candidate[index] >= 0 {
-			candidateLength = candidate[index+1] - candidate[index]
+	visit(expression, nil)
+	return children
+}
+
+// Compare iterations from first to last; the final register value alone loses
+// the greedy choice of earlier iterations. Histories are immutable across paths.
+func rwmRewritePreferCaptureHistory(candidate, best [10]*rwmRewriteCaptureHistory, operation *rwmRewriteOperation) (bool, error) {
+	for group := 1; group < len(candidate); group++ {
+		if candidate[group] == best[group] {
+			continue
 		}
-		if best[index] >= 0 {
-			bestLength = best[index+1] - best[index]
+		var histories [2][]*rwmRewriteCaptureHistory
+		for index, history := range [2]*rwmRewriteCaptureHistory{candidate[group], best[group]} {
+			for node := history; node != nil; node = node.previous {
+				operation.regexSteps++
+				if operation.regexSteps > rwmRewriteMaximumRegexSteps {
+					return false, fmt.Errorf("rewrite regex work exceeds %d steps", rwmRewriteMaximumRegexSteps)
+				}
+				histories[index] = append(histories[index], node)
+			}
 		}
-		if candidateLength != bestLength {
-			return candidateLength > bestLength
+		a, b := histories[0], histories[1]
+		for len(a) > 0 && len(b) > 0 {
+			left, right := a[len(a)-1], b[len(b)-1]
+			if left.end-left.start != right.end-right.start {
+				return left.end-left.start > right.end-right.start, nil
+			}
+			if left.start != right.start {
+				return left.start < right.start, nil
+			}
+			a, b = a[:len(a)-1], b[:len(b)-1]
 		}
-		if candidate[index] != best[index] {
-			return candidate[index] < best[index]
+		if len(a) != len(b) {
+			// An empty extra iteration must not overwrite a nonempty capture.
+			if len(a) > 0 {
+				return best[group] == nil || a[len(a)-1].end > a[len(a)-1].start, nil
+			}
+			return candidate[group] != nil && b[len(b)-1].end == b[len(b)-1].start, nil
 		}
 	}
-	return false
+	return false, nil
 }
