@@ -73,6 +73,12 @@ type AttributeResolver interface {
 	HasAttributeDescription(entry Entry, description string) bool
 }
 
+// FilterAssertionValidator distinguishes an absent value from an unusable
+// assertion; negating the latter must preserve LDAP's undefined result.
+type FilterAssertionValidator interface {
+	ValidateFilterAssertion(Filter) error
+}
+
 func (filter Filter) Match(entry Entry) (bool, error) {
 	return filter.MatchWith(entry, BasicMatcher{})
 }
@@ -137,12 +143,16 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 		}
 
 	case FilterPresent:
-		return booleanFilterResult(
-			resolvedHasAttribute(matcher, entry, filter.Attribute),
-		), nil
+		if !resolvedHasAttribute(matcher, entry, filter.Attribute) {
+			return absentFilterResult(filter, matcher), nil
+		}
+		return FilterTrueResult, nil
 
 	case FilterApprox:
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+		if len(values) == 0 {
+			return absentFilterResult(filter, matcher), nil
+		}
 		approximate, hasApproximateMatcher := matcher.(ApproximateMatcher)
 		undefined := false
 		for _, value := range values {
@@ -177,6 +187,9 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 
 	case FilterEquality, FilterGreaterOrEqual, FilterLessOrEqual:
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+		if len(values) == 0 {
+			return absentFilterResult(filter, matcher), nil
+		}
 		undefined := false
 		for _, value := range values {
 			var comparison int
@@ -219,8 +232,12 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 		return FilterFalseResult, nil
 
 	case FilterSubstrings:
+		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+		if len(values) == 0 {
+			return absentFilterResult(filter, matcher), nil
+		}
 		undefined := false
-		for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
+		for _, value := range values {
 			matches, err := matcher.MatchSubstring(filter.Attribute, value, filter.Substring)
 			if err != nil {
 				undefined = true
@@ -249,8 +266,12 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 			return filter.EvaluateWith(withDNAttributes, matcher)
 		}
 		if filter.Attribute != "" {
+			values := resolvedAttributeValues(matcher, entry, filter.Attribute)
+			if len(values) == 0 {
+				return absentFilterResult(filter, matcher), nil
+			}
 			undefined := false
-			for _, value := range resolvedAttributeValues(matcher, entry, filter.Attribute) {
+			for _, value := range values {
 				comparison, err := matcher.Compare(
 					filter.Attribute,
 					filter.MatchingRule,
@@ -298,9 +319,11 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 	}
 }
 
-func booleanFilterResult(value bool) FilterResult {
-	if value {
-		return FilterTrueResult
+func absentFilterResult(filter Filter, matcher ValueMatcher) FilterResult {
+	if validator, ok := matcher.(FilterAssertionValidator); ok {
+		if err := validator.ValidateFilterAssertion(filter); err != nil {
+			return FilterUndefinedResult
+		}
 	}
 	return FilterFalseResult
 }

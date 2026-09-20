@@ -1280,7 +1280,10 @@ func (server *Server) passwordPolicyModificationProcessor(
 				analysis,
 				options,
 			)
-			if len(oldPassword) > 0 {
+			// Administrators use ordinary Modify value matching. Only a
+			// policy-governed user change interprets Delete as a password.
+			if len(oldPassword) > 0 && prepared.hasPolicy &&
+				!prepared.passwordAdministrator {
 				storedValues := runtime.schema.AttributeValues(
 					entry,
 					policy.attribute,

@@ -773,6 +773,9 @@ func (server *Server) applySyncConsumerEntry(
 				return parseErr
 			}
 			if !existingDN.Equal(nextDN) {
+				if err := moveSyncConsumerDescendants(writer, content, config, existingDN, nextDN); err != nil {
+					return err
+				}
 				if deleteErr := content.Delete(existingDN); deleteErr != nil {
 					return deleteErr
 				}

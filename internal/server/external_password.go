@@ -483,7 +483,8 @@ func (server *Server) preverifyPasswordModification(
 			analysis := prepared.analysis
 			if analysis.passwordModified {
 				oldPassword := passwordPolicyOldPassword(analysis, options)
-				if len(oldPassword) > 0 {
+				if len(oldPassword) > 0 && analysis.newPasswordIndex >= 0 &&
+					prepared.hasPolicy && !prepared.passwordAdministrator {
 					appendSequence(
 						runtime.schema.AttributeValues(entry, policy.attribute),
 						oldPassword,

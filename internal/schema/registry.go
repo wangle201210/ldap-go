@@ -3015,6 +3015,14 @@ func (registry *Registry) validateAttributeDescription(
 	description string,
 	attribute AttributeType,
 ) error {
+	return registry.validateAttributeDescriptionOptions(description, attribute, true)
+}
+
+func (registry *Registry) validateAttributeDescriptionOptions(
+	description string,
+	attribute AttributeType,
+	requireBinaryTransfer bool,
+) error {
 	if description == "" || strings.TrimSpace(description) != description {
 		return errors.New("invalid AttributeDescription")
 	}
@@ -3057,7 +3065,7 @@ func (registry *Registry) validateAttributeDescription(
 			return errors.New("too many or too long attribute options")
 		}
 	}
-	if binarySyntax && !binary {
+	if requireBinaryTransfer && binarySyntax && !binary {
 		return fmt.Errorf("attribute needs ';binary' transfer as required by syntax %s", attribute.Syntax)
 	}
 	return nil
