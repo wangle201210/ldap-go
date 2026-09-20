@@ -319,6 +319,14 @@ unsupported. See [server configuration and bounds](verify-credentials.md) and
 
 ## Implemented subset evidence
 
+The built-in core `cn=config` schema now includes the pinned 111 attributes and
+nine foundation classes, with validated references and native public discovery.
+Configuration attribute names/OIDs share runtime validation and online write
+handling; imported values remain unchanged through the canonical read view.
+Schema registration, bbolt upgrade/reopen, ordered limits, and rejected-update
+rollback have focused coverage. This declares schema metadata, not support for
+all corresponding directives. See [configuration schema](configuration-schema.md).
+
 The optional `allowed` overlay generates schema-derived allowed attribute and
 auxiliary-class lists and the ACL-writable subsets. Explicit/OID/operational
 selection, typesOnly, local paging, identity separation, Root DSE/frontend

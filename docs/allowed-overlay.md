@@ -73,10 +73,11 @@ the overlay is disabled or none of these operational attributes is selected.
 The default-selection microbenchmark reports zero allocations with or without
 the overlay; it is not an end-to-end LDAP throughput comparison.
 
-Some optional built-in `cn=config` classes still lack complete base schema
-definitions. Such classes are omitted as a whole rather than inventing MUST
-sets or effective permissions. Complete native `cn=config` schema projection
-therefore remains unclaimed. Delegated LDAP/meta/socket/passwd/DNS and relay
+The [core configuration schema](configuration-schema.md) now provides the
+foundation classes and their attribute dependencies. Any incomplete custom
+class is still omitted as a whole rather than inventing MUST sets or effective
+permissions. Complete backend-specific schema projection remains unclaimed.
+Delegated LDAP/meta/socket/passwd/DNS and relay
 backend combinations are currently rejected when this overlay would apply;
 they need their own operational response integration. General cross-overlay,
 SQL-provider, replication-topology, and platform parity remain bounded by the

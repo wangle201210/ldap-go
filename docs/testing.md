@@ -162,6 +162,39 @@ claimed. These explicit exclusions are reported as skips, not passing tests.
 
 ## OpenLDAP differential tests
 
+`TestOpenLDAPConfiguration*` checks the pinned core catalog (111 attributes,
+nine classes), inheritance and attribute references, public visibility,
+idempotent registration, semantic OID aliases, clone isolation, conflict rollback,
+and preservation of matching behavior. `TestBuiltinObjectClassReferences`
+checks that built-in classes reference existing parents and attributes, including
+the existing PKI classes' certificate-list/pair fields.
+
+`TestConfigurationSchema*` exercises a real bbolt upgrade from a legacy schema,
+unchanged entries and partitions, persisted indexes and naming fingerprints,
+reopen, classic configuration value formats, and unsupported-setting rollback.
+`TestConfigurationAttribute*` checks runtime activation by name/OID and
+nonmutating startup views. The native comparison is reproducible with:
+
+```sh
+. /path/to/openldap-reference.env
+CGO_ENABLED=0 LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 \
+  go test ./internal/server -run '^TestOpenLDAPConfigurationSchemaReference$' \
+  -count=1 -timeout=2m -v
+```
+
+The fixture verifies metadata, Subschema visibility and selectors, definition
+name/OID Compare and filters, configuration readback, ordered limits, and
+attribute-option behavior. A runtime query proves that language-tagged size
+limits remain stored metadata rather than overriding the base setting.
+Non-default `olcThreads` deliberately differs: native applies it, while ldap-go
+rejects it and retains the existing process-concurrency configuration.
+The completed run passes 1,023 leaf cases: 6 metadata/visibility, 482 schema
+name/OID query, 448 configuration query, 16 class-selector, 40 schema-selector,
+13 modification, 8 tagged-runtime, and 10 assertion-boundary cases. This
+includes two expected `olcThreads` differences, not a claim of universal
+behavioral equality. The checked loops execute 3,921 operations per endpoint
+(984 Compare, 2,920 Search, and 17 Modify), excluding setup and authentication.
+
 `TestAllowed*` covers schema selection and aliases, inheritance, effective
 identity isolation, typesOnly, paging, frontend/data scope, module activation,
 ACL reload, incompatible-schema rollback, non-persistence, and rejection of
