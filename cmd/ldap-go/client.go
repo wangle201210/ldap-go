@@ -1385,6 +1385,7 @@ func runLDAPSearch(
 	defer client.clear()
 
 	baseDN := flags.String("b", "", "search base DN")
+	urlSearch := flags.Bool("url-search", false, "use RFC 4516 search components from -H (project extension)")
 	scopeName := flags.String("s", "sub", "search scope: base, one, sub, or children")
 	derefName := flags.String("a", "never", "alias dereference mode: never, search, find, or always")
 	sizeLimit := flags.Int("z", 0, "search size limit")
@@ -1466,13 +1467,11 @@ func runLDAPSearch(
 	if err != nil {
 		return err
 	}
-	directURL, err := parseLDAPSearchDirectURL(client.uri)
+	dialURIs, directURL, err := resolveLDAPSearchURLs(client.uri, *urlSearch)
 	if err != nil {
 		return err
 	}
-	if directURL.direct {
-		client.uri = directURL.dialURI
-	}
+	client.uri = dialURIs
 	if err := client.validate(flags); err != nil {
 		return err
 	}
@@ -1494,16 +1493,13 @@ func runLDAPSearch(
 	if directURL.direct {
 		filter = directURL.filter
 		attributes = append(attributes, directURL.attributes...)
-		positionalFilter, positionalAttributes := splitLDAPSearchArguments(flags.Args())
-		if positionalFilter != "" {
-			filter = positionalFilter
-		}
-		if positionalAttributes != nil {
-			attributes = positionalAttributes
-		}
-	} else if flags.NArg() > 0 {
-		filter = flags.Arg(0)
-		attributes = flags.Args()[1:]
+	}
+	positionalFilter, positionalAttributes := splitLDAPSearchArguments(flags.Args())
+	if positionalFilter != "" {
+		filter = positionalFilter
+	}
+	if positionalAttributes != nil {
+		attributes = positionalAttributes
 	}
 	batchPatternIndex := -1
 	if *batchPath != "" {
@@ -1705,6 +1701,45 @@ type ldapSearchDirectURL struct {
 	attributes []string
 	scope      int
 	filter     string
+}
+
+func resolveLDAPSearchURLs(rawURI string, urlSearch bool) (string, ldapSearchDirectURL, error) {
+	parseList := parseLDAPClientURIList
+	if urlSearch {
+		parseList = parseLDAPSearchInitialURIList
+	}
+	values, err := parseList(rawURI)
+	if err != nil {
+		return "", ldapSearchDirectURL{}, err
+	}
+	var selected ldapSearchDirectURL
+	for index, value := range values {
+		direct, err := parseLDAPSearchDirectURL(value)
+		if err != nil {
+			return "", ldapSearchDirectURL{}, err
+		}
+		if !direct.direct {
+			continue
+		}
+		if urlSearch {
+			if len(values) != 1 {
+				return "", ldapSearchDirectURL{}, errors.New(
+					"an RFC 4516 LDAP search URL cannot be combined with other -H URIs",
+				)
+			}
+			selected = direct
+		} else if strings.ContainsAny(direct.baseDN+direct.filter, ",") {
+			// Native ldapsearch serializes decoded DN/filter components before
+			// ldap_initialize parses the URI list again, treating commas as separators.
+			return "", ldapSearchDirectURL{}, errors.New(
+				"-H URI search components cannot contain commas; use -b and positional arguments, or -url-search",
+			)
+		}
+		// OpenLDAP uses -H only for connection targets. Validate the full URL
+		// before stripping search components, even when they are not applied.
+		values[index] = direct.dialURI
+	}
+	return strings.Join(values, " "), selected, nil
 }
 
 func parseLDAPSearchDirectURL(rawURI string) (ldapSearchDirectURL, error) {

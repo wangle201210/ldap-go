@@ -89,4 +89,22 @@ func TestLDAPVCProjectServerModule(t *testing.T) {
 			}
 		})
 	}
+	t.Run("explicit anonymous credentials", func(t *testing.T) {
+		stdout, stderr, code := runLDAPClientCommand([]string{
+			"ldapvc", "-x", "-H", "ldap://" + listener.Addr().String(),
+			"-D", clientToolRootDN, "-w", clientToolRootPassword, "-v", "", "",
+		}, "")
+		if code != 0 || stderr != "" || !strings.Contains(stdout, "Result: Success (0)") {
+			t.Fatalf("explicit anonymous VC: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+	t.Run("omitted credentials match native malformed request", func(t *testing.T) {
+		stdout, stderr, code := runLDAPClientCommand([]string{
+			"ldapvc", "-x", "-H", "ldap://" + listener.Addr().String(),
+			"-D", clientToolRootDN, "-w", clientToolRootPassword,
+		}, "")
+		if code == 0 || stderr != "" || !strings.Contains(stdout, "Protocol error (2)") {
+			t.Fatalf("omitted VC credentials: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
 }

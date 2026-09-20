@@ -84,10 +84,12 @@ extra or malformed fields fail.
 
 VC-specific SASL negotiation and continuation cookies are not implemented.
 They fail explicitly; ordinary connection SASL remains supported. The Go client
-also intentionally returns nonzero for an inner verification failure even when
-an external server returns outer success, and sends an explicit empty simple
-credential for anonymous verification. These differ from native 2.6.13 client
-quirks and are asserted by the client differential.
+matches native 2.6.13's outer-result exit status and omission of authentication
+when no operands are supplied. Explicit empty DN and credential operands send
+an empty simple credential for anonymous verification. The client differential
+compares both wire requests and exit status without special-case exclusions.
+Use the ldap-go-only `-require-verified` option when a script also requires
+nonzero exit status for an inner failure under outer success.
 
 See [testing](testing.md) for local, native, and platform evidence. Native
 OpenLDAP modules are external test processes only; production and Go tests

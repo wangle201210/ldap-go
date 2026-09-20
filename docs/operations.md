@@ -100,7 +100,9 @@ identity. See [module and authzid configuration](verify-credentials.md).
 This prompts for Alice's password. `-a` requests the verified authorization
 identity; `-b` requests password-policy information. An optional final password
 operand is supported, but the prompt avoids exposing it in the process argument
-list. Omitting both operands verifies anonymous credentials.
+list. To verify anonymous credentials, pass explicit empty operands: `'' ''`.
+Omitting both operands matches the native client's missing authentication field,
+which the native VC module rejects with `protocolError`.
 
 If the server requires an authenticated connection, use the normal `-D/-W/-y`
 or `-Y/-U` options for that separate identity. Those options do not select the
@@ -108,13 +110,12 @@ password being verified. The command supports verified LDAPS/StartTLS and
 connection failover; it does not chase verification referrals. `-n` validates
 locally without connecting or prompting.
 
-Both an outer LDAP error and a failed inner credential check return a nonzero
-exit status. OpenLDAP 2.6.13's `ldapvc` returns zero for an inner failure when
-the outer operation succeeds; scripts must account for this intentional
-difference. VC-specific interactive SASL (`-E`) and continuation cookies remain
-unsupported. Normal connection SASL remains available.
-Anonymous verification sends an explicit empty simple-authentication field;
-native 2.6.13 omits that mandatory field when its credential pointer is absent.
+By default the exit status follows the outer LDAP result, matching OpenLDAP
+2.6.13. An outer success with an inner verification failure prints `Failed:`
+but exits zero. Use `-require-verified` to preserve ldap-go's previous behavior
+of returning nonzero for either failure; this extra option is not a native
+OpenLDAP flag. VC-specific interactive SASL (`-E`) and continuation cookies
+remain unsupported. Normal connection SASL remains available.
 
 ## Web administration
 

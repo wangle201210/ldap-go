@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
@@ -34,7 +38,7 @@ func TestLDAPSearchDirectURLRFC4516AndExplicitPrecedence(t *testing.T) {
 		"/ou%3Dpeople%2Cdc%3Dexample%2Cdc%3Dcom" +
 		"?uid,cn?one?%28uid%3Dalice%29?x-direct=%2Bvalue"
 	stdout, stderr, exitCode := runLDAPClientCommand([]string{
-		"ldapsearch", "-H", directURL, "-x", "-LLL",
+		"ldapsearch", "-H", directURL, "-url-search", "-x", "-LLL",
 	}, "")
 	if exitCode != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("direct URL search exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
@@ -49,7 +53,7 @@ func TestLDAPSearchDirectURLRFC4516AndExplicitPrecedence(t *testing.T) {
 	})
 
 	stdout, stderr, exitCode = runLDAPClientCommand([]string{
-		"ldapsearch", "-H", directURL, "-x", "-LLL",
+		"ldapsearch", "-H", directURL, "-url-search", "-x", "-LLL",
 		"-b", "dc=example,dc=com", "-s", "sub",
 		"(uid=bob)", "description",
 	}, "")
@@ -66,7 +70,7 @@ func TestLDAPSearchDirectURLRFC4516AndExplicitPrecedence(t *testing.T) {
 	})
 
 	stdout, stderr, exitCode = runLDAPClientCommand([]string{
-		"ldapsearch", "-H", directURL, "-x", "-LLL", "mail",
+		"ldapsearch", "-H", directURL, "-url-search", "-x", "-LLL", "mail",
 	}, "")
 	if exitCode != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("URL filter with positional attrs exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
@@ -97,7 +101,7 @@ func TestLDAPSearchDirectURLEmptyComponentsUseRFC4516Defaults(t *testing.T) {
 	})
 
 	stdout, stderr, exitCode := runLDAPClientCommand([]string{
-		"ldapsearch", "-H", fixture.uri + "/???", "-x", "-LLL",
+		"ldapsearch", "-H", fixture.uri + "/???", "-url-search", "-x", "-LLL",
 	}, "")
 	if exitCode != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("default URL search exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
@@ -110,7 +114,7 @@ func TestLDAPSearchDirectURLEmptyComponentsUseRFC4516Defaults(t *testing.T) {
 	}
 }
 
-func TestLDAPSearchPlainURIKeepsSlashAndFirstPositionalFilterSemantics(t *testing.T) {
+func TestLDAPSearchPlainURIKeepsSlashAndPositionalAttributeSemantics(t *testing.T) {
 	requests := make(chan ldapwire.SearchRequest, 1)
 	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
 		request, ok := message.Request.(ldapwire.SearchRequest)
@@ -141,8 +145,87 @@ func TestLDAPSearchPlainURIKeepsSlashAndFirstPositionalFilterSemantics(t *testin
 	stdout, stderr, exitCode = runLDAPClientCommand([]string{
 		"ldapsearch", "-H", fixture.uri, "-x", "-LLL", "cn",
 	}, "")
-	if exitCode == 0 || stdout != "" || !strings.Contains(stderr, "Bad search filter") {
-		t.Fatalf("plain positional filter exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	if exitCode != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("plain positional attribute exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	}
+	assertLDAPSearchURLRequest(t, awaitLDAPClientWireMessageValue(t, requests), ldapSearchURLRequest{
+		scope:      directory.ScopeWholeSubtree,
+		filterKind: directory.FilterPresent,
+		attribute:  "objectClass",
+		attributes: []string{"cn"},
+	})
+}
+
+func TestLDAPSearchConnectionURLDefaultsAndFailover(t *testing.T) {
+	requests := make(chan ldapwire.SearchRequest, 1)
+	var binds atomic.Int32
+	fixture := startLDAPClientWireFixture(t, func(message ldapwire.Message) ([][]byte, error) {
+		if _, ok := message.Request.(ldapwire.BindRequest); ok {
+			binds.Add(1)
+			return [][]byte{ldapwire.EncodeBindResponse(message.ID,
+				ldapwire.Result{Code: ldapwire.ResultSuccess}, nil)}, nil
+		}
+		if request, ok := message.Request.(ldapwire.SearchRequest); ok {
+			requests <- request
+			return [][]byte{ldapwire.EncodeSearchResultDone(message.ID,
+				ldapwire.Result{Code: ldapwire.ResultSuccess}, nil)}, nil
+		}
+		return nil, nil
+	})
+	fullURL := fixture.uri + "/dc=ignored?cn?one?%28uid%3Dignored%29"
+	for _, test := range []struct {
+		name string
+		uri  string
+		args []string
+	}{
+		{name: "full URL", uri: fullURL},
+		{name: "explicitly disabled extension", uri: fullURL, args: []string{"-url-search=false"}},
+		{name: "empty components", uri: fixture.uri + "/???"},
+		{name: "DN only", uri: fixture.uri + "/dc=ignored"},
+		{name: "space failover", uri: unavailableLDAPClientURI(t) + "/dc=unused " + fullURL},
+		{name: "comma failover", uri: unavailableLDAPClientURI(t) + "/dc=unused," + fullURL},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"ldapsearch", "-H", test.uri, "-x", "-LLL"}, test.args...)
+			stdout, stderr, code := runLDAPClientCommand(args, "")
+			if code != 0 || stdout != "" || stderr != "" {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			assertLDAPSearchURLRequest(t, awaitLDAPClientWireMessageValue(t, requests), ldapSearchURLRequest{
+				scope: directory.ScopeWholeSubtree, filterKind: directory.FilterPresent, attribute: "objectClass",
+			})
+		})
+	}
+	bindsBeforeRejections := binds.Load()
+	_, stderr, code := runLDAPClientCommand([]string{
+		"ldapsearch", "-H", fixture.uri + " " + fullURL, "-url-search", "-x", "-LLL",
+	}, "")
+	if code == 0 || !strings.Contains(stderr, "cannot be combined") {
+		t.Fatalf("ambiguous URL search exit=%d stderr=%q", code, stderr)
+	}
+	for _, invalid := range []string{
+		"ldap://127.0.0.1:65536/dc=ignored",
+		"ldap://user:secret@127.0.0.1/dc=ignored",
+		"ldap://127.0.0.1/???%28uid%3D",
+		fixture.uri + "/dc=ignored,dc=example",
+		fixture.uri + "/dc%3Dignored%2Cdc%3Dexample",
+		fixture.uri + "/?cn,sn",
+		fixture.uri + "/???%28cn%3Da%2Cb%29",
+	} {
+		_, stderr, code := runLDAPClientCommand([]string{
+			"ldapsearch", "-H", fullURL + " " + invalid, "-x", "-LLL",
+		}, "")
+		if code == 0 || stderr == "" {
+			t.Fatalf("invalid URL list exit=%d stderr=%q", code, stderr)
+		}
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("invalid URL list sent a search: %#v", request)
+	default:
+	}
+	if got := binds.Load(); got != bindsBeforeRejections {
+		t.Fatalf("invalid URL list sent %d binds", got-bindsBeforeRejections)
 	}
 }
 
@@ -167,18 +250,20 @@ func TestLDAPSearchDirectURLStrictParsingAndCriticalExtensions(t *testing.T) {
 		{name: "fragment", uri: "ldap://127.0.0.1:1/#fragment", message: "fragments are not permitted"},
 		{name: "empty fragment", uri: "ldap://127.0.0.1:1/#", message: "fragments are not permitted"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stdout, stderr, exitCode := runLDAPClientCommand([]string{
-				"ldapsearch", "-H", test.uri, "-x", "-LLL",
-			}, "")
-			if exitCode == 0 || stdout != "" || !strings.Contains(stderr, test.message) {
-				t.Fatalf("direct URL exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
-			}
-			if strings.Contains(stderr, "connect to") {
-				t.Fatalf("direct URL validation attempted a connection: %q", stderr)
-			}
-		})
+	for _, mode := range []string{"-url-search=false", "-url-search=true"} {
+		for _, test := range tests {
+			t.Run(mode+"/"+test.name, func(t *testing.T) {
+				stdout, stderr, exitCode := runLDAPClientCommand([]string{
+					"ldapsearch", "-H", test.uri, mode, "-x", "-LLL",
+				}, "")
+				if exitCode == 0 || stdout != "" || !strings.Contains(stderr, test.message) {
+					t.Fatalf("direct URL exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+				}
+				if strings.Contains(stderr, "connect to") {
+					t.Fatalf("direct URL validation attempted a connection: %q", stderr)
+				}
+			})
+		}
 	}
 }
 
@@ -206,41 +291,69 @@ func TestLDAPSearchDirectURLStripsQueryAndPreservesTLSHost(t *testing.T) {
 
 func TestLDAPSearchDirectURLPreservesHostDuringRealLDAPSHandshake(t *testing.T) {
 	serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
-	requests := make(chan ldapwire.SearchRequest, 1)
-	uri := startLDAPClientTLSWireFixture(t, serverTLS, func(message ldapwire.Message) ([][]byte, error) {
-		switch request := message.Request.(type) {
-		case ldapwire.BindRequest:
-			return [][]byte{ldapwire.EncodeBindResponse(
-				message.ID,
-				ldapwire.Result{Code: ldapwire.ResultSuccess},
-				nil,
-			)}, nil
-		case ldapwire.SearchRequest:
-			requests <- request
-			return [][]byte{ldapwire.EncodeSearchResultDone(
-				message.ID,
-				ldapwire.Result{Code: ldapwire.ResultSuccess},
-				nil,
-			)}, nil
-		default:
-			return nil, nil
-		}
-	})
-	uri = strings.Replace(uri, "127.0.0.1", "localhost", 1)
 	caPath := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	directURL := uri + "/dc%3Dexample%2Cdc%3Dcom?dc?base?%28objectClass%3D%2A%29"
-	stdout, stderr, exitCode := runLDAPClientCommand([]string{
-		"ldapsearch", "-H", directURL, "-x", "-tls-ca", caPath, "-LLL",
-	}, "")
-	if exitCode != 0 || stdout != "" || stderr != "" {
-		t.Fatalf("LDAPS direct URL exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+	for _, mode := range []string{"-url-search=false", "-url-search=true"} {
+		t.Run(mode, func(t *testing.T) {
+			requests := make(chan ldapwire.SearchRequest, 1)
+			uri := startLDAPClientTLSWireFixture(t, serverTLS.Clone(), func(message ldapwire.Message) ([][]byte, error) {
+				switch request := message.Request.(type) {
+				case ldapwire.BindRequest:
+					return [][]byte{ldapwire.EncodeBindResponse(message.ID,
+						ldapwire.Result{Code: ldapwire.ResultSuccess}, nil)}, nil
+				case ldapwire.SearchRequest:
+					requests <- request
+					return [][]byte{ldapwire.EncodeSearchResultDone(message.ID,
+						ldapwire.Result{Code: ldapwire.ResultSuccess}, nil)}, nil
+				default:
+					return nil, nil
+				}
+			})
+			uri = strings.Replace(uri, "127.0.0.1", "localhost", 1)
+			directURL := uri + "/dc%3Dexample?dc?base?%28objectClass%3D%2A%29"
+			stdout, stderr, exitCode := runLDAPClientCommand([]string{
+				"ldapsearch", "-H", directURL, mode, "-x", "-tls-ca", caPath, "-LLL",
+			}, "")
+			if exitCode != 0 || stdout != "" || stderr != "" {
+				t.Fatalf("LDAPS direct URL exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
+			}
+			want := ldapSearchURLRequest{
+				scope: directory.ScopeWholeSubtree, filterKind: directory.FilterPresent, attribute: "objectClass",
+			}
+			if mode == "-url-search=true" {
+				want.baseDN, want.scope, want.attributes = "dc=example", directory.ScopeBase, []string{"dc"}
+			}
+			assertLDAPSearchURLRequest(t, awaitLDAPClientWireMessageValue(t, requests), want)
+		})
 	}
-	request := awaitLDAPClientWireMessageValue(t, requests)
-	if request.BaseDN != "dc=example,dc=com" || request.Scope != directory.ScopeBase {
-		t.Fatalf("LDAPS direct URL request = %#v", request)
+}
+
+func TestLDAPSearchURLStartTLSVerifiesTarget(t *testing.T) {
+	serverTLS, certificatePEM := newLDAPClientToolTLSConfig(t)
+	uri := startLDAPClientToolServer(t, serverTLS) + "/dc=ignored?cn?one?%28uid%3Dignored%29"
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, certificatePEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"-url-search=false", "-url-search=true"} {
+		t.Run(mode, func(t *testing.T) {
+			args := []string{
+				"ldapsearch", "-H", uri, mode, "-x", "-ZZ", "-tls-ca", caPath,
+				"-b", clientToolBaseDN, "-s", "base", "-LLL",
+			}
+			stdout, stderr, code := runLDAPClientCommand(append(args, "(objectClass=*)", "dc"), "")
+			if code != 0 || stderr != "" || !strings.Contains(stdout, "dn: "+clientToolBaseDN) {
+				t.Fatalf("StartTLS URL search exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			stdout, stderr, code = runLDAPClientCommand(append(args,
+				"-tls-server-name", "wrong.example", "(objectClass=*)", "dc"), "")
+			if code == 0 || stdout != "" || !strings.Contains(stderr, "wrong.example") ||
+				!strings.Contains(stderr, "certificate") {
+				t.Fatalf("StartTLS URL accepted wrong peer identity: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
 	}
 }
 
@@ -265,7 +378,7 @@ func TestLDAPSearchDirectURLDoesNotReplaceReferralURLSemantics(t *testing.T) {
 		"/ou%3Dsource%2Cdc%3Dexample%2Cdc%3Dcom?cn?one?%28uid%3Dinitial%29"
 
 	stdout, stderr, exitCode := runLDAPClientCommand([]string{
-		"ldapsearch", "-H", initialURL, "-x", "-C", "-LLL",
+		"ldapsearch", "-H", initialURL, "-url-search", "-x", "-C", "-LLL",
 	}, "")
 	if exitCode != 0 || stdout != "" || stderr != "" {
 		t.Fatalf("direct referral search exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
@@ -291,6 +404,13 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 	referenceTool := filepath.Join(os.Getenv("OPENLDAP_BUILD"), "clients", "tools", "ldapsearch")
 	if _, err := os.Stat(referenceTool); err != nil {
 		t.Fatalf("find pinned OpenLDAP ldapsearch: %v", err)
+	}
+	runReference := func(arguments ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, referenceTool, arguments...)
+		command.Env = append(os.Environ(), "LDAPNOINIT=1", "LC_ALL=C")
+		return command.CombinedOutput()
 	}
 
 	requests := make(chan ldapwire.SearchRequest, 10)
@@ -320,7 +440,7 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 		t.Fatalf("ldap-go exit=%d stdout=%q stderr=%q", localExit, localStdout, localStderr)
 	}
 	localRequest := awaitLDAPClientWireMessageValue(t, requests)
-	referenceOutput, referenceErr := exec.Command(referenceTool, arguments...).CombinedOutput()
+	referenceOutput, referenceErr := runReference(arguments...)
 	if referenceErr != nil || len(referenceOutput) != 0 {
 		t.Fatalf("OpenLDAP ldapsearch: %v output=%q", referenceErr, referenceOutput)
 	}
@@ -338,7 +458,7 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 		t.Fatalf("ldap-go slash URI exit=%d stdout=%q stderr=%q", localExit, localStdout, localStderr)
 	}
 	localSlashRequest := awaitLDAPClientWireMessageValue(t, requests)
-	referenceOutput, referenceErr = exec.Command(referenceTool, plainSlashArguments...).CombinedOutput()
+	referenceOutput, referenceErr = runReference(plainSlashArguments...)
 	if referenceErr != nil || len(referenceOutput) != 0 {
 		t.Fatalf("OpenLDAP slash URI ldapsearch: %v output=%q", referenceErr, referenceOutput)
 	}
@@ -362,24 +482,20 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 		t.Fatalf("ldap-go URL-only exit=%d stdout=%q stderr=%q", localExit, localStdout, localStderr)
 	}
 	localURLRequest := awaitLDAPClientWireMessageValue(t, requests)
-	referenceOutput, referenceErr = exec.Command(
-		referenceTool,
+	referenceOutput, referenceErr = runReference(
 		"-H",
 		fullURL,
 		"-x",
 		"-LLL",
-	).CombinedOutput()
+	)
 	if referenceErr != nil || len(referenceOutput) != 0 {
 		t.Fatalf("OpenLDAP URL-only ldapsearch: %v output=%q", referenceErr, referenceOutput)
 	}
 	referenceURLRequest := awaitLDAPClientWireMessageValue(t, requests)
 	assertLDAPSearchURLRequest(t, localURLRequest, ldapSearchURLRequest{
-		baseDN:     "dc=ignored",
-		scope:      directory.ScopeBase,
-		filterKind: directory.FilterEquality,
-		attribute:  "uid",
-		assertion:  "bob",
-		attributes: []string{"description"},
+		scope:      directory.ScopeWholeSubtree,
+		filterKind: directory.FilterPresent,
+		attribute:  "objectClass",
 	})
 	if referenceURLRequest.BaseDN != "" ||
 		referenceURLRequest.Scope != directory.ScopeWholeSubtree ||
@@ -396,21 +512,20 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 		t.Fatalf("ldap-go URL attrs override exit=%d stdout=%q stderr=%q", localExit, localStdout, localStderr)
 	}
 	localAttrsRequest := awaitLDAPClientWireMessageValue(t, requests)
-	referenceOutput, referenceErr = exec.Command(
-		referenceTool,
+	referenceOutput, referenceErr = runReference(
 		"-H",
 		fullURL,
 		"-x",
 		"-LLL",
 		"uid",
-	).CombinedOutput()
+	)
 	if referenceErr != nil || len(referenceOutput) != 0 {
 		t.Fatalf("OpenLDAP URL attrs ldapsearch: %v output=%q", referenceErr, referenceOutput)
 	}
 	referenceAttrsRequest := awaitLDAPClientWireMessageValue(t, requests)
 	if !reflect.DeepEqual(localAttrsRequest.Attributes, []string{"uid"}) ||
-		localAttrsRequest.Filter.Kind != directory.FilterEquality ||
-		string(localAttrsRequest.Filter.Assertion) != "bob" ||
+		localAttrsRequest.Filter.Kind != directory.FilterPresent ||
+		!strings.EqualFold(localAttrsRequest.Filter.Attribute, "objectClass") ||
 		!reflect.DeepEqual(referenceAttrsRequest.Attributes, []string{"uid"}) ||
 		referenceAttrsRequest.Filter.Kind != directory.FilterPresent {
 		t.Fatalf(
@@ -419,7 +534,65 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 			referenceAttrsRequest,
 		)
 	}
+	for _, test := range []struct {
+		name string
+		uri  string
+		args []string
+	}{
+		{name: "DN only", uri: fixture.uri + "/dc%3Dignored"},
+		{name: "empty URL components", uri: fixture.uri + "/???"},
+		{name: "explicit base only", uri: fullURL, args: []string{"-b", "dc=explicit"}},
+		{name: "explicit scope only", uri: fullURL, args: []string{"-s", "one"}},
+		{name: "explicit filter only", uri: fullURL, args: []string{"(uid=explicit)"}},
+		{name: "plain URI attributes", uri: fixture.uri, args: []string{"uid", "cn"}},
+		{name: "URL list space failover", uri: unavailableLDAPClientURI(t) + "/dc%3Dunused " + fullURL},
+		{name: "URL list comma failover", uri: unavailableLDAPClientURI(t) + "/dc%3Dunused," + fullURL},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"-H", test.uri, "-x", "-LLL"}, test.args...)
+			localOut, localErr, code := runLDAPClientCommand(append([]string{"ldapsearch"}, args...), "")
+			if code != 0 || localOut != "" || localErr != "" {
+				t.Fatalf("ldap-go exit=%d stdout=%q stderr=%q", code, localOut, localErr)
+			}
+			local := awaitLDAPClientWireMessageValue(t, requests)
+			output, err := runReference(args...)
+			if err != nil || len(output) != 0 {
+				t.Fatalf("OpenLDAP: %v output=%q", err, output)
+			}
+			reference := awaitLDAPClientWireMessageValue(t, requests)
+			// Attribute descriptions are case-insensitive on the wire.
+			local.Filter.Attribute = strings.ToLower(local.Filter.Attribute)
+			reference.Filter.Attribute = strings.ToLower(reference.Filter.Attribute)
+			if !reflect.DeepEqual(local, reference) {
+				t.Fatalf("-H requests differ: ldap-go=%#v OpenLDAP=%#v", local, reference)
+			}
+		})
+	}
+	for _, suffix := range []string{
+		"/dc=ignored,dc=example",
+		"/dc%3Dignored%2Cdc%3Dexample",
+		"/dc%3Dignored?cn,sn?one?%28uid%3Dignored%29",
+		"/???%28cn%3Da%2Cb%29",
+	} {
+		t.Run("reject comma "+suffix, func(t *testing.T) {
+			args := []string{"-H", fixture.uri + suffix, "-x", "-LLL"}
+			_, localErr, code := runLDAPClientCommand(append([]string{"ldapsearch"}, args...), "")
+			output, err := runReference(args...)
+			if code != 1 || err == nil || len(output) == 0 || localErr == "" {
+				t.Fatalf("comma rejection differs: ldap-go=%d %q OpenLDAP=%v %q", code, localErr, err, output)
+			}
+			if failure, ok := err.(*exec.ExitError); !ok || failure.ExitCode() != code {
+				t.Fatalf("OpenLDAP comma rejection exit code: %v", err)
+			}
+			select {
+			case request := <-requests:
+				t.Fatalf("rejected URL sent a search: %#v", request)
+			default:
+			}
+		})
+	}
 
+	// Retain fail-closed handling of unsupported critical URL extensions.
 	criticalURL := fixture.uri + "/????!x-direct"
 	_, localError, localExit := runLDAPClientCommand([]string{
 		"ldapsearch", "-H", criticalURL, "-x", "-LLL",
@@ -427,13 +600,12 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 	if localExit == 0 || !strings.Contains(localError, "unsupported critical") {
 		t.Fatalf("ldap-go critical URL exit=%d stderr=%q", localExit, localError)
 	}
-	referenceOutput, referenceErr = exec.Command(
-		referenceTool,
+	referenceOutput, referenceErr = runReference(
 		"-H",
 		criticalURL,
 		"-x",
 		"-LLL",
-	).CombinedOutput()
+	)
 	if referenceErr != nil || len(referenceOutput) != 0 {
 		t.Fatalf("OpenLDAP critical URL ldapsearch: %v output=%q", referenceErr, referenceOutput)
 	}
@@ -441,7 +613,7 @@ func TestOpenLDAP213LDAPSearchDirectURLExplicitPrecedenceDifferential(t *testing
 
 	badScope := []string{"-H", criticalURL, "-x", "-s", "invalid"}
 	_, localError, localExit = runLDAPClientCommand(append([]string{"ldapsearch"}, badScope...), "")
-	referenceError, referenceErr := exec.Command(referenceTool, badScope...).CombinedOutput()
+	referenceError, referenceErr := runReference(badScope...)
 	if localExit == 0 || referenceErr == nil ||
 		!bytes.Contains([]byte(localError), []byte("-s must be")) ||
 		!bytes.Contains(referenceError, []byte("scope should be")) {
@@ -473,7 +645,7 @@ func assertLDAPSearchURLRequest(
 	if request.BaseDN != want.baseDN || request.Scope != want.scope ||
 		request.Filter.Kind != want.filterKind || request.Filter.Attribute != want.attribute ||
 		string(request.Filter.Assertion) != want.assertion ||
-		!reflect.DeepEqual(request.Attributes, want.attributes) {
+		!slices.Equal(request.Attributes, want.attributes) {
 		t.Fatalf("direct URL request = %#v, want %#v", request, want)
 	}
 }

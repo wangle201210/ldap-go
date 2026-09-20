@@ -273,7 +273,7 @@ func TestLDAPURIListReviewExternal(t *testing.T) {
 				args := uriListReviewArgs("ldapsearch", good.uri+suffix, false)
 				stdout, stderr, local := runLDAPClientCommand(args, "")
 				output, external := runExternal(t, args)
-				// Direct search URL support intentionally extends OpenLDAP's -H semantics.
+				// Complete RFC 4516 URL searches require the explicit -url-search extension.
 				t.Logf("local=%d %q %q external=%d %q", local, stdout, stderr, external, output)
 			})
 		}

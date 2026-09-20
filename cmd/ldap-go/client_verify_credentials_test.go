@@ -182,9 +182,12 @@ func TestLDAPVCResultExitPolicyAndRedaction(t *testing.T) {
 		value            []byte
 		want, diagnostic string
 		status           int
+		requireVerified  bool
 	}{
 		{name: "success", value: ldapVCTestValue(0, ""), want: "Result: Success (0)\n"},
-		{name: "inner rejection", value: ldapVCTestValue(49, "denied target-secret"), want: "Failed: Invalid credentials (49)\nDiagnostic: denied [redacted]\nResult: Success (0)\n", status: 1},
+		{name: "inner rejection", value: ldapVCTestValue(49, "denied target-secret"), want: "Failed: Invalid credentials (49)\nDiagnostic: denied [redacted]\nResult: Success (0)\n"},
+		{name: "required verification rejection", value: ldapVCTestValue(49, "denied target-secret"), want: "Failed: Invalid credentials (49)\nDiagnostic: denied [redacted]\nResult: Success (0)\n", status: 1, requireVerified: true},
+		{name: "required verification success", value: ldapVCTestValue(0, ""), want: "Result: Success (0)\n", requireVerified: true},
 		{name: "outer rejection", outer: ldapwire.Result{Code: 53, DiagnosticMessage: "denied target-secret", MatchedDN: "dc=example"}, want: "Result: Server is unwilling to perform (53)\nAdditional info: denied [redacted]\nMatched DN: dc=example\n", status: 1},
 		{name: "both codes", outer: ldapwire.Result{Code: 49}, value: ldapVCTestValue(32, ""), want: "Failed: No such object (32)\nResult: Invalid credentials (49)\n", status: 1},
 		{name: "missing response", diagnostic: "missing its value", status: 1},
@@ -195,7 +198,12 @@ func TestLDAPVCResultExitPolicyAndRedaction(t *testing.T) {
 			uri, done := startLDAPExtendedWireServer(t, func(id int64, _ ldapwire.ExtendedRequest) ([]byte, error) {
 				return ldapVCTestResponse(id, test.outer, test.value), nil
 			})
-			stdout, stderr, status := runLDAPClientCommand([]string{"ldapvc", "-xv", "-H", uri, "cn=user", "target-secret"}, "")
+			args := []string{"ldapvc", "-xv", "-H", uri}
+			if test.requireVerified {
+				args = append(args, "-require-verified")
+			}
+			args = append(args, "cn=user", "target-secret")
+			stdout, stderr, status := runLDAPClientCommand(args, "")
 			awaitLDAPExtendedWireServer(t, done)
 			if status != test.status || stdout != test.want || (test.diagnostic == "" && stderr != "") || !strings.Contains(stderr, test.diagnostic) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", status, stdout, stderr)

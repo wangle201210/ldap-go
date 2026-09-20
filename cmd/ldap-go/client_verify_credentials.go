@@ -30,14 +30,17 @@ const (
 // remains independent of the simple authentication inside this operation.
 const ldapVCUsage = `usage: ldap-go ldapvc [options] [DN [cred]]
 Verify credentials without changing the connection's authorization identity.
-DN omitted verifies anonymous credentials; cred omitted prompts for the user's password.
+DN omitted matches the native request without an authentication field.
+Pass explicit empty DN and credentials to verify anonymous credentials.
+With a DN operand, omitted cred prompts for the user's password.
 -D/-w/-W/-y and -Y/-U/-X/-R/-O authenticate the connection, not the verified user.
 
 Requires the vc module on OpenLDAP or ldap-go (olcModuleLoad: vc.la).
 The ldap-go server disables this extension until the module is configured.
 VC-specific -E sasl/mech/realm/authcid/authzid/secprops and cookie/SASL continuation
 are unsupported, as the pinned OpenLDAP interactive VC API is not implemented.
-Verification failures return nonzero, including an inner failure with outer success.
+Exit status follows the outer LDAP result, matching OpenLDAP 2.6.13.
+Use -require-verified to also fail on an inner verification failure.
 Dry runs validate locally without connecting or prompting.
 
 Options:
@@ -58,6 +61,7 @@ func runLDAPVC(args []string, stdin io.Reader, stdout, stderr io.Writer) (runErr
 	versionOnly := flags.Bool("VV", false, "print version information and exit")
 	authzID := flags.Bool("a", false, "request the verified user's authorization identity")
 	policy := flags.Bool("b", false, "request the verified user's password policy information")
+	requireVerified := flags.Bool("require-verified", false, "return nonzero when the inner credential verification fails")
 	var extensions repeatedStringFlag
 	flags.Var(&extensions, "E", "VC SASL parameters (unsupported by the pinned OpenLDAP implementation)")
 	flags.Usage = func() {
@@ -204,7 +208,7 @@ func runLDAPVC(args []string, stdin io.Reader, stdout, stderr io.Writer) (runErr
 	if _, err := io.WriteString(stdout, ldapVCRedact(output.String(), credential)); err != nil {
 		return err
 	}
-	if result.outerCode != 0 || result.code != 0 {
+	if result.outerCode != 0 || (*requireVerified && result.code != 0) {
 		return &ldapClientExitError{code: 1}
 	}
 	return nil
@@ -280,9 +284,11 @@ func encodeLDAPVCRequest(dn string, credential []byte, controls []ldap.Control) 
 	value := ber.NewSequence("Verify Credentials")
 	defer clearBERPacket(value)
 	value.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, dn, "DN"))
-	password := ber.Encode(ber.ClassContext, ber.TypePrimitive, 0, nil, "simple")
-	password.Data.Write(credential)
-	value.AppendChild(password)
+	if credential != nil {
+		password := ber.Encode(ber.ClassContext, ber.TypePrimitive, 0, nil, "simple")
+		password.Data.Write(credential)
+		value.AppendChild(password)
+	}
 	if len(controls) != 0 {
 		wrapper := ber.Encode(ber.ClassContext, ber.TypeConstructed, 2, nil, "controls")
 		for _, control := range controls {

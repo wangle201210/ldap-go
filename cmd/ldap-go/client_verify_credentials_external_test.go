@@ -49,10 +49,11 @@ func TestLDAPVCOpenLDAPNativeDifferential(t *testing.T) {
 	}{
 		{name: "simple", args: []string{"-x", "cn=user", "pw"}, value: ldapVCTestValue(0, "")},
 		{name: "anonymous", args: []string{"-x"}, value: ldapVCTestValue(0, "")},
+		{name: "explicit anonymous", args: []string{"-x", "", ""}, value: ldapVCTestValue(0, "")},
 		{name: "verbose", args: []string{"-xv", "cn=user", "pw"}, value: ldapVCTestValue(0, "")},
 		{name: "nested controls", args: []string{"-xab", "-o", "ldif_wrap=no", "cn=user", "pw"}, value: ldapVCTestValue(0, "", innerControls)},
 		{name: "general controls", args: []string{"-x", "-e", "ppolicy", "-e", "!1.2.3", "-D", "cn=operator", "-w", "bind-secret", "cn=user", "pw"}, value: ldapVCTestValue(0, "")},
-		{name: "inner rejection exit difference", args: []string{"-xv", "cn=user", "pw"}, value: ldapVCTestValue(49, "denied"), goCode: 1},
+		{name: "inner rejection", args: []string{"-xv", "cn=user", "pw"}, value: ldapVCTestValue(49, "denied")},
 		{name: "outer rejection", args: []string{"-x", "cn=user", "pw"}, outer: ldapwire.Result{Code: 53, DiagnosticMessage: "disabled"}, goCode: 1, nativeCode: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -88,21 +89,12 @@ func TestLDAPVCOpenLDAPNativeDifferential(t *testing.T) {
 				}
 				nativeCode = exitError.ExitCode()
 			}
-			if nativeCode != test.nativeCode || stdout != nativeOut.String() {
+			if nativeCode != test.nativeCode || goCode != nativeCode || stdout != nativeOut.String() {
 				t.Fatalf("Go exit=%d stdout=%q; native exit=%d stdout=%q stderr=%q", goCode, stdout, nativeCode, nativeOut.String(), nativeErr.String())
 			}
 			nativeBind := awaitLDAPClientWireMessage(t, requests)
 			nativeVC := awaitLDAPClientWireMessage(t, requests)
 			pairs := [][2]ldapwire.Message{{goBind, nativeBind}, {goVC, nativeVC}}
-			if test.name == "anonymous" {
-				// Native omits the mandatory AuthenticationChoice when cred is NULL.
-				// Send an explicit empty simple credential, as required by VCRequest.
-				if !bytes.Equal(goVC.Request.(ldapwire.ExtendedRequest).Value, []byte{0x30, 4, 4, 0, 0x80, 0}) ||
-					!bytes.Equal(nativeVC.Request.(ldapwire.ExtendedRequest).Value, []byte{0x30, 2, 4, 0}) {
-					t.Fatal("anonymous request compatibility assumption changed")
-				}
-				pairs = pairs[:1]
-			}
 			for _, pair := range pairs {
 				if !reflect.DeepEqual(pair[0].Request, pair[1].Request) || !reflect.DeepEqual(pair[0].Controls, pair[1].Controls) {
 					t.Fatal("Go and native requests differ (credential-bearing packets omitted)")
