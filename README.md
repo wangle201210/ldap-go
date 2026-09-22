@@ -82,6 +82,9 @@ for the reproducible comparison method.
 
 The [2026-09-20 performance audit](docs/performance-audit-20260920.md) adds
 revision comparisons, 100k snapshot queries, and remaining performance limits.
+The [2026-09-22 optimization](docs/performance-optimization-20260922.md) reduced
+first objectClass traversal time by 36.7% and repeated traversal time by 9.0%
+in the separate 100k snapshot workload, with exact ordinary-data parity.
 
 ## Requirements
 

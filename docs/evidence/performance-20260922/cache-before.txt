@@ -1,0 +1,39 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkSearchResultCache/entries=1/get-4     	 3608890	        66.15 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/get-4     	 3373615	        70.24 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/get-4     	 3430214	        65.89 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/get_parallel-4         	 1000000	       209.1 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/get_parallel-4         	 1392009	       220.8 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/get_parallel-4         	 1494295	       156.5 ns/op	      80 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=1/put-4                  	  847320	       288.7 ns/op	     344 B/op	       8 allocs/op
+BenchmarkSearchResultCache/entries=1/put-4                  	  935292	       275.5 ns/op	     344 B/op	       8 allocs/op
+BenchmarkSearchResultCache/entries=1/put-4                  	  935367	       283.3 ns/op	     344 B/op	       8 allocs/op
+BenchmarkSearchResultCache/entries=4/get-4                  	 1664056	       142.9 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/get-4                  	 1699596	       138.4 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/get-4                  	 1706396	       140.0 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/get_parallel-4         	 1000000	       241.0 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/get_parallel-4         	 1000000	       220.8 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/get_parallel-4         	 1000000	       226.0 ns/op	     320 B/op	       1 allocs/op
+BenchmarkSearchResultCache/entries=4/put-4                  	  247744	       962.2 ns/op	    1376 B/op	      29 allocs/op
+BenchmarkSearchResultCache/entries=4/put-4                  	  263539	       933.1 ns/op	    1376 B/op	      29 allocs/op
+BenchmarkSearchResultCache/entries=4/put-4                  	  259580	       949.4 ns/op	    1376 B/op	      29 allocs/op
+BenchmarkSearchResultCache/reject_oversized-4               	   20766	     11769 ns/op	   65688 B/op	       4 allocs/op
+BenchmarkSearchResultCache/reject_oversized-4               	   19454	     12172 ns/op	   65688 B/op	       4 allocs/op
+BenchmarkSearchResultCache/reject_oversized-4               	   19863	     12161 ns/op	   65688 B/op	       4 allocs/op
+BenchmarkSearchBaseCache/get-4                              	 4857950	        49.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/get-4                              	 4876772	        49.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/get-4                              	 4872753	        49.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/get_parallel-4                     	 1597558	       148.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/get_parallel-4                     	 1588150	       149.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/get_parallel-4                     	 1565613	       151.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSearchBaseCache/put-4                              	 1000000	       215.7 ns/op	     208 B/op	       6 allocs/op
+BenchmarkSearchBaseCache/put-4                              	 1202973	       199.2 ns/op	     208 B/op	       6 allocs/op
+BenchmarkSearchBaseCache/put-4                              	 1000000	       202.9 ns/op	     208 B/op	       6 allocs/op
+BenchmarkSearchBaseCache/put_parallel-4                     	  802786	       322.7 ns/op	     208 B/op	       6 allocs/op
+BenchmarkSearchBaseCache/put_parallel-4                     	  771404	       322.6 ns/op	     208 B/op	       6 allocs/op
+BenchmarkSearchBaseCache/put_parallel-4                     	  781928	       314.9 ns/op	     208 B/op	       6 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	8.824s

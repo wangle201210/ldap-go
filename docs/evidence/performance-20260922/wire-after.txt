@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkEncodeSearchResultEntry/NoControls/Direct  	  745920	       288.8 ns/op	4266.19 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/NoControls/Direct  	  752498	       287.9 ns/op	4279.82 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/NoControls/Direct  	  878370	       298.7 ns/op	4124.97 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/SyncControl/Direct 	  663830	       310.5 ns/op	4187.00 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/SyncControl/Direct 	  759819	       312.6 ns/op	4159.23 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/SyncControl/Direct 	  884126	       297.9 ns/op	4364.42 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/MultipleControls/Direct         	  698037	       355.4 ns/op	4440.13 MB/s	    1792 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/MultipleControls/Direct         	  692606	       361.5 ns/op	4365.13 MB/s	    1792 B/op	       1 allocs/op
+BenchmarkEncodeSearchResultEntry/MultipleControls/Direct         	  714338	       362.5 ns/op	4352.62 MB/s	    1792 B/op	       1 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	2.174s

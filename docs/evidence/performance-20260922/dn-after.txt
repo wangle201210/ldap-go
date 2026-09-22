@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/directory
+cpu: Apple M1 Pro
+BenchmarkDNIdentityKeyValidation/display_bytes=4/parse-4   	  324837	       741.4 ns/op	     496 B/op	      30 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=4/parse-4   	  274804	       804.3 ns/op	     496 B/op	      30 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=4/parse-4   	  340300	       728.5 ns/op	     496 B/op	      30 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=4/scope-4   	 3185600	        75.39 ns/op	      40 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=4/scope-4   	 3203046	        75.29 ns/op	      40 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=4/scope-4   	 3175915	        76.72 ns/op	      40 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/parse-4  	   79495	      2962 ns/op	    2040 B/op	      94 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/parse-4  	   83290	      2948 ns/op	    2040 B/op	      94 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/parse-4  	   83829	      2902 ns/op	    2040 B/op	      94 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/scope-4  	 1588902	       151.2 ns/op	     160 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/scope-4  	 1593925	       151.0 ns/op	     160 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=37/scope-4  	 1609717	       150.3 ns/op	     160 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/parse-4 	   19671	     12190 ns/op	   11480 B/op	     100 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/parse-4 	   19782	     12110 ns/op	   11480 B/op	     100 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/parse-4 	   19590	     12184 ns/op	   11480 B/op	     100 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/scope-4 	  318327	       803.0 ns/op	     656 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/scope-4 	  310573	       795.8 ns/op	     656 B/op	       2 allocs/op
+BenchmarkDNIdentityKeyValidation/display_bytes=533/scope-4 	  294886	       769.2 ns/op	     656 B/op	       2 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/directory	5.064s
