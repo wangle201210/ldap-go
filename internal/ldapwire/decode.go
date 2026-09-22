@@ -103,6 +103,12 @@ func readMessageWithFilterDepthProviderAndSize(
 	if err != nil {
 		return Message{}, 0, err
 	}
+	if message, ok := decodeShortSearchFrame(frame); ok {
+		if maxFilterDepth() < 0 {
+			return Message{}, len(frame), fmt.Errorf("%w: %w", ErrMalformedMessage, ErrFilterTooDeep)
+		}
+		return message, len(frame), nil
+	}
 	packet, err := ber.DecodePacketErr(frame)
 	if err != nil {
 		return Message{}, len(frame), malformed("decode BER: %v", err)
@@ -612,8 +618,10 @@ func packetBoolean(packet *ber.Packet) (bool, error) {
 }
 
 func packetString(packet *ber.Packet) (string, error) {
-	value, err := packetBytes(packet)
-	return string(value), err
+	if !isPacket(packet, ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString) {
+		return "", errors.New("not an octet string")
+	}
+	return packet.Data.String(), nil
 }
 
 func packetBytes(packet *ber.Packet) ([]byte, error) {
