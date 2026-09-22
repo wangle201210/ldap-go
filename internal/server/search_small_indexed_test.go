@@ -572,6 +572,42 @@ func TestSmallIndexedSearchCachesEmptyResult(t *testing.T) {
 	}
 }
 
+func TestSmallIndexedSearchDefersUntilIndexesInitialized(t *testing.T) {
+	for _, kind := range []string{"not initialized", "older revision", "untracked"} {
+		t.Run(kind, func(t *testing.T) {
+			server, state := newSmallIndexedFixture(t, 8)
+			message := smallIndexedMessage("(uid=person-00000)")
+			prelude, database := smallIndexedTestPrelude(server, state, message)
+			database.equalityIndexInit = &databaseEqualityIndexInitialization{}
+			if kind == "older revision" {
+				database.equalityIndexInit.markReady(prelude.revision-1, true)
+			} else if kind == "untracked" {
+				database.equalityIndexInit = nil
+			}
+			observed := &smallIndexedObservedStore{Store: server.config.Store}
+			server.config.Store = observed
+			capture := &smallIndexedCapture{}
+			handled, err := server.trySmallIndexedSearch(t.Context(), capture, state, message,
+				message.Request.(ldapwire.SearchRequest), prelude, database)
+			if handled || err != nil || capture.Len() != 0 || observed.views != 0 ||
+				len(state.runtime.collectivePlans.plans) != 0 {
+				t.Fatal("uninitialized fast path read entries or built a collective plan")
+			}
+			if kind == "untracked" {
+				return
+			}
+			general := smallIndexedEvaluate(server, state, message, "wrapper")
+			if general.code != 0 || general.entries != 1 || general.handlerError != "" {
+				t.Fatalf("initial general search failed: %#v", general)
+			}
+			fast := smallIndexedEvaluate(server, state, message, "small")
+			if !fast.handled || !bytes.Equal(fast.wire, general.wire) {
+				t.Fatal("initialized fast path did not preserve the result")
+			}
+		})
+	}
+}
+
 // Count writes to storage separately from cache fills and wire writes.
 type smallIndexedObservedStore struct {
 	storage.Store

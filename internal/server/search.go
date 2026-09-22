@@ -1281,7 +1281,7 @@ func (server *Server) handleUncachedSearch(
 	}
 
 	candidates := make([]searchCandidate, 0)
-	snapshotItems := make([]pagedSortedItem, 0)
+	var snapshotBuilder pagedSnapshotBuilder
 	var candidateBytes int64
 	var snapshotBytes int64
 	var processSearchBytes int64
@@ -2024,7 +2024,7 @@ func (server *Server) handleUncachedSearch(
 					}
 				}
 				if snapshotPaging {
-					if len(snapshotItems) >= remaining {
+					if snapshotBuilder.count >= remaining {
 						sortTruncated = true
 						return errStopSearch
 					}
@@ -2039,12 +2039,12 @@ func (server *Server) handleUncachedSearch(
 						return errStopSearch
 					}
 					snapshotBytes += itemBytes
-					snapshotItems = append(snapshotItems, pagedSortedItem{
+					snapshotBuilder.append(pagedSortedItem{
 						route: routeIndex,
 						dn:    entry.DN,
 					})
 					if !snapshotEntriesCacheable {
-						snapshotItems[len(snapshotItems)-1].normalizedDN = candidate
+						snapshotBuilder.last().normalizedDN = candidate
 					}
 					if len(candidates) >= entryLimit && !snapshotEntriesCacheable {
 						return nil
@@ -2124,7 +2124,7 @@ func (server *Server) handleUncachedSearch(
 					)
 				}
 				if snapshotEntriesCacheable {
-					item := &snapshotItems[len(snapshotItems)-1]
+					item := snapshotBuilder.last()
 					previousBytes := pagedSortedItemBytes(*item)
 					previousDN := item.dn
 					item.dn = ""
@@ -2508,6 +2508,7 @@ func (server *Server) handleUncachedSearch(
 			}
 		}
 	} else if snapshotPaging {
+		snapshotItems := snapshotBuilder.finish()
 		pageEnd := min(entryLimit, len(candidates))
 		entries = selectedSearchEntries(candidates[:pageEnd])
 		if pageEnd > 0 {
@@ -2525,7 +2526,7 @@ func (server *Server) handleUncachedSearch(
 			live:      true,
 		}
 		paging.sorted.retainedBytes = pagedSortedSearchRetainedBytes(paging.sorted)
-		if snapshotCacheable && paging.hasStorageRevision {
+		if snapshotCacheable && paging.hasStorageRevision && result.Code == ldapwire.ResultSuccess && !sortTruncated {
 			state.runtime.pagedSnapshots.put(
 				paging.fingerprint,
 				paging.storageRevision,

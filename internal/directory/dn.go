@@ -340,9 +340,15 @@ func ValidateDNWithIdentityKey(value, key string) error {
 		_, err := ParseDNWithIdentityKey(value, key)
 		return err
 	}
-	parsed, err := parseDN(value)
-	if err != nil {
-		return err
+	depth, simple := simpleDNDepth(value)
+	var parsed *ldap.DN
+	if !simple {
+		var err error
+		parsed, err = parseDN(value)
+		if err != nil {
+			return err
+		}
+		depth = len(parsed.RDNs)
 	}
 	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
 	var scratch [1024]byte
@@ -359,7 +365,7 @@ func ValidateDNWithIdentityKey(value, key string) error {
 	if err != nil {
 		return fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
 	}
-	if rdns.count != len(parsed.RDNs) {
+	if rdns.count != depth {
 		_, err := ParseDNWithIdentityKey(value, key)
 		return err
 	}
@@ -368,7 +374,11 @@ func ValidateDNWithIdentityKey(value, key string) error {
 		if err != nil {
 			return fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, err)
 		}
-		if avas.count != len(parsed.RDNs[rdnIndex].Attributes) {
+		attributeCount := 1
+		if !simple {
+			attributeCount = len(parsed.RDNs[rdnIndex].Attributes)
+		}
+		if avas.count != attributeCount {
 			_, err := ParseDNWithIdentityKey(value, key)
 			return err
 		}
@@ -380,6 +390,31 @@ func ValidateDNWithIdentityKey(value, key string) error {
 		}
 	}
 	return nil
+}
+
+// Recognize a strict subset whose RDNs have one unescaped ASCII value. Anything
+// else uses the full parser, including all syntax-error reporting.
+func simpleDNDepth(value string) (int, bool) {
+	depth := 0
+	for len(value) > 0 {
+		rdn, rest, more := strings.Cut(value, ",")
+		attribute, assertion, found := strings.Cut(rdn, "=")
+		if !found || !validDNAttributeType(attribute) || len(assertion) == 0 {
+			return 0, false
+		}
+		for index := range len(assertion) {
+			c := assertion[index]
+			if !asciiDNAttributeLetter(c) && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
+				return 0, false
+			}
+		}
+		depth++
+		if !more {
+			return depth, true
+		}
+		value = rest
+	}
+	return 0, false
 }
 
 func dnIdentityAVA(encoded []byte) (attributeType, value string, ok bool) {

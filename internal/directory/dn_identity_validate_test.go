@@ -20,6 +20,33 @@ func checkDNIdentityValidation(t *testing.T, value, key string) error {
 	return got
 }
 
+func TestSimpleDNDepthRecognition(t *testing.T) {
+	for _, value := range []string{"uid=scale-000001,ou=people,dc=scale,dc=qualification", "CN=Alice", "2.5.4.3=a_b.c-12"} {
+		depth, ok := simpleDNDepth(value)
+		parsed, err := ParseDN(value)
+		if !ok || err != nil || depth != parsed.Depth() {
+			t.Fatalf("simple recognition %q = %d/%t, parsed error=%v", value, depth, ok, err)
+		}
+	}
+	for _, value := range []string{"", "cn=", "cn=a,", "cn=a,,dc=x", "cn=a+uid=b", `cn=a\,b`, "cn= Alice", "cn=a ", "cn=a=b", "cn=#6162", "cn=a;b", "cn=\xff", "cn=\u00e9", "cn;lang-en=a", "01.2=a"} {
+		if _, ok := simpleDNDepth(value); ok {
+			t.Fatalf("complex or invalid DN accepted by simple recognizer: %q", value)
+		}
+	}
+	base := "uid=alice,ou=people,dc=example,dc=com"
+	dn, err := ParseDNWithNormalizer(base, aliasIdentityNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for position := range len(base) {
+		for replacement := range 256 {
+			value := []byte(base)
+			value[position] = byte(replacement)
+			checkDNIdentityValidation(t, string(value), dn.Key())
+		}
+	}
+}
+
 func TestValidateDNWithIdentityKeyValid(t *testing.T) {
 	for _, value := range []string{
 		"", " ", "cn=", "dc=Example,dc=COM",

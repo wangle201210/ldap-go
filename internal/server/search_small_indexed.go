@@ -34,6 +34,12 @@ func (server *Server) trySmallIndexedSearch(
 		monitorDatabaseIndexForDN(state.runtime.databases, prelude.base) >= 0 {
 		return false, nil
 	}
+	// The general path prepares indexes before building the collective plan.
+	// A speculative first lookup could otherwise fall back to a whole-directory
+	// collective scan before that initialization has established index readiness.
+	if !database.equalityIndexInit.readyFor(prelude.revision, prelude.hasRevision) {
+		return false, nil
+	}
 	switch request.Scope {
 	case directory.ScopeBase, directory.ScopeSingleLevel, directory.ScopeWholeSubtree:
 	default:
