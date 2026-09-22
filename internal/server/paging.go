@@ -39,10 +39,12 @@ type pagedSortedItem struct {
 }
 
 type pagedSortedSearch struct {
+	// Items are immutable once published. Continuations own only the cursor.
 	items     []pagedSortedItem
 	offset    int
 	truncated bool
 	live      bool
+	shared    bool
 }
 
 type pagedSearchState struct {
@@ -441,7 +443,12 @@ func clonePagedSortedSearch(source *pagedSortedSearch) *pagedSortedSearch {
 		return nil
 	}
 	cloned := *source
-	cloned.items = append([]pagedSortedItem(nil), source.items...)
+	if !source.shared {
+		// Preserve the original first-clone capacity and memory admission
+		// boundary, then share the immutable compacted items on later pages.
+		cloned.items = append([]pagedSortedItem(nil), source.items...)
+		cloned.shared = true
+	}
 	return &cloned
 }
 

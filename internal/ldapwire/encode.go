@@ -123,13 +123,13 @@ func EncodeResultResponse(messageID int64, applicationTag uint64, result Result,
 }
 
 func EncodeSearchResultEntry(messageID int64, entry directory.Entry, controls []Control) []byte {
-	if messageID >= 0 && len(controls) == 0 {
-		return encodeSearchResultEntryDirect(messageID, entry)
+	if messageID >= 0 {
+		return encodeSearchResultEntryDirect(messageID, entry, controls)
 	}
 	return encodeMessage(messageID, encodeSearchResultEntry(entry), controls)
 }
 
-func encodeSearchResultEntryDirect(messageID int64, entry directory.Entry) []byte {
+func encodeSearchResultEntryDirect(messageID int64, entry directory.Entry, controls []Control) []byte {
 	attributesContent := 0
 	for _, attribute := range entry.Attributes {
 		valuesContent := 0
@@ -143,6 +143,13 @@ func encodeSearchResultEntryDirect(messageID int64, entry directory.Entry) []byt
 	entryContent := berElementSize(len(entry.DN)) + berElementSize(attributesContent)
 	messageContent := berElementSize(int(integerContentSize(messageID))) +
 		berElementSize(entryContent)
+	controlsContent := 0
+	if len(controls) > 0 {
+		for _, control := range controls {
+			controlsContent += berElementSize(controlContentSize(control))
+		}
+		messageContent += berElementSize(controlsContent)
+	}
 	encoded := make([]byte, 0, berElementSize(messageContent))
 	encoded = appendBERHeader(encoded, 0x30, messageContent)
 	encoded = appendBERPositiveInteger(encoded, 0x02, messageID)
@@ -167,7 +174,31 @@ func encodeSearchResultEntryDirect(messageID int64, entry directory.Entry) []byt
 			encoded = appendBERBytes(encoded, 0x04, value)
 		}
 	}
+	if len(controls) > 0 {
+		encoded = appendBERHeader(encoded, 0xa0, controlsContent)
+		for _, control := range controls {
+			encoded = appendBERHeader(encoded, 0x30, controlContentSize(control))
+			encoded = appendBERBytes(encoded, 0x04, []byte(control.OID))
+			if control.Critical {
+				encoded = append(encoded, 0x01, 0x01, 0xff)
+			}
+			if control.HasValue || control.Value != nil {
+				encoded = appendBERBytes(encoded, 0x04, control.Value)
+			}
+		}
+	}
 	return encoded
+}
+
+func controlContentSize(control Control) int {
+	content := berElementSize(len(control.OID))
+	if control.Critical {
+		content += berElementSize(1)
+	}
+	if control.HasValue || control.Value != nil {
+		content += berElementSize(len(control.Value))
+	}
+	return content
 }
 
 func berElementSize(content int) int {

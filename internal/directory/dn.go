@@ -248,8 +248,9 @@ func ParseDNWithIdentityKey(value, key string) (DN, error) {
 		return dn, nil
 	}
 	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
-	payload, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != encoded {
+	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	// Strict decoding checks unused tail bits but still ignores CR and LF.
+	if err != nil || strings.ContainsAny(encoded, "\r\n") {
 		return DN{}, errors.New("schema-aware DN key is not canonically encoded")
 	}
 	rdns, err := decodeDNIdentityParts(payload)
@@ -728,8 +729,9 @@ func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error)
 		return false, errors.New("candidate has no schema-aware identity key")
 	}
 	encoded := strings.TrimPrefix(candidateKey, schemaAwareDNKeyPrefix)
-	payload, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != encoded {
+	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	// Strict decoding checks unused tail bits but still ignores CR and LF.
+	if err != nil || strings.ContainsAny(encoded, "\r\n") {
 		return false, errors.New("candidate schema-aware DN key is not canonically encoded")
 	}
 	candidateRDNs, err := decodeDNIdentityParts(payload)

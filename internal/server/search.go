@@ -1816,7 +1816,11 @@ func (server *Server) handleSearch(
 					}
 					var ordered bool
 					candidateOrderKey, ordered = entry.DNOrderKeyHint()
-					if !ordered {
+					if !ordered && identityScope {
+						// This identity came from the same schema-aware reader used
+						// for scope checks; do not normalize its DN a second time.
+						candidateOrderKey = candidate.LegacyKey() + "\x00" + candidate.Key()
+					} else if !ordered {
 						candidateOrderKey, err = storage.ReaderDNOrderKey(tx, candidate)
 						if err != nil {
 							return fmt.Errorf("order search candidate %q: %w", entry.DN, err)

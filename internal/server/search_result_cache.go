@@ -57,12 +57,13 @@ func (cache *searchBaseCache) put(
 		return
 	}
 	key := searchBaseCacheKey{partition: partition, dnKey: dn.Key(), revision: revision}
+	cloned := entry.Clone()
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if len(cache.entries) >= searchBaseCacheMaximumEntries {
 		clear(cache.entries)
 	}
-	cache.entries[key] = entry.Clone()
+	cache.entries[key] = cloned
 }
 
 type searchResultCache struct {
@@ -97,14 +98,15 @@ func (cache *searchResultCache) get(
 		return nil, false
 	}
 	cache.mu.Lock()
-	defer cache.mu.Unlock()
 	entry, found := cache.entries[searchResultCacheKey{
 		fingerprint: fingerprint,
 		revision:    revision,
 	}]
+	cache.mu.Unlock()
 	if !found {
 		return nil, false
 	}
+	// Replacements and evictions never mutate the published entry slice.
 	return append([]directory.Entry(nil), entry.entries...), true
 }
 
@@ -117,13 +119,19 @@ func (cache *searchResultCache) put(
 		return
 	}
 	retained := int64(64)
+	if retained > cache.maximum {
+		return
+	}
+	// Reject oversized results before allocating their owned copies.
+	for index := range entries {
+		retained += searchResultCacheEntryBytes(entries[index])
+		if retained > cache.maximum {
+			return
+		}
+	}
 	cloned := make([]directory.Entry, len(entries))
 	for index := range entries {
 		cloned[index] = entries[index].Clone()
-		retained += searchResultCacheEntryBytes(cloned[index])
-	}
-	if retained > cache.maximum {
-		return
 	}
 	key := searchResultCacheKey{fingerprint: fingerprint, revision: revision}
 	cache.mu.Lock()
