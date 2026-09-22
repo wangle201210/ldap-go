@@ -1,0 +1,11 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkPrepareSubstringMatcher/cn-8         	    4468	     82204 ns/op	    3009 B/op	     157 allocs/op
+BenchmarkPrepareSubstringMatcher/cn-8         	    4375	     82323 ns/op	    3008 B/op	     157 allocs/op
+BenchmarkPrepareSubstringMatcher/cn-8         	    4339	     83723 ns/op	    3008 B/op	     157 allocs/op
+BenchmarkPrepareSubstringMatcher/postalAddress-8         	    3598	     85331 ns/op	    2880 B/op	     145 allocs/op
+BenchmarkPrepareSubstringMatcher/postalAddress-8         	    4392	     82684 ns/op	    2880 B/op	     145 allocs/op
+BenchmarkPrepareSubstringMatcher/postalAddress-8         	    4170	     84313 ns/op	    2880 B/op	     145 allocs/op
+PASS

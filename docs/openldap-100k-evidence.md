@@ -23,6 +23,8 @@ sequential sample is not mixed into the repeated-query medians below.
 The [September 23 substring replay](performance-optimization-20260923.md)
 separately records the subsequent optimization against `205b61b`, with three
 processes per implementation and exact SDK/data validation.
+The [following name/normalization optimization](performance-optimization-20260923-round2.md)
+repeats that workload against `ec18938` and separately rechecks short operations.
 
 ## Final online replay
 

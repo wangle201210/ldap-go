@@ -26,6 +26,7 @@ type Registry struct {
 	nameForms        map[string]*NameForm
 	structureRules   map[string]*DITStructureRule
 	attributeOptions []string
+	preparedNames    preparedAttributeNameCache
 }
 
 type lockedRegistryDNNormalizer struct {
@@ -146,6 +147,7 @@ func (registry *Registry) RegisterAttributeType(attribute AttributeType) error {
 	for _, key := range keys {
 		registry.attributes[key] = &copy
 	}
+	registry.preparedNames.clear()
 	return nil
 }
 
@@ -356,6 +358,7 @@ func (registry *Registry) UpsertAttributeType(attribute AttributeType) error {
 	for _, key := range keys {
 		registry.attributes[key] = &copy
 	}
+	registry.preparedNames.clear()
 	return nil
 }
 
@@ -824,7 +827,7 @@ func (registry *Registry) EntryHasObjectClass(
 // PreparedObjectClassMatcher resolves a fixed set of object classes once and
 // classifies each entry with one objectClass scan. Bit i corresponds to names[i].
 type PreparedObjectClassMatcher struct {
-	attributes map[string]struct{}
+	attributes preparedAttributeNames
 	flags      map[string]uint64
 }
 
@@ -914,16 +917,7 @@ func (registry *Registry) PrepareObjectClassMatcher(
 	if !ok {
 		return nil, errors.New("undefined objectClass attribute")
 	}
-	attributes := make(map[string]struct{})
-	for key, candidate := range registry.attributes {
-		if registry.attributeTypeSubtype(
-			candidate,
-			objectClassAttribute,
-			make(map[string]bool),
-		) {
-			attributes[key] = struct{}{}
-		}
-	}
+	attributes := registry.prepareAttributeNames(objectClassAttribute)
 	flags := make(map[string]uint64, len(registry.objectClasses))
 	for key, candidate := range registry.objectClasses {
 		var value uint64
@@ -933,6 +927,11 @@ func (registry *Registry) PrepareObjectClassMatcher(
 			}
 		}
 		flags[key] = value
+		for _, spelling := range candidate.Names {
+			if schemaKey(spelling) == key {
+				flags[spelling] = value
+			}
+		}
 	}
 	return &PreparedObjectClassMatcher{attributes: attributes, flags: flags}, nil
 }
@@ -943,12 +942,15 @@ func (matcher *PreparedObjectClassMatcher) Match(entry directory.Entry) uint64 {
 	}
 	var result uint64
 	for _, attribute := range entry.Attributes {
-		description, _, _ := strings.Cut(attribute.Description, ";")
-		if _, ok := matcher.attributes[schemaKey(description)]; !ok {
+		if !matcher.attributes.match(attribute.Description) {
 			continue
 		}
 		for _, value := range attribute.Values {
-			result |= matcher.flags[schemaKey(string(value))]
+			flags, known := matcher.flags[string(value)]
+			if !known {
+				flags = matcher.flags[schemaKey(string(value))]
+			}
+			result |= flags
 		}
 	}
 	return result
@@ -1811,7 +1813,7 @@ func (registry *Registry) MatchSubstring(
 // runtime. Match collapses undefined to false and must not be used for children
 // of NOT or other filters that require the three-valued result.
 type PreparedSubstringMatcher struct {
-	attributes     map[string]struct{}
+	attributes     preparedAttributeNames
 	normalize      func([]byte) []byte
 	substring      directory.Substring
 	rawSubstring   directory.Substring
@@ -1840,12 +1842,7 @@ func (registry *Registry) PrepareSubstringMatcher(
 	if err != nil {
 		return nil, err
 	}
-	attributes := make(map[string]struct{})
-	for key, candidate := range registry.attributes {
-		if registry.attributeTypeSubtype(candidate, attribute, make(map[string]bool)) {
-			attributes[key] = struct{}{}
-		}
-	}
+	attributes := registry.prepareAttributeNames(attribute)
 	matcher := &PreparedSubstringMatcher{
 		attributes: attributes,
 		ordered:    attributeHasOrderedValues(*attribute),
@@ -1855,7 +1852,8 @@ func (registry *Registry) PrepareSubstringMatcher(
 			Final:   bytes.Clone(substring.Final),
 		},
 	}
-	switch canonicalMatchingRule(effective.Substring) {
+	rule := canonicalMatchingRule(effective.Substring)
+	switch rule {
 	case "octetstringsubstringsmatch":
 		matcher.normalize = bytes.Clone
 	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
@@ -1876,6 +1874,16 @@ func (registry *Registry) PrepareSubstringMatcher(
 	if !matcher.caseIgnoreList {
 		matcher.substring = normalizeSubstringAssertion(matcher.normalize, substring)
 	}
+	// Assertion storage above must remain owned. Candidate values below are
+	// only read during Match, so identity normalization can borrow them.
+	switch rule {
+	case "caseignoresubstringsmatch", "caseignoreia5substringsmatch":
+		matcher.normalize = func(value []byte) []byte { return normalizeSubstringASCIIValue(value, true) }
+	case "caseexactsubstringsmatch", "caseexactia5substringsmatch":
+		matcher.normalize = func(value []byte) []byte { return normalizeSubstringASCIIValue(value, false) }
+	case "octetstringsubstringsmatch":
+		matcher.normalize = func(value []byte) []byte { return value }
+	}
 	return matcher, nil
 }
 
@@ -1887,8 +1895,7 @@ func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, err
 		return false, errors.New("prepared substring matcher is nil")
 	}
 	for _, attribute := range entry.Attributes {
-		description, _, _ := strings.Cut(attribute.Description, ";")
-		if _, ok := matcher.attributes[schemaKey(description)]; !ok {
+		if !matcher.attributes.match(attribute.Description) {
 			continue
 		}
 		for _, value := range attribute.Values {

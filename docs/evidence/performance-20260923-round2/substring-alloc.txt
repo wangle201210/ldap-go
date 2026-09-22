@@ -1,0 +1,22 @@
+File: profile.test
+Type: alloc_space
+Time: 2026-09-23 00:55:39 CST
+Showing nodes accounting for 501.58MB, 99.42% of 504.50MB total
+Dropped 32 nodes (cum <= 2.52MB)
+Showing top 15 nodes out of 16
+      flat  flat%   sum%        cum   cum%
+  386.58MB 76.63% 76.63%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/storage.ForEachReadOnlyStablePhysicalEntry
+  115.01MB 22.80% 99.42%   115.01MB 22.80%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrow
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleSearch
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection.func4
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View.func1
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View.func1
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View
+         0     0% 99.42%   502.09MB 99.52%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View.func1
+         0     0% 99.42%   115.01MB 22.80%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).decode

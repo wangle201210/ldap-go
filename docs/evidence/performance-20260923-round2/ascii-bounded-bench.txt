@@ -1,0 +1,54 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/original-8         	 3132966	       114.1 ns/op	 227.89 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/original-8         	 3090451	       118.5 ns/op	 219.46 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/original-8         	 2803576	       123.6 ns/op	 210.35 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/wrapper-8          	13803922	        26.33 ns/op	 987.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/wrapper-8          	13901581	        26.00 ns/op	 999.94 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lowercase/wrapper-8          	14017440	        25.54 ns/op	1018.06 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/original-8         	 3191964	       115.5 ns/op	 225.13 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/original-8         	 3146106	       114.4 ns/op	 227.24 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/original-8         	 3167367	       118.6 ns/op	 219.20 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/wrapper-8          	 3125512	       114.9 ns/op	 226.34 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/wrapper-8          	 3197952	       113.7 ns/op	 228.71 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/uppercase/wrapper-8          	 3187432	       113.0 ns/op	 230.03 MB/s	     112 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/original-8         	  138396	      2585 ns/op	 495.22 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/original-8         	  138226	      2587 ns/op	 494.73 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/original-8         	  143577	      2574 ns/op	 497.27 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/wrapper-8          	  138088	      2563 ns/op	 499.47 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/wrapper-8          	  141700	      2720 ns/op	 470.51 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/longASCII/wrapper-8          	  141854	      2581 ns/op	 495.94 MB/s	    3856 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/original-8      	  141984	      2617 ns/op	 489.43 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/original-8      	  139108	      2576 ns/op	 497.32 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/original-8      	  137853	      2627 ns/op	 487.69 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/wrapper-8       	  137481	      2620 ns/op	 488.99 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/wrapper-8       	  137846	      2617 ns/op	 489.44 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseIgnore/lateFallback/wrapper-8       	  125970	      2669 ns/op	 479.98 MB/s	    3984 B/op	       4 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/original-8          	 4830687	        76.48 ns/op	 339.95 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/original-8          	 4857840	        73.70 ns/op	 352.77 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/original-8          	 4942152	        72.95 ns/op	 356.43 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/wrapper-8           	16708146	        21.80 ns/op	1192.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/wrapper-8           	16461187	        22.10 ns/op	1176.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lowercase/wrapper-8           	16269469	        21.76 ns/op	1194.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/original-8          	 4709809	        74.36 ns/op	 349.63 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/original-8          	 4920524	        73.03 ns/op	 356.01 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/original-8          	 4946694	        74.63 ns/op	 348.37 MB/s	      80 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/wrapper-8           	15684378	        22.66 ns/op	1147.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/wrapper-8           	16676542	        21.62 ns/op	1202.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/uppercase/wrapper-8           	16716487	        21.62 ns/op	1202.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/original-8          	  218677	      1708 ns/op	 749.22 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/original-8          	  219795	      1653 ns/op	 774.46 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/original-8          	  223152	      1591 ns/op	 804.69 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/wrapper-8           	  220663	      1605 ns/op	 797.46 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/wrapper-8           	  224676	      1589 ns/op	 805.55 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/longASCII/wrapper-8           	  230541	      1591 ns/op	 804.35 MB/s	    2576 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/original-8       	  213483	      1620 ns/op	 790.51 MB/s	    2704 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/original-8       	  222826	      1648 ns/op	 777.29 MB/s	    2704 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/original-8       	  207368	      1718 ns/op	 745.83 MB/s	    2704 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/wrapper-8        	  232053	      1597 ns/op	 802.36 MB/s	    2704 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/wrapper-8        	  223497	      1611 ns/op	 794.92 MB/s	    2704 B/op	       3 allocs/op
+BenchmarkSubstringASCIIValue/caseExact/lateFallback/wrapper-8        	  227500	      1609 ns/op	 796.20 MB/s	    2704 B/op	       3 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	17.382s

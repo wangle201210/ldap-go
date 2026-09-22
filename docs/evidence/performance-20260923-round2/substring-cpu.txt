@@ -1,0 +1,28 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 00:55:39 CST
+Duration: 2.85s, Total samples = 2420ms (85.01%)
+Showing nodes accounting for 1770ms, 73.14% of 2420ms total
+Dropped 56 nodes (cum <= 12.10ms)
+Showing top 20 nodes out of 122
+      flat  flat%   sum%        cum   cum%
+     220ms  9.09%  9.09%      360ms 14.88%  runtime.mapaccess2_faststr
+     160ms  6.61% 15.70%      210ms  8.68%  encoding/base64.(*Encoding).Decode
+     160ms  6.61% 22.31%      160ms  6.61%  runtime.kevent
+     150ms  6.20% 28.51%      150ms  6.20%  strings.(*asciiSet).contains (inline)
+     140ms  5.79% 34.30%      300ms 12.40%  strings.IndexAny
+     130ms  5.37% 39.67%      130ms  5.37%  runtime.madvise
+      90ms  3.72% 43.39%      950ms 39.26%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5.1
+      80ms  3.31% 46.69%       80ms  3.31%  encoding/binary.Uvarint (inline)
+      70ms  2.89% 49.59%      100ms  4.13%  github.com/wangle201210/ldap-go/internal/directory.viewDNIdentityParts
+      70ms  2.89% 52.48%      300ms 12.40%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrow
+      60ms  2.48% 54.96%      150ms  6.20%  github.com/wangle201210/ldap-go/internal/directory.simpleDNDepth
+      60ms  2.48% 57.44%       60ms  2.48%  runtime.memequal
+      50ms  2.07% 59.50%       50ms  2.07%  encoding/base64.assemble64 (inline)
+      50ms  2.07% 61.57%       60ms  2.48%  github.com/wangle201210/ldap-go/internal/directory.(*dnIdentityParts).next
+      50ms  2.07% 63.64%       50ms  2.07%  internal/bytealg.IndexByteString
+      50ms  2.07% 65.70%      100ms  4.13%  internal/stringslite.Cut
+      50ms  2.07% 67.77%       50ms  2.07%  runtime.pthread_cond_wait
+      50ms  2.07% 69.83%       50ms  2.07%  syscall.rawsyscalln
+      40ms  1.65% 71.49%      540ms 22.31%  github.com/wangle201210/ldap-go/internal/directory.ValidateDNWithIdentityKey
+      40ms  1.65% 73.14%       70ms  2.89%  github.com/wangle201210/ldap-go/internal/storage.consumeEntryBinaryField

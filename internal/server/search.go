@@ -1850,7 +1850,7 @@ func (server *Server) handleUncachedSearch(
 				unprojectedEntry := entry
 				filterEntry := entry
 				effectiveFilter := request.Filter
-				if !controls.manageDsaIT {
+				if !controls.manageDsaIT && database.dynlist != nil {
 					projected, projectedFilterEntry, projectErr :=
 						dynlistPlans.apply(*database, entry)
 					if projectErr != nil {
@@ -1866,6 +1866,9 @@ func (server *Server) handleUncachedSearch(
 						) {
 						filterEntry = unprojectedEntry
 					}
+				}
+				if !controls.manageDsaIT && nestGroupPlans.enabled {
+					var projectErr error
 					entry, filterEntry, effectiveFilter, projectErr =
 						nestGroupPlans.apply(*database, entry, filterEntry)
 					if projectErr != nil {

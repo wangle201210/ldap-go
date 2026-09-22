@@ -1,0 +1,8 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/317 completed
+fuzz: elapsed: 1s, gathering baseline coverage: 317/317 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 29429 (9807/sec), new interesting: 15 (total: 332)
+fuzz: elapsed: 6s, execs: 71805 (14123/sec), new interesting: 21 (total: 338)
+fuzz: elapsed: 9s, execs: 71805 (0/sec), new interesting: 21 (total: 338)
+fuzz: elapsed: 11s, execs: 71805 (0/sec), new interesting: 21 (total: 338)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	11.069s

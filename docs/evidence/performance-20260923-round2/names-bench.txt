@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkPreparedObjectClassNames/fold-8         	  882530	       705.6 ns/op	     144 B/op	       9 allocs/op
+BenchmarkPreparedObjectClassNames/fold-8         	  865524	       689.3 ns/op	     144 B/op	       9 allocs/op
+BenchmarkPreparedObjectClassNames/fold-8         	  886234	       687.0 ns/op	     144 B/op	       9 allocs/op
+BenchmarkPreparedObjectClassNames/fold-8         	  780448	       705.8 ns/op	     144 B/op	       9 allocs/op
+BenchmarkPreparedObjectClassNames/fold-8         	  874990	       692.9 ns/op	     144 B/op	       9 allocs/op
+BenchmarkPreparedObjectClassNames/known-spellings-8         	 3202789	       189.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedObjectClassNames/known-spellings-8         	 3144892	       194.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedObjectClassNames/known-spellings-8         	 3190957	       188.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedObjectClassNames/known-spellings-8         	 3150874	       189.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedObjectClassNames/known-spellings-8         	 3172780	       189.4 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	6.022s

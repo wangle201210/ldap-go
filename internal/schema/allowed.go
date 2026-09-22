@@ -59,6 +59,9 @@ func RegisterOpenLDAPAllowedSchema(registry *Registry) error {
 			registry.attributes[key] = &copy
 		}
 	}
+	if len(missing) != 0 {
+		registry.preparedNames.clear()
+	}
 	return nil
 }
 

@@ -121,6 +121,7 @@ func RegisterOpenLDAPConfigurationSchema(registry *Registry) error {
 	}
 	registry.attributes = staged.attributes
 	registry.objectClasses = staged.objectClasses
+	registry.preparedNames.clear()
 	return nil
 }
 
