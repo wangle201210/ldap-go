@@ -1,0 +1,23 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 02:23:13 CST
+Duration: 1.53s, Total samples = 1190ms (78.01%)
+Showing nodes accounting for 870ms, 73.11% of 1190ms total
+Showing top 16 nodes out of 109
+      flat  flat%   sum%        cum   cum%
+     100ms  8.40%  8.40%      190ms 15.97%  runtime.mapaccess2_faststr
+      90ms  7.56% 15.97%      110ms  9.24%  github.com/wangle201210/ldap-go/internal/directory.validSingleAVADNIdentityRDN
+      80ms  6.72% 22.69%      130ms 10.92%  encoding/base64.(*Encoding).Decode
+      80ms  6.72% 29.41%       80ms  6.72%  internal/bytealg.IndexByteString
+      70ms  5.88% 35.29%       70ms  5.88%  runtime.memequal
+      60ms  5.04% 40.34%       60ms  5.04%  encoding/binary.Uvarint (inline)
+      50ms  4.20% 44.54%      120ms 10.08%  github.com/wangle201210/ldap-go/internal/directory.simpleDNDepthBytes
+      50ms  4.20% 48.74%       50ms  4.20%  runtime.pthread_cond_signal
+      40ms  3.36% 52.10%       40ms  3.36%  aeshashbody
+      40ms  3.36% 55.46%       40ms  3.36%  encoding/base64.(*Encoding).decodeQuantum
+      40ms  3.36% 58.82%      130ms 10.92%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrowMetadata
+      40ms  3.36% 62.18%       60ms  5.04%  github.com/wangle201210/ldap-go/internal/storage.consumeEntryBinaryField
+      40ms  3.36% 65.55%       90ms  7.56%  internal/stringslite.Cut
+      30ms  2.52% 68.07%      440ms 36.97%  github.com/wangle201210/ldap-go/internal/directory.validatedSimpleDNIdentityRDNsBytes
+      30ms  2.52% 70.59%       30ms  2.52%  github.com/wangle201210/ldap-go/internal/directory.viewDNIdentityParts
+      30ms  2.52% 73.11%      230ms 19.33%  github.com/wangle201210/ldap-go/internal/schema.preparedAttributeNames.match

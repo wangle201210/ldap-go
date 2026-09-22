@@ -95,7 +95,13 @@ func (decoder *readOnlyCandidateDecoder) borrowMetadata(value []byte) ([]byte, [
 		if err != nil || valueCount > len(next) || valueCount > len(decoder.values)-usedValues {
 			return nil, nil, false
 		}
-		attribute := directory.Attribute{Description: decoder.internName(description)}
+		// Stable row layouts can reuse the previous owned name at this slot.
+		// Exact byte comparison keeps reordered and mixed-case rows on fallback.
+		name := decoder.attributes[i].Description
+		if name == "" || len(description) == 0 || name[0] != description[0] || name != string(description) {
+			name = decoder.internName(description)
+		}
+		attribute := directory.Attribute{Description: name}
 		if valueCount > 0 {
 			end := usedValues + valueCount
 			attribute.Values = decoder.values[usedValues:end:end]

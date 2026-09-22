@@ -77,8 +77,8 @@ also compares the preceding version in the same run and records timing variabili
 The [broader SDK report](docs/performance-optimization-20260922-round4.md) adds
 startup, Bind, Compare, base/substring searches and writes. Add, ModifyDN,
 Delete and unindexed substrings still have large performance gaps to OpenLDAP.
-The [latest substring replay](docs/performance-optimization-20260923-round3.md)
-reduces scan time by about 43% against `a279a00`, with full comparison data
+The [latest substring replay](docs/performance-optimization-20260923-round4.md)
+reduces scan time by about 10% against `f0e1243`, with full comparison data
 and an additional traversal returning all 100k users.
 
 ## Requirements

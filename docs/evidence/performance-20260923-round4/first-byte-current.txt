@@ -1,0 +1,20 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkReadOnlyDecoderNameLayouts/stable-8         	 5101713	       118.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/stable-8         	 5007918	       120.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/stable-8         	 4764726	       119.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/stable-8         	 5142224	       117.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/stable-8         	 5140339	       117.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/case-changes-8   	 3679221	       177.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/case-changes-8   	 3294318	       180.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/case-changes-8   	 3647370	       161.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/case-changes-8   	 3399316	       176.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/case-changes-8   	 3400630	       176.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/long-stable-8    	 3841449	       157.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/long-stable-8    	 3721428	       160.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/long-stable-8    	 3809174	       156.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/long-stable-8    	 3823047	       225.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadOnlyDecoderNameLayouts/long-stable-8    	 3427407	       162.7 ns/op	       0 B/op	       0 allocs/op
+PASS

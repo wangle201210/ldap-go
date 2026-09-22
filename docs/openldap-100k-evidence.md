@@ -27,6 +27,8 @@ The [following name/normalization optimization](performance-optimization-2026092
 repeats that workload against `ec18938` and separately rechecks short operations.
 The [DN metadata-view iteration](performance-optimization-20260923-round3.md)
 then compares against `a279a00` and adds a full 100k-result unpaged traversal.
+The [decoder/DN/Compare iteration](performance-optimization-20260923-round4.md)
+repeats that comparison against `f0e1243`, retaining the full-result workload.
 
 ## Final online replay
 

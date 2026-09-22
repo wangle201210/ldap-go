@@ -66,7 +66,7 @@ Web 管理控制台。
 [本轮优化报告](docs/performance-optimization-20260922-round3.md)另列出与上一版同场对照的变化及耗时波动。
 [扩展 SDK 性能报告](docs/performance-optimization-20260922-round4.md)补充启动、Bind、Compare、
 基础/子串查询和增删改名。Add、ModifyDN、Delete 及无索引子串查询仍明显慢于 OpenLDAP。
-[最新子串查询复测](docs/performance-optimization-20260923-round3.md)相对 `a279a00` 降低约 43% 的
+[最新子串查询复测](docs/performance-optimization-20260923-round4.md)相对 `f0e1243` 降低约 10% 的
 子串查询耗时，包含返回全部 100k 条目的遍历与完整对比数据。
 
 ## 环境要求

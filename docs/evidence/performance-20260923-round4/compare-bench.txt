@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkEncodeCompareResultResponse/False/Direct-8  	15637838	        22.48 ns/op	 667.25 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/False/Direct-8  	13931574	        25.02 ns/op	 599.63 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/False/Direct-8  	16078515	        22.54 ns/op	 665.59 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/False/OldPacket-8         	  422376	       913.5 ns/op	  16.42 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeCompareResultResponse/False/OldPacket-8         	  384976	       918.2 ns/op	  16.34 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeCompareResultResponse/False/OldPacket-8         	  405110	       896.3 ns/op	  16.74 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeCompareResultResponse/True/Direct-8             	15637131	        22.83 ns/op	 657.03 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/True/Direct-8             	15427386	        23.21 ns/op	 646.38 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/True/Direct-8             	16006994	        22.41 ns/op	 669.33 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeCompareResultResponse/True/OldPacket-8          	  404781	       917.2 ns/op	  16.35 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeCompareResultResponse/True/OldPacket-8          	  385887	       941.6 ns/op	  15.93 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeCompareResultResponse/True/OldPacket-8          	  413503	       915.4 ns/op	  16.39 MB/s	    1740 B/op	      41 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	4.369s

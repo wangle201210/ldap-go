@@ -3,6 +3,7 @@ package directory
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 )
 
 // ValidateDNIdentityInScopeBytes has the same results and error ordering as
@@ -46,16 +47,39 @@ func validatedSimpleDNIdentityRDNsBytes(value, key, scratch []byte) (dnIdentityP
 	}
 	remaining := rdns
 	for range rdns.count {
-		avas, err := viewDNIdentityParts(remaining.next())
-		if err != nil || avas.count != 1 {
-			return dnIdentityParts{}, false
-		}
-		parts, err := viewDNIdentityParts(avas.next())
-		if err != nil || parts.count != 2 || len(parts.next()) == 0 {
+		if !validSingleAVADNIdentityRDN(remaining.next()) {
 			return dnIdentityParts{}, false
 		}
 	}
 	return rdns, true
+}
+
+// Validate one complete single-AVA RDN without re-reading its nested lengths.
+// Exact final lengths reject trailing bytes at both levels; Uvarint preserves
+// acceptance of non-minimal encodings. Failures use the caller's full fallback.
+func validSingleAVADNIdentityRDN(encoded []byte) bool {
+	count, n := binary.Uvarint(encoded)
+	if n <= 0 || count != 1 {
+		return false
+	}
+	encoded = encoded[n:]
+	length, n := binary.Uvarint(encoded)
+	if n <= 0 || length != uint64(len(encoded)-n) {
+		return false
+	}
+	encoded = encoded[n:]
+	count, n = binary.Uvarint(encoded)
+	if n <= 0 || count != 2 {
+		return false
+	}
+	encoded = encoded[n:]
+	length, n = binary.Uvarint(encoded)
+	if n <= 0 || length == 0 || length > uint64(len(encoded)-n) {
+		return false
+	}
+	encoded = encoded[n+int(length):]
+	length, n = binary.Uvarint(encoded)
+	return n > 0 && length == uint64(len(encoded)-n)
 }
 
 // Recognize the same strict ASCII subset as simpleDNDepth without string copies.
