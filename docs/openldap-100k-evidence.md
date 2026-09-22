@@ -1,89 +1,146 @@
 # OpenLDAP 100k comparison evidence
 
-For the later revision comparison and a separate objectClass paging workload,
-see the [2026-09-20 performance audit](performance-audit-20260920.md). The table
-below remains the complete September 1 fresh-import comparison.
+The latest measurements were collected on 2026-09-22 (Asia/Shanghai), Apple M1
+Pro, 8 CPUs, 16 GiB RAM, Darwin 24.6.0 arm64, Go 1.26.4. Every accepted Go build
+used `CGO_ENABLED=0`. Both servers used the same OpenLDAP 2.6.13 clients on
+loopback. The native source was pinned to
+`d172686d3d270bc961b78f3ff00d7019c8dfb094`.
 
-This evidence was produced on 2026-09-01 (Asia/Shanghai) from ldap-go commit
-`38f3fb2` on an Apple M1 Pro,
-Darwin 24.6.0 arm64 host. Both servers used the same OpenLDAP 2.6.13 client
-binaries over loopback. OpenLDAP and ldap-go explicitly rebuilt `uid` and
-`objectClass` equality indexes before startup.
+**Not every metric has reached OpenLDAP performance.** Repeated queries, paging,
+negative queries, and concurrent queries reach or exceed the reference in these
+runs. First indexed queries, first broad objectClass paging, startup, memory,
+and file size still show gaps. This is a shared workstation, not a dedicated
+capacity benchmark.
 
-Run profile:
+Relative performance is `OpenLDAP / ldap-go * 100%`. Larger is better; 100%
+means equal. Timing and resource values themselves are lower-is-better.
 
-- 100,000 generated `inetOrgPerson` entries
-- 10,000 sequential indexed searches per round
-- 10 unindexed negative searches per round
-- two complete paged traversals per round, page size 10,000
-- eight concurrent connections, 1,000 indexed searches each
-- 1,000 Modify operations
-- canonical full-data and operation-result parity enabled
+## Final online replay
 
-For timing and resource rows, relative performance is `OpenLDAP / ldap-go`,
-expressed as a percentage: 100% means equal performance, values above 100%
-favor ldap-go, and larger is better.
+The final query implementation includes the index-readiness guard, simple-DN
+validation, chunked snapshot construction, and exclusion of failed/truncated
+snapshots from the cache. Its executable SHA-256 is
+`c11845cbe570ae1439e00056d7ad7c8bb86f5a930b7b5daa04bcfe4767000029`.
+
+Each server ran three fresh processes from copies of the databases produced by
+the complete run below, after its balanced parity operations. Process order was:
+
+```text
+before-1 current-1 openldap-1
+current-2 openldap-2 before-2
+openldap-3 before-3 current-3
+```
+
+Here `before` means the immediately preceding cold-path fixes, before chunked
+snapshot construction; it is not the original September 1 implementation.
+The primary comparison below uses only `current` and `openldap`.
+
+Work per batch:
+
+- 10,000 indexed queries for `scale-001001` through `scale-011000`;
+- ten negative description queries;
+- one first, then two repeated full `(objectClass=inetOrgPerson)` traversals,
+  page size 10,000;
+- eight concurrent connections with 1,000 queries each.
+
+Each process ran three repeated batches. Medians use three first-batch samples,
+nine repeated-batch samples, and three RSS samples. Repetitions within one
+process are not independent process samples. Clients wrote LDIF to files.
+There was no forced GC or filesystem-cache eviction. "First" means the first
+batch in a new server process, not a cold OS page cache.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 129,952 ms | 1,021,672 ms | 786% |
-| Startup ready | 265 ms | 106 ms | 40% |
-| Indexed search, repeated | 726 ms | 644 ms | 89% |
-| Indexed search, first batch | 1,225 ms | 592 ms | 48% |
-| Unindexed negative, repeated | 30 ms | 347 ms | 1,157% |
-| Unindexed negative, first batch | 331 ms | 391 ms | 118% |
-| Paged traversal, repeated | 1,113 ms | 1,029 ms | 92% |
-| Paged traversal, first | 568 ms | 576 ms | 101% |
-| Concurrent indexed search | 336 ms | 267 ms | 79% |
-| Modify | 748 ms | 5,478 ms | 732% |
-| RSS after workload | 147,013,632 B | 97,910,784 B | 67% |
-| RSS after 10 seconds idle | 112,869,376 B | 93,257,728 B | 83% |
-| Database file | 140,738,560 B | 85,254,144 B | 61% |
+| Indexed, first 10,000 queries | 1,069 ms | 725 ms | 68% |
+| Indexed, repeated 10,000 queries | 677 ms | 682 ms | 101% |
+| Negative, first ten queries | 312 ms | 354 ms | 113% |
+| Negative, repeated ten queries | 30 ms | 348 ms | 1,160% |
+| First full objectClass traversal | 1,009 ms | 760 ms | 75% |
+| Two repeated objectClass traversals | 1,214 ms | 1,411 ms | 116% |
+| Concurrent indexed, 8 x 1,000 | 243 ms | 254 ms | 105% |
+| RSS after mixed workload | 333.2 MiB | 94.3 MiB | 28% |
 
-Correctness evidence:
+All nine runs returned 100,000 unique people and the same 100,002-entry subtree:
+42,712,504 canonical ordinary-attribute bytes, POSIX checksum `648440320`.
+Request counts, negative result counts, page uniqueness, and concurrent result
+counts were checked. Full ordinary-attribute data matched byte for byte.
 
-- 100,000 unique people returned by both servers
-- all 1,000 timed modifications visible on both servers
-- 100,002 final subtree entries after the balanced Add/Delete sequence
-- 15 canonical data, query, Bind, Compare, and error-result checks passed
-- canonical ordinary-attribute output matched byte for byte: 42,712,504 bytes,
-  POSIX checksum `648440320`
-- duplicate Add, missing Modify, and non-leaf Delete matched LDAP result codes
-  68, 32, and 66; Compare TRUE/FALSE matched 6 and 5
+Repeated negative queries may use the same-revision result cache. RSS is a
+post-workload sample, not peak memory or an idle/retained-heap measurement.
+These query results are not a replacement measurement for import or writes.
 
-The canonical comparison requests `*`: it covers every ordinary LDAP
-attribute and excludes generated operational values such as timestamps, CSNs,
-and random UUIDs that are intentionally server-specific. Raw and canonical
-LDIF, operation status tables, logs, databases, `results.tsv`, and
-`report.json` were retained in the run artifact directory.
+Raw evidence:
+[online timings](evidence/performance-20260922-round2/final-online-timings.tsv),
+[online validation](evidence/performance-20260922-round2/final-online-validation.tsv).
+The replay driver and full artifacts are retained under
+`/var/tmp/ldap-go-perf-round2-20260922/online-builder` on the qualification host.
 
-Compared with the previous complete 100k run on the same host, ldap-go's first
-indexed batch fell from 1,953 ms to 1,225 ms (37%), the first unindexed negative
-batch from 1,016 ms to 331 ms (67%), and the first paged traversal from 2,012 ms
-to 568 ms (72%). Post-workload RSS fell from 485,179,392 B to 147,013,632 B
-(70%), and ten-second-idle RSS fell from 217,268,224 B to 112,869,376 B (48%).
-The physical-key index references increased the database file from 123,813,888
-B to 140,738,560 B (14%), while keyset paging made repeated traversal 55%
-slower than the previous retained snapshot path. In the paired result, first
-paging and first unindexed negative search now favor ldap-go; repeated indexed
-and paged searches are within 11% and 8% of OpenLDAP. Cold indexed search,
-concurrent indexed search, startup, idle RSS, and database size remain explicit
-follow-up targets.
+## Complete fresh-data run
 
-Every offline, online, resource, and correctness value in the table comes from
-this one uninterrupted run. The comparison does not force a GC, drop filesystem
-caches, or otherwise alter one side between paired measurements. Raw LDIF,
-canonical output, status tables, logs, databases, `results.tsv`, and
-`report.json` are retained under `/var/tmp/ldap-go-perf-round10-100k` on the
-qualification host.
+This uninterrupted run used the implementation committed as `e28e1e2`, before
+the final cold-path fixes. Binary SHA-256:
+`f1dab40d5034e2d4359aac55517da51388dfad72062077ee2ef0083a8b9f2bff`.
 
-Reproduce with:
+Both databases were generated and imported afresh with 100,000 inetOrgPerson
+entries, then explicitly indexed on `uid` and `objectClass`. Each repeated
+batch used 10,000 indexed queries, ten negative queries, two full paged
+traversals (page size 10,000), and eight connections with 1,000 queries each.
+There were 1,000 timed Modify operations. Paging covered both `(uid=scale-*)`
+and `(objectClass=inetOrgPerson)`. Repeated query timings are the integer mean
+of two batches in opposite server orders.
+
+| Metric | ldap-go | OpenLDAP | Relative performance |
+| --- | ---: | ---: | ---: |
+| Import plus index | 98,121 ms | 933,093 ms | 951% |
+| Startup ready | 656 ms | 159 ms | 24% |
+| Indexed search, repeated | 585 ms | 595 ms | 102% |
+| Indexed search, first batch | 4,710 ms | 499 ms | 11% |
+| Negative search, repeated | 33 ms | 344 ms | 1,042% |
+| Negative search, first batch | 305 ms | 522 ms | 171% |
+| UID paging, repeated | 1,129 ms | 1,367 ms | 121% |
+| UID paging, first | 560 ms | 568 ms | 101% |
+| ObjectClass paging, repeated | 573 ms | 1,228 ms | 214% |
+| ObjectClass paging, first | 1,153 ms | 709 ms | 61% |
+| Concurrent indexed search | 207 ms | 241 ms | 116% |
+| Modify | 548 ms | 5,478 ms | 1,000% |
+| RSS after workload | 261,308,416 B | 99,565,568 B | 38% |
+| RSS after ten seconds idle | 122,060,800 B | 94,371,840 B | 77% |
+| Database file size | 140,738,560 B | 85,254,144 B | 61% |
+
+The first indexed batch exposed speculative collective-plan work before index
+initialization. The final implementation defers that fast path until readiness
+is established; the new regression checks that it performs no speculative View
+or collective scan before initialization. The 4,710 ms value above remains the
+actual recorded result, not a substituted later measurement. OS cache warmth
+also differs between the long import run and the online replays, so differences
+between those tables cannot be attributed solely to code changes.
+
+This run passed all 15 canonical-data and result-code checks. Both paging
+filters returned exactly 100,000 unique people, every timed modification was
+visible, and the final 100,002-entry ordinary-attribute subtree matched byte for
+byte with the same checksum and byte count as the replay. Generated operational
+timestamps, CSNs, and UUIDs were excluded by requesting `*`.
+
+Raw evidence:
+[complete JSON report](evidence/performance-20260922-round2/fresh-100k.json),
+[complete TSV](evidence/performance-20260922-round2/fresh-100k.tsv).
+Full artifacts are under
+`/var/tmp/ldap-go-perf-round2-20260922/fresh-100k`.
+
+## Reproduction and limits
 
 ```sh
-make qualification-compare-openldap-100k
+CGO_ENABLED=0 OPENLDAP_ENV_FILE=/path/to/openldap-reference.env \
+  make qualification-compare-openldap-100k
 ```
 
-The results establish exact ordinary-data parity for this bounded workload,
-not full behavioral identity with every OpenLDAP backend or overlay. They also
-make the remaining cold-path latency, RSS, and database-size differences
-explicit rather than treating repeated-cache performance as the only result.
+See [production qualification](production-qualification.md#openldap-performance-comparison)
+for parameters and [implementation/validation notes](performance-optimization-20260922-round2.md)
+for the changes. The [September 1 complete run](openldap-100k-evidence-20260901.md)
+is retained separately. Its paging workload did not include the additional
+objectClass measurements, so its RSS is not directly comparable with the new
+complete run.
+
+The validated data parity covers these workloads, not every LDAP backend or
+overlay. The outstanding first-request, memory, and file-size differences remain
+explicit; these results do not establish universal performance superiority.

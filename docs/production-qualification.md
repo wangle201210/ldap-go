@@ -163,6 +163,16 @@ Indexed and unindexed batches follow the same convention:
 `indexed_search_ms`/`unindexed_negative_ms` report the subsequent repeated
 rounds.
 
+The comparison also measures `(objectClass=inetOrgPerson)` with the same page
+size and traversal count. `objectclass_paged_cold_ms` captures its first full
+traversal into an LDIF file; `objectclass_paged_ms` averages two repeated batches
+in opposite server orders. First-traversal results must contain exactly the
+expected number of unique people. JSON reports include `objectclass_paged` and
+`objectclass_paged_cold` timings and per-server `objectclass_entries` validation.
+This covers the broad indexed paging path separately from the existing
+`(uid=scale-*)` workload. RSS samples now follow both paging workloads, so compare
+them only with runs that include the same phases.
+
 The `objectClass` index is part of the indexed baseline because slapd adds its
 referral candidate branch to normal searches. With only `uid` indexed,
 OpenLDAP's internal `(|(objectClass=referral)(uid=...))` candidate set falls

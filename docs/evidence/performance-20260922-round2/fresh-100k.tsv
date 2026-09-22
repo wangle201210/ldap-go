@@ -1,0 +1,20 @@
+metric	ldap_go	openldap	openldap_over_ldap_go	workload
+offline_import_plus_index_ms	98121	933093	9.51	100000 entries with uid/objectClass equality indexes
+startup_ready_ms	656	159	0.24	authenticated WhoAmI readiness
+indexed_search_ms	585	595	1.02	10000 sequential searches per round
+indexed_cold_ms	4710	499	0.11	first 10000 sequential searches with LDIF output
+unindexed_negative_ms	33	344	10.42	10 full negative scans per round
+unindexed_cold_ms	305	522	1.71	first 10 full negative scans
+paged_search_ms	1129	1367	1.21	2 full traversals per round, page size 10000
+paged_cold_ms	560	568	1.01	one uncached full traversal, page size 10000
+concurrent_indexed_ms	207	241	1.16	8 connections x 1000 searches per round
+objectclass_paged_ms	573	1228	2.14	2 full objectClass traversals per round, page size 10000
+objectclass_paged_cold_ms	1153	709	0.61	one first objectClass traversal with LDIF output, page size 10000
+modify_ms	548	5478	10.00	1000 replaces
+rss_bytes	261308416	99565568	0.38	after workload
+rss_quiescent_bytes	122060800	94371840	0.77	after 10 seconds idle
+database_bytes	140738560	85254144	0.61	logical file size
+unique_entries	100000	100000	1.00	paged correctness
+modified_entries	1000	1000	1.00	post-write correctness
+canonical_data_entries	100002	100002	1.00	post-operation ordinary attribute parity
+data_parity_checks	15	15	1.00	canonical query and result-code checks

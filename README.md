@@ -51,40 +51,27 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-The following single-host result was produced on 2026-09-01 using 100,000
-generated entries, identical indexes and OpenLDAP 2.6.13 clients over loopback
-on an Apple M1 Pro. Timing and resource rows are lower-is-better. Relative
-performance is `OpenLDAP / ldap-go`, expressed as a percentage: 100% means
-equal performance, values above 100% favor ldap-go, and larger is better.
+Latest online replay: September 22, 2026, 100,000 users, Apple M1 Pro,
+Go built without cgo, identical indexes and OpenLDAP 2.6.13 clients.
+Times are medians; relative performance is `OpenLDAP / ldap-go`, expressed
+as a percentage. Above 100% favors ldap-go.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Import plus index | 129,952 ms | 1,021,672 ms | 786% |
-| Startup ready | 265 ms | 106 ms | 40% |
-| Indexed search, repeated | 726 ms | 644 ms | 89% |
-| Indexed search, first batch | 1,225 ms | 592 ms | 48% |
-| Unindexed negative, repeated | 30 ms | 347 ms | 1,157% |
-| Unindexed negative, first batch | 331 ms | 391 ms | 118% |
-| Paged traversal, repeated | 1,113 ms | 1,029 ms | 92% |
-| Paged traversal, first | 568 ms | 576 ms | 101% |
-| Concurrent indexed search | 336 ms | 267 ms | 79% |
-| Modify | 748 ms | 5,478 ms | 732% |
-| RSS after workload | 140.2 MiB | 93.4 MiB | 67% |
-| RSS after 10 seconds idle | 107.6 MiB | 88.9 MiB | 83% |
-| Database file | 134.2 MiB | 81.3 MiB | 61% |
+| Indexed, first 10,000 queries | 1,069 ms | 725 ms | 68% |
+| Indexed, repeated 10,000 queries | 677 ms | 682 ms | 101% |
+| Negative, first ten queries | 312 ms | 354 ms | 113% |
+| Negative, repeated ten queries | 30 ms | 348 ms | 1,160% |
+| First full objectClass traversal | 1,009 ms | 760 ms | 75% |
+| Two repeated objectClass traversals | 1,214 ms | 1,411 ms | 116% |
+| Concurrent indexed, 8 x 1,000 | 243 ms | 254 ms | 105% |
+| RSS after mixed workload | 333.2 MiB | 94.3 MiB | 28% |
 
-All 100,000 people, 1,000 modifications, representative result codes, and
-42,712,504 bytes of canonical ordinary-attribute LDIF matched. This is a
-bounded regression benchmark, not a universal production capacity claim. See
-the [100k evidence](docs/openldap-100k-evidence.md) for the exact workload and
-interpretation, and [production qualification](docs/production-qualification.md#openldap-performance-comparison)
-for the reproducible comparison method.
-
-The [2026-09-20 performance audit](docs/performance-audit-20260920.md) adds
-revision comparisons, 100k snapshot queries, and remaining performance limits.
-The [2026-09-22 optimization](docs/performance-optimization-20260922.md) reduced
-first objectClass traversal time by 36.7% and repeated traversal time by 9.0%
-in the separate 100k snapshot workload, with exact ordinary-data parity.
+All 100,000 users and 42,712,504 bytes of canonical ordinary-attribute data
+matched. First-query latency and large-directory memory remain gaps.
+The [100k evidence](docs/openldap-100k-evidence.md) separately records the
+complete fresh-import/write run and this final online replay; it includes raw
+results, workload differences, remaining limits, and reproduction instructions.
 
 ## Requirements
 

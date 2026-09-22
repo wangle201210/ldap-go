@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkPagedSnapshotBuild/entries=50/chunked=false         	   21019	     11372 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=50/chunked=false         	   23548	     10511 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=50/chunked=false         	   22102	     10831 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=50/chunked=true          	   19652	     11405 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=50/chunked=true          	   21969	     10937 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=50/chunked=true          	   22448	     10623 ns/op	   32464 B/op	       7 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=false       	     154	   1427261 ns/op	 5144272 B/op	      17 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=false       	     208	   1057179 ns/op	 5144272 B/op	      17 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=false       	     196	   1132628 ns/op	 5144272 B/op	      17 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=true        	     213	   1121014 ns/op	 5938920 B/op	      19 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=true        	     213	   1038436 ns/op	 5938920 B/op	      19 allocs/op
+BenchmarkPagedSnapshotBuild/entries=5000/chunked=true        	     200	   1134595 ns/op	 5938920 B/op	      19 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=false     	       6	  56321680 ns/op	139730640 B/op	      30 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=false     	       5	  45857083 ns/op	139730640 B/op	      30 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=false     	       5	  48225683 ns/op	139730640 B/op	      30 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=true      	      18	  11730352 ns/op	51348792 B/op	      47 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=true      	      22	  13323504 ns/op	51348792 B/op	      47 allocs/op
+BenchmarkPagedSnapshotBuild/entries=100000/chunked=true      	      14	  16157854 ns/op	51348792 B/op	      47 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	4.395s

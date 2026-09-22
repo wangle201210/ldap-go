@@ -539,6 +539,22 @@ search_paged_once() {
 		-LLL -E "pr=$page_size/noprompt" -b "$people_dn" '(uid=scale-*)' uid >/dev/null
 }
 
+search_objectclass_paged_once() {
+	uri=$1
+	output=${2:-/dev/null}
+	"$ldapsearch" -H "$uri" -x -D "$root_dn" -y "$password_file" \
+		-LLL -E "pr=$page_size/noprompt" -b "$people_dn" '(objectClass=inetOrgPerson)' uid >"$output"
+}
+
+search_objectclass_paged() {
+	uri=$1
+	iteration=0
+	while [ "$iteration" -lt "$paged_traversals" ]; do
+		search_objectclass_paged_once "$uri"
+		iteration=$((iteration + 1))
+	done
+}
+
 search_concurrent() {
 	uri=$1
 	worker=0
@@ -780,6 +796,14 @@ measure openldap_paged_1_ms search_paged "$openldap_uri"
 measure ldap_go_paged_1_ms search_paged "$ldap_go_uri"
 measure ldap_go_paged_2_ms search_paged "$ldap_go_uri"
 measure openldap_paged_2_ms search_paged "$openldap_uri"
+measure openldap_objectclass_paged_cold_ms search_objectclass_paged_once \
+	"$openldap_uri" "$artifact_dir/openldap-objectclass-validation.ldif"
+measure ldap_go_objectclass_paged_cold_ms search_objectclass_paged_once \
+	"$ldap_go_uri" "$artifact_dir/ldap-go-objectclass-validation.ldif"
+measure openldap_objectclass_paged_1_ms search_objectclass_paged "$openldap_uri"
+measure ldap_go_objectclass_paged_1_ms search_objectclass_paged "$ldap_go_uri"
+measure ldap_go_objectclass_paged_2_ms search_objectclass_paged "$ldap_go_uri"
+measure openldap_objectclass_paged_2_ms search_objectclass_paged "$openldap_uri"
 measure openldap_concurrent_1_ms search_concurrent "$openldap_uri"
 measure ldap_go_concurrent_1_ms search_concurrent "$ldap_go_uri"
 measure ldap_go_concurrent_2_ms search_concurrent "$ldap_go_uri"
@@ -797,6 +821,10 @@ for side in ldap-go openldap; do
 	unique=$(awk '/^dn: uid=scale-[0-9]+,ou=people,dc=scale,dc=qualification$/ {print}' \
 		"$artifact_dir/$side-all.ldif" | sort -u | wc -l | tr -d ' ')
 	[ "$unique" -eq "$entries" ] || die "$side returned $unique unique entries, expected $entries"
+	objectclass_count=$(awk '/^dn: / {count++} END {print count+0}' "$artifact_dir/$side-objectclass-validation.ldif")
+	objectclass_unique=$(awk '/^dn: / {print}' "$artifact_dir/$side-objectclass-validation.ldif" | LC_ALL=C sort -u | wc -l | tr -d ' ')
+	[ "$objectclass_count" -eq "$entries" ] && [ "$objectclass_unique" -eq "$entries" ] ||
+		die "$side objectClass paging returned $objectclass_count entries, $objectclass_unique unique, expected $entries"
 	"$ldapsearch" -H "$uri" -x -D "$root_dn" -y "$password_file" \
 		-LLL -b "$people_dn" '(description=benchmark-*)' description \
 		>"$artifact_dir/$side-modified.ldif"
@@ -841,6 +869,8 @@ ldap_go_unindexed_ms=$(( (ldap_go_unindexed_1_ms + ldap_go_unindexed_2_ms) / 2 )
 openldap_unindexed_ms=$(( (openldap_unindexed_1_ms + openldap_unindexed_2_ms) / 2 ))
 ldap_go_paged_ms=$(( (ldap_go_paged_1_ms + ldap_go_paged_2_ms) / 2 ))
 openldap_paged_ms=$(( (openldap_paged_1_ms + openldap_paged_2_ms) / 2 ))
+ldap_go_objectclass_paged_ms=$(( (ldap_go_objectclass_paged_1_ms + ldap_go_objectclass_paged_2_ms) / 2 ))
+openldap_objectclass_paged_ms=$(( (openldap_objectclass_paged_1_ms + openldap_objectclass_paged_2_ms) / 2 ))
 ldap_go_concurrent_ms=$(( (ldap_go_concurrent_1_ms + ldap_go_concurrent_2_ms) / 2 ))
 openldap_concurrent_ms=$(( (openldap_concurrent_1_ms + openldap_concurrent_2_ms) / 2 ))
 ldap_go_import_index_ms=$((ldap_go_import_ms + ldap_go_reindex_ms))
@@ -874,6 +904,12 @@ ratio() {
 		"$ldap_go_paged_cold_ms" "$openldap_paged_cold_ms" "$(ratio "$openldap_paged_cold_ms" "$ldap_go_paged_cold_ms")" "$page_size"
 	printf 'concurrent_indexed_ms\t%s\t%s\t%s\t%s connections x %s searches per round\n' \
 		"$ldap_go_concurrent_ms" "$openldap_concurrent_ms" "$(ratio "$openldap_concurrent_ms" "$ldap_go_concurrent_ms")" "$concurrency" "$searches_per_connection"
+	printf 'objectclass_paged_ms\t%s\t%s\t%s\t%s full objectClass traversals per round, page size %s\n' \
+		"$ldap_go_objectclass_paged_ms" "$openldap_objectclass_paged_ms" \
+		"$(ratio "$openldap_objectclass_paged_ms" "$ldap_go_objectclass_paged_ms")" "$paged_traversals" "$page_size"
+	printf 'objectclass_paged_cold_ms\t%s\t%s\t%s\tone first objectClass traversal with LDIF output, page size %s\n' \
+		"$ldap_go_objectclass_paged_cold_ms" "$openldap_objectclass_paged_cold_ms" \
+		"$(ratio "$openldap_objectclass_paged_cold_ms" "$ldap_go_objectclass_paged_cold_ms")" "$page_size"
 	printf 'modify_ms\t%s\t%s\t%s\t%s replaces\n' \
 		"$ldap_go_modify_ms" "$openldap_modify_ms" "$(ratio "$openldap_modify_ms" "$ldap_go_modify_ms")" "$modifications"
 	printf 'rss_bytes\t%s\t%s\t%s\tafter workload\n' \
@@ -911,16 +947,16 @@ cat >"$report" <<EOF
     "data_parity": $data_parity
   },
   "timings_ms": {
-    "ldap_go": {"import": $ldap_go_import_ms, "reindex": $ldap_go_reindex_ms, "import_plus_index": $ldap_go_import_index_ms, "startup": $ldap_go_startup_ms, "indexed": $ldap_go_indexed_ms, "indexed_cold": $ldap_go_indexed_cold_ms, "unindexed": $ldap_go_unindexed_ms, "unindexed_cold": $ldap_go_unindexed_cold_ms, "paged": $ldap_go_paged_ms, "paged_cold": $ldap_go_paged_cold_ms, "concurrent": $ldap_go_concurrent_ms, "modify": $ldap_go_modify_ms},
-    "openldap": {"import": $openldap_import_ms, "reindex": $openldap_reindex_ms, "import_plus_index": $openldap_import_index_ms, "startup": $openldap_startup_ms, "indexed": $openldap_indexed_ms, "indexed_cold": $openldap_indexed_cold_ms, "unindexed": $openldap_unindexed_ms, "unindexed_cold": $openldap_unindexed_cold_ms, "paged": $openldap_paged_ms, "paged_cold": $openldap_paged_cold_ms, "concurrent": $openldap_concurrent_ms, "modify": $openldap_modify_ms}
+    "ldap_go": {"import": $ldap_go_import_ms, "reindex": $ldap_go_reindex_ms, "import_plus_index": $ldap_go_import_index_ms, "startup": $ldap_go_startup_ms, "indexed": $ldap_go_indexed_ms, "indexed_cold": $ldap_go_indexed_cold_ms, "unindexed": $ldap_go_unindexed_ms, "unindexed_cold": $ldap_go_unindexed_cold_ms, "paged": $ldap_go_paged_ms, "paged_cold": $ldap_go_paged_cold_ms, "objectclass_paged": $ldap_go_objectclass_paged_ms, "objectclass_paged_cold": $ldap_go_objectclass_paged_cold_ms, "concurrent": $ldap_go_concurrent_ms, "modify": $ldap_go_modify_ms},
+    "openldap": {"import": $openldap_import_ms, "reindex": $openldap_reindex_ms, "import_plus_index": $openldap_import_index_ms, "startup": $openldap_startup_ms, "indexed": $openldap_indexed_ms, "indexed_cold": $openldap_indexed_cold_ms, "unindexed": $openldap_unindexed_ms, "unindexed_cold": $openldap_unindexed_cold_ms, "paged": $openldap_paged_ms, "paged_cold": $openldap_paged_cold_ms, "objectclass_paged": $openldap_objectclass_paged_ms, "objectclass_paged_cold": $openldap_objectclass_paged_cold_ms, "concurrent": $openldap_concurrent_ms, "modify": $openldap_modify_ms}
   },
   "resources": {
     "ldap_go": {"rss_bytes": $ldap_go_rss_bytes, "rss_quiescent_bytes": $ldap_go_rss_quiescent_bytes, "database_bytes": $ldap_go_db_bytes},
     "openldap": {"rss_bytes": $openldap_rss_bytes, "rss_quiescent_bytes": $openldap_rss_quiescent_bytes, "database_bytes": $openldap_db_bytes}
   },
   "correctness": {
-    "ldap_go": {"indexed_results": $ldap_go_indexed_count, "unique_entries": $ldap_go_unique, "modified_entries": $ldap_go_modified},
-    "openldap": {"indexed_results": $openldap_indexed_count, "unique_entries": $openldap_unique, "modified_entries": $openldap_modified},
+    "ldap_go": {"indexed_results": $ldap_go_indexed_count, "unique_entries": $ldap_go_unique, "objectclass_entries": $entries, "modified_entries": $ldap_go_modified},
+    "openldap": {"indexed_results": $openldap_indexed_count, "unique_entries": $openldap_unique, "objectclass_entries": $entries, "modified_entries": $openldap_modified},
     "data_parity": {"enabled": $data_parity, "canonical_entries": $data_parity_entries, "checks": $data_parity_checks, "checksum": "$data_parity_checksum", "canonical_bytes": $data_parity_bytes}
   }
 }
@@ -936,4 +972,4 @@ trap - EXIT HUP INT TERM
 printf 'OpenLDAP comparison passed.\n'
 printf 'Results: %s\n' "$results"
 printf 'Report: %s\n' "$report"
-sed -n '1,20p' "$results"
+sed -n '1,24p' "$results"

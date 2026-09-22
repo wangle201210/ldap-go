@@ -1,0 +1,6 @@
+Building linux/amd64 with CGO_ENABLED=0
+Building linux/arm64 with CGO_ENABLED=0
+Building darwin/amd64 with CGO_ENABLED=0
+Building darwin/arm64 with CGO_ENABLED=0
+Building windows/amd64 with CGO_ENABLED=0
+Building freebsd/amd64 with CGO_ENABLED=0
