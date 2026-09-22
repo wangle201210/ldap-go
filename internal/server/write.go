@@ -1833,7 +1833,7 @@ func (server *Server) handleDelete(
 				if err != nil {
 					return err
 				}
-				if err := tx.ForEach(func(entry directory.Entry) error {
+				checkDescendant := func(entry directory.Entry) error {
 					candidate, err := normalizedWriteCandidateDN(tx, entry)
 					if err != nil {
 						return err
@@ -1842,7 +1842,12 @@ func (server *Server) handleDelete(
 						hasChildren = true
 					}
 					return nil
-				}); err != nil {
+				}
+				handled, err := storage.ForEachDeleteCandidateDN(tx, checkDescendant)
+				if err == nil && !handled {
+					err = tx.ForEach(checkDescendant)
+				}
+				if err != nil {
 					return err
 				}
 			}

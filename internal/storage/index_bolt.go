@@ -10,6 +10,13 @@ import (
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
+// readOnlyIndexEntryValues opts into reusing a decoded entry across index-value
+// calls. Implementations must not mutate its descriptors or value bytes, either
+// during a call or through retained aliases. Unknown schemas keep fresh decodes.
+type readOnlyIndexEntryValues interface {
+	IndexEntryValuesReadOnly() bool
+}
+
 func (tx *boltTx) equalityIndexConfig(
 	partition string,
 ) (EqualityIndexConfig, bool, error) {
@@ -239,6 +246,7 @@ func (tx *boltTx) putInWithEqualityIndexes(
 	if len(existingKeys) > 0 && !replace {
 		return ErrEntryExists
 	}
+	var validatedExisting *directory.Entry
 	if len(existingKeys) == 1 && existingKeys[0] == partitionedEntryKey(partition, dn.Key()) {
 		value := tx.entries.Get([]byte(existingKeys[0]))
 		_, entryKey := splitPartitionedEntryKey(existingKeys[0])
@@ -259,13 +267,22 @@ func (tx *boltTx) putInWithEqualityIndexes(
 				true,
 			)
 		}
+		if readOnly, ok := schema.(readOnlyIndexEntryValues); ok && readOnly.IndexEntryValuesReadOnly() {
+			validatedExisting = &existing
+		}
 	}
 	for _, key := range existingKeys {
-		value := tx.entries.Get([]byte(key))
-		_, entryKey := splitPartitionedEntryKey(key)
-		existing, err := decodeAndValidateEntry(entryKey, value)
-		if err != nil {
-			return err
+		var existing directory.Entry
+		if validatedExisting != nil {
+			// Only the single-key branch can reuse this owned, validated entry.
+			existing = *validatedExisting
+		} else {
+			value := tx.entries.Get([]byte(key))
+			_, entryKey := splitPartitionedEntryKey(key)
+			existing, err = decodeAndValidateEntry(entryKey, value)
+			if err != nil {
+				return err
+			}
 		}
 		if err := tx.removeEqualityIndexEntry(
 			partition,

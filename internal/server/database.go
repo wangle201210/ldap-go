@@ -845,6 +845,11 @@ func (normalizer *databaseEqualityIndexNormalizer) EqualityIndexConfiguration() 
 	return config
 }
 
+func (normalizer *databaseEqualityIndexNormalizer) IndexEntryValuesReadOnly() bool {
+	registry, ok := normalizer.registry.(*schema.Registry)
+	return ok && registry != nil
+}
+
 func (normalizer *databaseEqualityIndexNormalizer) ResolveEqualityIndexAttribute(
 	description string,
 ) (canonical string, equality, presence bool, err error) {

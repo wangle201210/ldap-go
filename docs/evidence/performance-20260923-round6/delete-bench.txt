@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkDeletePreflight/Entries10000/Payload256/ForEach-8 	      13	  28009208 ns/op	27308600 B/op	  630030 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload256/ForEach-8 	      12	  27565007 ns/op	27307806 B/op	  630029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload256/ForEach-8 	      12	  27749750 ns/op	27307820 B/op	  630029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload256/Metadata-8         	      13	  26476401 ns/op	22907794 B/op	  590029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload256/Metadata-8         	      13	  26097917 ns/op	22907806 B/op	  590029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload256/Metadata-8         	      12	  25951535 ns/op	22907797 B/op	  590029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/ForEach-8        	       7	  43822357 ns/op	208107778 B/op	  630029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/ForEach-8        	       7	  42891286 ns/op	208108510 B/op	  630029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/ForEach-8        	       7	  43135208 ns/op	208107789 B/op	  630029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/Metadata-8       	      12	  28448198 ns/op	22907793 B/op	  590029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/Metadata-8       	      12	  28608375 ns/op	22907776 B/op	  590029 allocs/op
+BenchmarkDeletePreflight/Entries10000/Payload16384/Metadata-8       	      12	  28020167 ns/op	22907810 B/op	  590029 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	5.187s

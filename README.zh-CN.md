@@ -68,6 +68,8 @@ Web 管理控制台。
 基础/子串查询和增删改名。Add、ModifyDN、Delete 及无索引子串查询仍明显慢于 OpenLDAP。
 [最新综合复测](docs/performance-optimization-20260923-round5.md)相对 `929683d` 降低约 56-57% 的
 Compare 耗时及约 14% 的子串查询耗时，也记录了分页、并发查询和本轮升高的 RSS 采样值。
+[写入优化复测](docs/performance-optimization-20260923-round6.md)减少删除检查的属性复制和
+索引修改的重复解码；100k 数据下实际 Delete 耗时下降约 3.9%。
 
 ## 环境要求
 

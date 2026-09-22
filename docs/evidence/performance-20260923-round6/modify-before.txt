@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkBoltIndexedModifyDecodeReuse/photo=1024-8         	   31934	     18108 ns/op	   23810 B/op	     366 allocs/op
+BenchmarkBoltIndexedModifyDecodeReuse/photo=1024-8         	   33246	     17918 ns/op	   23810 B/op	     366 allocs/op
+BenchmarkBoltIndexedModifyDecodeReuse/photo=1024-8         	   30028	     19533 ns/op	   23810 B/op	     366 allocs/op
+BenchmarkBoltIndexedModifyDecodeReuse/photo=65536-8        	    9445	     59888 ns/op	  312821 B/op	     366 allocs/op
+BenchmarkBoltIndexedModifyDecodeReuse/photo=65536-8        	   10000	     54926 ns/op	  312823 B/op	     366 allocs/op
+BenchmarkBoltIndexedModifyDecodeReuse/photo=65536-8        	   12163	     49106 ns/op	  312821 B/op	     366 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	3.661s

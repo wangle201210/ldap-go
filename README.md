@@ -80,6 +80,8 @@ Delete and unindexed substrings still have large performance gaps to OpenLDAP.
 The [latest broader replay](docs/performance-optimization-20260923-round5.md)
 reduces Compare time by about 56-57% and substring time by about 14% against
 `929683d`. It also records pagination, concurrent queries and higher sampled RSS.
+The [write follow-up](docs/performance-optimization-20260923-round6.md) reduces
+Delete scan allocations and indexed-update decoding; 100k Delete time falls 3.9%.
 
 ## Requirements
 
