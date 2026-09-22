@@ -1258,7 +1258,10 @@ func (server *Server) modifyEntry(
 				)
 				continue
 			}
-			beforeChange := entry.Clone()
+			var beforeChange directory.Entry
+			if configurationWrite || sqlModify != nil {
+				beforeChange = entry.Clone()
+			}
 			if configurationWrite {
 				if handled, err := applyMaxEntrySizeModification(&entry, change, permissiveModify); handled {
 					if err != nil {
@@ -1831,11 +1834,7 @@ func (server *Server) handleDelete(
 					return err
 				}
 				if err := tx.ForEach(func(entry directory.Entry) error {
-					candidate, err := directory.ParseDN(entry.DN)
-					if err != nil {
-						return err
-					}
-					candidate, err = storage.NormalizeReaderDN(tx, candidate)
+					candidate, err := normalizedWriteCandidateDN(tx, entry)
 					if err != nil {
 						return err
 					}
@@ -2637,11 +2636,7 @@ func (server *Server) handleModifyDN(
 			})
 			oldKeys[comparisonOldDN.Key()] = struct{}{}
 		} else if err := tx.ForEach(func(entry directory.Entry) error {
-			candidate, err := directory.ParseDN(entry.DN)
-			if err != nil {
-				return err
-			}
-			candidate, err = storage.NormalizeReaderDN(tx, candidate)
+			candidate, err := normalizedWriteCandidateDN(tx, entry)
 			if err != nil {
 				return err
 			}
@@ -4503,6 +4498,23 @@ func refreshNamingContexts(writer storage.Writer) error {
 	return writer.SetNamingContexts(contexts)
 }
 
+// Schema-aware iterators already reconstructed candidate DNs using the same
+// reader. Keep normalization as the fallback for other iterator implementations.
+func normalizedWriteCandidateDN(reader storage.Reader, entry directory.Entry) (directory.DN, error) {
+	if _, schemaAware := reader.(interface {
+		NormalizeDNIdentity(directory.DN) (directory.DN, error)
+	}); schemaAware {
+		if dn, available := entry.NormalizedDNHint(); available && dn.String() == entry.DN {
+			return dn, nil
+		}
+	}
+	dn, err := directory.ParseDN(entry.DN)
+	if err != nil {
+		return directory.DN{}, err
+	}
+	return storage.NormalizeReaderDN(reader, dn)
+}
+
 func refreshRuntimeNamingContexts(
 	writer storage.Writer,
 	runtime *runtimeState,
@@ -4510,14 +4522,31 @@ func refreshRuntimeNamingContexts(
 	if runtime == nil || runtime.schema == nil {
 		return refreshNamingContexts(writer)
 	}
-	contexts, err := storage.InferNamingContextsWithNormalizer(
-		writer,
+	contexts, err := storage.InferNamingContextsMetadataWithNormalizer(
+		namingContextMetadataStorageReader(writer),
 		runtime.schema,
 	)
 	if err != nil {
 		return err
 	}
 	return writer.SetNamingContexts(contexts)
+}
+
+func namingContextMetadataStorageReader(reader storage.Reader) storage.Reader {
+	// These concrete wrappers inherit ForEachPartition unchanged. Unknown
+	// decorators keep their iteration behavior, even if they expose maintenance.
+	for {
+		switch wrapped := reader.(type) {
+		case *homedirTrackingWriter:
+			reader = wrapped.Writer
+		case accessContextWriter:
+			reader = wrapped.Writer
+		case *accessContextWriter:
+			reader = wrapped.Writer
+		default:
+			return reader
+		}
+	}
 }
 
 func parseCoreWriteDN(

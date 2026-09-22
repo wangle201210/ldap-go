@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8         	      86	   7789842 ns/op	 1316215 B/op	    3280 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8         	      86	   8042299 ns/op	 1314400 B/op	    3280 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8         	     100	   8431860 ns/op	 1314477 B/op	    3279 allocs/op
+PASS

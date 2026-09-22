@@ -32,9 +32,10 @@ func (decoder *readOnlyCandidateDecoder) decode(value []byte) (directory.Entry, 
 	return stored.Entry, err
 }
 
-// borrow is called only after the planner has prevalidated every candidate.
-// It still checks fields with the original parsers, including counts, binding,
-// trailing bytes, and normalization flags; a failed gate uses the owned decoder.
+// borrow checks fields with the original parsers, including counts, binding
+// length, trailing bytes, and normalization flags. The candidate planner
+// prevalidates identities; other callers must validate the returned identity
+// binding themselves before exposing a row. A failed gate uses the owned decoder.
 func (decoder *readOnlyCandidateDecoder) borrow(value []byte) (directory.Entry, bool) {
 	var flags []byte
 	var err error

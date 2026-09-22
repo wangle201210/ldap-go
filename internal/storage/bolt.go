@@ -672,8 +672,20 @@ func (tx *boltTx) ForEachIn(
 		}
 	}
 	if partition == "" {
-		for key, value := cursor.First(); key != nil; key, value = cursor.Next() {
-			if bytes.IndexByte(key, 0) >= 0 {
+		var seekBuffer [256]byte
+		seek := seekBuffer[:0]
+		for key, value := cursor.First(); key != nil; {
+			if separator := bytes.IndexByte(key, 0); separator >= 0 {
+				prefix := key[:separator+1]
+				key, value = cursor.Next()
+				if key == nil || !bytes.HasPrefix(key, prefix) {
+					continue
+				}
+				// Every key under this NUL-delimited prefix is partitioned.
+				// Seek past the whole group without skipping any legacy key.
+				seek = append(seek[:0], prefix[:separator]...)
+				seek = append(seek, 1)
+				key, value = cursor.Seek(seek)
 				continue
 			}
 			if err := tx.ctx.Err(); err != nil {
@@ -686,6 +698,7 @@ func (tx *boltTx) ForEachIn(
 			if err := fn(entry); err != nil {
 				return err
 			}
+			key, value = cursor.Next()
 		}
 	}
 	return nil

@@ -493,7 +493,8 @@ func octetString(value []byte) *ber.Packet {
 		nil,
 		"LDAPString",
 	)
-	_, _ = packet.Data.Write(bytes.Clone(value))
+	// Write copies value into packet-owned storage.
+	_, _ = packet.Data.Write(value)
 	return packet
 }
 

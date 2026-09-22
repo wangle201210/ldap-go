@@ -372,6 +372,12 @@ func (server *Server) preverifyExternalPasswordBind(
 	if err != nil || len(candidates) == 0 {
 		return externalPasswordMatches{}, err
 	}
+	// Local passwords are verified in the final password-policy transaction.
+	if !externalPasswordSequencesNeedVerification([]externalPasswordVerificationSequence{{
+		stored: candidates,
+	}}) {
+		return externalPasswordMatches{}, nil
+	}
 	matches := newExternalPasswordMatches()
 	for _, stored := range candidates {
 		if scheme, _ := externalPasswordScheme(stored); scheme != "" {

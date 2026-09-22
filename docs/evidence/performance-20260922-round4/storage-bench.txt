@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkBoltLegacyPartitionScan/optimized=false-8         	     235	   1491075 ns/op	    2376 B/op	     113 allocs/op
+BenchmarkBoltLegacyPartitionScan/optimized=false-8         	     242	   1510495 ns/op	    2376 B/op	     113 allocs/op
+BenchmarkBoltLegacyPartitionScan/optimized=false-8         	     241	   1476618 ns/op	    2376 B/op	     113 allocs/op
+BenchmarkBoltLegacyPartitionScan/optimized=true-8          	   67581	      5276 ns/op	    2888 B/op	     114 allocs/op
+BenchmarkBoltLegacyPartitionScan/optimized=true-8          	   66434	      5169 ns/op	    2888 B/op	     114 allocs/op
+BenchmarkBoltLegacyPartitionScan/optimized=true-8          	   69680	      5149 ns/op	    2888 B/op	     114 allocs/op
+BenchmarkNamingContextKeys/reference-8                     	       7	  44614143 ns/op	36237898 B/op	 1080205 allocs/op
+BenchmarkNamingContextKeys/reference-8                     	       7	  44749256 ns/op	36237113 B/op	 1080204 allocs/op
+BenchmarkNamingContextKeys/reference-8                     	       7	  48078530 ns/op	36237145 B/op	 1080204 allocs/op
+BenchmarkNamingContextKeys/compact-8                       	       7	  43416494 ns/op	36288064 B/op	 1070202 allocs/op
+BenchmarkNamingContextKeys/compact-8                       	       7	  44067536 ns/op	36288118 B/op	 1070203 allocs/op
+BenchmarkNamingContextKeys/compact-8                       	       8	  42038172 ns/op	36288156 B/op	 1070203 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Original-8         	      30	  11570235 ns/op	26573158 B/op	  236247 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Original-8         	      28	  10792890 ns/op	26573178 B/op	  236247 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Original-8         	      33	  10990508 ns/op	26573192 B/op	  236247 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Metadata-8         	      44	   8072633 ns/op	 6216779 B/op	  196209 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Metadata-8         	      43	   8121193 ns/op	 6216777 B/op	  196209 allocs/op
+BenchmarkNamingContextMetadataInference/Entries1000/Payload16KiB/Metadata-8         	      44	   8209504 ns/op	 6216769 B/op	  196209 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	6.777s

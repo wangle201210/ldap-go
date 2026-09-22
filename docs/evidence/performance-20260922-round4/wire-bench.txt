@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkOctetString/0/Current-8         	 5171166	        69.52 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/0/Current-8         	 5442920	        67.91 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/0/Current-8         	 5211250	        68.42 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/0/CloneReference-8  	 5240485	        68.48 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/0/CloneReference-8  	 5371146	        69.65 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/0/CloneReference-8  	 4180789	        72.66 ns/op	     176 B/op	       3 allocs/op
+BenchmarkOctetString/16/Current-8        	 4181884	        86.34 ns/op	 185.31 MB/s	     240 B/op	       4 allocs/op
+BenchmarkOctetString/16/Current-8        	 4084532	        87.94 ns/op	 181.95 MB/s	     240 B/op	       4 allocs/op
+BenchmarkOctetString/16/Current-8        	 4122189	        86.76 ns/op	 184.41 MB/s	     240 B/op	       4 allocs/op
+BenchmarkOctetString/16/CloneReference-8 	 3609056	        99.65 ns/op	 160.56 MB/s	     256 B/op	       5 allocs/op
+BenchmarkOctetString/16/CloneReference-8 	 3577140	       100.3 ns/op	 159.51 MB/s	     256 B/op	       5 allocs/op
+BenchmarkOctetString/16/CloneReference-8 	 3590455	       110.8 ns/op	 144.36 MB/s	     256 B/op	       5 allocs/op
+BenchmarkOctetString/128/Current-8       	 3190431	       196.7 ns/op	 650.86 MB/s	     304 B/op	       4 allocs/op
+BenchmarkOctetString/128/Current-8       	 2365564	       153.0 ns/op	 836.66 MB/s	     304 B/op	       4 allocs/op
+BenchmarkOctetString/128/Current-8       	 2360402	       129.6 ns/op	 987.61 MB/s	     304 B/op	       4 allocs/op
+BenchmarkOctetString/128/CloneReference-8         	 2213186	       165.9 ns/op	 771.65 MB/s	     432 B/op	       5 allocs/op
+BenchmarkOctetString/128/CloneReference-8         	 2583573	       141.4 ns/op	 905.46 MB/s	     432 B/op	       5 allocs/op
+BenchmarkOctetString/128/CloneReference-8         	 2559716	       217.0 ns/op	 589.74 MB/s	     432 B/op	       5 allocs/op
+BenchmarkOctetString/4096/Current-8               	  424342	       822.4 ns/op	4980.43 MB/s	    4272 B/op	       4 allocs/op
+BenchmarkOctetString/4096/Current-8               	  462112	       815.7 ns/op	5021.56 MB/s	    4272 B/op	       4 allocs/op
+BenchmarkOctetString/4096/Current-8               	  571598	       716.6 ns/op	5715.86 MB/s	    4272 B/op	       4 allocs/op
+BenchmarkOctetString/4096/CloneReference-8        	  254011	      1423 ns/op	2879.43 MB/s	    8368 B/op	       5 allocs/op
+BenchmarkOctetString/4096/CloneReference-8        	  249133	      1294 ns/op	3164.19 MB/s	    8368 B/op	       5 allocs/op
+BenchmarkOctetString/4096/CloneReference-8        	  260599	      1330 ns/op	3079.94 MB/s	    8368 B/op	       5 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	9.093s

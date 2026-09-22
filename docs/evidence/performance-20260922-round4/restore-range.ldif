@@ -1,0 +1,18 @@
+dn: uid=parity-renamed,ou=people,dc=scale,dc=qualification
+changetype: modrdn
+newrdn: uid=scale-000002
+deleteoldrdn: 1
+
+dn: uid=parity-added,ou=people,dc=scale,dc=qualification
+changetype: delete
+
+dn: uid=scale-000003,ou=people,dc=scale,dc=qualification
+changetype: add
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+uid: scale-000003
+cn: Scale User 000003
+sn: User000003
+description: cohort-003

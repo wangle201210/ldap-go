@@ -652,8 +652,9 @@ func inferNamingContexts(
 	forEach func(func(directory.Entry, directory.DN) error) error,
 ) ([]string, error) {
 	type namedDN struct {
-		dn  directory.DN
-		raw string
+		key    string
+		parent string
+		raw    string
 	}
 
 	entries := make(map[string]namedDN)
@@ -661,7 +662,13 @@ func inferNamingContexts(
 		if dn.Depth() == 0 {
 			return nil
 		}
-		entries[dn.Key()] = namedDN{dn: dn, raw: entry.DN}
+		name := namedDN{key: dn.Key(), raw: entry.DN}
+		if parent, hasParent := dn.Parent(); hasParent && parent.Depth() != 0 {
+			name.parent = parent.Key()
+		}
+		// Parent membership only needs keys. Do not retain every parsed DN's
+		// RDN/AVA graph until the end of a large-directory scan.
+		entries[name.key] = name
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("scan directory entries: %w", err)
@@ -669,17 +676,16 @@ func inferNamingContexts(
 
 	contexts := make([]namedDN, 0)
 	for _, entry := range entries {
-		parent, hasParent := entry.dn.Parent()
-		if !hasParent || parent.Depth() == 0 {
+		if entry.parent == "" {
 			contexts = append(contexts, entry)
 			continue
 		}
-		if _, exists := entries[parent.Key()]; !exists {
+		if _, exists := entries[entry.parent]; !exists {
 			contexts = append(contexts, entry)
 		}
 	}
 	sort.Slice(contexts, func(i, j int) bool {
-		return contexts[i].dn.Key() < contexts[j].dn.Key()
+		return contexts[i].key < contexts[j].key
 	})
 
 	result := make([]string, len(contexts))

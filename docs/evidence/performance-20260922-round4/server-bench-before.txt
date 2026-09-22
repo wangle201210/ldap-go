@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkLocalPasswordBind/success-8         	       4	  93263490 ns/op	   55048 B/op	    1816 allocs/op
+BenchmarkLocalPasswordBind/success-8         	       4	  93477875 ns/op	   55048 B/op	    1816 allocs/op
+BenchmarkLocalPasswordBind/success-8         	       4	  95726740 ns/op	   55052 B/op	    1816 allocs/op
+BenchmarkLocalPasswordBind/failure-8         	       4	  91520573 ns/op	   55048 B/op	    1816 allocs/op
+BenchmarkLocalPasswordBind/failure-8         	       4	  92741229 ns/op	   55064 B/op	    1816 allocs/op
+BenchmarkLocalPasswordBind/failure-8         	       4	  92964094 ns/op	   55072 B/op	    1816 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=1-8         	    2122	    150783 ns/op	  100108 B/op	    2604 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=1-8         	    2476	    155066 ns/op	  100106 B/op	    2604 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=1-8         	    2408	    156386 ns/op	  100109 B/op	    2604 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=8-8         	    1867	    189606 ns/op	  129135 B/op	    3206 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=8-8         	    1816	    192419 ns/op	  129138 B/op	    3206 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=1024/changes=8-8         	    1872	    191434 ns/op	  129127 B/op	    3206 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=1-8        	    1257	    284703 ns/op	 1068298 B/op	    2606 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=1-8        	    1276	    279112 ns/op	 1068292 B/op	    2606 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=1-8        	    1293	    274703 ns/op	 1068276 B/op	    2606 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=8-8        	     979	    359940 ns/op	 1549109 B/op	    3209 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=8-8        	    1021	    361987 ns/op	 1549103 B/op	    3209 allocs/op
+BenchmarkModifyEntrySnapshots/memory/photo=65536/changes=8-8        	     946	    382552 ns/op	 1549161 B/op	    3209 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=1-8           	      39	   9259166 ns/op	  141794 B/op	    2851 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=1-8           	      12	  25356191 ns/op	  141884 B/op	    2850 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=1-8           	      40	   8420210 ns/op	  141250 B/op	    2850 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=8-8           	      39	   8689248 ns/op	  170284 B/op	    3453 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=8-8           	      46	   8147481 ns/op	  169859 B/op	    3453 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=1024/changes=8-8           	      45	   8651664 ns/op	  169853 B/op	    3452 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=1-8          	      42	   8814534 ns/op	 1368731 B/op	    2862 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=1-8          	      40	   9154978 ns/op	 1365484 B/op	    2861 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=1-8          	      51	   7665721 ns/op	 1367301 B/op	    2862 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8          	      44	   8024330 ns/op	 1849276 B/op	    3465 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8          	      39	   8329765 ns/op	 1849167 B/op	    3465 allocs/op
+BenchmarkModifyEntrySnapshots/bolt/photo=65536/changes=8-8          	      44	   7683236 ns/op	 1850440 B/op	    3466 allocs/op
+PASS

@@ -15,6 +15,12 @@ capacity benchmark.
 Relative performance is `OpenLDAP / ldap-go * 100%`. Larger is better; 100%
 means equal. Timing and resource values themselves are lower-is-better.
 
+The repeated-query table below is the round-three replay. A separate
+[broader SDK report](performance-optimization-20260922-round4.md) adds 100k
+startup, Bind, Compare, base/substring queries, Add, Modify, ModifyDN and Delete.
+It exposes substantial remaining write and substring-scan gaps. Its single
+sequential sample is not mixed into the repeated-query medians below.
+
 ## Final online replay
 
 The final query implementation additionally avoids empty attribute-option maps,

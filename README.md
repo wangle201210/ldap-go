@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest online replay: September 22, 2026, 100,000 users, Apple M1 Pro,
+Repeated query replay (round three): September 22, 2026, 100,000 users, Apple M1 Pro,
 Go built without cgo, identical indexes and OpenLDAP 2.6.13 clients.
 Times are medians; relative performance is `OpenLDAP / ldap-go`, expressed
 as a percentage. Above 100% favors ldap-go.
@@ -72,8 +72,11 @@ matched. First-query latency and large-directory memory remain gaps.
 The [100k evidence](docs/openldap-100k-evidence.md) separately records the
 complete fresh-import/write run and this final online replay; it includes raw
 results, workload differences, remaining limits, and reproduction instructions.
-The [latest optimization report](docs/performance-optimization-20260922-round3.md)
+The [query optimization report](docs/performance-optimization-20260922-round3.md)
 also compares the preceding version in the same run and records timing variability.
+The [broader SDK report](docs/performance-optimization-20260922-round4.md) adds
+startup, Bind, Compare, base/substring searches and writes. Add, ModifyDN,
+Delete and unindexed substrings still have large performance gaps to OpenLDAP.
 
 ## Requirements
 

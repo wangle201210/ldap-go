@@ -2211,7 +2211,25 @@ func (server *Server) handleUncachedSearch(
 				return nil
 			}
 			var err error
-			if translucentRoute == nil {
+			if translucentRoute == nil && route.scope == directory.ScopeBase &&
+				paging == nil && !sorting.active() && syncSearch == nil &&
+				databaseUsesLocalContentStorage(*database) &&
+				request.Filter.Kind == directory.FilterPresent &&
+				strings.EqualFold(request.Filter.Attribute, "objectClass") {
+				// A base-object presence search has only one candidate. Keep the
+				// usual visitor's authorization, projections and result limits.
+				var entry directory.Entry
+				entry, err = tx.Get(scopeBase)
+				if err == nil {
+					// A direct read may retain an older in-memory DN hint after a
+					// rename. Reconstruct it as the physical candidate iterator does.
+					var candidate directory.DN
+					candidate, err = directory.ParseDNWithIdentityKey(entry.DN, scopeBase.Key())
+					if err == nil {
+						err = visitEntry(entry.WithNormalizedDNHint(candidate, ""))
+					}
+				}
+			} else if translucentRoute == nil {
 				iterateCandidates := storage.ForEachFilterCandidate
 				if snapshotEntriesCacheable && routeRoot && !projectSubschemaReference &&
 					!collectResponses.enabled && !nestGroupPlans.enabled &&

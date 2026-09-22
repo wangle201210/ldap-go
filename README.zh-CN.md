@@ -44,7 +44,7 @@ Web 管理控制台。
 
 ## 性能对比
 
-最新在线复测：2026-09-22，100,000 个用户，Apple M1 Pro，Go 构建关闭 cgo，
+重复查询复测（第三轮）：2026-09-22，100,000 个用户，Apple M1 Pro，Go 构建关闭 cgo，
 双方使用相同索引和 OpenLDAP 2.6.13 客户端。耗时取中位数，相对性能为
 `OpenLDAP / ldap-go`：100% 表示持平，大于 100% 表示 ldap-go 占优。
 
@@ -64,6 +64,8 @@ Web 管理控制台。
 [100k 对比证据](docs/openldap-100k-evidence.md) 分别记录了完整的新建数据库
 导入/写入测试与最终在线复测，包含原始结果、测试条件差异、未追平项和复现方法。
 [本轮优化报告](docs/performance-optimization-20260922-round3.md)另列出与上一版同场对照的变化及耗时波动。
+[扩展 SDK 性能报告](docs/performance-optimization-20260922-round4.md)补充启动、Bind、Compare、
+基础/子串查询和增删改名。Add、ModifyDN、Delete 及无索引子串查询仍明显慢于 OpenLDAP。
 
 ## 环境要求
 

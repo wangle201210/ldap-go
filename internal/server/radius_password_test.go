@@ -427,6 +427,75 @@ func TestOpenLDAPRADIUSBindPreservesPasswordValueShortCircuit(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	})
+
+	for _, test := range []struct {
+		name      string
+		passwords []string
+		wantUser  string
+		wantBind  bool
+	}{
+		{
+			name: "local miss reaches external success",
+			passwords: []string{
+				"other-local-secret",
+				auth.OpenLDAPRADIUSHashScheme + "first-radius-user",
+				auth.OpenLDAPRADIUSHashScheme + "must-not-receive",
+			},
+			wantUser: "first-radius-user", wantBind: true,
+		},
+		{
+			name: "external failure reaches local success",
+			passwords: []string{
+				auth.OpenLDAPRADIUSHashScheme + "rejected-radius-user",
+				"secret",
+				auth.OpenLDAPRADIUSHashScheme + "must-not-receive",
+			},
+			wantUser: "rejected-radius-user", wantBind: true,
+		},
+		{
+			name: "mixed passwords all fail",
+			passwords: []string{
+				"other-local-secret",
+				auth.OpenLDAPRADIUSHashScheme + "rejected-radius-user",
+			},
+			wantUser: "rejected-radius-user",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := storage.NewMemory()
+			t.Cleanup(func() { _ = store.Close() })
+			seedDirectory(t, store)
+			if err := store.Update(t.Context(), func(writer storage.Writer) error {
+				dn, _ := directory.ParseDN(aliceDN)
+				entry, err := writer.Get(dn)
+				if err != nil {
+					return err
+				}
+				entry.ReplaceValues("userPassword", stringValues(test.passwords...))
+				return writer.Put(entry, true)
+			}); err != nil {
+				t.Fatalf("seed mixed passwords: %v", err)
+			}
+			address, stopLDAP := startServer(t, store, Config{
+				RADIUSConfigPath: radiusConfig, RADIUSNASIdentifier: "nas",
+			})
+			defer stopLDAP()
+			assertBindPassword(t, address, aliceDN, "secret", test.wantBind)
+			select {
+			case username := <-usernames:
+				if username != test.wantUser {
+					t.Fatalf("RADIUS username = %q, want %q", username, test.wantUser)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("RADIUS request did not arrive")
+			}
+			select {
+			case username := <-usernames:
+				t.Fatalf("unexpected additional RADIUS request for %q", username)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
+	}
 }
 
 func TestLoadExternalPasswordRuntimeConfiguration(t *testing.T) {
