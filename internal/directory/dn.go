@@ -47,18 +47,26 @@ type AttributeValue struct {
 }
 
 func ParseDN(value string) (DN, error) {
-	parsed, err := ldap.ParseDN(value)
+	parsed, err := parseDN(value)
 	if err != nil {
-		return DN{}, fmt.Errorf("parse DN %q: %w", value, err)
-	}
-	if err := validateUniqueDNAttributeTypes(parsed); err != nil {
-		return DN{}, fmt.Errorf("parse DN %q: %w", value, err)
+		return DN{}, err
 	}
 	return DN{
 		parsed:      parsed,
 		canonical:   strings.ToLower(parsed.String()),
 		displayRDNs: formatDNRDNs(parsed, false),
 	}, nil
+}
+
+func parseDN(value string) (*ldap.DN, error) {
+	parsed, err := ldap.ParseDN(value)
+	if err != nil {
+		return nil, fmt.Errorf("parse DN %q: %w", value, err)
+	}
+	if err := validateUniqueDNAttributeTypes(parsed); err != nil {
+		return nil, fmt.Errorf("parse DN %q: %w", value, err)
+	}
+	return parsed, nil
 }
 
 func validateUniqueDNAttributeTypes(parsed *ldap.DN) error {
@@ -237,15 +245,19 @@ func ParseDNWithNormalizer(value string, normalizer DNAttributeNormalizer) (DN, 
 // ParseDNWithIdentityKey reconstructs a schema-aware DN from its validated
 // physical identity key without rerunning schema matching rules.
 func ParseDNWithIdentityKey(value, key string) (DN, error) {
-	dn, err := ParseDN(value)
-	if err != nil {
-		return DN{}, err
-	}
 	if !strings.HasPrefix(key, schemaAwareDNKeyPrefix) {
+		dn, err := ParseDN(value)
+		if err != nil {
+			return DN{}, err
+		}
 		if err := dn.ValidateIdentityKey(key); err != nil {
 			return DN{}, err
 		}
 		return dn, nil
+	}
+	parsed, err := parseDN(value)
+	if err != nil {
+		return DN{}, err
 	}
 	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
@@ -253,40 +265,54 @@ func ParseDNWithIdentityKey(value, key string) (DN, error) {
 	if err != nil || strings.ContainsAny(encoded, "\r\n") {
 		return DN{}, errors.New("schema-aware DN key is not canonically encoded")
 	}
-	rdns, err := decodeDNIdentityParts(payload)
+	rdns, err := viewDNIdentityParts(payload)
 	if err != nil {
 		return DN{}, fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
 	}
-	if len(rdns) != len(dn.parsed.RDNs) {
+	if rdns.count != len(parsed.RDNs) {
 		return DN{}, fmt.Errorf(
 			"schema-aware DN key has %d RDNs, display DN has %d",
-			len(rdns),
-			len(dn.parsed.RDNs),
+			rdns.count,
+			len(parsed.RDNs),
 		)
 	}
-	dn.identityRDNs = make([][]byte, len(rdns))
-	dn.normalizedRDNs = make([]string, len(rdns))
-	dn.attributeTypes = make([][]string, len(rdns))
-	for rdnIndex, encodedRDN := range rdns {
-		avas, decodeErr := decodeDNIdentityParts(encodedRDN)
+	dn := DN{
+		parsed:         parsed,
+		identityRDNs:   make([][]byte, rdns.count),
+		normalizedRDNs: make([]string, rdns.count),
+		attributeTypes: make([][]string, rdns.count),
+	}
+	for rdnIndex := 0; rdnIndex < rdns.count; rdnIndex++ {
+		encodedRDN := rdns.next()
+		avas, decodeErr := viewDNIdentityParts(encodedRDN)
 		if decodeErr != nil {
 			return DN{}, fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, decodeErr)
+		}
+		// The decoded payload belongs to this DN. Capped views retain it without
+		// copying each RDN or allowing an append to overwrite its siblings.
+		dn.identityRDNs[rdnIndex] = encodedRDN
+		if avas.count == 1 {
+			attributeType, value, ok := dnIdentityAVA(avas.next())
+			if !ok {
+				return DN{}, fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
+			}
+			dn.attributeTypes[rdnIndex] = []string{attributeType}
+			dn.normalizedRDNs[rdnIndex] = value
+			continue
 		}
 		type normalizedAVA struct {
 			attributeType string
 			value         string
 		}
-		normalized := make([]normalizedAVA, 0, len(avas))
-		for _, ava := range avas {
-			parts, partsErr := decodeDNIdentityParts(ava)
-			if partsErr != nil || len(parts) != 2 || len(parts[0]) == 0 {
+		normalized := make([]normalizedAVA, 0, avas.count)
+		for index := 0; index < avas.count; index++ {
+			attributeType, value, ok := dnIdentityAVA(avas.next())
+			if !ok {
 				return DN{}, fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
 			}
-			attributeType := string(parts[0])
 			normalized = append(normalized, normalizedAVA{
 				attributeType: attributeType,
-				value: attributeType + "=" +
-					escapeDNValue(string(parts[1])),
+				value:         value,
 			})
 		}
 		sort.Slice(normalized, func(left, right int) bool {
@@ -298,12 +324,75 @@ func ParseDNWithIdentityKey(value, key string) (DN, error) {
 			dn.attributeTypes[rdnIndex][index] = normalized[index].attributeType
 			normalizedValues[index] = normalized[index].value
 		}
-		dn.identityRDNs[rdnIndex] = bytes.Clone(encodedRDN)
 		dn.normalizedRDNs[rdnIndex] = strings.Join(normalizedValues, "+")
 	}
+	dn.displayRDNs = formatDNRDNs(parsed, false)
 	dn.identityLevel = schemaAwareDNIdentityLevel
 	dn.canonical = key
 	return dn, nil
+}
+
+// ValidateDNWithIdentityKey returns the same error as ParseDNWithIdentityKey.
+// Matching v2 RDN/AVA cardinalities avoid constructing a DN's output fields;
+// legacy keys and cardinality mismatches retain the full parser's behavior.
+func ValidateDNWithIdentityKey(value, key string) error {
+	if !strings.HasPrefix(key, schemaAwareDNKeyPrefix) {
+		_, err := ParseDNWithIdentityKey(value, key)
+		return err
+	}
+	parsed, err := parseDN(value)
+	if err != nil {
+		return err
+	}
+	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
+	var scratch [1024]byte
+	payload := scratch[:]
+	if size := base64.RawURLEncoding.DecodedLen(len(encoded)); size > len(payload) {
+		payload = make([]byte, size)
+	}
+	n, err := base64.RawURLEncoding.Strict().Decode(payload, []byte(encoded))
+	// Strict decoding checks unused tail bits but still ignores CR and LF.
+	if err != nil || strings.ContainsAny(encoded, "\r\n") {
+		return errors.New("schema-aware DN key is not canonically encoded")
+	}
+	rdns, err := viewDNIdentityParts(payload[:n])
+	if err != nil {
+		return fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
+	}
+	if rdns.count != len(parsed.RDNs) {
+		_, err := ParseDNWithIdentityKey(value, key)
+		return err
+	}
+	for rdnIndex := 0; rdnIndex < rdns.count; rdnIndex++ {
+		avas, err := viewDNIdentityParts(rdns.next())
+		if err != nil {
+			return fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, err)
+		}
+		if avas.count != len(parsed.RDNs[rdnIndex].Attributes) {
+			_, err := ParseDNWithIdentityKey(value, key)
+			return err
+		}
+		for index := 0; index < avas.count; index++ {
+			parts, err := viewDNIdentityParts(avas.next())
+			if err != nil || parts.count != 2 || len(parts.next()) == 0 {
+				return fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func dnIdentityAVA(encoded []byte) (attributeType, value string, ok bool) {
+	parts, err := viewDNIdentityParts(encoded)
+	if err != nil || parts.count != 2 {
+		return "", "", false
+	}
+	typeBytes := parts.next()
+	if len(typeBytes) == 0 {
+		return "", "", false
+	}
+	attributeType = string(typeBytes)
+	return attributeType, attributeType + "=" + escapeDNValue(string(parts.next())), true
 }
 
 // LegacyKey returns the historical case-folded textual key used as the first
@@ -556,6 +645,15 @@ func (dn DN) ReplaceAncestor(oldBase, newBase DN) (DN, error) {
 func formatDNRDNs(parsed *ldap.DN, preserveAttributeCase bool) []string {
 	formatted := make([]string, len(parsed.RDNs))
 	for rdnIndex, rdn := range parsed.RDNs {
+		if len(rdn.Attributes) == 1 {
+			attribute := rdn.Attributes[0]
+			attributeType := attribute.Type
+			if !preserveAttributeCase {
+				attributeType = strings.ToLower(attributeType)
+			}
+			formatted[rdnIndex] = attributeType + "=" + escapeDNValue(attribute.Value)
+			continue
+		}
 		avas := make([]string, len(rdn.Attributes))
 		for attributeIndex, attribute := range rdn.Attributes {
 			attributeType := attribute.Type
@@ -572,8 +670,28 @@ func formatDNRDNs(parsed *ldap.DN, preserveAttributeCase bool) []string {
 
 func escapeDNValue(value string) string {
 	const hex = "0123456789abcdef"
+	start := 0
+scan:
+	for start < len(value) {
+		character := value[start]
+		if character < ' ' || character > '~' ||
+			(start == 0 && (character == ' ' || character == '#')) ||
+			(start == len(value)-1 && character == ' ') {
+			break
+		}
+		switch character {
+		case '"', '+', ',', ';', '<', '>', '\\':
+			break scan
+		}
+		start++
+	}
+	if start == len(value) {
+		return value
+	}
 	var builder strings.Builder
-	for index := 0; index < len(value); index++ {
+	builder.Grow(len(value) + 2)
+	builder.WriteString(value[:start])
+	for index := start; index < len(value); index++ {
 		character := value[index]
 		escapeCharacter := (index == 0 && (character == ' ' || character == '#')) ||
 			(index == len(value)-1 && character == ' ')
@@ -617,35 +735,62 @@ func encodeDNIdentityParts(parts ...[]byte) []byte {
 }
 
 func decodeDNIdentityParts(encoded []byte) ([][]byte, error) {
+	view, err := viewDNIdentityParts(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([][]byte, view.count)
+	for index := range parts {
+		parts[index] = view.next()
+	}
+	return parts, nil
+}
+
+// dnIdentityParts is a fully validated sequence. Validation precedes iteration
+// so malformed later lengths still take precedence over nested-content errors.
+// Non-minimal varints remain accepted, as in binary.Uvarint.
+type dnIdentityParts struct {
+	data  []byte
+	count int
+}
+
+func (parts *dnIdentityParts) next() []byte {
+	length, n := binary.Uvarint(parts.data)
+	parts.data = parts.data[n:]
+	part := parts.data[:int(length):int(length)]
+	parts.data = parts.data[int(length):]
+	return part
+}
+
+func viewDNIdentityParts(encoded []byte) (dnIdentityParts, error) {
 	count, bytesRead := binary.Uvarint(encoded)
 	if bytesRead == 0 {
-		return nil, errors.New("truncated part count")
+		return dnIdentityParts{}, errors.New("truncated part count")
 	}
 	if bytesRead < 0 {
-		return nil, errors.New("part count overflows uint64")
+		return dnIdentityParts{}, errors.New("part count overflows uint64")
 	}
 	encoded = encoded[bytesRead:]
 	if count > uint64(len(encoded))+1 {
-		return nil, errors.New("part count exceeds encoded payload")
+		return dnIdentityParts{}, errors.New("part count exceeds encoded payload")
 	}
-	parts := make([][]byte, 0, int(count))
+	parts := dnIdentityParts{data: encoded, count: int(count)}
 	for index := uint64(0); index < count; index++ {
 		length, lengthBytes := binary.Uvarint(encoded)
 		if lengthBytes == 0 {
-			return nil, fmt.Errorf("part %d has a truncated length", index)
+			return dnIdentityParts{}, fmt.Errorf("part %d has a truncated length", index)
 		}
 		if lengthBytes < 0 {
-			return nil, fmt.Errorf("part %d length overflows uint64", index)
+			return dnIdentityParts{}, fmt.Errorf("part %d length overflows uint64", index)
 		}
 		encoded = encoded[lengthBytes:]
 		if length > uint64(len(encoded)) {
-			return nil, fmt.Errorf("part %d length exceeds encoded payload", index)
+			return dnIdentityParts{}, fmt.Errorf("part %d length exceeds encoded payload", index)
 		}
-		parts = append(parts, encoded[:int(length)])
 		encoded = encoded[int(length):]
 	}
 	if len(encoded) != 0 {
-		return nil, errors.New("trailing bytes after encoded parts")
+		return dnIdentityParts{}, errors.New("trailing bytes after encoded parts")
 	}
 	return parts, nil
 }
@@ -729,21 +874,28 @@ func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error)
 		return false, errors.New("candidate has no schema-aware identity key")
 	}
 	encoded := strings.TrimPrefix(candidateKey, schemaAwareDNKeyPrefix)
-	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	// Common keys fit on the stack; larger keys get one exactly sized buffer.
+	var scratch [1024]byte
+	payload := scratch[:]
+	if size := base64.RawURLEncoding.DecodedLen(len(encoded)); size > len(payload) {
+		payload = make([]byte, size)
+	}
+	n, err := base64.RawURLEncoding.Strict().Decode(payload, []byte(encoded))
 	// Strict decoding checks unused tail bits but still ignores CR and LF.
 	if err != nil || strings.ContainsAny(encoded, "\r\n") {
 		return false, errors.New("candidate schema-aware DN key is not canonically encoded")
 	}
-	candidateRDNs, err := decodeDNIdentityParts(payload)
+	candidateRDNs, err := viewDNIdentityParts(payload[:n])
 	if err != nil {
 		return false, fmt.Errorf("decode candidate schema-aware DN key: %w", err)
 	}
-	equal := len(base.identityRDNs) == len(candidateRDNs)
-	ancestor := len(base.identityRDNs) < len(candidateRDNs)
+	equal := len(base.identityRDNs) == candidateRDNs.count
+	ancestor := len(base.identityRDNs) < candidateRDNs.count
 	if equal || ancestor {
-		offset := len(candidateRDNs) - len(base.identityRDNs)
-		for index := range base.identityRDNs {
-			if !bytes.Equal(base.identityRDNs[index], candidateRDNs[index+offset]) {
+		offset := candidateRDNs.count - len(base.identityRDNs)
+		for index := 0; index < candidateRDNs.count; index++ {
+			rdn := candidateRDNs.next()
+			if index >= offset && !bytes.Equal(base.identityRDNs[index-offset], rdn) {
 				equal = false
 				ancestor = false
 				break
@@ -754,7 +906,7 @@ func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error)
 	case ScopeBase:
 		return equal, nil
 	case ScopeSingleLevel:
-		return ancestor && len(candidateRDNs) == len(base.identityRDNs)+1, nil
+		return ancestor && candidateRDNs.count == len(base.identityRDNs)+1, nil
 	case ScopeWholeSubtree:
 		return equal || ancestor, nil
 	case ScopeChildren:
