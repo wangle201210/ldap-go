@@ -30,6 +30,9 @@ func TestPreparedAttributeNamesMatchResolver(t *testing.T) {
 			if got, want := prepared.match(candidate), registry.AttributeDescriptionSubtype(candidate, target); got != want {
 				t.Fatalf("%q <: %q: got %v, want %v", candidate, target, got, want)
 			}
+			if got, want := prepared.roles(candidate)&preparedAttributeObjectClass != 0, registry.AttributeDescriptionSubtype(candidate, "objectClass"); got != want {
+				t.Fatalf("%q objectClass role for %q: got %v, want %v", candidate, target, got, want)
+			}
 		}
 	}
 }
@@ -38,7 +41,7 @@ func objectClassFoldReference(matcher *PreparedObjectClassMatcher, entry directo
 	var result uint64
 	for _, attribute := range entry.Attributes {
 		description, _, _ := strings.Cut(attribute.Description, ";")
-		if !matcher.attributes[schemaKey(description)] {
+		if matcher.attributes[schemaKey(description)]&preparedAttributeTarget == 0 {
 			continue
 		}
 		for _, value := range attribute.Values {

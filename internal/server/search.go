@@ -2306,6 +2306,10 @@ func (server *Server) handleUncachedSearch(
 								}
 								if len(plan.sources) == 0 {
 									if preparedRootSubstring != nil {
+										var substringQuery *schema.PreparedSubstringQueryPlan
+										if preparedEntryClasses != nil {
+											substringQuery = preparedRootSubstring.WithObjectClasses(preparedEntryClasses)
+										}
 										streamed, err = storage.ForEachReadOnlyStablePhysicalMetadataInScope(tx, scopeBase, route.scope,
 											func(view storage.EntryMetadataView, inScope bool, scopeErr error) error {
 												borrowedScopeReady, borrowedInScope, borrowedScopeErr = true, inScope, scopeErr
@@ -2323,11 +2327,26 @@ func (server *Server) handleUncachedSearch(
 													return nil
 												}
 												attributes := directory.Entry{Attributes: view.Attributes()}
-												if !smallIndexedEntryIsSpecial(state.runtime, attributes) {
+												var special bool
+												var selected uint64
+												if substringQuery != nil {
+													var flags uint64
+													flags, selected = substringQuery.Classify(attributes)
+													special = flags&(searchEntryClassSubentry|searchEntryClassAlias|searchEntryClassReferral) != 0
+												} else {
+													special = smallIndexedEntryIsSpecial(state.runtime, attributes)
+												}
+												if !special {
 													if !subentrySearchVisibleClassified(false, request.Scope, controls.subentries) {
 														return nil
 													}
-													matched, matchErr := preparedRootSubstring.Match(attributes)
+													var matched bool
+													var matchErr error
+													if substringQuery != nil {
+														matched, matchErr = substringQuery.Match(attributes, selected)
+													} else {
+														matched, matchErr = preparedRootSubstring.Match(attributes)
+													}
 													if matchErr == nil && !matched {
 														return nil
 													}

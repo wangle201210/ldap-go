@@ -1,0 +1,10 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/109 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 109/109 completed, now fuzzing with 1 workers
+fuzz: elapsed: 3s, execs: 74114 (24699/sec), new interesting: 48 (total: 157)
+fuzz: elapsed: 6s, execs: 144802 (23552/sec), new interesting: 75 (total: 184)
+fuzz: elapsed: 9s, execs: 201630 (18943/sec), new interesting: 102 (total: 211)
+fuzz: elapsed: 12s, execs: 286279 (28228/sec), new interesting: 136 (total: 245)
+fuzz: elapsed: 15s, execs: 357910 (23868/sec), new interesting: 155 (total: 264)
+fuzz: elapsed: 15s, execs: 357910 (0/sec), new interesting: 155 (total: 264)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	15.097s

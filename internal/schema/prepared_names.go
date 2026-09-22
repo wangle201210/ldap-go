@@ -11,9 +11,10 @@ const (
 )
 
 type preparedAttributeNameCache struct {
-	mu    sync.Mutex
-	plans map[*AttributeType]preparedAttributeNames
-	bytes int
+	mu         sync.Mutex
+	plans      map[*AttributeType]preparedAttributeNames
+	bytes      int
+	generation uint64 // Also protected by Registry.mu; eviction does not change it.
 }
 
 // Schema writers hold Registry.mu first, matching the preparation lock order.
@@ -23,11 +24,19 @@ func (cache *preparedAttributeNameCache) clear() {
 	defer cache.mu.Unlock()
 	cache.plans = nil
 	cache.bytes = 0
+	cache.generation++
 }
+
+type preparedAttributeRole uint8
+
+const (
+	preparedAttributeTarget preparedAttributeRole = 1 << iota
+	preparedAttributeObjectClass
+)
 
 // Both matching and nonmatching known names are recorded. This avoids folding
 // common camel-case descriptions on every row without caching arbitrary input.
-type preparedAttributeNames map[string]bool
+type preparedAttributeNames map[string]preparedAttributeRole
 
 // The caller holds the registry read lock; the result is immutable thereafter.
 func (registry *Registry) prepareAttributeNames(target *AttributeType) preparedAttributeNames {
@@ -38,12 +47,23 @@ func (registry *Registry) prepareAttributeNames(target *AttributeType) preparedA
 		return names
 	}
 	names := make(preparedAttributeNames, len(registry.attributes))
+	objectClass := registry.attributes[schemaKey("objectClass")]
 	for key, candidate := range registry.attributes {
-		selected := registry.attributeTypeSubtype(candidate, target, make(map[string]bool))
-		names[key] = selected
+		var roles preparedAttributeRole
+		if registry.attributeTypeSubtype(candidate, target, make(map[string]bool)) {
+			roles |= preparedAttributeTarget
+		}
+		if target == objectClass {
+			if roles&preparedAttributeTarget != 0 {
+				roles |= preparedAttributeObjectClass
+			}
+		} else if objectClass != nil && registry.attributeTypeSubtype(candidate, objectClass, make(map[string]bool)) {
+			roles |= preparedAttributeObjectClass
+		}
+		names[key] = roles
 		for _, spelling := range candidate.Names {
 			if schemaKey(spelling) == key {
-				names[spelling] = selected
+				names[spelling] = roles
 			}
 		}
 	}
@@ -65,10 +85,14 @@ func (registry *Registry) prepareAttributeNames(target *AttributeType) preparedA
 }
 
 func (names preparedAttributeNames) match(description string) bool {
+	return names.roles(description)&preparedAttributeTarget != 0
+}
+
+func (names preparedAttributeNames) roles(description string) preparedAttributeRole {
 	description, _, _ = strings.Cut(description, ";")
-	matched, known := names[description]
+	roles, known := names[description]
 	if !known {
-		matched = names[schemaKey(description)]
+		roles = names[schemaKey(description)]
 	}
-	return matched
+	return roles
 }

@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkReadBindCompareMessage/Bind-8             	 2688765	       134.7 ns/op	 304.40 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8             	 2845689	       131.7 ns/op	 311.41 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8             	 2654750	       129.9 ns/op	 315.70 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/AnonymousBind-8    	 3820690	        96.55 ns/op	 155.36 MB/s	     114 B/op	       3 allocs/op
+BenchmarkReadBindCompareMessage/AnonymousBind-8    	 3202291	       100.5 ns/op	 149.22 MB/s	     114 B/op	       3 allocs/op
+BenchmarkReadBindCompareMessage/AnonymousBind-8    	 3651732	       100.2 ns/op	 149.71 MB/s	     114 B/op	       3 allocs/op
+BenchmarkReadBindCompareMessage/BinaryBind-8       	 2659952	       130.5 ns/op	 160.86 MB/s	     136 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/BinaryBind-8       	 2915246	       120.7 ns/op	 173.92 MB/s	     136 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/BinaryBind-8       	 2968407	       126.5 ns/op	 166.05 MB/s	     136 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8          	 2657954	       175.8 ns/op	 250.24 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8          	 2407832	       151.3 ns/op	 290.87 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8          	 2441572	       153.8 ns/op	 286.09 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/EmptyCompare-8     	 3367576	       106.6 ns/op	 178.30 MB/s	      94 B/op	       4 allocs/op
+BenchmarkReadBindCompareMessage/EmptyCompare-8     	 3444214	       103.9 ns/op	 182.80 MB/s	      94 B/op	       4 allocs/op
+BenchmarkReadBindCompareMessage/EmptyCompare-8     	 3437233	       103.9 ns/op	 182.80 MB/s	      94 B/op	       4 allocs/op
+BenchmarkReadBindCompareMessage/BinaryCompare-8    	 2705714	       132.9 ns/op	 180.64 MB/s	     104 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/BinaryCompare-8    	 2725262	       131.8 ns/op	 182.04 MB/s	     104 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/BinaryCompare-8    	 2738187	       131.3 ns/op	 182.74 MB/s	     104 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/BindControls-8     	  105412	      3551 ns/op	  16.61 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessage/BindControls-8     	  100336	      3498 ns/op	  16.87 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessage/BindControls-8     	  110848	      3543 ns/op	  16.65 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8         	  172742	      2212 ns/op	 125.22 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8         	  161002	      2172 ns/op	 127.51 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8         	  175687	      2199 ns/op	 125.96 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8      	  124777	      2674 ns/op	 105.83 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8      	  148864	      2663 ns/op	 106.29 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8      	  141972	      2677 ns/op	 105.72 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Bind-8         	  210414	      1903 ns/op	  21.55 MB/s	    4240 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Bind-8         	  177230	      1808 ns/op	  22.67 MB/s	    4240 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Bind-8         	  176600	      1887 ns/op	  21.73 MB/s	    4240 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/AnonymousBind-8         	  231252	      1469 ns/op	  10.21 MB/s	    2928 B/op	      59 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/AnonymousBind-8         	  258218	      1556 ns/op	   9.64 MB/s	    2928 B/op	      59 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/AnonymousBind-8         	  220656	      1602 ns/op	   9.36 MB/s	    2928 B/op	      59 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryBind-8            	  192088	      2077 ns/op	  10.11 MB/s	    4168 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryBind-8            	  177439	      1901 ns/op	  11.05 MB/s	    4168 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryBind-8            	  194244	      1879 ns/op	  11.18 MB/s	    4168 B/op	      69 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Compare-8               	  173625	      2071 ns/op	  21.24 MB/s	    4528 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Compare-8               	  191611	      2125 ns/op	  20.71 MB/s	    4528 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/Compare-8               	  170499	      2021 ns/op	  21.77 MB/s	    4528 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/EmptyCompare-8          	  240783	      1628 ns/op	  11.67 MB/s	    3208 B/op	      70 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/EmptyCompare-8          	  244761	      1718 ns/op	  11.06 MB/s	    3208 B/op	      70 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/EmptyCompare-8          	  203942	      1733 ns/op	  10.96 MB/s	    3208 B/op	      70 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryCompare-8         	  176905	      2056 ns/op	  11.68 MB/s	    4456 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryCompare-8         	  186813	      1992 ns/op	  12.05 MB/s	    4456 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BinaryCompare-8         	  165511	      2012 ns/op	  11.93 MB/s	    4456 B/op	      82 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BindControls-8          	  102302	      3502 ns/op	  16.85 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BindControls-8          	   93672	      3450 ns/op	  17.10 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/BindControls-8          	  110878	      3437 ns/op	  17.17 MB/s	    7584 B/op	     129 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongBind-8              	  157261	      2190 ns/op	 126.48 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongBind-8              	  177498	      2288 ns/op	 121.05 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongBind-8              	  152319	      2323 ns/op	 119.26 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongCompare-8           	  131906	      2727 ns/op	 103.79 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongCompare-8           	  138892	      2837 ns/op	  99.76 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessagePacketReference/LongCompare-8           	  129571	      2637 ns/op	 107.32 MB/s	    6576 B/op	      98 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	19.815s

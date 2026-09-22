@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkCollectivePresence/reference-8 	    1867	    198443 ns/op	  250841 B/op	      28 allocs/op
+BenchmarkCollectivePresence/reference-8 	    1880	    190548 ns/op	  250835 B/op	      28 allocs/op
+BenchmarkCollectivePresence/reference-8 	    1935	    189089 ns/op	  250834 B/op	      28 allocs/op
+BenchmarkCollectivePresence/current-8   	 1000000	       304.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCollectivePresence/current-8   	 1000000	       303.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCollectivePresence/current-8   	 1000000	       305.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/sequential-8         	 1650470	       219.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/sequential-8         	 1635789	       219.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/sequential-8         	 1674325	       214.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/plan-8               	 1827272	       196.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/plan-8               	 1858915	       193.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/hit/plan-8               	 1812006	       217.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/sequential-8        	 1000000	       349.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/sequential-8        	 1000000	       350.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/sequential-8        	 1000000	       354.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/plan-8              	 1830148	       199.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/plan-8              	 1757184	       199.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/ordinary11/miss/plan-8              	 1878972	       191.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/sequential-8         	  169213	      2128 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/sequential-8         	  169843	      2116 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/sequential-8         	  169689	      2113 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/plan-8               	  171622	      2108 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/plan-8               	  167143	      2193 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/hit/plan-8               	  165110	      2170 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/sequential-8        	  166231	      2118 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/sequential-8        	  168505	      2109 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/sequential-8        	  171556	      2112 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/plan-8              	  170690	      2103 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/plan-8              	  170260	      2104 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryPlan/fallback65/miss/plan-8              	  171800	      2106 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	10.677s

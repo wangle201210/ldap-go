@@ -827,8 +827,10 @@ func (registry *Registry) EntryHasObjectClass(
 // PreparedObjectClassMatcher resolves a fixed set of object classes once and
 // classifies each entry with one objectClass scan. Bit i corresponds to names[i].
 type PreparedObjectClassMatcher struct {
-	attributes preparedAttributeNames
-	flags      map[string]uint64
+	attributes     preparedAttributeNames
+	flags          map[string]uint64
+	sourceRegistry *Registry
+	nameGeneration uint64
 }
 
 // PreparedAttributeSelection handles explicit, option-free attribute lists.
@@ -933,7 +935,10 @@ func (registry *Registry) PrepareObjectClassMatcher(
 			}
 		}
 	}
-	return &PreparedObjectClassMatcher{attributes: attributes, flags: flags}, nil
+	return &PreparedObjectClassMatcher{
+		attributes: attributes, flags: flags,
+		sourceRegistry: registry, nameGeneration: registry.preparedNames.generation,
+	}, nil
 }
 
 func (matcher *PreparedObjectClassMatcher) Match(entry directory.Entry) uint64 {
@@ -945,13 +950,19 @@ func (matcher *PreparedObjectClassMatcher) Match(entry directory.Entry) uint64 {
 		if !matcher.attributes.match(attribute.Description) {
 			continue
 		}
-		for _, value := range attribute.Values {
-			flags, known := matcher.flags[string(value)]
-			if !known {
-				flags = matcher.flags[schemaKey(string(value))]
-			}
-			result |= flags
+		result |= matcher.matchValues(attribute.Values)
+	}
+	return result
+}
+
+func (matcher *PreparedObjectClassMatcher) matchValues(values [][]byte) uint64 {
+	var result uint64
+	for _, value := range values {
+		flags, known := matcher.flags[string(value)]
+		if !known {
+			flags = matcher.flags[schemaKey(string(value))]
 		}
+		result |= flags
 	}
 	return result
 }
@@ -1027,7 +1038,7 @@ func (registry *Registry) HasCollectiveAttributeTypes() bool {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
-	for _, attribute := range uniqueAttributeTypes(registry.attributes) {
+	for _, attribute := range registry.attributes {
 		if attribute.Collective {
 			return true
 		}
@@ -1814,6 +1825,8 @@ func (registry *Registry) MatchSubstring(
 // of NOT or other filters that require the three-valued result.
 type PreparedSubstringMatcher struct {
 	attributes     preparedAttributeNames
+	sourceRegistry *Registry
+	nameGeneration uint64
 	normalize      func([]byte) []byte
 	substring      directory.Substring
 	rawSubstring   directory.Substring
@@ -1844,8 +1857,10 @@ func (registry *Registry) PrepareSubstringMatcher(
 	}
 	attributes := registry.prepareAttributeNames(attribute)
 	matcher := &PreparedSubstringMatcher{
-		attributes: attributes,
-		ordered:    attributeHasOrderedValues(*attribute),
+		attributes:     attributes,
+		sourceRegistry: registry,
+		nameGeneration: registry.preparedNames.generation,
+		ordered:        attributeHasOrderedValues(*attribute),
 		rawSubstring: directory.Substring{
 			Initial: bytes.Clone(substring.Initial),
 			Any:     clonePreparedValues(substring.Any),
@@ -1898,35 +1913,36 @@ func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, err
 		if !matcher.attributes.match(attribute.Description) {
 			continue
 		}
-		for _, value := range attribute.Values {
-			if matcher.ordered {
-				_, content, _, err := ParseOrderedValue(value)
-				if err != nil {
-					continue
-				}
-				value = content
-			}
-			var matches bool
-			var err error
-			if matcher.caseIgnoreList {
-				matches, err = matchCaseIgnoreListSubstring(value, matcher.rawSubstring)
-			} else {
-				matches = matchNormalizedSubstring(
-					matcher.normalize(value),
-					matcher.substring,
-				)
-			}
-			if err != nil {
-				continue
-			}
-			if matches {
-				return true, nil
-			}
+		if matcher.matchValues(attribute.Values) {
+			return true, nil
 		}
 	}
 	// Value errors and absent-value assertion errors produce undefined, which
 	// has the same root boolean as false. Later values may still match.
 	return false, nil
+}
+
+func (matcher *PreparedSubstringMatcher) matchValues(values [][]byte) bool {
+	for _, value := range values {
+		if matcher.ordered {
+			_, content, _, err := ParseOrderedValue(value)
+			if err != nil {
+				continue
+			}
+			value = content
+		}
+		var matches bool
+		var err error
+		if matcher.caseIgnoreList {
+			matches, err = matchCaseIgnoreListSubstring(value, matcher.rawSubstring)
+		} else {
+			matches = matchNormalizedSubstring(matcher.normalize(value), matcher.substring)
+		}
+		if err == nil && matches {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSubstringAssertion(
