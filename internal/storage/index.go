@@ -190,9 +190,73 @@ func ForEachFilterCandidate(
 	if !ok {
 		return false, 0, nil
 	}
-	entries, planned, err := planner.planEqualityIndexCandidates(filter)
+	var entries []directory.Entry
+	var encoded []encodedEqualityIndexCandidate
+	if scoped, ok := reader.(schemaAwarePartitionReader); ok && filter.Kind == directory.FilterEquality {
+		entries, planned, err = scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded)
+	} else {
+		entries, planned, err = planner.planEqualityIndexCandidates(filter)
+	}
 	if err != nil || !planned {
 		return planned, 0, err
+	}
+	for _, candidate := range encoded {
+		stored, err := decodeStoredEntry(candidate.value)
+		if err != nil {
+			return true, candidates, err
+		}
+		if err := fn(stored.Entry.WithDNIdentityKey(string(candidate.identity))); err != nil {
+			return true, candidates, err
+		}
+		candidates++
+	}
+	for _, entry := range entries {
+		if err := fn(entry); err != nil {
+			return true, candidates, err
+		}
+		candidates++
+	}
+	return true, candidates, nil
+}
+
+// ForEachReadOnlyFilterCandidate has ForEachFilterCandidate's planning, callback
+// order, counts, errors, and cancellation semantics, but its entries are READ-ONLY
+// and callback-scoped. Callers MUST NOT mutate or retain raw entry Attributes,
+// Values, or value bytes, including through shallow copies. Use Entry.Clone or
+// Entry.Select inside the callback to produce owned output for retention or
+// mutation. DN, attribute descriptions, and identity strings are owned.
+//
+// Only prevalidated, bounded binary Bolt candidates borrow storage and reuse
+// descriptors. All other candidates use the existing owned decoding path; the
+// same read-only contract applies regardless of which path is selected. Entries
+// still require the scope, filter, ACL, and overlay checks described above, and
+// callers must use only checks that do not mutate or retain the borrowed data.
+func ForEachReadOnlyFilterCandidate(
+	reader Reader,
+	filter directory.Filter,
+	fn func(directory.Entry) error,
+) (planned bool, candidates int, err error) {
+	scoped, ok := reader.(schemaAwarePartitionReader)
+	if !ok || filter.Kind != directory.FilterEquality {
+		return ForEachFilterCandidate(reader, filter, fn)
+	}
+	var encoded []encodedEqualityIndexCandidate
+	entries, planned, err := scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded)
+	if err != nil || !planned {
+		return planned, 0, err
+	}
+	if len(encoded) > 0 {
+		var decoder readOnlyCandidateDecoder
+		for _, candidate := range encoded {
+			entry, err := decoder.decode(candidate.value)
+			if err != nil {
+				return true, candidates, err
+			}
+			if err := fn(entry.WithDNIdentityKey(string(candidate.identity))); err != nil {
+				return true, candidates, err
+			}
+			candidates++
+		}
 	}
 	for _, entry := range entries {
 		if err := fn(entry); err != nil {
@@ -389,6 +453,13 @@ func deletePartitionEntryWithEqualityIndexes(
 func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	filter directory.Filter,
 ) ([]directory.Entry, bool, error) {
+	return reader.planEqualityIndexCandidatesWithEncoded(filter, nil)
+}
+
+func (reader schemaAwarePartitionReader) planEqualityIndexCandidatesWithEncoded(
+	filter directory.Filter,
+	encoded *[]encodedEqualityIndexCandidate,
+) ([]directory.Entry, bool, error) {
 	schema, ok := reader.normalizer.(EqualityIndexSchema)
 	if !ok {
 		return nil, false, nil
@@ -397,6 +468,17 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	if !ok {
 		return nil, false, nil
 	}
+	current, err := reader.currentEqualityIndex(indexed, schema)
+	if err != nil || !current {
+		return nil, false, err
+	}
+	return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter, encoded)
+}
+
+func (reader schemaAwarePartitionReader) currentEqualityIndex(
+	indexed equalityIndexStorageReader,
+	schema EqualityIndexSchema,
+) (bool, error) {
 	revision, hasRevision := ReaderSnapshotRevision(reader.Reader)
 	validationCache, cacheable := schema.(EqualityIndexValidationCache)
 	if hasRevision && cacheable {
@@ -404,43 +486,41 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 			reader.partition,
 			revision,
 		); known {
-			if !current {
-				return nil, false, nil
-			}
-			return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter)
+			return current, nil
 		}
 	}
 	want, err := normalizeEqualityIndexConfig(schema.EqualityIndexConfiguration())
 	if err != nil || len(want.Attributes) == 0 {
-		return nil, false, err
+		return false, err
 	}
 	stored, present, err := indexed.equalityIndexConfig(reader.partition)
 	if err != nil || !present {
 		if err == nil && hasRevision && cacheable {
 			validationCache.StoreEqualityIndexValidation(reader.partition, revision, false)
 		}
-		return nil, false, err
+		return false, err
 	}
 	stored, err = normalizeEqualityIndexConfig(stored)
 	if err != nil {
-		return nil, false, nil
+		return false, nil
 	}
 	if !equalityIndexConfigsEqual(stored, want) {
 		if hasRevision && cacheable {
 			validationCache.StoreEqualityIndexValidation(reader.partition, revision, false)
 		}
-		return nil, false, nil
+		return false, nil
 	}
 	if hasRevision && cacheable {
 		validationCache.StoreEqualityIndexValidation(reader.partition, revision, true)
 	}
-	return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter)
+	return true, nil
 }
 
 func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 	indexed equalityIndexStorageReader,
 	schema EqualityIndexSchema,
 	filter directory.Filter,
+	encoded *[]encodedEqualityIndexCandidate,
 ) ([]directory.Entry, bool, error) {
 	if filter.Kind == directory.FilterEquality {
 		attribute, equality, _, err := schema.ResolveEqualityIndexAttribute(filter.Attribute)
@@ -464,6 +544,18 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 			return nil, true, err
 		}
 		sort.Strings(references)
+		if encoded != nil && len(references) >= minEncodedEqualityIndexCandidates {
+			if tx, ok := indexed.(*boltTx); ok {
+				candidates, valid, err := tx.prevalidateEqualityIndexCandidates(reader.partition, references)
+				if err != nil {
+					return nil, true, err
+				}
+				if valid {
+					*encoded = candidates
+					return nil, true, nil
+				}
+			}
+		}
 		entries, err := indexed.equalityIndexEntries(reader.partition, references, schema)
 		return entries, true, err
 	}

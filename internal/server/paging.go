@@ -40,11 +40,12 @@ type pagedSortedItem struct {
 
 type pagedSortedSearch struct {
 	// Items are immutable once published. Continuations own only the cursor.
-	items     []pagedSortedItem
-	offset    int
-	truncated bool
-	live      bool
-	shared    bool
+	items         []pagedSortedItem
+	offset        int
+	truncated     bool
+	live          bool
+	shared        bool
+	retainedBytes int64
 }
 
 type pagedSearchState struct {
@@ -226,6 +227,7 @@ func (server *Server) preparePagedSearch(
 		if revision, ok := server.currentStorageSnapshotRevision(ctx); ok {
 			if items := state.runtime.pagedSnapshots.get(fingerprint, revision); len(items) != 0 {
 				context.sorted = &pagedSortedSearch{items: items, live: true}
+				context.sorted.retainedBytes = pagedSortedSearchRetainedBytes(context.sorted)
 				context.storageRevision = revision
 				context.hasStorageRevision = true
 			}
@@ -431,6 +433,9 @@ func pagedSortedSearchRetainedBytes(sorted *pagedSortedSearch) int64 {
 	if sorted == nil {
 		return size
 	}
+	if sorted.retainedBytes > 0 {
+		return sorted.retainedBytes
+	}
 	size += int64(cap(sorted.items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
 	for _, item := range sorted.items {
 		size += pagedSortedItemBytes(item)
@@ -443,11 +448,13 @@ func clonePagedSortedSearch(source *pagedSortedSearch) *pagedSortedSearch {
 		return nil
 	}
 	cloned := *source
+	cloned.retainedBytes = pagedSortedSearchRetainedBytes(source)
 	if !source.shared {
 		// Preserve the original first-clone capacity and memory admission
 		// boundary, then share the immutable compacted items on later pages.
 		cloned.items = append([]pagedSortedItem(nil), source.items...)
 		cloned.shared = true
+		cloned.retainedBytes += int64(cap(cloned.items)-cap(source.items)) * int64(unsafe.Sizeof(pagedSortedItem{}))
 	}
 	return &cloned
 }

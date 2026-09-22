@@ -704,6 +704,9 @@ func (server *Server) tryRetcodeSearch(
 	request ldapwire.SearchRequest,
 	manageDsaIT bool,
 ) (bool, error) {
+	if !state.runtime.features.retcode {
+		return false, nil
+	}
 	base, err := directory.ParseDN(request.BaseDN)
 	if err != nil {
 		return false, nil

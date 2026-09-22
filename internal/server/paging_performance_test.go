@@ -149,7 +149,17 @@ func BenchmarkPagedSnapshotContinuationState(b *testing.B) {
 func TestPagedContinuationPreservesLegacyCapacityAccounting(t *testing.T) {
 	for _, size := range []int{1, 7, 100, 1000} {
 		current := &pagedSortedSearch{items: make([]pagedSortedItem, size, size*2), live: true}
+		for index := range current.items {
+			current.items[index] = pagedSortedItem{
+				dn: "uid=sample,dc=example",
+				selected: directory.Entry{DN: "uid=sample,dc=example", Attributes: []directory.Attribute{{
+					Description: "description", Values: [][]byte{[]byte("one"), []byte("two")},
+				}}},
+				hasSelected: index%2 == 0,
+			}
+		}
 		legacy := *current
+		current.retainedBytes = pagedSortedSearchRetainedBytes(current)
 		for page := 0; page < 4; page++ {
 			previous := current
 			current = clonePagedSortedSearch(current)
@@ -162,6 +172,17 @@ func TestPagedContinuationPreservesLegacyCapacityAccounting(t *testing.T) {
 			if previous.offset != page {
 				t.Fatal("continuation changed the preceding cursor")
 			}
+		}
+	}
+}
+
+func BenchmarkPagedSnapshotMemoryAccounting(b *testing.B) {
+	snapshot := &pagedSortedSearch{items: make([]pagedSortedItem, 100000), live: true}
+	snapshot.retainedBytes = pagedSortedSearchRetainedBytes(snapshot)
+	b.ReportAllocs()
+	for b.Loop() {
+		if pagedSortedSearchRetainedBytes(snapshot) <= 0 {
+			b.Fatal("snapshot was not charged")
 		}
 	}
 }

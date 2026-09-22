@@ -973,10 +973,12 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 		queued := &queuedOperation{
 			message:       message,
 			operation:     operation,
-			completion:    make(chan operationCompletion, 1),
 			state:         &state,
 			concurrent:    concurrent,
 			retainedBytes: retainedBytes,
+		}
+		if connectionReadBarrier(message) {
+			queued.completion = make(chan operationCompletion, 1)
 		}
 		if !server.pendingByteLimiter.tryAcquire(retainedBytes) {
 			server.monitor.queueOperation(state.monitor)
@@ -1002,7 +1004,7 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			}
 			return
 		}
-		if !connectionReadBarrier(message) {
+		if queued.completion == nil {
 			continue
 		}
 
@@ -1186,10 +1188,12 @@ func (server *Server) runConnectionOperations(
 
 		operations.finish(queued.operation)
 		queue.complete(queued)
-		queued.completion <- operationCompletion{
-			closeConnection: closeConnection,
-			connection:      sharedState.connection,
-			err:             err,
+		if queued.completion != nil {
+			queued.completion <- operationCompletion{
+				closeConnection: closeConnection,
+				connection:      sharedState.connection,
+				err:             err,
+			}
 		}
 		if queued.concurrent {
 			clearConcurrentConnectionState(state)
@@ -1538,8 +1542,8 @@ func (server *Server) dispatch(
 		defer func() {
 			state.boundDN = originalBoundDN
 		}()
+		ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	}
-	ctx = withACLSubject(ctx, server.connectionACLSubject(state))
 	domainScope := false
 	noOpSearch := false
 	var noOpSearchResponse *noOpSearchResponseConnection

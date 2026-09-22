@@ -68,7 +68,8 @@ func openBolt(path string, noFreelistSync bool) (*Bolt, error) {
 		return nil, fmt.Errorf("lock database path: %w", err)
 	}
 
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	// LDAP monitoring uses its own operation and persisted entry counters.
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second, NoStatistics: true})
 	if err != nil {
 		_ = pathLock.Close()
 		return nil, fmt.Errorf("open database: %w", err)

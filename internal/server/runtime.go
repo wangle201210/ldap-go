@@ -86,6 +86,8 @@ type runtimeOperationFeatures struct {
 	retcode           bool
 	pcache            bool
 	noOpSearch        bool
+	rwmRewriteRelay   bool
+	sqlBackend        bool
 	searchPreDispatch bool
 }
 
@@ -576,10 +578,13 @@ func runtimeFeaturesForDatabases(databases []runtimeDatabase) runtimeOperationFe
 		features.ldapBackend = features.ldapBackend || database.ldapBackend != nil
 		features.passwdBackend = features.passwdBackend || database.passwdBackend != nil
 		features.sockBackend = features.sockBackend || database.sockBackend != nil
+		features.sqlBackend = features.sqlBackend || database.sqlBackend != nil
 		features.chain = features.chain || database.chain != nil
 		features.retcode = features.retcode || len(database.retcodes) != 0
 		features.pcache = features.pcache || database.pcache != nil
 		features.noOpSearch = features.noOpSearch || database.noOpSearchOverlay
+		features.rwmRewriteRelay = features.rwmRewriteRelay ||
+			(database.relay != nil && database.rwm != nil && database.rwm.rewrite.active())
 	}
 	features.searchPreDispatch = features.sockOverlay || features.metaBackend ||
 		features.dnssrvBackend || features.ldapBackend || features.passwdBackend ||

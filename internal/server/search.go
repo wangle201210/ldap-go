@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -182,78 +181,23 @@ func searchControlSupportForDatabases(databases []runtimeDatabase) requestContro
 	return support
 }
 
-func (server *Server) handleSearch(
+func (server *Server) handleUncachedSearch(
 	ctx context.Context,
 	connection net.Conn,
 	state *connectionState,
 	message ldapwire.Message,
 	request ldapwire.SearchRequest,
+	prelude searchRequestPrelude,
 ) error {
-	if handled, err := server.tryPcachePrivateSearch(
-		connection,
-		state,
-		message,
-		request,
-	); handled {
-		return err
-	}
 	var (
-		base                   directory.DN
-		baseReady              bool
-		resultCacheFingerprint [sha256.Size]byte
-		resultCacheRevision    uint64
-		hasResultCacheRevision bool
-		resultCacheable        bool
-		resultCacheEvaluated   bool
+		base                   = prelude.base
+		baseReady              = prelude.baseReady
+		resultCacheFingerprint = prelude.fingerprint
+		resultCacheRevision    = prelude.revision
+		hasResultCacheRevision = prelude.hasRevision
+		resultCacheable        = prelude.cacheable
+		resultCacheEvaluated   = prelude.evaluated
 	)
-	if len(message.Controls) == 0 && state.passwordPolicyRestrictedDN == "" {
-		var baseErr error
-		base, baseErr = normalizeConnectionSearchRequestBase(state, request.BaseDN)
-		if baseErr != nil {
-			return server.writeSearchDone(
-				connection,
-				message.ID,
-				ldapwire.ResultError(ldapwire.ResultInvalidDNSyntax, ""),
-			)
-		}
-		baseReady = true
-		resultCacheEvaluated = true
-		if base.Depth() > 0 {
-			if database := databaseForNormalizedDN(state.runtime, base); database != nil {
-				cacheRequest := request
-				cacheRequest.BaseDN = base.String()
-				if fingerprint, cacheable := server.rootEqualitySearchCacheFingerprint(
-					state,
-					*database,
-					cacheRequest,
-					nil,
-				); cacheable {
-					if revision, available := server.currentStorageSnapshotRevision(ctx); available {
-						if cached, found := state.runtime.searchResults.get(
-							fingerprint,
-							revision,
-						); found {
-							return server.writeSearchResult(
-								connection,
-								message.ID,
-								state,
-								nil,
-								nil,
-								cached,
-								ldapwire.Result{Code: ldapwire.ResultSuccess},
-								pagedSearchCursor{},
-								false,
-							)
-						}
-						resultCacheFingerprint = fingerprint
-						resultCacheRevision = revision
-						hasResultCacheRevision = true
-						resultCacheable = true
-					}
-				}
-			}
-		}
-	}
 	var sortLease *serverSideSortLease
 	defer func() {
 		releaseServerSideSortLease(state, sortLease)
@@ -272,15 +216,13 @@ func (server *Server) handleSearch(
 			*controlFailure,
 		)
 	}
-	searchFilters := []directory.Filter{request.Filter}
-	if controls.assertion != nil {
-		searchFilters = append(searchFilters, *controls.assertion)
+	if state.runtime.features.sqlBackend {
+		searchFilters := []directory.Filter{request.Filter}
+		if controls.assertion != nil {
+			searchFilters = append(searchFilters, *controls.assertion)
+		}
+		ctx = withSQLBackendSearchRequirements(ctx, request.Attributes, searchFilters...)
 	}
-	ctx = withSQLBackendSearchRequirements(
-		ctx,
-		request.Attributes,
-		searchFilters...,
-	)
 	controls.deref, controlFailure = prepareDerefControl(
 		state.runtime.schema,
 		controls.deref,
@@ -314,7 +256,9 @@ func (server *Server) handleSearch(
 			)
 		}
 	}
-	ctx = withSQLBackendScopeRequirements(ctx, base, request.Scope)
+	if state.runtime.features.sqlBackend {
+		ctx = withSQLBackendScopeRequirements(ctx, base, request.Scope)
+	}
 	if handled, err := server.tryRetcodeSearch(
 		ctx,
 		connection,
@@ -379,17 +323,17 @@ func (server *Server) handleSearch(
 		limitBase,
 	)
 	if limitDatabaseIndex >= 0 {
-		database := state.runtime.databases[limitDatabaseIndex]
+		database := &state.runtime.databases[limitDatabaseIndex]
 		if databaseSearchLimitsRequireRequestContext(database.searchSizeLimits) {
 			err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-				tx := readerForDatabase(reader, database, ctx)
+				tx := readerForDatabase(reader, *database, ctx)
 				requestDN, err := storage.NormalizeReaderDN(tx, base)
 				if err != nil {
 					return err
 				}
 				limits, err = server.effectiveDatabaseSearchLimitsForRequest(
 					state.runtime,
-					database,
+					*database,
 					state.boundDN,
 					requestDN,
 					reader,
@@ -405,7 +349,7 @@ func (server *Server) handleSearch(
 		} else {
 			limits = effectiveDatabaseSearchExecutionLimits(
 				state.runtime,
-				database,
+				*database,
 				state.boundDN,
 				server.config.MaxSearchEntries,
 				noOpSearchRequestedSize(ctx, request.SizeLimit),
@@ -1316,12 +1260,18 @@ func (server *Server) handleSearch(
 	snapshotEntriesCacheable = snapshotEntriesCacheable && snapshotCacheable
 	valueSortEnabled := runtimeSupportsValueSort(state.runtime.databases)
 	var preparedRootSubstring *schema.PreparedSubstringMatcher
+	var preparedRootEquality *schema.PreparedEqualityMatcher
 	preparedEntryClasses := state.runtime.searchEntryClasses
 	preparedSelection, hasPreparedSelection := state.runtime.searchSelections.get(
 		state.runtime.schema,
 		request.Attributes,
 	)
 	if snapshotPaging {
+		if request.Filter.Kind == directory.FilterEquality {
+			preparedRootEquality, _ = state.runtime.schema.PrepareEqualityMatcher(
+				request.Filter.Attribute, request.Filter.Assertion,
+			)
+		}
 		if request.Filter.Kind == directory.FilterSubstrings {
 			preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(
 				request.Filter.Attribute,
@@ -1635,7 +1585,10 @@ func (server *Server) handleSearch(
 				continue
 			}
 			database := &state.runtime.databases[route.databaseIndex]
-			routeContext := withSQLBackendScopeRequirements(ctx, route.base, route.scope)
+			routeContext := ctx
+			if state.runtime.features.sqlBackend {
+				routeContext = withSQLBackendScopeRequirements(ctx, route.base, route.scope)
+			}
 			tx := readerForDatabase(reader, *database, routeContext)
 			routeRoot := primaryRoot && routeIndex == 0
 			if routeIndex != 0 {
@@ -1783,6 +1736,9 @@ func (server *Server) handleSearch(
 				identityScope := stableCursorPaging ||
 					(!candidateReady && hasCandidateIdentity &&
 						databaseUsesRuntimeDNIdentity(*database, state.runtime.schema))
+				validateCandidateOnly := snapshotEntriesCacheable && identityScope &&
+					!stableCursorPaging && !paging.cursor.valid && len(candidates) >= entryLimit
+				candidateDisplayDN := entry.DN
 				resolveCandidate := func() error {
 					if candidateReady {
 						return nil
@@ -1793,8 +1749,12 @@ func (server *Server) handleSearch(
 						if stableCursorPaging {
 							identityKey = physicalCursorKey
 						}
+						displayDN := entry.DN
+						if validateCandidateOnly {
+							displayDN = candidateDisplayDN
+						}
 						candidate, resolveErr = directory.ParseDNWithIdentityKey(
-							entry.DN,
+							displayDN,
 							identityKey,
 						)
 					} else {
@@ -1811,15 +1771,24 @@ func (server *Server) handleSearch(
 				}
 				candidateOrderKey := ""
 				if !stableCursorPaging && (paging != nil || sorting.active()) {
-					if err := resolveCandidate(); err != nil {
-						return err
+					if validateCandidateOnly {
+						if err := directory.ValidateDNWithIdentityKey(entry.DN, candidateIdentityKey); err != nil {
+							return fmt.Errorf("normalize search candidate %q: %w", entry.DN, err)
+						}
+					} else {
+						if err := resolveCandidate(); err != nil {
+							return err
+						}
 					}
 					var ordered bool
 					candidateOrderKey, ordered = entry.DNOrderKeyHint()
 					if !ordered && identityScope {
 						// This identity came from the same schema-aware reader used
 						// for scope checks; do not normalize its DN a second time.
-						candidateOrderKey = candidate.LegacyKey() + "\x00" + candidate.Key()
+						// Remaining snapshot items use their offsets, not cursor keys.
+						if !snapshotPaging || paging.cursor.valid || len(candidates) < entryLimit {
+							candidateOrderKey = candidate.LegacyKey() + "\x00" + candidate.Key()
+						}
 					} else if !ordered {
 						candidateOrderKey, err = storage.ReaderDNOrderKey(tx, candidate)
 						if err != nil {
@@ -1972,6 +1941,8 @@ func (server *Server) handleSearch(
 				if routeRoot && preparedRootSubstring != nil &&
 					len(database.nestGroups) == 0 {
 					matches, err = preparedRootSubstring.Match(filterEntry)
+				} else if routeRoot && preparedRootEquality != nil && len(database.nestGroups) == 0 {
+					matches, err = preparedRootEquality.Match(filterEntry)
 				} else if routeRoot {
 					matches, err = effectiveFilter.MatchWith(
 						filterEntry,
@@ -2069,10 +2040,12 @@ func (server *Server) handleSearch(
 					}
 					snapshotBytes += itemBytes
 					snapshotItems = append(snapshotItems, pagedSortedItem{
-						route:        routeIndex,
-						dn:           entry.DN,
-						normalizedDN: candidate,
+						route: routeIndex,
+						dn:    entry.DN,
 					})
+					if !snapshotEntriesCacheable {
+						snapshotItems[len(snapshotItems)-1].normalizedDN = candidate
+					}
 					if len(candidates) >= entryLimit && !snapshotEntriesCacheable {
 						return nil
 					}
@@ -2154,15 +2127,16 @@ func (server *Server) handleSearch(
 					item := &snapshotItems[len(snapshotItems)-1]
 					previousBytes := pagedSortedItemBytes(*item)
 					previousDN := item.dn
-					previousNormalizedDN := item.normalizedDN
 					item.dn = ""
-					item.normalizedDN = directory.DN{}
 					item.selected = selected
 					item.hasSelected = true
 					delta := pagedSortedItemBytes(*item) - previousBytes
 					if delta > server.config.MaxSearchCandidateBytes-snapshotBytes {
+						if err := resolveCandidate(); err != nil {
+							return err
+						}
 						item.dn = previousDN
-						item.normalizedDN = previousNormalizedDN
+						item.normalizedDN = candidate
 						item.selected = directory.Entry{}
 						item.hasSelected = false
 						snapshotEntriesCacheable = false
@@ -2193,13 +2167,15 @@ func (server *Server) handleSearch(
 					return errStopSearch
 				}
 				retainedCandidate := searchCandidate{
-					selected:     selected,
-					readable:     sortReadable,
-					normalizedDN: candidate,
-					route:        routeIndex,
-					dn:           entry.DN,
-					cursorKey:    candidateCursorKey,
-					syncUUID:     syncUUID,
+					selected:  selected,
+					readable:  sortReadable,
+					route:     routeIndex,
+					dn:        entry.DN,
+					cursorKey: candidateCursorKey,
+					syncUUID:  syncUUID,
+				}
+				if sorting.active() || syncSearch != nil {
+					retainedCandidate.normalizedDN = candidate
 				}
 				candidateSize := searchCandidateRetainedBytes(retainedCandidate)
 				if candidateSize <= 0 {
@@ -2236,8 +2212,22 @@ func (server *Server) handleSearch(
 			}
 			var err error
 			if translucentRoute == nil {
+				iterateCandidates := storage.ForEachFilterCandidate
+				if snapshotEntriesCacheable && routeRoot && !projectSubschemaReference &&
+					!collectResponses.enabled && !nestGroupPlans.enabled &&
+					databaseSearchResultCacheSafe(state.runtime, *database) {
+					plan, planErr := collectivePlans.plan(database.partition, tx)
+					if planErr != nil {
+						return planErr
+					}
+					if len(plan.sources) == 0 {
+						// This projection only reads input values; Select creates all
+						// retained output before the decoder reuses its descriptors.
+						iterateCandidates = storage.ForEachReadOnlyFilterCandidate
+					}
+				}
 				var planned bool
-				planned, _, err = storage.ForEachFilterCandidate(
+				planned, _, err = iterateCandidates(
 					tx,
 					request.Filter,
 					visitEntry,
@@ -2507,6 +2497,7 @@ func (server *Server) handleSearch(
 				offset:    pageEnd,
 				truncated: sortTruncated,
 			}
+			paging.sorted.retainedBytes = pagedSortedSearchRetainedBytes(paging.sorted)
 			switch {
 			case result.Code != ldapwire.ResultSuccess:
 				paging.sorted = nil
@@ -2533,6 +2524,7 @@ func (server *Server) handleSearch(
 			truncated: sortTruncated,
 			live:      true,
 		}
+		paging.sorted.retainedBytes = pagedSortedSearchRetainedBytes(paging.sorted)
 		if snapshotCacheable && paging.hasStorageRevision {
 			state.runtime.pagedSnapshots.put(
 				paging.fingerprint,
@@ -3784,6 +3776,9 @@ func stringValues(values ...string) [][]byte {
 }
 
 func isRuntimeSubschemaDN(runtime *runtimeState, dn directory.DN) bool {
+	if dn.Depth() != 1 {
+		return false
+	}
 	if runtime == nil || runtime.schema == nil {
 		return isSubschemaDN(dn)
 	}
@@ -3806,6 +3801,9 @@ func normalizeSearchRequestBase(
 }
 
 func isSubschemaDN(dn directory.DN) bool {
+	if dn.Depth() != 1 {
+		return false
+	}
 	subSchema, err := directory.ParseDN("cn=Subschema")
 	return err == nil && dn.Equal(subSchema)
 }

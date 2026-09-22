@@ -12,6 +12,9 @@ import (
 // A DSL can rewrite each operation differently. Apply it once at the relay
 // boundary, then let the selected database operate in its own namespace.
 func (server *Server) tryRWMRewriteRelayOperation(ctx context.Context, connection net.Conn, state *connectionState, message ldapwire.Message) (bool, error) {
+	if !state.runtime.features.rwmRewriteRelay {
+		return false, nil
+	}
 	target, ok := rwmRewriteRequestTarget(state, message.Request)
 	if !ok {
 		return false, nil
