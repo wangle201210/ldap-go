@@ -73,6 +73,18 @@ type AttributeResolver interface {
 	HasAttributeDescription(entry Entry, description string) bool
 }
 
+// EqualityEvaluator optionally evaluates selected entry values without copying
+// them. Comparison errors produce undefined unless any value matches. When
+// hasValues is false, EvaluateWith handles absent-value assertion validation.
+// Implementations must not mutate the entry or assertion.
+// Opt in only when this evaluates the same values and matching semantics as
+// AttributeResolver and ValueMatcher. Wrappers overriding either must implement
+// this method too, or hide it by exposing only the legacy interfaces; embedding
+// an evaluator directly promotes its method and bypasses those overrides.
+type EqualityEvaluator interface {
+	EvaluateEquality(entry Entry, description string, assertion []byte) (result FilterResult, hasValues bool)
+}
+
 // FilterAssertionValidator distinguishes an absent value from an unusable
 // assertion; negating the latter must preserve LDAP's undefined result.
 type FilterAssertionValidator interface {
@@ -186,6 +198,15 @@ func (filter Filter) EvaluateWith(entry Entry, matcher ValueMatcher) (FilterResu
 		return FilterFalseResult, nil
 
 	case FilterEquality, FilterGreaterOrEqual, FilterLessOrEqual:
+		if filter.Kind == FilterEquality {
+			if evaluator, ok := matcher.(EqualityEvaluator); ok {
+				result, hasValues := evaluator.EvaluateEquality(entry, filter.Attribute, filter.Assertion)
+				if !hasValues {
+					return absentFilterResult(filter, matcher), nil
+				}
+				return result, nil
+			}
+		}
 		values := resolvedAttributeValues(matcher, entry, filter.Attribute)
 		if len(values) == 0 {
 			return absentFilterResult(filter, matcher), nil

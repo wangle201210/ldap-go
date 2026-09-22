@@ -570,6 +570,36 @@ func (registry *Registry) AttributeValues(
 	return registry.attributeValues(entry, description)
 }
 
+// EvaluateEquality implements directory.EqualityEvaluator using the same value
+// selection and comparison as AttributeValues and Compare, under one read lock.
+func (registry *Registry) EvaluateEquality(
+	entry directory.Entry,
+	description string,
+	assertion []byte,
+) (result directory.FilterResult, hasValues bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	result = directory.FilterFalseResult
+	for _, attribute := range entry.Attributes {
+		if !registry.attributeDescriptionSubtype(attribute.Description, description) {
+			continue
+		}
+		for _, value := range attribute.Values {
+			hasValues = true
+			comparison, err := registry.compareLocked(description, "", value, assertion)
+			if err != nil {
+				result = directory.FilterUndefinedResult
+				continue
+			}
+			if comparison == 0 {
+				return directory.FilterTrueResult, true
+			}
+		}
+	}
+	return result, hasValues
+}
+
 // NormalizedEqualityAttributeValues returns all values selected by an
 // AttributeDescription after applying that attribute's equality rule. It
 // resolves the schema once for callers that need every normalized value.
@@ -1383,6 +1413,13 @@ func (registry *Registry) Compare(
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
+	return registry.compareLocked(attributeName, matchingRule, left, right)
+}
+
+func (registry *Registry) compareLocked(
+	attributeName, matchingRule string,
+	left, right []byte,
+) (int, error) {
 	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
 	if !ok {
 		return 0, fmt.Errorf("undefined attribute type %q", attributeName)
