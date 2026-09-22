@@ -1,0 +1,21 @@
+File: profile.test
+Type: alloc_space
+Time: 2026-09-23 01:42:40 CST
+Showing nodes accounting for 4223.07kB, 100% of 4223.07kB total
+Showing top 15 nodes out of 16
+      flat  flat%   sum%        cum   cum%
+ 1805.17kB 42.75% 42.75%  3038.80kB 71.96%  compress/flate.NewWriter (inline)
+ 1184.27kB 28.04% 70.79%  1184.27kB 28.04%  runtime/pprof.StartCPUProfile
+  650.62kB 15.41% 86.19%  1233.63kB 29.21%  compress/flate.(*compressor).init
+  583.01kB 13.81%   100%   583.01kB 13.81%  compress/flate.newDeflateFast (inline)
+         0     0%   100%  3038.80kB 71.96%  compress/gzip.(*Writer).Write
+         0     0%   100%  2737.48kB 64.82%  github.com/wangle201210/ldap-go/cmd/ldap-go.TestPerformanceSnapshotProfile
+         0     0%   100%  1553.21kB 36.78%  github.com/wangle201210/ldap-go/cmd/ldap-go.TestPerformanceSnapshotProfile.func2
+         0     0%   100%  3038.80kB 71.96%  runtime/pprof.(*profileBuilder).build
+         0     0%   100%  1485.59kB 35.18%  runtime/pprof.(*profileBuilder).flush
+         0     0%   100%  1485.59kB 35.18%  runtime/pprof.(*profileBuilder).pbSample
+         0     0%   100%  1553.21kB 36.78%  runtime/pprof.WriteHeapProfile (inline)
+         0     0%   100%  1485.59kB 35.18%  runtime/pprof.profileWriter
+         0     0%   100%  1553.21kB 36.78%  runtime/pprof.writeHeap (inline)
+         0     0%   100%  1553.21kB 36.78%  runtime/pprof.writeHeapInternal
+         0     0%   100%  1553.21kB 36.78%  runtime/pprof.writeHeapProto

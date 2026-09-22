@@ -32,11 +32,19 @@ func (decoder *readOnlyCandidateDecoder) decode(value []byte) (directory.Entry, 
 	return stored.Entry, err
 }
 
-// borrow checks fields with the original parsers, including counts, binding
-// length, trailing bytes, and normalization flags. The candidate planner
-// prevalidates identities; other callers must validate the returned identity
-// binding themselves before exposing a row. A failed gate uses the owned decoder.
 func (decoder *readOnlyCandidateDecoder) borrow(value []byte) (directory.Entry, bool) {
+	dn, attributes, ok := decoder.borrowMetadata(value)
+	if !ok {
+		return directory.Entry{}, false
+	}
+	return directory.Entry{DN: string(dn), Attributes: attributes}, true
+}
+
+// borrowMetadata checks fields with the original parsers, including counts,
+// binding length, trailing bytes, and normalization flags. DN bytes and values
+// are borrowed; descriptions are owned. Callers must validate the DN against
+// the physical identity before exposing a row. A failed gate uses the owned decoder.
+func (decoder *readOnlyCandidateDecoder) borrowMetadata(value []byte) ([]byte, []directory.Attribute, bool) {
 	var flags []byte
 	var err error
 	v1, v3 := false, false
@@ -45,7 +53,7 @@ func (decoder *readOnlyCandidateDecoder) borrow(value []byte) (directory.Entry, 
 		v3 = true
 		flags, value, err = consumeEntryBinaryField(value[len(entryBinaryV3Prefix):])
 		if err != nil {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 	case bytes.HasPrefix(value, entryBinaryPrefix):
 		value = value[len(entryBinaryPrefix):]
@@ -53,39 +61,39 @@ func (decoder *readOnlyCandidateDecoder) borrow(value []byte) (directory.Entry, 
 		v1 = true
 		value = value[len(entryBinaryV1Prefix):]
 	default:
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	dn, value, err := consumeEntryBinaryField(value)
 	if err != nil {
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	binding, value, err := consumeEntryBinaryField(value)
 	if err != nil {
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	if v1 {
-		// V1 identity/source metadata is not part of the callback entry. The API
-		// attaches an owned copy of the prevalidated physical reference identity.
+		// V1 identity/source metadata does not replace the physical identity
+		// supplied by the iterator.
 		_, value, err = consumeEntryBinaryField(value)
 		if err != nil {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 	} else if len(binding) != 0 && len(binding) != sha256.Size {
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	attributeCount, value, err := consumeEntryBinaryCount(value)
 	if err != nil || attributeCount > len(value) || attributeCount > len(decoder.attributes) {
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	usedValues := 0
 	for i := range attributeCount {
 		description, next, err := consumeEntryBinaryField(value)
 		if err != nil {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 		valueCount, next, err := consumeEntryBinaryCount(next)
 		if err != nil || valueCount > len(next) || valueCount > len(decoder.values)-usedValues {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 		attribute := directory.Attribute{Description: decoder.internName(description)}
 		if valueCount > 0 {
@@ -96,31 +104,31 @@ func (decoder *readOnlyCandidateDecoder) borrow(value []byte) (directory.Entry, 
 		for j := range valueCount {
 			attribute.Values[j], next, err = consumeEntryBinaryField(next)
 			if err != nil {
-				return directory.Entry{}, false
+				return nil, nil, false
 			}
 		}
 		decoder.attributes[i] = attribute
 		value = next
 	}
 	if len(value) != 0 {
-		return directory.Entry{}, false
+		return nil, nil, false
 	}
 	if v3 {
 		if len(flags) != (attributeCount+7)/8 {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 		if remainder := attributeCount % 8; remainder != 0 && flags[len(flags)-1]>>uint(remainder) != 0 {
-			return directory.Entry{}, false
+			return nil, nil, false
 		}
 		for i := range attributeCount {
 			decoder.attributes[i].RawNormalized = flags[i/8]&(1<<uint(i%8)) != 0
 		}
 	}
-	entry := directory.Entry{DN: string(dn)}
+	var attributes []directory.Attribute
 	if attributeCount > 0 {
-		entry.Attributes = decoder.attributes[:attributeCount:attributeCount]
+		attributes = decoder.attributes[:attributeCount:attributeCount]
 	}
-	return entry, true
+	return dn, attributes, true
 }
 
 func (decoder *readOnlyCandidateDecoder) internName(name []byte) string {

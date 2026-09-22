@@ -15,6 +15,21 @@ import (
 // Only read-only Bolt transactions in nonempty schema-aware partitions use this
 // path. Unsupported readers return false without visiting entries.
 func ForEachReadOnlyStablePhysicalEntry(reader Reader, visit func(directory.Entry) error) (bool, error) {
+	return forEachReadOnlyPhysicalEntry(reader, nil, 0, func(entry directory.Entry, _ bool, _ error) error {
+		return visit(entry)
+	})
+}
+
+// ForEachReadOnlyStablePhysicalEntryInScope shares the read-only ownership
+// contract above and reuses DN decoding for scope evaluation. Every validated
+// row still reaches visit, including rows outside scope. Scope errors are passed
+// to visit so callers can retain their deadline/error ordering; DN validation
+// errors stop iteration before the callback as before.
+func ForEachReadOnlyStablePhysicalEntryInScope(reader Reader, base directory.DN, scope directory.Scope, visit func(directory.Entry, bool, error) error) (bool, error) {
+	return forEachReadOnlyPhysicalEntry(reader, &base, scope, visit)
+}
+
+func forEachReadOnlyPhysicalEntry(reader Reader, base *directory.DN, scope directory.Scope, visit func(directory.Entry, bool, error) error) (bool, error) {
 	scoped, ok := reader.(schemaAwarePartitionReader)
 	if !ok || scoped.partition == "" {
 		return false, nil
@@ -38,10 +53,17 @@ func ForEachReadOnlyStablePhysicalEntry(reader Reader, visit func(directory.Entr
 		if err != nil {
 			return true, err
 		}
-		if err := directory.ValidateDNWithIdentityKey(entry.DN, identity); err != nil {
+		var inScope bool
+		var scopeErr error
+		if base == nil {
+			err = directory.ValidateDNWithIdentityKey(entry.DN, identity)
+		} else {
+			inScope, scopeErr, err = directory.ValidateDNIdentityInScope(entry.DN, identity, *base, scope)
+		}
+		if err != nil {
 			return true, err
 		}
-		if err := visit(entry.WithDNIdentityKey(identity)); err != nil {
+		if err := visit(entry.WithDNIdentityKey(identity), inScope, scopeErr); err != nil {
 			return true, err
 		}
 	}

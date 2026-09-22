@@ -279,7 +279,7 @@ func ParseDNWithIdentityKey(value, key string) (DN, error) {
 	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
 	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
 	// Strict decoding checks unused tail bits but still ignores CR and LF.
-	if err != nil || strings.ContainsAny(encoded, "\r\n") {
+	if err != nil || hasDNKeyLineBreak(encoded) {
 		return DN{}, errors.New("schema-aware DN key is not canonically encoded")
 	}
 	rdns, err := viewDNIdentityParts(payload)
@@ -357,39 +357,47 @@ func ValidateDNWithIdentityKey(value, key string) error {
 		_, err := ParseDNWithIdentityKey(value, key)
 		return err
 	}
+	var scratch [1024]byte
+	_, err := validatedDNIdentityRDNs(value, key, scratch[:])
+	return err
+}
+
+// validatedDNIdentityRDNs validates a v2 key and retains its RDN views in scratch
+// (or a larger buffer). Cardinality mismatches preserve the full parser's rules.
+func validatedDNIdentityRDNs(value, key string, scratch []byte) (dnIdentityParts, error) {
 	depth, simple := simpleDNDepth(value)
 	var parsed *ldap.DN
 	if !simple {
 		var err error
 		parsed, err = parseDN(value)
 		if err != nil {
-			return err
+			return dnIdentityParts{}, err
 		}
 		depth = len(parsed.RDNs)
 	}
 	encoded := strings.TrimPrefix(key, schemaAwareDNKeyPrefix)
-	var scratch [1024]byte
-	payload := scratch[:]
+	payload := scratch
 	if size := base64.RawURLEncoding.DecodedLen(len(encoded)); size > len(payload) {
 		payload = make([]byte, size)
 	}
 	n, err := base64.RawURLEncoding.Strict().Decode(payload, []byte(encoded))
 	// Strict decoding checks unused tail bits but still ignores CR and LF.
-	if err != nil || strings.ContainsAny(encoded, "\r\n") {
-		return errors.New("schema-aware DN key is not canonically encoded")
+	if err != nil || hasDNKeyLineBreak(encoded) {
+		return dnIdentityParts{}, errors.New("schema-aware DN key is not canonically encoded")
 	}
 	rdns, err := viewDNIdentityParts(payload[:n])
 	if err != nil {
-		return fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
+		return dnIdentityParts{}, fmt.Errorf("decode schema-aware DN key RDNs: %w", err)
 	}
 	if rdns.count != depth {
 		_, err := ParseDNWithIdentityKey(value, key)
-		return err
+		return rdns, err
 	}
+	remaining := rdns
 	for rdnIndex := 0; rdnIndex < rdns.count; rdnIndex++ {
-		avas, err := viewDNIdentityParts(rdns.next())
+		avas, err := viewDNIdentityParts(remaining.next())
 		if err != nil {
-			return fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, err)
+			return dnIdentityParts{}, fmt.Errorf("decode schema-aware DN key RDN %d: %w", rdnIndex, err)
 		}
 		attributeCount := 1
 		if !simple {
@@ -397,16 +405,16 @@ func ValidateDNWithIdentityKey(value, key string) error {
 		}
 		if avas.count != attributeCount {
 			_, err := ParseDNWithIdentityKey(value, key)
-			return err
+			return rdns, err
 		}
 		for index := 0; index < avas.count; index++ {
 			parts, err := viewDNIdentityParts(avas.next())
 			if err != nil || parts.count != 2 || len(parts.next()) == 0 {
-				return fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
+				return dnIdentityParts{}, fmt.Errorf("schema-aware DN key RDN %d contains an invalid AVA", rdnIndex)
 			}
 		}
 	}
-	return nil
+	return rdns, nil
 }
 
 // Recognize a strict subset whose RDNs have one unescaped ASCII value. Anything
@@ -934,13 +942,17 @@ func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error)
 	}
 	n, err := base64.RawURLEncoding.Strict().Decode(payload, []byte(encoded))
 	// Strict decoding checks unused tail bits but still ignores CR and LF.
-	if err != nil || strings.ContainsAny(encoded, "\r\n") {
+	if err != nil || hasDNKeyLineBreak(encoded) {
 		return false, errors.New("candidate schema-aware DN key is not canonically encoded")
 	}
 	candidateRDNs, err := viewDNIdentityParts(payload[:n])
 	if err != nil {
 		return false, fmt.Errorf("decode candidate schema-aware DN key: %w", err)
 	}
+	return dnIdentityRDNsInScope(base, candidateRDNs, scope), nil
+}
+
+func dnIdentityRDNsInScope(base DN, candidateRDNs dnIdentityParts, scope Scope) bool {
 	equal := len(base.identityRDNs) == candidateRDNs.count
 	ancestor := len(base.identityRDNs) < candidateRDNs.count
 	if equal || ancestor {
@@ -956,14 +968,14 @@ func IdentityKeyInScope(base DN, candidateKey string, scope Scope) (bool, error)
 	}
 	switch scope {
 	case ScopeBase:
-		return equal, nil
+		return equal
 	case ScopeSingleLevel:
-		return ancestor && candidateRDNs.count == len(base.identityRDNs)+1, nil
+		return ancestor && candidateRDNs.count == len(base.identityRDNs)+1
 	case ScopeWholeSubtree:
-		return equal || ancestor, nil
+		return equal || ancestor
 	case ScopeChildren:
-		return ancestor, nil
+		return ancestor
 	default:
-		return false, nil
+		return false
 	}
 }

@@ -1,0 +1,1514 @@
+[
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.328334
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 7.789082000000001
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.406462
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.4490029999999994
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.138292
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.094165000000002
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2611.8357899999996
+  },
+  {
+    "run": "before-1",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2603.263374
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.281458
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.345709999999999
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.657333
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.3529590000000002
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.149879
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.652124
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2621.9052919999995
+  },
+  {
+    "run": "before-1",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2608.541835000001
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.365958
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.935918999999998
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.2659599999999998
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.296543
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.403959
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.530792000000002
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2694.877419
+  },
+  {
+    "run": "before-1",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2664.8320859999994
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.328541
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 9.40854
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.9785420000000005
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.864459
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 10.378498
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.883916000000001
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2623.8299159999997
+  },
+  {
+    "run": "before-2",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2607.6787099999992
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.334208
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 7.741124999999999
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.6214989999999987
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.3764989999999995
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.174334
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.672711999999999
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2624.45625
+  },
+  {
+    "run": "before-2",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2614.625708
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.358083
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.770958
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.7415369999999997
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.196874
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.446751999999998
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.477629
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2616.552167
+  },
+  {
+    "run": "before-2",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2610.647458000001
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.294667
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.399873
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.0990020000000005
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.911584
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.086918
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.804415
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2659.154625
+  },
+  {
+    "run": "before-3",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2674.1677910000008
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.287541
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.731086000000001
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.6148779999999996
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.90758
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 13.902000000000001
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 10.657665000000001
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2662.289045
+  },
+  {
+    "run": "before-3",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2677.756333
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.330917
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 10.297998
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.274959
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.2821669999999994
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.848666
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.797792999999999
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 2634.6798360000003
+  },
+  {
+    "run": "before-3",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 2632.219624
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.36675
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.314169
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.523626
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.955877
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 8.95654
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.125960999999998
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1485.4068740000002
+  },
+  {
+    "run": "current-1",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1494.122789
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.326292
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 7.910082999999999
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.6551220000000004
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.1490009999999993
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.805252000000001
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.022456
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1483.8087500000001
+  },
+  {
+    "run": "current-1",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1502.9978749999996
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.310667
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 7.807372999999998
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.0595860000000004
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.8242089999999997
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.615293000000001
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.527792999999999
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1535.1410410000003
+  },
+  {
+    "run": "current-1",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1507.9106250000004
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.309375
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.036041
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.5248759999999995
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.3505400000000005
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.917503
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.083833
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1494.150668
+  },
+  {
+    "run": "current-2",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1497.087918
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.32575
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.492041999999998
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.240748
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.176705
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.781747999999999
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.766041000000001
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1536.4263319999998
+  },
+  {
+    "run": "current-2",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1490.906709
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.309125
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.155583
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.542209
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.667627
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 8.591626999999999
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 9.294167
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1504.004208
+  },
+  {
+    "run": "current-2",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1489.9378760000002
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.347375
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 15.604585
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 5.781791999999999
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 13.339873999999996
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 16.200539999999997
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 20.284250999999998
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1788.7224589999998
+  },
+  {
+    "run": "current-3",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1533.1097940000004
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.290583
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 9.631373999999997
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.8983319999999995
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.1850000000000005
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.958919000000002
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 8.691206000000001
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1507.2891250000002
+  },
+  {
+    "run": "current-3",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1509.747167
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.325542
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 8.470666
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.5913779999999993
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.570792
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 9.497875
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 10.04129
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 1505.4807520000002
+  },
+  {
+    "run": "current-3",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 1509.7498339999997
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.306084
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.486959
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.568707
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.0014179999999993
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.490081
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.1733330000000004
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 617.090498
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 615.09658
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.317458
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.477044
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.0893349999999993
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.758585
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.206958
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.107833
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 617.783332
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 631.6910009999999
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.313792
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.39425
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.7582929999999997
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.648293
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.196124
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.375125
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 625.8881690000001
+  },
+  {
+    "run": "openldap-1",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 617.98479
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.42275
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 3.4219599999999994
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.821418
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.1842490000000003
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.92975
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.8476690000000007
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 663.9180399999999
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 616.3205409999999
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.346584
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.498122000000001
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.6720010000000003
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.1093780000000004
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.168126
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.032166
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 617.8632090000001
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 627.238957
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.307209
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.1433750000000003
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 3.428211
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.9029580000000004
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.1647499999999997
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.5122909999999994
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 625.5291220000001
+  },
+  {
+    "run": "openldap-2",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 614.36654
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.319083
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 7.474792
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 4.065460999999999
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.06254
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 3.560751
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 4.188293000000001
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 633.47521
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 1,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 622.0534170000001
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.306416
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.9132929999999995
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 4.066208999999999
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 3.3044569999999993
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.737789
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.5851230000000003
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 629.3647119999999
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 2,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 626.747958
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "connect",
+    "operations": 1,
+    "total_ms": 0.312209
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "rootBind",
+    "operations": 20,
+    "total_ms": 2.4128709999999995
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "baseSearch",
+    "operations": 20,
+    "total_ms": 2.753168
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "indexedEquality",
+    "operations": 20,
+    "total_ms": 2.686752
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "compareTrue",
+    "operations": 20,
+    "total_ms": 2.169958
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "compareFalse",
+    "operations": 20,
+    "total_ms": 2.1502929999999996
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "substringPrefix",
+    "operations": 20,
+    "total_ms": 634.9165830000001
+  },
+  {
+    "run": "openldap-3",
+    "repeat": 3,
+    "stage": "substringNegative",
+    "operations": 20,
+    "total_ms": 645.842042
+  }
+]

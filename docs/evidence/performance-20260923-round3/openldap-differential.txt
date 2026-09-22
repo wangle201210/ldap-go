@@ -1,0 +1,425 @@
+=== RUN   TestOpenLDAPReferenceAttributeOptionRangeSearchAndModify
+--- PASS: TestOpenLDAPReferenceAttributeOptionRangeSearchAndModify (0.37s)
+=== RUN   TestOpenLDAPReferenceLanguageAttributeOptionProjection
+--- PASS: TestOpenLDAPReferenceLanguageAttributeOptionProjection (0.25s)
+=== RUN   TestOpenLDAPReferenceACLDNExpansionAndGroups
+--- PASS: TestOpenLDAPReferenceACLDNExpansionAndGroups (0.38s)
+=== RUN   TestOpenLDAPReferencePagingIgnoredAtRequestSizeLimit
+--- PASS: TestOpenLDAPReferencePagingIgnoredAtRequestSizeLimit (0.21s)
+=== RUN   TestOpenLDAPReferenceDNMultiAVADifferential
+--- PASS: TestOpenLDAPReferenceDNMultiAVADifferential (0.21s)
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/ordinary_subtree
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_absent
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/critical_domain_absent
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_empty
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_nonempty
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/critical_options_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/phantom_root_ignored
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/phantom_root_critical
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/mixed_flags_ignored
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/negative_flags_ignored
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/negative_flags_critical
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_absent
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_empty
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_malformed
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/permissive_tags
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/permissive_trailing_data
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/zero_length_integer
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/duplicate_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_then_options_zero
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_then_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_then_options_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain_then_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_twice
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_then_domain_option
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain_twice
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_ordinary
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_domain
+=== RUN   TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_search_options
+--- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions (0.22s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/ordinary_subtree (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_absent (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/critical_domain_absent (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_empty (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_nonempty (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/critical_options_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/phantom_root_ignored (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/phantom_root_critical (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/mixed_flags_ignored (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/negative_flags_ignored (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/negative_flags_critical (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_absent (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_empty (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_malformed (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/permissive_tags (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/permissive_trailing_data (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/zero_length_integer (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/duplicate_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_then_options_zero (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_then_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/domain_then_options_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain_then_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_twice (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_zero_then_domain_option (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/options_domain_twice (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_ordinary (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_domain (0.00s)
+    --- PASS: TestOpenLDAPReferenceDomainScopeAndSearchOptions/base_referral_search_options (0.00s)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(unknownFilterAttribute=value)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(unknownFilterAttribute=value))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(unknownFilterAttribute=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(unknownFilterAttribute=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(unknownFilterAttribute=*)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(unknownFilterAttribute=*))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(unknownFilterAttribute=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(unknownFilterAttribute=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn>=A)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn>=A))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn>=A)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn>=A)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(jpegPhoto=value)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(jpegPhoto=value))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(jpegPhoto=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(jpegPhoto=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(userPassword=*secret*)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(userPassword=*secret*))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(userPassword=*secret*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(userPassword=*secret*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(createTimestamp=not-a-time)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(createTimestamp=not-a-time))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(createTimestamp=not-a-time)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(createTimestamp=not-a-time)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn:1.2.3:=value)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn:1.2.3:=value))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn:1.2.3:=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn:1.2.3:=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;unknownOption=value)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;unknownOption=value))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;unknownOption=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;unknownOption=value)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn=Absent)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn=Absent))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn=*)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn=*))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn~=Absent)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn~=Absent))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn~=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn~=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;lang-en=Absent)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;lang-en=Absent))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;lang-en=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;lang-en=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;lang-=Absent)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;lang-=Absent))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;lang-=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;lang-=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn:caseIgnoreMatch:=Absent)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn:caseIgnoreMatch:=Absent))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn:caseIgnoreMatch:=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn:caseIgnoreMatch:=Absent)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(createTimestamp=20260920000000Z)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(createTimestamp=20260920000000Z))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(createTimestamp=20260920000000Z)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(createTimestamp=20260920000000Z)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(attributeTypes=cn)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(attributeTypes=cn))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(attributeTypes=cn)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(attributeTypes=cn)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(objectClasses=person)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(objectClasses=person))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(objectClasses=person)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(objectClasses=person)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(matchingRules=caseIgnoreMatch)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(matchingRules=caseIgnoreMatch))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(matchingRules=caseIgnoreMatch)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(matchingRules=caseIgnoreMatch)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(dITStructureRules=1)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(dITStructureRules=1))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(dITStructureRules=1)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(dITStructureRules=1)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(certificateRevocationList=*)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(certificateRevocationList=*))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(certificateRevocationList=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(certificateRevocationList=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(certificateRevocationList;binary=*)
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(certificateRevocationList;binary=*))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(certificateRevocationList;binary=*)(ou=people))
+=== RUN   TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(certificateRevocationList;binary=*)(ou=people))
+--- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions (0.20s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(unknownFilterAttribute=value) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(unknownFilterAttribute=value)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(unknownFilterAttribute=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(unknownFilterAttribute=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(unknownFilterAttribute=*) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(unknownFilterAttribute=*)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(unknownFilterAttribute=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(unknownFilterAttribute=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn>=A) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn>=A)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn>=A)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn>=A)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(jpegPhoto=value) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(jpegPhoto=value)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(jpegPhoto=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(jpegPhoto=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(userPassword=*secret*) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(userPassword=*secret*)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(userPassword=*secret*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(userPassword=*secret*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(createTimestamp=not-a-time) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(createTimestamp=not-a-time)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(createTimestamp=not-a-time)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(createTimestamp=not-a-time)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn:1.2.3:=value) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn:1.2.3:=value)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn:1.2.3:=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn:1.2.3:=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;unknownOption=value) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;unknownOption=value)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;unknownOption=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;unknownOption=value)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn=Absent) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn=Absent)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn=*) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn=*)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn~=Absent) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn~=Absent)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn~=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn~=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;lang-en=Absent) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;lang-en=Absent)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;lang-en=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;lang-en=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn;lang-=Absent) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn;lang-=Absent)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn;lang-=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn;lang-=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(cn:caseIgnoreMatch:=Absent) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(cn:caseIgnoreMatch:=Absent)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(cn:caseIgnoreMatch:=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(cn:caseIgnoreMatch:=Absent)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(createTimestamp=20260920000000Z) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(createTimestamp=20260920000000Z)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(createTimestamp=20260920000000Z)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(createTimestamp=20260920000000Z)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(attributeTypes=cn) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(attributeTypes=cn)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(attributeTypes=cn)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(attributeTypes=cn)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(objectClasses=person) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(objectClasses=person)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(objectClasses=person)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(objectClasses=person)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(matchingRules=caseIgnoreMatch) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(matchingRules=caseIgnoreMatch)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(matchingRules=caseIgnoreMatch)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(matchingRules=caseIgnoreMatch)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(dITStructureRules=1) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(dITStructureRules=1)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(dITStructureRules=1)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(dITStructureRules=1)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(certificateRevocationList=*) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(certificateRevocationList=*)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(certificateRevocationList=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(certificateRevocationList=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(certificateRevocationList;binary=*) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(!(certificateRevocationList;binary=*)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(|(certificateRevocationList;binary=*)(ou=people)) (0.00s)
+    --- PASS: TestOpenLDAPReferenceFilterAbsentAttributeAssertions/(&(certificateRevocationList;binary=*)(ou=people)) (0.00s)
+=== RUN   TestOpenLDAPMaxFilterDepthDisconnectDifferential
+--- PASS: TestOpenLDAPMaxFilterDepthDisconnectDifferential (0.22s)
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/RFC_class
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/inherited_class
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/numeric_OID
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/plus_class_is_unknown
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/bang_class_is_unknown
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/extensible_object
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/unknown_class
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/unsupported_option
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/leading_whitespace
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/trailing_whitespace
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/mixed_explicit_and_class
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/no_attributes_plus_class
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/typesOnly
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@inetOrgPerson]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@2.16.840.1.113730.3.2.2]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@notInSchema]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@extensibleObject]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[1.1_@person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[cn_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@_person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person_]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person;x-test]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=false/[cn_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@inetOrgPerson]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@2.16.840.1.113730.3.2.2]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@notInSchema]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@extensibleObject]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[1.1_@person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[cn_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@_person]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person_]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person;x-test]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=false/[cn_description]
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Add
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Modify_missing
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Delete
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Delete_missing
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/ModifyDN_pre
+=== RUN   TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/ModifyDN_post
+--- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection (0.48s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/RFC_class (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/inherited_class (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/numeric_OID (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/plus_class_is_unknown (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/bang_class_is_unknown (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/extensible_object (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/unknown_class (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/unsupported_option (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/leading_whitespace (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/trailing_whitespace (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/mixed_explicit_and_class (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/no_attributes_plus_class (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/typesOnly (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@inetOrgPerson] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@2.16.840.1.113730.3.2.2] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@notInSchema] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@extensibleObject] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person_description] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[1.1_@person] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[cn_description] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@_person] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person_] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=true/[@person;x-test] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.1/critical=false/[cn_description] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@inetOrgPerson] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@2.16.840.1.113730.3.2.2] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@notInSchema] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@extensibleObject] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person_description] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[1.1_@person] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[cn_description] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@_person] (0.02s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person_] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=true/[@person;x-test] (0.01s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/1.3.6.1.1.13.2/critical=false/[cn_description] (0.02s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Add (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Modify_missing (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Delete (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/Delete_missing (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/ModifyDN_pre (0.00s)
+    --- PASS: TestOpenLDAPReferenceObjectClassAttributeSelection/read/write_rejection/ModifyDN_post (0.00s)
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync-then-sort
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sort-then-sync
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync-sort-vlv
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/persistent-sync-sort
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/persistent-sync-sort-vlv
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync-then-sort
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sort-then-sync
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync-sort-vlv
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/persistent-sync-sort
+=== RUN   TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/persistent-sync-sort-vlv
+--- PASS: TestOpenLDAPReferenceSyncSortAndVLV (4.58s)
+    --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv (3.34s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync (0.26s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync-then-sort (0.19s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sort-then-sync (0.22s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/sync-sort-vlv (0.19s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/persistent-sync-sort (1.21s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/syncprov-then-sssvlv/persistent-sync-sort-vlv (1.27s)
+    --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov (1.24s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync (0.23s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync-then-sort (0.18s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sort-then-sync (0.24s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/sync-sort-vlv (0.20s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/persistent-sync-sort (0.21s)
+        --- PASS: TestOpenLDAPReferenceSyncSortAndVLV/sssvlv-then-syncprov/persistent-sync-sort-vlv (0.19s)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential
+    openldap_sdk_state_machine_test.go:52: SDK differential step passed: anonymous bind (result code 0)
+    openldap_sdk_state_machine_test.go:56: SDK differential step passed: invalid root bind (result code 49)
+    openldap_sdk_state_machine_test.go:71: SDK differential step passed: anonymous initial snapshot (result code 0)
+    openldap_sdk_state_machine_test.go:79: SDK differential step passed: root bind (result code 0)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/base_search
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: base search (result code 0)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/missing_base
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: missing base (result code 32)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/one-level_compound_filter
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: one-level compound filter (result code 0)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/subtree_substring_filter
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: subtree substring filter (result code 0)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/types_only
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: types only (result code 0)
+=== RUN   TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/size_limit
+    openldap_sdk_state_machine_test.go:202: SDK differential step passed: size limit (result code 4)
+=== NAME  TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential
+    openldap_sdk_state_machine_test.go:214: SDK differential step passed: paged subtree search (result code 0)
+    openldap_sdk_state_machine_test.go:232: SDK differential step passed: add archive (result code 0)
+    openldap_sdk_state_machine_test.go:241: SDK differential step passed: add SDK user (result code 0)
+    openldap_sdk_state_machine_test.go:249: SDK differential step passed: duplicate add (result code 68)
+    openldap_sdk_state_machine_test.go:257: SDK differential step passed: snapshot after add (result code 0)
+    openldap_sdk_state_machine_test.go:262: SDK differential step passed: compare true (result code 6)
+    openldap_sdk_state_machine_test.go:267: SDK differential step passed: compare false (result code 5)
+    openldap_sdk_state_machine_test.go:272: SDK differential step passed: compare missing attribute (result code 16)
+    openldap_sdk_state_machine_test.go:278: SDK differential step passed: mixed modify (result code 0)
+    openldap_sdk_state_machine_test.go:286: SDK differential step passed: snapshot after modify (result code 0)
+    openldap_sdk_state_machine_test.go:291: SDK differential step passed: password modify (result code 0)
+    openldap_sdk_state_machine_test.go:300: SDK differential step passed: old password rejected (result code 49)
+    openldap_sdk_state_machine_test.go:305: SDK differential step passed: new password accepted (result code 0)
+    openldap_sdk_state_machine_test.go:311: SDK differential step passed: add child (result code 0)
+    openldap_sdk_state_machine_test.go:318: SDK differential step passed: delete non-leaf (result code 66)
+    openldap_sdk_state_machine_test.go:325: SDK differential step passed: move subtree (result code 0)
+    openldap_sdk_state_machine_test.go:334: SDK differential step passed: snapshot after move (result code 0)
+    openldap_sdk_state_machine_test.go:349: SDK differential step passed: delete moved child (result code 0)
+    openldap_sdk_state_machine_test.go:349: SDK differential step passed: delete moved user (result code 0)
+    openldap_sdk_state_machine_test.go:349: SDK differential step passed: delete archive (result code 0)
+    openldap_sdk_state_machine_test.go:349: SDK differential step passed: delete missing user (result code 32)
+    openldap_sdk_state_machine_test.go:354: SDK differential step passed: final snapshot (result code 0)
+--- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential (0.39s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/base_search (0.00s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/missing_base (0.00s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/one-level_compound_filter (0.00s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/subtree_substring_filter (0.00s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/types_only (0.00s)
+    --- PASS: TestOpenLDAPReferenceGoLDAPSDKStateMachineDifferential/size_limit (0.00s)
+=== RUN   TestOpenLDAPReferenceSearchParameterErrors
+--- PASS: TestOpenLDAPReferenceSearchParameterErrors (0.17s)
+=== RUN   TestOpenLDAPSyncreplConsumesLDAPGoProvider
+--- PASS: TestOpenLDAPSyncreplConsumesLDAPGoProvider (0.33s)
+=== RUN   TestOpenLDAPReferenceValueSortOverlay
+--- PASS: TestOpenLDAPReferenceValueSortOverlay (0.19s)
+=== RUN   TestOpenLDAPLDAPSearchSyncInteroperability
+=== PAUSE TestOpenLDAPLDAPSearchSyncInteroperability
+=== CONT  TestOpenLDAPLDAPSearchSyncInteroperability
+--- PASS: TestOpenLDAPLDAPSearchSyncInteroperability (0.04s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	8.287s

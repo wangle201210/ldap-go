@@ -1,0 +1,25 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 01:42:40 CST
+Duration: 1.72s, Total samples = 1330ms (77.15%)
+Showing nodes accounting for 1050ms, 78.95% of 1330ms total
+Showing top 18 nodes out of 81
+      flat  flat%   sum%        cum   cum%
+     150ms 11.28% 11.28%      380ms 28.57%  runtime.mapaccess2_faststr
+      90ms  6.77% 18.05%      300ms 22.56%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrowMetadata
+      90ms  6.77% 24.81%       90ms  6.77%  runtime.memequal
+      70ms  5.26% 30.08%       70ms  5.26%  encoding/base64.assemble64 (inline)
+      70ms  5.26% 35.34%      100ms  7.52%  github.com/wangle201210/ldap-go/internal/directory.(*dnIdentityParts).next
+      70ms  5.26% 40.60%       80ms  6.02%  github.com/wangle201210/ldap-go/internal/directory.viewDNIdentityParts
+      70ms  5.26% 45.86%       70ms  5.26%  internal/bytealg.IndexByteString
+      60ms  4.51% 50.38%      460ms 34.59%  github.com/wangle201210/ldap-go/internal/directory.validatedSimpleDNIdentityRDNsBytes
+      50ms  3.76% 54.14%       50ms  3.76%  aeshashbody
+      50ms  3.76% 57.89%      140ms 10.53%  github.com/wangle201210/ldap-go/internal/directory.simpleDNDepthBytes
+      40ms  3.01% 60.90%       80ms  6.02%  bytes.Cut
+      40ms  3.01% 63.91%       40ms  3.01%  encoding/binary.Uvarint (inline)
+      40ms  3.01% 66.92%       80ms  6.02%  internal/stringslite.Cut
+      40ms  3.01% 69.92%       40ms  3.01%  runtime.strhash
+      30ms  2.26% 72.18%      100ms  7.52%  encoding/base64.(*Encoding).Decode
+      30ms  2.26% 74.44%      200ms 15.04%  github.com/wangle201210/ldap-go/internal/schema.(*PreparedObjectClassMatcher).Match
+      30ms  2.26% 76.69%       30ms  2.26%  internal/runtime/maps.(*groupsReference).group (inline)
+      30ms  2.26% 78.95%       30ms  2.26%  runtime.pthread_cond_signal

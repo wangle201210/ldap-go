@@ -25,6 +25,8 @@ separately records the subsequent optimization against `205b61b`, with three
 processes per implementation and exact SDK/data validation.
 The [following name/normalization optimization](performance-optimization-20260923-round2.md)
 repeats that workload against `ec18938` and separately rechecks short operations.
+The [DN metadata-view iteration](performance-optimization-20260923-round3.md)
+then compares against `a279a00` and adds a full 100k-result unpaged traversal.
 
 ## Final online replay
 

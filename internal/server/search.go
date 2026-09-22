@@ -1719,6 +1719,10 @@ func (server *Server) handleUncachedSearch(
 			}
 
 			physicalCursorKey := ""
+			var borrowedScopeReady, borrowedInScope bool
+			var borrowedScopeErr error
+			borrowedDeadlineChecked := false
+			borrowedOrdinaryMatch := false
 			visitEntry := func(entry directory.Entry) error {
 				if translucentRoute != nil {
 					var mergeErr error
@@ -1811,7 +1815,7 @@ func (server *Server) handleUncachedSearch(
 						return nil
 					}
 				}
-				if expired(deadline) {
+				if !borrowedDeadlineChecked && expired(deadline) {
 					result.Code = ldapwire.ResultTimeLimitExceeded
 					return errStopSearch
 				}
@@ -1826,11 +1830,15 @@ func (server *Server) handleUncachedSearch(
 					if stableCursorPaging {
 						identityKey = physicalCursorKey
 					}
-					inScope, err = directory.IdentityKeyInScope(
-						scopeBase,
-						identityKey,
-						route.scope,
-					)
+					if borrowedScopeReady {
+						inScope, err = borrowedInScope, borrowedScopeErr
+					} else {
+						inScope, err = directory.IdentityKeyInScope(
+							scopeBase,
+							identityKey,
+							route.scope,
+						)
+					}
 					if err != nil {
 						return err
 					}
@@ -1880,12 +1888,12 @@ func (server *Server) handleUncachedSearch(
 					}
 				}
 				var subentry, alias, referral bool
-				if preparedEntryClasses != nil {
+				if !borrowedOrdinaryMatch && preparedEntryClasses != nil {
 					classFlags := preparedEntryClasses.Match(entry)
 					subentry = classFlags&searchEntryClassSubentry != 0
 					alias = classFlags&searchEntryClassAlias != 0
 					referral = classFlags&searchEntryClassReferral != 0
-				} else {
+				} else if !borrowedOrdinaryMatch {
 					subentry = state.runtime.schema.EntryHasObjectClass(entry, "subentry")
 					alias = state.runtime.schema.EntryHasObjectClass(entry, "alias")
 					referral = state.runtime.schema.EntryHasObjectClass(entry, "referral")
@@ -1941,7 +1949,9 @@ func (server *Server) handleUncachedSearch(
 					return nil
 				}
 				var matches bool
-				if routeRoot && preparedRootSubstring != nil &&
+				if borrowedOrdinaryMatch {
+					matches = true
+				} else if routeRoot && preparedRootSubstring != nil &&
 					len(database.nestGroups) == 0 {
 					matches, err = preparedRootSubstring.Match(filterEntry)
 				} else if routeRoot && preparedRootEquality != nil && len(database.nestGroups) == 0 {
@@ -2295,7 +2305,50 @@ func (server *Server) handleUncachedSearch(
 									return planErr
 								}
 								if len(plan.sources) == 0 {
-									streamed, err = storage.ForEachReadOnlyStablePhysicalEntry(tx, visitEntry)
+									if preparedRootSubstring != nil {
+										streamed, err = storage.ForEachReadOnlyStablePhysicalMetadataInScope(tx, scopeBase, route.scope,
+											func(view storage.EntryMetadataView, inScope bool, scopeErr error) error {
+												borrowedScopeReady, borrowedInScope, borrowedScopeErr = true, inScope, scopeErr
+												if !view.HasIdentity() {
+													return visitEntry(view.ReadOnlyEntry())
+												}
+												if expired(deadline) {
+													result.Code = ldapwire.ResultTimeLimitExceeded
+													return errStopSearch
+												}
+												if scopeErr != nil {
+													return scopeErr
+												}
+												if !inScope {
+													return nil
+												}
+												attributes := directory.Entry{Attributes: view.Attributes()}
+												if !smallIndexedEntryIsSpecial(state.runtime, attributes) {
+													if !subentrySearchVisibleClassified(false, request.Scope, controls.subentries) {
+														return nil
+													}
+													matched, matchErr := preparedRootSubstring.Match(attributes)
+													if matchErr == nil && !matched {
+														return nil
+													}
+													borrowedOrdinaryMatch = matchErr == nil && matched
+												}
+												// Special or matching rows keep the full visitor. Preserve
+												// its single deadline check before scope and filtering.
+												borrowedDeadlineChecked = true
+												visitErr := visitEntry(view.ReadOnlyEntry())
+												borrowedDeadlineChecked = false
+												borrowedOrdinaryMatch = false
+												return visitErr
+											})
+									}
+									if err == nil && !streamed {
+										streamed, err = storage.ForEachReadOnlyStablePhysicalEntryInScope(tx, scopeBase, route.scope,
+											func(entry directory.Entry, inScope bool, scopeErr error) error {
+												borrowedScopeReady, borrowedInScope, borrowedScopeErr = true, inScope, scopeErr
+												return visitEntry(entry)
+											})
+									}
 								}
 							}
 							if err == nil && !streamed {

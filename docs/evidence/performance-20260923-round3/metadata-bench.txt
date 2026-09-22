@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkMetadataPhysicalScan/hits=0/readonly-8         	       6	  56458938 ns/op	         0 hits/op	    100000 rows/op	16009336 B/op	  200048 allocs/op
+BenchmarkMetadataPhysicalScan/hits=0/readonly-8         	       6	  56484986 ns/op	         0 hits/op	    100000 rows/op	16009434 B/op	  200049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=0/readonly-8         	       6	  56303048 ns/op	         0 hits/op	    100000 rows/op	16009392 B/op	  200048 allocs/op
+BenchmarkMetadataPhysicalScan/hits=0/metadata-8         	       6	  51400167 ns/op	         0 hits/op	    100000 rows/op	    9336 B/op	      48 allocs/op
+BenchmarkMetadataPhysicalScan/hits=0/metadata-8         	       6	  51340236 ns/op	         0 hits/op	    100000 rows/op	    9336 B/op	      48 allocs/op
+BenchmarkMetadataPhysicalScan/hits=0/metadata-8         	       6	  52142194 ns/op	         0 hits/op	    100000 rows/op	    9336 B/op	      48 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/readonly-8    	       6	  57070340 ns/op	      1000 hits/op	    100000 rows/op	16307258 B/op	  206049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/readonly-8    	       6	  57259875 ns/op	      1000 hits/op	    100000 rows/op	16307296 B/op	  206049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/readonly-8    	       6	  57434069 ns/op	      1000 hits/op	    100000 rows/op	16307277 B/op	  206049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/metadata-8    	       6	  52838035 ns/op	      1000 hits/op	    100000 rows/op	  467256 B/op	    8049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/metadata-8    	       6	  52054424 ns/op	      1000 hits/op	    100000 rows/op	  467256 B/op	    8049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=sparse/metadata-8    	       6	  51792215 ns/op	      1000 hits/op	    100000 rows/op	  467256 B/op	    8049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/readonly-8       	       3	 103936375 ns/op	    100000 hits/op	    100000 rows/op	45612946 B/op	  800049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/readonly-8       	       3	 101626653 ns/op	    100000 hits/op	    100000 rows/op	45612957 B/op	  800049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/readonly-8       	       3	 101036486 ns/op	    100000 hits/op	    100000 rows/op	45612957 B/op	  800049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/metadata-8       	       3	 101845778 ns/op	    100000 hits/op	    100000 rows/op	45612957 B/op	  800049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/metadata-8       	       3	 102364583 ns/op	    100000 hits/op	    100000 rows/op	45612984 B/op	  800049 allocs/op
+BenchmarkMetadataPhysicalScan/hits=all/metadata-8       	       3	 102313111 ns/op	    100000 hits/op	    100000 rows/op	45612946 B/op	  800049 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	44.684s
