@@ -3007,7 +3007,11 @@ func (registry *Registry) attributeTypeSubtype(
 func splitAttributeDescription(
 	description string,
 ) (string, map[string]struct{}) {
-	parts := strings.Split(strings.TrimSpace(description), ";")
+	description = strings.TrimSpace(description)
+	if !strings.Contains(description, ";") {
+		return description, nil
+	}
+	parts := strings.Split(description, ";")
 	options := make(map[string]struct{}, len(parts)-1)
 	for _, option := range parts[1:] {
 		options[schemaKey(option)] = struct{}{}

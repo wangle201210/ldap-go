@@ -17,10 +17,11 @@ means equal. Timing and resource values themselves are lower-is-better.
 
 ## Final online replay
 
-The final query implementation includes the index-readiness guard, simple-DN
-validation, chunked snapshot construction, and exclusion of failed/truncated
-snapshots from the cache. Its executable SHA-256 is
-`c11845cbe570ae1439e00056d7ad7c8bb86f5a930b7b5daa04bcfe4767000029`.
+The final query implementation additionally avoids empty attribute-option maps,
+constructs the Bolt DN migration key in one allocation, and shares immutable
+cached paging arrays with independent cursors and unchanged memory charges.
+Its executable SHA-256 is
+`ede86fab5a54a118733f3ed2927a60f96acda611ed144b85980e363c5dc36d1a`.
 
 Each server ran three fresh processes from copies of the databases produced by
 the complete run below, after its balanced parity operations. Process order was:
@@ -31,8 +32,8 @@ current-2 openldap-2 before-2
 openldap-3 before-3 current-3
 ```
 
-Here `before` means the immediately preceding cold-path fixes, before chunked
-snapshot construction; it is not the original September 1 implementation.
+Here `before` means `5e781d9`, including the preceding cold-path fixes and
+chunked snapshot construction; it is not the original September 1 implementation.
 The primary comparison below uses only `current` and `openldap`.
 
 Work per batch:
@@ -51,14 +52,14 @@ batch in a new server process, not a cold OS page cache.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Indexed, first 10,000 queries | 1,069 ms | 725 ms | 68% |
-| Indexed, repeated 10,000 queries | 677 ms | 682 ms | 101% |
-| Negative, first ten queries | 312 ms | 354 ms | 113% |
-| Negative, repeated ten queries | 30 ms | 348 ms | 1,160% |
-| First full objectClass traversal | 1,009 ms | 760 ms | 75% |
-| Two repeated objectClass traversals | 1,214 ms | 1,411 ms | 116% |
-| Concurrent indexed, 8 x 1,000 | 243 ms | 254 ms | 105% |
-| RSS after mixed workload | 333.2 MiB | 94.3 MiB | 28% |
+| Indexed, first 10,000 queries | 848 ms | 671 ms | 79% |
+| Indexed, repeated 10,000 queries | 639 ms | 663 ms | 104% |
+| Negative, first ten queries | 240 ms | 347 ms | 145% |
+| Negative, repeated ten queries | 31 ms | 343 ms | 1,106% |
+| First full objectClass traversal | 826 ms | 705 ms | 85% |
+| Two repeated objectClass traversals | 825 ms | 1,425 ms | 173% |
+| Concurrent indexed, 8 x 1,000 | 266 ms | 286 ms | 108% |
+| RSS after mixed workload | 253.1 MiB | 144.4 MiB | 57% |
 
 All nine runs returned 100,000 unique people and the same 100,002-entry subtree:
 42,712,504 canonical ordinary-attribute bytes, POSIX checksum `648440320`.
@@ -68,12 +69,18 @@ counts were checked. Full ordinary-attribute data matched byte for byte.
 Repeated negative queries may use the same-revision result cache. RSS is a
 post-workload sample, not peak memory or an idle/retained-heap measurement.
 These query results are not a replacement measurement for import or writes.
+The [round-three report](performance-optimization-20260922-round3.md) compares
+the preceding version in the same run, including the 3.1% slower concurrency
+median and its separate recheck. Small timing differences are not evidence of
+a stable gain or regression on this shared host.
 
 Raw evidence:
-[online timings](evidence/performance-20260922-round2/final-online-timings.tsv),
-[online validation](evidence/performance-20260922-round2/final-online-validation.tsv).
+[online timings](evidence/performance-20260922-round3/online-timings.tsv),
+[online validation](evidence/performance-20260922-round3/online-validation.tsv).
 The replay driver and full artifacts are retained under
-`/var/tmp/ldap-go-perf-round2-20260922/online-builder` on the qualification host.
+`/var/tmp/ldap-go-perf-round3-20260922` on the qualification host.
+The [preceding round's timings](evidence/performance-20260922-round2/final-online-timings.tsv)
+remain historical evidence and are not mixed into this table.
 
 ## Complete fresh-data run
 

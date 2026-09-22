@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Direct-8         	16705238	        22.04 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Direct-8         	17032886	        21.52 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Direct-8         	17634740	        21.94 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Reference-8      	13577348	        26.71 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Reference-8      	13546884	        27.42 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Empty/Reference-8      	13737573	        27.51 ns/op	      32 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Direct-8      	 8746249	        41.96 ns/op	 667.35 MB/s	      80 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Direct-8      	 8255570	        41.92 ns/op	 667.86 MB/s	      80 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Direct-8      	 8519894	        40.86 ns/op	 685.27 MB/s	      80 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Reference-8   	 3619322	       102.6 ns/op	 272.86 MB/s	     240 B/op	       4 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Reference-8   	 3398455	       113.7 ns/op	 246.17 MB/s	     240 B/op	       4 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Database/Reference-8   	 3388225	       105.4 ns/op	 265.65 MB/s	     240 B/op	       4 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Direct-8          	    8818	     40439 ns/op	1620.63 MB/s	   90112 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Direct-8          	    9058	     40983 ns/op	1599.09 MB/s	   90112 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Direct-8          	    8760	     41067 ns/op	1595.83 MB/s	   90112 B/op	       1 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Reference-8       	    5392	     64049 ns/op	1023.21 MB/s	  360449 B/op	       4 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Reference-8       	    5691	     68171 ns/op	 961.34 MB/s	  360449 B/op	       4 allocs/op
+BenchmarkBoltSchemaAwareDNMigrationMetadataKey/Long/Reference-8       	    5776	     64072 ns/op	1022.86 MB/s	  360449 B/op	       4 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	6.634s

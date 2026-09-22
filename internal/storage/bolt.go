@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -794,13 +795,20 @@ func (tx *boltTx) validateSchemaAwareDNBindingsIn(
 	})
 }
 
+func boltSchemaAwareDNMigrationMetadataKey(partition string) []byte {
+	prefixLength := len(metadataPrefix) + len(schemaAwareDNMigrationMetadataPrefix)
+	key := make([]byte, prefixLength+base64.RawURLEncoding.EncodedLen(len(partition)))
+	offset := copy(key, metadataPrefix)
+	copy(key[offset:], schemaAwareDNMigrationMetadataPrefix)
+	base64.RawURLEncoding.Encode(key[prefixLength:], []byte(partition))
+	return key
+}
+
 func (tx *boltTx) schemaAwareDNIdentityReady(partition string) (bool, error) {
 	if err := tx.ctx.Err(); err != nil {
 		return false, err
 	}
-	value := tx.meta.Get(genericMetadataKey(
-		schemaAwareDNMigrationMetadataKey(partition),
-	))
+	value := tx.meta.Get(boltSchemaAwareDNMigrationMetadataKey(partition))
 	if value == nil {
 		ready := false
 		err := tx.entries.ForEach(func(key, value []byte) error {

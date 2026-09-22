@@ -58,20 +58,22 @@ as a percentage. Above 100% favors ldap-go.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Indexed, first 10,000 queries | 1,069 ms | 725 ms | 68% |
-| Indexed, repeated 10,000 queries | 677 ms | 682 ms | 101% |
-| Negative, first ten queries | 312 ms | 354 ms | 113% |
-| Negative, repeated ten queries | 30 ms | 348 ms | 1,160% |
-| First full objectClass traversal | 1,009 ms | 760 ms | 75% |
-| Two repeated objectClass traversals | 1,214 ms | 1,411 ms | 116% |
-| Concurrent indexed, 8 x 1,000 | 243 ms | 254 ms | 105% |
-| RSS after mixed workload | 333.2 MiB | 94.3 MiB | 28% |
+| Indexed, first 10,000 queries | 848 ms | 671 ms | 79% |
+| Indexed, repeated 10,000 queries | 639 ms | 663 ms | 104% |
+| Negative, first ten queries | 240 ms | 347 ms | 145% |
+| Negative, repeated ten queries | 31 ms | 343 ms | 1,106% |
+| First full objectClass traversal | 826 ms | 705 ms | 85% |
+| Two repeated objectClass traversals | 825 ms | 1,425 ms | 173% |
+| Concurrent indexed, 8 x 1,000 | 266 ms | 286 ms | 108% |
+| RSS after mixed workload | 253.1 MiB | 144.4 MiB | 57% |
 
 All 100,000 users and 42,712,504 bytes of canonical ordinary-attribute data
 matched. First-query latency and large-directory memory remain gaps.
 The [100k evidence](docs/openldap-100k-evidence.md) separately records the
 complete fresh-import/write run and this final online replay; it includes raw
 results, workload differences, remaining limits, and reproduction instructions.
+The [latest optimization report](docs/performance-optimization-20260922-round3.md)
+also compares the preceding version in the same run and records timing variability.
 
 ## Requirements
 

@@ -1,0 +1,27 @@
+File: profile-head.test
+Type: alloc_space
+Time: 2026-09-22 18:32:49 CST
+Showing nodes accounting for 727.12MB, 72.34% of 1005.18MB total
+Dropped 33 nodes (cum <= 5.03MB)
+Showing top 20 nodes out of 121
+      flat  flat%   sum%        cum   cum%
+   88.02MB  8.76%  8.76%   784.47MB 78.04%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallIndexedSearch
+   87.03MB  8.66% 17.41%    87.03MB  8.66%  go.etcd.io/bbolt.cloneBytes (inline)
+   67.50MB  6.72% 24.13%    67.50MB  6.72%  go.etcd.io/bbolt.(*Cursor).search
+   54.01MB  5.37% 29.50%    54.01MB  5.37%  github.com/wangle201210/ldap-go/internal/storage.decodeBinaryStoredEntryAttributes
+      47MB  4.68% 34.18%       61MB  6.07%  github.com/wangle201210/ldap-go/internal/schema.splitAttributeDescription
+   42.50MB  4.23% 38.41%    42.50MB  4.23%  internal/bytealg.MakeNoZero
+   40.01MB  3.98% 42.39%   924.49MB 91.97%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+   34.51MB  3.43% 45.82%   240.54MB 23.93%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).equalityIndexEntries
+   33.50MB  3.33% 49.15%   120.53MB 11.99%  go.etcd.io/bbolt.(*Bucket).openBucket
+   28.51MB  2.84% 51.99%    28.51MB  2.84%  bytes.Clone (inline)
+   26.51MB  2.64% 54.63%   846.98MB 84.26%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+      26MB  2.59% 57.21%       26MB  2.59%  github.com/wangle201210/ldap-go/internal/storage.decodeEqualityIndexEntryReference
+   24.51MB  2.44% 59.65%    24.51MB  2.44%  github.com/wangle201210/ldap-go/internal/storage.partitionedEntryKey (inline)
+   24.50MB  2.44% 62.09%    25.50MB  2.54%  github.com/wangle201210/ldap-go/internal/ldapwire.decodeShortSearchFrame
+   23.50MB  2.34% 64.43%       33MB  3.28%  github.com/wangle201210/ldap-go/internal/server.newTrackedOperation
+      19MB  1.89% 66.32%       19MB  1.89%  encoding/base64.(*Encoding).EncodeToString
+      16MB  1.59% 67.91%       23MB  2.29%  go.etcd.io/bbolt.(*DB).beginTx
+   15.50MB  1.54% 69.45%    15.50MB  1.54%  strings.genSplit
+      15MB  1.49% 70.94%       15MB  1.49%  github.com/wangle201210/ldap-go/internal/server.accessReaderFromContext (inline)
+      14MB  1.39% 72.34%       33MB  3.28%  github.com/wangle201210/ldap-go/internal/storage.schemaAwareDNMigrationMetadataKey (inline)

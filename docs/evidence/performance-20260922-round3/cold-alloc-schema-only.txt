@@ -1,0 +1,27 @@
+File: profile-schema.test
+Type: alloc_space
+Time: 2026-09-22 19:05:30 CST
+Showing nodes accounting for 679.61MB, 71.79% of 946.63MB total
+Dropped 52 nodes (cum <= 4.73MB)
+Showing top 20 nodes out of 118
+      flat  flat%   sum%        cum   cum%
+   87.53MB  9.25%  9.25%    87.53MB  9.25%  go.etcd.io/bbolt.cloneBytes (inline)
+   79.02MB  8.35% 17.59%   728.59MB 76.97%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallIndexedSearch
+      60MB  6.34% 23.93%       60MB  6.34%  go.etcd.io/bbolt.(*Cursor).search
+   54.01MB  5.71% 29.64%    54.01MB  5.71%  github.com/wangle201210/ldap-go/internal/storage.decodeBinaryStoredEntryAttributes
+   46.01MB  4.86% 34.50%   867.11MB 91.60%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+   37.50MB  3.96% 38.46%    37.50MB  3.96%  internal/bytealg.MakeNoZero
+   35.51MB  3.75% 42.21%    35.51MB  3.75%  bytes.Clone (inline)
+   35.51MB  3.75% 45.96%    36.01MB  3.80%  github.com/wangle201210/ldap-go/internal/ldapwire.decodeShortSearchFrame
+      34MB  3.59% 49.55%   121.53MB 12.84%  go.etcd.io/bbolt.(*Bucket).openBucket
+   32.01MB  3.38% 52.94%   224.04MB 23.67%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).equalityIndexEntries
+   22.51MB  2.38% 55.31%    22.51MB  2.38%  github.com/wangle201210/ldap-go/internal/storage.partitionedEntryKey (inline)
+   21.50MB  2.27% 57.58%    21.50MB  2.27%  github.com/wangle201210/ldap-go/internal/storage.decodeEqualityIndexEntryReference
+   21.01MB  2.22% 59.80%   783.10MB 82.73%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+      21MB  2.22% 62.02%       21MB  2.22%  github.com/wangle201210/ldap-go/internal/server.(*collectiveAttributePlanCache).plan
+   20.50MB  2.17% 64.19%    27.50MB  2.91%  go.etcd.io/bbolt.(*DB).beginTx
+      16MB  1.69% 65.88%       16MB  1.69%  encoding/base64.(*Encoding).EncodeToString
+   15.48MB  1.64% 67.51%    25.48MB  2.69%  github.com/wangle201210/ldap-go/internal/server.(*searchResultCache).put
+      15MB  1.58% 69.10%       15MB  1.58%  github.com/wangle201210/ldap-go/internal/server.databaseSearchRoutesFromPrimary
+      13MB  1.37% 70.47%       20MB  2.11%  github.com/wangle201210/ldap-go/internal/server.newTrackedOperation
+   12.50MB  1.32% 71.79%    28.50MB  3.01%  github.com/wangle201210/ldap-go/internal/storage.schemaAwareDNMigrationMetadataKey (inline)

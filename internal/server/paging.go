@@ -96,8 +96,9 @@ type pagedSnapshotCacheKey struct {
 }
 
 type pagedSnapshotCacheEntry struct {
-	items []pagedSortedItem
-	bytes int64
+	items               []pagedSortedItem
+	bytes               int64
+	sortedRetainedBytes int64
 }
 
 func newPagedSnapshotCache(maximum int64) *pagedSnapshotCache {
@@ -107,10 +108,12 @@ func newPagedSnapshotCache(maximum int64) *pagedSnapshotCache {
 	}
 }
 
-func (cache *pagedSnapshotCache) get(
+// getShared returns an independent cursor over the cache's immutable items.
+// Callers must not modify the items or their selected entries.
+func (cache *pagedSnapshotCache) getShared(
 	fingerprint [sha256.Size]byte,
 	revision uint64,
-) []pagedSortedItem {
+) *pagedSortedSearch {
 	if cache == nil {
 		return nil
 	}
@@ -123,7 +126,12 @@ func (cache *pagedSnapshotCache) get(
 	if !ok {
 		return nil
 	}
-	return append([]pagedSortedItem(nil), entry.items...)
+	return &pagedSortedSearch{
+		items:         entry.items,
+		live:          true,
+		shared:        true,
+		retainedBytes: entry.sortedRetainedBytes,
+	}
 }
 
 func (cache *pagedSnapshotCache) put(
@@ -151,9 +159,15 @@ func (cache *pagedSnapshotCache) put(
 		clear(cache.entries)
 		cache.bytes = 0
 	}
+	cachedItems := append([]pagedSortedItem(nil), items...)
+	// Keep cache admission based on the input capacity, but charge search
+	// cursors for the actual copied capacity, as get followed by clone did.
+	sortedRetainedBytes := pagedSortedSearchRetainedBytes(nil) + retained +
+		int64(cap(cachedItems)-cap(items))*int64(unsafe.Sizeof(pagedSortedItem{}))
 	cache.entries[key] = pagedSnapshotCacheEntry{
-		items: append([]pagedSortedItem(nil), items...),
-		bytes: retained,
+		items:               cachedItems,
+		bytes:               retained,
+		sortedRetainedBytes: sortedRetainedBytes,
 	}
 	cache.bytes += retained
 }
@@ -225,9 +239,8 @@ func (server *Server) preparePagedSearch(
 			noEstimate:  limits.pageNoEstimate,
 		}
 		if revision, ok := server.currentStorageSnapshotRevision(ctx); ok {
-			if items := state.runtime.pagedSnapshots.get(fingerprint, revision); len(items) != 0 {
-				context.sorted = &pagedSortedSearch{items: items, live: true}
-				context.sorted.retainedBytes = pagedSortedSearchRetainedBytes(context.sorted)
+			if sorted := state.runtime.pagedSnapshots.getShared(fingerprint, revision); sorted != nil {
+				context.sorted = sorted
 				context.storageRevision = revision
 				context.hasStorageRevision = true
 			}

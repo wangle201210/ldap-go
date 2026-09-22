@@ -1,0 +1,8 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/264 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 264/264 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 95953 (31974/sec), new interesting: 2 (total: 266)
+fuzz: elapsed: 6s, execs: 209222 (37756/sec), new interesting: 2 (total: 266)
+fuzz: elapsed: 9s, execs: 285157 (25312/sec), new interesting: 2 (total: 266)
+fuzz: elapsed: 10s, execs: 303559 (15471/sec), new interesting: 2 (total: 266)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	10.208s

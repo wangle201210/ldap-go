@@ -1,0 +1,46 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkSplitAttributeDescription/uid/reference-8         	22129962	        52.50 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/uid/reference-8         	23429892	        50.20 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/uid/reference-8         	23669202	        50.51 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/uid/reference-8         	23811963	        51.54 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/uid/reference-8         	22254900	        51.66 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/uid/current-8           	198577248	         6.388 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/uid/current-8           	195659617	         6.299 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/uid/current-8           	196302104	         6.119 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/uid/current-8           	195575391	         6.197 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/uid/current-8           	166558836	         6.969 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/reference-8        	20662179	        54.18 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/reference-8        	18735301	        79.68 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/reference-8        	24384213	        57.10 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/reference-8        	22415940	        53.01 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/reference-8        	23768984	        54.72 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/current-8          	165817122	         7.786 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/current-8          	173475028	         6.793 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/current-8          	179416213	         6.687 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/current-8          	178042093	         6.743 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/_CN_/current-8          	135059911	         8.312 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/reference-8  	 9109066	       139.1 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/reference-8  	 9074295	       139.3 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/reference-8  	 8928122	       135.8 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/reference-8  	 8682397	       140.0 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/reference-8  	 9364491	       134.4 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/current-8    	 8661906	       161.0 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/current-8    	 5597145	       197.9 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/current-8    	 8814884	       156.8 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/current-8    	 8155437	       140.4 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/cn;lang-en/current-8    	 9237356	       146.0 ns/op	     288 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/reference-8         	 7111003	       182.1 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/reference-8         	 7088574	       182.2 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/reference-8         	 6839792	       171.1 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/reference-8         	 7372435	       177.8 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/reference-8         	 6758402	       170.2 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/current-8           	 7124294	       166.8 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/current-8           	 7217634	       174.6 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/current-8           	 6966622	       171.0 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/current-8           	 7174782	       169.1 ns/op	     304 B/op	       3 allocs/op
+BenchmarkSplitAttributeDescription/userCertificate;binary;lang-en/current-8           	 7076792	       168.6 ns/op	     304 B/op	       3 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	49.372s
