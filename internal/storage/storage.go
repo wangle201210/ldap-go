@@ -526,48 +526,59 @@ func validateStoredEntryIdentity(
 	storedSource string,
 	storedBinding []byte,
 ) error {
+	_, err := validateStoredEntryIdentityDN(physicalKey, entry, storedIdentity, storedSource, storedBinding)
+	return err
+}
+
+func validateStoredEntryIdentityDN(
+	physicalKey string,
+	entry directory.Entry,
+	storedIdentity string,
+	storedSource string,
+	storedBinding []byte,
+) (directory.DN, error) {
 	dn, err := directory.ParseDN(entry.DN)
 	if err != nil {
-		return fmt.Errorf("invalid entry DN %q: %w", entry.DN, err)
+		return directory.DN{}, fmt.Errorf("invalid entry DN %q: %w", entry.DN, err)
 	}
 	if isSchemaAwareDNKey(physicalKey) {
 		if len(storedBinding) > 0 {
 			if storedIdentity != "" || storedSource != "" {
-				return errors.New("entry carries both explicit and digest DN bindings")
+				return directory.DN{}, errors.New("entry carries both explicit and digest DN bindings")
 			}
 			if len(storedBinding) != sha256.Size {
-				return fmt.Errorf("DN binding has invalid length %d", len(storedBinding))
+				return directory.DN{}, fmt.Errorf("DN binding has invalid length %d", len(storedBinding))
 			}
 			expected := entryDNBinding(physicalKey, entry.DN)
 			if !bytes.Equal(storedBinding, expected[:]) {
-				return fmt.Errorf("schema-aware physical key %q has an invalid DN binding", physicalKey)
+				return directory.DN{}, fmt.Errorf("schema-aware physical key %q has an invalid DN binding", physicalKey)
 			}
 		} else {
 			if storedIdentity == "" {
-				return fmt.Errorf(
+				return directory.DN{}, fmt.Errorf(
 					"schema-aware physical key %q has no DN identity binding",
 					physicalKey,
 				)
 			}
 			if storedIdentity != physicalKey {
-				return fmt.Errorf(
+				return directory.DN{}, fmt.Errorf(
 					"schema-aware physical key %q does not match stored DN identity %q",
 					physicalKey,
 					storedIdentity,
 				)
 			}
 			if storedSource == "" {
-				return fmt.Errorf(
+				return directory.DN{}, fmt.Errorf(
 					"schema-aware physical key %q has no source DN binding",
 					physicalKey,
 				)
 			}
 			sourceDN, err := directory.ParseDN(storedSource)
 			if err != nil {
-				return fmt.Errorf("invalid stored source DN %q: %w", storedSource, err)
+				return directory.DN{}, fmt.Errorf("invalid stored source DN %q: %w", storedSource, err)
 			}
 			if !sourceDN.EqualExact(dn) {
-				return fmt.Errorf(
+				return directory.DN{}, fmt.Errorf(
 					"stored source DN %q does not match entry DN %q",
 					storedSource,
 					entry.DN,
@@ -575,25 +586,25 @@ func validateStoredEntryIdentity(
 			}
 		}
 		if err := dn.ValidateIdentityKey(physicalKey); err != nil {
-			return fmt.Errorf("invalid schema-aware physical key %q: %w", physicalKey, err)
+			return directory.DN{}, fmt.Errorf("invalid schema-aware physical key %q: %w", physicalKey, err)
 		}
-		return nil
+		return dn, nil
 	}
 	if storedIdentity != "" || storedSource != "" || len(storedBinding) != 0 {
-		return fmt.Errorf(
+		return directory.DN{}, fmt.Errorf(
 			"legacy physical key %q unexpectedly carries DN identity binding",
 			physicalKey,
 		)
 	}
 	if err := dn.ValidateIdentityKey(physicalKey); err != nil {
-		return fmt.Errorf(
+		return directory.DN{}, fmt.Errorf(
 			"physical key %q does not match normalized DN %q: %w",
 			physicalKey,
 			entry.DN,
 			err,
 		)
 	}
-	return nil
+	return dn, nil
 }
 
 func InferNamingContexts(reader Reader) ([]string, error) {

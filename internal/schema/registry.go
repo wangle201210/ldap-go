@@ -1807,15 +1807,21 @@ func (registry *Registry) MatchSubstring(
 }
 
 // PreparedSubstringMatcher resolves an attribute and normalizes the fixed
-// assertion parts once for repeated matching within one immutable runtime.
+// assertion parts once for repeated top-level matching within one immutable
+// runtime. Match collapses undefined to false and must not be used for children
+// of NOT or other filters that require the three-valued result.
 type PreparedSubstringMatcher struct {
 	attributes     map[string]struct{}
 	normalize      func([]byte) []byte
 	substring      directory.Substring
 	rawSubstring   directory.Substring
 	caseIgnoreList bool
+	ordered        bool
 }
 
+// PrepareSubstringMatcher supports option-free attribute descriptions. An error
+// means the caller must use the general filter path, not that it cannot match.
+// The registry must remain immutable for the matcher's lifetime.
 func (registry *Registry) PrepareSubstringMatcher(
 	attributeName string,
 	substring directory.Substring,
@@ -1842,6 +1848,7 @@ func (registry *Registry) PrepareSubstringMatcher(
 	}
 	matcher := &PreparedSubstringMatcher{
 		attributes: attributes,
+		ordered:    attributeHasOrderedValues(*attribute),
 		rawSubstring: directory.Substring{
 			Initial: bytes.Clone(substring.Initial),
 			Any:     clonePreparedValues(substring.Any),
@@ -1872,6 +1879,9 @@ func (registry *Registry) PrepareSubstringMatcher(
 	return matcher, nil
 }
 
+// Match returns the same boolean and error as a top-level FilterSubstrings'
+// MatchWith(entry, registry). It neither modifies nor retains entry values;
+// the fixed assertion is owned by the matcher.
 func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, error) {
 	if matcher == nil {
 		return false, errors.New("prepared substring matcher is nil")
@@ -1882,6 +1892,13 @@ func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, err
 			continue
 		}
 		for _, value := range attribute.Values {
+			if matcher.ordered {
+				_, content, _, err := ParseOrderedValue(value)
+				if err != nil {
+					continue
+				}
+				value = content
+			}
 			var matches bool
 			var err error
 			if matcher.caseIgnoreList {
@@ -1892,11 +1909,16 @@ func (matcher *PreparedSubstringMatcher) Match(entry directory.Entry) (bool, err
 					matcher.substring,
 				)
 			}
-			if err != nil || matches {
-				return matches, err
+			if err != nil {
+				continue
+			}
+			if matches {
+				return true, nil
 			}
 		}
 	}
+	// Value errors and absent-value assertion errors produce undefined, which
+	// has the same root boolean as false. Later values may still match.
 	return false, nil
 }
 

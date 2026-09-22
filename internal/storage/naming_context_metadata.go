@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 
 	"github.com/wangle201210/ldap-go/internal/directory"
@@ -14,43 +15,50 @@ func InferNamingContextsMetadataWithNormalizer(
 	reader Reader,
 	normalizer directory.DNAttributeNormalizer,
 ) ([]string, error) {
-	var scan func(func(string, directory.Entry) error) error
+	var scan func(func(string, directory.Entry, directory.DN) error) error
 	switch backend := reader.(type) {
 	case *boltTx:
 		scan = backend.forEachNamingContextMetadata
 	case *memoryTx:
 		scan = backend.forEachNamingContextMetadata
 	}
-	if scan != nil {
-		reader = namingContextMetadataReader{Reader: reader, scan: scan}
+	if scan == nil {
+		return InferNamingContextsWithNormalizer(reader, normalizer)
 	}
-	return InferNamingContextsWithNormalizer(reader, normalizer)
-}
-
-type namingContextMetadataReader struct {
-	Reader
-	scan func(func(string, directory.Entry) error) error
-}
-
-func (reader namingContextMetadataReader) ForEachPartition(
-	visit func(string, directory.Entry) error,
-) error {
-	return reader.scan(visit)
+	configurationSuffix, err := directory.ParseDN("cn=config")
+	if err != nil {
+		return nil, err
+	}
+	return inferNamingContexts(func(visit func(directory.Entry, directory.DN) error) error {
+		return scan(func(partition string, entry directory.Entry, legacy directory.DN) error {
+			dn := legacy
+			if partition != OpenLDAPConfigPartition &&
+				!configurationSuffix.Equal(legacy) &&
+				!configurationSuffix.AncestorOf(legacy) {
+				var err error
+				dn, err = legacy.NormalizeWith(normalizer)
+				if err != nil {
+					return err
+				}
+			}
+			return visit(entry, dn)
+		})
+	})
 }
 
 func (tx *boltTx) forEachNamingContextMetadata(
-	visit func(string, directory.Entry) error,
+	visit func(string, directory.Entry, directory.DN) error,
 ) error {
 	return tx.entries.ForEach(func(key, value []byte) error {
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
 		partition, identity := splitPartitionedEntryKey(string(key))
-		entry, err := decodeNamingContextMetadata(identity, value)
+		entry, legacy, err := decodeNamingContextMetadataDN(identity, value)
 		if err != nil {
 			return err
 		}
-		return visit(partition, entry)
+		return visit(partition, entry, legacy)
 	})
 }
 
@@ -58,6 +66,14 @@ func decodeNamingContextMetadata(
 	identity string,
 	value []byte,
 ) (directory.Entry, error) {
+	entry, _, err := decodeNamingContextMetadataDN(identity, value)
+	return entry, err
+}
+
+func decodeNamingContextMetadataDN(
+	identity string,
+	value []byte,
+) (directory.Entry, directory.DN, error) {
 	if validBinaryCandidateEntry(value) {
 		// The structural validator consumed every field, including attributes
 		// and V3 flags, so these header reads cannot fail. No borrowed bytes escape.
@@ -74,22 +90,24 @@ func decodeNamingContextMetadata(
 			storedIdentity, storedSource = string(binding), string(source)
 			binding = nil
 		}
-		if err := validateStoredEntryIdentity(identity, entry, storedIdentity, storedSource, binding); err != nil {
-			return directory.Entry{}, err
+		legacy, err := validateStoredEntryIdentityDN(identity, entry, storedIdentity, storedSource, binding)
+		if err != nil {
+			return directory.Entry{}, directory.DN{}, err
 		}
-		return entry, nil
+		return entry, legacy, nil
 	}
 	// Keep JSON, unknown formats and every decode error on the
 	// authoritative path, including its error wrapping and validation order.
 	entry, err := decodeAndValidateEntry(identity, value)
 	if err != nil {
-		return directory.Entry{}, err
+		return directory.Entry{}, directory.DN{}, err
 	}
-	return directory.Entry{DN: entry.DN}, nil
+	legacy, err := directory.ParseDN(entry.DN)
+	return directory.Entry{DN: entry.DN}, legacy, err
 }
 
 func (tx *memoryTx) forEachNamingContextMetadata(
-	visit func(string, directory.Entry) error,
+	visit func(string, directory.Entry, directory.DN) error,
 ) error {
 	keys := make([]string, 0, len(tx.entries))
 	for key := range tx.entries {
@@ -100,12 +118,13 @@ func (tx *memoryTx) forEachNamingContextMetadata(
 		if err := tx.ctx.Err(); err != nil {
 			return err
 		}
-		partition, _ := splitPartitionedEntryKey(key)
+		partition, identity := splitPartitionedEntryKey(key)
 		entry := tx.entries[key]
-		if err := tx.validateEntry(key, entry); err != nil {
-			return err
+		legacy, err := validateStoredEntryIdentityDN(identity, entry, tx.dnIdentities[key], tx.dnSources[key], nil)
+		if err != nil {
+			return fmt.Errorf("entry key %q: %w", key, err)
 		}
-		if err := visit(partition, directory.Entry{DN: entry.DN}); err != nil {
+		if err := visit(partition, directory.Entry{DN: entry.DN}, legacy); err != nil {
 			return err
 		}
 	}

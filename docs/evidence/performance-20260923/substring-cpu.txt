@@ -1,0 +1,32 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 00:06:49 CST
+Duration: 4.16s, Total samples = 3610ms (86.77%)
+Showing nodes accounting for 2530ms, 70.08% of 3610ms total
+Dropped 46 nodes (cum <= 18.05ms)
+Showing top 24 nodes out of 162
+      flat  flat%   sum%        cum   cum%
+     350ms  9.70%  9.70%      580ms 16.07%  strings.ToLower
+     240ms  6.65% 16.34%     2010ms 55.68%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5.1
+     220ms  6.09% 22.44%      220ms  6.09%  strings.(*asciiSet).contains (inline)
+     180ms  4.99% 27.42%      180ms  4.99%  go.etcd.io/bbolt/internal/common.(*Page).FastCheck
+     170ms  4.71% 32.13%      200ms  5.54%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr
+     150ms  4.16% 36.29%      250ms  6.93%  encoding/base64.(*Encoding).Decode
+     120ms  3.32% 39.61%      320ms  8.86%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrow
+     100ms  2.77% 42.38%      100ms  2.77%  runtime.madvise
+     100ms  2.77% 45.15%      320ms  8.86%  strings.IndexAny
+      90ms  2.49% 47.65%       90ms  2.49%  runtime.kevent
+      80ms  2.22% 49.86%      200ms  5.54%  runtime.mallocgcSmallNoscan
+      80ms  2.22% 52.08%       80ms  2.22%  runtime.memequal
+      70ms  1.94% 54.02%       70ms  1.94%  encoding/base64.assemble64 (inline)
+      60ms  1.66% 55.68%       60ms  1.66%  encoding/binary.Uvarint (inline)
+      60ms  1.66% 57.34%      560ms 15.51%  github.com/wangle201210/ldap-go/internal/directory.ValidateDNWithIdentityKey
+      60ms  1.66% 59.00%      280ms  7.76%  runtime.mapaccess2_faststr
+      60ms  1.66% 60.66%       60ms  1.66%  strings.(*Builder).copyCheck (inline)
+      50ms  1.39% 62.05%      340ms  9.42%  github.com/wangle201210/ldap-go/internal/directory.IdentityKeyInScope
+      50ms  1.39% 63.43%      600ms 16.62%  github.com/wangle201210/ldap-go/internal/schema.(*PreparedSubstringMatcher).Match
+      50ms  1.39% 64.82%       50ms  1.39%  github.com/wangle201210/ldap-go/internal/server.(*nestGroupProjectionCache).apply
+      50ms  1.39% 66.20%      120ms  3.32%  github.com/wangle201210/ldap-go/internal/server.databaseUsesLocalContentStorage
+      50ms  1.39% 67.59%      170ms  4.71%  github.com/wangle201210/ldap-go/internal/server.databaseUsesRuntimeDNIdentity
+      50ms  1.39% 68.98%       80ms  2.22%  internal/stringslite.Cut
+      40ms  1.11% 70.08%       50ms  1.39%  github.com/wangle201210/ldap-go/internal/directory.(*dnIdentityParts).next

@@ -1,0 +1,29 @@
+File: profile.test
+Type: alloc_space
+Time: 2026-09-23 00:06:49 CST
+Showing nodes accounting for 827.59MB, 99.51% of 831.70MB total
+Dropped 22 nodes (cum <= 4.16MB)
+Showing top 22 nodes out of 28
+      flat  flat%   sum%        cum   cum%
+  379.58MB 45.64% 45.64%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/storage.ForEachReadOnlyStablePhysicalEntry
+  218.50MB 26.27% 71.91%   218.50MB 26.27%  internal/bytealg.MakeNoZero
+  117.01MB 14.07% 85.98%   117.51MB 14.13%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrow
+      55MB  6.61% 92.59%       81MB  9.74%  github.com/wangle201210/ldap-go/internal/schema.normalizeSpace
+   31.50MB  3.79% 96.38%    31.50MB  3.79%  bytes.ToLower
+      26MB  3.13% 99.51%       26MB  3.13%  strings.Fields
+         0     0% 99.51%   149.50MB 17.98%  github.com/wangle201210/ldap-go/internal/schema.(*PreparedObjectClassMatcher).Match
+         0     0% 99.51%   181.50MB 21.82%  github.com/wangle201210/ldap-go/internal/schema.(*PreparedSubstringMatcher).Match
+         0     0% 99.51%   112.50MB 13.53%  github.com/wangle201210/ldap-go/internal/schema.normalizeCaseIgnore
+         0     0% 99.51%   218.50MB 26.27%  github.com/wangle201210/ldap-go/internal/schema.schemaKey
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleSearch
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5
+         0     0% 99.51%   331.01MB 39.80%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5.1
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection.func4
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View.func1
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View.func1
+         0     0% 99.51%   828.09MB 99.57%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View

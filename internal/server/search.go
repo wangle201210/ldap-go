@@ -2275,7 +2275,29 @@ func (server *Server) handleUncachedSearch(
 								},
 							)
 						} else if !sorting.active() && syncSearch == nil {
-							streamed, err = storage.ForEachStablePhysicalEntry(tx, visitEntry)
+							if paging == nil && routeRoot && request.Filter.Kind == directory.FilterSubstrings && preparedRootSubstring == nil {
+								preparedRootSubstring, _ = state.runtime.schema.PrepareSubstringMatcher(request.Filter.Attribute, request.Filter.Substring)
+							}
+							// Selected output is copied inside the visitor. Borrow only
+							// when neither filtering nor projection can retain raw rows.
+							if paging == nil && routeRoot && !projectSubschemaReference &&
+								!collectResponses.enabled && !nestGroupPlans.enabled &&
+								request.Filter.Kind == directory.FilterSubstrings &&
+								readOnlyScanAttributesSafe(state.runtime.schema, request.Attributes) &&
+								databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) &&
+								databaseSearchResultCacheSafe(state.runtime, *database) &&
+								smallIndexedRuntimeProjectionSafe(state.runtime) {
+								plan, planErr := collectivePlans.plan(database.partition, tx)
+								if planErr != nil {
+									return planErr
+								}
+								if len(plan.sources) == 0 {
+									streamed, err = storage.ForEachReadOnlyStablePhysicalEntry(tx, visitEntry)
+								}
+							}
+							if err == nil && !streamed {
+								streamed, err = storage.ForEachStablePhysicalEntry(tx, visitEntry)
+							}
 						}
 						if err == nil && !streamed {
 							err = tx.ForEach(visitEntry)
@@ -2666,6 +2688,21 @@ func databaseSupportsPhysicalKeyPaging(
 		filter.Attribute,
 	)
 	return err == nil && !initial && !any && !final
+}
+
+func readOnlyScanAttributesSafe(registry *schema.Registry, attributes []string) bool {
+	if registry == nil {
+		return false
+	}
+	for _, attribute := range attributes {
+		if attribute == "*" {
+			continue
+		}
+		if attribute == "+" || registry.IsOperational(attribute) {
+			return false
+		}
+	}
+	return true
 }
 
 func pagedSnapshotAttributesCacheable(

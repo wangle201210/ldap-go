@@ -20,6 +20,9 @@ The repeated-query table below is the round-three replay. A separate
 startup, Bind, Compare, base/substring queries, Add, Modify, ModifyDN and Delete.
 It exposes substantial remaining write and substring-scan gaps. Its single
 sequential sample is not mixed into the repeated-query medians below.
+The [September 23 substring replay](performance-optimization-20260923.md)
+separately records the subsequent optimization against `205b61b`, with three
+processes per implementation and exact SDK/data validation.
 
 ## Final online replay
 

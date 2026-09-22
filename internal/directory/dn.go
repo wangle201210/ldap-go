@@ -141,6 +141,23 @@ func ParseDNWithNormalizer(value string, normalizer DNAttributeNormalizer) (DN, 
 	if err != nil {
 		return DN{}, err
 	}
+	return dn.NormalizeWith(normalizer)
+}
+
+// NormalizeWith recomputes identity and display fields from the original parsed
+// attributes without modifying this DN or any DN sharing its parsed RDNs.
+// The zero value is treated as an empty DN.
+func (dn DN) NormalizeWith(normalizer DNAttributeNormalizer) (DN, error) {
+	if normalizer == nil {
+		return DN{}, errors.New("DN attribute normalizer is required")
+	}
+	if dn.parsed == nil {
+		var err error
+		dn, err = ParseDN("")
+		if err != nil {
+			return DN{}, err
+		}
+	}
 
 	identityRDNs := make([][]byte, len(dn.parsed.RDNs))
 	displayRDNs := make([]string, len(dn.parsed.RDNs))
