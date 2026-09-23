@@ -190,6 +190,17 @@ type Target struct {
 	DNNormalizer directory.DNAttributeNormalizer
 }
 
+// DNIdentityParser optionally lets a Target's DNNormalizer parse a complete DN.
+// Implementations must preserve the identity, display forms and errors of
+// directory.ParseDNWithNormalizer using that same normalizer, including any
+// directory.DNAttributeCanonicalNamer behavior. Implementations must own any
+// retained data and return immutable DNs that remain valid after later calls or
+// cache invalidation. Cached results must reflect the current normalization
+// semantics. Implementing DNAttributeNormalizer alone does not opt in.
+type DNIdentityParser interface {
+	ParseDNIdentity(string) (directory.DN, error)
+}
+
 type TargetSchema interface {
 	directory.ValueMatcher
 	directory.AttributeResolver

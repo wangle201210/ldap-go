@@ -53,31 +53,35 @@ Detailed implementation claims and boundaries are recorded in the
 
 Latest SDK comparison: September 23, 2026, 100,000 users, Apple M1 Pro,
 Go built without cgo, OpenLDAP 2.6.13. Values are batch-time medians; operation
-counts are shown. Bind and short queries use nine interleaved batches on one
-warmed process per implementation. Scans and writes use three fresh processes.
+counts are shown. Bind, Compare and non-root reads use three batches with
+endpoint rotation after every request, on one warmed process per implementation.
+Other rows use three fresh processes.
 Writes follow setup and cache warmup.
 Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
 
 | Metric | Operations | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 3,000 | 380.35 ms | 195.69 ms | 51.5% |
-| Root Bind | 3,000 | 269.17 ms | 194.37 ms | 72.2% |
-| Base search | 3,000 | 308.35 ms | 245.55 ms | 79.6% |
-| Indexed equality | 3,000 | 321.94 ms | 268.46 ms | 83.4% |
-| Compare, matching | 3,000 | 325.59 ms | 209.41 ms | 64.3% |
-| Prefix substring | 20 | 906.59 ms | 618.63 ms | 68.2% |
-| Negative substring | 20 | 900.94 ms | 621.25 ms | 69.0% |
-| Add | 20 | 15.46 ms | 110.41 ms | 714.0% |
-| Modify, unindexed description | 20 | 8.23 ms | 116.95 ms | 1,420.8% |
-| ModifyDN | 20 | 28.39 ms | 111.31 ms | 392.0% |
-| Delete | 20 | 18.60 ms | 117.94 ms | 634.2% |
+| User Bind, SSHA | 3,000 | 356.48 ms | 235.93 ms | 66.2% |
+| Root Bind | 3,000 | 258.88 ms | 203.96 ms | 78.8% |
+| Base search, administrator | 1,000 | 99.08 ms | 80.76 ms | 81.5% |
+| Indexed equality, administrator | 1,000 | 109.66 ms | 85.20 ms | 77.7% |
+| Base search, non-root | 3,000 | 701.26 ms | 316.92 ms | 45.2% |
+| Indexed equality, non-root | 3,000 | 696.55 ms | 322.22 ms | 46.3% |
+| Compare, matching, administrator | 3,000 | 310.39 ms | 213.31 ms | 68.7% |
+| Prefix substring | 20 | 910.67 ms | 612.17 ms | 67.2% |
+| Negative substring | 20 | 911.04 ms | 610.64 ms | 67.0% |
+| Add | 20 | 18.47 ms | 99.57 ms | 539.1% |
+| Modify, unindexed description | 20 | 8.73 ms | 92.89 ms | 1,064.7% |
+| ModifyDN | 20 | 25.98 ms | 104.78 ms | 403.3% |
+| Delete | 20 | 18.36 ms | 96.58 ms | 525.9% |
 
-Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round12.md)
-records about 18% lower substring latency against `9581b3d`. Short operations
-remain mixed, including slower results; the initial replay, batch recheck and
-per-request recheck are all retained. Read/auth RSS in the initial replay was
-414.2 / 95.6 MiB. Small serial write results do not generalize to every production
-workload. Startup, cold initialization, Bind, substrings and memory remain gaps.
+Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round13.md)
+records about 14% lower ordinary authentication latency and 27% lower non-root
+single-entry query latency against `03991cc`. It retains mixed administrator
+timings and the concurrent-query recheck. Read/auth RSS was 431.4 / 115.5 MiB;
+lower sampled cumulative allocation did not yield a measured RSS reduction.
+Small serial writes do not describe every production workload. Authentication,
+non-root reads, substring scans and memory still trail OpenLDAP materially.
 The [write-index report](docs/performance-optimization-20260923-round8.md)
 documents initialization costs; [historical paging results](docs/openldap-100k-evidence.md)
 use a different workload.

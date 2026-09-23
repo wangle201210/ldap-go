@@ -1,0 +1,184 @@
+package main
+
+import (
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	ldap "github.com/go-ldap/ldap/v3"
+)
+
+type endpoint struct {
+	name string
+	conn *ldap.Conn
+}
+
+type sample struct {
+	Fixture    string  `json:"fixture"`
+	Metric     string  `json:"metric"`
+	Side       string  `json:"side"`
+	Repeat     int     `json:"repeat"`
+	Operations int     `json:"operations"`
+	TotalMS    float64 `json:"total_ms"`
+}
+
+func run() error {
+	count := flag.Int("n", 3000, "operations per endpoint per batch")
+	flag.Parse()
+	root := "cn=admin,dc=scale,dc=qualification"
+	rootPassword := os.Getenv("LDAP_BENCH_PASSWORD")
+	var endpoints []endpoint
+	for i, name := range []string{"before", "current", "openldap"} {
+		conn, err := ldap.DialURL(fmt.Sprintf("ldap://127.0.0.1:%d", 29481+i))
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		conn.SetTimeout(10 * time.Second)
+		if err := conn.Bind(root, rootPassword); err != nil {
+			return err
+		}
+		endpoints = append(endpoints, endpoint{name, conn})
+	}
+	var rows []sample
+	searchDN := "uid=scale-001001,ou=people,dc=scale,dc=qualification"
+	for _, fixture := range []string{"short", "long-dn", "long-password"} {
+		var token [12]byte
+		if _, err := rand.Read(token[:]); err != nil {
+			return err
+		}
+		uid := "bindprobe-" + hex.EncodeToString(token[:])
+		if fixture == "long-dn" {
+			uid += strings.Repeat("x", 128)
+		}
+		dn := "uid=" + uid + ",ou=people,dc=scale,dc=qualification"
+		password := "disposable-bind-probe-secret"
+		if fixture == "long-password" {
+			password += strings.Repeat("p", 256-len(password))
+		}
+		h := sha1.New()
+		h.Write([]byte(password))
+		h.Write(token[:])
+		hash := "{SSHA}" + base64.StdEncoding.EncodeToString(append(h.Sum(nil), token[:]...))
+		for _, e := range endpoints {
+			add := ldap.NewAddRequest(dn, nil)
+			add.Attribute("objectClass", []string{"top", "person", "organizationalPerson", "inetOrgPerson"})
+			add.Attribute("uid", []string{uid})
+			add.Attribute("cn", []string{"Paired Probe"})
+			add.Attribute("sn", []string{"Probe"})
+			add.Attribute("userPassword", []string{hash})
+			if err := e.conn.Add(add); err != nil {
+				return fmt.Errorf("%s setup: %w", e.name, err)
+			}
+		}
+		for _, metric := range []string{"userBind", "userBindWrong", "rootBind", "compareTrue", "compareFalse", "nonrootBase", "nonrootEquality"} {
+			userSearch := metric == "nonrootBase" || metric == "nonrootEquality"
+			operation := func(e endpoint) error {
+				switch metric {
+				case "userBind":
+					return e.conn.Bind(dn, password)
+				case "userBindWrong":
+					err := e.conn.Bind(dn, "wrong-password")
+					if !ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+						return fmt.Errorf("wrong-password result: %v", err)
+					}
+					return nil
+				case "rootBind":
+					return e.conn.Bind(root, rootPassword)
+				case "nonrootBase", "nonrootEquality":
+					base, scope, filter := searchDN, ldap.ScopeBaseObject, "(objectClass=*)"
+					if metric == "nonrootEquality" {
+						base, scope, filter = "ou=people,dc=scale,dc=qualification", ldap.ScopeWholeSubtree, "(uid=scale-001001)"
+					}
+					result, err := e.conn.Search(ldap.NewSearchRequest(base, scope, ldap.NeverDerefAliases, 0, 0, false, filter, []string{"uid"}, nil))
+					if err != nil {
+						return err
+					}
+					if len(result.Entries) != 1 || result.Entries[0].DN != searchDN || result.Entries[0].GetAttributeValue("uid") != "scale-001001" {
+						return fmt.Errorf("unexpected nonroot search result: %#v", result.Entries)
+					}
+					return nil
+				default:
+					assertion, want := uid, metric == "compareTrue"
+					if !want {
+						assertion = strings.Repeat("z", 256)
+					}
+					got, err := e.conn.Compare(dn, "uid", assertion)
+					if err != nil || got != want {
+						return fmt.Errorf("Compare %v/%v, want %v", got, err, want)
+					}
+					return nil
+				}
+			}
+			for _, e := range endpoints {
+				if err := e.conn.Bind(root, rootPassword); err != nil {
+					return err
+				}
+				if userSearch {
+					if err := e.conn.Bind(dn, password); err != nil {
+						return err
+					}
+				}
+				for range 30 {
+					if err := operation(e); err != nil {
+						return err
+					}
+				}
+			}
+			for repeat := range 3 {
+				totals := make([]time.Duration, len(endpoints))
+				for iteration := range *count {
+					for offset := range len(endpoints) {
+						index := (iteration + repeat + offset) % len(endpoints)
+						start := time.Now()
+						err := operation(endpoints[index])
+						totals[index] += time.Since(start)
+						if err != nil {
+							return fmt.Errorf("%s/%s/%s: %w", fixture, metric, endpoints[index].name, err)
+						}
+					}
+				}
+				for index, e := range endpoints {
+					wantIdentity := "dn:" + root
+					if metric == "userBind" || userSearch {
+						wantIdentity = "dn:" + dn
+					}
+					if metric == "userBindWrong" {
+						wantIdentity = ""
+					}
+					identity, err := e.conn.WhoAmI(nil)
+					if err != nil {
+						return err
+					}
+					if identity.AuthzID != wantIdentity {
+						return fmt.Errorf("%s identity %q != %q", e.name, identity.AuthzID, wantIdentity)
+					}
+					rows = append(rows, sample{fixture, metric, e.name, repeat, *count, float64(totals[index]) / float64(time.Millisecond)})
+				}
+			}
+		}
+		for _, e := range endpoints {
+			if err := e.conn.Bind(root, rootPassword); err != nil {
+				return err
+			}
+			if err := e.conn.Del(ldap.NewDelRequest(dn, nil)); err != nil {
+				return err
+			}
+		}
+	}
+	return json.NewEncoder(os.Stdout).Encode(rows)
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

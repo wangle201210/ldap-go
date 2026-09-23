@@ -11,3 +11,13 @@ func (normalizer *databaseEqualityIndexNormalizer) ParseDNIdentity(value string)
 	}
 	return directory.ParseDNWithNormalizer(value, normalizer)
 }
+
+// Published runtime schemas opt into DN parsing reuse; ACL decisions and entry
+// reads remain live. Embedding preserves the registry's other normalization APIs.
+type aclDNNormalizer struct {
+	*schema.Registry
+}
+
+func (normalizer aclDNNormalizer) ParseDNIdentity(value string) (directory.DN, error) {
+	return normalizer.NormalizeDNCached(value)
+}

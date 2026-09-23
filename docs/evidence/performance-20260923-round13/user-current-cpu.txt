@@ -1,0 +1,33 @@
+File: profile-current.test
+Type: cpu
+Time: 2026-09-23 17:03:52 CST
+Duration: 7.41s, Total samples = 7.46s (100.70%)
+Showing nodes accounting for 6.45s, 86.46% of 7.46s total
+Dropped 174 nodes (cum <= 0.04s)
+Showing top 25 nodes out of 189
+      flat  flat%   sum%        cum   cum%
+     2.27s 30.43% 30.43%      2.27s 30.43%  syscall.rawsyscalln
+     1.12s 15.01% 45.44%      1.12s 15.01%  runtime.pthread_cond_wait
+     0.95s 12.73% 58.18%      0.95s 12.73%  runtime.kevent
+     0.79s 10.59% 68.77%      0.79s 10.59%  runtime.pthread_cond_signal
+     0.28s  3.75% 72.52%      0.35s  4.69%  runtime.tryDeferToSpanScan
+     0.18s  2.41% 74.93%      0.18s  2.41%  runtime.madvise
+     0.12s  1.61% 76.54%      0.12s  1.61%  runtime.memclrNoHeapPointers
+     0.09s  1.21% 77.75%      0.42s  5.63%  runtime.scanObject
+     0.08s  1.07% 78.82%      0.08s  1.07%  runtime.(*spanInlineMarkBits).init
+     0.08s  1.07% 79.89%      0.24s  3.22%  runtime.mallocgcSmallScanNoHeader
+     0.07s  0.94% 80.83%      0.07s  0.94%  runtime.usleep
+     0.06s   0.8% 81.64%      0.55s  7.37%  runtime.mallocgc
+     0.06s   0.8% 82.44%      0.12s  1.61%  strings.ToLower
+     0.04s  0.54% 82.98%      0.04s  0.54%  runtime.pthread_kill
+     0.04s  0.54% 83.51%      0.08s  1.07%  runtime.scanObjectsSmall
+     0.03s   0.4% 83.91%      0.08s  1.07%  runtime.concatstrings
+     0.03s   0.4% 84.32%      0.20s  2.68%  runtime.growslice
+     0.03s   0.4% 84.72%      0.06s   0.8%  runtime.mallocgcTiny
+     0.03s   0.4% 85.12%      0.08s  1.07%  runtime.mapaccess2_faststr
+     0.02s  0.27% 85.39%      0.12s  1.61%  github.com/go-ldap/ldap/v3.decodeString
+     0.02s  0.27% 85.66%      0.15s  2.01%  go.etcd.io/bbolt.(*Cursor).seek
+     0.02s  0.27% 85.92%      0.09s  1.21%  strings.(*Builder).WriteRune
+     0.02s  0.27% 86.19%      0.05s  0.67%  strings.(*Builder).grow
+     0.01s  0.13% 86.33%      0.05s  0.67%  github.com/go-ldap/ldap/v3.encodeString
+     0.01s  0.13% 86.46%      0.05s  0.67%  github.com/wangle201210/ldap-go/internal/directory.formatDNRDNs

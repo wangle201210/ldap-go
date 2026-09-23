@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/acl
+cpu: Apple M1 Pro
+BenchmarkAllowedDNParser/anonymous_auth/uncached-8         	   48481	      7368 ns/op	    4088 B/op	     167 allocs/op
+BenchmarkAllowedDNParser/anonymous_auth/uncached-8         	   49230	      7367 ns/op	    4088 B/op	     167 allocs/op
+BenchmarkAllowedDNParser/anonymous_auth/uncached-8         	   49266	      7443 ns/op	    4088 B/op	     167 allocs/op
+BenchmarkAllowedDNParser/anonymous_auth/cached-8           	  496485	       733.1 ns/op	     696 B/op	       6 allocs/op
+BenchmarkAllowedDNParser/anonymous_auth/cached-8           	  501727	       723.9 ns/op	     696 B/op	       6 allocs/op
+BenchmarkAllowedDNParser/anonymous_auth/cached-8           	  496753	       725.6 ns/op	     696 B/op	       6 allocs/op
+BenchmarkAllowedDNParser/self_read/uncached-8              	   23456	     15388 ns/op	    8152 B/op	     355 allocs/op
+BenchmarkAllowedDNParser/self_read/uncached-8              	   23016	     15518 ns/op	    8152 B/op	     355 allocs/op
+BenchmarkAllowedDNParser/self_read/uncached-8              	   23324	     15435 ns/op	    8152 B/op	     355 allocs/op
+BenchmarkAllowedDNParser/self_read/cached-8                	  308432	      1212 ns/op	     856 B/op	      11 allocs/op
+BenchmarkAllowedDNParser/self_read/cached-8                	  301604	      1222 ns/op	     856 B/op	      11 allocs/op
+BenchmarkAllowedDNParser/self_read/cached-8                	  296206	      1207 ns/op	     856 B/op	      11 allocs/op
+BenchmarkAllowedDNParser/group_read/uncached-8             	   10000	     30360 ns/op	   15360 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/group_read/uncached-8             	   10000	     30507 ns/op	   15360 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/group_read/uncached-8             	   10000	     32872 ns/op	   15360 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/group_read/cached-8               	  131961	      2740 ns/op	    1456 B/op	      31 allocs/op
+BenchmarkAllowedDNParser/group_read/cached-8               	  131013	      2702 ns/op	    1456 B/op	      31 allocs/op
+BenchmarkAllowedDNParser/group_read/cached-8               	  133395	      2721 ns/op	    1456 B/op	      31 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/uncached-8       	   10000	     30258 ns/op	   15312 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/uncached-8       	   10000	     30157 ns/op	   15312 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/uncached-8       	   10000	     30331 ns/op	   15312 B/op	     685 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/cached-8         	  132018	      2744 ns/op	    1456 B/op	      31 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/cached-8         	  129399	      2745 ns/op	    1456 B/op	      31 allocs/op
+BenchmarkAllowedDNParser/nonmember_denied/cached-8         	  128353	      2734 ns/op	    1456 B/op	      31 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/acl	8.399s

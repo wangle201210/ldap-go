@@ -1,0 +1,111 @@
+#!/bin/sh
+set -eu
+. /tmp/ldap-go-compatibility-audit-20260920.env
+audit=/var/tmp/ldap-go-perf-round16-20260923
+source_dir=/var/tmp/ldap-go-perf-round4-20260922/online-accepted
+out=$audit/writes
+mkdir "$out"
+umask 077
+printf '%s' scale-qualification-local-secret >"$out/password"
+pid=
+stop_server() {
+  if [ -n "$pid" ]; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    pid=
+  fi
+}
+trap 'stop_server; rm -f "$out/password"' EXIT HUP INT TERM
+uri=ldap://127.0.0.1:29481
+root_dn=cn=admin,dc=scale,dc=qualification
+people_dn=ou=people,dc=scale,dc=qualification
+awk 'BEGIN {for(i=1001;i<=11000;i++) printf "scale-%06d\n",i}' >"$out/indexed.txt"
+awk 'BEGIN {for(i=1001;i<=2000;i++) printf "scale-%06d\n",i}' >"$out/concurrent.txt"
+awk 'BEGIN {for(i=1;i<=10;i++) printf "absent-%06d\n",i}' >"$out/unindexed.txt"
+printf 'run\tmetric\tms\n' >"$out/timings.tsv"
+printf 'run\trss_bytes\tcanonical_entries\tcanonical_cksum\tcanonical_bytes\n' >"$out/validation.tsv"
+search() {
+  ldapsearch -H "$uri" -x -D "$root_dn" -y "$out/password" -LLL -o ldif-wrap=no "$@"
+}
+indexed() { search -b "$people_dn" -f "$out/indexed.txt" '(uid=%s)' uid >"$run_dir/indexed.ldif"; }
+unindexed() { search -b "$people_dn" -f "$out/unindexed.txt" '(description=%s)' uid >"$run_dir/unindexed.ldif"; }
+paged_once() { search -E pr=10000/noprompt -b "$people_dn" '(objectClass=inetOrgPerson)' uid >"$run_dir/paged.ldif"; }
+paged() { paged_once; paged_once; }
+full_prefix() { search -b "$people_dn" '(uid=scale-*)' uid >"$run_dir/full-prefix.ldif"; }
+concurrent() {
+  worker=0
+  workers=
+  while [ "$worker" -lt 8 ]; do
+    search -b "$people_dn" -f "$out/concurrent.txt" '(uid=%s)' uid >"$run_dir/concurrent-$worker.ldif" &
+    workers="$workers $!"
+    worker=$((worker + 1))
+  done
+  for worker_pid in $workers; do wait "$worker_pid"; done
+}
+measure() {
+  metric=$1
+  shift
+  start=$(gdate +%s%N)
+  "$@"
+  end=$(gdate +%s%N)
+  printf '%s\t%s\t%s\n' "$run" "$metric" "$(((end-start)/1000000))" >>"$out/timings.tsv"
+}
+for run in before-1 current-1 openldap-1 current-2 openldap-2 before-2 openldap-3 before-3 current-3; do
+  side=${run%-*}
+  run_dir=$out/$run
+  mkdir "$run_dir"
+  if [ "$side" = openldap ]; then
+    mkdir "$run_dir/data"
+    cp "$source_dir/openldap-1/data/data.mdb" "$run_dir/data/data.mdb"
+    sed -e "s|^directory .*|directory $run_dir/data|" \
+      -e "s|^pidfile .*|pidfile $run_dir/slapd.pid|" \
+      -e "s|^argsfile .*|argsfile $run_dir/slapd.args|" \
+      -e "s|^include .*/core.schema|include $OPENLDAP_SCHEMA_DIR/core.schema|" \
+      -e "s|^include .*/cosine.schema|include $OPENLDAP_SCHEMA_DIR/cosine.schema|" \
+      -e "s|^include .*/inetorgperson.schema|include $OPENLDAP_SCHEMA_DIR/inetorgperson.schema|" \
+      "$source_dir/openldap-1/slapd.conf" >"$run_dir/slapd.conf"
+    launch_start=$(gdate +%s%N)
+    slapd -f "$run_dir/slapd.conf" -h "$uri" -d 0 >"$run_dir/server.log" 2>&1 &
+  else
+    cp "$source_dir/current-1/data.db" "$run_dir/data.db"
+    launch_start=$(gdate +%s%N)
+    binary=$audit/$side
+    LDAP_GO_ROOT_PASSWORD=scale-qualification-local-secret "$binary" serve \
+      -db "$run_dir/data.db" -listen 127.0.0.1:29481 -root-dn "$root_dn" \
+      -search-limit 100100 -search-candidate-limit 100100 \
+      -search-candidate-bytes 819200000 -search-memory-bytes 1638400000 \
+      >"$run_dir/server.log" 2>&1 &
+  fi
+  pid=$!
+  deadline=$(( $(date +%s) + 60 ))
+  until ldapwhoami -H "$uri" -x -D "$root_dn" -y "$out/password" -o nettimeout=1 >/dev/null 2>&1; do
+    kill -0 "$pid"
+    [ "$(date +%s)" -lt "$deadline" ]
+    sleep 0.05
+  done
+  ready_time=$(gdate +%s%N)
+  printf '%s\tstartup\t%s\n' "$run" "$(((ready_time-launch_start)/1000000))" >>"$out/timings.tsv"
+  printf 'Measuring 100k writes: %s\n' "$run"
+  LDAP_BENCH_PASSWORD=scale-qualification-local-secret LDAP_BENCH_USER_PASSWORD=disposable-user-secret /var/tmp/ldap-go-perf-round4-20260922/ldapbench \
+    -uri "$uri" -bind-dn "$root_dn" -password-env LDAP_BENCH_PASSWORD \
+    -user-password-env LDAP_BENCH_USER_PASSWORD -base dc=scale,dc=qualification \
+    -people "$people_dn" -write -n 20 -write-batch 20 -entries 100000 \
+    -label "$run" >"$run_dir/probe.json"
+  rss=$(ps -o rss= -p "$pid" | awk '{printf "%.0f", $1 * 1024}')
+  search -E pr=10000/noprompt -b dc=scale,dc=qualification '(objectClass=*)' '*' >"$run_dir/data.ldif"
+  /var/tmp/ldap-go-perf-round2-20260922/ldifcanonical -in "$run_dir/data.ldif" >"$run_dir/data.unsorted"
+  LC_ALL=C sort "$run_dir/data.unsorted" >"$run_dir/data.canonical"
+  rm "$run_dir/data.unsorted"
+  count=$(wc -l <"$run_dir/data.canonical" | tr -d ' ')
+  [ "$count" -eq 100002 ]
+  set -- $(cksum "$run_dir/data.canonical")
+  printf '%s\t%s\t%s\t%s\t%s\n' "$run" "$rss" "$count" "$1" "$2" >>"$out/validation.tsv"
+  if [ "$run" != before-1 ]; then cmp "$out/before-1/data.canonical" "$run_dir/data.canonical"; fi
+  stop_server
+  if [ "$side" = openldap ]; then
+    rm "$run_dir/data/data.mdb"
+  else
+    rm "$run_dir/data.db"
+  fi
+done
+printf '100k snapshot comparison passed.\n'

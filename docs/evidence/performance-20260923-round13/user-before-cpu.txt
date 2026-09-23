@@ -1,0 +1,33 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 16:43:34 CST
+Duration: 8.41s, Total samples = 8.62s (102.49%)
+Showing nodes accounting for 7.41s, 85.96% of 8.62s total
+Dropped 198 nodes (cum <= 0.04s)
+Showing top 25 nodes out of 187
+      flat  flat%   sum%        cum   cum%
+     3.15s 36.54% 36.54%      3.15s 36.54%  syscall.rawsyscalln
+     1.04s 12.06% 48.61%      1.04s 12.06%  runtime.pthread_cond_wait
+     0.99s 11.48% 60.09%      0.99s 11.48%  runtime.kevent
+     0.78s  9.05% 69.14%      0.78s  9.05%  runtime.pthread_cond_signal
+     0.39s  4.52% 73.67%      0.43s  4.99%  runtime.tryDeferToSpanScan
+     0.20s  2.32% 75.99%      0.20s  2.32%  runtime.madvise
+     0.11s  1.28% 77.26%      0.13s  1.51%  strings.ToLower
+     0.10s  1.16% 78.42%      0.10s  1.16%  runtime.(*spanInlineMarkBits).init
+     0.09s  1.04% 79.47%      0.09s  1.04%  runtime.usleep
+     0.08s  0.93% 80.39%      0.55s  6.38%  runtime.mallocgc
+     0.07s  0.81% 81.21%      0.48s  5.57%  runtime.scanObject
+     0.06s   0.7% 81.90%      0.06s   0.7%  runtime.memclrNoHeapPointers
+     0.05s  0.58% 82.48%      0.20s  2.32%  runtime.mallocgcSmallNoscan
+     0.05s  0.58% 83.06%      0.08s  0.93%  runtime.mallocgcTiny
+     0.03s  0.35% 83.41%      0.09s  1.04%  github.com/go-ldap/ldap/v3.encodeString
+     0.03s  0.35% 83.76%      0.05s  0.58%  runtime.(*spanSet).pop
+     0.03s  0.35% 84.11%      0.15s  1.74%  runtime.mallocgcSmallScanNoHeader
+     0.02s  0.23% 84.34%      0.32s  3.71%  github.com/wangle201210/ldap-go/internal/directory.DN.NormalizeWith
+     0.02s  0.23% 84.57%      0.07s  0.81%  github.com/wangle201210/ldap-go/internal/server.databaseIndexForDN
+     0.02s  0.23% 84.80%      0.09s  1.04%  runtime.lock2
+     0.02s  0.23% 85.03%      0.06s   0.7%  runtime.mapaccess2_faststr
+     0.02s  0.23% 85.27%      0.09s  1.04%  runtime.scanObjectsSmall
+     0.02s  0.23% 85.50%      0.06s   0.7%  strings.(*Builder).WriteByte (inline)
+     0.02s  0.23% 85.73%      0.12s  1.39%  strings.(*Builder).WriteRune
+     0.02s  0.23% 85.96%      0.05s  0.58%  strings.Join

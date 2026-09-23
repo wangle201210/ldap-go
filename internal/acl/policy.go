@@ -623,6 +623,9 @@ func parseACLDN(
 	normalizer directory.DNAttributeNormalizer,
 ) (directory.DN, error) {
 	if normalizer != nil {
+		if parser, ok := normalizer.(DNIdentityParser); ok {
+			return parser.ParseDNIdentity(raw)
+		}
 		return directory.ParseDNWithNormalizer(raw, normalizer)
 	}
 	return directory.ParseDN(raw)
@@ -635,7 +638,7 @@ func normalizeACLDN(
 	if normalizer == nil {
 		return dn, nil
 	}
-	return directory.ParseDNWithNormalizer(dn.String(), normalizer)
+	return parseACLDN(dn.String(), normalizer)
 }
 
 func targetIsDNValued(target Target) bool {
