@@ -44,31 +44,29 @@ Web 管理控制台。
 
 ## 性能对比
 
-重复查询复测（第三轮）：2026-09-22，100,000 个用户，Apple M1 Pro，Go 构建关闭 cgo，
-双方使用相同索引和 OpenLDAP 2.6.13 客户端。耗时取中位数，相对性能为
-`OpenLDAP / ldap-go`：100% 表示持平，大于 100% 表示 ldap-go 占优。
+最新 SDK 对照：2026-09-23，100,000 个用户，Apple M1 Pro，Go 构建关闭 cgo，
+对照 OpenLDAP 2.6.13。每行是 20 次操作的总耗时，取三个独立进程的中位数；
+写入在准备数据及缓存预热后测量。相对性能为 `OpenLDAP / ldap-go × 100%`，
+大于 100% 表示 ldap-go 占优。
 
 | 指标 | ldap-go | OpenLDAP | 相对性能 |
 | --- | ---: | ---: | ---: |
-| 索引查询，首批 10,000 次 | 848 ms | 671 ms | 79% |
-| 索引查询，重复 10,000 次 | 639 ms | 663 ms | 104% |
-| 无索引负查询，首批 10 次 | 240 ms | 347 ms | 145% |
-| 无索引负查询，重复 10 次 | 31 ms | 343 ms | 1,106% |
-| objectClass 首次全量分页 | 826 ms | 705 ms | 85% |
-| objectClass 重复两次全量分页 | 825 ms | 1,425 ms | 173% |
-| 并发索引查询，8 连接各 1,000 次 | 266 ms | 286 ms | 108% |
-| 混合负载结束后的 RSS | 253.1 MiB | 144.4 MiB | 57% |
+| 管理员 Bind | 4.77 ms | 2.84 ms | 59.6% |
+| Base 查询 | 3.84 ms | 3.36 ms | 87.5% |
+| 索引等值查询 | 3.41 ms | 2.95 ms | 86.4% |
+| Compare，匹配 | 4.13 ms | 2.34 ms | 56.8% |
+| 前缀子串查询 | 1,240.35 ms | 644.73 ms | 52.0% |
+| Add | 31.10 ms | 115.31 ms | 370.8% |
+| Modify，修改非索引 description | 17.38 ms | 122.69 ms | 706.1% |
+| ModifyDN | 35.51 ms | 121.37 ms | 341.8% |
+| Delete | 28.04 ms | 135.41 ms | 482.9% |
 
-全部 100,000 个用户及 42,712,504 字节的普通属性规范化数据一致。
-首次查询耗时和大目录内存占用仍有差距。
-[100k 对比证据](docs/openldap-100k-evidence.md) 分别记录了完整的新建数据库
-导入/写入测试与最终在线复测，包含原始结果、测试条件差异、未追平项和复现方法。
-[本轮优化报告](docs/performance-optimization-20260922-round3.md)另列出与上一版同场对照的变化及耗时波动。
-[扩展 SDK 性能报告](docs/performance-optimization-20260922-round4.md)补充启动、Bind、Compare、
-基础/子串查询和增删改名。Add、ModifyDN、Delete 及无索引子串查询仍明显慢于 OpenLDAP。
-[最新 DN 与 Bind 优化复测](docs/performance-optimization-20260923-round7.md)相对 `9d66cbc`，
-Root Bind 耗时下降约 46-48%，Add 约 20%，ModifyDN/Delete 约 14-15%；
-报告保留了升高的读负载 RSS 和短查询复测结果。
+完整普通属性导出一致。此预热后的叶子写入场景已消除原先的大幅差距；
+启动、首次初始化、Bind、子串查询和内存占用仍有差距。负载结束后 RSS 为
+389.7 / 135.4 MiB。[最新写入报告](docs/performance-optimization-20260923-round8.md)
+记录了前后版本对照、启动成本、配置限制和原始证据。
+此前的[查询/分页结果](docs/openldap-100k-evidence.md)和
+[DN/Bind 结果](docs/performance-optimization-20260923-round7.md)负载不同，分别保留。
 
 ## 环境要求
 

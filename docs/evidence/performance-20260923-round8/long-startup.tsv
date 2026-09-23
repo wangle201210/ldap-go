@@ -1,0 +1,7 @@
+run	metric	ms
+current-1	startup	1796
+openldap-1	startup	138
+openldap-2	startup	133
+current-2	startup	1935
+current-3	startup	2027
+openldap-3	startup	128

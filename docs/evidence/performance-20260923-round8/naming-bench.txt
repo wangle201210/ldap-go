@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkNamingContextIncrementalWrites/Entries1000/Scan-8    	      15	   7255986 ns/op	 6228829 B/op	  168500 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries1000/Scan-8    	      15	   7322600 ns/op	 6228822 B/op	  168500 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries1000/Scan-8    	      16	   7143237 ns/op	 6228779 B/op	  168500 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries1000/Incremental-8         	    8533	     15137 ns/op	   11326 B/op	     320 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries1000/Incremental-8         	    7740	     15446 ns/op	   11327 B/op	     320 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries1000/Incremental-8         	    8164	     15094 ns/op	   11327 B/op	     320 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Scan-8              	       1	 796180250 ns/op	605406872 B/op	16801543 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Scan-8              	       1	 815159292 ns/op	605406872 B/op	16801543 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Scan-8              	       1	 811872667 ns/op	605406872 B/op	16801543 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Incremental-8       	    8061	     15444 ns/op	   12186 B/op	     329 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Incremental-8       	    7773	     15263 ns/op	   12186 B/op	     329 allocs/op
+BenchmarkNamingContextIncrementalWrites/Entries100000/Incremental-8       	    8038	     16476 ns/op	   12186 B/op	     329 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	7.060s

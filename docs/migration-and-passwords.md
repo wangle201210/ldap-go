@@ -96,6 +96,22 @@ These commands do not make bbolt files binary-compatible with OpenLDAP MDB
 files. Proxy and virtual backends reject unsupported offline operations rather
 than silently changing another partition.
 
+Writable startup now builds and validates the derived DN hierarchy index used
+for local Bolt subtree operations. A stale or corrupt derived index is reported
+as an error. After stopping the server, a full logical index rebuild validates
+authoritative entries and repairs the hierarchy atomically:
+
+```sh
+./bin/ldap-go slapindex -db ./data/ldap-go.db
+```
+
+Omit attribute names for the full rebuild; use `-n` or `-database` to select a
+database when necessary. Attribute-selective `slapindex cn uid` does not repair
+the hierarchy. The `reindex`/`rebuild` aliases compact physical storage and are
+not substitutes for this logical repair. The first index build and complete
+startup validation add work proportional to directory size. A read-only store
+without the optional hierarchy index continues using general traversal.
+
 ## Validation and atomicity
 
 Native `import`, direct `ImportLDIF` callers, and `slapadd` without `-c` validate

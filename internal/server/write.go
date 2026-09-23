@@ -1833,22 +1833,29 @@ func (server *Server) handleDelete(
 				if err != nil {
 					return err
 				}
-				checkDescendant := func(entry directory.Entry) error {
-					candidate, err := normalizedWriteCandidateDN(tx, entry)
+				handled, found, err := storage.HasDescendants(tx, comparisonDN)
+				if err != nil {
+					return err
+				}
+				hasChildren = found
+				if !handled {
+					checkDescendant := func(entry directory.Entry) error {
+						candidate, err := normalizedWriteCandidateDN(tx, entry)
+						if err != nil {
+							return err
+						}
+						if comparisonDN.AncestorOf(candidate) {
+							hasChildren = true
+						}
+						return nil
+					}
+					handled, err = storage.ForEachDeleteCandidateDN(tx, checkDescendant)
+					if err == nil && !handled {
+						err = tx.ForEach(checkDescendant)
+					}
 					if err != nil {
 						return err
 					}
-					if comparisonDN.AncestorOf(candidate) {
-						hasChildren = true
-					}
-					return nil
-				}
-				handled, err := storage.ForEachDeleteCandidateDN(tx, checkDescendant)
-				if err == nil && !handled {
-					err = tx.ForEach(checkDescendant)
-				}
-				if err != nil {
-					return err
 				}
 			}
 		}
@@ -2640,27 +2647,31 @@ func (server *Server) handleModifyDN(
 				entry: sourceEntry,
 			})
 			oldKeys[comparisonOldDN.Key()] = struct{}{}
-		} else if err := tx.ForEach(func(entry directory.Entry) error {
-			candidate, err := normalizedWriteCandidateDN(tx, entry)
-			if err != nil {
-				return err
-			}
-			if !comparisonOldDN.Equal(candidate) &&
-				!comparisonOldDN.AncestorOf(candidate) {
+		} else {
+			prepareMove := func(entry directory.Entry) error {
+				candidate, err := normalizedWriteCandidateDN(tx, entry)
+				if err != nil {
+					return err
+				}
+				if !comparisonOldDN.Equal(candidate) &&
+					!comparisonOldDN.AncestorOf(candidate) {
+					return nil
+				}
+				replaced, err := candidate.ReplaceAncestor(comparisonOldDN, storedNewDN)
+				if err != nil {
+					return err
+				}
+				moves = append(moves, move{oldDN: candidate, newDN: replaced, entry: entry})
+				oldKeys[candidate.Key()] = struct{}{}
 				return nil
 			}
-			replaced, err := candidate.ReplaceAncestor(
-				comparisonOldDN,
-				storedNewDN,
-			)
+			handled, err := storage.ForEachSubtreeEntry(tx, comparisonOldDN, prepareMove)
+			if err == nil && !handled {
+				err = tx.ForEach(prepareMove)
+			}
 			if err != nil {
 				return err
 			}
-			moves = append(moves, move{oldDN: candidate, newDN: replaced, entry: entry})
-			oldKeys[candidate.Key()] = struct{}{}
-			return nil
-		}); err != nil {
-			return err
 		}
 
 		for _, item := range moves {
@@ -4527,9 +4538,9 @@ func refreshRuntimeNamingContexts(
 	if runtime == nil || runtime.schema == nil {
 		return refreshNamingContexts(writer)
 	}
-	contexts, err := storage.InferNamingContextsMetadataWithNormalizer(
+	contexts, err := storage.InferNamingContextsIncremental(
 		namingContextMetadataStorageReader(writer),
-		runtime.schema,
+		runtimeNamingContextNormalizer{runtime.schema},
 	)
 	if err != nil {
 		return err

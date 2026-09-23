@@ -621,7 +621,10 @@ func checkBoltDatabase(
 		); err != nil {
 			return err
 		}
-		return checkBoltEntryCounts(ctx, tx, partitions)
+		if err := checkBoltEntryCounts(ctx, tx, partitions); err != nil {
+			return err
+		}
+		return checkBoltHierarchyIndexes(ctx, tx)
 	})
 	if err != nil {
 		return CheckReport{}, err

@@ -51,35 +51,31 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Repeated query replay (round three): September 22, 2026, 100,000 users, Apple M1 Pro,
-Go built without cgo, identical indexes and OpenLDAP 2.6.13 clients.
-Times are medians; relative performance is `OpenLDAP / ldap-go`, expressed
-as a percentage. Above 100% favors ldap-go.
+Latest SDK comparison: September 23, 2026, 100,000 users, Apple M1 Pro,
+Go built without cgo, OpenLDAP 2.6.13. Each row totals 20 operations; values are
+medians from three fresh processes. Writes follow fixture setup and cache warmup.
+Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
 
 | Metric | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: |
-| Indexed, first 10,000 queries | 848 ms | 671 ms | 79% |
-| Indexed, repeated 10,000 queries | 639 ms | 663 ms | 104% |
-| Negative, first ten queries | 240 ms | 347 ms | 145% |
-| Negative, repeated ten queries | 31 ms | 343 ms | 1,106% |
-| First full objectClass traversal | 826 ms | 705 ms | 85% |
-| Two repeated objectClass traversals | 825 ms | 1,425 ms | 173% |
-| Concurrent indexed, 8 x 1,000 | 266 ms | 286 ms | 108% |
-| RSS after mixed workload | 253.1 MiB | 144.4 MiB | 57% |
+| Root Bind | 4.77 ms | 2.84 ms | 59.6% |
+| Base search | 3.84 ms | 3.36 ms | 87.5% |
+| Indexed equality | 3.41 ms | 2.95 ms | 86.4% |
+| Compare, matching | 4.13 ms | 2.34 ms | 56.8% |
+| Prefix substring | 1,240.35 ms | 644.73 ms | 52.0% |
+| Add | 31.10 ms | 115.31 ms | 370.8% |
+| Modify, unindexed description | 17.38 ms | 122.69 ms | 706.1% |
+| ModifyDN | 35.51 ms | 121.37 ms | 341.8% |
+| Delete | 28.04 ms | 135.41 ms | 482.9% |
 
-All 100,000 users and 42,712,504 bytes of canonical ordinary-attribute data
-matched. First-query latency and large-directory memory remain gaps.
-The [100k evidence](docs/openldap-100k-evidence.md) separately records the
-complete fresh-import/write run and this final online replay; it includes raw
-results, workload differences, remaining limits, and reproduction instructions.
-The [query optimization report](docs/performance-optimization-20260922-round3.md)
-also compares the preceding version in the same run and records timing variability.
-The [broader SDK report](docs/performance-optimization-20260922-round4.md) adds
-startup, Bind, Compare, base/substring searches and writes. Add, ModifyDN,
-Delete and unindexed substrings still have large performance gaps to OpenLDAP.
-The [latest DN and Bind report](docs/performance-optimization-20260923-round7.md)
-reduces Root Bind by 46-48%, Add by 20%, and ModifyDN/Delete by 14-15% against
-`9d66cbc`; it retains the higher read RSS and short-query recheck results.
+All exported ordinary-attribute data matched. The larger write gaps are removed
+for this warm leaf-write fixture; startup, cold initialization, Bind, substring
+queries and memory still have gaps. Post-workload RSS was 389.7 / 135.4 MiB.
+The [latest write report](docs/performance-optimization-20260923-round8.md)
+includes baseline comparisons, startup costs, configuration limits and raw
+evidence. Earlier [read/paging measurements](docs/openldap-100k-evidence.md)
+and [DN/Bind measurements](docs/performance-optimization-20260923-round7.md)
+use different workloads and are retained separately.
 
 ## Requirements
 

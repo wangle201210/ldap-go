@@ -1152,6 +1152,9 @@ func ReindexOffline(
 			if err := markOfflineDNIdentitySchemaCurrent(writer, runtime, database); err != nil {
 				return err
 			}
+			if _, err := storage.RebuildHierarchyIndex(writer, database.partition, database.dnNormalizer); err != nil {
+				return fmt.Errorf("reindex hierarchy for database %q: %w", database.name, err)
+			}
 			reindexed++
 		}
 		return nil
@@ -1267,6 +1270,11 @@ func reindexOfflineDatabases(
 		}
 		if err := markOfflineDNIdentitySchemaCurrent(writer, runtime, database); err != nil {
 			return reindexed, err
+		}
+		if len(attributes) == 0 {
+			if _, err := storage.RebuildHierarchyIndex(writer, database.partition, normalizer); err != nil {
+				return reindexed, fmt.Errorf("reindex hierarchy for database %q: %w", database.name, err)
+			}
 		}
 		reindexed++
 	}

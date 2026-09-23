@@ -20,7 +20,16 @@ func (server *Server) migrateRuntimeDNIdentities(
 		server.config.Store,
 		runtime,
 	)
-	if err != nil || current {
+	if err != nil {
+		return err
+	}
+	var hierarchyCurrent bool
+	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+		var err error
+		hierarchyCurrent, err = runtimeHierarchyIndexesCurrent(reader, runtime)
+		return err
+	})
+	if err != nil || current && hierarchyCurrent {
 		return err
 	}
 	return server.config.Store.Update(ctx, func(writer storage.Writer) error {
@@ -89,6 +98,9 @@ func migrateRuntimeDNIdentitiesInWriter(
 		stored, err := writer.Metadata(metadataKey)
 		switch {
 		case err == nil && bytes.Equal(stored, fingerprint[:]):
+			if _, err := storage.EnsureHierarchyIndex(writer, partition, normalizer); err != nil {
+				return fmt.Errorf("ensure hierarchy in partition %q: %w", partition, err)
+			}
 			continue
 		case err != nil && !errors.Is(err, storage.ErrMetadataNotFound):
 			return fmt.Errorf(
@@ -107,6 +119,9 @@ func migrateRuntimeDNIdentitiesInWriter(
 				partition,
 				err,
 			)
+		}
+		if _, err := storage.EnsureHierarchyIndex(writer, partition, normalizer); err != nil {
+			return fmt.Errorf("ensure hierarchy in partition %q: %w", partition, err)
 		}
 		if err := writer.SetMetadata(metadataKey, fingerprint[:]); err != nil {
 			return fmt.Errorf(

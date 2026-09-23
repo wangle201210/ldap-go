@@ -43,6 +43,7 @@ type Bolt struct {
 	updateMu    sync.Mutex
 	singleSync  bool
 	revision    atomic.Uint64
+	namingIndex *boltNamingContextIndex
 }
 
 func OpenBolt(path string) (*Bolt, error) {
@@ -232,12 +233,29 @@ func (store *Bolt) update(
 		before, metaReadErr = store.readMetaPages()
 	}
 	var committedRevision uint64
+	var activeWriter *boltTx
+	cacheCommitted := false
+	defer func() {
+		if !cacheCommitted && activeWriter != nil && activeWriter.namingIndexChanged {
+			store.namingIndex = nil
+		}
+		if activeWriter != nil {
+			activeWriter.namingStore = nil
+			clear(activeWriter.namingDirty)
+		}
+	}()
 	err := store.db.Update(func(tx *bolt.Tx) error {
 		writer := newBoltTx(ctx, tx)
+		writer.namingStore = store
+		activeWriter = writer
+		if store.namingIndex != nil && store.namingIndex.revision != uint64(tx.ID())-1 {
+			store.namingIndex = nil
+		}
 		writer.setFillPercent(fillPercent)
 		if err := fn(writer); err != nil {
 			return err
 		}
+		writer.finishNamingContextIndex()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -245,7 +263,11 @@ func (store *Bolt) update(
 		return nil
 	})
 	if err == nil {
+		cacheCommitted = true
 		store.revision.Store(committedRevision)
+		if store.namingIndex != nil {
+			store.namingIndex.revision = committedRevision
+		}
 	}
 	if err != nil || !store.singleSync {
 		return err
@@ -276,6 +298,7 @@ func (store *Bolt) Close() error {
 	}
 	store.updateMu.Lock()
 	defer store.updateMu.Unlock()
+	store.namingIndex = nil
 	var databaseErr error
 	if store.db != nil {
 		databaseErr = store.db.Close()
@@ -367,6 +390,9 @@ type boltTx struct {
 	equalityIndexes      *bolt.Bucket
 	equalityIndexConfigs *bolt.Bucket
 	equalityIndexRefs    *bolt.Bucket
+	namingStore          *Bolt
+	namingDirty          map[string]struct{}
+	namingIndexChanged   bool
 }
 
 func (tx *boltTx) StorageSnapshotRevision() (uint64, bool) {
@@ -450,9 +476,13 @@ func (tx *boltTx) setPartitionEntryCount(partition string, count uint64) error {
 
 func (tx *boltTx) putEntry(key, value []byte) error {
 	exists := tx.entries.Get(key) != nil
+	if err := tx.hierarchyPutEntry(key, value); err != nil {
+		return err
+	}
 	if err := tx.entries.Put(key, value); err != nil {
 		return err
 	}
+	tx.trackNamingContextMutation(key)
 	if exists {
 		return nil
 	}
@@ -476,9 +506,13 @@ func (tx *boltTx) deleteEntry(key []byte) error {
 	if count == 0 {
 		return fmt.Errorf("partition %q entry count underflow", partition)
 	}
+	if err := tx.hierarchyDeleteEntry(key); err != nil {
+		return err
+	}
 	if err := tx.entries.Delete(key); err != nil {
 		return err
 	}
+	tx.trackNamingContextMutation(key)
 	return tx.setPartitionEntryCount(partition, count-1)
 }
 
@@ -954,6 +988,10 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 			"schema-aware DN migration requires equality index schema for indexed partition",
 		)
 	}
+	tx.invalidateNamingContextIndex()
+	if err := tx.invalidateHierarchyIndex(partition); err != nil {
+		return DNIdentityMigrationReport{}, err
+	}
 	for _, entry := range entries {
 		if !bytes.Equal(entry.oldKey, entry.newKey) {
 			if err := tx.entries.Delete(entry.oldKey); err != nil {
@@ -982,6 +1020,11 @@ func (tx *boltTx) migrateSchemaAwareDNIdentitiesIn(
 			return DNIdentityMigrationReport{}, err
 		}
 		if err := tx.buildEqualityIndexes(partition, indexSchema, config); err != nil {
+			return DNIdentityMigrationReport{}, err
+		}
+	}
+	if _, supported := hierarchyFingerprint(normalizer); supported {
+		if err := tx.rebuildHierarchyIndex(partition, normalizer); err != nil {
 			return DNIdentityMigrationReport{}, err
 		}
 	}
@@ -1262,6 +1305,10 @@ func (tx *boltTx) DeleteIn(partition string, dn directory.DN) error {
 func (tx *boltTx) Clear() error {
 	if !tx.tx.Writable() {
 		return errorsReadOnly()
+	}
+	tx.invalidateNamingContextIndex()
+	if err := tx.clearHierarchyIndexes(); err != nil {
+		return err
 	}
 	if err := tx.tx.DeleteBucket(entriesBucket); err != nil {
 		return err

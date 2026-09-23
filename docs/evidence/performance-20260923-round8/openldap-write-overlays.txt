@@ -1,0 +1,56 @@
+=== RUN   TestOpenLDAPReferenceCollectiveAdministrativeAreaDifferential
+--- PASS: TestOpenLDAPReferenceCollectiveAdministrativeAreaDifferential (0.25s)
+=== RUN   TestOpenLDAPReferenceConstraintOverlay
+--- PASS: TestOpenLDAPReferenceConstraintOverlay (0.28s)
+=== RUN   TestOpenLDAPReferenceCoreProtocolDifferential
+--- PASS: TestOpenLDAPReferenceCoreProtocolDifferential (0.29s)
+=== RUN   TestOpenLDAPReferenceDNIdentityModifyDNPrettyForm
+--- PASS: TestOpenLDAPReferenceDNIdentityModifyDNPrettyForm (0.25s)
+=== RUN   TestOpenLDAPReferenceMemberOfOverlay
+--- PASS: TestOpenLDAPReferenceMemberOfOverlay (0.32s)
+=== RUN   TestOpenLDAPReferenceMemberOfUniqueNames
+--- PASS: TestOpenLDAPReferenceMemberOfUniqueNames (0.24s)
+=== RUN   TestOpenLDAPReferenceRefintOverlay
+--- PASS: TestOpenLDAPReferenceRefintOverlay (0.32s)
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/absent_noncritical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/absent_critical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/empty_noncritical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/empty_critical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/nonempty_noncritical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/nonempty_critical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/duplicate_noncritical
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/duplicate_mixed_criticality
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/noncritical_leaf_is_an_ordinary_MDB_delete
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/critical_leaf_is_rejected_by_MDB
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/noncritical_on_Search_is_ignored_without_value_validation
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/critical_on_Search_is_unsupported
+=== RUN   TestOpenLDAPReferenceTreeDeleteMDBProtocol/hidden_from_Root_DSE
+--- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol (0.17s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/absent_noncritical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/absent_critical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/empty_noncritical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/empty_critical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/nonempty_noncritical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/nonempty_critical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/duplicate_noncritical (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/duplicate_mixed_criticality (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/noncritical_leaf_is_an_ordinary_MDB_delete (0.01s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/critical_leaf_is_rejected_by_MDB (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/noncritical_on_Search_is_ignored_without_value_validation (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/critical_on_Search_is_unsupported (0.00s)
+    --- PASS: TestOpenLDAPReferenceTreeDeleteMDBProtocol/hidden_from_Root_DSE (0.00s)
+=== RUN   TestOpenLDAPReferenceUniqueOverlay
+--- PASS: TestOpenLDAPReferenceUniqueOverlay (0.19s)
+=== RUN   TestOpenLDAPReferenceOrderedSiblingModifyDNDifferential
+--- PASS: TestOpenLDAPReferenceOrderedSiblingModifyDNDifferential (0.26s)
+=== RUN   TestOpenLDAPReferenceTransactionControlCombinations
+--- PASS: TestOpenLDAPReferenceTransactionControlCombinations (0.22s)
+=== RUN   TestOpenLDAPReferenceTransactionSourceSemantics
+--- PASS: TestOpenLDAPReferenceTransactionSourceSemantics (0.00s)
+=== RUN   TestOpenLDAPLDAPModifyTransactionInteroperability
+--- PASS: TestOpenLDAPLDAPModifyTransactionInteroperability (0.06s)
+=== RUN   TestOpenLDAPReferenceTransactionRollback
+--- PASS: TestOpenLDAPReferenceTransactionRollback (0.15s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	3.046s
