@@ -1,0 +1,54 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkEntryCodecShortField/Tiny/Original-8         	100000000	         3.168 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Tiny/Original-8         	100000000	         3.156 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Tiny/Original-8         	100000000	         3.163 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Tiny/Current-8          	134384790	         2.680 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Tiny/Current-8          	133611277	         2.695 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Tiny/Current-8          	133305067	         2.701 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Original-8      	95039041	         3.818 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Original-8      	94336532	         3.810 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Original-8      	95247543	         3.800 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Current-8       	89713096	         4.001 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Current-8       	89906340	         4.000 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Long128/Current-8       	90542302	         4.000 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Original-8   	95507587	         3.799 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Original-8   	93478158	         3.778 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Original-8   	93745946	         4.260 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Current-8    	88554524	         3.996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Current-8    	90979921	         4.003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/Nonminimal/Current-8    	90145539	         4.006 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Original-8         	20522809	        17.49 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Original-8         	20288072	        17.17 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Original-8         	21841124	        16.98 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Current-8          	20915538	        17.61 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Current-8          	20769680	        17.39 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortField/TruncatedVarint/Current-8          	20152166	        17.43 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Original-8                    	121645798	         2.956 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Original-8                    	122664546	         2.934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Original-8                    	122983545	         2.927 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Current-8                     	168670902	         2.131 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Current-8                     	168573918	         2.134 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Tiny/Current-8                     	166158957	         2.151 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Original-8                 	100000000	         3.573 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Original-8                 	100000000	         3.588 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Original-8                 	100000000	         5.643 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Current-8                  	51313575	         7.152 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Current-8                  	75550468	         5.972 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Long128/Current-8                  	91051830	         3.890 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Original-8              	99575889	         3.664 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Original-8              	100000000	         3.597 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Original-8              	100000000	         3.573 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Current-8               	94541936	         3.834 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Current-8               	94618568	         3.844 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/Nonminimal/Current-8               	94407656	         3.834 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Original-8         	21926318	        16.96 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Original-8         	22107250	        16.92 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Original-8         	20861048	        17.26 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Current-8          	20270460	        17.00 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Current-8          	20715648	        17.14 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryCodecShortCount/TruncatedVarint/Current-8          	20796525	        17.07 ns/op	      16 B/op	       1 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/storage	17.521s

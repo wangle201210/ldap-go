@@ -1,0 +1,32 @@
+File: profile.test
+Type: cpu
+Time: 2026-09-23 15:56:15 CST
+Duration: 1.31s, Total samples = 1000ms (76.30%)
+Showing nodes accounting for 950ms, 95.00% of 1000ms total
+Showing top 25 nodes out of 63
+      flat  flat%   sum%        cum   cum%
+     160ms 16.00% 16.00%      160ms 16.00%  encoding/binary.Uvarint (inline)
+     100ms 10.00% 26.00%      100ms 10.00%  internal/bytealg.IndexByteString
+      90ms  9.00% 35.00%      240ms 24.00%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrowMetadata
+      70ms  7.00% 42.00%      150ms 15.00%  github.com/wangle201210/ldap-go/internal/directory.simpleDNDepthBytes
+      70ms  7.00% 49.00%      460ms 46.00%  github.com/wangle201210/ldap-go/internal/directory.validateSimpleDNIdentityInScopeBytes
+      60ms  6.00% 55.00%      140ms 14.00%  runtime.mapaccess2_faststr
+      50ms  5.00% 60.00%       50ms  5.00%  encoding/base64.assemble64 (inline)
+      50ms  5.00% 65.00%      120ms 12.00%  github.com/wangle201210/ldap-go/internal/storage.consumeEntryBinaryField
+      50ms  5.00% 70.00%       50ms  5.00%  runtime.memequal
+      40ms  4.00% 74.00%       90ms  9.00%  encoding/base64.(*Encoding).Decode
+      20ms  2.00% 76.00%       20ms  2.00%  aeshashbody
+      20ms  2.00% 78.00%       70ms  7.00%  bytes.Cut
+      20ms  2.00% 80.00%       50ms  5.00%  bytes.Index
+      20ms  2.00% 82.00%      110ms 11.00%  github.com/wangle201210/ldap-go/internal/directory.validSingleAVADNIdentityRDN
+      20ms  2.00% 84.00%      990ms 99.00%  github.com/wangle201210/ldap-go/internal/storage.ForEachReadOnlyStablePhysicalMetadataInScope
+      20ms  2.00% 86.00%       20ms  2.00%  github.com/wangle201210/ldap-go/internal/storage.consumeEntryBinaryCount
+      10ms  1.00% 87.00%       20ms  2.00%  bytes.HasPrefix (inline)
+      10ms  1.00% 88.00%      470ms 47.00%  github.com/wangle201210/ldap-go/internal/directory.ValidateDNIdentityInScopeBytes
+      10ms  1.00% 89.00%       10ms  1.00%  github.com/wangle201210/ldap-go/internal/directory.asciiDNAttributeLetter (inline)
+      10ms  1.00% 90.00%       50ms  5.00%  github.com/wangle201210/ldap-go/internal/schema.(*PreparedObjectClassMatcher).matchValues
+      10ms  1.00% 91.00%      160ms 16.00%  github.com/wangle201210/ldap-go/internal/schema.preparedAttributeNames.roles
+      10ms  1.00% 92.00%      230ms 23.00%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5.3
+      10ms  1.00% 93.00%       30ms  3.00%  go.etcd.io/bbolt.(*Cursor).next
+      10ms  1.00% 94.00%       20ms  2.00%  go.etcd.io/bbolt.(*elemRef).isLeaf (inline)
+      10ms  1.00% 95.00%       10ms  1.00%  go.etcd.io/bbolt/internal/common.(*Page).IsLeafPage (inline)

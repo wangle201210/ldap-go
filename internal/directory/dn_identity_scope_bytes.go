@@ -94,6 +94,17 @@ func validateSimpleDNIdentityInScopeBytes(value, key []byte, base DN, scope Scop
 // Exact final lengths reject trailing bytes at both levels; Uvarint preserves
 // acceptance of non-minimal encodings. Failures use the caller's full fallback.
 func validSingleAVADNIdentityRDN(encoded []byte) bool {
+	// Common RDNs use one-byte lengths at every level. Check all framing before
+	// accepting; larger or nonminimal varints retain the general validator.
+	if len(encoded) >= 6 && encoded[0] == 1 && encoded[1] < 128 &&
+		int(encoded[1]) == len(encoded)-2 && encoded[2] == 2 &&
+		encoded[3] > 0 && encoded[3] < 128 {
+		valueOffset := 4 + int(encoded[3])
+		if valueOffset < len(encoded) && encoded[valueOffset] < 128 &&
+			int(encoded[valueOffset]) == len(encoded)-valueOffset-1 {
+			return true
+		}
+	}
 	count, n := binary.Uvarint(encoded)
 	if n <= 0 || count != 1 {
 		return false

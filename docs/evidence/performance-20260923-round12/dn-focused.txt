@@ -1,0 +1,1 @@
+ok  	github.com/wangle201210/ldap-go/internal/directory	0.154s

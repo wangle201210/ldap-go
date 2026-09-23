@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/plan-8         	 1843276	       195.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/plan-8         	 1840202	       195.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/plan-8         	 1801701	       198.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/cursor-8       	 5134137	        70.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/cursor-8       	 5093384	        70.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/hit/cursor-8       	 5128999	        70.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/plan-8        	 1856694	       194.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/plan-8        	 1855341	       233.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/plan-8        	 1839181	       194.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/cursor-8      	 5262176	        70.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/cursor-8      	 5269413	        73.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/stable11/miss/cursor-8      	 4958990	        74.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/plan-8    	 1848830	       195.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/plan-8    	 1829673	       197.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/plan-8    	 1840246	       195.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/cursor-8  	 2802823	       128.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/cursor-8  	 2818520	       128.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/hit/cursor-8  	 2799114	       178.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/plan-8   	 1000000	       471.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/plan-8   	 1771592	       201.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/plan-8   	 1535152	       230.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/cursor-8 	 2292052	       165.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/cursor-8 	 2428336	       147.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPreparedSubstringQueryCursor/alternating11/miss/cursor-8 	 2612043	       134.6 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	9.046s

@@ -60,25 +60,24 @@ Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
 
 | Metric | Operations | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 3,000 | 360.74 ms | 200.82 ms | 55.7% |
-| Root Bind | 3,000 | 254.80 ms | 191.71 ms | 75.2% |
-| Base search | 3,000 | 287.94 ms | 239.10 ms | 83.0% |
-| Indexed equality | 3,000 | 306.60 ms | 249.43 ms | 81.4% |
-| Compare, matching | 3,000 | 302.24 ms | 199.92 ms | 66.1% |
-| Prefix substring | 20 | 1,112.34 ms | 621.19 ms | 55.8% |
-| Add | 20 | 15.51 ms | 97.49 ms | 628.6% |
-| Modify, unindexed description | 20 | 8.45 ms | 94.64 ms | 1,119.6% |
-| ModifyDN | 20 | 27.36 ms | 89.73 ms | 328.0% |
-| Delete | 20 | 18.35 ms | 88.51 ms | 482.5% |
+| User Bind, SSHA | 3,000 | 380.35 ms | 195.69 ms | 51.5% |
+| Root Bind | 3,000 | 269.17 ms | 194.37 ms | 72.2% |
+| Base search | 3,000 | 308.35 ms | 245.55 ms | 79.6% |
+| Indexed equality | 3,000 | 321.94 ms | 268.46 ms | 83.4% |
+| Compare, matching | 3,000 | 325.59 ms | 209.41 ms | 64.3% |
+| Prefix substring | 20 | 906.59 ms | 618.63 ms | 68.2% |
+| Negative substring | 20 | 900.94 ms | 621.25 ms | 69.0% |
+| Add | 20 | 15.46 ms | 110.41 ms | 714.0% |
+| Modify, unindexed description | 20 | 8.23 ms | 116.95 ms | 1,420.8% |
+| ModifyDN | 20 | 28.39 ms | 111.31 ms | 392.0% |
+| Delete | 20 | 18.60 ms | 117.94 ms | 634.2% |
 
-Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round11.md)
-retains both the initial noisy replay, including slower results, and the
-interleaved recheck: ordinary search/Compare changed around 1%, user Bind was
-about 3% faster, and long-DN Bind/Compare about 4-6% faster against `4a990fd`.
-Protocol allocation reductions are larger than the end-to-end gains. Read/auth
-RSS in the initial replay was 414.9 / 95.4 MiB. Small serial write results do
-not generalize to every production workload. Startup, cold initialization,
-Bind, substrings and memory remain gaps.
+Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round12.md)
+records about 18% lower substring latency against `9581b3d`. Short operations
+remain mixed, including slower results; the initial replay, batch recheck and
+per-request recheck are all retained. Read/auth RSS in the initial replay was
+414.2 / 95.6 MiB. Small serial write results do not generalize to every production
+workload. Startup, cold initialization, Bind, substrings and memory remain gaps.
 The [write-index report](docs/performance-optimization-20260923-round8.md)
 documents initialization costs; [historical paging results](docs/openldap-100k-evidence.md)
 use a different workload.

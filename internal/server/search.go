@@ -2306,9 +2306,9 @@ func (server *Server) handleUncachedSearch(
 								}
 								if len(plan.sources) == 0 {
 									if preparedRootSubstring != nil {
-										var substringQuery *schema.PreparedSubstringQueryPlan
+										var substringQuery *schema.PreparedSubstringQueryCursor
 										if preparedEntryClasses != nil {
-											substringQuery = preparedRootSubstring.WithObjectClasses(preparedEntryClasses)
+											substringQuery = preparedRootSubstring.WithObjectClasses(preparedEntryClasses).NewCursor()
 										}
 										streamed, err = storage.ForEachReadOnlyStablePhysicalMetadataInScope(tx, scopeBase, route.scope,
 											func(view storage.EntryMetadataView, inScope bool, scopeErr error) error {

@@ -202,6 +202,13 @@ func entryDNBinding(identity, source string) [sha256.Size]byte {
 }
 
 func consumeEntryBinaryField(value []byte) ([]byte, []byte, error) {
+	if len(value) > 0 && value[0] < 0x80 {
+		length := int(value[0])
+		if length < len(value) {
+			value = value[1:]
+			return value[:length:length], value[length:], nil
+		}
+	}
 	length, count := binary.Uvarint(value)
 	if count <= 0 {
 		return nil, nil, errors.New("invalid length")
@@ -214,6 +221,9 @@ func consumeEntryBinaryField(value []byte) ([]byte, []byte, error) {
 }
 
 func consumeEntryBinaryCount(value []byte) (int, []byte, error) {
+	if len(value) > 0 && value[0] < 0x80 {
+		return int(value[0]), value[1:], nil
+	}
 	count, width := binary.Uvarint(value)
 	if width <= 0 {
 		return 0, nil, errors.New("invalid count")

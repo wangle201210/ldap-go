@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/directory
+cpu: Apple M1 Pro
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8   	  548811	      1106 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8   	  534836	      1108 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8   	  552364	      1180 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8   	  449419	      1152 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8   	  575690	      1103 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8 	  591724	      1012 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8 	  593006	      1005 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8 	  583604	       983.5 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8 	  630298	      1013 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8 	  595892	       987.6 ns/op	     520 B/op	      24 allocs/op
+PASS
