@@ -1,0 +1,75 @@
+File: profile.test
+Type: inuse_space
+Time: 2026-09-23 14:33:53 CST
+Showing nodes accounting for 84.66MB, 100% of 84.66MB total
+      flat  flat%   sum%        cum   cum%
+   30.51MB 36.03% 36.03%    30.51MB 36.03%  github.com/wangle201210/ldap-go/internal/directory.encodeDNIdentity
+   30.01MB 35.45% 71.48%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).buildNamingContextIndex.func1
+   15.61MB 18.44% 89.92%    15.61MB 18.44%  github.com/wangle201210/ldap-go/internal/storage.(*boltNamingContextIndex).put
+    4.50MB  5.32% 95.24%     4.50MB  5.32%  github.com/wangle201210/ldap-go/internal/storage.decodeNamingContextMetadataDN
+    2.51MB  2.96% 98.20%     2.51MB  2.96%  runtime.mallocgc
+    0.52MB  0.61% 98.82%     0.52MB  0.61%  github.com/xdg-go/stringprep.map.init.2
+    0.50MB  0.59% 99.41%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).Clone
+    0.50MB  0.59%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/directory.cloneValues (inline)
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/cmd/ldap-go.TestPerformanceSnapshotProfile.func1
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/cmd/ldap-go.runServe
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/cmd/ldap-go.runWithContext (inline)
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/cmd/ldap-go.runWithContextAndSignals
+         0     0%   100%    17.50MB 20.68%  github.com/wangle201210/ldap-go/internal/directory.DN.NormalizeWith
+         0     0%   100%       13MB 15.36%  github.com/wangle201210/ldap-go/internal/directory.DN.ParentKey
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/directory.Entry.Clone
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*Server).buildRuntimeState
+         0     0%   100%    81.13MB 95.83%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleAdd
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleAdd.func1
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleSearch
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleUncachedSearch.func5
+         0     0%   100%    81.13MB 95.83%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+         0     0%   100%    81.13MB 95.83%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection.func4
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*Server).updateStorage
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*Server).updateStorage.func1
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).Update
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).Update.func1
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View.func1
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).Update
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).Update.func1
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View.func1
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*searchBaseCache).put
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.New
+         0     0%   100%     0.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.New.func4
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/server.refreshRuntimeNamingContexts
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).Update
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View
+         0     0%   100%        1MB  1.18%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View.func1
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).update
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).update.func2
+         0     0%   100%    35.01MB 41.35%  github.com/wangle201210/ldap-go/internal/storage.(*boltNamingContextIndex).decodeRow
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).buildNamingContextIndex
+         0     0%   100%    80.63MB 95.24%  github.com/wangle201210/ldap-go/internal/storage.InferNamingContextsIncremental
+         0     0%   100%     0.52MB  0.61%  github.com/xdg-go/stringprep.init
+         0     0%   100%    80.63MB 95.24%  go.etcd.io/bbolt.(*Bucket).ForEach
+         0     0%   100%    80.63MB 95.24%  go.etcd.io/bbolt.(*DB).Update
+         0     0%   100%        1MB  1.18%  go.etcd.io/bbolt.(*DB).View
+         0     0%   100%     1.50MB  1.78%  runtime.allocm
+         0     0%   100%     0.52MB  0.61%  runtime.doInit (inline)
+         0     0%   100%     0.52MB  0.61%  runtime.doInit1
+         0     0%   100%     0.52MB  0.61%  runtime.main
+         0     0%   100%     0.50MB  0.59%  runtime.malg
+         0     0%   100%     1.50MB  1.78%  runtime.mstart
+         0     0%   100%     1.50MB  1.78%  runtime.mstart0
+         0     0%   100%     1.50MB  1.78%  runtime.mstart1
+         0     0%   100%     1.50MB  1.78%  runtime.newm
+         0     0%   100%     2.51MB  2.96%  runtime.newobject
+         0     0%   100%     0.50MB  0.59%  runtime.newproc.func1
+         0     0%   100%     0.50MB  0.59%  runtime.newproc1
+         0     0%   100%     0.51MB   0.6%  runtime.procresize
+         0     0%   100%     1.50MB  1.78%  runtime.resetspinning
+         0     0%   100%     0.51MB   0.6%  runtime.rt0_go
+         0     0%   100%     0.51MB   0.6%  runtime.schedinit
+         0     0%   100%     1.50MB  1.78%  runtime.schedule
+         0     0%   100%     1.50MB  1.78%  runtime.startm
+         0     0%   100%     0.50MB  0.59%  runtime.systemstack
+         0     0%   100%     1.50MB  1.78%  runtime.wakep

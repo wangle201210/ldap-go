@@ -11,6 +11,7 @@ import (
 
 	"github.com/wangle201210/ldap-go/internal/auth"
 	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -151,6 +152,89 @@ func TestPasswordBindValuesPreserveACLAndFullVerification(t *testing.T) {
 	}
 }
 
+func TestPasswordBindSpecialEntryClassification(t *testing.T) {
+	instance, database, dn := newReadOnlyPasswordBindFixture(t, "memory", stringValues("secret"), nil)
+	store := instance.config.Store
+	runtime := *instance.runtime.Load()
+	runtime.schema = runtime.schema.Clone()
+	const attributeOID = "1.3.6.1.4.1.99999.965.4"
+	if err := runtime.schema.RegisterAttributeType(schema.AttributeType{
+		OID: attributeOID, Names: []string{"bindObjectClass", "bindObjectClassAlias"}, Superior: "objectClass",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	classes := []struct {
+		value   string
+		special bool
+	}{
+		{value: "inetOrgPerson"},
+		{value: "unknownBindClass"},
+	}
+	for index, name := range []string{"subentry", "alias", "referral"} {
+		class, ok := runtime.schema.ObjectClass(name)
+		if !ok {
+			t.Fatalf("missing class %q", name)
+		}
+		child := schema.ObjectClass{
+			OID:   fmt.Sprintf("1.3.6.1.4.1.99999.965.%d", index+1),
+			Names: []string{"bind" + name, "bind" + name + "Alias"}, Superiors: []string{name}, Kind: class.Kind,
+		}
+		if err := runtime.schema.RegisterObjectClass(child); err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []string{name, class.OID, child.OID, child.Names[1]} {
+			classes = append(classes, struct {
+				value   string
+				special bool
+			}{value: value, special: true})
+		}
+	}
+	prepared, err := runtime.schema.PrepareObjectClassMatcher("subentry", "alias", "referral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"prepared", "fallback"} {
+		runtime.searchEntryClasses = prepared
+		if mode == "fallback" {
+			runtime.searchEntryClasses = nil
+		}
+		for _, description := range []string{"objectClass", "2.5.4.0", "OBJECTCLASS;binary", "bindObjectClassAlias;lang-en", attributeOID} {
+			for _, class := range classes {
+				t.Run(mode+"/"+description+"/"+class.value, func(t *testing.T) {
+					entry := directory.Entry{DN: aliceDN, Attributes: []directory.Attribute{
+						{Description: description, Values: stringValues(class.value)},
+						{Description: "userPassword", Values: stringValues("secret")},
+					}}
+					want := runtime.schema.EntryHasObjectClass(entry, "subentry") ||
+						runtime.schema.EntryHasObjectClass(entry, "alias") ||
+						runtime.schema.EntryHasObjectClass(entry, "referral")
+					if want != class.special {
+						t.Fatalf("schema classification = %t; want %t", want, class.special)
+					}
+					if err := store.Update(t.Context(), func(writer storage.Writer) error {
+						return writerForDatabase(writer, *database).Put(entry, true)
+					}); err != nil {
+						t.Fatal(err)
+					}
+					probe := &passwordBindCandidateProbeStore{Store: store}
+					instance.config.Store = probe
+					result, err := instance.authenticatePasswordBind(t.Context(), &runtime, dn.String(), []byte("secret"), false)
+					if err != nil || result.authenticated != !want {
+						t.Fatalf("Bind = %#v, %v; want authenticated=%t", result, err, !want)
+					}
+					aclCalls := 2
+					if want {
+						aclCalls = 0
+					}
+					if probe.views != 2 || probe.reads != 2 || probe.aclCalls != aclCalls || probe.sourceChanged {
+						t.Fatalf("views=%d reads=%d ACL calls=%d source changed=%t", probe.views, probe.reads, probe.aclCalls, probe.sourceChanged)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestReadOnlyPasswordBindErrorsAndCancellation(t *testing.T) {
 	storageFailure := errors.New("read failure")
 	for _, test := range []struct {
@@ -204,30 +288,45 @@ func TestReadOnlyPasswordBindErrorsAndCancellation(t *testing.T) {
 }
 
 func TestReadOnlyPasswordBindUsesFinalSnapshot(t *testing.T) {
-	for _, supplied := range []string{"secret", "replacement"} {
-		t.Run(supplied, func(t *testing.T) {
-			instance, database, dn := newReadOnlyPasswordBindFixture(t, "memory", stringValues("secret"), nil)
-			probe := &readOnlyBindProbeStore{Store: instance.config.Store}
-			probe.beforeView = func(view int) error {
-				if view != 2 {
-					return nil
-				}
-				return probe.Store.Update(t.Context(), func(writer storage.Writer) error {
-					tx := writerForDatabase(writer, *database)
-					entry, err := tx.Get(dn)
-					if err != nil {
-						return err
+	for _, backend := range []string{"memory", "bolt"} {
+		for _, change := range []string{"password", "delete", "subentry", "alias", "referral"} {
+			for _, supplied := range []string{"secret", "replacement"} {
+				t.Run(backend+"/"+change+"/"+supplied, func(t *testing.T) {
+					instance, database, dn := newReadOnlyPasswordBindFixture(t, backend, stringValues("secret"), nil)
+					probe := &readOnlyBindProbeStore{Store: instance.config.Store}
+					probe.beforeView = func(view int) error {
+						if view != 2 {
+							return nil
+						}
+						return probe.Store.Update(t.Context(), func(writer storage.Writer) error {
+							tx := writerForDatabase(writer, *database)
+							if change == "delete" {
+								return tx.Delete(dn)
+							}
+							entry, err := tx.Get(dn)
+							if err != nil {
+								return err
+							}
+							if change == "password" {
+								entry.ReplaceValues("userPassword", stringValues("replacement"))
+							} else {
+								entry.ReplaceValues("objectClass", stringValues(change))
+							}
+							return tx.Put(entry, true)
+						})
 					}
-					entry.ReplaceValues("userPassword", stringValues("replacement"))
-					return tx.Put(entry, true)
+					instance.config.Store = probe
+					result, err := instance.authenticatePasswordBind(t.Context(), instance.runtime.Load(), dn.String(), []byte(supplied), false)
+					want := passwordBindResult{}
+					if change == "password" {
+						want = passwordBindResult{authenticated: supplied == "replacement", authenticatedDN: dn.String()}
+					}
+					if err != nil || !reflect.DeepEqual(result, want) || probe.views != 2 || probe.updates != 0 {
+						t.Fatalf("Bind(%q) = %#v, %v; want %#v; views=%d updates=%d", supplied, result, err, want, probe.views, probe.updates)
+					}
 				})
 			}
-			instance.config.Store = probe
-			result, err := instance.authenticatePasswordBind(t.Context(), instance.runtime.Load(), dn.String(), []byte(supplied), false)
-			if err != nil || result.authenticated != (supplied == "replacement") || probe.updates != 0 {
-				t.Fatalf("Bind(%q) = %#v, %v; updates=%d", supplied, result, err, probe.updates)
-			}
-		})
+		}
 	}
 }
 

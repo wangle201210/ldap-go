@@ -3943,6 +3943,11 @@ func databaseDNEqual(
 	left directory.DN,
 	right directory.DN,
 ) bool {
+	if database.dnNormalizer == nil {
+		if equal, _, ok := left.SimpleLegacyDisplayRelation(right); ok {
+			return equal
+		}
+	}
 	left, err := normalizeRuntimeDatabaseDN(database, left)
 	if err != nil {
 		return false
@@ -3956,6 +3961,11 @@ func databaseDNAtOrBelow(
 	dn directory.DN,
 	base directory.DN,
 ) bool {
+	if database.dnNormalizer == nil {
+		if equal, ancestor, ok := base.SimpleLegacyDisplayRelation(dn); ok {
+			return equal || ancestor
+		}
+	}
 	dn, err := normalizeRuntimeDatabaseDN(database, dn)
 	if err != nil {
 		return false
@@ -3969,6 +3979,11 @@ func databaseDNStrictlyBelow(
 	dn directory.DN,
 	base directory.DN,
 ) bool {
+	if database.dnNormalizer == nil {
+		if _, ancestor, ok := base.SimpleLegacyDisplayRelation(dn); ok {
+			return ancestor
+		}
+	}
 	dn, err := normalizeRuntimeDatabaseDN(database, dn)
 	if err != nil {
 		return false

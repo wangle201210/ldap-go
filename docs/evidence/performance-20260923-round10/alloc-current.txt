@@ -1,0 +1,145 @@
+File: profile-current.test
+Type: alloc_space
+Time: 2026-09-23 14:47:08 CST
+Showing nodes accounting for 2189.22MB, 95.34% of 2296.28MB total
+Dropped 87 nodes (cum <= 11.48MB)
+      flat  flat%   sum%        cum   cum%
+  189.51MB  8.25%  8.25%   189.51MB  8.25%  internal/bytealg.MakeNoZero
+     154MB  6.71% 14.96%      154MB  6.71%  github.com/go-ldap/ldap/v3.ParseDN.func1 (inline)
+  150.01MB  6.53% 21.49%   420.03MB 18.29%  github.com/wangle201210/ldap-go/internal/directory.DN.NormalizeWith
+  133.54MB  5.82% 27.31%   133.54MB  5.82%  github.com/wangle201210/ldap-go/internal/storage.decodeBinaryStoredEntryAttributes
+  108.04MB  4.70% 32.01%   108.04MB  4.70%  go.etcd.io/bbolt.cloneBytes (inline)
+  101.50MB  4.42% 36.43%   101.50MB  4.42%  unicode/utf8.AppendRune (inline)
+   97.50MB  4.25% 40.68%    97.50MB  4.25%  github.com/wangle201210/ldap-go/internal/directory.encodeDNIdentityParts
+   91.05MB  3.97% 44.64%    91.05MB  3.97%  bytes.Clone (inline)
+   83.07MB  3.62% 48.26%   700.17MB 30.49%  github.com/wangle201210/ldap-go/internal/server.(*Server).preverifyExternalPasswordBind
+   78.56MB  3.42% 51.68%   650.66MB 28.34%  github.com/wangle201210/ldap-go/internal/server.(*Server).authenticateReadOnlyPasswordBind
+   76.51MB  3.33% 55.01%    76.51MB  3.33%  github.com/wangle201210/ldap-go/internal/directory.encodeDNIdentity
+      74MB  3.22% 58.24%       74MB  3.22%  strings.(*Builder).WriteByte (inline)
+      61MB  2.66% 60.89%       61MB  2.66%  github.com/wangle201210/ldap-go/internal/directory.formatDNRDNs
+   54.50MB  2.37% 63.27%   338.01MB 14.72%  github.com/go-ldap/ldap/v3.ParseDN
+   48.51MB  2.11% 65.38%   129.51MB  5.64%  github.com/go-ldap/ldap/v3.decodeString
+   45.50MB  1.98% 67.36%   153.54MB  6.69%  go.etcd.io/bbolt.(*Bucket).openBucket
+   44.01MB  1.92% 69.28%    44.01MB  1.92%  github.com/wangle201210/ldap-go/internal/storage.partitionedEntryKey (inline)
+   42.51MB  1.85% 71.13%    42.51MB  1.85%  encoding/base64.(*Encoding).EncodeToString
+   38.50MB  1.68% 72.81%    38.50MB  1.68%  go.etcd.io/bbolt.(*Cursor).search
+   37.51MB  1.63% 74.44%   313.62MB 13.66%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).getSchemaAwareIn
+      37MB  1.61% 76.05%       37MB  1.61%  github.com/go-asn1-ber/asn1-ber.Encode
+      37MB  1.61% 77.66%       54MB  2.35%  github.com/wangle201210/ldap-go/internal/schema.normalizeSpace
+      32MB  1.39% 79.06%   126.50MB  5.51%  github.com/go-ldap/ldap/v3.(*AttributeTypeAndValue).String
+   31.01MB  1.35% 80.41%  2241.81MB 97.63%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+   29.50MB  1.28% 81.69%    29.50MB  1.28%  github.com/wangle201210/ldap-go/internal/directory.decodeDNIdentityParts
+   29.32MB  1.28% 82.97%    29.32MB  1.28%  github.com/wangle201210/ldap-go/internal/storage.(*boltNamingContextIndex).put
+      29MB  1.26% 84.23%   196.01MB  8.54%  github.com/go-ldap/ldap/v3.(*DN).String
+   27.01MB  1.18% 85.41%   407.36MB 17.74%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).buildNamingContextIndex.func1
+      24MB  1.05% 86.45%       26MB  1.13%  github.com/wangle201210/ldap-go/internal/storage.entryDNBinding
+      22MB  0.96% 87.41%    30.51MB  1.33%  go.etcd.io/bbolt.(*DB).beginTx
+   18.50MB  0.81% 88.22%    18.50MB  0.81%  github.com/wangle201210/ldap-go/internal/server.accessReaderFromContext (inline)
+      18MB  0.78% 89.00%    50.50MB  2.20%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection
+      17MB  0.74% 89.74%       17MB  0.74%  strings.Fields
+      16MB   0.7% 90.44%       16MB   0.7%  encoding/base64.(*Encoding).DecodeString
+   15.50MB  0.68% 91.11%    15.50MB  0.68%  github.com/wangle201210/ldap-go/internal/server.accessContextReader.AccessContext
+      14MB  0.61% 91.72%       14MB  0.61%  github.com/wangle201210/ldap-go/internal/storage.boltSchemaAwareDNMigrationMetadataKey
+      14MB  0.61% 92.33%       14MB  0.61%  bytes.(*Buffer).grow
+   13.50MB  0.59% 92.92%   181.54MB  7.91%  github.com/wangle201210/ldap-go/internal/storage.newBoltTx
+   11.50MB   0.5% 93.42%    11.50MB   0.5%  bytes.ToLower
+      10MB  0.44% 93.86%    13.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.newTrackedOperation
+    6.50MB  0.28% 94.14%  1186.70MB 51.68%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View
+       6MB  0.26% 94.40%   207.02MB  9.02%  github.com/wangle201210/ldap-go/internal/storage.decodeNamingContextMetadataDN
+       6MB  0.26% 94.66%   935.65MB 40.75%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View.func1
+    5.50MB  0.24% 94.90%  1525.34MB 66.43%  github.com/wangle201210/ldap-go/internal/server.(*Server).authenticatePasswordBind
+       3MB  0.13% 95.03%  2195.30MB 95.60%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+    2.50MB  0.11% 95.14%  1189.20MB 51.79%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View
+    2.50MB  0.11% 95.25%       54MB  2.35%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).attributeValues
+       1MB 0.044% 95.29%       13MB  0.57%  github.com/go-asn1-ber/asn1-ber.(*Packet).AppendChild
+       1MB 0.044% 95.34%  1669.84MB 72.72%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleBind
+         0     0% 95.34%       14MB  0.61%  bytes.(*Buffer).Write
+         0     0% 95.34%    30.50MB  1.33%  github.com/go-ldap/ldap/v3.(*AttributeTypeAndValue).setType (inline)
+         0     0% 95.34%    99.01MB  4.31%  github.com/go-ldap/ldap/v3.(*AttributeTypeAndValue).setValue
+         0     0% 95.34%   126.50MB  5.51%  github.com/go-ldap/ldap/v3.(*RelativeDN).String
+         0     0% 95.34%       74MB  3.22%  github.com/go-ldap/ldap/v3.encodeString
+         0     0% 95.34%    20.50MB  0.89%  github.com/go-ldap/ldap/v3.foldString
+         0     0% 95.34%   487.03MB 21.21%  github.com/wangle201210/ldap-go/internal/acl.(*Policy).Allowed
+         0     0% 95.34%   142.51MB  6.21%  github.com/wangle201210/ldap-go/internal/acl.(*Policy).rulesFor
+         0     0% 95.34%   142.51MB  6.21%  github.com/wangle201210/ldap-go/internal/acl.normalizeACLDN
+         0     0% 95.34%   344.52MB 15.00%  github.com/wangle201210/ldap-go/internal/acl.parseACLDN
+         0     0% 95.34%       66MB  2.87%  github.com/wangle201210/ldap-go/internal/directory.DN.String (inline)
+         0     0% 95.34%    88.01MB  3.83%  github.com/wangle201210/ldap-go/internal/directory.DN.ValidateIdentityKey
+         0     0% 95.34%   594.53MB 25.89%  github.com/wangle201210/ldap-go/internal/directory.ParseDN
+         0     0% 95.34%   483.53MB 21.06%  github.com/wangle201210/ldap-go/internal/directory.ParseDNWithNormalizer
+         0     0% 95.34%   338.01MB 14.72%  github.com/wangle201210/ldap-go/internal/directory.parseDN
+         0     0% 95.34%       52MB  2.26%  github.com/wangle201210/ldap-go/internal/ldapwire.EncodeBindResponse (inline)
+         0     0% 95.34%    17.50MB  0.76%  github.com/wangle201210/ldap-go/internal/ldapwire.ReadMessageWithDynamicFilterDepthAndSize
+         0     0% 95.34%       27MB  1.18%  github.com/wangle201210/ldap-go/internal/ldapwire.appendLDAPResult
+         0     0% 95.34%       18MB  0.78%  github.com/wangle201210/ldap-go/internal/ldapwire.encodeMessage (inline)
+         0     0% 95.34%       18MB  0.78%  github.com/wangle201210/ldap-go/internal/ldapwire.encodeMessageWithControlPresence
+         0     0% 95.34%       52MB  2.26%  github.com/wangle201210/ldap-go/internal/ldapwire.encodeResultMessage
+         0     0% 95.34%       14MB  0.61%  github.com/wangle201210/ldap-go/internal/ldapwire.octetString
+         0     0% 95.34%    17.50MB  0.76%  github.com/wangle201210/ldap-go/internal/ldapwire.readMessageWithFilterDepthProviderAndSize
+         0     0% 95.34%       54MB  2.35%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).AttributeValues
+         0     0% 95.34%      104MB  4.53%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).NormalizeDNAttribute
+         0     0% 95.34%       42MB  1.83%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).attributeDescriptionSubtype
+         0     0% 95.34%      104MB  4.53%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).normalizeDNAttributeLocked
+         0     0% 95.34%      104MB  4.53%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).normalizeWithRuleLocked
+         0     0% 95.34%    38.50MB  1.68%  github.com/wangle201210/ldap-go/internal/schema.canonicalMatchingRule
+         0     0% 95.34%    65.50MB  2.85%  github.com/wangle201210/ldap-go/internal/schema.normalizeCaseIgnore
+         0     0% 95.34%       86MB  3.75%  github.com/wangle201210/ldap-go/internal/schema.normalizeWithRule
+         0     0% 95.34%    44.50MB  1.94%  github.com/wangle201210/ldap-go/internal/schema.schemaKey
+         0     0% 95.34%   505.03MB 21.99%  github.com/wangle201210/ldap-go/internal/server.(*Server).allowed
+         0     0% 95.34%   451.07MB 19.64%  github.com/wangle201210/ldap-go/internal/server.(*Server).authenticateReadOnlyPasswordBind.func1
+         0     0% 95.34%    12.50MB  0.54%  github.com/wangle201210/ldap-go/internal/server.(*Server).connectionACLSubject
+         0     0% 95.34%   407.36MB 17.74%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleAdd
+         0     0% 95.34%   407.36MB 17.74%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleAdd.func1
+         0     0% 95.34%   478.58MB 20.84%  github.com/wangle201210/ldap-go/internal/server.(*Server).preverifyExternalPasswordBind.func1
+         0     0% 95.34%  2241.81MB 97.63%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection.func4
+         0     0% 95.34%   410.95MB 17.90%  github.com/wangle201210/ldap-go/internal/server.(*Server).updateStorage
+         0     0% 95.34%   409.94MB 17.85%  github.com/wangle201210/ldap-go/internal/server.(*Server).updateStorage.func1
+         0     0% 95.34%   280.02MB 12.19%  github.com/wangle201210/ldap-go/internal/server.(*Server).verifyPasswordBindValues
+         0     0% 95.34%   410.95MB 17.90%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).Update
+         0     0% 95.34%   409.94MB 17.85%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).Update.func1
+         0     0% 95.34%   954.15MB 41.55%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View.func1
+         0     0% 95.34%   410.95MB 17.90%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).Update
+         0     0% 95.34%   409.94MB 17.85%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).Update.func1
+         0     0% 95.34%    13.50MB  0.59%  github.com/wangle201210/ldap-go/internal/server.(*operationRegistry).register
+         0     0% 95.34%    15.50MB  0.68%  github.com/wangle201210/ldap-go/internal/server.accessSubject
+         0     0% 95.34%       88MB  3.83%  github.com/wangle201210/ldap-go/internal/server.bindPreDelegationResult
+         0     0% 95.34%    26.50MB  1.15%  github.com/wangle201210/ldap-go/internal/server.databaseDNAtOrBelow
+         0     0% 95.34%    26.50MB  1.15%  github.com/wangle201210/ldap-go/internal/server.databaseForDN (inline)
+         0     0% 95.34%    26.50MB  1.15%  github.com/wangle201210/ldap-go/internal/server.databaseIndexForDN
+         0     0% 95.34%   158.51MB  6.90%  github.com/wangle201210/ldap-go/internal/server.normalizePasswordPolicyDN
+         0     0% 95.34%       32MB  1.39%  github.com/wangle201210/ldap-go/internal/server.normalizeRuntimeDatabaseDN
+         0     0% 95.34%   162.51MB  7.08%  github.com/wangle201210/ldap-go/internal/server.parseRuntimeConnectionDN
+         0     0% 95.34%   408.42MB 17.79%  github.com/wangle201210/ldap-go/internal/server.refreshRuntimeNamingContexts
+         0     0% 95.34%    15.50MB  0.68%  github.com/wangle201210/ldap-go/internal/server.storageRevisionReader.AccessContext
+         0     0% 95.34%   410.95MB 17.90%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).Update
+         0     0% 95.34%  1166.20MB 50.79%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View
+         0     0% 95.34%  1135.69MB 49.46%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View.func1
+         0     0% 95.34%   410.95MB 17.90%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).update
+         0     0% 95.34%   409.94MB 17.85%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).update.func2
+         0     0% 95.34%   351.03MB 15.29%  github.com/wangle201210/ldap-go/internal/storage.(*boltNamingContextIndex).decodeRow
+         0     0% 95.34%   407.36MB 17.74%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).buildNamingContextIndex
+         0     0% 95.34%       17MB  0.74%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).schemaAwareDNIdentityReady
+         0     0% 95.34%   408.42MB 17.79%  github.com/wangle201210/ldap-go/internal/storage.InferNamingContextsIncremental
+         0     0% 95.34%   133.54MB  5.82%  github.com/wangle201210/ldap-go/internal/storage.decodeBinaryStoredEntry
+         0     0% 95.34%   211.09MB  9.19%  github.com/wangle201210/ldap-go/internal/storage.decodeNormalizedStoredEntry
+         0     0% 95.34%   211.09MB  9.19%  github.com/wangle201210/ldap-go/internal/storage.decodeStoredEntry
+         0     0% 95.34%    15.50MB  0.68%  github.com/wangle201210/ldap-go/internal/storage.partitionReader.AccessContext
+         0     0% 95.34%       17MB  0.74%  github.com/wangle201210/ldap-go/internal/storage.requireSchemaAwareDNIdentities
+         0     0% 95.34%   330.62MB 14.40%  github.com/wangle201210/ldap-go/internal/storage.schemaAwareGetIn
+         0     0% 95.34%   343.12MB 14.94%  github.com/wangle201210/ldap-go/internal/storage.schemaAwarePartitionReader.Get
+         0     0% 95.34%    17.50MB  0.76%  github.com/wangle201210/ldap-go/internal/storage.schemaAwarePartitionReader.NormalizeDNIdentity
+         0     0% 95.34%   201.02MB  8.75%  github.com/wangle201210/ldap-go/internal/storage.validateStoredEntryIdentityDN
+         0     0% 95.34%   168.04MB  7.32%  go.etcd.io/bbolt.(*Bucket).Bucket
+         0     0% 95.34%   407.36MB 17.74%  go.etcd.io/bbolt.(*Bucket).ForEach
+         0     0% 95.34%       24MB  1.05%  go.etcd.io/bbolt.(*Bucket).Get
+         0     0% 95.34%    19.50MB  0.85%  go.etcd.io/bbolt.(*Cursor).searchPage
+         0     0% 95.34%    38.50MB  1.68%  go.etcd.io/bbolt.(*Cursor).seek
+         0     0% 95.34%    30.51MB  1.33%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 95.34%   410.95MB 17.90%  go.etcd.io/bbolt.(*DB).Update
+         0     0% 95.34%  1166.20MB 50.79%  go.etcd.io/bbolt.(*DB).View
+         0     0% 95.34%   168.04MB  7.32%  go.etcd.io/bbolt.(*Tx).Bucket (inline)
+         0     0% 95.34%   189.51MB  8.25%  strings.(*Builder).Grow
+         0     0% 95.34%   101.50MB  4.42%  strings.(*Builder).WriteRune
+         0     0% 95.34%   189.51MB  8.25%  strings.(*Builder).grow
+         0     0% 95.34%   106.51MB  4.64%  strings.Join
+         0     0% 95.34%       83MB  3.61%  strings.ToLower

@@ -332,9 +332,7 @@ func (server *Server) preverifyExternalPasswordBind(
 		if err != nil {
 			return err
 		}
-		if runtime.schema.EntryHasObjectClass(entry, "subentry") ||
-			runtime.schema.EntryHasObjectClass(entry, "alias") ||
-			runtime.schema.EntryHasObjectClass(entry, "referral") {
+		if smallIndexedEntryIsSpecial(runtime, entry) {
 			return nil
 		}
 		policy, hasPolicy := loadPasswordPolicy(runtime, reader, database, entry)
@@ -353,7 +351,10 @@ func (server *Server) preverifyExternalPasswordBind(
 		if totpPasswordEnabled {
 			lastTOTPAuthentication = totpPasswordLastAuthentication(runtime.schema, entry)
 		}
-		for _, stored := range runtime.schema.AttributeValues(entry, policy.attribute) {
+		// AttributeValues owns the bytes; compact its slice without copying them again.
+		values := runtime.schema.AttributeValues(entry, policy.attribute)
+		candidates = values[:0]
+		for _, stored := range values {
 			if !server.allowed(
 				runtime,
 				tx,
@@ -365,8 +366,9 @@ func (server *Server) preverifyExternalPasswordBind(
 			) {
 				continue
 			}
-			candidates = append(candidates, bytes.Clone(stored))
+			candidates = append(candidates, stored)
 		}
+		clear(values[len(candidates):])
 		return nil
 	})
 	if err != nil || len(candidates) == 0 {

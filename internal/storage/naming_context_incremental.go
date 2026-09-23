@@ -34,6 +34,11 @@ type namingContextIndexNode struct {
 	owners map[string]struct{} // Allocated only for duplicate global identities.
 }
 
+type namingContextIndexChildren struct {
+	parent     string
+	identities map[string]struct{} // Live child identities reference the shared parent key.
+}
+
 // Access is restricted to managed write transactions under Bolt.updateMu.
 // Rows contain owned DN metadata, never attributes or mmap-backed slices.
 type boltNamingContextIndex struct {
@@ -43,7 +48,7 @@ type boltNamingContextIndex struct {
 	configDN    directory.DN
 	rows        map[string]namingContextIndexRow
 	nodes       map[string]*namingContextIndexNode
-	children    map[string]map[string]struct{}
+	children    map[string]namingContextIndexChildren
 	roots       map[string]string
 	bytes       int64
 }
@@ -103,7 +108,7 @@ func (tx *boltTx) buildNamingContextIndex(normalizer directory.DNAttributeNormal
 	index := &boltNamingContextIndex{
 		fingerprint: fingerprint, normalizer: normalizer, configDN: configDN,
 		rows: make(map[string]namingContextIndexRow), nodes: make(map[string]*namingContextIndexNode),
-		children: make(map[string]map[string]struct{}), roots: make(map[string]string),
+		children: make(map[string]namingContextIndexChildren), roots: make(map[string]string),
 	}
 	err = tx.entries.ForEach(func(key, value []byte) error {
 		if err := tx.ctx.Err(); err != nil {
@@ -134,7 +139,14 @@ func (index *boltNamingContextIndex) decodeRow(physical string, value []byte) (n
 	row := namingContextIndexRow{raw: entry.DN}
 	if dn.Depth() != 0 {
 		row.identity = dn.Key()
-		if dn.Depth() > 1 {
+		// physical is owned by the index. Reuse its suffix only after validating
+		// and normalizing: legacy keys and config exceptions can infer another key.
+		if row.identity == identity {
+			row.identity = identity
+		}
+		if node := index.nodes[row.identity]; node != nil {
+			row.parent = node.parent
+		} else if dn.Depth() > 1 {
 			row.parent, _ = dn.ParentKey()
 		}
 	}
@@ -142,18 +154,33 @@ func (index *boltNamingContextIndex) decodeRow(physical string, value []byte) (n
 }
 
 func namingContextRowBytes(physical string, row namingContextIndexRow) int64 {
-	return int64(len(physical)) + int64(len(row.identity)) + int64(len(row.parent)) + int64(len(row.raw)) + 512
+	size := int64(len(physical)) + int64(len(row.raw)) + 512
+	_, identity := splitPartitionedEntryKey(physical)
+	if row.identity != identity {
+		size += int64(len(row.identity))
+	}
+	return size
 }
 
 func (index *boltNamingContextIndex) put(physical string, row namingContextIndexRow) error {
 	if previous, exists := index.rows[physical]; exists {
 		if previous.identity == row.identity {
+			row.parent = previous.parent
 			index.bytes += namingContextRowBytes(physical, row) - namingContextRowBytes(physical, previous)
 			index.rows[physical] = row
 			index.refreshRoot(row.identity)
 			return index.checkCapacity()
 		}
 		index.remove(physical)
+	}
+	if row.parent != "" {
+		children, exists := index.children[row.parent]
+		if !exists {
+			children = namingContextIndexChildren{parent: row.parent, identities: make(map[string]struct{})}
+			index.children[row.parent] = children
+			index.bytes += int64(len(row.parent))
+		}
+		row.parent = children.parent
 	}
 	index.rows[physical] = row
 	index.bytes += namingContextRowBytes(physical, row)
@@ -165,12 +192,9 @@ func (index *boltNamingContextIndex) put(physical string, row namingContextIndex
 		node = &namingContextIndexNode{parent: row.parent, winner: physical}
 		index.nodes[row.identity] = node
 		if row.parent != "" {
-			if index.children[row.parent] == nil {
-				index.children[row.parent] = make(map[string]struct{})
-			}
-			index.children[row.parent][row.identity] = struct{}{}
+			index.children[row.parent].identities[row.identity] = struct{}{}
 		}
-		for child := range maps.Keys(index.children[row.identity]) {
+		for child := range maps.Keys(index.children[row.identity].identities) {
 			index.refreshRoot(child)
 		}
 	} else {
@@ -215,13 +239,14 @@ func (index *boltNamingContextIndex) remove(physical string) {
 	}
 	delete(index.nodes, row.identity)
 	delete(index.roots, row.identity)
-	if siblings := index.children[row.parent]; siblings != nil {
-		delete(siblings, row.identity)
-		if len(siblings) == 0 {
+	if siblings, exists := index.children[row.parent]; exists {
+		delete(siblings.identities, row.identity)
+		if len(siblings.identities) == 0 {
 			delete(index.children, row.parent)
+			index.bytes -= int64(len(row.parent))
 		}
 	}
-	for child := range maps.Keys(index.children[row.identity]) {
+	for child := range maps.Keys(index.children[row.identity].identities) {
 		index.refreshRoot(child)
 	}
 }

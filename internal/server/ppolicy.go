@@ -745,9 +745,7 @@ func (server *Server) authenticateReadOnlyPasswordBind(
 		if err != nil {
 			return err
 		}
-		if runtime.schema.EntryHasObjectClass(entry, "subentry") ||
-			runtime.schema.EntryHasObjectClass(entry, "alias") ||
-			runtime.schema.EntryHasObjectClass(entry, "referral") {
+		if smallIndexedEntryIsSpecial(runtime, entry) {
 			return nil
 		}
 		result.authenticatedDN = entry.DN
@@ -1833,7 +1831,12 @@ func normalizePasswordPolicyDN(
 	if normalizer == nil && runtime != nil {
 		normalizer = runtime.schema
 	}
-	dn, err := parseRuntimeDN(value, normalizer)
+	var dn directory.DN
+	if runtime != nil && runtime.schema != nil && normalizer == runtime.schema {
+		dn, err = runtime.schema.NormalizeDNCached(value)
+	} else {
+		dn, err = parseRuntimeDN(value, normalizer)
+	}
 	if err != nil {
 		return directory.DN{}, err
 	}

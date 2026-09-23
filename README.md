@@ -58,23 +58,24 @@ Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
 
 | Metric | Operations | ldap-go | OpenLDAP | Relative performance |
 | --- | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 1,000 | 177.45 ms | 87.51 ms | 49.3% |
-| Root Bind | 1,000 | 108.26 ms | 73.57 ms | 68.0% |
-| Base search | 1,000 | 107.17 ms | 90.39 ms | 84.3% |
-| Indexed equality | 1,000 | 121.64 ms | 102.25 ms | 84.1% |
-| Compare, matching | 1,000 | 117.46 ms | 72.93 ms | 62.1% |
-| Prefix substring | 20 | 1,157.95 ms | 625.05 ms | 54.0% |
-| Add | 20 | 19.29 ms | 115.50 ms | 598.8% |
-| Modify, unindexed description | 20 | 10.26 ms | 116.25 ms | 1,133.2% |
-| ModifyDN | 20 | 28.85 ms | 129.76 ms | 449.8% |
-| Delete | 20 | 20.85 ms | 133.65 ms | 640.9% |
+| User Bind, SSHA | 1,000 | 132.30 ms | 69.13 ms | 52.2% |
+| Root Bind | 1,000 | 88.75 ms | 66.51 ms | 74.9% |
+| Base search | 1,000 | 103.91 ms | 84.25 ms | 81.1% |
+| Indexed equality | 1,000 | 110.24 ms | 91.05 ms | 82.6% |
+| Compare, matching | 1,000 | 109.18 ms | 73.21 ms | 67.0% |
+| Prefix substring | 20 | 1,123.83 ms | 620.02 ms | 55.2% |
+| Add | 20 | 16.60 ms | 95.42 ms | 574.9% |
+| Modify, unindexed description | 20 | 9.37 ms | 90.09 ms | 961.8% |
+| ModifyDN | 20 | 27.93 ms | 102.22 ms | 366.0% |
+| Delete | 20 | 18.09 ms | 92.74 ms | 512.7% |
 
-Complete ordinary-attribute exports matched. The [latest common-operation report](docs/performance-optimization-20260923-round9.md)
-records a 53% ordinary-user Bind reduction and 19-23% Compare reduction against
-`42bb528`. Base/equality results are mixed, including slower long-batch samples;
-no consistent improvement is claimed there. Read/auth workload RSS was
-473.4 / 95.2 MiB. Startup, cold initialization, Bind, substrings and memory remain
-gaps. The [write-index report](docs/performance-optimization-20260923-round8.md)
+Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round10.md)
+records another 23% user-Bind and 17% Root-Bind time reduction against `fc58dd4`,
+plus 38% lower retained heap in the diagnostic fixture. Read/auth RSS was
+442.5 / 145.2 MiB. Other query timings were largely unchanged; the report retains
+the mixed write results and their larger-batch recheck. Startup, cold
+initialization, Bind, substrings and memory remain gaps.
+The [write-index report](docs/performance-optimization-20260923-round8.md)
 documents initialization costs; [historical paging results](docs/openldap-100k-evidence.md)
 use a different workload.
 
