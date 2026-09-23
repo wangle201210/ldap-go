@@ -1,0 +1,58 @@
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapwhoami
+    sasl_3des_reference_test.go:43: native Cyrus 3DES self-check: signal: segmentation fault
+        SASL/DIGEST-MD5 authentication started
+        SASL username: replicator
+        SASL SSF: 112
+        SASL data security layer installed.
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapsearch
+    sasl_3des_reference_test.go:43: native Cyrus 3DES self-check: signal: segmentation fault
+        SASL/DIGEST-MD5 authentication started
+        SASL username: replicator
+        SASL SSF: 112
+        SASL data security layer installed.
+--- FAIL: TestOpenLDAPReferenceDIGESTMD5Native3DES (0.28s)
+    --- FAIL: TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapwhoami (0.02s)
+    --- FAIL: TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapsearch (0.02s)
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/1
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/40
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/55
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/56
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/112
+    syncrepl_sasl_openldap_test.go:75: protected search: unable to read LDAP response packet: read LDAP response header: EOF
+    openldap_reference_test.go:447: OpenLDAP slapd exited before cleanup: signal: segmentation fault
+        slapd.conf:
+        include /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/ldap-go-openldap-source-2.6.13/servers/slapd/schema/core.schema
+        include /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/ldap-go-openldap-source-2.6.13/servers/slapd/schema/cosine.schema
+        include /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/ldap-go-openldap-source-2.6.13/servers/slapd/schema/inetorgperson.schema
+        pidfile /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/TestOpenLDAPSyncreplDIGESTMD5SecurityLayers1121553135741/001/slapd.pid
+        argsfile /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/TestOpenLDAPSyncreplDIGESTMD5SecurityLayers1121553135741/001/slapd.args
+        sasl-realm example.com
+        sasl-secprops noplain,noanonymous,maxbufsize=128
+        authz-regexp "^uid=replicator,.*cn=auth$" "uid=replicator,ou=people,dc=example,dc=com"
+
+        database mdb
+        maxsize 1073741824
+        suffix "dc=example,dc=com"
+        rootdn "cn=admin,dc=example,dc=com"
+        rootpw secret
+        directory /var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/TestOpenLDAPSyncreplDIGESTMD5SecurityLayers1121553135741/001/db
+        index objectClass eq
+        index entryUUID,entryCSN eq
+        access to * by dn.exact="uid=replicator,ou=people,dc=example,dc=com" read by anonymous auth by * none
+        overlay syncprov
+
+        slapd log tail:
+        <empty>
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/128
+--- FAIL: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers (1.06s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/1 (0.20s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/40 (0.22s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/55 (0.16s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/56 (0.16s)
+    --- FAIL: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/112 (0.13s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/128 (0.20s)
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/server	1.373s
+FAIL

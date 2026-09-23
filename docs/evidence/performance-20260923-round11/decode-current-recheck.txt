@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkReadBindCompareMessage/Bind-8         	 2251332	       161.9 ns/op	 253.20 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8         	 2503098	       142.9 ns/op	 286.83 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8         	 2573520	       139.5 ns/op	 294.00 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2634181	       139.4 ns/op	 315.56 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2536014	       143.1 ns/op	 307.40 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2644603	       136.7 ns/op	 321.91 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	 1579327	       223.4 ns/op	1239.86 MB/s	     656 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	 1641514	       223.3 ns/op	1240.70 MB/s	     656 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	 1680500	       216.6 ns/op	1278.95 MB/s	     656 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	 1625264	       218.4 ns/op	1295.97 MB/s	     624 B/op	       7 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	 1639080	       216.8 ns/op	1305.30 MB/s	     624 B/op	       7 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	 1690052	       213.4 ns/op	1326.00 MB/s	     624 B/op	       7 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   90232	      3982 ns/op	  74.09 MB/s	    9392 B/op	     140 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   17179	     17966 ns/op	  16.42 MB/s	    9392 B/op	     140 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   52629	      5778 ns/op	  51.06 MB/s	    9392 B/op	     140 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	5.319s

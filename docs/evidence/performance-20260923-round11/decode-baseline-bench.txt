@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkReadBindCompareMessage/Bind-8         	 2693811	       137.5 ns/op	 298.08 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8         	 2595246	       136.0 ns/op	 301.49 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Bind-8         	 2685169	       135.7 ns/op	 302.24 MB/s	     184 B/op	       5 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2665840	       136.7 ns/op	 321.98 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2670418	       134.2 ns/op	 327.91 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/Compare-8      	 2651773	       136.8 ns/op	 321.59 MB/s	     152 B/op	       6 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	  148030	      2260 ns/op	 122.57 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	  163602	      2273 ns/op	 121.88 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongBind-8     	  164269	      2285 ns/op	 121.24 MB/s	    5448 B/op	      79 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	  127426	      2734 ns/op	 103.51 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	  132843	      2688 ns/op	 105.30 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessage/LongCompare-8  	  133576	      2732 ns/op	 103.59 MB/s	    6576 B/op	      98 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   89150	      3986 ns/op	  74.00 MB/s	    9392 B/op	     140 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   87051	      4087 ns/op	  72.18 MB/s	    9392 B/op	     140 allocs/op
+BenchmarkReadBindCompareMessage/LongBindControls-8         	   87452	      4115 ns/op	  71.70 MB/s	    9392 B/op	     140 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	5.415s

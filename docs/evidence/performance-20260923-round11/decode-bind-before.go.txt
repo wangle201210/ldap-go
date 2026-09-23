@@ -7,15 +7,15 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 )
 
-// decodeBindCompareFrame recognizes Simple Bind and Compare requests without
-// controls and with minimal definite lengths. Other encodings use the BER decoder.
+// decodeBindCompareFrame recognizes only short-form Simple Bind and Compare
+// requests without controls. All other shapes and encodings use the BER decoder.
 func decodeBindCompareFrame(frame []byte) (Message, bool) {
-	content, rest, ok := bindCompareElement(frame, 0x30)
+	content, rest, ok := shortSearchElement(frame, 0x30)
 	if !ok || len(rest) != 0 ||
 		(ber.MaxPacketLengthBytes > 0 && int64(len(content)) > ber.MaxPacketLengthBytes) {
 		return Message{}, false
 	}
-	idBytes, rest, ok := bindCompareElement(content, 0x02)
+	idBytes, rest, ok := shortSearchElement(content, 0x02)
 	if !ok || len(idBytes) == 0 {
 		return Message{}, false
 	}
@@ -35,13 +35,13 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 	if ber.MaxNestingDepth > 0 && ber.MaxNestingDepth <= depth {
 		return Message{}, false
 	}
-	operation, rest, ok := bindCompareElement(rest, tag)
+	operation, rest, ok := shortSearchElement(rest, tag)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
 
 	if tag == 0x60 {
-		versionBytes, rest, ok := bindCompareElement(operation, 0x02)
+		versionBytes, rest, ok := shortSearchElement(operation, 0x02)
 		if !ok || len(versionBytes) == 0 {
 			return Message{}, false
 		}
@@ -49,11 +49,11 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 		if err != nil || version < 0 || version > math.MaxInt32 {
 			return Message{}, false
 		}
-		name, rest, ok := bindCompareElement(rest, 0x04)
+		name, rest, ok := shortSearchElement(rest, 0x04)
 		if !ok {
 			return Message{}, false
 		}
-		password, rest, ok := bindCompareElement(rest, 0x80)
+		password, rest, ok := shortSearchElement(rest, 0x80)
 		if !ok || len(rest) != 0 {
 			return Message{}, false
 		}
@@ -69,19 +69,19 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 		}}, true
 	}
 
-	dn, rest, ok := bindCompareElement(operation, 0x04)
+	dn, rest, ok := shortSearchElement(operation, 0x04)
 	if !ok {
 		return Message{}, false
 	}
-	assertion, rest, ok := bindCompareElement(rest, 0x30)
+	assertion, rest, ok := shortSearchElement(rest, 0x30)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
-	attribute, rest, ok := bindCompareElement(assertion, 0x04)
+	attribute, rest, ok := shortSearchElement(assertion, 0x04)
 	if !ok || len(attribute) == 0 {
 		return Message{}, false
 	}
-	value, rest, ok := bindCompareElement(rest, 0x04)
+	value, rest, ok := shortSearchElement(rest, 0x04)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
@@ -93,33 +93,4 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 	return Message{ID: id, Request: CompareRequest{
 		DN: string(dn), Attribute: string(attribute), Assertion: ownedValue,
 	}}, true
-}
-
-// The fixed request shape bounds traversal; each child is bounded by its parent.
-// Unsupported lengths fall back without constructing errors or partial requests.
-func bindCompareElement(data []byte, tag byte) (value, rest []byte, ok bool) {
-	if len(data) < 2 || data[0] != tag {
-		return nil, nil, false
-	}
-	headerLength := 2
-	length := uint64(data[1])
-	if data[1]&0x80 != 0 {
-		lengthBytes := int(data[1] & 0x7f)
-		if lengthBytes == 0 || lengthBytes > 8 || lengthBytes > len(data)-2 || data[2] == 0 {
-			return nil, nil, false
-		}
-		headerLength += lengthBytes
-		length = 0
-		for _, octet := range data[2:headerLength] {
-			length = length<<8 | uint64(octet)
-		}
-		if length < 128 {
-			return nil, nil, false
-		}
-	}
-	if length > uint64(len(data)-headerLength) {
-		return nil, nil, false
-	}
-	end := headerLength + int(length)
-	return data[headerLength:end], data[end:], true
 }

@@ -109,7 +109,7 @@ func readMessageWithFilterDepthProviderAndSize(
 		}
 		return message, len(frame), nil
 	}
-	if message, ok := decodeShortBindCompareFrame(frame); ok {
+	if message, ok := decodeBindCompareFrame(frame); ok {
 		// Bind and Compare still sample the provider after successful BER decoding,
 		// even though neither operation uses the filter depth limit.
 		maxFilterDepth()

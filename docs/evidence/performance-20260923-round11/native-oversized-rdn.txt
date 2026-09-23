@@ -1,0 +1,2 @@
+6ab381dd.3abe6038 0x170dcf000 mdb_add: dn2id_add failed: MDB_BAD_VALSIZE: Unsupported size of key/DB name/data, or wrong DUPFIXED size (-30781)
+6ab381dd.3abe73c0 0x170dcf000 send_ldap_response: msgid=2 tag=105 err=80

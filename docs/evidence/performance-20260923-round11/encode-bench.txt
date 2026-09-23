@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/ldapwire
+cpu: Apple M1 Pro
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/Current-8 	15257280	        23.19 ns/op	 646.94 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/Current-8 	15661280	        22.94 ns/op	 653.78 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/Current-8 	15690946	        22.83 ns/op	 656.97 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/OldPacket-8         	  411819	       925.7 ns/op	  16.20 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/OldPacket-8         	  394419	       932.1 ns/op	  16.09 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/CompareTrue/OldPacket-8         	  405136	       926.5 ns/op	  16.19 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/Current-8    	 9527925	        38.17 ns/op	 393.00 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/Current-8    	 9539413	        38.17 ns/op	 393.02 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/Current-8    	 9518605	        38.00 ns/op	 394.73 MB/s	      16 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/OldPacket-8  	  377389	       923.2 ns/op	  16.25 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/OldPacket-8  	  404916	       928.6 ns/op	  16.15 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/InvalidCredentials/OldPacket-8  	  427147	       919.6 ns/op	  16.31 MB/s	    1740 B/op	      41 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/Current-8        	 8305383	        42.77 ns/op	 794.91 MB/s	      48 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/Current-8        	 8214325	        42.93 ns/op	 792.06 MB/s	      48 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/Current-8        	 8244368	        42.65 ns/op	 797.14 MB/s	      48 B/op	       1 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/OldPacket-8      	  358245	       940.2 ns/op	  36.16 MB/s	    1804 B/op	      42 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/OldPacket-8      	  405121	       948.6 ns/op	  35.84 MB/s	    1804 B/op	      42 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/BindDiagnostic/OldPacket-8      	  371995	       943.8 ns/op	  36.03 MB/s	    1804 B/op	      42 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/Current-8       	  224276	      1591 ns/op	  17.60 MB/s	    2932 B/op	      69 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/Current-8       	  224755	      1606 ns/op	  17.44 MB/s	    2932 B/op	      69 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/Current-8       	  229550	      1576 ns/op	  17.77 MB/s	    2932 B/op	      69 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/OldPacket-8     	  230954	      1555 ns/op	  18.01 MB/s	    2932 B/op	      69 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/OldPacket-8     	  247154	      1571 ns/op	  17.83 MB/s	    2932 B/op	      69 allocs/op
+BenchmarkEncodeGeneralizedResultResponse/ControlFallback/OldPacket-8     	  223141	      1562 ns/op	  17.93 MB/s	    2932 B/op	      69 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	8.735s

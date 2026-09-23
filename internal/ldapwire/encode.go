@@ -406,6 +406,10 @@ func encodeResultMessage(messageID int64, tag uint64, result Result, controls []
 		len(result.Referrals) == 0 && len(controls) == 0 {
 		return encodeEmptyResultMessage(messageID, byte(tag), result.Code)
 	}
+	if messageID >= 0 && tag < 31 && result.Code >= 0 &&
+		len(result.Referrals) == 0 && len(controls) == 0 {
+		return encodeResultMessageDirect(messageID, byte(tag), result)
+	}
 	response := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ber.Tag(tag), nil, "LDAPResult")
 	appendLDAPResult(response, result)
 	return encodeMessage(messageID, response, controls)
@@ -421,6 +425,20 @@ func encodeEmptyResultMessage(messageID int64, tag byte, code ResultCode) []byte
 	encoded = appendBERHeader(encoded, 0x60|tag, resultContent)
 	encoded = append(encoded, 0x0a, 0x01, byte(code), 0x04, 0x00, 0x04, 0x00)
 	return encoded
+}
+
+func encodeResultMessageDirect(messageID int64, tag byte, result Result) []byte {
+	code := int64(result.Code)
+	resultContent := berElementSize(int(integerContentSize(code))) +
+		berElementSize(len(result.MatchedDN)) + berElementSize(len(result.DiagnosticMessage))
+	messageContent := berElementSize(int(integerContentSize(messageID))) + berElementSize(resultContent)
+	encoded := make([]byte, 0, berElementSize(messageContent))
+	encoded = appendBERHeader(encoded, 0x30, messageContent)
+	encoded = appendBERPositiveInteger(encoded, 0x02, messageID)
+	encoded = appendBERHeader(encoded, 0x60|tag, resultContent)
+	encoded = appendBERPositiveInteger(encoded, 0x0a, code)
+	encoded = appendBERBytes(encoded, 0x04, []byte(result.MatchedDN))
+	return appendBERBytes(encoded, 0x04, []byte(result.DiagnosticMessage))
 }
 
 func appendLDAPResult(packet *ber.Packet, result Result) {

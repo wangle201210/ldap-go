@@ -1,0 +1,90 @@
+package main
+
+import (
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	ldap "github.com/go-ldap/ldap/v3"
+)
+
+func run() error {
+	uri := flag.String("uri", "", "disposable endpoint")
+	count := flag.Int("n", 1000, "binds per stage")
+	longDN := flag.Bool("long-dn", false, "use a long user DN")
+	longPassword := flag.Bool("long-password", false, "use a 256-byte password")
+	flag.Parse()
+	conn, err := ldap.DialURL(*uri)
+	if err != nil { return err }
+	defer conn.Close()
+	conn.SetTimeout(10*time.Second)
+	root := "cn=admin,dc=scale,dc=qualification"
+	if err := conn.Bind(root, os.Getenv("LDAP_BENCH_PASSWORD")); err != nil { return err }
+	var token [12]byte
+	if _, err := rand.Read(token[:]); err != nil { return err }
+	uid := "bindprobe-"+hex.EncodeToString(token[:])
+	if *longDN { uid += strings.Repeat("x", 128) }
+	dn := "uid="+uid+",ou=people,dc=scale,dc=qualification"
+	password := "disposable-bind-probe-secret"
+	if *longPassword { password += strings.Repeat("p",256-len(password)) }
+	h := sha1.New()
+	h.Write([]byte(password))
+	h.Write(token[:])
+	hash := "{SSHA}"+base64.StdEncoding.EncodeToString(append(h.Sum(nil), token[:]...))
+	add := ldap.NewAddRequest(dn,nil)
+	add.Attribute("objectClass",[]string{"top","person","organizationalPerson","inetOrgPerson"})
+	add.Attribute("uid",[]string{uid})
+	add.Attribute("cn",[]string{"Bind Probe"})
+	add.Attribute("sn",[]string{"Probe"})
+	add.Attribute("userPassword",[]string{hash})
+	if err := conn.Add(add); err != nil { return err }
+	defer func(){
+		if err := conn.Bind(root,os.Getenv("LDAP_BENCH_PASSWORD")); err != nil { panic(err) }
+		if err := conn.Del(ldap.NewDelRequest(dn,nil)); err != nil { panic(err) }
+	}()
+	for range 20 { if err := conn.Bind(dn,password); err != nil { return err } }
+	var rows []map[string]any
+	for repeat := range 3 {
+		for _, valid := range []bool{true,false} {
+			candidate := password
+			name := "userBind"
+			if !valid { candidate = "wrong-password"; name = "userBindWrong" }
+			start := time.Now()
+			for range *count {
+				err := conn.Bind(dn,candidate)
+				if valid && err != nil { return err }
+				if !valid && !ldap.IsErrorWithCode(err,ldap.LDAPResultInvalidCredentials) { return fmt.Errorf("wrong-password result: %v",err) }
+			}
+			elapsed := time.Since(start)
+			identity, err := conn.WhoAmI(nil)
+			if err != nil { return err }
+			want := ""
+			if valid { want = "dn:"+dn }
+			if identity.AuthzID != want { return fmt.Errorf("identity %q != %q",identity.AuthzID,want) }
+			rows = append(rows,map[string]any{"name":name,"repeat":repeat,"operations":*count,"total_ms":float64(elapsed)/float64(time.Millisecond)})
+		}
+	}
+	if err := conn.Bind(root,os.Getenv("LDAP_BENCH_PASSWORD")); err != nil {return err}
+	for repeat:=range 3 {
+		for _,expected:=range []bool{true,false} {
+			assertion,name:=uid,"compareTrue"
+			if !expected {assertion=strings.Repeat("z",256);name="compareFalse"}
+			start:=time.Now()
+			for range *count {
+				got,err:=conn.Compare(dn,"uid",assertion)
+				if err!=nil||got!=expected{return fmt.Errorf("Compare=%v/%v, want%v",got,err,expected)}
+			}
+			rows=append(rows,map[string]any{"name":name,"repeat":repeat,"operations":*count,"total_ms":float64(time.Since(start))/float64(time.Millisecond)})
+		}
+	}
+	return json.NewEncoder(os.Stdout).Encode(rows)
+}
+
+func main(){ if err:=run(); err!=nil { fmt.Fprintln(os.Stderr,err); os.Exit(1) } }

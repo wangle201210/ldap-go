@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/iotest"
 
@@ -14,6 +15,7 @@ import (
 func bindCompareDecodeFixtures(tb testing.TB) map[string][]byte {
 	tb.Helper()
 	fixtures := make(map[string][]byte)
+	longDN := "uid=alice," + strings.Repeat("ou=engineering,", 10) + "dc=example,dc=com"
 	for name, request := range map[string]Request{
 		"Bind":          BindRequest{Version: 3, Name: "uid=alice,dc=example", Authentication: Authentication{Simple: []byte("secret")}},
 		"AnonymousBind": BindRequest{Version: 3},
@@ -22,11 +24,16 @@ func bindCompareDecodeFixtures(tb testing.TB) map[string][]byte {
 		"SASL": BindRequest{Version: 3, Authentication: Authentication{
 			IsSASL: true, SASLMechanism: "PLAIN", HasSASLCredentials: true, SASLCredentials: []byte("\x00alice\x00secret"),
 		}},
-		"LongBind":      BindRequest{Version: 3, Authentication: Authentication{Simple: bytes.Repeat([]byte("x"), 256)}},
-		"Compare":       CompareRequest{DN: "uid=alice,dc=example", Attribute: "uid", Assertion: []byte("alice")},
-		"EmptyCompare":  CompareRequest{Attribute: "uid"},
-		"BinaryCompare": CompareRequest{DN: "\x00\xff\x80", Attribute: "\xff\x00", Assertion: []byte{0, 0xff, 0x80}},
-		"LongCompare":   CompareRequest{Attribute: "uid", Assertion: bytes.Repeat([]byte("x"), 256)},
+		"LongBind":             BindRequest{Version: 3, Authentication: Authentication{Simple: bytes.Repeat([]byte("x"), 256)}},
+		"Compare":              CompareRequest{DN: "uid=alice,dc=example", Attribute: "uid", Assertion: []byte("alice")},
+		"EmptyCompare":         CompareRequest{Attribute: "uid"},
+		"BinaryCompare":        CompareRequest{DN: "\x00\xff\x80", Attribute: "\xff\x00", Assertion: []byte{0, 0xff, 0x80}},
+		"LongCompare":          CompareRequest{Attribute: "uid", Assertion: bytes.Repeat([]byte("x"), 256)},
+		"LongDNBind":           BindRequest{Version: 3, Name: longDN, Authentication: Authentication{Simple: []byte("secret")}},
+		"LongDNEmptyPassword":  BindRequest{Version: 3, Name: longDN},
+		"LongDNCompare":        CompareRequest{DN: longDN, Attribute: "uid", Assertion: []byte("alice")},
+		"LongDNEmptyCompare":   CompareRequest{DN: longDN, Attribute: "uid"},
+		"LongAttributeCompare": CompareRequest{Attribute: strings.Repeat("a", 128), Assertion: []byte{0, 0xff, 0x80}},
 	} {
 		message := Message{ID: 1234, Request: request}
 		frame, err := EncodeRequestMessage(message)
@@ -34,7 +41,7 @@ func bindCompareDecodeFixtures(tb testing.TB) map[string][]byte {
 			tb.Fatal(err)
 		}
 		fixtures[name] = frame
-		if name == "Bind" || name == "Compare" {
+		if name == "Bind" || name == "Compare" || name == "LongBind" || name == "LongCompare" {
 			message.Controls = []Control{{OID: "1.2.3", Critical: true, HasValue: true, Value: []byte{0, 0xff}}}
 			frame, err = EncodeRequestMessage(message)
 			if err != nil {
@@ -60,9 +67,9 @@ func bindCompareTestFrame(tag byte, fields ...[]byte) []byte {
 	return searchTestTLV(0x30, []byte{0x02, 1, 1}, searchTestTLV(tag, fields...))
 }
 
-func checkShortBindCompareFrame(t testing.TB, frame []byte, eligible bool) {
+func checkBindCompareFrame(t testing.TB, frame []byte, eligible bool) {
 	t.Helper()
-	got, ok := decodeShortBindCompareFrame(frame)
+	got, ok := decodeBindCompareFrame(frame)
 	if ok != eligible {
 		t.Fatalf("frame %x: fast path = %v, want %v", frame, ok, eligible)
 	}
@@ -72,17 +79,17 @@ func checkShortBindCompareFrame(t testing.TB, frame []byte, eligible bool) {
 		}
 		return
 	}
-	want, size, err := readSearchMessageReference(bytes.NewReader(frame), 4096, 0, func() int { return 0 })
+	want, size, err := readSearchMessageReference(bytes.NewReader(frame), max(4096, int64(len(frame))), 0, func() int { return 0 })
 	if err != nil || size != len(frame) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("frame %x: fast path %#v, reference %#v, size %d, error %v", frame, got, want, size, err)
 	}
 }
 
-func TestShortBindCompareFrameEligibility(t *testing.T) {
+func TestBindCompareFrameEligibility(t *testing.T) {
 	for name, frame := range bindCompareDecodeFixtures(t) {
 		t.Run(name, func(t *testing.T) {
-			eligible := name != "SASL" && name != "LongBind" && name != "LongCompare" && name != "BindControls" && name != "CompareControls"
-			checkShortBindCompareFrame(t, frame, eligible)
+			eligible := name != "SASL" && !strings.HasSuffix(name, "Controls")
+			checkBindCompareFrame(t, frame, eligible)
 			for _, depth := range []int{-1, 0, DefaultMaxFilterDepth} {
 				compareSearchDecode(t, frame, 4096, 0, depth)
 			}
@@ -90,12 +97,12 @@ func TestShortBindCompareFrameEligibility(t *testing.T) {
 	}
 	for name, frame := range searchDecodeFixtures(t) {
 		t.Run("Search/"+name, func(t *testing.T) {
-			checkShortBindCompareFrame(t, frame, false)
+			checkBindCompareFrame(t, frame, false)
 		})
 	}
 }
 
-func TestShortBindCompareIntegers(t *testing.T) {
+func TestBindCompareIntegers(t *testing.T) {
 	for _, tc := range []struct {
 		value       []byte
 		id, version bool
@@ -114,13 +121,13 @@ func TestShortBindCompareIntegers(t *testing.T) {
 			integer := searchTestTLV(integerTag, tc.value)
 			for _, tag := range []byte{0x60, 0x6e} {
 				frame := searchTestTLV(0x30, integer, searchTestTLV(tag, bindCompareTestFields(tag)...))
-				checkShortBindCompareFrame(t, frame, integerTag == 0x02 && tc.id)
+				checkBindCompareFrame(t, frame, integerTag == 0x02 && tc.id)
 				compareSearchDecode(t, frame, 4096, 0, -1)
 			}
 			fields := bindCompareTestFields(0x60)
 			fields[0] = integer
 			frame := bindCompareTestFrame(0x60, fields...)
-			checkShortBindCompareFrame(t, frame, integerTag == 0x02 && tc.version)
+			checkBindCompareFrame(t, frame, integerTag == 0x02 && tc.version)
 			compareSearchDecode(t, frame, 4096, 0, -1)
 		}
 	}
@@ -209,10 +216,10 @@ func bindCompareDecodeEdgeFrames() map[string][]byte {
 	return frames
 }
 
-func TestShortBindCompareBERCompatibility(t *testing.T) {
+func TestBindCompareBERCompatibility(t *testing.T) {
 	for name, frame := range bindCompareDecodeEdgeFrames() {
 		t.Run(name, func(t *testing.T) {
-			checkShortBindCompareFrame(t, frame, false)
+			checkBindCompareFrame(t, frame, false)
 			for _, depth := range []int{-1, 0, DefaultMaxFilterDepth} {
 				compareSearchDecode(t, frame, 4096, 0, depth)
 			}
@@ -220,7 +227,7 @@ func TestShortBindCompareBERCompatibility(t *testing.T) {
 	}
 }
 
-func TestShortBindCompareLengthBoundary(t *testing.T) {
+func TestBindCompareLengthBoundary(t *testing.T) {
 	for _, tag := range []byte{0x60, 0x6e} {
 		for _, contentLength := range []int{126, 127, 128, 129} {
 			fields := bindCompareTestFields(tag)
@@ -239,7 +246,7 @@ func TestShortBindCompareLengthBoundary(t *testing.T) {
 			if len(frame)-headerLength != contentLength {
 				t.Fatal("incorrect boundary fixture")
 			}
-			checkShortBindCompareFrame(t, frame, contentLength < 128)
+			checkBindCompareFrame(t, frame, true)
 			compareSearchDecode(t, frame, int64(len(frame)), uint64(contentLength), -1)
 			compareSearchDecode(t, frame, int64(len(frame)-1), uint64(contentLength), -1)
 			compareSearchDecode(t, frame, int64(len(frame)), uint64(contentLength-1), -1)
@@ -247,7 +254,7 @@ func TestShortBindCompareLengthBoundary(t *testing.T) {
 	}
 }
 
-func TestShortBindCompareLimits(t *testing.T) {
+func TestBindCompareLimits(t *testing.T) {
 	fixtures := bindCompareDecodeFixtures(t)
 	for _, frame := range fixtures {
 		headerLength := 2
@@ -266,29 +273,34 @@ func TestShortBindCompareLimits(t *testing.T) {
 	oldLength, oldDepth := ber.MaxPacketLengthBytes, ber.MaxNestingDepth
 	t.Cleanup(func() { ber.MaxPacketLengthBytes, ber.MaxNestingDepth = oldLength, oldDepth })
 	for name, frame := range fixtures {
-		for _, maxLength := range []int64{-1, 0, 1, int64(len(frame) - 3), int64(len(frame) - 2)} {
+		headerLength := 2
+		if frame[1]&0x80 != 0 {
+			headerLength += int(frame[1] & 0x7f)
+		}
+		contentLength := int64(len(frame) - headerLength)
+		for _, maxLength := range []int64{-1, 0, 1, contentLength - 1, contentLength} {
 			for _, maxDepth := range []int{-1, 0, 1, 2, 3, 4, 5} {
 				ber.MaxPacketLengthBytes, ber.MaxNestingDepth = maxLength, maxDepth
 				compareSearchDecode(t, frame, 4096, 0, -1)
-				if name == "Bind" || name == "Compare" {
+				if name != "SASL" && !strings.HasSuffix(name, "Controls") {
 					depth := 2
-					if name == "Compare" {
+					if strings.Contains(name, "Compare") {
 						depth = 3
 					}
-					checkShortBindCompareFrame(t, frame, (maxLength <= 0 || maxLength >= int64(len(frame)-2)) && (maxDepth <= 0 || maxDepth > depth))
+					checkBindCompareFrame(t, frame, (maxLength <= 0 || maxLength >= contentLength) && (maxDepth <= 0 || maxDepth > depth))
 				}
 			}
 		}
 	}
 }
 
-func TestShortBindCompareByteMutations(t *testing.T) {
+func TestBindCompareByteMutations(t *testing.T) {
 	fixtures := bindCompareDecodeFixtures(t)
-	for _, name := range []string{"Bind", "Compare", "BindControls", "CompareControls", "SASL"} {
+	for _, name := range []string{"Bind", "Compare", "BindControls", "CompareControls", "SASL", "LongBind", "LongCompare", "LongDNBind", "LongDNCompare", "LongAttributeCompare"} {
 		t.Run(name, func(t *testing.T) {
 			frame := fixtures[name]
 			for offset := range frame {
-				checkShortBindCompareFrame(t, frame[:offset], false)
+				checkBindCompareFrame(t, frame[:offset], false)
 				compareSearchDecode(t, frame[:offset], 4096, 0, -1)
 				mutated := bytes.Clone(frame)
 				for value := 0; value < 256; value++ {
@@ -300,7 +312,7 @@ func TestShortBindCompareByteMutations(t *testing.T) {
 	}
 }
 
-func TestShortBindCompareStreamAndOwnership(t *testing.T) {
+func TestBindCompareStreamAndOwnership(t *testing.T) {
 	for name, frame := range bindCompareDecodeFixtures(t) {
 		t.Run(name, func(t *testing.T) {
 			stream := bytes.NewReader(bytes.Repeat(frame, 3))
@@ -319,7 +331,7 @@ func TestShortBindCompareStreamAndOwnership(t *testing.T) {
 				}
 			}
 			compareSearchDecode(t, nil, 4096, 0, -1)
-			if got, ok := decodeShortBindCompareFrame(frame); ok {
+			if got, ok := decodeBindCompareFrame(frame); ok {
 				want, _, err := readSearchMessageReference(bytes.NewReader(frame), 4096, 0, func() int { return 0 })
 				if err != nil {
 					t.Fatal(err)
@@ -333,7 +345,7 @@ func TestShortBindCompareStreamAndOwnership(t *testing.T) {
 	}
 }
 
-func TestShortBindCompareProviderInvocation(t *testing.T) {
+func TestBindCompareProviderInvocation(t *testing.T) {
 	for _, tag := range []byte{0x60, 0x6e} {
 		frame := bindCompareTestFrame(tag, bindCompareTestFields(tag)...)
 		for _, tc := range []struct {
@@ -374,6 +386,9 @@ func FuzzReadBindCompareMessageReference(f *testing.F) {
 	}
 	for _, frame := range bindCompareDecodeEdgeFrames() {
 		f.Add(frame, int8(0))
+	}
+	for _, frame := range bindCompareLongLengthEdgeFrames() {
+		f.Add(frame, int8(-1))
 	}
 	f.Fuzz(func(t *testing.T, frame []byte, depth int8) {
 		compareSearchDecode(t, frame, 64<<10, 32<<10, int(depth))

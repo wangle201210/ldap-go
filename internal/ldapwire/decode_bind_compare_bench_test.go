@@ -16,7 +16,7 @@ func BenchmarkReadBindCompareMessagePacketReference(b *testing.B) {
 
 func benchmarkReadBindCompareMessage(b *testing.B, read func(io.Reader, int64, uint64, func() int) (Message, int, error)) {
 	fixtures := bindCompareDecodeFixtures(b)
-	for _, name := range []string{"Bind", "AnonymousBind", "BinaryBind", "Compare", "EmptyCompare", "BinaryCompare", "BindControls", "CompareControls", "SASL", "LongBind", "LongCompare"} {
+	for _, name := range []string{"Bind", "AnonymousBind", "BinaryBind", "Compare", "EmptyCompare", "BinaryCompare", "BindControls", "CompareControls", "SASL", "LongBind", "LongCompare", "LongDNBind", "LongDNCompare", "LongAttributeCompare", "LongBindControls", "LongCompareControls"} {
 		b.Run(name, func(b *testing.B) {
 			frame := fixtures[name]
 			reader := bytes.NewReader(frame)
@@ -35,14 +35,14 @@ func benchmarkReadBindCompareMessage(b *testing.B, read func(io.Reader, int64, u
 	}
 }
 
-func BenchmarkShortBindCompareFrameFallback(b *testing.B) {
+func BenchmarkBindCompareFrameFallback(b *testing.B) {
 	fixtures := bindCompareDecodeFixtures(b)
-	for _, name := range []string{"BindControls", "CompareControls", "SASL", "LongBind", "LongCompare"} {
+	for _, name := range []string{"BindControls", "CompareControls", "SASL", "LongBindControls", "LongCompareControls"} {
 		b.Run(name, func(b *testing.B) {
 			frame := fixtures[name]
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, ok := decodeShortBindCompareFrame(frame); ok {
+				if _, ok := decodeBindCompareFrame(frame); ok {
 					b.Fatal("unexpected fast path match")
 				}
 			}

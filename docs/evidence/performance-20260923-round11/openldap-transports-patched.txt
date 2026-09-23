@@ -1,0 +1,28 @@
+=== RUN   TestOpenLDAPReferenceStartTLSRejectsOutstandingSearch
+--- PASS: TestOpenLDAPReferenceStartTLSRejectsOutstandingSearch (2.27s)
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES
+    sasl_3des_reference_test.go:19: Reference: unmodified OpenLDAP 2.6.13 with locally parity-repaired Cyrus 2.1.28; not an unmodified-Cyrus result
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapwhoami
+=== RUN   TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapsearch
+--- PASS: TestOpenLDAPReferenceDIGESTMD5Native3DES (0.22s)
+    --- PASS: TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapwhoami (0.03s)
+    --- PASS: TestOpenLDAPReferenceDIGESTMD5Native3DES/ldapsearch (0.02s)
+=== RUN   TestOpenLDAP2613SASLCBindingTLS
+--- PASS: TestOpenLDAP2613SASLCBindingTLS (0.33s)
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers
+    syncrepl_sasl_openldap_test.go:15: Reference: unmodified OpenLDAP 2.6.13 with locally parity-repaired Cyrus 2.1.28; not an unmodified-Cyrus result
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/1
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/40
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/55
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/56
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/112
+=== RUN   TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/128
+--- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers (0.96s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/1 (0.17s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/40 (0.14s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/55 (0.14s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/56 (0.19s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/112 (0.17s)
+    --- PASS: TestOpenLDAPSyncreplDIGESTMD5SecurityLayers/128 (0.15s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	3.815s
