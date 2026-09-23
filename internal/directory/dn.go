@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"sort"
 	"strings"
 
@@ -171,7 +172,11 @@ func (dn DN) NormalizeWith(normalizer DNAttributeNormalizer) (DN, error) {
 			normalized    string
 			identity      []byte
 		}
-		avas := make([]normalizedAVA, len(rdn.Attributes))
+		singleAVA := len(rdn.Attributes) == 1
+		var avas []normalizedAVA
+		if !singleAVA {
+			avas = make([]normalizedAVA, len(rdn.Attributes))
+		}
 		canonicalTypes := make(map[string]struct{}, len(rdn.Attributes))
 		attributeTypes[rdnIndex] = make([]string, len(rdn.Attributes))
 		for attributeIndex, attribute := range rdn.Attributes {
@@ -219,7 +224,7 @@ func (dn DN) NormalizeWith(normalizer DNAttributeNormalizer) (DN, error) {
 				}
 				displayName = canonicalName
 			}
-			avas[attributeIndex] = normalizedAVA{
+			ava := normalizedAVA{
 				attributeType: displayName,
 				display:       displayName + "=" + escapeDNValue(attribute.Value),
 				normalized: displayName + "=" +
@@ -227,6 +232,16 @@ func (dn DN) NormalizeWith(normalizer DNAttributeNormalizer) (DN, error) {
 				identity: identity,
 			}
 			attributeTypes[rdnIndex][attributeIndex] = displayName
+			if singleAVA {
+				identityRDNs[rdnIndex] = encodeDNIdentityParts(ava.identity)
+				displayRDNs[rdnIndex] = ava.display
+				normalizedRDNs[rdnIndex] = ava.normalized
+			} else {
+				avas[attributeIndex] = ava
+			}
+		}
+		if singleAVA {
+			continue
 		}
 		// OpenLDAP canonicalizes AttributeDescriptions before sorting AVAs.
 		// Sorting the complete display string is observably different when
@@ -780,12 +795,39 @@ func (dn DN) hasSchemaAwareIdentity() bool {
 }
 
 func encodeDNIdentity(rdns [][]byte) string {
-	encoded := encodeDNIdentityParts(rdns...)
-	return schemaAwareDNKeyPrefix + base64.RawURLEncoding.EncodeToString(encoded)
+	var payload [256]byte
+	size := dnIdentityPartsSize(rdns)
+	encoded := payload[:0]
+	if size > len(payload) {
+		encoded = make([]byte, 0, size)
+	}
+	encoded = appendDNIdentityParts(encoded, rdns)
+	var shortKey [512]byte
+	keySize := len(schemaAwareDNKeyPrefix) + base64.RawURLEncoding.EncodedLen(len(encoded))
+	key := shortKey[:]
+	if keySize > len(key) {
+		key = make([]byte, keySize)
+	}
+	key = key[:keySize]
+	copy(key, schemaAwareDNKeyPrefix)
+	base64.RawURLEncoding.Encode(key[len(schemaAwareDNKeyPrefix):], encoded)
+	return string(key)
 }
 
 func encodeDNIdentityParts(parts ...[]byte) []byte {
-	result := make([]byte, 0)
+	return appendDNIdentityParts(make([]byte, 0, dnIdentityPartsSize(parts)), parts)
+}
+
+func dnIdentityPartsSize(parts [][]byte) int {
+	// Each unsigned varint needs one byte per seven bits, including zero.
+	size := (bits.Len(uint(len(parts))|1) + 6) / 7
+	for _, part := range parts {
+		size += (bits.Len(uint(len(part))|1)+6)/7 + len(part)
+	}
+	return size
+}
+
+func appendDNIdentityParts(result []byte, parts [][]byte) []byte {
 	result = binary.AppendUvarint(result, uint64(len(parts)))
 	for _, part := range parts {
 		result = binary.AppendUvarint(result, uint64(len(part)))

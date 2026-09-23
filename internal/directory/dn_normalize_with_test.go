@@ -47,7 +47,7 @@ func TestDNNormalizeWithPreservesCallsAndErrors(t *testing.T) {
 			n := &parsedDNRecordingNormalizer{failAt: failAt, err: injected}
 			got, gotErr := legacy.NormalizeWith(n)
 			reference := &parsedDNRecordingNormalizer{failAt: failAt, err: injected}
-			want, wantErr := ParseDNWithNormalizer(raw, reference)
+			want, wantErr := referenceNormalizeDNWith(legacy, reference)
 			if !reflect.DeepEqual(got, want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) ||
 				reflect.TypeOf(gotErr) != reflect.TypeOf(wantErr) {
 				t.Fatalf("got %#v, %v; want %#v, %v", got, gotErr, want, wantErr)
@@ -92,7 +92,7 @@ func TestDNNormalizeWithImmutableSharing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := ParseDNWithNormalizer(raw, aliasIdentityNormalizer{})
+			want, err := referenceNormalizeDNWith(untouched, aliasIdentityNormalizer{})
 			if err != nil || !reflect.DeepEqual(normalized, want) {
 				t.Fatalf("normalized DN differs: %v", err)
 			}
@@ -101,14 +101,14 @@ func TestDNNormalizeWithImmutableSharing(t *testing.T) {
 			}
 			// A second schema uses original AVAs, not the first schema's pretty DN.
 			recomputed, err := normalized.NormalizeWith(scopeIdentityNormalizer{})
-			wantRecomputed, wantErr := ParseDNWithNormalizer(raw, scopeIdentityNormalizer{})
+			wantRecomputed, wantErr := referenceNormalizeDNWith(untouched, scopeIdentityNormalizer{})
 			if err != nil || wantErr != nil || !reflect.DeepEqual(recomputed, wantRecomputed) || !reflect.DeepEqual(normalized, want) {
 				t.Fatalf("renormalization changed shared state: %v / %v", err, wantErr)
 			}
 		})
 	}
 	got, err := (DN{}).NormalizeWith(aliasIdentityNormalizer{})
-	want, wantErr := ParseDNWithNormalizer("", aliasIdentityNormalizer{})
+	want, wantErr := referenceNormalizeDNWith(DN{}, aliasIdentityNormalizer{})
 	if err != nil || wantErr != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("zero DN differs from empty DN: %v / %v", err, wantErr)
 	}

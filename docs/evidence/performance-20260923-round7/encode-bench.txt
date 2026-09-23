@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/directory
+cpu: Apple M1 Pro
+BenchmarkDNIdentityEncoding/RDNs1/reference-8         	 2741596	       130.5 ns/op	     248 B/op	       5 allocs/op
+BenchmarkDNIdentityEncoding/RDNs1/reference-8         	 2763628	       126.8 ns/op	     248 B/op	       5 allocs/op
+BenchmarkDNIdentityEncoding/RDNs1/reference-8         	 2930060	       125.8 ns/op	     248 B/op	       5 allocs/op
+BenchmarkDNIdentityEncoding/RDNs1/current-8           	 6587328	        55.88 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs1/current-8           	 6461672	        56.94 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs1/current-8           	 6443707	        56.26 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/reference-8         	 1000000	       322.4 ns/op	    1032 B/op	       7 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/reference-8         	 1000000	       329.8 ns/op	    1032 B/op	       7 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/reference-8         	 1000000	       328.8 ns/op	    1032 B/op	       7 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/current-8           	 2404881	       151.2 ns/op	     240 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/current-8           	 2396779	       151.0 ns/op	     240 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs4/current-8           	 2374723	       151.8 ns/op	     240 B/op	       1 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/reference-8        	  395554	       985.6 ns/op	    4120 B/op	       9 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/reference-8        	  323085	      1041 ns/op	    4120 B/op	       9 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/reference-8        	  324426	      1079 ns/op	    4120 B/op	       9 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/current-8          	  428570	       752.3 ns/op	    2496 B/op	       3 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/current-8          	  509617	       757.4 ns/op	    2496 B/op	       3 allocs/op
+BenchmarkDNIdentityEncoding/RDNs16/current-8          	  521152	       745.0 ns/op	    2496 B/op	       3 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/directory	6.434s

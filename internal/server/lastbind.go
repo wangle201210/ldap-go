@@ -36,6 +36,16 @@ func (server *Server) recordLastBindOverlay(
 	if state == nil || state.runtime == nil || state.boundDN == "" {
 		return
 	}
+	enabled := false
+	for index := range state.runtime.databases {
+		if state.runtime.databases[index].lastBindOverlay {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return
+	}
 	dn, err := parseRuntimeConnectionDN(state.runtime, state.boundDN)
 	if err != nil {
 		return

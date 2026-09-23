@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,6 +86,92 @@ func TestLastBindForwardChangeContainsAuthTimestamp(t *testing.T) {
 		changes[0].Attribute.Description != "authTimestamp" ||
 		changes[0].Operation != ldapwire.ModificationReplace {
 		t.Fatalf("lastbind forward changes = %#v", changes)
+	}
+}
+
+func TestLastBindOverlayOnlineAddRemove(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	var seconds atomic.Int64
+	seconds.Store(time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC).Unix())
+	clock := func() time.Time { return time.Unix(seconds.Load(), 0).UTC() }
+	address, stop := startServer(t, store, Config{Clock: clock})
+	t.Cleanup(stop)
+	configuration := bindConstraintClient(t, address, "cn=config", "config-secret")
+	defer configuration.Close()
+	client := bindConstraintClient(t, address, aliceDN, "secret")
+	defer client.Close()
+	assertLastBindTimestamp(t, store, nil)
+
+	const overlayDN = "olcOverlay={0}lastbind,olcDatabase={1}mdb,cn=config"
+	var previous []byte
+	for range 2 {
+		add := ldap.NewAddRequest(overlayDN, nil)
+		add.Attribute("objectClass", []string{"olcLastBindConfig"})
+		add.Attribute("olcOverlay", []string{"{0}lastbind"})
+		if err := configuration.Add(add); err != nil {
+			t.Fatalf("add lastbind overlay: %v", err)
+		}
+		seconds.Add(7200)
+		assertLDAPResultCode(t, client.Bind(aliceDN, "wrong"), ldap.LDAPResultInvalidCredentials)
+		assertLastBindTimestamp(t, store, previous)
+		if err := client.Bind(aliceDN, "secret"); err != nil {
+			t.Fatal(err)
+		}
+		previous = []byte(formatPasswordPolicyTime(clock()))
+		assertLastBindTimestamp(t, store, previous)
+
+		if err := configuration.Del(ldap.NewDelRequest(overlayDN, nil)); err != nil {
+			t.Fatalf("remove lastbind overlay: %v", err)
+		}
+		seconds.Add(7200)
+		if err := client.Bind(aliceDN, "secret"); err != nil {
+			t.Fatal(err)
+		}
+		assertLastBindTimestamp(t, store, previous)
+	}
+}
+
+func TestLastBindOverlayManualRuntimeIsolation(t *testing.T) {
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	instance, err := New(Config{Store: store, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := instance.runtime.Load()
+	var previous []byte
+	for _, test := range []struct {
+		name  string
+		local bool
+		other bool
+	}{
+		{name: "absent"},
+		{name: "only other database", other: true},
+		{name: "local enabled", local: true, other: true},
+		{name: "local removed", other: true},
+		{name: "local reenabled", local: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := *initial
+			runtime.databases = append([]runtimeDatabase(nil), initial.databases...)
+			for index := range runtime.databases {
+				runtime.databases[index].lastBindOverlay = test.local
+			}
+			runtime.databases = append(runtime.databases, runtimeDatabase{
+				name: "{2}mdb", suffixes: []directory.DN{staticRuntimeDN("dc=other")},
+				dnNormalizer: initial.schema, lastBindOverlay: test.other,
+			})
+			now = now.Add(2 * time.Hour)
+			instance.recordLastBindOverlay(t.Context(), &connectionState{runtime: &runtime, boundDN: aliceDN})
+			if test.local {
+				previous = []byte(formatPasswordPolicyTime(now))
+			}
+			assertLastBindTimestamp(t, store, previous)
+		})
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -663,7 +663,6 @@ func inferNamingContexts(
 	forEach func(func(directory.Entry, directory.DN) error) error,
 ) ([]string, error) {
 	type namedDN struct {
-		key    string
 		parent string
 		raw    string
 	}
@@ -673,35 +672,33 @@ func inferNamingContexts(
 		if dn.Depth() == 0 {
 			return nil
 		}
-		name := namedDN{key: dn.Key(), raw: entry.DN}
-		if parent, hasParent := dn.Parent(); hasParent && parent.Depth() != 0 {
-			name.parent = parent.Key()
+		name := namedDN{raw: entry.DN}
+		if dn.Depth() > 1 {
+			name.parent, _ = dn.ParentKey()
 		}
 		// Parent membership only needs keys. Do not retain every parsed DN's
 		// RDN/AVA graph until the end of a large-directory scan.
-		entries[name.key] = name
+		entries[dn.Key()] = name
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("scan directory entries: %w", err)
 	}
 
-	contexts := make([]namedDN, 0)
-	for _, entry := range entries {
+	contexts := make([]string, 0)
+	for key, entry := range entries {
 		if entry.parent == "" {
-			contexts = append(contexts, entry)
+			contexts = append(contexts, key)
 			continue
 		}
 		if _, exists := entries[entry.parent]; !exists {
-			contexts = append(contexts, entry)
+			contexts = append(contexts, key)
 		}
 	}
-	sort.Slice(contexts, func(i, j int) bool {
-		return contexts[i].key < contexts[j].key
-	})
+	slices.Sort(contexts)
 
 	result := make([]string, len(contexts))
 	for i := range contexts {
-		result[i] = contexts[i].raw
+		result[i] = entries[contexts[i]].raw
 	}
 	return result, nil
 }

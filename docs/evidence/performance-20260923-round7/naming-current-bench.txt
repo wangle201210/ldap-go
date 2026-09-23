@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/storage
+cpu: Apple M1 Pro
+BenchmarkNamingContextParsedInference/Entries100000/Metadata-8         	       3	 406162333 ns/op	302686720 B/op	 8400532 allocs/op
+BenchmarkNamingContextParsedInference/Entries100000/Metadata-8         	       3	 406208389 ns/op	302686650 B/op	 8400530 allocs/op
+BenchmarkNamingContextParsedInference/Entries100000/Metadata-8         	       3	 405218986 ns/op	302686544 B/op	 8400529 allocs/op
+PASS

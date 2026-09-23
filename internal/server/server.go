@@ -2227,81 +2227,96 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
-	if handled, err := server.tryTranslucentBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	// The request DN and retained runtime are unchanged since policy selection.
+	if activeTranslucentConfiguration(policyDatabase) != nil {
+		if handled, err := server.tryTranslucentBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.tryMetaBackendBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	if policyDatabase != nil && policyDatabase.metaBackend != nil {
+		if handled, err := server.tryMetaBackendBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.tryPcacheBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	if policyDatabase != nil && policyDatabase.ldapBackend != nil && policyDatabase.pcache != nil {
+		if handled, err := server.tryPcacheBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.tryLDAPBackendBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	if policyDatabase != nil && policyDatabase.ldapBackend != nil {
+		if handled, err := server.tryLDAPBackendBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.trySockBackendBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	if policyDatabase != nil && policyDatabase.sockBackend != nil {
+		if handled, err := server.trySockBackendBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.tryDNSSRVBackendBind(
-		ctx,
-		connection,
-		state,
-		message,
-		request,
-		requestDN,
-	); handled {
-		canonicalizeBindEntryState(state, requestDN)
-		return err
+	if policyDatabase != nil && policyDatabase.dnssrvBackend != nil {
+		if handled, err := server.tryDNSSRVBackendBind(
+			ctx,
+			connection,
+			state,
+			message,
+			request,
+			requestDN,
+		); handled {
+			canonicalizeBindEntryState(state, requestDN)
+			return err
+		}
 	}
-	if handled, err := server.tryPasswdBackendBind(
-		connection,
-		state,
-		message,
-		requestDN,
-	); handled {
-		return err
+	if policyDatabase != nil && policyDatabase.passwdBackend != nil {
+		if handled, err := server.tryPasswdBackendBind(
+			connection,
+			state,
+			message,
+			requestDN,
+		); handled {
+			return err
+		}
 	}
-	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+	if database := policyDatabase; database != nil &&
 		database.remoteAuth != nil {
 		handled, result, responseControls := server.remoteAuthSimpleBind(
 			ctx,
@@ -2337,7 +2352,7 @@ func (server *Server) handleBind(
 			))
 		}
 	}
-	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+	if database := policyDatabase; database != nil &&
 		database.pbind != nil {
 		result, responseControls := server.proxySimpleBind(
 			ctx,
@@ -2370,7 +2385,7 @@ func (server *Server) handleBind(
 			responseControls,
 		))
 	}
-	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+	if database := policyDatabase; database != nil &&
 		databaseUsesNullBackend(state.runtime, *database) {
 		authenticated := database.nullBindAllowed
 		if !authenticated {
@@ -2404,7 +2419,7 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
-	if database := databaseForDN(state.runtime, requestDN); database != nil &&
+	if database := policyDatabase; database != nil &&
 		activeOTPConfiguration(database) != nil {
 		if _, root := databaseAuthenticationRoot(
 			state.runtime,
