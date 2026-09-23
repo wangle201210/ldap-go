@@ -113,12 +113,53 @@ func TestValidateDNIdentityInScopeBytesErrorsOwnInputs(t *testing.T) {
 	}
 }
 
+func TestValidateDNIdentityInScopeBytesOuterFramingAndScope(t *testing.T) {
+	bases := []DN{{}}
+	for _, value := range []string{
+		"", "dc=com", "dc=example,dc=com", "dc=other,dc=com",
+		"cn=a,dc=example,dc=com", "uid=b,cn=a,dc=example,dc=com",
+	} {
+		base, err := ParseDNWithNormalizer(value, aliasIdentityNormalizer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bases = append(bases, base)
+	}
+	legacy, err := ParseDN("dc=example,dc=com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bases = append(bases, legacy)
+	for _, payload := range malformedSimpleDNIdentityOuterPayloads(t) {
+		key := schemaAwareDNKeyPrefix + base64.RawURLEncoding.EncodeToString(payload)
+		for _, value := range []string{"cn=a,dc=example,dc=com", "cn=a", "cn"} {
+			for _, base := range bases {
+				for scope := Scope(-1); scope <= Scope(4); scope++ {
+					checkDNIdentityScope(t, value, key, base, scope)
+					inScope, scopeErr, validationErr := ValidateDNIdentityInScopeBytes([]byte(value), []byte(key), base, scope)
+					if inScope || scopeErr != nil || validationErr == nil {
+						t.Fatalf("malformed payload %x escaped validation: %t, %v, %v", payload, inScope, scopeErr, validationErr)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestValidateDNIdentityInScopeBytesNoAllocs(t *testing.T) {
 	base, err := ParseDNWithNormalizer("dc=example,dc=com", aliasIdentityNormalizer{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	schemaEmpty, err := ParseDNWithNormalizer("", aliasIdentityNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched, err := ParseDNWithNormalizer("ou=other,dc=example,dc=com", aliasIdentityNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deeper, err := ParseDNWithNormalizer("cn=b,uid=alice,ou=people,dc=example,dc=com", aliasIdentityNormalizer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +173,7 @@ func TestValidateDNIdentityInScopeBytesNoAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 		valueBytes, keyBytes := []byte(value), []byte(dn.Key())
-		for _, scopeBase := range []DN{base, dn, schemaEmpty} {
+		for _, scopeBase := range []DN{base, dn, schemaEmpty, mismatched, deeper} {
 			for scope := Scope(-1); scope <= Scope(4); scope++ {
 				want, wantErr := IdentityKeyInScope(scopeBase, dn.Key(), scope)
 				if wantErr != nil {

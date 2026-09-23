@@ -27,6 +27,12 @@ func FuzzValidateDNIdentityInScopeBytes(f *testing.F) {
 	for _, payload := range identityPayloadCorpus()[:40] {
 		f.Add([]byte("cn=a"), []byte(schemaAwareDNKeyPrefix+base64.RawURLEncoding.EncodeToString(payload)), "cn=a", int8(ScopeBase))
 	}
+	for _, payload := range malformedSimpleDNIdentityOuterPayloads(f) {
+		key := []byte(schemaAwareDNKeyPrefix + base64.RawURLEncoding.EncodeToString(payload))
+		for _, scope := range []Scope{ScopeWholeSubtree, ScopeBase, -1} {
+			f.Add([]byte("cn=a,dc=example,dc=com"), key, "dc=other,dc=com", int8(scope))
+		}
+	}
 	f.Add([]byte("cn"), []byte("dn:v2:!"), "invalid", int8(-1))
 	f.Fuzz(func(t *testing.T, value, key []byte, baseValue string, scope int8) {
 		depth, simple := simpleDNDepthBytes(value)

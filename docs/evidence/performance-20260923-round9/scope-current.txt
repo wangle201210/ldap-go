@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/directory
+cpu: Apple M1 Pro
+BenchmarkValidateDNIdentityInScopeBytes/typical/bytes-8   	 1961214	       182.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/typical/bytes-8   	 1875914	       211.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/typical/bytes-8   	 2058098	       175.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/outside_scope/bytes-8         	 2671840	       141.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/outside_scope/bytes-8         	 2569872	       135.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/outside_scope/bytes-8         	 2710352	       140.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8        	  323924	      1114 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8        	  327739	      1165 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/multi_fallback/bytes-8        	  281302	      1144 ns/op	     552 B/op	      27 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8      	  305956	      1058 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8      	  359222	      1027 ns/op	     520 B/op	      24 allocs/op
+BenchmarkValidateDNIdentityInScopeBytes/escaped_fallback/bytes-8      	  345988	      1027 ns/op	     520 B/op	      24 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/directory	4.357s

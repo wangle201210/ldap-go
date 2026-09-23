@@ -3923,6 +3923,9 @@ func parseRuntimeDN(
 	normalizer directory.DNAttributeNormalizer,
 ) (directory.DN, error) {
 	if normalizer != nil {
+		if parser, ok := normalizer.(storage.DNIdentityParser); ok {
+			return parser.ParseDNIdentity(value)
+		}
 		return directory.ParseDNWithNormalizer(value, normalizer)
 	}
 	return directory.ParseDN(value)

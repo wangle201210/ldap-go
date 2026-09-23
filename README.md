@@ -52,30 +52,31 @@ Detailed implementation claims and boundaries are recorded in the
 ## Performance snapshot
 
 Latest SDK comparison: September 23, 2026, 100,000 users, Apple M1 Pro,
-Go built without cgo, OpenLDAP 2.6.13. Each row totals 20 operations; values are
-medians from three fresh processes. Writes follow fixture setup and cache warmup.
+Go built without cgo, OpenLDAP 2.6.13. Values are batch-time medians from three
+fresh processes; operation counts are shown. Writes follow setup and cache warmup.
 Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
 
-| Metric | ldap-go | OpenLDAP | Relative performance |
-| --- | ---: | ---: | ---: |
-| Root Bind | 4.77 ms | 2.84 ms | 59.6% |
-| Base search | 3.84 ms | 3.36 ms | 87.5% |
-| Indexed equality | 3.41 ms | 2.95 ms | 86.4% |
-| Compare, matching | 4.13 ms | 2.34 ms | 56.8% |
-| Prefix substring | 1,240.35 ms | 644.73 ms | 52.0% |
-| Add | 31.10 ms | 115.31 ms | 370.8% |
-| Modify, unindexed description | 17.38 ms | 122.69 ms | 706.1% |
-| ModifyDN | 35.51 ms | 121.37 ms | 341.8% |
-| Delete | 28.04 ms | 135.41 ms | 482.9% |
+| Metric | Operations | ldap-go | OpenLDAP | Relative performance |
+| --- | ---: | ---: | ---: | ---: |
+| User Bind, SSHA | 1,000 | 177.45 ms | 87.51 ms | 49.3% |
+| Root Bind | 1,000 | 108.26 ms | 73.57 ms | 68.0% |
+| Base search | 1,000 | 107.17 ms | 90.39 ms | 84.3% |
+| Indexed equality | 1,000 | 121.64 ms | 102.25 ms | 84.1% |
+| Compare, matching | 1,000 | 117.46 ms | 72.93 ms | 62.1% |
+| Prefix substring | 20 | 1,157.95 ms | 625.05 ms | 54.0% |
+| Add | 20 | 19.29 ms | 115.50 ms | 598.8% |
+| Modify, unindexed description | 20 | 10.26 ms | 116.25 ms | 1,133.2% |
+| ModifyDN | 20 | 28.85 ms | 129.76 ms | 449.8% |
+| Delete | 20 | 20.85 ms | 133.65 ms | 640.9% |
 
-All exported ordinary-attribute data matched. The larger write gaps are removed
-for this warm leaf-write fixture; startup, cold initialization, Bind, substring
-queries and memory still have gaps. Post-workload RSS was 389.7 / 135.4 MiB.
-The [latest write report](docs/performance-optimization-20260923-round8.md)
-includes baseline comparisons, startup costs, configuration limits and raw
-evidence. Earlier [read/paging measurements](docs/openldap-100k-evidence.md)
-and [DN/Bind measurements](docs/performance-optimization-20260923-round7.md)
-use different workloads and are retained separately.
+Complete ordinary-attribute exports matched. The [latest common-operation report](docs/performance-optimization-20260923-round9.md)
+records a 53% ordinary-user Bind reduction and 19-23% Compare reduction against
+`42bb528`. Base/equality results are mixed, including slower long-batch samples;
+no consistent improvement is claimed there. Read/auth workload RSS was
+473.4 / 95.2 MiB. Startup, cold initialization, Bind, substrings and memory remain
+gaps. The [write-index report](docs/performance-optimization-20260923-round8.md)
+documents initialization costs; [historical paging results](docs/openldap-100k-evidence.md)
+use a different workload.
 
 ## Requirements
 

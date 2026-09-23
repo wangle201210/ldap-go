@@ -506,6 +506,9 @@ func (server *Server) authenticatePasswordBind(
 	if err != nil {
 		return result, err
 	}
+	if passwordBindReadOnly(runtime, database) {
+		return server.authenticateReadOnlyPasswordBind(ctx, runtime, *database, dn, password, externalMatches)
+	}
 	var syncChange *syncChange
 	var (
 		forwardPolicyState bool
@@ -580,18 +583,7 @@ func (server *Server) authenticatePasswordBind(
 				entry,
 			)
 		}
-		for _, stored := range runtime.schema.AttributeValues(entry, policy.attribute) {
-			if !server.allowed(
-				runtime,
-				tx,
-				"",
-				entry,
-				policy.attribute,
-				stored,
-				acl.Auth,
-			) {
-				continue
-			}
+		evaluation.authenticated = server.verifyPasswordBindValues(runtime, tx, entry, policy.attribute, func(stored []byte) bool {
 			matched := verifyStoredPasswordWithExternalMatches(
 				stored,
 				password,
@@ -605,10 +597,8 @@ func (server *Server) authenticatePasswordBind(
 					lastTOTPAuthentication,
 				)
 			}
-			if matched {
-				evaluation.authenticated = true
-			}
-		}
+			return matched
+		})
 		if overlayEnabled && passwordPresent {
 			if !evaluation.authenticated {
 				if hasPolicy && (writePolicyState || forwardPolicyState) {
@@ -722,6 +712,78 @@ func (server *Server) authenticatePasswordBind(
 		}
 	}
 	return result, nil
+}
+
+func passwordBindReadOnly(runtime *runtimeState, database *runtimeDatabase) bool {
+	return databaseUsesLocalContentStorage(*database) &&
+		database.rwm == nil &&
+		database.remoteAuth == nil &&
+		database.pbind == nil &&
+		activeTranslucentConfiguration(database) == nil &&
+		database.ppolicy == nil &&
+		!database.lastBind &&
+		!database.lastBindOverlay &&
+		activeOTPConfiguration(database) == nil &&
+		activeTOTPPasswordConfiguration(runtime, database) == nil
+}
+
+func (server *Server) authenticateReadOnlyPasswordBind(
+	ctx context.Context,
+	runtime *runtimeState,
+	database runtimeDatabase,
+	dn directory.DN,
+	password []byte,
+	externalMatches externalPasswordMatches,
+) (passwordBindResult, error) {
+	var result passwordBindResult
+	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, database)
+		entry, err := tx.Get(dn)
+		if errors.Is(err, storage.ErrEntryNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if runtime.schema.EntryHasObjectClass(entry, "subentry") ||
+			runtime.schema.EntryHasObjectClass(entry, "alias") ||
+			runtime.schema.EntryHasObjectClass(entry, "referral") {
+			return nil
+		}
+		result.authenticatedDN = entry.DN
+		result.authenticated = server.verifyPasswordBindValues(runtime, tx, entry, "userPassword", func(stored []byte) bool {
+			return verifyStoredPasswordWithExternalMatches(stored, password, externalMatches)
+		})
+		return nil
+	})
+	if err != nil {
+		return passwordBindResult{}, err
+	}
+	// Update checks cancellation after its callback; View does not.
+	if err := ctx.Err(); err != nil {
+		return passwordBindResult{}, err
+	}
+	return result, nil
+}
+
+func (server *Server) verifyPasswordBindValues(
+	runtime *runtimeState,
+	reader storage.Reader,
+	entry directory.Entry,
+	attribute string,
+	verify func([]byte) bool,
+) bool {
+	authenticated := false
+	for _, stored := range runtime.schema.AttributeValues(entry, attribute) {
+		if !server.allowed(runtime, reader, "", entry, attribute, stored, acl.Auth) {
+			continue
+		}
+		// Every permitted value is verified, including values after a match.
+		if verify(stored) {
+			authenticated = true
+		}
+	}
+	return authenticated
 }
 
 func (server *Server) authenticateTOTPPasswordDatabaseRoot(

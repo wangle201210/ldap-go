@@ -11,6 +11,20 @@ import (
 
 const OpenLDAPConfigPartition = "openldap:config"
 
+// DNIdentityParser optionally parses a complete DN using exactly the same
+// identity, display and error semantics as its DNAttributeNormalizer methods.
+// Results must be immutable or independently owned by the caller.
+type DNIdentityParser interface {
+	ParseDNIdentity(string) (directory.DN, error)
+}
+
+func parsePartitionDNIdentity(value string, normalizer directory.DNAttributeNormalizer) (directory.DN, error) {
+	if parser, ok := normalizer.(DNIdentityParser); ok {
+		return parser.ParseDNIdentity(value)
+	}
+	return directory.ParseDNWithNormalizer(value, normalizer)
+}
+
 func OpenLDAPDatabasePartition(name string, entryUUID []byte) string {
 	if uuid := strings.TrimSpace(string(entryUUID)); uuid != "" {
 		return "openldap:database:uuid:" + encodePartitionComponent(
@@ -259,7 +273,7 @@ type schemaAwarePartitionReader struct {
 func (reader schemaAwarePartitionReader) NormalizeDNIdentity(
 	dn directory.DN,
 ) (directory.DN, error) {
-	return directory.ParseDNWithNormalizer(dn.String(), reader.normalizer)
+	return parsePartitionDNIdentity(dn.String(), reader.normalizer)
 }
 
 func (reader schemaAwarePartitionReader) DNIdentityOrderKey(
@@ -309,7 +323,7 @@ type schemaAwarePartitionWriter struct {
 func (writer schemaAwarePartitionWriter) NormalizeDNIdentity(
 	dn directory.DN,
 ) (directory.DN, error) {
-	return directory.ParseDNWithNormalizer(dn.String(), writer.normalizer)
+	return parsePartitionDNIdentity(dn.String(), writer.normalizer)
 }
 
 func (writer schemaAwarePartitionWriter) DNIdentityOrderKey(

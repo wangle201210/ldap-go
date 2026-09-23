@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"slices"
 	"testing"
 )
 
@@ -19,12 +20,13 @@ func checkSimpleDNIdentitySingleAVA(t *testing.T, rdn []byte) {
 	key := []byte(schemaAwareDNKeyPrefix + base64.RawURLEncoding.EncodeToString(payload))
 	var scratch [1024]byte
 	want = want && len(payload) <= len(scratch)
-	rdns, ok := validatedSimpleDNIdentityRDNsBytes([]byte("cn=a"), key, scratch[:])
+	base := DN{identityLevel: schemaAwareDNIdentityLevel, identityRDNs: [][]byte{rdn}}
+	inScope, ok := validateSimpleDNIdentityInScopeBytes([]byte("cn=a"), key, base, ScopeBase, scratch[:])
 	if ok != want {
 		t.Fatalf("single AVA %x: fast path = %t, reference = %t", rdn, ok, want)
 	}
-	if ok && (rdns.count != 1 || !bytes.Equal(rdns.next(), rdn) || len(rdns.data) != 0) {
-		t.Fatalf("single AVA %x: returned an incomplete RDN view", rdn)
+	if inScope != want {
+		t.Fatalf("single AVA %x: scope = %t, want %t", rdn, inScope, want)
 	}
 }
 
@@ -92,6 +94,84 @@ func TestSimpleDNIdentitySingleAVANonminimalVarints(t *testing.T) {
 			checkSimpleDNIdentitySingleAVA(t, encodeDNIdentityParts(append(bytes.Clone(ava), tail)))
 		}
 	}
+}
+
+func TestSimpleDNIdentityOuterNonminimalVarints(t *testing.T) {
+	dn, err := ParseDNWithNormalizer("cn=a,dc=example,dc=com", aliasIdentityNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := func(value uint64, width int) []byte {
+		encoded := binary.AppendUvarint(nil, value)
+		for len(encoded) < width {
+			encoded[len(encoded)-1] |= 0x80
+			encoded = append(encoded, 0)
+		}
+		return encoded
+	}
+	// Vary the outer count and all three lengths independently. Only the outer
+	// framing changes, so exact RDN scope comparisons must still match.
+	for combination := range 81 {
+		var widths [4]int
+		for index := range widths {
+			widths[index] = []int{1, 2, 10}[combination%3]
+			combination /= 3
+		}
+		payload := pad(3, widths[0])
+		for index, rdn := range dn.identityRDNs {
+			payload = append(payload, pad(uint64(len(rdn)), widths[index+1])...)
+			payload = append(payload, rdn...)
+		}
+		key := []byte(schemaAwareDNKeyPrefix + base64.RawURLEncoding.EncodeToString(payload))
+		var scratch [1024]byte
+		inScope, ok := validateSimpleDNIdentityInScopeBytes([]byte(dn.String()), key, dn, ScopeBase, scratch[:])
+		if !ok || !inScope {
+			t.Fatalf("outer widths %v: scope/fast path = %t/%t", widths, inScope, ok)
+		}
+		for scope := Scope(-1); scope <= Scope(4); scope++ {
+			checkDNIdentityScope(t, dn.String(), string(key), dn, scope)
+		}
+	}
+}
+
+func malformedSimpleDNIdentityOuterPayloads(t testing.TB) [][]byte {
+	t.Helper()
+	dn, err := ParseDNWithNormalizer("cn=a,dc=example,dc=com", aliasIdentityNormalizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := encodeDNIdentityParts(dn.identityRDNs...)
+	var malformed [][]byte
+	for end := range len(payload) {
+		malformed = append(malformed, bytes.Clone(payload[:end]))
+	}
+	malformed = append(malformed, append(bytes.Clone(payload), 0))
+	for _, field := range [][]byte{
+		{0x80},
+		append(bytes.Repeat([]byte{0xff}, 9), 2),
+		binary.AppendUvarint(nil, ^uint64(0)),
+	} {
+		malformed = append(malformed, bytes.Clone(field))
+		prefix := binary.AppendUvarint(nil, 3)
+		for _, rdn := range dn.identityRDNs {
+			malformed = append(malformed, append(bytes.Clone(prefix), field...))
+			prefix = binary.AppendUvarint(prefix, uint64(len(rdn)))
+			prefix = append(prefix, rdn...)
+		}
+	}
+	invalidRDN := encodeDNIdentityParts(encodeDNIdentityParts(nil, nil))
+	for position := range len(dn.identityRDNs) {
+		rdns := slices.Clone(dn.identityRDNs)
+		rdns[position] = invalidRDN
+		malformed = append(malformed, encodeDNIdentityParts(rdns...))
+		malformed = append(malformed, append(encodeDNIdentityParts(rdns...), 0))
+	}
+	// An earlier invalid AVA must not displace a later outer framing error.
+	prefix := binary.AppendUvarint(nil, 3)
+	prefix = binary.AppendUvarint(prefix, uint64(len(invalidRDN)))
+	prefix = append(prefix, invalidRDN...)
+	malformed = append(malformed, append(prefix, 0x80))
+	return malformed
 }
 
 func TestValidateDNIdentitySingleAVATailsAndErrorOrder(t *testing.T) {

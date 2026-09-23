@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"reflect"
@@ -356,7 +357,7 @@ func TestMetadataPhysicalScanLegacyIdentity(t *testing.T) {
 }
 
 func TestMetadataPhysicalScanOutOfScopeErrorsAndCancellation(t *testing.T) {
-	for _, mode := range []string{"valid", "json", "codec", "dn", "identity"} {
+	for _, mode := range []string{"valid", "json", "codec", "dn", "identity", "identity_tail", "identity_rdn", "identity_length"} {
 		t.Run(mode, func(t *testing.T) {
 			store, schema, _ := newBoltCandidateStore(t, 8)
 			if mode != "valid" {
@@ -377,6 +378,36 @@ func TestMetadataPhysicalScanOutOfScopeErrorsAndCancellation(t *testing.T) {
 					case "dn":
 						stored.DN = "invalid DN"
 						return tx.entries.Put(key, encodeCandidateTestEntry(t, stored.Entry, identity, "v2"))
+					case "identity_tail", "identity_rdn", "identity_length":
+						payload, err := base64.RawURLEncoding.Strict().DecodeString(identity[len("dn:v2:"):])
+						if err != nil {
+							return err
+						}
+						switch mode {
+						case "identity_tail":
+							payload = append(payload, 0)
+						case "identity_rdn":
+							count, rest, err := consumeEntryBinaryCount(payload)
+							if err != nil || count != 2 {
+								t.Fatalf("fixture identity count = %d, error = %v", count, err)
+							}
+							_, rest, err = consumeEntryBinaryField(rest)
+							if err != nil {
+								return err
+							}
+							rdn, tail, err := consumeEntryBinaryField(rest)
+							if err != nil || len(rdn) == 0 || len(tail) != 0 {
+								t.Fatalf("fixture final RDN = %x, tail = %x, error = %v", rdn, tail, err)
+							}
+							rdn[0] = 0
+						case "identity_length":
+							payload = payload[:len(payload)-1]
+						}
+						corruptIdentity := "dn:v2:" + base64.RawURLEncoding.EncodeToString(payload)
+						if err := tx.entries.Delete(key); err != nil {
+							return err
+						}
+						return tx.entries.Put([]byte(partitionedEntryKey("db", corruptIdentity)), encodeCandidateTestEntry(t, stored.Entry, corruptIdentity, "v2"))
 					default:
 						if err := tx.entries.Delete(key); err != nil {
 							return err
@@ -387,7 +418,8 @@ func TestMetadataPhysicalScanOutOfScopeErrorsAndCancellation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			base, err := directory.ParseDNWithNormalizer("dc=elsewhere", schema)
+			// The first RDN differs, before any corruption in the final RDN or tail.
+			base, err := directory.ParseDNWithNormalizer("uid=elsewhere,dc=example", schema)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -401,7 +433,7 @@ func TestMetadataPhysicalScanOutOfScopeErrorsAndCancellation(t *testing.T) {
 							}
 						}
 						if cancelAt == 100 && stopAt == 0 {
-							bad := mode == "codec" || mode == "dn" || mode == "identity"
+							bad := mode != "valid" && mode != "json"
 							if bad && (got.err == nil || len(got.rows) != 7) || !bad && (got.err != nil || len(got.rows) != 8) {
 								t.Fatalf("out-of-scope bad row was skipped: %d/%v", len(got.rows), got.err)
 							}

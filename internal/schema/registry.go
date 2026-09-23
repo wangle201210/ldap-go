@@ -27,6 +27,7 @@ type Registry struct {
 	structureRules   map[string]*DITStructureRule
 	attributeOptions []string
 	preparedNames    preparedAttributeNameCache
+	dnCache          normalizedDNCache
 }
 
 type lockedRegistryDNNormalizer struct {

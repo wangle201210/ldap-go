@@ -3133,7 +3133,7 @@ func (server *Server) handleCompare(
 		var dynlistCompareHandled bool
 		var dynlistCompareMatched bool
 		rawEntry := entry
-		if database != nil && !controls.manageDsaIT {
+		if database != nil && !controls.manageDsaIT && (database.dynlist != nil || database.dyngroup != nil) {
 			dynlistPlans = newDynlistProjectionCache(
 				ctx,
 				server,
@@ -3301,11 +3301,11 @@ func normalizeCompareACLEntry(
 		isConfigDatabase(*database) || isMonitorDatabase(*database) || boundDN == "" {
 		return entry, nil
 	}
-	subject, err := runtime.schema.NormalizeDN(boundDN)
+	subject, err := runtime.schema.NormalizeDNCached(boundDN)
 	if err != nil {
 		return directory.Entry{}, err
 	}
-	target, err := runtime.schema.NormalizeDN(entry.DN)
+	target, err := runtime.schema.NormalizeDNCached(entry.DN)
 	if err != nil {
 		return directory.Entry{}, err
 	}

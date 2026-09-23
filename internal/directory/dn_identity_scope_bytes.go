@@ -17,41 +17,77 @@ import (
 func ValidateDNIdentityInScopeBytes(value, key []byte, base DN, scope Scope) (inScope bool, scopeErr error, validationErr error) {
 	var scratch [1024]byte
 	if base.hasSchemaAwareIdentity() {
-		if rdns, ok := validatedSimpleDNIdentityRDNsBytes(value, key, scratch[:]); ok {
-			return dnIdentityRDNsInScope(base, rdns, scope), nil, nil
+		if inScope, ok := validateSimpleDNIdentityInScopeBytes(value, key, base, scope, scratch[:]); ok {
+			return inScope, nil, nil
 		}
 	}
 	return ValidateDNIdentityInScope(string(value), string(key), base, scope)
 }
 
-func validatedSimpleDNIdentityRDNsBytes(value, key, scratch []byte) (dnIdentityParts, bool) {
+func validateSimpleDNIdentityInScopeBytes(value, key []byte, base DN, scope Scope, scratch []byte) (inScope, ok bool) {
 	if !bytes.HasPrefix(key, []byte(schemaAwareDNKeyPrefix)) {
-		return dnIdentityParts{}, false
+		return false, false
 	}
 	depth, simple := simpleDNDepthBytes(value)
 	if !simple {
-		return dnIdentityParts{}, false
+		return false, false
 	}
 	encoded := key[len(schemaAwareDNKeyPrefix):]
 	if base64.RawURLEncoding.DecodedLen(len(encoded)) > len(scratch) ||
 		bytes.IndexByte(encoded, '\r') >= 0 || bytes.IndexByte(encoded, '\n') >= 0 {
-		return dnIdentityParts{}, false
+		return false, false
 	}
 	n, err := base64.RawURLEncoding.Strict().Decode(scratch, encoded)
 	if err != nil {
-		return dnIdentityParts{}, false
+		return false, false
 	}
-	rdns, err := viewDNIdentityParts(scratch[:n])
-	if err != nil || rdns.count != depth {
-		return dnIdentityParts{}, false
+	payload := scratch[:n]
+	count, n := binary.Uvarint(payload)
+	if n <= 0 {
+		return false, false
 	}
-	remaining := rdns
-	for range rdns.count {
-		if !validSingleAVADNIdentityRDN(remaining.next()) {
-			return dnIdentityParts{}, false
+	payload = payload[n:]
+	if count > uint64(len(payload))+1 || count != uint64(depth) {
+		return false, false
+	}
+	baseDepth := len(base.identityRDNs)
+	equal, ancestor := baseDepth == depth, baseDepth < depth
+	offset := depth - baseDepth
+	// Fuse framing, AVA validation and suffix comparison. A scope mismatch must
+	// not skip later validation; any failure defers error precedence to fallback.
+	for index := range depth {
+		length, n := binary.Uvarint(payload)
+		if n <= 0 {
+			return false, false
+		}
+		payload = payload[n:]
+		if length > uint64(len(payload)) {
+			return false, false
+		}
+		rdn := payload[:int(length):int(length)]
+		payload = payload[int(length):]
+		if !validSingleAVADNIdentityRDN(rdn) {
+			return false, false
+		}
+		if (equal || ancestor) && index >= offset && !bytes.Equal(base.identityRDNs[index-offset], rdn) {
+			equal, ancestor = false, false
 		}
 	}
-	return rdns, true
+	if len(payload) != 0 {
+		return false, false
+	}
+	switch scope {
+	case ScopeBase:
+		return equal, true
+	case ScopeSingleLevel:
+		return ancestor && depth == baseDepth+1, true
+	case ScopeWholeSubtree:
+		return equal || ancestor, true
+	case ScopeChildren:
+		return ancestor, true
+	default:
+		return false, true
+	}
 }
 
 // Validate one complete single-AVA RDN without re-reading its nested lengths.
