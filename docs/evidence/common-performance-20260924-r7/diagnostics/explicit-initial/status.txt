@@ -1,0 +1,13 @@
+Initial explicit-ACL attempt: diagnostic evidence only, excluded from accepted tables.
+Source: /var/tmp/ldap-go-common-perf-20260924-r7/explicit-initial
+
+groups.json records a 10,000 ms client timeout while current created direct-1000,
+after 24 setup adds. It contains zero measured samples and a Network Error
+timeout. cleanup_done lists before and current. Smoke, hot and distributed JSON
+are preserved from the same failed attempt; none are accepted final measurements.
+
+Both access modes subsequently completed on fresh fixtures with a 30-second
+client timeout; the SDK timer is unchanged. The coordinator confirmed exit 0.
+replay.sh.txt preserves the initial recipe with its fixture password replaced
+by a required LDAP_BENCH_PASSWORD environment variable. Its original output
+directory was explicit-final, subsequently renamed explicit-initial.

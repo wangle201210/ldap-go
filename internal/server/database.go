@@ -2263,7 +2263,7 @@ func effectiveDatabaseSearchExecutionLimitsWithMatcher(
 		!isConfigDatabase(database) {
 		database.dnNormalizer = runtime.schema
 	}
-	root := database.rootDN != nil && boundDN == database.rootDN.String()
+	root := database.rootDN != nil && database.rootDN.DisplayEquals(boundDN)
 	var subject directory.DN
 	var err error
 	if !root {

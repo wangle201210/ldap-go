@@ -57,7 +57,7 @@ func (registry *Registry) normalizeEqualityAssertionLocked(
 		if err != nil {
 			return nil, errors.New("distinguishedNameMatch received invalid DN")
 		}
-		return []byte(dn.NormalizedString()), nil
+		return []byte(dn.normalizedString()), nil
 	}
 	return registry.normalizeWithRuleLocked(effective.Equality, value)
 }

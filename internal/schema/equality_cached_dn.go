@@ -44,7 +44,7 @@ func (registry *Registry) evaluateDNEqualityCachedLocked(
 				if err != nil {
 					return directory.FilterUndefinedResult, true
 				}
-				normalizedAssertion = dn.NormalizedString()
+				normalizedAssertion = dn.normalizedString()
 				hasValues = true
 			}
 			dn, err := registry.normalizeDNCachedLocked(string(value))
@@ -52,7 +52,7 @@ func (registry *Registry) evaluateDNEqualityCachedLocked(
 				result = directory.FilterUndefinedResult
 				continue
 			}
-			if dn.NormalizedString() == normalizedAssertion {
+			if dn.normalizedString() == normalizedAssertion {
 				return directory.FilterTrueResult, true
 			}
 		}

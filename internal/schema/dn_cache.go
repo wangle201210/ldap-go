@@ -16,9 +16,23 @@ const (
 
 type normalizedDNCache struct {
 	mu         sync.Mutex
-	entries    map[string]directory.DN
+	entries    map[string]normalizedDNCacheEntry
 	bytes      int
 	generation uint64
+}
+
+type normalizedDNCacheEntry struct {
+	dn         directory.DN
+	normalized string
+}
+
+func (entry normalizedDNCacheEntry) normalizedString() string {
+	if entry.normalized != "" {
+		return entry.normalized
+	}
+	// Inputs rejected by the cache's input/depth limits are rendered only
+	// when a text consumer needs them. Empty DNs also take this cheap path.
+	return entry.dn.NormalizedString()
 }
 
 // NormalizeDNCached is an opt-in, bounded cache of successful NormalizeDN
@@ -29,13 +43,14 @@ type normalizedDNCache struct {
 func (registry *Registry) NormalizeDNCached(value string) (directory.DN, error) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	return registry.normalizeDNCachedLocked(value)
+	entry, err := registry.normalizeDNCachedLocked(value)
+	return entry.dn, err
 }
 
 // The caller holds Registry.mu through lookup, parsing and publication. Schema
 // definitions (including Names slices shared by registry APIs) must be treated
 // as immutable; registry mutation methods advance preparedNames.generation.
-func (registry *Registry) normalizeDNCachedLocked(value string) (directory.DN, error) {
+func (registry *Registry) normalizeDNCachedLocked(value string) (normalizedDNCacheEntry, error) {
 	cache := &registry.dnCache
 	cache.mu.Lock()
 	if cache.generation != registry.preparedNames.generation {
@@ -45,7 +60,8 @@ func (registry *Registry) normalizeDNCachedLocked(value string) (directory.DN, e
 	}
 	if len(value) > maxCachedDNInput {
 		cache.mu.Unlock()
-		return registry.normalizeDNLocked(value)
+		dn, err := registry.normalizeDNLocked(value)
+		return normalizedDNCacheEntry{dn: dn}, err
 	}
 	if dn, ok := cache.entries[value]; ok {
 		cache.mu.Unlock()
@@ -59,12 +75,14 @@ func (registry *Registry) normalizeDNCachedLocked(value string) (directory.DN, e
 	// Recursive DN-valued matching uses normalizeDNLocked and bypasses this
 	// cache. Never hold the cache mutex while running the parser or matcher.
 	dn, err := registry.normalizeDNLocked(value)
+	entry := normalizedDNCacheEntry{dn: dn}
 	if err != nil || dn.Depth() > maxCachedDNDepth {
-		return dn, err
+		return entry, err
 	}
-	retained := estimatedDNCacheBytes(value, dn)
+	entry.normalized = dn.NormalizedString()
+	retained := estimatedDNCacheBytes(value, entry)
 	if retained > maxCachedDNBytes {
-		return dn, nil
+		return entry, nil
 	}
 
 	cache.mu.Lock()
@@ -79,20 +97,22 @@ func (registry *Registry) normalizeDNCachedLocked(value string) (directory.DN, e
 		cache.bytes = 0
 	}
 	if cache.entries == nil {
-		cache.entries = make(map[string]directory.DN)
+		cache.entries = make(map[string]normalizedDNCacheEntry)
 	}
-	cache.entries[value] = dn
+	cache.entries[value] = entry
 	cache.bytes += retained
-	return dn, nil
+	return entry, nil
 }
 
-func estimatedDNCacheBytes(value string, dn directory.DN) int {
+func estimatedDNCacheBytes(value string, entry normalizedDNCacheEntry) int {
 	// Allow for map slots, the DN, parsed RDN/AVA objects, nested slice headers,
 	// spare capacity and allocator rounding. Every AVA requires an '=' in the
 	// input; escaped '=' bytes only overestimate that count. Charge multiple
 	// copies of input, identity and rendered strings to cover retained values,
-	// identity RDN buffers and normalization/schema-name expansion. This is a
-	// conservative estimate, not an exact Go heap measurement.
+	// identity RDN buffers, the retained normalized text and normalization/schema-
+	// name expansion. The entry's string header fits in the fixed allowance.
+	// This is a conservative estimate, not an exact Go heap measurement.
+	dn := entry.dn
 	return 512 + 512*dn.Depth() + 256*strings.Count(value, "=") +
-		4*(len(value)+len(dn.Key())+len(dn.String())+len(dn.NormalizedString()))
+		4*(len(value)+len(dn.Key())+len(dn.String())+len(entry.normalized))
 }

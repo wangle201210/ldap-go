@@ -1,0 +1,16 @@
+R7 evidence source: /var/tmp/ldap-go-common-perf-20260924-r7
+Baseline source: ac7182c
+
+Executable SHA-256 supplied by the coordinator (binaries are not archived):
+before   f65475df23fa7fa127f688dd6ee475263fdf978af437efecb9a5f009509a46e2
+current  9d77bb8edafc272b239a40af57fa8ce5518ee4c758f45ab75dd50e7d15850981
+
+go-test.txt, go-vet.txt, openldap-differential.txt, display-bench.txt and
+text-cache-bench.txt are unchanged copies of completed logs. The coordinator
+confirmed Go tests with CGO_ENABLED=0, vet and 355 passing native checks.
+The empty vet log is expected.
+
+The coordinator confirmed both final explicit/default runs exited 0. Their
+measurements and 30-second-timeout replay scripts are archived; script passwords
+are replaced by an environment requirement. Initial explicit data is diagnostic only.
+No tests, builds or benchmarks were run while preparing this evidence archive.

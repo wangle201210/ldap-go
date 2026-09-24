@@ -1,0 +1,54 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkDNCacheNormalizedText/root/warm/DNOnly-8   	 3827310	        46.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/root/warm/DNOnly-8   	 3723681	        47.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/root/warm/DNAndRender-8         	 3386540	        52.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/root/warm/DNAndRender-8         	 3455640	        51.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/root/warm/retainedText-8        	 3572137	        51.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/root/warm/retainedText-8        	 3533875	        50.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/DNOnly-8            	 3775767	        47.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/DNOnly-8            	 3749673	        47.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/DNAndRender-8       	 2203125	        81.97 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/DNAndRender-8       	 2214799	        81.21 ns/op	      24 B/op	       1 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/retainedText-8      	 3962116	        45.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/warm/retainedText-8      	 3711872	        46.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/DNOnly-8          	 3640303	        49.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/DNOnly-8          	 3651340	        49.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/DNAndRender-8     	 1737608	       103.1 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/DNAndRender-8     	 1743404	       103.4 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/retainedText-8    	 3922711	        45.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/multiAVA/warm/retainedText-8    	 3969438	        45.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/DNOnly-8            	   34962	      5341 ns/op	    1712 B/op	      73 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/DNOnly-8            	   35107	      5183 ns/op	    1712 B/op	      73 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/DNAndRender-8       	   36632	      5504 ns/op	    1736 B/op	      74 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/DNAndRender-8       	   36358	      4909 ns/op	    1736 B/op	      74 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/retainedText-8      	   34794	      5488 ns/op	    1712 B/op	      73 allocs/op
+BenchmarkDNCacheNormalizedText/suffix/cold/retainedText-8      	   24811	      8604 ns/op	    1712 B/op	      73 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/DNOnly-8         	    2192	     74133 ns/op	   30760 B/op	     116 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/DNOnly-8         	    3415	     46866 ns/op	   30760 B/op	     116 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/DNAndRender-8    	    6822	     30279 ns/op	   31912 B/op	     117 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/DNAndRender-8    	    6222	     27376 ns/op	   31912 B/op	     117 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/retainedText-8   	    6090	     28239 ns/op	   31913 B/op	     117 allocs/op
+BenchmarkDNCacheNormalizedText/oversizedInput/retainedText-8   	    6487	     26335 ns/op	   31912 B/op	     117 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/DNOnly-8            	    4858	     37279 ns/op	   20680 B/op	     913 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/DNOnly-8            	    5239	     36534 ns/op	   20680 B/op	     913 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/DNAndRender-8       	    4981	     37069 ns/op	   21032 B/op	     914 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/DNAndRender-8       	    5007	     38471 ns/op	   21032 B/op	     914 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/retainedText-8      	    5022	     36919 ns/op	   21032 B/op	     914 allocs/op
+BenchmarkDNCacheNormalizedText/excessDepth/retainedText-8      	    4707	     37199 ns/op	   21032 B/op	     914 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/root/uncached-8         	  427726	       421.6 ns/op	     104 B/op	       5 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/root/uncached-8         	  434664	       433.1 ns/op	     104 B/op	       5 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/root/cached-8           	  656554	       292.0 ns/op	      48 B/op	       2 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/root/cached-8           	  658786	       283.3 ns/op	      48 B/op	       2 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/suffix/uncached-8       	   48484	      3740 ns/op	    1856 B/op	     105 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/suffix/uncached-8       	   46938	      3750 ns/op	    1856 B/op	     105 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/suffix/cached-8         	  143035	      1239 ns/op	     568 B/op	      36 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/suffix/cached-8         	  144270	      1261 ns/op	     568 B/op	      36 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/multiAVA/uncached-8     	   19557	      9726 ns/op	    4608 B/op	     236 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/multiAVA/uncached-8     	   19362	      9272 ns/op	    4608 B/op	     236 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/multiAVA/cached-8       	   66638	      2869 ns/op	    1288 B/op	      75 allocs/op
+BenchmarkNormalizeEqualityAssertionCachedDNText/multiAVA/cached-8       	   64504	      2789 ns/op	    1288 B/op	      75 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	18.866s

@@ -1,0 +1,100 @@
+"""Calculate R6-style endpoint medians from completed R7 evidence only.
+
+python3 calculate.py.txt explicit-final default-final --output medians.tsv
+Run from this directory. This reads saved reports; it launches no workloads.
+"""
+
+import argparse
+import csv
+import json
+from collections import defaultdict
+from pathlib import Path
+from statistics import median
+
+
+ROWS = [
+    ("hot", "userBind", "simple_bind_ssha", 0, "User Bind, SSHA", "Very high"),
+    ("hot", "userBindWrong", "simple_bind_ssha", 0, "Wrong password, SSHA", "Low"),
+    ("hot", "userBind", "simple_bind_plaintext", 0, "User Bind, plaintext diagnostic", "Very high"),
+    ("hot", "userBindWrong", "simple_bind_plaintext", 0, "Wrong password, plaintext diagnostic", "Low"),
+    ("hot", "nonrootBase", "search_nonrootBase", 0, "Non-root Base, hot", "High"),
+    ("hot", "nonrootEquality", "search_nonrootEquality", 0, "Non-root equality, hot", "Very high"),
+    ("distributed", "nonrootBase", "search_nonrootBase", 0, "Non-root Base, distributed", "High"),
+    ("distributed", "nonrootEquality", "search_nonrootEquality", 0, "Non-root equality, distributed", "Very high"),
+    ("groups", "memberEquality", "search_memberEquality", 0, "Direct group discovery", "High"),
+    ("groups", "groupBase", "base_member_values", 10, "Group Base, 10 members", "Medium"),
+    ("groups", "groupBase", "base_member_values", 1000, "Group Base, 1,000 members", "Medium"),
+    ("groups", "nestedMembership", "client_bfs_member_equality", 0, "Nested membership, client BFS", "Medium-high"),
+]
+ENDPOINTS = {"before", "current", "openldap"}
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def calculate(run):
+    groups = defaultdict(list)
+    for batch in ("smoke", "hot", "distributed", "groups"):
+        path = Path(run) / f"{batch}.json"
+        report = json.loads(path.read_text())
+        require(not report.get("error"), f"{path}: {report.get('error')}")
+        require(set(report["cleanup_done"]) == ENDPOINTS, f"{path}: incomplete cleanup")
+        require(report["timeout_ms"] == 30000, f"{path}: unexpected timeout")
+        repeats = report["config"]["repeats"]
+        require(repeats == (1 if batch == "smoke" else 3), f"{path}: repeat count")
+        local = defaultdict(list)
+        for sample in report["samples"]:
+            require(not sample.get("error"), f"{path}: failed sample")
+            require(sample["completed"] == sample["operations"], f"{path}: incomplete sample")
+            require(sample["operations"] == report["config"]["n"], f"{path}: operation count")
+            require(len(sample["latency_ms"]) == sample["operations"], f"{path}: operation latency count")
+            key = (run, batch, sample["stage"], sample["method"], sample.get("members", 0), sample["endpoint"])
+            local[key].append(sample)
+        for key, samples in local.items():
+            require(sorted(s["repeat"] for s in samples) == list(range(1, repeats + 1)), f"{key}: incomplete repeats")
+            counts = {(s["operations"], s["requests"], s["verification_requests"]) for s in samples}
+            require(len(counts) == 1, f"{key}: differing counts")
+        if batch != "smoke":
+            groups.update(local)
+
+    expected = {(run, *row[:4], endpoint) for row in ROWS for endpoint in ENDPOINTS}
+    require(set(groups) == expected, f"{run}: missing or unexpected endpoint groups")
+    medians = {key: median(s["total_ms"] for s in samples) for key, samples in groups.items()}
+    rows = []
+    print(f"\n{run}\n")
+    print("| Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |")
+    print("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    for batch, stage, method, members, label, frequency in ROWS:
+        key = (run, batch, stage, method, members)
+        before, current, native = (medians[(*key, endpoint)] for endpoint in ("before", "current", "openldap"))
+        sample = groups[(*key, "before")][0]
+        calls = f"{sample['operations']:,}" + (" traversals" if stage == "nestedMembership" else "")
+        print(f"| {label} | {frequency} | {calls} | {before:.2f} ms | {current:.2f} ms | {native:.2f} ms | {native/current*100:.1f}% | {(1-current/before)*100:.1f}% |")
+        for endpoint in ("before", "current", "openldap"):
+            endpoint_key = (*key, endpoint)
+            samples = groups[endpoint_key]
+            counts = [samples[0][field] for field in ("operations", "requests", "verification_requests")]
+            rows.append([*endpoint_key, len(samples), *counts, f"{medians[endpoint_key]:.9f}"])
+
+    with (Path(run) / "concurrent.tsv").open() as source:
+        concurrent = list(csv.DictReader(source, delimiter="\t"))
+    times = {}
+    for endpoint in ("before", "current", "openldap"):
+        samples = [r for r in concurrent if r["side"] == endpoint]
+        require(sorted(int(r["repeat"]) for r in samples) == [0, 1, 2, 3], f"{run}: concurrent repeats")
+        times[endpoint] = median(int(r["ms"]) for r in samples if r["repeat"] != "0")
+    print(f"\nConcurrent ms: {times}; relative={times['openldap']/times['current']*100:.1f}%; reduction={(1-times['current']/times['before'])*100:.1f}%")
+    return rows
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("runs", nargs="+", choices=("explicit-final", "default-final"))
+parser.add_argument("--output", type=Path, required=True)
+args = parser.parse_args()
+rows = [row for run in args.runs for row in calculate(run)]
+with args.output.open("w", newline="") as output:
+    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+    writer.writerow(["run", "batch", "stage", "method", "members", "endpoint", "repeats", "operations", "requests", "verification_requests", "median_ms"])
+    writer.writerows(rows)

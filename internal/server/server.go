@@ -2859,7 +2859,7 @@ func (server *Server) isRoot(
 	}
 	for index := range runtime.databases {
 		database := &runtime.databases[index]
-		if database.rootDN == nil || rawDN != database.rootDN.String() {
+		if database.rootDN == nil || !database.rootDN.DisplayEquals(rawDN) {
 			continue
 		}
 		if targetDN == "" {
@@ -2869,8 +2869,7 @@ func (server *Server) isRoot(
 			continue
 		}
 		for _, suffix := range database.suffixes {
-			text := suffix.String()
-			if targetDN == text || strings.HasSuffix(targetDN, ","+text) {
+			if suffix.DisplaySuffixOf(targetDN) {
 				return true
 			}
 		}
@@ -2898,7 +2897,7 @@ func (server *Server) isDatabaseRoot(
 	if rawDN == "" {
 		return false
 	}
-	if database.rootDN != nil && rawDN == database.rootDN.String() {
+	if database.rootDN != nil && database.rootDN.DisplayEquals(rawDN) {
 		return true
 	}
 	subject, err := parseRuntimeDN(rawDN, database.dnNormalizer)

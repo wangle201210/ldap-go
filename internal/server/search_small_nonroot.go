@@ -23,7 +23,7 @@ func (server *Server) trySmallNonRootSearch(
 	base directory.DN,
 	database *runtimeDatabase,
 ) (bool, error) {
-	if database.rootDN != nil && state.boundDN == database.rootDN.String() {
+	if database.rootDN != nil && database.rootDN.DisplayEquals(state.boundDN) {
 		return false, nil
 	}
 	if state.boundDN == "" || state.protocolVersion != 3 || base.Depth() == 0 ||

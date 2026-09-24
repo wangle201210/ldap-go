@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 24, 2026, R6, 100,000 users, baseline `49af259`
+Latest comparison: September 24, 2026, R7, 100,000 users, baseline `ac7182c`
 versus `current`, Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
 Rows are medians of three batch times with endpoints rotated per request; only
 SDK calls are timed. All endpoints use uid/member/objectClass equality indexes.
@@ -60,35 +60,33 @@ Usage frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 131.94 ms | 106.12 ms | 80.4% | 80.0% |
-| Non-root Base, hot | High | 1,000 | 125.86 ms | 97.06 ms | 77.1% | 73.3% |
-| Non-root equality, hot | Very high | 1,000 | 113.02 ms | 89.06 ms | 78.8% | 74.9% |
-| Direct group discovery | High | 100 | 16.27 ms | 10.67 ms | 65.6% | 60.5% |
-| Group Base, 1,000 members | Medium | 100 | 96.79 ms | 85.25 ms | 88.1% | 85.4% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 55.11 ms | 39.83 ms | 72.3% | 74.8% |
+| User Bind, SSHA | Very high | 1,000 | 92.48 ms | 73.45 ms | 79.4% | 73.2% |
+| Non-root Base, hot | High | 1,000 | 121.80 ms | 94.79 ms | 77.8% | 73.5% |
+| Non-root equality, hot | Very high | 1,000 | 118.53 ms | 89.80 ms | 75.8% | 77.0% |
+| Direct group discovery | High | 100 | 17.11 ms | 11.76 ms | 68.8% | 67.4% |
+| Group Base, 1,000 members | Medium | 100 | 97.61 ms | 88.71 ms | 90.9% | 88.6% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 51.66 ms | 36.84 ms | 71.3% | 74.3% |
 
-The [R6 report](docs/common-ldap-performance.md) records a **57.4% reduction in
-sampled allocation** under `trySmallNonRootSearch` for 10,000 member queries.
-That is not a latency claim. Direct group discovery medians improve 4.8% with
-explicit ACLs and 12.7% with default access; latency results overall remain mixed.
+The [R7 report](docs/common-ldap-performance.md) retains both full measured
+tables and every slower median. SSHA Bind is **7.3% slower with explicit ACLs
+and 0.7% slower with default access** versus baseline `ac7182c`. Explicit paired slowdowns are 0.44%,
+0.26% and 12.25%; shared-host timing does not establish code-level causality.
+Direct-group medians improve 4.2% and 0.4%, respectively. **OpenLDAP parity
+remains unachieved; there is no uniform gain.**
 
-Original default SSHA Bind is **6.6% slower** and explicit 1,000-member group
-Base **7.1% slower**. Separate seven-repeat rechecks do not reproduce those
-regressions; the 10-member explicit group remains 4.0% slower with mixed paired
-signs. Default root-bound concurrency is 15.7% slower. Original and recheck
-samples remain separate. **The OpenLDAP parity goal remains unachieved; there
-is no uniform speedup.**
+R7 avoids repeated DN display/normalized-text construction. Warm retained-text
+lookup saves one allocation versus warm DN lookup plus rerendering; this is a
+component result, not an SDK latency claim. Cache bounds and per-call validation
+remain; no authorization cache was added. Final pure-Go tests, vet and 355
+native checks passed. The R2 operational-attribute gap remains.
 
-R6 reuses at most 16 zeroed idle decoders, retaining no payload references, and
-opts into bounded DN assertion normalization with syntax/length validation on
-every call. Custom callbacks and authorization/password/snapshot checks remain;
-no authorization cache was added. Final Go tests, vet and 355 native PASS records
-passed. The R2 operational-attribute gap remains.
-
-See the [evidence index](docs/evidence/common-performance-20260924-r6/README.md),
-[archived R5 report](docs/common-ldap-performance-20260924-r5.md) and
-[SDK runner](internal/cmd/ldapcommonbench/README.md). Older write/paging/memory
-measurements remain in the [full-operation report](docs/performance-optimization-20260923-round13.md).
+The failed initial setup is archived separately; accepted fresh-fixture runs
+use a 30-second client timeout with unchanged SDK timing boundaries. See the
+[evidence index](docs/evidence/common-performance-20260924-r7/README.md),
+[exact R6 archive](docs/common-ldap-performance-20260924-r6.md) and
+[SDK runner](internal/cmd/ldapcommonbench/README.md). No further benchmark or
+recheck is planned at this checkpoint. Older write/paging/memory results remain
+in the [full-operation report](docs/performance-optimization-20260923-round13.md).
 
 ## Requirements
 

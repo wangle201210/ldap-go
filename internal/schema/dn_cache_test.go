@@ -126,7 +126,7 @@ func TestNormalizeDNCachedInvalidation(t *testing.T) {
 		t.Fatal("replacement retained old naming semantics")
 	}
 	if registry.dnCache.generation == generation || registry.dnCache.generation != registry.preparedNames.generation ||
-		len(registry.dnCache.entries) != 1 || registry.dnCache.bytes != estimatedDNCacheBytes(raw, after) {
+		len(registry.dnCache.entries) != 1 || registry.dnCache.bytes != estimatedDNCacheBytes(raw, normalizedDNCacheEntry{dn: after, normalized: after.NormalizedString()}) {
 		t.Fatal("replacement retained old cache entries or accounting")
 	}
 	if _, err := registry.NormalizeDNCached("registryExactAlias=Alice"); err == nil {
