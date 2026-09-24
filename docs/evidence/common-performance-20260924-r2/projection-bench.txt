@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkDefaultProjection/ordinary11/default/optimized-8         	  126955	      2736 ns/op	    1336 B/op	      22 allocs/op
+BenchmarkDefaultProjection/ordinary11/default/optimized-8         	  130844	      2714 ns/op	    1336 B/op	      22 allocs/op
+BenchmarkDefaultProjection/ordinary11/default/optimized-8         	  132110	      2697 ns/op	    1336 B/op	      22 allocs/op
+BenchmarkDefaultProjection/ordinary11/default/original-8          	    9726	     35216 ns/op	    8496 B/op	     175 allocs/op
+BenchmarkDefaultProjection/ordinary11/default/original-8          	   10000	     35100 ns/op	    8496 B/op	     175 allocs/op
+BenchmarkDefaultProjection/ordinary11/default/original-8          	   10000	     35380 ns/op	    8496 B/op	     175 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/optimized-8         	   41804	      8646 ns/op	    6312 B/op	      63 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/optimized-8         	   38575	      9462 ns/op	    6312 B/op	      63 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/optimized-8         	   41539	      8647 ns/op	    6312 B/op	      63 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/original-8          	    8386	     40457 ns/op	   13424 B/op	     217 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/original-8          	    8671	     39270 ns/op	   13424 B/op	     217 allocs/op
+BenchmarkDefaultProjection/ordinary11/explicitValueIndependent/original-8          	    8829	     39179 ns/op	   13424 B/op	     217 allocs/op
+BenchmarkDefaultProjection/group1000/default/optimized-8                           	   51466	      7159 ns/op	   25216 B/op	      14 allocs/op
+BenchmarkDefaultProjection/group1000/default/optimized-8                           	   52458	      7137 ns/op	   25216 B/op	      14 allocs/op
+BenchmarkDefaultProjection/group1000/default/optimized-8                           	   49483	      6967 ns/op	   25216 B/op	      14 allocs/op
+BenchmarkDefaultProjection/group1000/default/original-8                            	     158	   2267796 ns/op	  485528 B/op	   10059 allocs/op
+BenchmarkDefaultProjection/group1000/default/original-8                            	     159	   2250660 ns/op	  485529 B/op	   10059 allocs/op
+BenchmarkDefaultProjection/group1000/default/original-8                            	     154	   2308158 ns/op	  485528 B/op	   10059 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/optimized-8          	   40378	      8811 ns/op	   26480 B/op	      26 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/optimized-8          	   40951	      8679 ns/op	   26480 B/op	      26 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/optimized-8          	   41334	      8779 ns/op	   26480 B/op	      26 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/original-8           	     136	   2637771 ns/op	  838586 B/op	   13068 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/original-8           	     140	   2544547 ns/op	  838585 B/op	   13068 allocs/op
+BenchmarkDefaultProjection/group1000/explicitValueIndependent/original-8           	     136	   2622370 ns/op	  838586 B/op	   13068 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	8.626s

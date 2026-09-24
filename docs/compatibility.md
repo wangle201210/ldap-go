@@ -20,6 +20,13 @@ The [implemented-behavior audit](openldap-behavior-audit.md) records confirmed
 semantic fixes, intentional differences, and the distinction between passing
 tests and proof of behavioral equality.
 
+A September 24 differential found a local-entry operational-attribute gap:
+the ordinary memory-store fixture omits synthesized `entryDN` and
+`hasSubordinates`, including root reads and `+` with types-only. The baseline
+and optimized versions fail the same 40 expanded scenarios. See the
+[reproduction and failure evidence](common-ldap-performance.md#existing-operational-attribute-gap).
+Passing named-attribute tests does not establish full `+` projection parity.
+
 ## Completeness audit
 
 The reproducible verification baseline is the OpenLDAP 2.6.13 release commit,

@@ -1,0 +1,304 @@
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/root/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/entry-only/typesOnly=true
+--- PASS: TestOpenLDAPReferenceACLValueBatchProjection (0.27s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/authenticated/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/root/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/anonymous-after-root/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchProjection/self-again/group10/entry-only/typesOnly=true (0.00s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	0.297s

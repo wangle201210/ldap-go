@@ -98,6 +98,7 @@ func (server *Server) attributesWithPrivilege(
 		return rootVisibleEntry(entry, typesOnly)
 	}
 	filtered := directory.Entry{DN: entry.DN}
+	batchValues := false
 	if entry.DN != "" && len(entry.Attributes) > 0 && runtime.schema != nil {
 		_, remote := reader.(interface {
 			remoteACLView(string, directory.Entry, string, []byte) (storage.Reader, string, directory.Entry, string, []byte, error)
@@ -157,9 +158,31 @@ func (server *Server) attributesWithPrivilege(
 				}
 				return filtered
 			}
+			batchValues = runtime.access.CanBatchValues()
 		}
 	}
 	for _, attribute := range entry.Attributes {
+		if batchValues {
+			// The non-root identity and context are stable for this entry, and
+			// this policy neither examines values nor calls an entry reader.
+			// Reuse only within this attribute; no authorization is cached.
+			var value []byte
+			if !typesOnly && len(attribute.Values) > 0 {
+				value = attribute.Values[0]
+			}
+			if runtime.access.Allowed(subject, acl.Target{
+				Entry: entry, Attribute: attribute.Description, Value: value,
+				DNValued: runtime.schema.IsDNValued(attribute.Description),
+				Schema:   runtime.schema, DNNormalizer: aclDNNormalizer{Registry: runtime.schema},
+			}, privilege, reader) {
+				selected := directory.Attribute{Description: attribute.Description}
+				if !typesOnly && len(attribute.Values) > 0 {
+					selected.Values = slices.Clone(attribute.Values)
+				}
+				filtered.Attributes = append(filtered.Attributes, selected)
+			}
+			continue
+		}
 		if typesOnly {
 			if server.allowed(
 				runtime,

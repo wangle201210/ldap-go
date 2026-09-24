@@ -1,0 +1,449 @@
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/all-operational-types/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/all-operational-types/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|member=|objectclass=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|member=|objectclass=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|mail=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|mail=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|member=|objectclass=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|member=|objectclass=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=|entrydn=|modifiersname=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=|modifiersname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|description=68696464656e206465736372697074696f6e|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365|userpassword=616c6963652d736563726574
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|description=68696464656e206465736372697074696f6e|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365|userpassword=616c6963652d736563726574
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|description=|entrydn=|mail=|modifiersname=|objectclass=|seealso=|sn=|telephonenumber=|uid=|userpassword=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|description=|mail=|modifiersname=|objectclass=|seealso=|sn=|telephonenumber=|uid=|userpassword=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifiersname=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifiersname=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=|entrydn=|modifiersname=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=|modifiersname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|description=68696464656e206669727374,68696464656e207365636f6e64|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|description=68696464656e206669727374,68696464656e207365636f6e64|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|modifiersname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|description=|entrydn=|member=|modifiersname=|objectclass=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|description=|member=|modifiersname=|objectclass=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifiersname=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifiersname=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/all-operational-types/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/operational/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/operational/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/mixed/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/mixed/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/all-operational-types/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=7569643d61636c2d616c6963652c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=416c6c6f77656420434e,48696464656e20434e|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|mail=416c6c6f776564404578616d706c652e434f4d,68696464656e406578616d706c652e636f6d|objectclass=696e65744f7267506572736f6e|seealso=7569643d6f776e65722c6f753d617263686976652c64633d6578616d706c652c64633d636f6d,7569643d6f776e65722c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|sn=414c494345,48696464656e205375726e616d65|telephonenumber=2b31203535352030313030|uid=61636c2d616c696365
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|mail=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|cn=|creatorsname=|mail=|objectclass=|seealso=|sn=|telephonenumber=|uid=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  uid=acl-alice,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/entry-only/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/explicit/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/explicit/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/ordinary/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/ordinary/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/default/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/default/typesOnly=true
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/operational/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/operational/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=|entrydn=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|creatorsname=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/mixed/typesOnly=false
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|entrydn=636e3d61636c2d62617463682d67726f757031302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=61636c2d62617463682d67726f75703130|creatorsname=636e3d61646d696e2c64633d6578616d706c652c64633d636f6d|member=7569643d61636c2d62617463682d6d656d626572302c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572312c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572322c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572332c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572342c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572352c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572362c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572372c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572382c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d,7569643d61636c2d62617463682d6d656d626572392c6f753d70656f706c652c64633d6578616d706c652c64633d636f6d|objectclass=67726f75704f664e616d6573
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/mixed/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|entrydn=|member=|objectclass=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|cn=|creatorsname=|member=|objectclass=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/all-operational-types/typesOnly=true
+    openldap_acl_value_batch_test.go:160: ACL value batch projection mismatch:
+        OpenLDAP: cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entrydn=|entryuuid=|hassubordinates=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+        ldap-go:  cn=acl-batch-group10,ou=people,dc=example,dc=com|createtimestamp=|creatorsname=|entrycsn=|entryuuid=|modifytimestamp=|structuralobjectclass=|subschemasubentry=
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/entry-only/typesOnly=false
+=== RUN   TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/entry-only/typesOnly=true
+--- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap (0.26s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous/group10/entry-only/typesOnly=true (0.00s)
+    --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/authenticated/group10/entry-only/typesOnly=true (0.00s)
+    --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self/group10/entry-only/typesOnly=true (0.00s)
+    --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/root/group10/entry-only/typesOnly=true (0.00s)
+    --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/default/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/operational/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/operational/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/mixed/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/mixed/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/anonymous-after-root/group10/entry-only/typesOnly=true (0.00s)
+    --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again (0.01s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/person/entry-only/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/explicit/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/explicit/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/ordinary/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/ordinary/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/default/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/default/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/operational/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/operational/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/mixed/typesOnly=false (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/mixed/typesOnly=true (0.00s)
+        --- FAIL: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/all-operational-types/typesOnly=true (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/entry-only/typesOnly=false (0.00s)
+        --- PASS: TestOpenLDAPReferenceACLValueBatchOperationalGap/self-again/group10/entry-only/typesOnly=true (0.00s)
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/server	0.294s
+FAIL

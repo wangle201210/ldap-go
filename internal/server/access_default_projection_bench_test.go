@@ -47,7 +47,7 @@ func BenchmarkDefaultProjection(b *testing.B) {
 		for _, explicit := range []bool{false, true} {
 			policyName := "default"
 			if explicit {
-				policyName = "explicitFallback"
+				policyName = "explicitValueIndependent"
 			}
 			for _, original := range []bool{false, true} {
 				implementation := "optimized"

@@ -1,0 +1,201 @@
+package server
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+func TestOpenLDAPReferenceACLValueBatchOperationalGap(t *testing.T) {
+	tools := requireOpenLDAPReferenceTools(t)
+	// Only DN/attribute targets and value-independent subject matchers: the
+	// explicit policy must remain eligible for CanBatchValues throughout.
+	rules := []string{
+		`to attrs=userPassword by anonymous auth by * none`,
+		`to attrs=description,modifiersName by * none`,
+		`to attrs=mail by self read by * none`,
+		`to attrs=entry,objectClass by * read`,
+		`to attrs=member by users read by * none`,
+		`to attrs=creatorsName by users read by * none`,
+		`to * by users read by * none`,
+	}
+	openLDAPConfig := make([]string, len(rules))
+	orderedRules := make([]string, len(rules))
+	for index, rule := range rules {
+		openLDAPConfig[index] = "access " + rule
+		orderedRules[index] = fmt.Sprintf("{%d}%s", index, rule)
+	}
+	openLDAPURI, stopOpenLDAP := startOpenLDAPReferenceServerWithConfig(
+		t, tools, nil, "", strings.Join(openLDAPConfig, "\n"), "",
+	)
+	t.Cleanup(stopOpenLDAP)
+
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedOnlineConfiguration(t, store)
+	address, stopLDAPGo := startServer(t, store, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("admin-secret"),
+	})
+	t.Cleanup(stopLDAPGo)
+	ldapGoURI := "ldap://" + address
+	configClient := dialBoundACLReferenceClient(t, ldapGoURI, "cn=config", "config-secret")
+	t.Cleanup(func() { _ = configClient.Close() })
+	modify := ldap.NewModifyRequest("olcDatabase={1}mdb,cn=config", nil)
+	modify.Replace("olcAccess", orderedRules)
+	if err := configClient.Modify(modify); err != nil {
+		t.Fatalf("Modify(ldap-go value batch ACL): %v", err)
+	}
+	policy, loaded, err := acl.LoadOpenLDAPConfig(t.Context(), store)
+	if err != nil {
+		t.Fatalf("LoadOpenLDAPConfig: %v", err)
+	}
+	if loaded.Rules < len(rules) || !policy.CanBatchValues() {
+		t.Fatal("installed explicit ACL must exercise value batching")
+	}
+
+	const groupDN = "cn=acl-batch-group10,ou=people,dc=example,dc=com"
+	members := make([]string, 10)
+	for index := range members {
+		members[index] = fmt.Sprintf("uid=acl-batch-member%d,ou=people,dc=example,dc=com", index)
+	}
+	openLDAP := bindOverlayReferenceClient(t, openLDAPURI, "secret")
+	t.Cleanup(func() { _ = openLDAP.Close() })
+	ldapGo := bindOverlayReferenceClient(t, ldapGoURI, "admin-secret")
+	t.Cleanup(func() { _ = ldapGo.Close() })
+	for _, client := range []*ldap.Conn{openLDAP, ldapGo} {
+		addACLReferenceFixtures(t, client)
+		group := ldap.NewAddRequest(groupDN, nil)
+		group.Attribute("objectClass", []string{"groupOfNames"})
+		group.Attribute("cn", []string{"acl-batch-group10"})
+		group.Attribute("member", members)
+		group.Attribute("description", []string{"hidden first", "hidden second"})
+		if err := client.Add(group); err != nil {
+			t.Fatalf("Add(value batch group): %v", err)
+		}
+	}
+
+	search := func(t *testing.T, name string, client *ldap.Conn, request *ldap.SearchRequest) *ldap.Entry {
+		t.Helper()
+		result, err := client.Search(request)
+		if err != nil {
+			t.Fatalf("Search(%s): %v", name, err)
+		}
+		if len(result.Entries) != 1 || !strings.EqualFold(result.Entries[0].DN, request.BaseDN) {
+			t.Fatalf("Search(%s) must return exactly %s: %#v", name, request.BaseDN, result.Entries)
+		}
+		entry := result.Entries[0]
+		if request.TypesOnly {
+			for _, attribute := range entry.Attributes {
+				if len(attribute.Values) != 0 || len(attribute.ByteValues) != 0 {
+					t.Fatalf("Search(%s) returned values for TypesOnly attribute %s", name, attribute.Name)
+				}
+			}
+		}
+		return entry
+	}
+
+	// Rebind the same connections so a previous user's projection cannot leak
+	// into the next request, including when leaving the root bypass.
+	for _, identity := range []struct {
+		name     string
+		dn       string
+		password string
+	}{
+		{name: "anonymous"},
+		{name: "authenticated", dn: aclReferenceBobDN, password: "bob-secret"},
+		{name: "self", dn: aclReferenceAliceDN, password: "alice-secret"},
+		{name: "root", dn: "cn=admin,dc=example,dc=com", password: "secret"},
+		{name: "anonymous-after-root"},
+		{name: "self-again", dn: aclReferenceAliceDN, password: "alice-secret"},
+	} {
+		t.Run(identity.name, func(t *testing.T) {
+			root := identity.name == "root"
+			for _, endpoint := range []struct {
+				name   string
+				client *ldap.Conn
+			}{
+				{name: "OpenLDAP", client: openLDAP},
+				{name: "ldap-go", client: ldapGo},
+			} {
+				password := identity.password
+				if root && endpoint.client == ldapGo {
+					password = "admin-secret"
+				}
+				if _, err := endpoint.client.SimpleBind(&ldap.SimpleBindRequest{
+					Username: identity.dn, Password: password, AllowEmptyPassword: true,
+				}); err != nil {
+					t.Fatalf("Bind(%s, %s): %v", endpoint.name, identity.name, err)
+				}
+			}
+			for _, target := range []struct{ name, dn string }{
+				{name: "person", dn: aclReferenceAliceDN},
+				{name: "group10", dn: groupDN},
+			} {
+				for _, selection := range []struct {
+					name       string
+					attributes []string
+				}{
+					{name: "explicit", attributes: []string{"cn", "sn", "mail", "seeAlso", "member", "description", "userPassword"}},
+					{name: "ordinary", attributes: []string{"*"}},
+					{name: "default"},
+					{name: "operational", attributes: []string{"entryDN", "creatorsName", "modifiersName"}},
+					{name: "mixed", attributes: []string{"*", "entryDN", "creatorsName", "modifiersName"}},
+					{name: "all-operational-types", attributes: []string{"+"}},
+					{name: "entry-only", attributes: []string{"1.1"}},
+				} {
+					for _, typesOnly := range []bool{false, true} {
+						if selection.name == "all-operational-types" && !typesOnly { continue }
+						t.Run(fmt.Sprintf("%s/%s/typesOnly=%t", target.name, selection.name, typesOnly), func(t *testing.T) {
+							request := ldap.NewSearchRequest(target.dn, ldap.ScopeBaseObject,
+								ldap.NeverDerefAliases, 0, 0, typesOnly, "(objectClass=*)", selection.attributes, nil)
+							reference := search(t, "OpenLDAP", openLDAP, request)
+							implementation := search(t, "ldap-go", ldapGo, request)
+							want, got := normalizeCoreReferenceEntry(reference), normalizeCoreReferenceEntry(implementation)
+							if got != want {
+								t.Fatalf("ACL value batch projection mismatch:\nOpenLDAP: %s\nldap-go:  %s", want, got)
+							}
+							if selection.name == "entry-only" && len(reference.Attributes) != 0 {
+								t.Fatal("1.1 must return an entry without attributes")
+							}
+							if !root {
+								for _, attribute := range reference.Attributes {
+									switch strings.ToLower(attribute.Name) {
+									case "description", "userpassword", "modifiersname":
+										t.Fatalf("denied attribute %s was exposed", attribute.Name)
+									}
+								}
+							}
+							if selection.name == "explicit" && !typesOnly {
+								if target.dn == groupDN {
+									wantMembers := 0
+									if identity.dn != "" {
+										wantMembers = len(members)
+									}
+									if got := len(reference.GetAttributeValues("member")); got != wantMembers {
+										t.Fatalf("member count = %d, want %d", got, wantMembers)
+									}
+								} else {
+									wantMail := 0
+									if root || identity.dn == target.dn {
+										wantMail = 2
+									}
+									if got := len(reference.GetAttributeValues("mail")); got != wantMail {
+										t.Fatalf("mail count = %d, want %d", got, wantMail)
+									}
+									if root && len(reference.GetAttributeValues("userPassword")) != 1 {
+										t.Fatal("root must bypass the password deny")
+									}
+								}
+							}
+						})
+					}
+				}
+			}
+		})
+	}
+}

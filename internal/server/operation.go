@@ -577,7 +577,9 @@ func (queue *operationQueue) complete(operations ...*queuedOperation) {
 			queue.retainedBytes -= operation.retainedBytes
 		}
 	}
-	queue.ready.Broadcast()
+	if len(queue.items) > 0 || queue.closed {
+		queue.ready.Broadcast()
+	}
 	queue.mu.Unlock()
 }
 
@@ -616,7 +618,9 @@ func (queue *operationQueue) discardPending() []*queuedOperation {
 			}
 		}
 	}
-	queue.ready.Broadcast()
+	if len(discarded) > 0 || queue.closed {
+		queue.ready.Broadcast()
+	}
 	queue.mu.Unlock()
 	return discarded
 }

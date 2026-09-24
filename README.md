@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest common-operation comparison: September 24, 2026, 100,000 users,
+Latest common-operation comparison: September 24, 2026, second run, 100,000 users,
 Apple M1 Pro, Go without cgo, OpenLDAP 2.6.13. These are batch-time medians from
 three repetitions with endpoints rotated per request. Only SDK calls are timed;
 response validation is outside timing. Both servers have uid/member/objectClass
@@ -59,18 +59,22 @@ equality indexes. Relative performance is `OpenLDAP / ldap-go * 100%`.
 
 | Common operation | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 1,000 | 104.47 ms | 71.46 ms | 68.4% | 66.4% |
-| Non-root Base, hot | 1,000 | 110.81 ms | 77.32 ms | 69.8% | 54.3% |
-| Non-root indexed equality, hot | 1,000 | 110.49 ms | 78.98 ms | 71.5% | 54.4% |
-| Direct group discovery | 100 | 43.54 ms | 16.99 ms | 39.0% | 4.5% |
-| Group Base, 1,000 members | 100 | 86.44 ms | 79.73 ms | 92.2% | 18.5% |
-| Nested membership, client BFS | 100 traversals | 97.21 ms | 55.30 ms | 56.9% | 12.6% |
+| User Bind, SSHA | 1,000 | 104.34 ms | 73.18 ms | 70.1% | 69.5% |
+| Non-root Base, hot | 1,000 | 121.49 ms | 85.70 ms | 70.5% | 63.8% |
+| Non-root indexed equality, hot | 1,000 | 120.42 ms | 87.55 ms | 72.7% | 65.5% |
+| Direct group discovery | 100 | 31.17 ms | 11.53 ms | 37.0% | 38.6% |
+| Group Base, 1,000 members | 100 | 100.23 ms | 88.19 ms | 88.0% | 84.7% |
+| Nested membership, client BFS | 100 traversals | 76.30 ms | 40.21 ms | 52.7% | 50.3% |
 
 The [common-operation report](docs/common-ldap-performance.md) includes distributed
 user reads, exact ACL definitions, all samples and validation. The
 [SDK runner](internal/cmd/ldapcommonbench/README.md) is reusable on disposable
-endpoints. The four-operation parity goal is **not complete**; explicit-ACL group
-queries remain the largest gap. No password strength or ACL decision was weakened.
+endpoints. Against `e07231f`, explicit-ACL group discovery takes **88.8% less time**,
+1,000-member group reads 77.5% less, and common Base/equality reads about 15%-17% less.
+The four-operation parity goal is **not complete**; direct group discovery remains
+a large gap. Some default-access measurements vary slightly in either direction.
+No password strength or ACL decision was weakened. The report also records a
+pre-existing operational-attribute compatibility gap.
 
 Timing boundaries and group fixtures differ from the
 [earlier full-operation comparison](docs/performance-optimization-20260923-round13.md),
