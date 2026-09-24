@@ -1,0 +1,3 @@
+=== RUN   TestCommonGroupProfile
+--- PASS: TestCommonGroupProfile (16.39s)
+PASS

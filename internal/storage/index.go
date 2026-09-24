@@ -263,6 +263,11 @@ func forEachReadOnlyEncodedCandidate(
 	fn func(directory.Entry) error,
 ) (candidates int, err error) {
 	var decoder *readOnlyCandidateDecoder
+	defer func() {
+		if decoder != nil {
+			releaseReadOnlyCandidateDecoder(decoder)
+		}
+	}()
 	for _, candidate := range encoded {
 		var entry directory.Entry
 		// A single small row costs less to own than to allocate the reusable
@@ -273,7 +278,7 @@ func forEachReadOnlyEncodedCandidate(
 			entry = stored.Entry
 		} else {
 			if decoder == nil {
-				decoder = new(readOnlyCandidateDecoder)
+				decoder = acquireReadOnlyCandidateDecoder()
 			}
 			entry, err = decoder.decode(candidate.value)
 		}

@@ -51,51 +51,44 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest common-operation comparison: September 24, 2026, fifth run, 100,000 users,
-baseline `b7e6cc1` versus the final `final` executable, Apple M1 Pro, Go 1.26.4
-with cgo disabled, OpenLDAP 2.6.13. Main rows are batch-time medians of three
-repeats with endpoints rotated per request. Only SDK calls are timed; validation
-is outside timing. All endpoints use uid/member/objectClass equality indexes.
+Latest comparison: September 24, 2026, R6, 100,000 users, baseline `49af259`
+versus `current`, Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
+Rows are medians of three batch times with endpoints rotated per request; only
+SDK calls are timed. All endpoints use uid/member/objectClass equality indexes.
 Relative performance is `OpenLDAP / ldap-go * 100%`; 100% means parity.
-Usage frequency is qualitative for authentication/directory workloads, not
-measured traffic. SSHA/plaintext methods and different member counts are separate.
+Usage frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 115.10 ms | 91.92 ms | 79.9% | 78.8% |
-| Non-root Base, hot | High | 1,000 | 106.38 ms | 81.51 ms | 76.6% | 76.1% |
-| Non-root equality, hot | Very high | 1,000 | 110.49 ms | 82.17 ms | 74.4% | 80.6% |
-| Direct group discovery | High | 100 | 20.92 ms | 13.23 ms | 63.2% | 60.0% |
-| Group Base, 1,000 members | Medium | 100 | 107.18 ms | 98.62 ms | 92.0% | 84.0% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 69.23 ms | 46.36 ms | 67.0% | 66.1% |
+| User Bind, SSHA | Very high | 1,000 | 131.94 ms | 106.12 ms | 80.4% | 80.0% |
+| Non-root Base, hot | High | 1,000 | 125.86 ms | 97.06 ms | 77.1% | 73.3% |
+| Non-root equality, hot | Very high | 1,000 | 113.02 ms | 89.06 ms | 78.8% | 74.9% |
+| Direct group discovery | High | 100 | 16.27 ms | 10.67 ms | 65.6% | 60.5% |
+| Group Base, 1,000 members | Medium | 100 | 96.79 ms | 85.25 ms | 88.1% | 85.4% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 55.11 ms | 39.83 ms | 72.3% | 74.8% |
 
-The [R5 report](docs/common-ldap-performance.md) includes baseline/current/native
-tables, exact ACLs, all samples and validation. Explicit-ACL hot Base/equality
-take 5.4%/8.7% less time; direct group discovery takes 38.6% less with explicit
-ACLs and 3.0% less with default access. Default hot queries and SSHA Bind are
-largely flat. **OpenLDAP parity and a uniform speedup are not established.**
+The [R6 report](docs/common-ldap-performance.md) records a **57.4% reduction in
+sampled allocation** under `trySmallNonRootSearch` for 10,000 member queries.
+That is not a latency claim. Direct group discovery medians improve 4.8% with
+explicit ACLs and 12.7% with default access; latency results overall remain mixed.
 
-The initial explicit distributed-equality row was 10.8% slower
-(197.20/218.43/129.65 ms before/current/native). A separate seven-repeat recheck
-gave 128.53/120.79/83.05 ms, a 6.0% reduction; both runs are retained, not pooled.
-The original explicit root-bound concurrent check was 16.8% slower and is retained.
-A dedicated seven-batch recheck gave 292/276/259 ms before/current/native, with
-wide ranges of 195-419/196-568/203-355 ms. The original regression did not persist;
-these separate observations do not support a stable concurrent speedup claim.
+Original default SSHA Bind is **6.6% slower** and explicit 1,000-member group
+Base **7.1% slower**. Separate seven-repeat rechecks do not reproduce those
+regressions; the 10-member explicit group remains 4.0% slower with mixed paired
+signs. Default root-bound concurrency is 15.7% slower. Original and recheck
+samples remain separate. **The OpenLDAP parity goal remains unachieved; there
+is no uniform speedup.**
 
-Accepted changes borrow projection descriptors, skip unrequested attributes only
-in pure ACL projection, and reuse a published runtime database pointer under
-read-only guards. Final selected payloads remain owned, the full entry remains
-the ACL target, and both authentication storage Views remain. The TCP read-buffer
-experiment was rejected and removed. Full Go tests, vet and 355 native PASS
-records passed; a baseline-confirmed Web Admin timer race was fixed only in its
-test fixture. The pre-existing R2 operational-attribute gaps remain documented.
+R6 reuses at most 16 zeroed idle decoders, retaining no payload references, and
+opts into bounded DN assertion normalization with syntax/length validation on
+every call. Custom callbacks and authorization/password/snapshot checks remain;
+no authorization cache was added. Final Go tests, vet and 355 native PASS records
+passed. The R2 operational-attribute gap remains.
 
-The [SDK runner](internal/cmd/ldapcommonbench/README.md) supports disposable
-replays. The [archived R4 report](docs/common-ldap-performance-20260924-r4.md)
-retains the previous run. Timing boundaries and group fixtures differ from the
-[earlier full-operation comparison](docs/performance-optimization-20260923-round13.md),
-which retains write, paging, concurrency and memory measurements.
+See the [evidence index](docs/evidence/common-performance-20260924-r6/README.md),
+[archived R5 report](docs/common-ldap-performance-20260924-r5.md) and
+[SDK runner](internal/cmd/ldapcommonbench/README.md). Older write/paging/memory
+measurements remain in the [full-operation report](docs/performance-optimization-20260923-round13.md).
 
 ## Requirements
 

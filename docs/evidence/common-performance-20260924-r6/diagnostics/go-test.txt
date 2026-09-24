@@ -1,0 +1,29 @@
+ok  	github.com/wangle201210/ldap-go/cmd/ldap-go	9.735s
+ok  	github.com/wangle201210/ldap-go/cmd/slapdconf-convert	3.372s
+ok  	github.com/wangle201210/ldap-go/internal/aci	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/acl	0.088s
+ok  	github.com/wangle201210/ldap-go/internal/audit	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/auth	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/buildcontract	2.990s
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldapbench	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldapcommonbench	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldifcanonical	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/directory	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/gmtransport	0.142s
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/lloadd	6.317s
+ok  	github.com/wangle201210/ldap-go/internal/mdbentry	0.031s
+ok  	github.com/wangle201210/ldap-go/internal/migration	1.072s
+ok  	github.com/wangle201210/ldap-go/internal/migration/slapdconf	1.985s
+ok  	github.com/wangle201210/ldap-go/internal/saslkrb5	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/schema	2.817s
+ok  	github.com/wangle201210/ldap-go/internal/server	149.243s
+--- FAIL: TestReadOnlyCandidatePoolLazyAcquire (0.00s)
+    --- FAIL: TestReadOnlyCandidatePoolLazyAcquire/multiple-small (0.00s)
+        index_readonly_pool_test.go:176: borrowed = false, want true
+        index_readonly_pool_test.go:176: borrowed = false, want true
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/storage	27.580s
+ok  	github.com/wangle201210/ldap-go/internal/testutil/ldapdiff	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/webadmin	0.339s
+FAIL

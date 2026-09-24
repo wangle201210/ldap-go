@@ -1704,32 +1704,7 @@ func (registry *Registry) NormalizeEqualityAssertion(
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
-	attribute, ok := registry.attributes[schemaKey(baseAttributeDescription(attributeName))]
-	if !ok {
-		return nil, fmt.Errorf("undefined attribute type %q", attributeName)
-	}
-	effective, err := registry.effectiveAttributeType(attribute, make(map[string]bool))
-	if err != nil {
-		return nil, err
-	}
-	if effective.Equality == "" {
-		return nil, fmt.Errorf("attribute %q has no equality matching rule", attributeName)
-	}
-
-	assertionSyntax := effective.Syntax
-	assertionLength := effective.SyntaxLength
-	switch canonicalMatchingRule(effective.Equality) {
-	case "integerfirstcomponentmatch":
-		assertionSyntax = SyntaxInteger
-		assertionLength = 0
-	case "objectidentifierfirstcomponentmatch":
-		assertionSyntax = SyntaxOID
-		assertionLength = 0
-	}
-	if err := registry.validateSyntax(assertionSyntax, assertionLength, value); err != nil {
-		return nil, fmt.Errorf("attribute %q assertion: %w", attributeName, err)
-	}
-	return registry.normalizeWithRuleLocked(effective.Equality, value)
+	return registry.normalizeEqualityAssertionLocked(attributeName, value, false)
 }
 
 // ValidateAttributeValue checks a single value against the effective syntax

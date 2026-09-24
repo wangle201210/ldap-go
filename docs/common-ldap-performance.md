@@ -1,88 +1,87 @@
 # Common LDAP performance qualification
 
-September 24, 2026, fifth run: baseline `b7e6cc1`, final executable `final`,
+September 24, 2026, sixth run: baseline `49af259`, final executable `current`,
 OpenLDAP 2.6.13, 100,000 users, Apple M1 Pro, Go 1.26.4 with
 `CGO_ENABLED=0`.
 
-The final paired measurements show explicit-ACL hot Base/equality reductions of
-**5.4%/8.7%** and direct-group discovery reductions of **38.6% with explicit ACLs
-and 3.0% with default access**. Default hot user queries and SSHA Bind are largely
-flat. The initial explicit distributed-equality median is **10.8% slower**;
-a separate seven-repeat recheck does not reproduce that regression. The explicit
-root-bound concurrent check is **16.8% slower**; a dedicated seven-batch recheck
-reverses that median difference, with wide ranges and no stable speedup claim.
-All original samples are retained.
-**These results do not establish OpenLDAP parity or a uniform speedup.**
+R6 reduces sampled allocation beneath the small non-root search path by
+**57.4%** in the separate 10,000-query member-equality profile. The paired SDK
+measurements remain mixed: direct group discovery takes **4.8% less time with
+explicit ACLs and 12.7% less with default access**, while several other rows
+regress. Original default SSHA Bind is **6.6% slower**, and explicit group Base
+with 1,000 members is **7.1% slower**. Separate seven-repeat rechecks do not
+reproduce those two regressions; they do not replace the original observations.
+The explicit 10-member group recheck remains **4.0% slower**.
+**The OpenLDAP parity goal remains unachieved; there is no uniform latency gain.**
 
-The [fourth run](common-ldap-performance-20260924-r4.md),
+The [fifth run](common-ldap-performance-20260924-r5.md),
+[fourth run](common-ldap-performance-20260924-r4.md),
 [third run](common-ldap-performance-20260924-r3.md),
 [second run](common-ldap-performance-20260924-r2.md), and
 [first run](common-ldap-performance-20260924-r1.md) retain previous evidence.
 Compare implementations within each run; shared-host timing varies across runs.
-The headline tables use only `explicit-final` and `default-final`.
-The recheck and rejected buffer experiment are reported separately.
+Main tables use only `explicit-final` and `default-final`. Rechecks and
+profiles are separate evidence.
 
 ## Accepted changes
 
-- The existing small non-root executor borrows value-slice descriptors in the
-  proven pure default/batch ACL projection branches. Final selection still owns
-  the returned descriptors and payload bytes before the storage callback ends.
-- A prepared explicit selection skips unrequested attribute ACL evaluations in
-  the pure batch branch and unrequested descriptor copying in the pure default
-  branch. The full entry remains the ACL target. Alias/OID/subtype and stored
-  option membership use the same prepared map as final selection. Nil selection
-  preserves the old projection; unsafe policies, context callbacks, normalizers
-  and remote mappings retain the full fallback and its callback ordering.
-- Read-only password Bind helpers reuse a database pointer only when it is the
-  published runtime database, the store is concrete local Bolt with known
-  wrappers/normalization, and the read-only policy guards hold. RADIUS and
-  unsupported configurations retain the former shallow database snapshot.
-  **Both authentication storage Views and live verification remain unchanged.**
-- The only Web Admin change is a deterministic test fixture: an already-expired
-  parent request context replaces a nanosecond timeout racing an immediate fake
-  write. Deadline/error-code and no-LDAP-write assertions remain. No Web Admin
-  production behavior changed.
+- Eligible read-only candidate iterators lazily borrow an exclusive decoder from
+  a fixed pool of at most **16 idle decoders**. This is an idle-retention bound,
+  not a limit on active iterators. The existing borrowing bounds remain
+  **64 attributes and 4,096 total value descriptors per row**. A single small
+  encoded row still uses the owned decoder. Unsupported shapes and errors
+  retain the authoritative owned fallback.
+- Release clears the complete attribute/value descriptor arrays, the entire
+  overflow capacity and the name map before recycling. Idle decoders retain no
+  entry or payload references. Bolt payload bytes are not cleared or changed.
+  Final selected output still owns its descriptors and bytes before the
+  candidate callback ends; snapshots, cancellation and error ordering remain.
+- `NormalizeEqualityAssertionCachedDN` reuses the existing bounded,
+  generation-invalidated DN cache only for `distinguishedNameMatch`. Attribute
+  resolution and **syntax validation, including length, execute on every call
+  before cache lookup**. It returns fresh bytes of the existing
+  `NormalizedString()` representation, not a DN identity key. The original
+  `NormalizeEqualityAssertion` API remains uncached.
+- The database index normalizer opts in only for a concrete `*schema.Registry`
+  under the runtime/offline immutable-schema contract. Custom registry callbacks,
+  non-DN matching rules, ordered-assertion behavior and exact errors retain their
+  prior semantics. The shared DN cache remains bounded to 128 entries and 1 MiB,
+  with input/depth admission limits and invalidation on registry mutation.
 
-The R4 small-search admission, positive-size-limit ordering and bounded DN syntax
-cache are baseline behavior, not new R5 changes. Password algorithms/work factors,
-entry/filter authorization, selected-result accounting and unsafe fallbacks remain.
-No attribute-read, authentication-result or ACL-decision cache was added.
-The raw TCP read-buffer prototype was **rejected and removed from production and
-active tests**; only diagnostic snapshots remain in the evidence archive.
+Root/entry/filter/attribute authorization, password verification and work factors,
+both authentication storage Views, snapshot freshness and result budgets remain.
+No authorization, authentication-result, entry-result or attribute-read cache was
+added. The R5 projection and Bind-pointer changes are baseline behavior, not new
+R6 changes. The rejected R5 TCP read-buffer prototype remains absent.
 
 ## Measurement
 
 The [SDK runner](../internal/cmd/ldapcommonbench/README.md) rotates endpoints per
 request and checks exact responses, identities and fixture cleanup. Only SDK
-Bind/Search calls are timed. Each main row is the median of three `total_ms`
-batch samples grouped by access mode, batch, stage, method, member count and
-endpoint. The separate distributed recheck uses seven repeats. No measured
-outliers are discarded. [Calculated medians](evidence/common-performance-20260924-r5/medians.tsv)
-retain all final, recheck and experiment groups, including plaintext Bind
-diagnostics.
+Bind/Search calls are timed. Main rows are medians of three `total_ms` batch
+samples, grouped by run, batch, stage, method, member count and endpoint.
+Rechecks use seven repeats and are calculated separately. No measured outliers
+are discarded. [Calculated medians](evidence/common-performance-20260924-r6/medians.tsv)
+retain all 90 endpoint groups, including plaintext Bind diagnostics.
 
-All three final endpoints use uid/member/objectClass equality indexes and the
-same fixture: 100,000 users plus two containers. Hot user reads use
-`scale-001001`; distributed reads sample 1,000 users across the 100k range.
-Temporary groups contain exactly 10 or 1,000 real user DNs. Group Base rows are
-separate `base_member_values` measurements for each member count. Nested
-membership uses the same client BFS with cycle detection on every endpoint;
-100 traversals issue 417 timed SDK searches. Other main rows have one timed SDK
-call per operation.
+All three endpoints use uid/member/objectClass equality indexes and 100,000 users
+plus two containers. Hot user reads use `scale-001001`; distributed reads sample
+1,000 users across the 100k range. Temporary groups contain 10 or 1,000 real user
+DNs, reported separately. Nested membership uses the same client BFS with cycle
+detection: 100 traversals issue 417 timed SDK searches per batch. Other main rows
+have one timed SDK call per operation.
 
-The workload and request limits are unchanged: ordinary Base/UID reads use
-`SizeLimit=len(want)+1=2`; nested group discovery uses
-`SizeLimit=len(groups)+1=6`. SSHA and plaintext storage methods are never pooled.
+Ordinary Base/UID reads retain `SizeLimit=len(want)+1=2`; nested group discovery
+retains `SizeLimit=len(groups)+1=6`. SSHA and plaintext methods are never pooled.
 Verification, connection setup and fixture cleanup are outside the SDK timer.
-Transport is plaintext loopback LDAP. TLS and stronger password schemes need
-separate equivalent measurements.
+Transport is plaintext loopback LDAP.
 
-Relative performance is `OpenLDAP / current * 100%`: higher is better, 100% is
-parity. Time reduction is `(1 - current / before) * 100%`; negative means a slower
+Relative performance is `OpenLDAP / current * 100%`; 100% means parity.
+Time reduction is `(1 - current / before) * 100%`; negative means a slower
 observed median. Ratios use unrounded medians; tables show milliseconds to two
-decimals and percentages to one. Changes rounding to zero are shown as 0.0%.
-Usage frequency is qualitative for authentication/company directories, not
-measured traffic; caching and connection pooling affect it.
+decimals and percentages to one. Usage frequency is qualitative, not measured
+traffic. Neither an individual ratio above 100% nor a lower allocation count
+establishes general parity.
 
 ## Explicit ACL
 
@@ -95,224 +94,221 @@ access to * by users read by * none
 
 | Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 100.77 ms | 100.73 ms | 79.34 ms | 78.8% | 0.0% |
-| Wrong password, SSHA | Low | 1,000 | 90.77 ms | 91.45 ms | 70.93 ms | 77.6% | -0.8% |
-| Non-root Base, hot | High | 1,000 | 116.05 ms | 109.79 ms | 83.55 ms | 76.1% | 5.4% |
-| Non-root equality, hot | Very high | 1,000 | 132.48 ms | 120.95 ms | 97.46 ms | 80.6% | 8.7% |
-| Non-root Base, distributed | High | 1,000 | 147.35 ms | 141.36 ms | 91.23 ms | 64.5% | 4.1% |
-| Non-root equality, distributed | Very high | 1,000 | 197.20 ms | 218.43 ms | 129.65 ms | 59.4% | -10.8% |
-| Direct group discovery | High | 100 | 32.09 ms | 19.72 ms | 11.84 ms | 60.0% | 38.6% |
-| Group Base, 10 members | Medium | 100 | 18.94 ms | 14.57 ms | 10.91 ms | 74.9% | 23.0% |
-| Group Base, 1,000 members | Medium | 100 | 135.87 ms | 116.37 ms | 97.73 ms | 84.0% | 14.4% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 67.30 ms | 61.55 ms | 40.70 ms | 66.1% | 8.6% |
+| User Bind, SSHA | Very high | 1,000 | 95.18 ms | 94.33 ms | 75.49 ms | 80.0% | 0.9% |
+| Wrong password, SSHA | Low | 1,000 | 90.19 ms | 91.73 ms | 70.38 ms | 76.7% | -1.7% |
+| User Bind, plaintext diagnostic | Very high | 1,000 | 98.36 ms | 102.15 ms | 79.09 ms | 77.4% | -3.9% |
+| Wrong password, plaintext diagnostic | Low | 1,000 | 88.95 ms | 89.02 ms | 70.10 ms | 78.7% | -0.1% |
+| Non-root Base, hot | High | 1,000 | 133.98 ms | 135.44 ms | 99.32 ms | 73.3% | -1.1% |
+| Non-root equality, hot | Very high | 1,000 | 129.54 ms | 125.76 ms | 94.25 ms | 74.9% | 2.9% |
+| Non-root Base, distributed | High | 1,000 | 132.58 ms | 131.65 ms | 86.33 ms | 65.6% | 0.7% |
+| Non-root equality, distributed | Very high | 1,000 | 265.46 ms | 173.14 ms | 122.06 ms | 70.5% | 34.8% |
+| Direct group discovery | High | 100 | 23.98 ms | 22.83 ms | 13.82 ms | 60.5% | 4.8% |
+| Group Base, 10 members | Medium | 100 | 16.50 ms | 17.04 ms | 11.81 ms | 69.3% | -3.3% |
+| Group Base, 1,000 members | Medium | 100 | 112.73 ms | 120.69 ms | 103.01 ms | 85.4% | -7.1% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 90.64 ms | 82.61 ms | 61.81 ms | 74.8% | 8.9% |
 
-[Hot samples](evidence/common-performance-20260924-r5/explicit-final/hot.json),
-[distributed samples](evidence/common-performance-20260924-r5/explicit-final/distributed.json),
-[group samples](evidence/common-performance-20260924-r5/explicit-final/groups.json).
+[Hot samples](evidence/common-performance-20260924-r6/explicit-final/hot.json),
+[distributed samples](evidence/common-performance-20260924-r6/explicit-final/distributed.json),
+[group samples](evidence/common-performance-20260924-r6/explicit-final/groups.json).
 
-### Distributed recheck
-
-The original equality result above remains **197.20 / 218.43 / 129.65 ms**
-(before/current/OpenLDAP). It is not replaced by the following seven-repeat run,
-which uses the same final binary, explicit ACL, methods, user distribution,
-1,000 operations per batch and validation. Its medians are calculated separately.
-
-| Workload | Repeats | Calls per batch | Before | Current | OpenLDAP | Relative | Time reduction |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Non-root Base, distributed | 7 | 1,000 | 131.86 ms | 124.44 ms | 81.53 ms | 65.5% | 5.6% |
-| Non-root equality, distributed | 7 | 1,000 | 128.53 ms | 120.79 ms | 83.05 ms | 68.8% | 6.0% |
-
-The initial equality regression was not reproduced; the recheck shows 5.6%/6.0%
-less time for Base/equality. This does not erase the first observation or establish
-stable performance across hosts. All three recheck exports match the source.
-[Seven-repeat samples](evidence/common-performance-20260924-r5/explicit-distributed-recheck/queries.json),
-[replay](evidence/common-performance-20260924-r5/recheck-distributed.sh.txt),
-[validation](evidence/common-performance-20260924-r5/explicit-distributed-recheck/validation.tsv).
+The 34.8% lower distributed-equality median is an observation from these three
+batches, not a stable speedup claim. Hot Base, wrong-password SSHA Bind, plaintext
+Bind and both group Base sizes have slower current medians. All remain visible.
 
 ## Default access
 
-No explicit ACL rules. The final executable, methods, counts and fixture match
-the explicit-ACL run; access modes are summarized independently.
+No explicit ACL rules. Methods, fixture and executables match the explicit run;
+access modes are summarized independently.
 
 | Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 118.12 ms | 115.10 ms | 91.92 ms | 79.9% | 2.6% |
-| Wrong password, SSHA | Low | 1,000 | 88.65 ms | 90.61 ms | 72.62 ms | 80.1% | -2.2% |
-| Non-root Base, hot | High | 1,000 | 106.00 ms | 106.38 ms | 81.51 ms | 76.6% | -0.4% |
-| Non-root equality, hot | Very high | 1,000 | 110.48 ms | 110.49 ms | 82.17 ms | 74.4% | 0.0% |
-| Non-root Base, distributed | High | 1,000 | 126.85 ms | 122.47 ms | 85.58 ms | 69.9% | 3.5% |
-| Non-root equality, distributed | Very high | 1,000 | 262.68 ms | 255.48 ms | 142.88 ms | 55.9% | 2.7% |
-| Direct group discovery | High | 100 | 21.56 ms | 20.92 ms | 13.23 ms | 63.2% | 3.0% |
-| Group Base, 10 members | Medium | 100 | 15.92 ms | 14.92 ms | 11.74 ms | 78.7% | 6.3% |
-| Group Base, 1,000 members | Medium | 100 | 108.79 ms | 107.18 ms | 98.62 ms | 92.0% | 1.5% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 71.97 ms | 69.23 ms | 46.36 ms | 67.0% | 3.8% |
+| User Bind, SSHA | Very high | 1,000 | 123.72 ms | 131.94 ms | 106.12 ms | 80.4% | -6.6% |
+| Wrong password, SSHA | Low | 1,000 | 112.70 ms | 105.98 ms | 84.07 ms | 79.3% | 6.0% |
+| User Bind, plaintext diagnostic | Very high | 1,000 | 115.31 ms | 110.75 ms | 87.04 ms | 78.6% | 4.0% |
+| Wrong password, plaintext diagnostic | Low | 1,000 | 110.17 ms | 112.21 ms | 86.78 ms | 77.3% | -1.9% |
+| Non-root Base, hot | High | 1,000 | 126.43 ms | 125.86 ms | 97.06 ms | 77.1% | 0.5% |
+| Non-root equality, hot | Very high | 1,000 | 113.91 ms | 113.02 ms | 89.06 ms | 78.8% | 0.8% |
+| Non-root Base, distributed | High | 1,000 | 138.65 ms | 145.15 ms | 94.70 ms | 65.2% | -4.7% |
+| Non-root equality, distributed | Very high | 1,000 | 141.36 ms | 143.03 ms | 100.82 ms | 70.5% | -1.2% |
+| Direct group discovery | High | 100 | 18.64 ms | 16.27 ms | 10.67 ms | 65.6% | 12.7% |
+| Group Base, 10 members | Medium | 100 | 20.13 ms | 18.45 ms | 12.74 ms | 69.0% | 8.4% |
+| Group Base, 1,000 members | Medium | 100 | 94.16 ms | 96.79 ms | 85.25 ms | 88.1% | -2.8% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 57.31 ms | 55.11 ms | 39.83 ms | 72.3% | 3.8% |
 
-[Hot samples](evidence/common-performance-20260924-r5/default-final/hot.json),
-[distributed samples](evidence/common-performance-20260924-r5/default-final/distributed.json),
-[group samples](evidence/common-performance-20260924-r5/default-final/groups.json).
+[Hot samples](evidence/common-performance-20260924-r6/default-final/hot.json),
+[distributed samples](evidence/common-performance-20260924-r6/default-final/distributed.json),
+[group samples](evidence/common-performance-20260924-r6/default-final/groups.json).
 
-SSHA wrong-password Bind is 0.8%-2.2% slower in the two main runs. Default hot
-Base/equality do not show an improvement. The 1,000-member Base medians reach
-84.0%-92.0% of native performance; that is not a parity claim.
+Default hot user-query medians change by less than 1%. The original SSHA Bind,
+both distributed user-query rows, plaintext wrong-password Bind and 1,000-member
+group Base are slower. The direct-group and nested-membership reductions do not
+erase these observations.
+
+## Seven-repeat rechecks
+
+Both rechecks completed successfully with the same final executables, fresh
+disposable fixtures, endpoint rotation and unchanged per-batch operation counts.
+They are not pooled into or substituted for the main tables.
+
+### Default Bind
+
+| Workload | Repeats | Calls per batch | Before | Current | OpenLDAP | Relative | Time reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| User Bind, SSHA | 7 | 1,000 | 91.22 ms | 90.35 ms | 71.21 ms | 78.8% | 1.0% |
+| Wrong password, SSHA | 7 | 1,000 | 104.21 ms | 95.21 ms | 76.71 ms | 80.6% | 8.6% |
+| User Bind, plaintext diagnostic | 7 | 1,000 | 88.50 ms | 87.46 ms | 68.81 ms | 78.7% | 1.2% |
+| Wrong password, plaintext diagnostic | 7 | 1,000 | 89.76 ms | 90.31 ms | 72.28 ms | 80.0% | -0.6% |
+
+The original SSHA Bind result remains **123.72 / 131.94 / 106.12 ms**
+(before/current/OpenLDAP), or **6.6% slower** current time. The separate recheck is
+**91.22 / 90.35 / 71.21 ms**, a 1.0% reduction. Original regression was not
+reproduced; neither run establishes a stable Bind gain. Recheck SSHA Bind ranges
+are 87.16-94.20 / 87.69-94.28 / 69.20-73.87 ms. Wrong-password SSHA samples
+also vary substantially, including a baseline range of 89.26-141.66 ms.
+
+[Samples](evidence/common-performance-20260924-r6/default-recheck/recheck.json),
+[replay](evidence/common-performance-20260924-r6/recheck-default.sh.txt),
+[completion log](evidence/common-performance-20260924-r6/recheck-default.log.txt),
+[exports](evidence/common-performance-20260924-r6/default-recheck/validation.tsv).
+
+### Explicit group Base
+
+| Workload | Repeats | Calls per batch | Before | Current | OpenLDAP | Relative | Time reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Group Base, 10 members | 7 | 100 | 13.52 ms | 14.06 ms | 9.96 ms | 70.9% | -4.0% |
+| Group Base, 1,000 members | 7 | 100 | 97.46 ms | 96.94 ms | 90.40 ms | 93.3% | 0.5% |
+
+The original 1,000-member result remains **112.73 / 120.69 / 103.01 ms**, or
+**7.1% slower** current time. The recheck is **97.46 / 96.94 / 90.40 ms**:
+the original regression is not reproduced, but a 0.5% median reduction is small.
+Ranges are 93.98-121.23 / 91.80-116.93 / 86.13-97.32 ms. The 10-member group
+remains slower: 3.3% in the original run and 4.0% in this recheck, with mixed
+signs in the paired before/current batches.
+No stable group-Base speedup is claimed.
+
+[Samples](evidence/common-performance-20260924-r6/explicit-recheck/recheck.json),
+[replay](evidence/common-performance-20260924-r6/recheck-explicit.sh.txt),
+[completion log](evidence/common-performance-20260924-r6/recheck-explicit.log.txt),
+[exports](evidence/common-performance-20260924-r6/explicit-recheck/validation.tsv).
 
 ## Concurrent check
 
 Eight independent root-bound clients each issue 1,000 indexed UID searches.
-This separate CLI wall-clock measurement includes startup/Bind, excludes the
-`repeat=0` warmup, and takes medians of repeats 1, 2 and 3 with rotated endpoint
-order. Every returned UID and count is checked. It does not measure non-root
-concurrent throughput.
+This separate CLI wall-clock measurement includes startup/Bind and excludes
+warmup repeat 0. Medians use repeats 1, 2 and 3 with rotated endpoint order;
+every UID/count is checked. It does not measure non-root concurrent throughput.
 
 | Access configuration | Before | Current | OpenLDAP | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Default | 220 ms | 218 ms | 234 ms | 107.3% | 0.9% |
-| Explicit ACL | 191 ms | 223 ms | 214 ms | 96.0% | -16.8% |
+| Default | 197 ms | 228 ms | 221 ms | 96.9% | -15.7% |
+| Explicit ACL | 267 ms | 229 ms | 256 ms | 111.8% | 14.2% |
 
-The explicit samples are before 282/186/191 ms, current 256/204/223 ms, and
-OpenLDAP 259/206/214 ms. The slower current median is retained without a speedup
-claim. The default difference is small.
-[Default batches](evidence/common-performance-20260924-r5/default-final/concurrent.tsv),
-[explicit batches](evidence/common-performance-20260924-r5/explicit-final/concurrent.tsv).
+All measured batches are retained. Default before/current/native samples are
+197/197/195, 209/228/251 and 221/223/212 ms. Explicit samples are 286/267/222,
+287/229/226 and 281/254/256 ms. Opposite directions across access modes and
+three-batch variability do not support a uniform concurrent improvement.
+[Default batches](evidence/common-performance-20260924-r6/default-final/concurrent.tsv),
+[explicit batches](evidence/common-performance-20260924-r6/explicit-final/concurrent.tsv).
 
-### Dedicated concurrent recheck
+## Focused allocation profile
 
-A separate explicit-ACL run used fresh instances of the same three servers,
-normal warmup and seven measured batches of the same eight clients and 1,000 UID
-queries per client. Endpoint order rotated and every UID/count was checked.
-No group fixture preceded this run, avoiding possible carryover from its cleanup.
-Warmup repeat 0 is excluded; the original table above is unchanged.
+Separate before/current runs use the same SDK `memberEquality` workload:
+10 warmup queries followed by 10,000 measured queries, with both reports showing
+10,000 completed requests and successful cleanup. The heap comparison subtracts
+each run's warm profile from its measured `alloc_space` profile and focuses
+stacks containing `trySmallNonRootSearch`.
 
-| Access configuration | Before | Current | OpenLDAP | Relative | Time reduction |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Explicit ACL, seven-batch recheck | 292 ms | 276 ms | 259 ms | 93.8% | 5.5% |
+| Focused cumulative allocation | Before | Current | Reduction |
+| --- | ---: | ---: | ---: |
+| `trySmallNonRootSearch`, 10,000 member queries | 626.84 MiB | 267.03 MiB | 57.4% |
 
-Measured ranges are **195-419 / 196-568 / 203-355 ms** for
-before/current/OpenLDAP. The original 16.8% median regression did not persist in
-this recheck, but the wide ranges do not support a stable concurrent speedup.
-The two runs remain separate and all three recheck exports match the source.
-[Raw batches](evidence/common-performance-20260924-r5/concurrent-recheck/concurrent.tsv),
-[export validation](evidence/common-performance-20260924-r5/concurrent-recheck/validation.tsv),
-[replay](evidence/common-performance-20260924-r5/recheck-concurrent.sh.txt),
-[completion log](evidence/common-performance-20260924-r5/recheck-concurrent.log.txt).
+This is sampled cumulative allocation, not retained heap, RSS, per-operation
+benchmark output or an SDK latency gain. The full harness includes Add and WhoAmI
+setup/verification work; whole-process totals and percentages are not query-only
+measurements. Only the focused allocation reduction is claimed.
+The text reports label binary-megabyte units as `MB`; the table uses MiB.
+No new component benchmark was run for R6.
 
-## Rejected buffer experiment
-
-The earlier four-endpoint runs compared baseline `before`, the buffer-bearing
-prototype named `current`, an earlier `projection` build without that listener
-buffer, and `openldap`. These are **diagnostic measurements**, not final R5
-results. In particular, the experiment's `current` is a different executable
-from the final tables' `current`, which maps to `final`.
-
-The buffer was rejected. Its production file, CLI integration and active tests
-were removed; it contributes nothing to the final implementation. The archive
-retains both access-mode experiments, smoke checks, concurrent/export results,
-replay scripts/logs, the projection overlay and
-[discarded source snapshots](evidence/common-performance-20260924-r5/diagnostics/discarded-buffer/).
-Former buffer correctness/read-count results are diagnostics only.
-
-[Explicit experiment](evidence/common-performance-20260924-r5/diagnostics/explicit-experiment/hot.json),
-[default experiment](evidence/common-performance-20260924-r5/diagnostics/default-experiment/hot.json),
-[diagnostic index](evidence/common-performance-20260924-r5/README.md#diagnostics).
-No four-endpoint sample is pooled into a final three-endpoint median.
-
-## Component evidence
-
-The completed [component benchmark](evidence/common-performance-20260924-r5/component-bench.txt)
-has two samples per case and a terminal PASS. These observations isolate local
-allocation/work differences; they are **not SDK latency or throughput claims**.
-
-- The two-View Bind component uses 10,040 B/op and 145 allocs/op with eligible
-  pointer reuse versus 12,088 B/op and 147 allocs/op with the legacy copy.
-  Two-sample midpoint times are about 11.1 versus 11.5 microseconds/op.
-  Both storage Views are executed in both variants.
-- Borrowing with an explicit value-independent ACL and a `cn`-only selection
-  uses 2,832 B/op and 69 allocs/op versus 76,776-76,777 B/op and 78 allocs/op.
-  The two times are 12.747/12.761 versus 51.167/33.365 microseconds/op.
-- The corresponding default-access `cn` case uses 1,632 B/op and 42 allocs/op
-  versus 75,576-75,577 B/op and 51 allocs/op; times are 7.395/7.760 versus
-  23.303/24.148 microseconds/op.
-
-One projection benchmark operation processes **three 1,000-member group entries**
-and performs final owning selection. It passes nil as the optional projection
-selection, so it isolates descriptor borrowing rather than the new skipped-ACL
-selection. The raw `cn,member` samples are retained too; requested member payloads
-still require ownership copies and their timing varies.
+[Before focused report](evidence/common-performance-20260924-r6/profile/query-alloc-before.txt),
+[current focused report](evidence/common-performance-20260924-r6/profile/query-alloc-current.txt),
+[before SDK report](evidence/common-performance-20260924-r6/profile/member-before-measured.json),
+[current SDK report](evidence/common-performance-20260924-r6/profile/member-current-measured.json),
+[profile helper](evidence/common-performance-20260924-r6/profile/profile_test.go.txt).
+Raw CPU/heap profiles, warmup reports, overlay and completion logs are retained
+in the [profile directory](evidence/common-performance-20260924-r6/profile/).
 
 ## Validation
 
-The coordinating run confirmed final full-suite, vet and native validation
-completed with exit status 0:
+The coordinator confirmed final full Go tests, vet and native differential
+validation completed successfully after source/test freeze:
 
-- [Full Go suite](evidence/common-performance-20260924-r5/go-test-optimized.txt)
-  passes with `CGO_ENABLED=0`; the server package reports 144.059 seconds.
-- [Vet](evidence/common-performance-20260924-r5/go-vet-optimized.txt) completed
-  successfully with no output; the empty log is expected.
-- [Native differential](evidence/common-performance-20260924-r5/openldap-differential-optimized.txt)
-  records 355 PASS results including subtests, zero failures/skips, and terminal PASS.
-- Projection differential tests cover aliases/OIDs/subtypes, stored options,
-  `1.1`, denied-only and empty/types-only results, full-entry ACL dependencies,
-  unchanged unsafe callback traces, and final payload ownership after source
-  overwrite. Existing small-search limit/freshness coverage remains passing.
-- Database-pointer checks cover published versus detached configuration,
-  unsupported readers/normalizers and callback cases, and live authentication
-  behavior across the two existing snapshots.
-- The Web Admin nanosecond fixture race failed on the pristine baseline in a
-  100-repeat check, then the expired-parent-context fixture passed 100 repeats.
-  [Baseline failure](evidence/common-performance-20260924-r5/diagnostics/webadmin-deadline-baseline.txt),
-  [fixed check](evidence/common-performance-20260924-r5/diagnostics/webadmin-deadline-fixed.txt).
-  The earlier focused recheck failure is preserved too; it was not a passing run.
-- Both final [explicit](evidence/common-performance-20260924-r5/explicit-final/smoke.json)
-  and [default](evidence/common-performance-20260924-r5/default-final/smoke.json)
-  smoke reports and all final/recheck measured reports have empty errors,
-  `completed == operations`, and cleanup for all three endpoints.
-- All **12 exports** (six main, three distributed recheck and three concurrent
-  recheck) match: **100,002 entries,
-  42,712,438 canonical bytes, POSIX checksum `2143929969`**.
-  [Explicit](evidence/common-performance-20260924-r5/explicit-final/validation.tsv),
-  [default](evidence/common-performance-20260924-r5/default-final/validation.tsv),
-  [distributed recheck](evidence/common-performance-20260924-r5/explicit-distributed-recheck/validation.tsv),
-  [concurrent recheck](evidence/common-performance-20260924-r5/concurrent-recheck/validation.tsv).
+- [Accepted Go suite](evidence/common-performance-20260924-r6/go-test-accepted.txt)
+  passes with `CGO_ENABLED=0`; some package results are reused from the Go test
+  cache. The accepted schema package reports 1.861 seconds.
+- [Accepted vet](evidence/common-performance-20260924-r6/go-vet-accepted.txt)
+  completed successfully with no output; its empty log is expected.
+- [Accepted native differential](evidence/common-performance-20260924-r6/openldap-differential-accepted.txt)
+  records **355 PASS results**, no failures/skips, terminal PASS and a 9.540-second
+  server-package result.
+- Decoder tests cover full-capacity clearing, idle capacity/exclusive ownership,
+  lazy acquisition, release on every exit, planning cancellation and concurrent
+  stores/clones. Existing candidate/search ownership and fallback regressions
+  remain passing.
+- Assertion tests compare old/new normalized bytes and exact error types/text,
+  length and syntax validation before cache reuse, aliases, schema mutation,
+  output ownership, cache bounds, ordered assertions and custom callbacks.
+- Earlier full-suite attempts caught in-progress pool-test fixtures and an
+  incorrect invalid-UTF-8 rejection expectation. The old and cached assertion
+  APIs both accept that tested input; the expectation was corrected. Those
+  failed runs remain [diagnostics](evidence/common-performance-20260924-r6/diagnostics/),
+  not successful final validation.
+- Both main smoke reports and every main/recheck measured report have empty
+  errors, complete repeat sequences, `completed == operations` and cleanup for
+  all three endpoints.
+- All **12 exports** match **100,002 entries, 42,712,438 canonical bytes and
+  POSIX checksum `2143929969`**:
+  [explicit](evidence/common-performance-20260924-r6/explicit-final/validation.tsv),
+  [default](evidence/common-performance-20260924-r6/default-final/validation.tsv),
+  [default recheck](evidence/common-performance-20260924-r6/default-recheck/validation.tsv),
+  [explicit recheck](evidence/common-performance-20260924-r6/explicit-recheck/validation.tsv).
 
 No race detector was used. This matrix does not establish full compatibility or
 deployment capacity.
 
 ### Existing operational-attribute gap
 
-All previously recorded qualification gaps remain reference limitations. This
-round does not implement missing synthesized `entryDN` or `hasSubordinates` in
-the ordinary memory-store fixture. The
-[R2 expanded differential](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
-records the same 40 failures before and after that round's optimization.
-Those cases are outside the passing native matrix. Neither the R4 admission
-guards nor the R5 projection changes close that gap.
+The [R2 expanded differential](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
+still records missing synthesized `entryDN` and `hasSubordinates` for ordinary
+entries in the memory-store fixture, including root reads and `+` with types-only.
+The same 40 leaf scenarios failed before and after that earlier optimization.
+Those cases are outside the passing native matrix. R6 does not close this gap.
 
 ## Replay and identity
 
-Local root: `/var/tmp/ldap-go-common-perf-20260924-r5`.
-[Explicit replay](evidence/common-performance-20260924-r5/final-explicit.sh.txt)
-and [default replay](evidence/common-performance-20260924-r5/final-default.sh.txt)
-retain exact setup, assertions, exports and cleanup. Their
-[explicit](evidence/common-performance-20260924-r5/final-explicit.log.txt) and
-[default](evidence/common-performance-20260924-r5/final-default.log.txt)
-logs record successful completion, as does the
-[recheck log](evidence/common-performance-20260924-r5/recheck-distributed.log.txt).
-Paths refer to disposable fixture copies and the pinned native installation;
-adjust them before replaying elsewhere. The coordinator confirmed that tests and
-builds did not overlap the final timed endpoint benchmarks, all processes have
-finished, and the component benchmark ran separately afterward.
+Local source: `/var/tmp/ldap-go-common-perf-20260924-r6`.
+[Explicit replay](evidence/common-performance-20260924-r6/common-explicit.sh.txt),
+[default replay](evidence/common-performance-20260924-r6/common-default.sh.txt),
+[explicit completion](evidence/common-performance-20260924-r6/common-explicit.log.txt)
+and [default completion](evidence/common-performance-20260924-r6/common-default.log.txt)
+preserve setup, assertions, exports and cleanup. Both recheck completion logs
+also report success. Paths refer to disposable fixture copies and the pinned
+native installation; adjust them before replaying elsewhere.
 
-Executable SHA-256, verified against the supplied files:
+The coordinator kept final endpoint timing separate from tests/builds and
+profiling. Preparing these docs ran no tests, builds or benchmarks; the archived
+focused text reports were copied from the coordinator's completed analysis.
+
+Executable SHA-256, verified against the supplied local files:
 
 ```text
-before (b7e6cc1)  bf22f861ebe6a5e2eebfaea08bf11ed42f3acee4c9cf997760d3747786e322c4
-final             dacceacf149cd9e8789790ee631bca362f6f6d1d8011f4b4e1e0f4c27b5735df
+before (49af259)  dacceacf149cd9e8789790ee631bca362f6f6d1d8011f4b4e1e0f4c27b5735df
+current           f65475df23fa7fa127f688dd6ee475263fdf978af437efecb9a5f009509a46e2
 ```
 
-The JSON endpoint label `current` in the final/recheck scripts means `final`,
-not the rejected experimental executable named `current`.
-The [evidence index](evidence/common-performance-20260924-r5/README.md) records
-provenance, calculations and diagnostic boundaries. Non-root concurrent
+The JSON endpoint `current` means the R6 executable named `current`. Baseline
+`before` is the R5 final executable, now associated with source `49af259`.
+The [evidence index](evidence/common-performance-20260924-r6/README.md) records
+provenance, calculation rules and diagnostic boundaries. Non-root concurrent
 throughput, additional policies, TLS and larger group populations remain
-qualification work. Older write/paging/memory results stay in the
-[full-operation report](performance-optimization-20260923-round13.md); they were
-not remeasured here.
+qualification work. Older write/paging/memory results remain in the
+[full-operation report](performance-optimization-20260923-round13.md).

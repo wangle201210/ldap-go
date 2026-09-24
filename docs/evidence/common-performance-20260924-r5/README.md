@@ -1,7 +1,7 @@
 # R5 common-operation evidence
 
 Source: `/var/tmp/ldap-go-common-perf-20260924-r5`. Baseline: `b7e6cc1`.
-The [report](../../common-ldap-performance.md) and
+The [report](../../common-ldap-performance-20260924-r5.md) and
 [R4 archive](../../common-ldap-performance-20260924-r4.md) retain interpretation
 and historical limitations.
 

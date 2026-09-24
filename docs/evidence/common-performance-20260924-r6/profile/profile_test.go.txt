@@ -1,0 +1,97 @@
+package main
+
+import (
+	"context"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"runtime/pprof"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestCommonGroupProfile(t *testing.T) {
+	db, prefix := os.Getenv("LDAP_GO_PERF_DB"), os.Getenv("LDAP_GO_PERF_PROFILE_PREFIX")
+	if db == "" || prefix == "" {
+		t.Skip("disposable snapshot required")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	finished := make(chan int, 1)
+	go func() {
+		finished <- runWithContext(ctx, []string{"serve", "-db", db, "-listen", "127.0.0.1:29485",
+			"-root-dn", "cn=admin,dc=scale,dc=qualification", "-search-limit", "100100",
+			"-search-candidate-limit", "100100", "-search-candidate-bytes", "819200000",
+			"-search-memory-bytes", "1638400000"}, strings.NewReader(""), io.Discard, os.Stderr, os.Getenv)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case code := <-finished:
+			if code != 0 {
+				t.Errorf("server exit: %d", code)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("server failed to stop")
+		}
+	}()
+	for {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:29485", time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal(ctx.Err())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	probe := func(n, output string) {
+		file, err := os.Create(prefix + output + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		stages := os.Getenv("LDAP_GO_PERF_STAGES")
+		if stages == "" {
+			stages = "memberEquality,nestedMembership,groupBase"
+		}
+		command := exec.CommandContext(ctx, "/var/tmp/ldap-go-common-perf-20260924-r2/ldapcommonbench",
+			"-endpoint", "profile=ldap://127.0.0.1:29485", "-base", "dc=scale,dc=qualification",
+			"-root-bind-dn", "cn=admin,dc=scale,dc=qualification", "-root-password-env", "LDAP_GO_ROOT_PASSWORD",
+			"-people", "ou=people,dc=scale,dc=qualification", "-setup-disposable", "-stages", stages,
+			"-group-sizes", "10,1000", "-n", n, "-repeats", "1")
+		command.Env = os.Environ()
+		command.Stdout, command.Stderr = file, os.Stderr
+		if err := command.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	heap := func(suffix string) {
+		runtime.GC()
+		file, err := os.Create(prefix + suffix + ".mem")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if err := pprof.WriteHeapProfile(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe("10", "-warm")
+	heap("-warm")
+	cpu, err := os.Create(prefix + ".cpu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cpu.Close()
+	if err := pprof.StartCPUProfile(cpu); err != nil {
+		t.Fatal(err)
+	}
+	defer pprof.StopCPUProfile()
+	probe("10000", "-measured")
+	pprof.StopCPUProfile()
+	heap("-measured")
+}

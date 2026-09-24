@@ -15,13 +15,38 @@ const (
 	maxReadOnlyCandidateNameBytes      = 128
 )
 
-// One decoder belongs to one candidate iteration, never a pool or transaction
-// cache. Descriptors are overwritten between callbacks; payloads borrow Bolt.
+// One decoder is owned by one candidate iteration. Descriptors are overwritten
+// between callbacks; payloads borrow Bolt. Recycled decoders retain no data.
 type readOnlyCandidateDecoder struct {
 	attributes     [maxReadOnlyCandidateAttributes]directory.Attribute
 	values         [maxReadOnlyCandidateValues][]byte
 	overflowValues [][]byte
 	names          map[string]string
+}
+
+// Fixed capacity bounds idle storage independently of GC or workload history.
+// Active iterators own their decoders exclusively, just as without recycling.
+var idleReadOnlyCandidateDecoders = make(chan *readOnlyCandidateDecoder, 16)
+
+func acquireReadOnlyCandidateDecoder() *readOnlyCandidateDecoder {
+	select {
+	case decoder := <-idleReadOnlyCandidateDecoders:
+		return decoder
+	default:
+		return new(readOnlyCandidateDecoder)
+	}
+}
+
+func releaseReadOnlyCandidateDecoder(decoder *readOnlyCandidateDecoder) {
+	// Clear descriptors, not their payload bytes: those still belong to Bolt.
+	clear(decoder.attributes[:])
+	clear(decoder.values[:])
+	clear(decoder.overflowValues[:cap(decoder.overflowValues)])
+	clear(decoder.names)
+	select {
+	case idleReadOnlyCandidateDecoders <- decoder:
+	default:
+	}
 }
 
 func (decoder *readOnlyCandidateDecoder) decode(value []byte) (directory.Entry, error) {

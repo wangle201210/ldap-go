@@ -1,0 +1,39 @@
+File: profile-current.test
+Type: alloc_space
+Time: 2026-09-24 16:06:31 CST
+Active filters:
+   focus=trySmallNonRootSearch
+Showing nodes accounting for 120.01MB, 3.76% of 3187.81MB total
+Dropped 32 nodes (cum <= 15.94MB)
+Showing top 30 nodes out of 136
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).dispatch
+         0     0%     0%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).handleSearch
+         0     0%     0%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperation
+         0     0%     0%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).runConnectionOperations
+         0     0%     0%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).serveConnection.func4
+   11.50MB  0.36%  0.36%   267.03MB  8.38%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch
+    0.50MB 0.016%  0.38%   245.53MB  7.70%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View
+         0     0%  0.38%   245.53MB  7.70%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View
+         0     0%  0.38%   242.53MB  7.61%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View
+         0     0%  0.38%   242.53MB  7.61%  go.etcd.io/bbolt.(*DB).View
+         0     0%  0.38%   238.53MB  7.48%  github.com/wangle201210/ldap-go/internal/storage.(*Bolt).View.func1
+         0     0%  0.38%   226.03MB  7.09%  github.com/wangle201210/ldap-go/internal/server.(*accessContextStore).View.func1
+         0     0%  0.38%   225.03MB  7.06%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch.func2
+         0     0%  0.38%   225.03MB  7.06%  github.com/wangle201210/ldap-go/internal/server.(*homedirEffectStore).View.func1
+         0     0%  0.38%   174.52MB  5.47%  github.com/wangle201210/ldap-go/internal/storage.ForEachBoundedReadOnlyFilterCandidate
+       3MB 0.094%  0.47%   125.01MB  3.92%  github.com/wangle201210/ldap-go/internal/storage.forEachReadOnlyEncodedCandidate
+         0     0%  0.47%   121.51MB  3.81%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch.func2.1 (partial-inline)
+  105.01MB  3.29%  3.76%   105.01MB  3.29%  internal/bytealg.MakeNoZero
+         0     0%  3.76%   105.01MB  3.29%  strings.(*Builder).Grow
+         0     0%  3.76%   105.01MB  3.29%  strings.(*Builder).grow
+         0     0%  3.76%    95.01MB  2.98%  strings.Join
+         0     0%  3.76%    60.51MB  1.90%  github.com/wangle201210/ldap-go/internal/server.(*Server).allowed
+         0     0%  3.76%    60.01MB  1.88%  github.com/wangle201210/ldap-go/internal/directory.DN.String (inline)
+         0     0%  3.76%    59.51MB  1.87%  github.com/wangle201210/ldap-go/internal/server.(*Server).evaluateFilterWithPrivilege
+         0     0%  3.76%    59.51MB  1.87%  github.com/wangle201210/ldap-go/internal/server.(*Server).filterMatches
+         0     0%  3.76%    59.51MB  1.87%  github.com/wangle201210/ldap-go/internal/server.(*Server).filterMatchesWithPrivilege (inline)
+         0     0%  3.76%       54MB  1.69%  github.com/wangle201210/ldap-go/internal/server.(*Server).isRoot
+         0     0%  3.76%       50MB  1.57%  github.com/wangle201210/ldap-go/internal/server.normalizeRuntimeDatabaseDN
+         0     0%  3.76%       37MB  1.16%  github.com/wangle201210/ldap-go/internal/server.databaseDNAtOrBelow
+         0     0%  3.76%       37MB  1.16%  github.com/wangle201210/ldap-go/internal/server.databaseForDN (inline)

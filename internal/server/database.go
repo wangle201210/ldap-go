@@ -911,6 +911,11 @@ func (normalizer *databaseEqualityIndexNormalizer) NormalizeEqualityIndexAsserti
 	description string,
 	value []byte,
 ) ([]byte, error) {
+	if registry, ok := normalizer.registry.(*schema.Registry); ok && registry != nil {
+		// Runtime and offline normalizers use immutable schema snapshots; schema
+		// mutation methods invalidate the registry's bounded DN cache.
+		return registry.NormalizeEqualityAssertionCachedDN(description, value)
+	}
 	return normalizer.registry.NormalizeEqualityAssertion(description, value)
 }
 
