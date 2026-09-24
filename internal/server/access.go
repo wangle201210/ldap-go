@@ -2,10 +2,12 @@ package server
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/wangle201210/ldap-go/internal/acl"
 	"github.com/wangle201210/ldap-go/internal/directory"
 	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/schema"
 	"github.com/wangle201210/ldap-go/internal/storage"
 )
 
@@ -96,6 +98,67 @@ func (server *Server) attributesWithPrivilege(
 		return rootVisibleEntry(entry, typesOnly)
 	}
 	filtered := directory.Entry{DN: entry.DN}
+	if entry.DN != "" && len(entry.Attributes) > 0 && runtime.schema != nil {
+		_, remote := reader.(interface {
+			remoteACLView(string, directory.Entry, string, []byte) (storage.Reader, string, directory.Entry, string, []byte, error)
+		})
+		// AccessSubject fixes DN to subjectDN, and default privileges ignore the
+		// other subject fields. Only known pure context accessors may be skipped;
+		// custom callbacks can have effects even when their result is irrelevant.
+		safe := !remote
+		for contextual := reader; safe; {
+			if source, partitioned := storage.UnwrapPartitionAccessContext(contextual); partitioned {
+				contextual = source
+				continue
+			}
+			switch value := contextual.(type) {
+			case storageRevisionReader:
+				contextual = value.Reader
+				continue
+			case accessContextReader, accessContextWriter:
+			default:
+				_, callback := contextual.(interface{ AccessContext() any })
+				safe = !callback
+			}
+			break
+		}
+		// Published runtime schemas are immutable during an operation. Repeated
+		// root checks must still run for custom normalizers or rewrite callbacks.
+		for _, database := range runtime.databases {
+			if !safe {
+				break
+			}
+			if database.relay != nil || database.rwm != nil {
+				safe = false
+				break
+			}
+			switch normalizer := database.dnNormalizer.(type) {
+			case nil:
+			case *schema.Registry:
+				safe = normalizer == runtime.schema
+			case *databaseEqualityIndexNormalizer:
+				safe = normalizer != nil && normalizer.registry == runtime.schema
+			default:
+				safe = false
+			}
+		}
+		if safe {
+			if allowed, applicable := runtime.access.DefaultDNAllowed(
+				entry.DN, aclDNNormalizer{Registry: runtime.schema}, privilege,
+			); applicable {
+				if allowed {
+					filtered.Attributes = make([]directory.Attribute, len(entry.Attributes))
+					for index, attribute := range entry.Attributes {
+						filtered.Attributes[index].Description = attribute.Description
+						if !typesOnly && len(attribute.Values) > 0 {
+							filtered.Attributes[index].Values = slices.Clone(attribute.Values)
+						}
+					}
+				}
+				return filtered
+			}
+		}
+	}
 	for _, attribute := range entry.Attributes {
 		if typesOnly {
 			if server.allowed(

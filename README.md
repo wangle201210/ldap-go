@@ -51,40 +51,30 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest SDK comparison: September 23, 2026, 100,000 users, Apple M1 Pro,
-Go built without cgo, OpenLDAP 2.6.13. Values are batch-time medians; operation
-counts are shown. Bind, Compare and non-root reads use three batches with
-endpoint rotation after every request, on one warmed process per implementation.
-Other rows use three fresh processes.
-Writes follow setup and cache warmup.
-Relative performance is `OpenLDAP / ldap-go * 100%`; above 100% favors ldap-go.
+Latest common-operation comparison: September 24, 2026, 100,000 users,
+Apple M1 Pro, Go without cgo, OpenLDAP 2.6.13. These are batch-time medians from
+three repetitions with endpoints rotated per request. Only SDK calls are timed;
+response validation is outside timing. Both servers have uid/member/objectClass
+equality indexes. Relative performance is `OpenLDAP / ldap-go * 100%`.
 
-| Metric | Operations | ldap-go | OpenLDAP | Relative performance |
-| --- | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 3,000 | 356.48 ms | 235.93 ms | 66.2% |
-| Root Bind | 3,000 | 258.88 ms | 203.96 ms | 78.8% |
-| Base search, administrator | 1,000 | 99.08 ms | 80.76 ms | 81.5% |
-| Indexed equality, administrator | 1,000 | 109.66 ms | 85.20 ms | 77.7% |
-| Base search, non-root | 3,000 | 701.26 ms | 316.92 ms | 45.2% |
-| Indexed equality, non-root | 3,000 | 696.55 ms | 322.22 ms | 46.3% |
-| Compare, matching, administrator | 3,000 | 310.39 ms | 213.31 ms | 68.7% |
-| Prefix substring | 20 | 910.67 ms | 612.17 ms | 67.2% |
-| Negative substring | 20 | 911.04 ms | 610.64 ms | 67.0% |
-| Add | 20 | 18.47 ms | 99.57 ms | 539.1% |
-| Modify, unindexed description | 20 | 8.73 ms | 92.89 ms | 1,064.7% |
-| ModifyDN | 20 | 25.98 ms | 104.78 ms | 403.3% |
-| Delete | 20 | 18.36 ms | 96.58 ms | 525.9% |
+| Common operation | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| User Bind, SSHA | 1,000 | 104.47 ms | 71.46 ms | 68.4% | 66.4% |
+| Non-root Base, hot | 1,000 | 110.81 ms | 77.32 ms | 69.8% | 54.3% |
+| Non-root indexed equality, hot | 1,000 | 110.49 ms | 78.98 ms | 71.5% | 54.4% |
+| Direct group discovery | 100 | 43.54 ms | 16.99 ms | 39.0% | 4.5% |
+| Group Base, 1,000 members | 100 | 86.44 ms | 79.73 ms | 92.2% | 18.5% |
+| Nested membership, client BFS | 100 traversals | 97.21 ms | 55.30 ms | 56.9% | 12.6% |
 
-Complete ordinary-attribute exports matched. The [latest report](docs/performance-optimization-20260923-round13.md)
-records about 14% lower ordinary authentication latency and 27% lower non-root
-single-entry query latency against `03991cc`. It retains mixed administrator
-timings and the concurrent-query recheck. Read/auth RSS was 431.4 / 115.5 MiB;
-lower sampled cumulative allocation did not yield a measured RSS reduction.
-Small serial writes do not describe every production workload. Authentication,
-non-root reads, substring scans and memory still trail OpenLDAP materially.
-The [write-index report](docs/performance-optimization-20260923-round8.md)
-documents initialization costs; [historical paging results](docs/openldap-100k-evidence.md)
-use a different workload.
+The [common-operation report](docs/common-ldap-performance.md) includes distributed
+user reads, exact ACL definitions, all samples and validation. The
+[SDK runner](internal/cmd/ldapcommonbench/README.md) is reusable on disposable
+endpoints. The four-operation parity goal is **not complete**; explicit-ACL group
+queries remain the largest gap. No password strength or ACL decision was weakened.
+
+Timing boundaries and group fixtures differ from the
+[earlier full-operation comparison](docs/performance-optimization-20260923-round13.md),
+which retains write, paging, concurrency and memory measurements.
 
 ## Requirements
 

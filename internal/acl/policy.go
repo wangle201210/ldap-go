@@ -45,6 +45,27 @@ func DefaultPolicy() *Policy {
 	return &Policy{}
 }
 
+// DefaultDNAllowed evaluates the subject-, attribute- and value-independent
+// default only when the entire policy has no rules. The second result reports
+// that proof; invalid DNs still deny access, even for a zero required privilege.
+// Callers must separately preserve root checks and any mapping/callback effects.
+func (policy *Policy) DefaultDNAllowed(
+	rawDN string,
+	normalizer directory.DNAttributeNormalizer,
+	required Privilege,
+) (allowed, applicable bool) {
+	if policy == nil || len(policy.global) != 0 {
+		return false, false
+	}
+	for _, database := range policy.databases {
+		if len(database.Rules) != 0 {
+			return false, false
+		}
+	}
+	targetDN, err := parseACLDN(rawDN, normalizer)
+	return err == nil && defaultPrivileges(targetDN)&required == required, true
+}
+
 func (policy *Policy) Validate(schema TargetSchema) error {
 	if schema == nil {
 		return nil

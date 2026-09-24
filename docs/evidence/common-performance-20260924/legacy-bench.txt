@@ -1,0 +1,33 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/hot-8     	  651175	       542.2 ns/op	      56 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/hot-8     	  667484	       540.9 ns/op	      56 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/hot-8     	  673672	       543.7 ns/op	      56 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/cold-8    	  144846	      2340 ns/op	    2120 B/op	      46 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/cold-8    	  148923	      2440 ns/op	    2120 B/op	      46 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/cold-8    	  144870	      2434 ns/op	    2120 B/op	      46 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/nil-cache-8         	  180801	      1864 ns/op	     704 B/op	      41 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/nil-cache-8         	  184168	      1936 ns/op	     704 B/op	      41 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/database-user/nil-cache-8         	  185766	      1946 ns/op	     704 B/op	      41 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/hot-8                 	 6089536	        59.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/hot-8                 	 6089643	        59.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/hot-8                 	 6027180	        59.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/cold-8                	  366778	       978.1 ns/op	    1608 B/op	      19 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/cold-8                	  353346	       976.5 ns/op	    1608 B/op	      19 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/cold-8                	  338455	       978.7 ns/op	    1608 B/op	      19 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/nil-cache-8           	  612483	       574.5 ns/op	     240 B/op	      15 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/nil-cache-8           	  608664	       564.4 ns/op	     240 B/op	      15 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/config-root/nil-cache-8           	  617875	       558.4 ns/op	     240 B/op	      15 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/hot-8                     	  666908	       492.1 ns/op	      72 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/hot-8                     	  644852	       550.6 ns/op	      72 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/hot-8                     	  646033	       549.9 ns/op	      72 B/op	       2 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/cold-8                    	  131233	      2702 ns/op	    2280 B/op	      50 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/cold-8                    	  132907	      2614 ns/op	    2280 B/op	      50 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/cold-8                    	  131853	      2681 ns/op	    2280 B/op	      50 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/nil-cache-8               	  157242	      2114 ns/op	     832 B/op	      45 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/nil-cache-8               	  164762	      2082 ns/op	     832 B/op	      45 allocs/op
+BenchmarkRuntimeLegacyDNCacheConnection/escaped/nil-cache-8               	  164653	      2157 ns/op	     832 B/op	      45 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	9.565s

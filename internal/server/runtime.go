@@ -27,6 +27,7 @@ const (
 type runtimeState struct {
 	revision             uint64
 	schema               *schema.Registry
+	legacyDNs            *runtimeLegacyDNCache
 	collectivePlans      *collectiveAttributePlanSharedCache
 	access               *acl.Policy
 	secureTransport      SecureTransport
@@ -494,6 +495,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 	}
 	runtime := &runtimeState{
 		schema:               registry,
+		legacyDNs:            newRuntimeLegacyDNCache(),
 		collectivePlans:      newCollectiveAttributePlanSharedCache(),
 		access:               access,
 		secureTransport:      secureTransport,

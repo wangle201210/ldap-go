@@ -240,6 +240,24 @@ type partitionReader struct {
 	partition string
 }
 
+// UnwrapPartitionAccessContext exposes only the source of a known partition
+// wrapper's AccessContext forwarding. The returned reader is for inspecting
+// that capability, not for data operations, which must retain partition scope.
+func UnwrapPartitionAccessContext(reader Reader) (Reader, bool) {
+	switch scoped := reader.(type) {
+	case partitionReader:
+		return scoped.Reader, true
+	case schemaAwarePartitionReader:
+		return scoped.Reader, true
+	case partitionWriter:
+		return scoped.Writer, true
+	case schemaAwarePartitionWriter:
+		return scoped.Writer, true
+	default:
+		return nil, false
+	}
+}
+
 func (reader partitionReader) StorageSnapshotRevision() (uint64, bool) {
 	return ReaderSnapshotRevision(reader.Reader)
 }
