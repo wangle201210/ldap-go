@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/acl
+cpu: Apple M1 Pro
+BenchmarkPolicyRulesFor/empty-8         	 2428725	        74.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/empty-8         	 2437742	        73.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/database-8      	 2444324	        73.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/database-8      	 2445612	        73.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/global-8        	 2416623	        74.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/global-8        	 2437683	        73.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPolicyRulesFor/both-8          	  562653	       324.4 ns/op	    1792 B/op	       1 allocs/op
+BenchmarkPolicyRulesFor/both-8          	  555948	       314.0 ns/op	    1792 B/op	       1 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/acl	1.451s

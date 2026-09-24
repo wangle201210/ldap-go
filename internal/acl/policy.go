@@ -257,6 +257,7 @@ func defaultPrivileges(target directory.DN) Privilege {
 	return ReadLevel
 }
 
+// rulesFor may return policy-owned rules; callers must not mutate the result.
 func (policy *Policy) rulesFor(
 	target directory.DN,
 	normalizer directory.DNAttributeNormalizer,
@@ -268,6 +269,12 @@ func (policy *Policy) rulesFor(
 			database = candidate.Rules
 			break
 		}
+	}
+	if len(database) == 0 {
+		return policy.global
+	}
+	if len(policy.global) == 0 {
+		return database
 	}
 	result := make([]Rule, 0, len(database)+len(policy.global))
 	result = append(result, database...)

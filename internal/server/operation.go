@@ -478,6 +478,30 @@ func newOperationQueue(maximum ...int) *operationQueue {
 	return queue
 }
 
+func (queue *operationQueue) tryClaimIdleSimpleBind(operation *queuedOperation) bool {
+	request, bind := operation.message.Request.(ldapwire.BindRequest)
+	if !bind || request.Version != 3 || request.Authentication.IsSASL || operation.concurrent {
+		return false
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.closed || len(queue.items) != 0 || queue.active != 0 || queue.fence ||
+		queue.maximum < 1 {
+		return false
+	}
+	if queue.maximumRetainedBytes > 0 &&
+		operation.retainedBytes > queue.maximumRetainedBytes-queue.retainedBytes {
+		return false
+	}
+	// An idle Bind occupies an execution slot, so push would count no pending
+	// operations even with a zero or negative pending limit. Claim its fence
+	// under the same lock as pop so workers cannot enter until complete.
+	queue.active++
+	queue.fence = true
+	queue.retainedBytes += operation.retainedBytes
+	return true
+}
+
 func (queue *operationQueue) push(
 	operation *queuedOperation,
 	maxPending int,

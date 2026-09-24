@@ -1,0 +1,1 @@
+ok  	github.com/wangle201210/ldap-go/internal/storage	4.050s

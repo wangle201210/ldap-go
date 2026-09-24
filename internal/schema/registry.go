@@ -583,7 +583,14 @@ func (registry *Registry) EvaluateEquality(
 ) (result directory.FilterResult, hasValues bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
+	return registry.evaluateEqualityLocked(entry, description, assertion)
+}
 
+func (registry *Registry) evaluateEqualityLocked(
+	entry directory.Entry,
+	description string,
+	assertion []byte,
+) (result directory.FilterResult, hasValues bool) {
 	result = directory.FilterFalseResult
 	for _, attribute := range entry.Attributes {
 		if !registry.attributeDescriptionSubtype(attribute.Description, description) {

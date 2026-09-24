@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkEvaluateEqualityCachedDN/size10/first/warmed/original-8         	   18427	      9742 ns/op	    4832 B/op	     236 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/first/warmed/original-8         	   18608	      9638 ns/op	    4832 B/op	     236 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/first/warmed/cached-8           	  281803	       631.4 ns/op	     232 B/op	       6 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/first/warmed/cached-8           	  291723	       634.5 ns/op	     232 B/op	       6 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/middle/warmed/original-8        	    3182	     56467 ns/op	   28912 B/op	    1411 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/middle/warmed/original-8        	    3013	     56674 ns/op	   28912 B/op	    1411 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/middle/warmed/cached-8          	  151770	      1172 ns/op	     712 B/op	      16 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/middle/warmed/cached-8          	  155054	      1174 ns/op	     712 B/op	      16 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/miss/warmed/original-8          	    1902	     99506 ns/op	   48339 B/op	    2351 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/miss/warmed/original-8          	    1864	     94577 ns/op	   48336 B/op	    2351 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/miss/warmed/cached-8            	  116150	      1556 ns/op	    1096 B/op	      24 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size10/miss/warmed/cached-8            	  116310	      1557 ns/op	    1096 B/op	      24 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/first/warmed/original-8       	   18592	      9711 ns/op	    4832 B/op	     236 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/first/warmed/original-8       	   18766	      9642 ns/op	    4832 B/op	     236 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/first/warmed/cached-8         	  290018	       649.9 ns/op	     232 B/op	       6 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/first/warmed/cached-8         	  290484	       669.9 ns/op	     232 B/op	       6 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/middle/cold/original-8        	      38	   4948764 ns/op	 2486452 B/op	  119540 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/middle/cold/original-8        	      38	   5169807 ns/op	 2486445 B/op	  119540 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/middle/cold/cached-8          	      57	   2834847 ns/op	 1636777 B/op	   65093 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/middle/cold/cached-8          	      66	   2641214 ns/op	 1636772 B/op	   65093 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/miss/distributed/original-8   	      16	  10278242 ns/op	 4971718 B/op	  238868 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/miss/distributed/original-8   	      18	   9919704 ns/op	 4971465 B/op	  238861 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/miss/distributed/cached-8     	      34	   5382567 ns/op	 3260345 B/op	  130076 allocs/op
+BenchmarkEvaluateEqualityCachedDN/size1000/miss/distributed/cached-8     	      33	   5444902 ns/op	 3260239 B/op	  130078 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	4.921s

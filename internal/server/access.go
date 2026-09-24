@@ -100,50 +100,7 @@ func (server *Server) attributesWithPrivilege(
 	filtered := directory.Entry{DN: entry.DN}
 	batchValues := false
 	if entry.DN != "" && len(entry.Attributes) > 0 && runtime.schema != nil {
-		_, remote := reader.(interface {
-			remoteACLView(string, directory.Entry, string, []byte) (storage.Reader, string, directory.Entry, string, []byte, error)
-		})
-		// AccessSubject fixes DN to subjectDN, and default privileges ignore the
-		// other subject fields. Only known pure context accessors may be skipped;
-		// custom callbacks can have effects even when their result is irrelevant.
-		safe := !remote
-		for contextual := reader; safe; {
-			if source, partitioned := storage.UnwrapPartitionAccessContext(contextual); partitioned {
-				contextual = source
-				continue
-			}
-			switch value := contextual.(type) {
-			case storageRevisionReader:
-				contextual = value.Reader
-				continue
-			case accessContextReader, accessContextWriter:
-			default:
-				_, callback := contextual.(interface{ AccessContext() any })
-				safe = !callback
-			}
-			break
-		}
-		// Published runtime schemas are immutable during an operation. Repeated
-		// root checks must still run for custom normalizers or rewrite callbacks.
-		for _, database := range runtime.databases {
-			if !safe {
-				break
-			}
-			if database.relay != nil || database.rwm != nil {
-				safe = false
-				break
-			}
-			switch normalizer := database.dnNormalizer.(type) {
-			case nil:
-			case *schema.Registry:
-				safe = normalizer == runtime.schema
-			case *databaseEqualityIndexNormalizer:
-				safe = normalizer != nil && normalizer.registry == runtime.schema
-			default:
-				safe = false
-			}
-		}
-		if safe {
+		if localProjectionReadOnly(runtime, reader) {
 			if allowed, applicable := runtime.access.DefaultDNAllowed(
 				entry.DN, aclDNNormalizer{Registry: runtime.schema}, privilege,
 			); applicable {
@@ -230,6 +187,56 @@ func (server *Server) attributesWithPrivilege(
 		}
 	}
 	return filtered
+}
+
+// Only known context accessors and immutable runtime normalization may be reused
+// while projecting an entry. Remote mappings and custom callbacks can have
+// observable effects or retain their inputs even when their result is constant.
+func localProjectionReadOnly(runtime *runtimeState, reader storage.Reader) bool {
+	if runtime == nil || runtime.schema == nil {
+		return false
+	}
+	if _, remote := reader.(interface {
+		remoteACLView(string, directory.Entry, string, []byte) (storage.Reader, string, directory.Entry, string, []byte, error)
+	}); remote {
+		return false
+	}
+	for contextual := reader; ; {
+		if source, partitioned := storage.UnwrapPartitionAccessContext(contextual); partitioned {
+			contextual = source
+			continue
+		}
+		switch value := contextual.(type) {
+		case storageRevisionReader:
+			contextual = value.Reader
+			continue
+		case accessContextReader, accessContextWriter:
+		default:
+			if _, callback := contextual.(interface{ AccessContext() any }); callback {
+				return false
+			}
+		}
+		break
+	}
+	for _, database := range runtime.databases {
+		if database.relay != nil || database.rwm != nil {
+			return false
+		}
+		switch normalizer := database.dnNormalizer.(type) {
+		case nil:
+		case *schema.Registry:
+			if normalizer != runtime.schema {
+				return false
+			}
+		case *databaseEqualityIndexNormalizer:
+			if normalizer == nil || normalizer.registry != runtime.schema {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func rootVisibleEntry(entry directory.Entry, typesOnly bool) directory.Entry {
@@ -418,8 +425,20 @@ func (server *Server) evaluateFilterWithPrivilege(
 		return filterUndefined, errors.New("unknown filter kind")
 	}
 
-	result, err := filter.EvaluateWith(entry, runtime.schema)
+	result, err := filter.EvaluateWith(entry, searchFilterSchema{runtime.schema})
 	return serverFilterResult(result), err
+}
+
+// Published runtime schemas remain immutable throughout an operation, allowing
+// bounded reuse of DN normalization without retaining filter or ACL decisions.
+type searchFilterSchema struct{ *schema.Registry }
+
+func (registry searchFilterSchema) EvaluateEquality(
+	entry directory.Entry,
+	description string,
+	assertion []byte,
+) (directory.FilterResult, bool) {
+	return registry.EvaluateEqualityCachedDN(entry, description, assertion)
 }
 
 func serverFilterResult(result directory.FilterResult) filterResult {

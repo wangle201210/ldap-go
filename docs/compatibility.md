@@ -24,7 +24,7 @@ A September 24 differential found a local-entry operational-attribute gap:
 the ordinary memory-store fixture omits synthesized `entryDN` and
 `hasSubordinates`, including root reads and `+` with types-only. The baseline
 and optimized versions fail the same 40 expanded scenarios. See the
-[reproduction and failure evidence](common-ldap-performance.md#existing-operational-attribute-gap).
+[reproduction and failure evidence](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap).
 Passing named-attribute tests does not establish full `+` projection parity.
 
 ## Completeness audit

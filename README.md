@@ -51,30 +51,32 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest common-operation comparison: September 24, 2026, second run, 100,000 users,
+Latest common-operation comparison: September 24, 2026, third run, 100,000 users,
 Apple M1 Pro, Go without cgo, OpenLDAP 2.6.13. These are batch-time medians from
 three repetitions with endpoints rotated per request. Only SDK calls are timed;
 response validation is outside timing. Both servers have uid/member/objectClass
 equality indexes. Relative performance is `OpenLDAP / ldap-go * 100%`.
+Usage frequency is a qualitative estimate for authentication/directory workloads,
+not measured traffic.
 
-| Common operation | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | 1,000 | 104.34 ms | 73.18 ms | 70.1% | 69.5% |
-| Non-root Base, hot | 1,000 | 121.49 ms | 85.70 ms | 70.5% | 63.8% |
-| Non-root indexed equality, hot | 1,000 | 120.42 ms | 87.55 ms | 72.7% | 65.5% |
-| Direct group discovery | 100 | 31.17 ms | 11.53 ms | 37.0% | 38.6% |
-| Group Base, 1,000 members | 100 | 100.23 ms | 88.19 ms | 88.0% | 84.7% |
-| Nested membership, client BFS | 100 traversals | 76.30 ms | 40.21 ms | 52.7% | 50.3% |
+| Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| User Bind, SSHA | Very high | 1,000 | 97.00 ms | 73.34 ms | 75.6% | 73.6% |
+| Non-root Base, hot | High | 1,000 | 109.04 ms | 77.97 ms | 71.5% | 65.1% |
+| Non-root indexed equality, hot | Very high | 1,000 | 113.73 ms | 82.29 ms | 72.4% | 66.4% |
+| Direct group discovery | High | 100 | 18.76 ms | 10.94 ms | 58.3% | 53.1% |
+| Group Base, 1,000 members | Medium | 100 | 95.20 ms | 85.52 ms | 89.8% | 84.2% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 61.55 ms | 39.45 ms | 64.1% | 60.6% |
 
 The [common-operation report](docs/common-ldap-performance.md) includes distributed
 user reads, exact ACL definitions, all samples and validation. The
 [SDK runner](internal/cmd/ldapcommonbench/README.md) is reusable on disposable
-endpoints. Against `e07231f`, explicit-ACL group discovery takes **88.8% less time**,
-1,000-member group reads 77.5% less, and common Base/equality reads about 15%-17% less.
-The four-operation parity goal is **not complete**; direct group discovery remains
-a large gap. Some default-access measurements vary slightly in either direction.
-No password strength or ACL decision was weakened. The report also records a
-pre-existing operational-attribute compatibility gap.
+endpoints. Against `a7c2941`, group discovery takes **35%-42% less time**, nested
+membership 17%-20% less, and SSHA Bind 5.6%-7.1% less. Ordinary user queries change
+little. The four-operation parity goal is **not complete**. An initial explicit-ACL
+large-group slowdown did not reproduce in a five-batch recheck; all samples remain
+in the report. Password strength and ACL decisions are preserved. The report
+continues to record the pre-existing operational-attribute compatibility gap.
 
 Timing boundaries and group fixtures differ from the
 [earlier full-operation comparison](docs/performance-optimization-20260923-round13.md),

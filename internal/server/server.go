@@ -977,9 +977,6 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			concurrent:    concurrent,
 			retainedBytes: retainedBytes,
 		}
-		if connectionReadBarrier(message) {
-			queued.completion = make(chan operationCompletion, 1)
-		}
 		if !server.pendingByteLimiter.tryAcquire(retainedBytes) {
 			server.monitor.queueOperation(state.monitor)
 			server.monitor.startOperation(state.monitor, false)
@@ -991,6 +988,18 @@ func (server *Server) serveConnection(ctx context.Context, connection net.Conn) 
 			server.pendingByteLimiter.release(retainedBytes)
 		}
 		server.monitor.queueOperation(state.monitor)
+		if queue.tryClaimIdleSimpleBind(queued) {
+			if !server.runConnectionOperation(
+				connectionContext, &state, operations, queue, writeMutex, queued,
+			) {
+				return
+			}
+			readConnection = state.connection
+			continue
+		}
+		if connectionReadBarrier(message) {
+			queued.completion = make(chan operationCompletion, 1)
+		}
 		pushResult := queue.push(
 			queued,
 			server.connectionMaxPending(&state),
@@ -1090,134 +1099,148 @@ func (server *Server) runConnectionOperations(
 		if !ok {
 			return
 		}
-		state := sharedState
-		var concurrentState connectionState
-		if queued.concurrent {
-			concurrentState = cloneConcurrentConnectionState(sharedState)
-			state = &concurrentState
-		} else if queued.state != nil {
-			state = queued.state
-		}
-
-		baseConnection := &serializedResponseConnection{
-			Conn:              state.connection,
-			mu:                writeMutex,
-			monitor:           server.monitor,
-			monitorConnection: state.monitor,
-			writeTimeout:      server.currentConnectionWriteTimeout,
-			terminal:          state.writeFailed,
-		}
-		responseConnection := &operationResponseConnection{
-			Conn:                 baseConnection,
-			operation:            queued.operation,
-			audit:                server.newOperationAuditObservation(state, queued.message),
-			maximumResponseBytes: server.searchResponseByteLimit(queued),
-			maximumPDUBytes:      server.searchResponsePDULimit(queued),
-			reserveResponseBytes: server.reserveSearchResponseBytes(queued),
-		}
-
-		var (
-			closeConnection bool
-			err             error
-		)
-		searchSessions := snapshotSearchSessions(state, queued.message)
-		boundDNBeforeOperation := state.boundDN
-		acquired := server.operationLimiter.acquire(queued.operation.ctx)
-		started := false
-		if acquired {
-			started = queued.operation.start()
-			server.monitor.startOperation(state.monitor, started)
-			if started {
-				closeConnection, err = server.dispatch(
-					withTrackedOperation(queued.operation.ctx, queued.operation),
-					responseConnection,
-					state,
-					queued.message,
-				)
-			}
-			server.operationLimiter.release()
-		}
-		if !queued.concurrent && state.transactionAdmission != nil {
-			state.transactionAdmission.Store(state.transaction != nil)
-		}
-		if errors.Is(err, errSearchResponseLimit) {
-			server.clearStoppedSearchState(state, queued.message, searchSessions)
-			responseConnection.maximumResponseBytes = 0
-			responseConnection.maximumPDUBytes = 0
-			responseConnection.reserveResponseBytes = nil
-			closeConnection = false
-			err = server.writeSearchDone(
-				responseConnection,
-				queued.message.ID,
-				ldapwire.ResultError(
-					ldapwire.ResultAdminLimitExceeded,
-					"search response byte budget exceeded",
-				),
-			)
-		}
-		state.publishAuditIdentity()
-		if operationRefreshesIncomingLimit(
-			queued.message.Request,
-			boundDNBeforeOperation != state.boundDN,
-		) {
-			state.maxIncoming = server.connectionIncomingLimit(state.boundDN != "")
-		}
-
-		stopMode := queued.operation.stopMode()
-		switch stopMode {
-		case operationAbandoned:
-			server.clearStoppedSearchState(state, queued.message, searchSessions)
-			closeConnection = false
-			err = nil
-		case operationCanceled:
-			server.clearStoppedSearchState(state, queued.message, searchSessions)
-			closeConnection = false
-			err = writeResultForMessage(
-				baseConnection,
-				queued.message,
-				ldapwire.Result{Code: ldapwire.ResultCanceled},
-			)
-		}
-		server.finishOperationAudit(responseConnection.audit, state, stopMode, err)
-		server.monitor.updateConnectionState(state.monitor, state)
-		server.monitor.completeOperation(
-			state.monitor,
-			queued.message.Request,
-			started,
-		)
-
-		operations.finish(queued.operation)
-		queue.complete(queued)
-		if queued.completion != nil {
-			queued.completion <- operationCompletion{
-				closeConnection: closeConnection,
-				connection:      sharedState.connection,
-				err:             err,
-			}
-		}
-		if queued.concurrent {
-			clearConcurrentConnectionState(state)
-		}
-
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			server.config.Logger.Debug(
-				"LDAP request failed",
-				"message_id",
-				queued.message.ID,
-				"error",
-				err,
-			)
-			_ = sharedState.connection.Close()
-			return
-		}
-		if closeConnection {
-			_ = sharedState.connection.Close()
+		if !server.runConnectionOperation(ctx, sharedState, operations, queue, writeMutex, queued) {
 			return
 		}
 	}
+}
+
+func (server *Server) runConnectionOperation(
+	ctx context.Context,
+	sharedState *connectionState,
+	operations *operationRegistry,
+	queue *operationQueue,
+	writeMutex *sync.Mutex,
+	queued *queuedOperation,
+) bool {
+	state := sharedState
+	var concurrentState connectionState
+	if queued.concurrent {
+		concurrentState = cloneConcurrentConnectionState(sharedState)
+		state = &concurrentState
+	} else if queued.state != nil {
+		state = queued.state
+	}
+
+	baseConnection := &serializedResponseConnection{
+		Conn:              state.connection,
+		mu:                writeMutex,
+		monitor:           server.monitor,
+		monitorConnection: state.monitor,
+		writeTimeout:      server.currentConnectionWriteTimeout,
+		terminal:          state.writeFailed,
+	}
+	responseConnection := &operationResponseConnection{
+		Conn:                 baseConnection,
+		operation:            queued.operation,
+		audit:                server.newOperationAuditObservation(state, queued.message),
+		maximumResponseBytes: server.searchResponseByteLimit(queued),
+		maximumPDUBytes:      server.searchResponsePDULimit(queued),
+		reserveResponseBytes: server.reserveSearchResponseBytes(queued),
+	}
+
+	var (
+		closeConnection bool
+		err             error
+	)
+	searchSessions := snapshotSearchSessions(state, queued.message)
+	boundDNBeforeOperation := state.boundDN
+	acquired := server.operationLimiter.acquire(queued.operation.ctx)
+	started := false
+	if acquired {
+		started = queued.operation.start()
+		server.monitor.startOperation(state.monitor, started)
+		if started {
+			closeConnection, err = server.dispatch(
+				withTrackedOperation(queued.operation.ctx, queued.operation),
+				responseConnection,
+				state,
+				queued.message,
+			)
+		}
+		server.operationLimiter.release()
+	}
+	if !queued.concurrent && state.transactionAdmission != nil {
+		state.transactionAdmission.Store(state.transaction != nil)
+	}
+	if errors.Is(err, errSearchResponseLimit) {
+		server.clearStoppedSearchState(state, queued.message, searchSessions)
+		responseConnection.maximumResponseBytes = 0
+		responseConnection.maximumPDUBytes = 0
+		responseConnection.reserveResponseBytes = nil
+		closeConnection = false
+		err = server.writeSearchDone(
+			responseConnection,
+			queued.message.ID,
+			ldapwire.ResultError(
+				ldapwire.ResultAdminLimitExceeded,
+				"search response byte budget exceeded",
+			),
+		)
+	}
+	state.publishAuditIdentity()
+	if operationRefreshesIncomingLimit(
+		queued.message.Request,
+		boundDNBeforeOperation != state.boundDN,
+	) {
+		state.maxIncoming = server.connectionIncomingLimit(state.boundDN != "")
+	}
+
+	stopMode := queued.operation.stopMode()
+	switch stopMode {
+	case operationAbandoned:
+		server.clearStoppedSearchState(state, queued.message, searchSessions)
+		closeConnection = false
+		err = nil
+	case operationCanceled:
+		server.clearStoppedSearchState(state, queued.message, searchSessions)
+		closeConnection = false
+		err = writeResultForMessage(
+			baseConnection,
+			queued.message,
+			ldapwire.Result{Code: ldapwire.ResultCanceled},
+		)
+	}
+	server.finishOperationAudit(responseConnection.audit, state, stopMode, err)
+	server.monitor.updateConnectionState(state.monitor, state)
+	server.monitor.completeOperation(
+		state.monitor,
+		queued.message.Request,
+		started,
+	)
+
+	operations.finish(queued.operation)
+	queue.complete(queued)
+	if queued.completion != nil {
+		queued.completion <- operationCompletion{
+			closeConnection: closeConnection,
+			connection:      sharedState.connection,
+			err:             err,
+		}
+	}
+	if queued.concurrent {
+		clearConcurrentConnectionState(state)
+	}
+
+	if ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		server.config.Logger.Debug(
+			"LDAP request failed",
+			"message_id",
+			queued.message.ID,
+			"error",
+			err,
+		)
+		_ = sharedState.connection.Close()
+		return false
+	}
+	if closeConnection {
+		_ = sharedState.connection.Close()
+		return false
+	}
+	return true
 }
 
 func (server *Server) searchResponseByteLimit(queued *queuedOperation) int64 {

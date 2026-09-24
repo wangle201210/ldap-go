@@ -65,7 +65,7 @@ func TestReadOnlyCandidateCodecShapes(t *testing.T) {
 				for _, attribute := range want.Attributes {
 					valueCount += len(attribute.Values)
 				}
-				wantBorrowed := format != "json" && len(want.Attributes) <= 64 && valueCount <= 128
+				wantBorrowed := format != "json" && len(want.Attributes) <= 64 && valueCount <= 4096
 				borrowed, ok := decoder.borrow(encoded)
 				if ok != wantBorrowed {
 					t.Fatalf("borrow gate = %v, want %v", ok, wantBorrowed)

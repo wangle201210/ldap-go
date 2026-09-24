@@ -2244,17 +2244,31 @@ func (server *Server) handleUncachedSearch(
 				}
 			} else if translucentRoute == nil {
 				iterateCandidates := storage.ForEachFilterCandidate
-				if snapshotEntriesCacheable && routeRoot && !projectSubschemaReference &&
+				borrowLocal := paging == nil && !sorting.active() && syncSearch == nil &&
+					len(message.Controls) == 0 && hasPreparedSelection &&
+					smallIndexedRuntimeProjectionSafe(state.runtime) &&
+					state.runtime.access.CanBatchValues() && localProjectionReadOnly(state.runtime, tx)
+				if borrowLocal {
+					// Base authorization already built this partition's plan. Do not
+					// initiate speculative reads or move its errors before the visitor.
+					plan := collectivePlans.plans[database.partition]
+					borrowLocal = plan != nil && len(plan.sources) == 0
+				}
+				if ((snapshotEntriesCacheable && routeRoot) || borrowLocal) && !projectSubschemaReference &&
 					!collectResponses.enabled && !nestGroupPlans.enabled &&
 					databaseSearchResultCacheSafe(state.runtime, *database) {
-					plan, planErr := collectivePlans.plan(database.partition, tx)
-					if planErr != nil {
-						return planErr
-					}
-					if len(plan.sources) == 0 {
-						// This projection only reads input values; Select creates all
-						// retained output before the decoder reuses its descriptors.
+					if borrowLocal {
 						iterateCandidates = storage.ForEachReadOnlyFilterCandidate
+					} else {
+						plan, planErr := collectivePlans.plan(database.partition, tx)
+						if planErr != nil {
+							return planErr
+						}
+						if len(plan.sources) == 0 {
+							// This projection only reads input values; Select creates all
+							// retained output before the decoder reuses its descriptors.
+							iterateCandidates = storage.ForEachReadOnlyFilterCandidate
+						}
 					}
 				}
 				var planned bool

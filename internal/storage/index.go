@@ -193,7 +193,7 @@ func ForEachFilterCandidate(
 	var entries []directory.Entry
 	var encoded []encodedEqualityIndexCandidate
 	if scoped, ok := reader.(schemaAwarePartitionReader); ok && filter.Kind == directory.FilterEquality {
-		entries, planned, err = scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded)
+		entries, planned, err = scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded, false)
 	} else {
 		entries, planned, err = planner.planEqualityIndexCandidates(filter)
 	}
@@ -241,14 +241,27 @@ func ForEachReadOnlyFilterCandidate(
 		return ForEachFilterCandidate(reader, filter, fn)
 	}
 	var encoded []encodedEqualityIndexCandidate
-	entries, planned, err := scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded)
+	entries, planned, err := scoped.planEqualityIndexCandidatesWithEncoded(filter, &encoded, true)
 	if err != nil || !planned {
 		return planned, 0, err
 	}
 	if len(encoded) > 0 {
-		var decoder readOnlyCandidateDecoder
+		var decoder *readOnlyCandidateDecoder
 		for _, candidate := range encoded {
-			entry, err := decoder.decode(candidate.value)
+			var entry directory.Entry
+			var err error
+			// A single small row costs less to own than to allocate the reusable
+			// descriptor arena. Large rows and multiple callbacks amortize it.
+			if len(encoded) == 1 && len(candidate.value) < 8*1024 {
+				var stored storedEntry
+				stored, err = decodeStoredEntry(candidate.value)
+				entry = stored.Entry
+			} else {
+				if decoder == nil {
+					decoder = new(readOnlyCandidateDecoder)
+				}
+				entry, err = decoder.decode(candidate.value)
+			}
 			if err != nil {
 				return true, candidates, err
 			}
@@ -453,12 +466,13 @@ func deletePartitionEntryWithEqualityIndexes(
 func (reader schemaAwarePartitionReader) planEqualityIndexCandidates(
 	filter directory.Filter,
 ) ([]directory.Entry, bool, error) {
-	return reader.planEqualityIndexCandidatesWithEncoded(filter, nil)
+	return reader.planEqualityIndexCandidatesWithEncoded(filter, nil, false)
 }
 
 func (reader schemaAwarePartitionReader) planEqualityIndexCandidatesWithEncoded(
 	filter directory.Filter,
 	encoded *[]encodedEqualityIndexCandidate,
+	allowSmallEncoded bool,
 ) ([]directory.Entry, bool, error) {
 	schema, ok := reader.normalizer.(EqualityIndexSchema)
 	if !ok {
@@ -472,7 +486,7 @@ func (reader schemaAwarePartitionReader) planEqualityIndexCandidatesWithEncoded(
 	if err != nil || !current {
 		return nil, false, err
 	}
-	return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter, encoded)
+	return reader.planCurrentEqualityIndexCandidates(indexed, schema, filter, encoded, allowSmallEncoded)
 }
 
 func (reader schemaAwarePartitionReader) currentEqualityIndex(
@@ -521,6 +535,7 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 	schema EqualityIndexSchema,
 	filter directory.Filter,
 	encoded *[]encodedEqualityIndexCandidate,
+	allowSmallEncoded bool,
 ) ([]directory.Entry, bool, error) {
 	if filter.Kind == directory.FilterEquality {
 		attribute, equality, _, err := schema.ResolveEqualityIndexAttribute(filter.Attribute)
@@ -544,7 +559,9 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 			return nil, true, err
 		}
 		sort.Strings(references)
-		if encoded != nil && len(references) >= minEncodedEqualityIndexCandidates {
+		// Only the read-only iterator opts into prevalidation for small sets.
+		// Empty sets still take the owned planner's metadata/error checkpoints.
+		if encoded != nil && (len(references) >= minEncodedEqualityIndexCandidates || allowSmallEncoded && len(references) > 0) {
 			if tx, ok := indexed.(*boltTx); ok {
 				candidates, valid, err := tx.prevalidateEqualityIndexCandidates(reader.partition, references)
 				if err != nil {

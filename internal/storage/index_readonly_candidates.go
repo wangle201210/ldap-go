@@ -8,18 +8,20 @@ import (
 )
 
 const (
-	maxReadOnlyCandidateAttributes = 64
-	maxReadOnlyCandidateValues     = 128 // Total across all attributes in one row.
-	maxReadOnlyCandidateNames      = 128
-	maxReadOnlyCandidateNameBytes  = 128
+	maxReadOnlyCandidateAttributes     = 64
+	maxReadOnlyCandidateValues         = 128  // Fixed descriptor arena for small rows.
+	maxReadOnlyCandidateBorrowedValues = 4096 // Total across all attributes in one row.
+	maxReadOnlyCandidateNames          = 128
+	maxReadOnlyCandidateNameBytes      = 128
 )
 
 // One decoder belongs to one candidate iteration, never a pool or transaction
 // cache. Descriptors are overwritten between callbacks; payloads borrow Bolt.
 type readOnlyCandidateDecoder struct {
-	attributes [maxReadOnlyCandidateAttributes]directory.Attribute
-	values     [maxReadOnlyCandidateValues][]byte
-	names      map[string]string
+	attributes     [maxReadOnlyCandidateAttributes]directory.Attribute
+	values         [maxReadOnlyCandidateValues][]byte
+	overflowValues [][]byte
+	names          map[string]string
 }
 
 func (decoder *readOnlyCandidateDecoder) decode(value []byte) (directory.Entry, error) {
@@ -86,13 +88,14 @@ func (decoder *readOnlyCandidateDecoder) borrowMetadata(value []byte) ([]byte, [
 		return nil, nil, false
 	}
 	usedValues := 0
+	values := decoder.values[:]
 	for i := range attributeCount {
 		description, next, err := consumeEntryBinaryField(value)
 		if err != nil {
 			return nil, nil, false
 		}
 		valueCount, next, err := consumeEntryBinaryCount(next)
-		if err != nil || valueCount > len(next) || valueCount > len(decoder.values)-usedValues {
+		if err != nil || valueCount > len(next) || valueCount > maxReadOnlyCandidateBorrowedValues-usedValues {
 			return nil, nil, false
 		}
 		// Stable row layouts can reuse the previous owned name at this slot.
@@ -104,7 +107,30 @@ func (decoder *readOnlyCandidateDecoder) borrowMetadata(value []byte) ([]byte, [
 		attribute := directory.Attribute{Description: name}
 		if valueCount > 0 {
 			end := usedValues + valueCount
-			attribute.Values = decoder.values[usedValues:end:end]
+			if end > len(values) {
+				if end > len(decoder.overflowValues) {
+					size := len(values)
+					for size < end {
+						size = min(maxReadOnlyCandidateBorrowedValues, 2*size)
+					}
+					decoder.overflowValues = make([][]byte, size)
+				}
+				copy(decoder.overflowValues, values[:usedValues])
+				values = decoder.overflowValues
+				// Growth moves descriptors only. Rebind earlier attributes in this
+				// row so all value slices use the current arena, including after
+				// multiple growths. Empty attributes keep nil Values.
+				position := 0
+				for j := range i {
+					count := len(decoder.attributes[j].Values)
+					if count > 0 {
+						next := position + count
+						decoder.attributes[j].Values = values[position:next:next]
+						position = next
+					}
+				}
+			}
+			attribute.Values = values[usedValues:end:end]
 			usedValues = end
 		}
 		for j := range valueCount {
