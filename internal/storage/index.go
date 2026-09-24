@@ -245,31 +245,9 @@ func ForEachReadOnlyFilterCandidate(
 	if err != nil || !planned {
 		return planned, 0, err
 	}
-	if len(encoded) > 0 {
-		var decoder *readOnlyCandidateDecoder
-		for _, candidate := range encoded {
-			var entry directory.Entry
-			var err error
-			// A single small row costs less to own than to allocate the reusable
-			// descriptor arena. Large rows and multiple callbacks amortize it.
-			if len(encoded) == 1 && len(candidate.value) < 8*1024 {
-				var stored storedEntry
-				stored, err = decodeStoredEntry(candidate.value)
-				entry = stored.Entry
-			} else {
-				if decoder == nil {
-					decoder = new(readOnlyCandidateDecoder)
-				}
-				entry, err = decoder.decode(candidate.value)
-			}
-			if err != nil {
-				return true, candidates, err
-			}
-			if err := fn(entry.WithDNIdentityKey(string(candidate.identity))); err != nil {
-				return true, candidates, err
-			}
-			candidates++
-		}
+	candidates, err = forEachReadOnlyEncodedCandidate(encoded, fn)
+	if err != nil {
+		return true, candidates, err
 	}
 	for _, entry := range entries {
 		if err := fn(entry); err != nil {
@@ -278,6 +256,36 @@ func ForEachReadOnlyFilterCandidate(
 		candidates++
 	}
 	return true, candidates, nil
+}
+
+func forEachReadOnlyEncodedCandidate(
+	encoded []encodedEqualityIndexCandidate,
+	fn func(directory.Entry) error,
+) (candidates int, err error) {
+	var decoder *readOnlyCandidateDecoder
+	for _, candidate := range encoded {
+		var entry directory.Entry
+		// A single small row costs less to own than to allocate the reusable
+		// descriptor arena. Large rows and multiple callbacks amortize it.
+		if len(encoded) == 1 && len(candidate.value) < 8*1024 {
+			var stored storedEntry
+			stored, err = decodeStoredEntry(candidate.value)
+			entry = stored.Entry
+		} else {
+			if decoder == nil {
+				decoder = new(readOnlyCandidateDecoder)
+			}
+			entry, err = decoder.decode(candidate.value)
+		}
+		if err != nil {
+			return candidates, err
+		}
+		if err := fn(entry.WithDNIdentityKey(string(candidate.identity))); err != nil {
+			return candidates, err
+		}
+		candidates++
+	}
+	return candidates, nil
 }
 
 // RebuildEqualityIndexes rebuilds one partition's configured equality indexes

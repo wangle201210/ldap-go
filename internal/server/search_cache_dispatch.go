@@ -60,6 +60,9 @@ func (server *Server) handleSearch(
 						}
 					}
 				}
+				if handled, err := server.trySmallNonRootSearch(ctx, connection, state, message, request, base, database); handled {
+					return err
+				}
 			}
 		}
 	}

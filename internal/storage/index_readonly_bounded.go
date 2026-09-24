@@ -18,8 +18,9 @@ import (
 // for validation and callbacks. No uniqueness assumption or deduplication is
 // applied before checking the bound.
 //
-// Once bounded, all references and entries are validated by the original owned
-// planner before the first callback. Index/context errors are returned, callback
+// Once bounded, all references and entries are validated before the first
+// callback. Eligible binary rows use the shared read-only decoder; other rows
+// use the original owned planner. Index/context errors are returned, callback
 // order is unchanged, and counts exclude a callback that returns an error.
 func ForEachBoundedReadOnlyFilterCandidate(
 	reader Reader,
@@ -62,6 +63,16 @@ func ForEachBoundedReadOnlyFilterCandidate(
 		return false, 0, nil
 	}
 	// The limited cursor scan already returns the same sorted reference order.
+	if len(references) > 0 {
+		encoded, valid, err := tx.prevalidateEqualityIndexCandidates(scoped.partition, references)
+		if err != nil {
+			return true, 0, err
+		}
+		if valid {
+			count, err := forEachReadOnlyEncodedCandidate(encoded, fn)
+			return true, count, err
+		}
+	}
 	entries, err := tx.equalityIndexEntries(scoped.partition, references, schema)
 	if err != nil {
 		return true, 0, err

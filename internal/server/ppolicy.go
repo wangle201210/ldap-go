@@ -1816,7 +1816,11 @@ func normalizePasswordPolicyDN(
 	reader storage.Reader,
 	value string,
 ) (directory.DN, error) {
-	legacy, err := directory.ParseDN(value)
+	var cache *runtimeLegacyDNCache
+	if runtime != nil {
+		cache = runtime.legacyDNs
+	}
+	legacy, err := cache.parse(value)
 	if err != nil {
 		return directory.DN{}, err
 	}
