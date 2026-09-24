@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn]/borrow=false-8         	    7731	     23303 ns/op	   75577 B/op	      51 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn]/borrow=false-8         	    7461	     24148 ns/op	   75576 B/op	      51 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn]/borrow=true-8          	   24213	      7395 ns/op	    1632 B/op	      42 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn]/borrow=true-8          	   23432	      7760 ns/op	    1632 B/op	      42 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn_member]/borrow=false-8  	    1524	    116826 ns/op	  293592 B/op	    3057 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn_member]/borrow=false-8  	    1508	    120299 ns/op	  293593 B/op	    3057 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn_member]/borrow=true-8   	    1821	    145145 ns/op	  219648 B/op	    3048 allocs/op
+BenchmarkBorrowedProjection/explicit=false/attributes=[cn_member]/borrow=true-8   	    1892	    108468 ns/op	  219648 B/op	    3048 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn]/borrow=false-8          	    6528	     51167 ns/op	   76777 B/op	      78 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn]/borrow=false-8          	    5364	     33365 ns/op	   76776 B/op	      78 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn]/borrow=true-8           	   14017	     12747 ns/op	    2832 B/op	      69 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn]/borrow=true-8           	   13620	     12761 ns/op	    2832 B/op	      69 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn_member]/borrow=false-8   	    1438	    142747 ns/op	  294792 B/op	    3084 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn_member]/borrow=false-8   	    1726	    112917 ns/op	  294792 B/op	    3084 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn_member]/borrow=true-8    	    1792	     93693 ns/op	  220849 B/op	    3075 allocs/op
+BenchmarkBorrowedProjection/explicit=true/attributes=[cn_member]/borrow=true-8    	    2017	     93629 ns/op	  220848 B/op	    3075 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/preverify/borrowed-8                        	   32679	      5696 ns/op	    4992 B/op	      72 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/preverify/borrowed-8                        	   32013	      5643 ns/op	    4992 B/op	      72 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/preverify/legacy-copy-8                     	   30188	      5932 ns/op	    6016 B/op	      73 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/preverify/legacy-copy-8                     	   29947	      5942 ns/op	    6016 B/op	      73 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/two-views/borrowed-8                        	   16495	     11212 ns/op	   10040 B/op	     145 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/two-views/borrowed-8                        	   16263	     10974 ns/op	   10040 B/op	     145 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/two-views/legacy-copy-8                     	   15571	     11542 ns/op	   12088 B/op	     147 allocs/op
+BenchmarkPasswordBindDatabaseSnapshot/two-views/legacy-copy-8                     	   15522	     11521 ns/op	   12088 B/op	     147 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	5.149s

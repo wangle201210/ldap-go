@@ -885,6 +885,16 @@ func (registry *Registry) PrepareExplicitAttributeSelection(
 	return &PreparedAttributeSelection{attributes: selected}, true
 }
 
+// SelectsAttribute uses the same membership as Select without copying values.
+func (selection *PreparedAttributeSelection) SelectsAttribute(description string) bool {
+	if selection == nil || selection.empty {
+		return false
+	}
+	base, _, _ := strings.Cut(description, ";")
+	_, selected := selection.attributes[schemaKey(base)]
+	return selected
+}
+
 func (selection *PreparedAttributeSelection) Select(
 	entry directory.Entry,
 	typesOnly bool,
@@ -894,8 +904,7 @@ func (selection *PreparedAttributeSelection) Select(
 		return result
 	}
 	for _, attribute := range entry.Attributes {
-		description, _, _ := strings.Cut(attribute.Description, ";")
-		if _, selected := selection.attributes[schemaKey(description)]; !selected {
+		if !selection.SelectsAttribute(attribute.Description) {
 			continue
 		}
 		value := directory.Attribute{Description: attribute.Description}

@@ -1,0 +1,6 @@
+--- FAIL: TestBulkDeadlineAndCaseFoldedDNDeduplication (0.00s)
+    --- FAIL: TestBulkDeadlineAndCaseFoldedDNDeduplication/deadline (0.00s)
+        bulk_test.go:277: status = 200, result = webadmin.bulkResponse{Action:"delete", Results:[]webadmin.bulkResult{webadmin.bulkResult{DN:"uid=first,dc=example", Success:false, Status:"unknown", Error:(*webadmin.apiError)(0x4d41143a6230)}, webadmin.bulkResult{DN:"uid=second,dc=example", Success:false, Status:"not_attempted", Error:(*webadmin.apiError)(nil)}}, Applied:0, Failed:0, Unknown:1, Aborted:true, AbortReason:"batch operation deadline exceeded"}, body = {"action":"delete","results":[{"dn":"uid=first,dc=example","success":false,"status":"unknown","error":{"code":"ldap_result_unknown","message":"LDAP write result is unknown because the batch was canceled during the operation"}},{"dn":"uid=second,dc=example","success":false,"status":"not_attempted"}],"applied":0,"failed":0,"unknown":1,"aborted":true,"abort_reason":"batch operation deadline exceeded"}
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/webadmin	0.041s
+FAIL

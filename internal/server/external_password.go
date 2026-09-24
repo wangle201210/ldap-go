@@ -311,17 +311,18 @@ func normalizeExternalPasswordSubject(
 func (server *Server) preverifyExternalPasswordBind(
 	ctx context.Context,
 	runtime *runtimeState,
-	database runtimeDatabase,
+	database *runtimeDatabase,
 	dn directory.DN,
 	password []byte,
 	now time.Time,
 ) (externalPasswordMatches, error) {
+	snapshot := server.passwordBindDatabaseSnapshot(runtime, database)
 	var candidates [][]byte
 	totpPasswordEnabled := false
 	lastTOTPAuthentication := time.Time{}
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := readerForDatabase(reader, database)
-		target, err := normalizeExternalPasswordTarget(runtime, database, tx, dn)
+		tx := readerForDatabase(reader, *snapshot)
+		target, err := normalizeExternalPasswordTarget(runtime, *snapshot, tx, dn)
 		if err != nil {
 			return err
 		}
@@ -335,19 +336,19 @@ func (server *Server) preverifyExternalPasswordBind(
 		if smallIndexedEntryIsSpecial(runtime, entry) {
 			return nil
 		}
-		policy, hasPolicy := loadPasswordPolicy(runtime, reader, database, entry)
-		if database.ppolicy != nil && hasPolicy {
+		policy, hasPolicy := loadPasswordPolicy(runtime, reader, *snapshot, entry)
+		if snapshot.ppolicy != nil && hasPolicy {
 			locked, _ := evaluatePasswordPolicyAccountLock(
 				entry,
 				policy,
-				database,
+				*snapshot,
 				now,
 			)
 			if locked {
 				return nil
 			}
 		}
-		totpPasswordEnabled = activeTOTPPasswordConfiguration(runtime, &database) != nil
+		totpPasswordEnabled = activeTOTPPasswordConfiguration(runtime, snapshot) != nil
 		if totpPasswordEnabled {
 			lastTOTPAuthentication = totpPasswordLastAuthentication(runtime.schema, entry)
 		}

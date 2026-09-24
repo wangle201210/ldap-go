@@ -264,16 +264,25 @@ func TestBulkDeadlineAndCaseFoldedDNDeduplication(t *testing.T) {
 	t.Parallel()
 	t.Run("deadline", func(t *testing.T) {
 		client := &fakeClient{}
-		application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, func(config *Config) {
-			config.OperationTimeout = time.Nanosecond
-		})
+		application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
 		authenticated := loginTestSession(t, application, "dn")
-		response := performBulkRequest(t, application, http.MethodPost, map[string]any{
-			"action": "delete", "dns": []string{"uid=first,dc=example", "uid=second,dc=example"},
-		}, authenticated.cookie, authenticated.csrf, "https://admin.example")
+		// Expiry must precede dispatch; a nanosecond operation timer can race
+		// with the fake client's immediate write and exercise a different case.
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		defer cancel()
+		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "https://admin.example/api/bulk",
+			strings.NewReader(`{"action":"delete","dns":["uid=first,dc=example","uid=second,dc=example"]}`))
+		request.TLS = &tls.ConnectionState{}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", "https://admin.example")
+		request.Header.Set("X-CSRF-Token", authenticated.csrf)
+		request.AddCookie(authenticated.cookie)
+		response := httptest.NewRecorder()
+		application.handleBulk(response, request)
 		var result bulkResponse
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil ||
-			!result.Aborted || len(result.Results) != 2 || result.Results[0].Status != "not_attempted" {
+			!result.Aborted || result.AbortReason != "batch operation deadline exceeded" ||
+			len(result.Results) != 2 || result.Results[0].Status != "not_attempted" {
 			t.Fatalf("status = %d, result = %#v, body = %s", response.Code, result, response.Body.String())
 		}
 		client.mu.Lock()

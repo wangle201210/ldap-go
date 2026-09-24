@@ -1,0 +1,35 @@
+=== RUN   TestReadBufferedConnectionLongBindReadCount
+    read_buffer_test.go:33: long Bind underlying reads: unbuffered=3, buffered=1
+--- PASS: TestReadBufferedConnectionLongBindReadCount (0.00s)
+=== RUN   TestReadBufferedConnectionFragmentedPipeline
+=== RUN   TestReadBufferedConnectionFragmentedPipeline/coalesced
+=== RUN   TestReadBufferedConnectionFragmentedPipeline/one-byte_fragments
+--- PASS: TestReadBufferedConnectionFragmentedPipeline (0.00s)
+    --- PASS: TestReadBufferedConnectionFragmentedPipeline/coalesced (0.00s)
+    --- PASS: TestReadBufferedConnectionFragmentedPipeline/one-byte_fragments (0.00s)
+=== RUN   TestReadBufferedConnectionDataAndError
+=== RUN   TestReadBufferedConnectionDataAndError/EOF
+=== RUN   TestReadBufferedConnectionDataAndError/read_failed_after_data
+--- PASS: TestReadBufferedConnectionDataAndError (0.00s)
+    --- PASS: TestReadBufferedConnectionDataAndError/EOF (0.00s)
+    --- PASS: TestReadBufferedConnectionDataAndError/read_failed_after_data (0.00s)
+=== RUN   TestReadBufferedConnectionDeadlines
+=== RUN   TestReadBufferedConnectionDeadlines/SetReadDeadline
+=== RUN   TestReadBufferedConnectionDeadlines/SetDeadline
+--- PASS: TestReadBufferedConnectionDeadlines (0.00s)
+    --- PASS: TestReadBufferedConnectionDeadlines/SetReadDeadline (0.00s)
+    --- PASS: TestReadBufferedConnectionDeadlines/SetDeadline (0.00s)
+=== RUN   TestReadBufferedConnectionDeadlineUnblocksRead
+=== RUN   TestReadBufferedConnectionDeadlineUnblocksRead/SetReadDeadline
+=== RUN   TestReadBufferedConnectionDeadlineUnblocksRead/SetDeadline
+--- PASS: TestReadBufferedConnectionDeadlineUnblocksRead (0.00s)
+    --- PASS: TestReadBufferedConnectionDeadlineUnblocksRead/SetReadDeadline (0.00s)
+    --- PASS: TestReadBufferedConnectionDeadlineUnblocksRead/SetDeadline (0.00s)
+=== RUN   TestReadBufferedConnectionClose
+=== RUN   TestReadBufferedConnectionClose/blocked_read
+=== RUN   TestReadBufferedConnectionClose/cached_data_and_error
+--- PASS: TestReadBufferedConnectionClose (0.00s)
+    --- PASS: TestReadBufferedConnectionClose/blocked_read (0.00s)
+    --- PASS: TestReadBufferedConnectionClose/cached_data_and_error (0.00s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	0.032s

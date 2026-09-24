@@ -1,0 +1,281 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+func TestReadBufferedTransportTLS(t *testing.T) {
+	for _, implicit := range []bool{false, true} {
+		name, scheme := "StartTLS", "ldap"
+		if implicit {
+			name, scheme = "LDAPS", "ldaps"
+		}
+		t.Run(name, func(t *testing.T) {
+			instance, address, _ := startReadBufferedTransportServer(t, Config{
+				RootDN:       "cn=admin,dc=example,dc=com",
+				RootPassword: []byte("secret"),
+				TLSConfig:    testServerTLSConfig(t),
+				ImplicitTLS:  implicit,
+			})
+			clientTLS := &tls.Config{
+				InsecureSkipVerify: true, // The fixture uses a self-signed certificate.
+				MinVersion:         tls.VersionTLS12,
+			}
+			client, err := ldap.DialURL(scheme+"://"+address,
+				ldap.DialWithTLSConfig(clientTLS),
+				ldap.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			client.SetTimeout(3 * time.Second)
+			if !implicit {
+				if err := client.StartTLS(clientTLS); err != nil {
+					t.Fatalf("StartTLS(): %v", err)
+				}
+			}
+			if err := client.Bind("cn=admin,dc=example,dc=com", "secret"); err != nil {
+				t.Fatalf("Bind(): %v", err)
+			}
+			identity, err := client.WhoAmI(nil)
+			if err != nil || identity.AuthzID != "dn:cn=admin,dc=example,dc=com" {
+				t.Fatalf("WhoAmI() = %#v, %v", identity, err)
+			}
+			readBufferedRegisteredConnection(t, instance)
+		})
+	}
+}
+
+func TestReadBufferedTransportPrefetchedSASLUpgrade(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	buffered, counted, peer := readBufferTestPipe(t, nil)
+	clientLayer, err := newSASLDigestMD5IntegrityConnection(peer,
+		saslDigestMD5SigningClientServer, saslDigestMD5SigningServerClient, key, 4096, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientLayer.Close()
+	bind, bindFrame := readBufferBindFixture(t, 1, 16)
+	next, nextFrame := readBufferBindFixture(t, 2, 64)
+	protected := clientLayer.encodeFrame(nextFrame, 0)
+	if len(bindFrame)+len(protected) > connectionReadBufferBytes {
+		t.Fatal("upgrade fixture exceeds the raw read buffer")
+	}
+	counted.reader = bytes.NewReader(append(bindFrame, protected...))
+	activity := newConnectionActivity()
+	tracked := &activityTrackingConnection{Conn: buffered, activity: activity}
+	readBufferAssertMessage(t, tracked, bind, len(bindFrame))
+	if !bytes.Equal(buffered.buffer[buffered.start:buffered.end], protected) {
+		t.Fatal("the complete SASL frame was not prefetched before the upgrade")
+	}
+	layer, err := newSASLDigestMD5ServerIntegrityConnection(tracked, key, 4096, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer layer.Close()
+	activity.observeRead(time.Now().Add(-time.Hour))
+	readBufferAssertMessage(t, layer, next, len(nextFrame))
+	if counted.reads != 1 {
+		t.Fatalf("layer upgrade reread the transport: %d reads", counted.reads)
+	}
+	if activity.expired(time.Minute, time.Now()) {
+		t.Fatal("reading prefetched upgrade bytes did not update activity")
+	}
+}
+
+func TestReadBufferedTransportDrainCleansMaps(t *testing.T) {
+	instance, address, stop := startReadBufferedTransportServer(t, Config{
+		RootDN:       "cn=admin,dc=example,dc=com",
+		RootPassword: []byte("secret"),
+	})
+	client := dialAndBindRawLDAP(t, address, "cn=admin,dc=example,dc=com", "secret")
+	defer client.Close()
+	buffered := readBufferedRegisteredConnection(t, instance)
+	stop()
+	if !buffered.closed.Load() {
+		t.Fatal("drain did not close the registered buffer")
+	}
+	if deadline := buffered.deadline.Load(); deadline == nil || deadline.IsZero() {
+		t.Fatal("drain bypassed the buffer's read deadline")
+	}
+	if n, err := buffered.Read(make([]byte, 1)); n != 0 || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Read() after drain = %d, %v", n, err)
+	}
+}
+
+func TestReadBufferedTransportPostBindIncomingLimit(t *testing.T) {
+	for _, rebind := range []bool{false, true} {
+		name := "successful bind raises limit"
+		if rebind {
+			name = "failed rebind restores anonymous limit"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				store := storage.NewMemory()
+				t.Cleanup(func() { _ = store.Close() })
+				seedDirectory(t, store)
+				putIncomingLimitRuntimeEntry(t, store, 128, 4096)
+				instance, err := New(Config{
+					Store:        store,
+					RootDN:       "cn=admin,dc=example,dc=com",
+					RootPassword: []byte("secret"),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				buffered, _, client := readBufferTestPipe(t, nil)
+				if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				instance.connections[buffered] = struct{}{}
+				instance.wg.Add(1)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					instance.serveConnection(t.Context(), buffered)
+				}()
+				t.Cleanup(func() {
+					_ = client.Close()
+					_ = buffered.Close()
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("buffered connection did not stop")
+					}
+					instance.monitor.closeLogFile()
+					instance.metaTransports.close()
+				})
+				if rebind {
+					written := writeInlineBindTestPipeline(t, client,
+						inlineBindTestMessage(1, "cn=admin,dc=example,dc=com", "secret"))
+					assertRawLDAPEnvelope(t, readRawLDAPPacket(t, client), 1,
+						ldapwire.ApplicationBindResponse, int64(ldapwire.ResultSuccess))
+					if err := <-written; err != nil {
+						t.Fatal(err)
+					}
+				}
+				password := "secret"
+				wantBind := ldapwire.ResultSuccess
+				if rebind {
+					password, wantBind = "wrong", ldapwire.ResultInvalidCredentials
+				}
+				bind, err := ldapwire.EncodeRequestMessage(
+					inlineBindTestMessage(2, "cn=admin,dc=example,dc=com", password))
+				if err != nil {
+					t.Fatal(err)
+				}
+				next := encodedPaddedWhoAmIRequest(t, 3, 300)
+				if ldapFrameContentLength(t, next) <= 128 || len(bind)+len(next) > connectionReadBufferBytes {
+					t.Fatal("pipeline must exceed the anonymous limit and fit in the read buffer")
+				}
+				written := make(chan error, 1)
+				go func() { written <- ldapwire.Write(client, append(bind, next...)) }()
+				// net.Pipe delivers the whole write to the buffer; Bind then blocks on its response.
+				synctest.Wait()
+				buffered.readMu.Lock()
+				prefetched := bytes.Equal(buffered.buffer[buffered.start:buffered.end], next)
+				buffered.readMu.Unlock()
+				if !prefetched {
+					t.Fatal("next PDU was not buffered while Bind waited for its response")
+				}
+				assertRawLDAPEnvelope(t, readRawLDAPPacket(t, client), 2,
+					ldapwire.ApplicationBindResponse, int64(wantBind))
+				if rebind {
+					if n, err := client.Read(make([]byte, 1)); n != 0 ||
+						(!errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe)) {
+						t.Fatalf("over-limit buffered PDU did not close silently: %d, %v", n, err)
+					}
+				} else {
+					assertRawLDAPEnvelope(t, readRawLDAPPacket(t, client), 3,
+						ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultProtocolError))
+				}
+				if err := <-written; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+func startReadBufferedTransportServer(t *testing.T, config Config) (*Server, string, func()) {
+	t.Helper()
+	store := storage.NewMemory()
+	t.Cleanup(func() { _ = store.Close() })
+	seedDirectory(t, store)
+	config.Store = store
+	config.ShutdownTimeout = 2 * time.Second
+	config.SecureHandshakeTimeout = 2 * time.Second
+	ready := make(chan struct{})
+	config.Ready = func() { close(ready) }
+	instance, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := BufferTCPListener(native)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- instance.Serve(ctx, listener) }()
+	stop := sync.OnceFunc(func() {
+		cancel()
+		defer listener.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Serve(): %v", err)
+			}
+		case <-time.After(4 * time.Second):
+			t.Error("buffered server did not drain")
+		}
+		instance.mu.Lock()
+		defer instance.mu.Unlock()
+		if len(instance.connections) != 0 || len(instance.connectionOperations) != 0 {
+			t.Errorf("drain left %d connections and %d operation registries",
+				len(instance.connections), len(instance.connectionOperations))
+		}
+	})
+	t.Cleanup(stop)
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("buffered server did not become ready")
+	}
+	return instance, listener.Addr().String(), stop
+}
+
+func readBufferedRegisteredConnection(t *testing.T, instance *Server) *readBufferedConnection {
+	t.Helper()
+	instance.mu.Lock()
+	defer instance.mu.Unlock()
+	if len(instance.connections) != 1 || len(instance.connectionOperations) != 1 {
+		t.Fatalf("tracked connections=%d, operation registries=%d; want one each",
+			len(instance.connections), len(instance.connectionOperations))
+	}
+	for connection := range instance.connections {
+		buffered, ok := connection.(*readBufferedConnection)
+		if !ok {
+			t.Fatalf("registered connection is %T, want the accepted buffer", connection)
+		}
+		if _, ok := instance.connectionOperations[connection]; !ok {
+			t.Fatal("operation registry uses a different connection key")
+		}
+		return buffered
+	}
+	return nil
+}

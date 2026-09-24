@@ -1,0 +1,130 @@
+#!/bin/sh
+set -eu
+. /tmp/ldap-go-compatibility-audit-20260920.env
+audit=/var/tmp/ldap-go-common-perf-20260924-r5
+source_dir=/var/tmp/ldap-go-perf-round4-20260922/online-accepted
+out=$audit/default
+mkdir "$out"
+umask 077
+printf '%s' scale-qualification-local-secret >"$out/password"
+pids=
+cleanup() {
+  for pid in $pids; do kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+  pids=
+  rm "$out/password"
+}
+trap cleanup EXIT HUP INT TERM
+root_dn=cn=admin,dc=scale,dc=qualification
+people_dn=ou=people,dc=scale,dc=qualification
+for side in before current openldap; do
+  case "$side" in before) port=29481;; current) port=29482;; openldap) port=29483;; esac
+  uri=ldap://127.0.0.1:$port
+  directory=$out/$side
+  mkdir "$directory"
+  if [ "$side" = openldap ]; then
+    mkdir "$directory/data"
+    cp "$source_dir/openldap-1/data/data.mdb" "$directory/data/data.mdb"
+    sed -e "s|^index uid eq|index uid,member eq|" -e "s|^directory .*|directory $directory/data|" \
+      -e "s|^pidfile .*|pidfile $directory/slapd.pid|" \
+      -e "s|^argsfile .*|argsfile $directory/slapd.args|" \
+      -e "s|^include .*/core.schema|include $OPENLDAP_SCHEMA_DIR/core.schema|" \
+      -e "s|^include .*/cosine.schema|include $OPENLDAP_SCHEMA_DIR/cosine.schema|" \
+      -e "s|^include .*/inetorgperson.schema|include $OPENLDAP_SCHEMA_DIR/inetorgperson.schema|" \
+      "$source_dir/openldap-1/slapd.conf" >"$directory/slapd.conf"
+    slapindex -f "$directory/slapd.conf" -n 1 member >"$directory/reindex.log" 2>&1
+    slapd -f "$directory/slapd.conf" -h "$uri" -d 0 >"$directory/server.log" 2>&1 &
+  else
+    cp "$audit/member-index.db" "$directory/data.db"
+    binary=$audit/$side
+    if [ "$side" = current ]; then binary=$audit/current; fi
+    LDAP_GO_ROOT_PASSWORD=scale-qualification-local-secret "$binary" serve \
+      -db "$directory/data.db" -listen 127.0.0.1:$port -root-dn "$root_dn" \
+      -search-limit 100100 -search-candidate-limit 100100 \
+      -search-candidate-bytes 819200000 -search-memory-bytes 1638400000 \
+      >"$directory/server.log" 2>&1 &
+  fi
+  pid=$!
+  pids="$pids $pid"
+  deadline=$(( $(date +%s) + 60 ))
+  until ldapwhoami -H "$uri" -x -D "$root_dn" -y "$out/password" -o nettimeout=1 >/dev/null 2>&1; do
+    kill -0 "$pid"
+    [ "$(date +%s)" -lt "$deadline" ]
+    sleep 0.05
+  done
+  LDAP_BENCH_PASSWORD=scale-qualification-local-secret /var/tmp/ldap-go-perf-round4-20260922/ldapbench \
+    -uri "$uri" -bind-dn "$root_dn" -password-env LDAP_BENCH_PASSWORD \
+    -base dc=scale,dc=qualification -people "$people_dn" -read-only -n 2 -entries 100000 \
+    -label "$side-warmup" >"$directory/warmup.json"
+done
+LDAP_BENCH_PASSWORD=scale-qualification-local-secret "$audit/ldapcommonbench" \
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -setup-disposable \
+  -people "$people_dn" -uid scale-001001 -group-sizes 10,1000 -n 2 -repeats 1 >"$out/smoke.json"
+LDAP_BENCH_PASSWORD=scale-qualification-local-secret "$audit/ldapcommonbench" \
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -setup-disposable \
+  -people "$people_dn" -uid scale-001001 -stages userBind,userBindWrong,base,equality \
+  -n 1000 -repeats 3 >"$out/hot.json"
+LDAP_BENCH_PASSWORD=scale-qualification-local-secret "$audit/ldapcommonbench" \
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -setup-disposable \
+  -people "$people_dn" -stages base,equality -n 1000 -repeats 3 >"$out/distributed.json"
+LDAP_BENCH_PASSWORD=scale-qualification-local-secret "$audit/ldapcommonbench" \
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -setup-disposable \
+  -people "$people_dn" -stages memberEquality,groupBase,nestedMembership \
+  -group-sizes 10,1000 -n 100 -repeats 3 >"$out/groups.json"
+awk 'BEGIN {for(i=1001;i<=2000;i++) printf "scale-%06d\n",i}' >"$out/values.txt"
+printf 'side\trepeat\tms\n' >"$out/concurrent.tsv"
+for repeat in 0 1 2 3; do
+  case "$repeat" in
+    0|1) sides="before current openldap";;
+    2) sides="current openldap before";;
+    3) sides="openldap before current";;
+  esac
+  for side in $sides; do
+    case "$side" in before) port=29481;; current) port=29482;; openldap) port=29483;; esac
+    directory=$out/$side
+    workers=
+    start=$(gdate +%s%N)
+    for worker in 0 1 2 3 4 5 6 7; do
+      ldapsearch -H ldap://127.0.0.1:$port -x -D "$root_dn" -y "$out/password" -LLL -o ldif-wrap=no \
+        -b "$people_dn" -f "$out/values.txt" '(uid=%s)' uid >"$directory/client-$worker.ldif" &
+      workers="$workers $!"
+    done
+    for worker_pid in $workers; do wait "$worker_pid"; done
+    end=$(gdate +%s%N)
+    printf '%s\t%s\t%s\n' "$side" "$repeat" "$(((end-start)/1000000))" >>"$out/concurrent.tsv"
+    for worker in 0 1 2 3 4 5 6 7; do
+      [ "$(awk '/^dn: / {n++} END {print n+0}' "$directory/client-$worker.ldif")" -eq 1000 ]
+      awk '/^uid: / {print $2}' "$directory/client-$worker.ldif" >"$directory/client-values.txt"
+      cmp "$out/values.txt" "$directory/client-values.txt"
+    done
+  done
+done
+printf 'run\tcanonical_entries\tcanonical_cksum\tcanonical_bytes\n' >"$out/validation.tsv"
+for side in before current openldap; do
+  case "$side" in before) port=29481;; current) port=29482;; openldap) port=29483;; esac
+  directory=$out/$side
+  ldapsearch -H ldap://127.0.0.1:$port -x -D "$root_dn" -y "$out/password" \
+    -LLL -o ldif-wrap=no -E pr=10000/noprompt -b dc=scale,dc=qualification '(objectClass=*)' '*' >"$directory/data.ldif"
+  /var/tmp/ldap-go-perf-round2-20260922/ldifcanonical -in "$directory/data.ldif" >"$directory/data.unsorted"
+  LC_ALL=C sort "$directory/data.unsorted" >"$directory/data.canonical"
+  rm "$directory/data.unsorted"
+  count=$(wc -l <"$directory/data.canonical" | tr -d ' ')
+  [ "$count" -eq 100002 ]
+  set -- $(cksum "$directory/data.canonical")
+  [ "$1" = 2143929969 ]
+  [ "$2" = 42712438 ]
+  printf '%s\t%s\t%s\t%s\n' "$side" "$count" "$1" "$2" >>"$out/validation.tsv"
+  cmp "/var/tmp/ldap-go-perf-round15-20260923/online/before-1/data.canonical" "$directory/data.canonical"
+done
+cleanup
+trap - EXIT HUP INT TERM
+rm "$out/before/data.db" "$out/current/data.db" "$out/openldap/data/data.mdb"
+printf 'Common-operation comparison passed.\n'

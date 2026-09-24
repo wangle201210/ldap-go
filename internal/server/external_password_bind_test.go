@@ -52,7 +52,7 @@ func TestLocalPasswordBindAfterExternalPreverify(t *testing.T) {
 			runtime := instance.runtime.Load()
 			for _, supplied := range []string{"first-secret", "second-secret", "wrong"} {
 				matches, err := instance.preverifyExternalPasswordBind(
-					t.Context(), runtime, database, dn, []byte(supplied), instance.clock(),
+					t.Context(), runtime, &database, dn, []byte(supplied), instance.clock(),
 				)
 				if err != nil || matches.values != nil || matches.collector != nil {
 					t.Fatalf("local preverify = %#v, %v; want empty result", matches, err)
@@ -87,7 +87,7 @@ func TestLocalPasswordPreverifyPreservesStorageErrors(t *testing.T) {
 				Store: instance.config.Store, err: want, afterRead: afterRead,
 			}
 			matches, err := instance.preverifyExternalPasswordBind(
-				t.Context(), instance.runtime.Load(), database, dn, []byte("secret"), instance.clock(),
+				t.Context(), instance.runtime.Load(), &database, dn, []byte("secret"), instance.clock(),
 			)
 			if !errors.Is(err, want) || matches.values != nil || matches.collector != nil {
 				t.Fatalf("preverify = %#v, %v; want empty result and original storage error", matches, err)
@@ -155,7 +155,7 @@ func TestExternalPasswordBindCandidateOwnershipAndOrder(t *testing.T) {
 			}
 			probe := &passwordBindCandidateProbeStore{Store: instance.config.Store, inView: &inView}
 			instance.config.Store = probe
-			matches, err := instance.preverifyExternalPasswordBind(t.Context(), runtime, database, dn, []byte("secret"), instance.clock())
+			matches, err := instance.preverifyExternalPasswordBind(t.Context(), runtime, &database, dn, []byte("secret"), instance.clock())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -327,7 +327,7 @@ func BenchmarkLocalPasswordBindPreverify(b *testing.B) {
 			now := instance.clock()
 			b.ReportAllocs()
 			for b.Loop() {
-				matches, err := instance.preverifyExternalPasswordBind(b.Context(), runtime, database, dn, password, now)
+				matches, err := instance.preverifyExternalPasswordBind(b.Context(), runtime, &database, dn, password, now)
 				if err != nil || !matches.empty() {
 					b.Fatalf("preverify = %#v, %v", matches, err)
 				}

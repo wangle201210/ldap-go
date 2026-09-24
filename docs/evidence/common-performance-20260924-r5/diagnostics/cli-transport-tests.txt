@@ -1,0 +1,1 @@
+ok  	github.com/wangle201210/ldap-go/cmd/ldap-go	0.117s

@@ -1,0 +1,105 @@
+package server
+
+import (
+	"net"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const connectionReadBufferBytes = 1024
+
+// The buffer belongs to the transport, below activity tracking and any later
+// TLS/SASL layers. Only bytes are prefetched; LDAP admission remains unchanged.
+type readBufferedConnection struct {
+	net.Conn
+	readMu     sync.Mutex
+	deadlineMu sync.Mutex
+	closed     atomic.Bool
+	deadline   atomic.Pointer[time.Time]
+	buffer     [connectionReadBufferBytes]byte
+	start, end int
+	pending    error
+}
+
+func (connection *readBufferedConnection) Read(p []byte) (int, error) {
+	connection.readMu.Lock()
+	defer connection.readMu.Unlock()
+	if connection.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	if deadline := connection.deadline.Load(); deadline != nil && !deadline.IsZero() && !time.Now().Before(*deadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if connection.start == connection.end {
+		if len(p) >= len(connection.buffer) {
+			return connection.Conn.Read(p)
+		}
+		n, err := connection.Conn.Read(connection.buffer[:])
+		if n == 0 {
+			return 0, err
+		}
+		connection.start, connection.end, connection.pending = 0, n, err
+	}
+	n := copy(p, connection.buffer[connection.start:connection.end])
+	clear(connection.buffer[connection.start : connection.start+n])
+	connection.start += n
+	if connection.start == connection.end {
+		connection.start, connection.end = 0, 0
+		err := connection.pending
+		connection.pending = nil
+		return n, err
+	}
+	return n, nil
+}
+
+func (connection *readBufferedConnection) SetReadDeadline(deadline time.Time) error {
+	connection.deadlineMu.Lock()
+	defer connection.deadlineMu.Unlock()
+	if err := connection.Conn.SetReadDeadline(deadline); err != nil {
+		return err
+	}
+	connection.deadline.Store(new(deadline))
+	return nil
+}
+
+func (connection *readBufferedConnection) SetDeadline(deadline time.Time) error {
+	connection.deadlineMu.Lock()
+	defer connection.deadlineMu.Unlock()
+	if err := connection.Conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	connection.deadline.Store(new(deadline))
+	return nil
+}
+
+func (connection *readBufferedConnection) Close() error {
+	connection.closed.Store(true)
+	err := connection.Conn.Close()
+	connection.readMu.Lock()
+	clear(connection.buffer[:])
+	connection.start, connection.end, connection.pending = 0, 0, nil
+	connection.readMu.Unlock()
+	return err
+}
+
+// BufferTCPListener buffers only newly accepted native TCP sockets, whose
+// initial deadlines are unset. All consumers receive the same wrapper, so
+// deadline changes and closes cannot bypass its buffered-read state.
+func BufferTCPListener(listener *net.TCPListener) net.Listener {
+	return &readBufferedTCPListener{TCPListener: listener}
+}
+
+type readBufferedTCPListener struct{ *net.TCPListener }
+
+func (listener *readBufferedTCPListener) Accept() (net.Conn, error) {
+	connection, err := listener.AcceptTCP()
+	if err != nil {
+		return nil, err
+	}
+	return &readBufferedConnection{Conn: connection}, nil
+}

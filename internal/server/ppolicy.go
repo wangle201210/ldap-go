@@ -498,7 +498,7 @@ func (server *Server) authenticatePasswordBind(
 	externalMatches, err := server.preverifyExternalPasswordBind(
 		ctx,
 		runtime,
-		*database,
+		database,
 		dn,
 		password,
 		bindNow,
@@ -507,7 +507,7 @@ func (server *Server) authenticatePasswordBind(
 		return result, err
 	}
 	if passwordBindReadOnly(runtime, database) {
-		return server.authenticateReadOnlyPasswordBind(ctx, runtime, *database, dn, password, externalMatches)
+		return server.authenticateReadOnlyPasswordBind(ctx, runtime, database, dn, password, externalMatches)
 	}
 	var syncChange *syncChange
 	var (
@@ -727,17 +727,34 @@ func passwordBindReadOnly(runtime *runtimeState, database *runtimeDatabase) bool
 		activeTOTPPasswordConfiguration(runtime, database) == nil
 }
 
+// Only published local configuration with known readers and normalizers can be
+// reused. Other callers retain the old shallow snapshot before each View. RADIUS
+// can invoke external verification and logger callbacks, so it cannot opt in.
+func (server *Server) passwordBindDatabaseSnapshot(runtime *runtimeState, database *runtimeDatabase) *runtimeDatabase {
+	if runtime != nil && !runtime.externalPasswords.radiusEnabled &&
+		plainBoltSearchStore(server.config.Store) && localProjectionReadOnly(runtime, nil) &&
+		passwordBindReadOnly(runtime, database) {
+		for index := range runtime.databases {
+			if database == &runtime.databases[index] {
+				return database
+			}
+		}
+	}
+	return new(*database)
+}
+
 func (server *Server) authenticateReadOnlyPasswordBind(
 	ctx context.Context,
 	runtime *runtimeState,
-	database runtimeDatabase,
+	database *runtimeDatabase,
 	dn directory.DN,
 	password []byte,
 	externalMatches externalPasswordMatches,
 ) (passwordBindResult, error) {
+	snapshot := server.passwordBindDatabaseSnapshot(runtime, database)
 	var result passwordBindResult
 	err := server.config.Store.View(ctx, func(reader storage.Reader) error {
-		tx := readerForDatabase(reader, database)
+		tx := readerForDatabase(reader, *snapshot)
 		entry, err := tx.Get(dn)
 		if errors.Is(err, storage.ErrEntryNotFound) {
 			return nil

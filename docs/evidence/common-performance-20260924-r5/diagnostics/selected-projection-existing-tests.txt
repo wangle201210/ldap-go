@@ -1,0 +1,1 @@
+ok  	github.com/wangle201210/ldap-go/internal/server	20.254s

@@ -2,7 +2,7 @@
 
 Source root: `/var/tmp/ldap-go-common-perf-20260924-r4`.
 Baseline: `aaf8350`. Final current executable: `current-sized`.
-The [report](../../common-ldap-performance.md) contains interpretation and limits.
+The [archived R4 report](../../common-ldap-performance-20260924-r4.md) contains interpretation and limits.
 
 ## Accepted measurements
 

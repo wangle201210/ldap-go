@@ -1,0 +1,6 @@
+--- FAIL: TestBulkDeadlineAndCaseFoldedDNDeduplication (0.00s)
+    --- FAIL: TestBulkDeadlineAndCaseFoldedDNDeduplication/deadline (0.00s)
+        bulk_test.go:277: status = 200, result = webadmin.bulkResponse{Action:"delete", Results:[]webadmin.bulkResult{webadmin.bulkResult{DN:"uid=first,dc=example", Success:true, Status:"applied", Error:(*webadmin.apiError)(nil)}, webadmin.bulkResult{DN:"uid=second,dc=example", Success:true, Status:"applied", Error:(*webadmin.apiError)(nil)}}, Applied:2, Failed:0, Unknown:0, Aborted:false, AbortReason:""}, body = {"action":"delete","results":[{"dn":"uid=first,dc=example","success":true,"status":"applied"},{"dn":"uid=second,dc=example","success":true,"status":"applied"}],"applied":2,"failed":0,"unknown":0}
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/webadmin	0.030s
+FAIL

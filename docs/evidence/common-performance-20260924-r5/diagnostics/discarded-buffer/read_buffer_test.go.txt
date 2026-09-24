@@ -1,0 +1,300 @@
+package server
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"reflect"
+	"testing"
+	"testing/iotest"
+	"testing/synctest"
+	"time"
+
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+)
+
+func TestReadBufferedConnectionLongBindReadCount(t *testing.T) {
+	message, frame := readBufferBindFixture(t, 1, 256)
+	if len(frame) >= connectionReadBufferBytes || frame[1]&0x80 == 0 {
+		t.Fatal("fixture must use long-form BER length and fit in one buffer")
+	}
+	_, raw, _ := readBufferTestPipe(t, bytes.NewReader(frame))
+	readBufferAssertMessage(t, raw, message, len(frame))
+	if raw.reads < 3 {
+		t.Fatalf("unbuffered Bind used %d underlying reads, want at least 3", raw.reads)
+	}
+	buffered, counted, _ := readBufferTestPipe(t, bytes.NewReader(frame))
+	readBufferAssertMessage(t, buffered, message, len(frame))
+	if counted.reads != 1 {
+		t.Fatalf("buffered Bind used %d underlying reads, want 1", counted.reads)
+	}
+	t.Logf("long Bind underlying reads: unbuffered=%d, buffered=%d", raw.reads, counted.reads)
+}
+
+func TestReadBufferedConnectionFragmentedPipeline(t *testing.T) {
+	var messages []ldapwire.Message
+	var sizes []int
+	var pipeline []byte
+	for index, passwordBytes := range []int{64, 256, 3 * connectionReadBufferBytes, 8} {
+		message, frame := readBufferBindFixture(t, int64(index+1), passwordBytes)
+		messages = append(messages, message)
+		sizes = append(sizes, len(frame))
+		pipeline = append(pipeline, frame...)
+	}
+	for _, fragmented := range []bool{false, true} {
+		name := "coalesced"
+		if fragmented {
+			name = "one-byte fragments"
+		}
+		t.Run(name, func(t *testing.T) {
+			var reader io.Reader = bytes.NewReader(pipeline)
+			if fragmented {
+				reader = iotest.OneByteReader(reader)
+			}
+			buffered, _, _ := readBufferTestPipe(t, reader)
+			for index, message := range messages {
+				readBufferAssertMessage(t, buffered, message, sizes[index])
+			}
+			if n, err := buffered.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+				t.Fatalf("after pipeline: Read() = %d, %v; want EOF", n, err)
+			}
+			if buffered.buffer != [connectionReadBufferBytes]byte{} {
+				t.Fatal("consumed plaintext remains in the read buffer")
+			}
+		})
+	}
+}
+
+func TestReadBufferedConnectionDataAndError(t *testing.T) {
+	for _, terminal := range []error{io.EOF, errors.New("read failed after data")} {
+		t.Run(terminal.Error(), func(t *testing.T) {
+			reader := &readBufferFinalErrorReader{Reader: bytes.NewReader([]byte("abcdef")), err: terminal}
+			buffered, counted, _ := readBufferTestPipe(t, reader)
+			for index, want := range []string{"ab", "cd", "ef"} {
+				value := make([]byte, 2)
+				n, err := buffered.Read(value)
+				wantErr := error(nil)
+				if index == 2 {
+					wantErr = terminal
+				}
+				if n != len(want) || string(value[:n]) != want || !errors.Is(err, wantErr) {
+					t.Fatalf("Read() = %q, %v; want %q, %v", value[:n], err, want, wantErr)
+				}
+			}
+			if counted.reads != 1 {
+				t.Fatalf("data+error used %d underlying reads, want 1", counted.reads)
+			}
+			if n, err := buffered.Read(make([]byte, 1)); n != 0 || !errors.Is(err, terminal) {
+				t.Fatalf("terminal Read() = %d, %v", n, err)
+			}
+		})
+	}
+}
+
+func TestReadBufferedConnectionDeadlines(t *testing.T) {
+	for _, method := range []string{"SetReadDeadline", "SetDeadline"} {
+		t.Run(method, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				buffered, counted, _ := readBufferTestPipe(t, bytes.NewReader([]byte("abcdef")))
+				set := buffered.SetReadDeadline
+				if method == "SetDeadline" {
+					set = buffered.SetDeadline
+				}
+				if n, err := buffered.Read(make([]byte, 1)); n != 1 || err != nil {
+					t.Fatalf("prefill = %d, %v", n, err)
+				}
+				for _, clearDeadline := range []bool{false, true} {
+					if err := set(time.Now().Add(time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					time.Sleep(2 * time.Second)
+					n, err := buffered.Read(make([]byte, 1))
+					if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+						t.Fatalf("expired cached Read() = %d, %v", n, err)
+					}
+					if timeout, ok := errors.AsType[net.Error](err); !ok || !timeout.Timeout() {
+						t.Fatalf("deadline error lacks Timeout(): %v", err)
+					}
+					deadline := time.Now().Add(time.Hour)
+					if clearDeadline {
+						deadline = time.Time{}
+					}
+					if err := set(deadline); err != nil {
+						t.Fatal(err)
+					}
+					value := make([]byte, 1)
+					want := byte('b')
+					if clearDeadline {
+						want = 'c'
+					}
+					if n, err := buffered.Read(value); n != 1 || err != nil || value[0] != want {
+						t.Fatalf("reset deadline Read() = %q (%d), %v; want %q", value, n, err, want)
+					}
+				}
+				if err := buffered.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				value := make([]byte, 3)
+				if n, err := buffered.Read(value); n != 3 || err != nil || string(value) != "def" {
+					t.Fatalf("cleared deadline Read() = %q (%d), %v", value, n, err)
+				}
+				if counted.reads != 1 {
+					t.Fatalf("deadline checks lost cached data: %d underlying reads", counted.reads)
+				}
+			})
+		})
+	}
+}
+
+func TestReadBufferedConnectionDeadlineUnblocksRead(t *testing.T) {
+	for _, method := range []string{"SetReadDeadline", "SetDeadline"} {
+		t.Run(method, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				buffered, counted, peer := readBufferTestPipe(t, nil)
+				set := buffered.SetReadDeadline
+				if method == "SetDeadline" {
+					set = buffered.SetDeadline
+				}
+				done := make(chan error, 1)
+				go func() {
+					_, err := buffered.Read(make([]byte, 1))
+					done <- err
+				}()
+				synctest.Wait()
+				if counted.reads != 1 || len(done) != 0 {
+					t.Fatal("read did not block in the transport")
+				}
+				if err := set(time.Now().Add(-time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := <-done; !errors.Is(err, os.ErrDeadlineExceeded) {
+					t.Fatalf("blocked Read() = %v", err)
+				}
+				if err := set(time.Time{}); err != nil {
+					t.Fatal(err)
+				}
+				go func() {
+					_, err := peer.Write([]byte("ok"))
+					done <- err
+				}()
+				value := make([]byte, 2)
+				if _, err := io.ReadFull(buffered, value); err != nil || string(value) != "ok" {
+					t.Fatalf("Read() after deadline clear = %q, %v", value, err)
+				}
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+func TestReadBufferedConnectionClose(t *testing.T) {
+	t.Run("blocked read", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			buffered, counted, _ := readBufferTestPipe(t, nil)
+			done := make(chan error, 1)
+			go func() {
+				_, err := buffered.Read(make([]byte, 1))
+				done <- err
+			}()
+			synctest.Wait()
+			if counted.reads != 1 || len(done) != 0 {
+				t.Fatal("read did not block in the transport")
+			}
+			if err := buffered.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("blocked Read() after Close() = %v", err)
+			}
+			if n, err := buffered.Read(make([]byte, 1)); n != 0 || !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Read() after Close() = %d, %v", n, err)
+			}
+		})
+	})
+	t.Run("cached data and error", func(t *testing.T) {
+		reader := &readBufferFinalErrorReader{Reader: bytes.NewReader([]byte("secret")), err: io.EOF}
+		buffered, counted, _ := readBufferTestPipe(t, reader)
+		if n, err := buffered.Read(make([]byte, 1)); n != 1 || err != nil {
+			t.Fatalf("prefill = %d, %v", n, err)
+		}
+		if err := buffered.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if buffered.buffer != [connectionReadBufferBytes]byte{} || buffered.pending != nil {
+			t.Fatal("Close() retained buffered plaintext or a pending error")
+		}
+		if n, err := buffered.Read(make([]byte, 8)); n != 0 || !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("cached Read() after Close() = %d, %v", n, err)
+		}
+		if counted.reads != 1 {
+			t.Fatal("closed buffer read from the transport")
+		}
+	})
+}
+
+type readBufferCountingConn struct {
+	net.Conn
+	reader io.Reader
+	reads  int
+}
+
+func (connection *readBufferCountingConn) Read(value []byte) (int, error) {
+	connection.reads++
+	if connection.reader != nil {
+		return connection.reader.Read(value)
+	}
+	return connection.Conn.Read(value)
+}
+
+func readBufferTestPipe(t *testing.T, reader io.Reader) (*readBufferedConnection, *readBufferCountingConn, net.Conn) {
+	t.Helper()
+	raw, peer := net.Pipe()
+	counted := &readBufferCountingConn{Conn: raw, reader: reader}
+	buffered := &readBufferedConnection{Conn: counted}
+	t.Cleanup(func() {
+		_ = peer.Close()
+		_ = buffered.Close()
+	})
+	return buffered, counted, peer
+}
+
+type readBufferFinalErrorReader struct {
+	*bytes.Reader
+	err error
+}
+
+func (reader *readBufferFinalErrorReader) Read(value []byte) (int, error) {
+	n, err := reader.Reader.Read(value)
+	if reader.Len() == 0 {
+		err = reader.err
+	}
+	return n, err
+}
+
+func readBufferBindFixture(t *testing.T, id int64, passwordBytes int) (ldapwire.Message, []byte) {
+	t.Helper()
+	message := ldapwire.Message{ID: id, Request: ldapwire.BindRequest{
+		Version: 3,
+		Name:    "uid=buffer,dc=example,dc=com",
+		Authentication: ldapwire.Authentication{
+			Simple: bytes.Repeat([]byte{byte(id)}, passwordBytes),
+		},
+	}}
+	frame, err := ldapwire.EncodeRequestMessage(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message, frame
+}
+
+func readBufferAssertMessage(t *testing.T, reader io.Reader, want ldapwire.Message, size int) {
+	t.Helper()
+	got, gotSize, err := ldapwire.ReadMessageWithDynamicFilterDepthAndSize(reader, 1<<20, 0, nil)
+	if err != nil || gotSize != size || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadMessage() = %#v, size %d, %v; want %#v, size %d", got, gotSize, err, want, size)
+	}
+}

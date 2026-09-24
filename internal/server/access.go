@@ -93,6 +93,22 @@ func (server *Server) attributesWithPrivilege(
 	privilege acl.Privilege,
 	typesOnly bool,
 ) directory.Entry {
+	return server.attributesWithPrivilegeValues(runtime, reader, subjectDN, entry, privilege, typesOnly, false, nil)
+}
+
+// borrowValues permits read-only descriptor reuse in the proven pure projection
+// branches. Callers must copy selected output before the source can be reused.
+// selection narrows only those pure branches; the original full entry remains
+// the ACL target. Nil keeps every attribute, including sorting dependencies.
+func (server *Server) attributesWithPrivilegeValues(
+	runtime *runtimeState,
+	reader storage.Reader,
+	subjectDN string,
+	entry directory.Entry,
+	privilege acl.Privilege,
+	typesOnly, borrowValues bool,
+	selection *schema.PreparedAttributeSelection,
+) directory.Entry {
 	subject := accessSubject(reader, subjectDN)
 	if server.isRoot(runtime, subject.DN, entry.DN, "") {
 		return rootVisibleEntry(entry, typesOnly)
@@ -105,12 +121,19 @@ func (server *Server) attributesWithPrivilege(
 				entry.DN, aclDNNormalizer{Registry: runtime.schema}, privilege,
 			); applicable {
 				if allowed {
-					filtered.Attributes = make([]directory.Attribute, len(entry.Attributes))
-					for index, attribute := range entry.Attributes {
-						filtered.Attributes[index].Description = attribute.Description
-						if !typesOnly && len(attribute.Values) > 0 {
-							filtered.Attributes[index].Values = slices.Clone(attribute.Values)
+					filtered.Attributes = make([]directory.Attribute, 0, len(entry.Attributes))
+					for _, attribute := range entry.Attributes {
+						if selection != nil && !selection.SelectsAttribute(attribute.Description) {
+							continue
 						}
+						selected := directory.Attribute{Description: attribute.Description}
+						if !typesOnly && len(attribute.Values) > 0 {
+							selected.Values = attribute.Values
+							if !borrowValues {
+								selected.Values = slices.Clone(attribute.Values)
+							}
+						}
+						filtered.Attributes = append(filtered.Attributes, selected)
 					}
 				}
 				return filtered
@@ -120,6 +143,9 @@ func (server *Server) attributesWithPrivilege(
 	}
 	for _, attribute := range entry.Attributes {
 		if batchValues {
+			if selection != nil && !selection.SelectsAttribute(attribute.Description) {
+				continue
+			}
 			// The non-root identity and context are stable for this entry, and
 			// this policy neither examines values nor calls an entry reader.
 			// Reuse only within this attribute; no authorization is cached.
@@ -134,7 +160,10 @@ func (server *Server) attributesWithPrivilege(
 			}, privilege, reader) {
 				selected := directory.Attribute{Description: attribute.Description}
 				if !typesOnly && len(attribute.Values) > 0 {
-					selected.Values = slices.Clone(attribute.Values)
+					selected.Values = attribute.Values
+					if !borrowValues {
+						selected.Values = slices.Clone(attribute.Values)
+					}
 				}
 				filtered.Attributes = append(filtered.Attributes, selected)
 			}
