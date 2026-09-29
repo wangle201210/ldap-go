@@ -1,0 +1,1 @@
+EXCLUDED from final schema component tables: object-class-bench-warm-only.txt predates the test-only cold variant. Production source was already final. Use object-class-bench.txt for all final original/cloning/current/cold rows.

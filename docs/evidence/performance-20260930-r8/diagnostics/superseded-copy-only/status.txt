@@ -1,0 +1,1 @@
+EXCLUDED: compare-copy-only.txt measures the superseded first candidate, before the cached-only prepared-name refinement. Raw log retained unchanged; no samples enter the final comparison.

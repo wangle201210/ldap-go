@@ -1,0 +1,17 @@
+target	method	repeats	ns_op	B_op	allocs_op
+leaf	original	3	1598	488	25
+leaf	cloning	3	1471	456	23
+leaf	current	3	235.1	0	0
+leaf	cold	3	910.6	176	11
+root	original	3	1757	504	26
+root	cloning	3	1597	472	24
+root	current	3	414.3	16	1
+root	cold	3	1082	192	12
+unrelated	original	3	2178	504	26
+unrelated	cloning	3	2107	472	24
+unrelated	current	3	938	16	1
+unrelated	cold	3	2144	320	20
+unknown	original	3	21.42	0	0
+unknown	cloning	3	19.79	0	0
+unknown	current	3	22.09	0	0
+unknown	cold	3	25.01	0	0

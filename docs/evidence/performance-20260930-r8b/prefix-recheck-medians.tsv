@@ -1,0 +1,4 @@
+suite	access_mode	variant	stage	method	members	endpoint	repeats	operations	median_ms
+prefix-recheck	root	paired-cli	full_prefix	ldapsearch	0	current	7	1	722
+prefix-recheck	root	paired-cli	full_prefix	ldapsearch	0	openldap	7	1	645
+prefix-recheck	root	paired-cli	full_prefix	ldapsearch	0	before	7	1	747

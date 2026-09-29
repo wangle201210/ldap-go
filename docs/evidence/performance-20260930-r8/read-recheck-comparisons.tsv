@@ -1,0 +1,6 @@
+suite	access_mode	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	openldap_over_current_pct	time_reduction_pct
+read-recheck	root	cli	full_prefix	ldapsearch	0	1	844	777	-	-	7.9383886255924185
+read-recheck	root	cli	indexed_10000	ldapsearch	0	10000	950	965	-	-	-1.5789473684210575
+read-recheck	root	cli	concurrent_8x1000	ldapsearch	0	8000	361	342	-	-	5.263157894736848
+read-recheck	root	cli	paged_2x100000	ldapsearch	0	2	1535	1694	-	-	-10.35830618892508
+read-recheck	root	cli	unindexed_negative_10	ldapsearch	0	10	251	234	-	-	6.772908366533869

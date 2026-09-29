@@ -823,10 +823,28 @@ func (registry *Registry) EntryHasObjectClass(
 	if !ok {
 		return false
 	}
-	for _, value := range registry.attributeValues(entry, "objectClass") {
-		candidate, ok := registry.objectClasses[schemaKey(string(value))]
-		if ok && registry.isSubclass(candidate, target, make(map[string]bool)) {
-			return true
+	// Reuse query preparation without building a schema-wide table on a miss.
+	var names preparedAttributeNames
+	if attribute := registry.attributes["objectclass"]; attribute != nil {
+		registry.preparedNames.mu.Lock()
+		names = registry.preparedNames.plans[attribute]
+		registry.preparedNames.mu.Unlock()
+	}
+	for _, attribute := range entry.Attributes {
+		var selected bool
+		if names != nil {
+			selected = names.match(attribute.Description)
+		} else {
+			selected = registry.attributeDescriptionSubtype(attribute.Description, "objectClass")
+		}
+		if !selected {
+			continue
+		}
+		for _, value := range attribute.Values {
+			candidate, ok := registry.objectClasses[schemaKey(string(value))]
+			if ok && registry.isSubclass(candidate, target, make(map[string]bool)) {
+				return true
+			}
 		}
 	}
 	return false
@@ -2984,6 +3002,9 @@ func (registry *Registry) attributeDescriptionSubtype(
 	candidate,
 	requested string,
 ) bool {
+	if candidate == requested {
+		return true
+	}
 	candidateTypeName, candidateOptions := splitAttributeDescription(candidate)
 	requestedTypeName, requestedOptions := splitAttributeDescription(requested)
 	candidateType, candidateKnown := registry.attributes[schemaKey(candidateTypeName)]

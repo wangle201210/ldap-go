@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+cd /Users/wanna/mine/github/ldap-go
+audit=/var/tmp/ldap-go-perf-20260930-r8b
+export CGO_ENABLED=0
+go test ./internal/schema -count=1 >"$audit/schema-test.txt" 2>&1
+go test ./... >"$audit/go-test.txt" 2>&1
+go vet ./... >"$audit/go-vet.txt" 2>&1
+. /var/tmp/ldap-go-openldap-reference-audit-2.6/openldap-reference.env
+reference_tests=$(awk '/^=== RUN   / && $3 !~ /\// {printf "%s%s", sep, $3; sep="|"}' docs/evidence/performance-20260930-r7/openldap-differential.txt)
+LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 go test ./internal/server -run "^($reference_tests)$" -count=1 -timeout=5m -v >"$audit/openldap-differential.txt" 2>&1
+go build -o "$audit/current" ./cmd/ldap-go
+go test ./internal/schema -run '^$' -bench '^BenchmarkEntryHasObjectClassReadOnly$' -benchmem -benchtime=300ms -count=3 >"$audit/object-class-bench.txt" 2>&1
+go test ./internal/server -run '^$' -bench '^BenchmarkLocalCompare$' -benchmem -benchtime=1s -count=3 >"$audit/compare-current.txt" 2>&1
+shasum -a 256 "$audit/before" "$audit/current" >"$audit/executable-sha256.txt"
+printf 'Validation completed.\n'

@@ -1,0 +1,1 @@
+EXCLUDED: compare-before-preliminary.txt was produced by go test; compilation may have overlapped production edits. Source provenance is uncertain. Raw log retained unchanged; no samples enter official calculations.

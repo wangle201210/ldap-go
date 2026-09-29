@@ -1,0 +1,42 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkEntryHasObjectClassReadOnly/leaf/cloning-8         	  250562	      1502 ns/op	     456 B/op	      23 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/cloning-8         	  250195	      1432 ns/op	     456 B/op	      23 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/cloning-8         	  252306	      1427 ns/op	     456 B/op	      23 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/current-8         	 1539194	       233.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/current-8         	 1548279	       232.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/current-8         	 1478911	       241.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/original-8        	  213930	      1675 ns/op	     488 B/op	      25 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/original-8        	  233914	      1605 ns/op	     488 B/op	      25 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/leaf/original-8        	  228039	      1566 ns/op	     488 B/op	      25 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/original-8        	  213252	      1799 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/original-8        	  207232	      1745 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/original-8        	  210626	      1697 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/cloning-8         	  229278	      1575 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/cloning-8         	  229468	      1647 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/cloning-8         	  227557	      1675 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/current-8         	  888093	       428.8 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/current-8         	  861372	       403.2 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/root/current-8         	  903992	       399.4 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/original-8   	  159392	      2157 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/original-8   	  172587	      2104 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/original-8   	  169048	      2164 ns/op	     504 B/op	      26 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/cloning-8    	  182278	      1986 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/cloning-8    	  179479	      1992 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/cloning-8    	  180417	      1981 ns/op	     472 B/op	      24 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/current-8    	  377569	       950.5 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/current-8    	  369376	       963.0 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unrelated/current-8    	  383539	       963.3 ns/op	      16 B/op	       1 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/original-8     	16706692	        20.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/original-8     	18183117	        19.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/original-8     	18225424	        19.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/cloning-8      	18737962	        19.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/cloning-8      	18668284	        20.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/cloning-8      	18565633	        20.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/current-8      	18764251	        19.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/current-8      	18467220	        19.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEntryHasObjectClassReadOnly/unknown/current-8      	18207680	        19.92 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	13.089s

@@ -1,0 +1,1567 @@
+path	check	status	detail
+default-final/before/warmup.json	top-level error	PASS	-
+default-final/before/warmup.json	100k fixture	PASS	100000
+default-final/before/warmup.json	stage inventory	PASS	-
+default-final/before/warmup.json	stage errors and totals	PASS	-
+default-final/before/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+default-final/current/warmup.json	top-level error	PASS	-
+default-final/current/warmup.json	100k fixture	PASS	100000
+default-final/current/warmup.json	stage inventory	PASS	-
+default-final/current/warmup.json	stage errors and totals	PASS	-
+default-final/current/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+default-final/distributed.json	top-level error	PASS	-
+default-final/distributed.json	100k fixture	PASS	100000
+default-final/distributed.json	config and setup	PASS	-
+default-final/distributed.json	endpoints and cleanup	PASS	-
+default-final/distributed.json	stage/method/members/endpoint/repeats	PASS	18/18
+default-final/distributed.json	completed and latency counts	PASS	-
+default-final/distributed.json	request and verification counts	PASS	-
+default-final/distributed.json	sample errors and totals	PASS	-
+default-final/groups.json	top-level error	PASS	-
+default-final/groups.json	100k fixture	PASS	100000
+default-final/groups.json	config and setup	PASS	-
+default-final/groups.json	endpoints and cleanup	PASS	-
+default-final/groups.json	stage/method/members/endpoint/repeats	PASS	36/36
+default-final/groups.json	completed and latency counts	PASS	-
+default-final/groups.json	request and verification counts	PASS	-
+default-final/groups.json	sample errors and totals	PASS	-
+default-final/hot.json	top-level error	PASS	-
+default-final/hot.json	100k fixture	PASS	100000
+default-final/hot.json	config and setup	PASS	-
+default-final/hot.json	endpoints and cleanup	PASS	-
+default-final/hot.json	stage/method/members/endpoint/repeats	PASS	54/54
+default-final/hot.json	completed and latency counts	PASS	-
+default-final/hot.json	request and verification counts	PASS	-
+default-final/hot.json	sample errors and totals	PASS	-
+default-final/openldap/warmup.json	top-level error	PASS	-
+default-final/openldap/warmup.json	100k fixture	PASS	100000
+default-final/openldap/warmup.json	stage inventory	PASS	-
+default-final/openldap/warmup.json	stage errors and totals	PASS	-
+default-final/openldap/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+default-final/smoke.json	top-level error	PASS	-
+default-final/smoke.json	100k fixture	PASS	100000
+default-final/smoke.json	config and setup	PASS	-
+default-final/smoke.json	endpoints and cleanup	PASS	-
+default-final/smoke.json	stage/method/members/endpoint/repeats	PASS	30/30
+default-final/smoke.json	completed and latency counts	PASS	-
+default-final/smoke.json	request and verification counts	PASS	-
+default-final/smoke.json	sample errors and totals	PASS	-
+explicit-final/before/warmup.json	top-level error	PASS	-
+explicit-final/before/warmup.json	100k fixture	PASS	100000
+explicit-final/before/warmup.json	stage inventory	PASS	-
+explicit-final/before/warmup.json	stage errors and totals	PASS	-
+explicit-final/before/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+explicit-final/current/warmup.json	top-level error	PASS	-
+explicit-final/current/warmup.json	100k fixture	PASS	100000
+explicit-final/current/warmup.json	stage inventory	PASS	-
+explicit-final/current/warmup.json	stage errors and totals	PASS	-
+explicit-final/current/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+explicit-final/distributed.json	top-level error	PASS	-
+explicit-final/distributed.json	100k fixture	PASS	100000
+explicit-final/distributed.json	config and setup	PASS	-
+explicit-final/distributed.json	endpoints and cleanup	PASS	-
+explicit-final/distributed.json	stage/method/members/endpoint/repeats	PASS	18/18
+explicit-final/distributed.json	completed and latency counts	PASS	-
+explicit-final/distributed.json	request and verification counts	PASS	-
+explicit-final/distributed.json	sample errors and totals	PASS	-
+explicit-final/groups.json	top-level error	PASS	-
+explicit-final/groups.json	100k fixture	PASS	100000
+explicit-final/groups.json	config and setup	PASS	-
+explicit-final/groups.json	endpoints and cleanup	PASS	-
+explicit-final/groups.json	stage/method/members/endpoint/repeats	PASS	36/36
+explicit-final/groups.json	completed and latency counts	PASS	-
+explicit-final/groups.json	request and verification counts	PASS	-
+explicit-final/groups.json	sample errors and totals	PASS	-
+explicit-final/hot.json	top-level error	PASS	-
+explicit-final/hot.json	100k fixture	PASS	100000
+explicit-final/hot.json	config and setup	PASS	-
+explicit-final/hot.json	endpoints and cleanup	PASS	-
+explicit-final/hot.json	stage/method/members/endpoint/repeats	PASS	54/54
+explicit-final/hot.json	completed and latency counts	PASS	-
+explicit-final/hot.json	request and verification counts	PASS	-
+explicit-final/hot.json	sample errors and totals	PASS	-
+explicit-final/openldap/warmup.json	top-level error	PASS	-
+explicit-final/openldap/warmup.json	100k fixture	PASS	100000
+explicit-final/openldap/warmup.json	stage inventory	PASS	-
+explicit-final/openldap/warmup.json	stage errors and totals	PASS	-
+explicit-final/openldap/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+explicit-final/smoke.json	top-level error	PASS	-
+explicit-final/smoke.json	100k fixture	PASS	100000
+explicit-final/smoke.json	config and setup	PASS	-
+explicit-final/smoke.json	endpoints and cleanup	PASS	-
+explicit-final/smoke.json	stage/method/members/endpoint/repeats	PASS	30/30
+explicit-final/smoke.json	completed and latency counts	PASS	-
+explicit-final/smoke.json	request and verification counts	PASS	-
+explicit-final/smoke.json	sample errors and totals	PASS	-
+online/before-1/fast-1.json	top-level error	PASS	-
+online/before-1/fast-1.json	100k fixture	PASS	100000
+online/before-1/fast-1.json	stage inventory	PASS	-
+online/before-1/fast-1.json	stage errors and totals	PASS	-
+online/before-1/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/fast-1.json	read fixture and DN variant	PASS	-
+online/before-1/fast-1.json	fresh process identity	PASS	-
+online/before-1/fast-2.json	top-level error	PASS	-
+online/before-1/fast-2.json	100k fixture	PASS	100000
+online/before-1/fast-2.json	stage inventory	PASS	-
+online/before-1/fast-2.json	stage errors and totals	PASS	-
+online/before-1/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/fast-2.json	read fixture and DN variant	PASS	-
+online/before-1/fast-2.json	fresh process identity	PASS	-
+online/before-1/fast-3.json	top-level error	PASS	-
+online/before-1/fast-3.json	100k fixture	PASS	100000
+online/before-1/fast-3.json	stage inventory	PASS	-
+online/before-1/fast-3.json	stage errors and totals	PASS	-
+online/before-1/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/fast-3.json	read fixture and DN variant	PASS	-
+online/before-1/fast-3.json	fresh process identity	PASS	-
+online/before-1/long-dn.json	extended binding inventory	PASS	-
+online/before-1/long-dn.json	extended binding totals	PASS	-
+online/before-1/long-password.json	extended binding inventory	PASS	-
+online/before-1/long-password.json	extended binding totals	PASS	-
+online/before-1/normalized-root-1.json	top-level error	PASS	-
+online/before-1/normalized-root-1.json	100k fixture	PASS	100000
+online/before-1/normalized-root-1.json	stage inventory	PASS	-
+online/before-1/normalized-root-1.json	stage errors and totals	PASS	-
+online/before-1/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/before-1/normalized-root-1.json	fresh process identity	PASS	-
+online/before-1/normalized-root-2.json	top-level error	PASS	-
+online/before-1/normalized-root-2.json	100k fixture	PASS	100000
+online/before-1/normalized-root-2.json	stage inventory	PASS	-
+online/before-1/normalized-root-2.json	stage errors and totals	PASS	-
+online/before-1/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/before-1/normalized-root-2.json	fresh process identity	PASS	-
+online/before-1/normalized-root-3.json	top-level error	PASS	-
+online/before-1/normalized-root-3.json	100k fixture	PASS	100000
+online/before-1/normalized-root-3.json	stage inventory	PASS	-
+online/before-1/normalized-root-3.json	stage errors and totals	PASS	-
+online/before-1/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-1/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/before-1/normalized-root-3.json	fresh process identity	PASS	-
+online/before-1/probe-1.json	top-level error	PASS	-
+online/before-1/probe-1.json	100k fixture	PASS	100000
+online/before-1/probe-1.json	stage inventory	PASS	-
+online/before-1/probe-1.json	stage errors and totals	PASS	-
+online/before-1/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-1/probe-1.json	read fixture and DN variant	PASS	-
+online/before-1/probe-1.json	fresh process identity	PASS	-
+online/before-1/probe-2.json	top-level error	PASS	-
+online/before-1/probe-2.json	100k fixture	PASS	100000
+online/before-1/probe-2.json	stage inventory	PASS	-
+online/before-1/probe-2.json	stage errors and totals	PASS	-
+online/before-1/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-1/probe-2.json	read fixture and DN variant	PASS	-
+online/before-1/probe-2.json	fresh process identity	PASS	-
+online/before-1/probe-3.json	top-level error	PASS	-
+online/before-1/probe-3.json	100k fixture	PASS	100000
+online/before-1/probe-3.json	stage inventory	PASS	-
+online/before-1/probe-3.json	stage errors and totals	PASS	-
+online/before-1/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-1/probe-3.json	read fixture and DN variant	PASS	-
+online/before-1/probe-3.json	fresh process identity	PASS	-
+online/before-1/user-bind.json	extended binding inventory	PASS	-
+online/before-1/user-bind.json	extended binding totals	PASS	-
+online/before-1/warmup.json	top-level error	PASS	-
+online/before-1/warmup.json	100k fixture	PASS	100000
+online/before-1/warmup.json	stage inventory	PASS	-
+online/before-1/warmup.json	stage errors and totals	PASS	-
+online/before-1/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/before-1/warmup.json	read fixture and DN variant	PASS	-
+online/before-2/fast-1.json	top-level error	PASS	-
+online/before-2/fast-1.json	100k fixture	PASS	100000
+online/before-2/fast-1.json	stage inventory	PASS	-
+online/before-2/fast-1.json	stage errors and totals	PASS	-
+online/before-2/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/fast-1.json	read fixture and DN variant	PASS	-
+online/before-2/fast-1.json	fresh process identity	PASS	-
+online/before-2/fast-2.json	top-level error	PASS	-
+online/before-2/fast-2.json	100k fixture	PASS	100000
+online/before-2/fast-2.json	stage inventory	PASS	-
+online/before-2/fast-2.json	stage errors and totals	PASS	-
+online/before-2/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/fast-2.json	read fixture and DN variant	PASS	-
+online/before-2/fast-2.json	fresh process identity	PASS	-
+online/before-2/fast-3.json	top-level error	PASS	-
+online/before-2/fast-3.json	100k fixture	PASS	100000
+online/before-2/fast-3.json	stage inventory	PASS	-
+online/before-2/fast-3.json	stage errors and totals	PASS	-
+online/before-2/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/fast-3.json	read fixture and DN variant	PASS	-
+online/before-2/fast-3.json	fresh process identity	PASS	-
+online/before-2/long-dn.json	extended binding inventory	PASS	-
+online/before-2/long-dn.json	extended binding totals	PASS	-
+online/before-2/long-password.json	extended binding inventory	PASS	-
+online/before-2/long-password.json	extended binding totals	PASS	-
+online/before-2/normalized-root-1.json	top-level error	PASS	-
+online/before-2/normalized-root-1.json	100k fixture	PASS	100000
+online/before-2/normalized-root-1.json	stage inventory	PASS	-
+online/before-2/normalized-root-1.json	stage errors and totals	PASS	-
+online/before-2/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/before-2/normalized-root-1.json	fresh process identity	PASS	-
+online/before-2/normalized-root-2.json	top-level error	PASS	-
+online/before-2/normalized-root-2.json	100k fixture	PASS	100000
+online/before-2/normalized-root-2.json	stage inventory	PASS	-
+online/before-2/normalized-root-2.json	stage errors and totals	PASS	-
+online/before-2/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/before-2/normalized-root-2.json	fresh process identity	PASS	-
+online/before-2/normalized-root-3.json	top-level error	PASS	-
+online/before-2/normalized-root-3.json	100k fixture	PASS	100000
+online/before-2/normalized-root-3.json	stage inventory	PASS	-
+online/before-2/normalized-root-3.json	stage errors and totals	PASS	-
+online/before-2/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-2/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/before-2/normalized-root-3.json	fresh process identity	PASS	-
+online/before-2/probe-1.json	top-level error	PASS	-
+online/before-2/probe-1.json	100k fixture	PASS	100000
+online/before-2/probe-1.json	stage inventory	PASS	-
+online/before-2/probe-1.json	stage errors and totals	PASS	-
+online/before-2/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-2/probe-1.json	read fixture and DN variant	PASS	-
+online/before-2/probe-1.json	fresh process identity	PASS	-
+online/before-2/probe-2.json	top-level error	PASS	-
+online/before-2/probe-2.json	100k fixture	PASS	100000
+online/before-2/probe-2.json	stage inventory	PASS	-
+online/before-2/probe-2.json	stage errors and totals	PASS	-
+online/before-2/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-2/probe-2.json	read fixture and DN variant	PASS	-
+online/before-2/probe-2.json	fresh process identity	PASS	-
+online/before-2/probe-3.json	top-level error	PASS	-
+online/before-2/probe-3.json	100k fixture	PASS	100000
+online/before-2/probe-3.json	stage inventory	PASS	-
+online/before-2/probe-3.json	stage errors and totals	PASS	-
+online/before-2/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-2/probe-3.json	read fixture and DN variant	PASS	-
+online/before-2/probe-3.json	fresh process identity	PASS	-
+online/before-2/user-bind.json	extended binding inventory	PASS	-
+online/before-2/user-bind.json	extended binding totals	PASS	-
+online/before-2/warmup.json	top-level error	PASS	-
+online/before-2/warmup.json	100k fixture	PASS	100000
+online/before-2/warmup.json	stage inventory	PASS	-
+online/before-2/warmup.json	stage errors and totals	PASS	-
+online/before-2/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/before-2/warmup.json	read fixture and DN variant	PASS	-
+online/before-3/fast-1.json	top-level error	PASS	-
+online/before-3/fast-1.json	100k fixture	PASS	100000
+online/before-3/fast-1.json	stage inventory	PASS	-
+online/before-3/fast-1.json	stage errors and totals	PASS	-
+online/before-3/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/fast-1.json	read fixture and DN variant	PASS	-
+online/before-3/fast-1.json	fresh process identity	PASS	-
+online/before-3/fast-2.json	top-level error	PASS	-
+online/before-3/fast-2.json	100k fixture	PASS	100000
+online/before-3/fast-2.json	stage inventory	PASS	-
+online/before-3/fast-2.json	stage errors and totals	PASS	-
+online/before-3/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/fast-2.json	read fixture and DN variant	PASS	-
+online/before-3/fast-2.json	fresh process identity	PASS	-
+online/before-3/fast-3.json	top-level error	PASS	-
+online/before-3/fast-3.json	100k fixture	PASS	100000
+online/before-3/fast-3.json	stage inventory	PASS	-
+online/before-3/fast-3.json	stage errors and totals	PASS	-
+online/before-3/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/fast-3.json	read fixture and DN variant	PASS	-
+online/before-3/fast-3.json	fresh process identity	PASS	-
+online/before-3/long-dn.json	extended binding inventory	PASS	-
+online/before-3/long-dn.json	extended binding totals	PASS	-
+online/before-3/long-password.json	extended binding inventory	PASS	-
+online/before-3/long-password.json	extended binding totals	PASS	-
+online/before-3/normalized-root-1.json	top-level error	PASS	-
+online/before-3/normalized-root-1.json	100k fixture	PASS	100000
+online/before-3/normalized-root-1.json	stage inventory	PASS	-
+online/before-3/normalized-root-1.json	stage errors and totals	PASS	-
+online/before-3/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/before-3/normalized-root-1.json	fresh process identity	PASS	-
+online/before-3/normalized-root-2.json	top-level error	PASS	-
+online/before-3/normalized-root-2.json	100k fixture	PASS	100000
+online/before-3/normalized-root-2.json	stage inventory	PASS	-
+online/before-3/normalized-root-2.json	stage errors and totals	PASS	-
+online/before-3/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/before-3/normalized-root-2.json	fresh process identity	PASS	-
+online/before-3/normalized-root-3.json	top-level error	PASS	-
+online/before-3/normalized-root-3.json	100k fixture	PASS	100000
+online/before-3/normalized-root-3.json	stage inventory	PASS	-
+online/before-3/normalized-root-3.json	stage errors and totals	PASS	-
+online/before-3/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/before-3/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/before-3/normalized-root-3.json	fresh process identity	PASS	-
+online/before-3/probe-1.json	top-level error	PASS	-
+online/before-3/probe-1.json	100k fixture	PASS	100000
+online/before-3/probe-1.json	stage inventory	PASS	-
+online/before-3/probe-1.json	stage errors and totals	PASS	-
+online/before-3/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-3/probe-1.json	read fixture and DN variant	PASS	-
+online/before-3/probe-1.json	fresh process identity	PASS	-
+online/before-3/probe-2.json	top-level error	PASS	-
+online/before-3/probe-2.json	100k fixture	PASS	100000
+online/before-3/probe-2.json	stage inventory	PASS	-
+online/before-3/probe-2.json	stage errors and totals	PASS	-
+online/before-3/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-3/probe-2.json	read fixture and DN variant	PASS	-
+online/before-3/probe-2.json	fresh process identity	PASS	-
+online/before-3/probe-3.json	top-level error	PASS	-
+online/before-3/probe-3.json	100k fixture	PASS	100000
+online/before-3/probe-3.json	stage inventory	PASS	-
+online/before-3/probe-3.json	stage errors and totals	PASS	-
+online/before-3/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/before-3/probe-3.json	read fixture and DN variant	PASS	-
+online/before-3/probe-3.json	fresh process identity	PASS	-
+online/before-3/user-bind.json	extended binding inventory	PASS	-
+online/before-3/user-bind.json	extended binding totals	PASS	-
+online/before-3/warmup.json	top-level error	PASS	-
+online/before-3/warmup.json	100k fixture	PASS	100000
+online/before-3/warmup.json	stage inventory	PASS	-
+online/before-3/warmup.json	stage errors and totals	PASS	-
+online/before-3/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/before-3/warmup.json	read fixture and DN variant	PASS	-
+online/current-1/fast-1.json	top-level error	PASS	-
+online/current-1/fast-1.json	100k fixture	PASS	100000
+online/current-1/fast-1.json	stage inventory	PASS	-
+online/current-1/fast-1.json	stage errors and totals	PASS	-
+online/current-1/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/fast-1.json	read fixture and DN variant	PASS	-
+online/current-1/fast-1.json	fresh process identity	PASS	-
+online/current-1/fast-2.json	top-level error	PASS	-
+online/current-1/fast-2.json	100k fixture	PASS	100000
+online/current-1/fast-2.json	stage inventory	PASS	-
+online/current-1/fast-2.json	stage errors and totals	PASS	-
+online/current-1/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/fast-2.json	read fixture and DN variant	PASS	-
+online/current-1/fast-2.json	fresh process identity	PASS	-
+online/current-1/fast-3.json	top-level error	PASS	-
+online/current-1/fast-3.json	100k fixture	PASS	100000
+online/current-1/fast-3.json	stage inventory	PASS	-
+online/current-1/fast-3.json	stage errors and totals	PASS	-
+online/current-1/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/fast-3.json	read fixture and DN variant	PASS	-
+online/current-1/fast-3.json	fresh process identity	PASS	-
+online/current-1/long-dn.json	extended binding inventory	PASS	-
+online/current-1/long-dn.json	extended binding totals	PASS	-
+online/current-1/long-password.json	extended binding inventory	PASS	-
+online/current-1/long-password.json	extended binding totals	PASS	-
+online/current-1/normalized-root-1.json	top-level error	PASS	-
+online/current-1/normalized-root-1.json	100k fixture	PASS	100000
+online/current-1/normalized-root-1.json	stage inventory	PASS	-
+online/current-1/normalized-root-1.json	stage errors and totals	PASS	-
+online/current-1/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/current-1/normalized-root-1.json	fresh process identity	PASS	-
+online/current-1/normalized-root-2.json	top-level error	PASS	-
+online/current-1/normalized-root-2.json	100k fixture	PASS	100000
+online/current-1/normalized-root-2.json	stage inventory	PASS	-
+online/current-1/normalized-root-2.json	stage errors and totals	PASS	-
+online/current-1/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/current-1/normalized-root-2.json	fresh process identity	PASS	-
+online/current-1/normalized-root-3.json	top-level error	PASS	-
+online/current-1/normalized-root-3.json	100k fixture	PASS	100000
+online/current-1/normalized-root-3.json	stage inventory	PASS	-
+online/current-1/normalized-root-3.json	stage errors and totals	PASS	-
+online/current-1/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-1/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/current-1/normalized-root-3.json	fresh process identity	PASS	-
+online/current-1/probe-1.json	top-level error	PASS	-
+online/current-1/probe-1.json	100k fixture	PASS	100000
+online/current-1/probe-1.json	stage inventory	PASS	-
+online/current-1/probe-1.json	stage errors and totals	PASS	-
+online/current-1/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-1/probe-1.json	read fixture and DN variant	PASS	-
+online/current-1/probe-1.json	fresh process identity	PASS	-
+online/current-1/probe-2.json	top-level error	PASS	-
+online/current-1/probe-2.json	100k fixture	PASS	100000
+online/current-1/probe-2.json	stage inventory	PASS	-
+online/current-1/probe-2.json	stage errors and totals	PASS	-
+online/current-1/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-1/probe-2.json	read fixture and DN variant	PASS	-
+online/current-1/probe-2.json	fresh process identity	PASS	-
+online/current-1/probe-3.json	top-level error	PASS	-
+online/current-1/probe-3.json	100k fixture	PASS	100000
+online/current-1/probe-3.json	stage inventory	PASS	-
+online/current-1/probe-3.json	stage errors and totals	PASS	-
+online/current-1/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-1/probe-3.json	read fixture and DN variant	PASS	-
+online/current-1/probe-3.json	fresh process identity	PASS	-
+online/current-1/user-bind.json	extended binding inventory	PASS	-
+online/current-1/user-bind.json	extended binding totals	PASS	-
+online/current-1/warmup.json	top-level error	PASS	-
+online/current-1/warmup.json	100k fixture	PASS	100000
+online/current-1/warmup.json	stage inventory	PASS	-
+online/current-1/warmup.json	stage errors and totals	PASS	-
+online/current-1/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/current-1/warmup.json	read fixture and DN variant	PASS	-
+online/current-2/fast-1.json	top-level error	PASS	-
+online/current-2/fast-1.json	100k fixture	PASS	100000
+online/current-2/fast-1.json	stage inventory	PASS	-
+online/current-2/fast-1.json	stage errors and totals	PASS	-
+online/current-2/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/fast-1.json	read fixture and DN variant	PASS	-
+online/current-2/fast-1.json	fresh process identity	PASS	-
+online/current-2/fast-2.json	top-level error	PASS	-
+online/current-2/fast-2.json	100k fixture	PASS	100000
+online/current-2/fast-2.json	stage inventory	PASS	-
+online/current-2/fast-2.json	stage errors and totals	PASS	-
+online/current-2/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/fast-2.json	read fixture and DN variant	PASS	-
+online/current-2/fast-2.json	fresh process identity	PASS	-
+online/current-2/fast-3.json	top-level error	PASS	-
+online/current-2/fast-3.json	100k fixture	PASS	100000
+online/current-2/fast-3.json	stage inventory	PASS	-
+online/current-2/fast-3.json	stage errors and totals	PASS	-
+online/current-2/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/fast-3.json	read fixture and DN variant	PASS	-
+online/current-2/fast-3.json	fresh process identity	PASS	-
+online/current-2/long-dn.json	extended binding inventory	PASS	-
+online/current-2/long-dn.json	extended binding totals	PASS	-
+online/current-2/long-password.json	extended binding inventory	PASS	-
+online/current-2/long-password.json	extended binding totals	PASS	-
+online/current-2/normalized-root-1.json	top-level error	PASS	-
+online/current-2/normalized-root-1.json	100k fixture	PASS	100000
+online/current-2/normalized-root-1.json	stage inventory	PASS	-
+online/current-2/normalized-root-1.json	stage errors and totals	PASS	-
+online/current-2/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/current-2/normalized-root-1.json	fresh process identity	PASS	-
+online/current-2/normalized-root-2.json	top-level error	PASS	-
+online/current-2/normalized-root-2.json	100k fixture	PASS	100000
+online/current-2/normalized-root-2.json	stage inventory	PASS	-
+online/current-2/normalized-root-2.json	stage errors and totals	PASS	-
+online/current-2/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/current-2/normalized-root-2.json	fresh process identity	PASS	-
+online/current-2/normalized-root-3.json	top-level error	PASS	-
+online/current-2/normalized-root-3.json	100k fixture	PASS	100000
+online/current-2/normalized-root-3.json	stage inventory	PASS	-
+online/current-2/normalized-root-3.json	stage errors and totals	PASS	-
+online/current-2/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-2/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/current-2/normalized-root-3.json	fresh process identity	PASS	-
+online/current-2/probe-1.json	top-level error	PASS	-
+online/current-2/probe-1.json	100k fixture	PASS	100000
+online/current-2/probe-1.json	stage inventory	PASS	-
+online/current-2/probe-1.json	stage errors and totals	PASS	-
+online/current-2/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-2/probe-1.json	read fixture and DN variant	PASS	-
+online/current-2/probe-1.json	fresh process identity	PASS	-
+online/current-2/probe-2.json	top-level error	PASS	-
+online/current-2/probe-2.json	100k fixture	PASS	100000
+online/current-2/probe-2.json	stage inventory	PASS	-
+online/current-2/probe-2.json	stage errors and totals	PASS	-
+online/current-2/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-2/probe-2.json	read fixture and DN variant	PASS	-
+online/current-2/probe-2.json	fresh process identity	PASS	-
+online/current-2/probe-3.json	top-level error	PASS	-
+online/current-2/probe-3.json	100k fixture	PASS	100000
+online/current-2/probe-3.json	stage inventory	PASS	-
+online/current-2/probe-3.json	stage errors and totals	PASS	-
+online/current-2/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-2/probe-3.json	read fixture and DN variant	PASS	-
+online/current-2/probe-3.json	fresh process identity	PASS	-
+online/current-2/user-bind.json	extended binding inventory	PASS	-
+online/current-2/user-bind.json	extended binding totals	PASS	-
+online/current-2/warmup.json	top-level error	PASS	-
+online/current-2/warmup.json	100k fixture	PASS	100000
+online/current-2/warmup.json	stage inventory	PASS	-
+online/current-2/warmup.json	stage errors and totals	PASS	-
+online/current-2/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/current-2/warmup.json	read fixture and DN variant	PASS	-
+online/current-3/fast-1.json	top-level error	PASS	-
+online/current-3/fast-1.json	100k fixture	PASS	100000
+online/current-3/fast-1.json	stage inventory	PASS	-
+online/current-3/fast-1.json	stage errors and totals	PASS	-
+online/current-3/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/fast-1.json	read fixture and DN variant	PASS	-
+online/current-3/fast-1.json	fresh process identity	PASS	-
+online/current-3/fast-2.json	top-level error	PASS	-
+online/current-3/fast-2.json	100k fixture	PASS	100000
+online/current-3/fast-2.json	stage inventory	PASS	-
+online/current-3/fast-2.json	stage errors and totals	PASS	-
+online/current-3/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/fast-2.json	read fixture and DN variant	PASS	-
+online/current-3/fast-2.json	fresh process identity	PASS	-
+online/current-3/fast-3.json	top-level error	PASS	-
+online/current-3/fast-3.json	100k fixture	PASS	100000
+online/current-3/fast-3.json	stage inventory	PASS	-
+online/current-3/fast-3.json	stage errors and totals	PASS	-
+online/current-3/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/fast-3.json	read fixture and DN variant	PASS	-
+online/current-3/fast-3.json	fresh process identity	PASS	-
+online/current-3/long-dn.json	extended binding inventory	PASS	-
+online/current-3/long-dn.json	extended binding totals	PASS	-
+online/current-3/long-password.json	extended binding inventory	PASS	-
+online/current-3/long-password.json	extended binding totals	PASS	-
+online/current-3/normalized-root-1.json	top-level error	PASS	-
+online/current-3/normalized-root-1.json	100k fixture	PASS	100000
+online/current-3/normalized-root-1.json	stage inventory	PASS	-
+online/current-3/normalized-root-1.json	stage errors and totals	PASS	-
+online/current-3/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/current-3/normalized-root-1.json	fresh process identity	PASS	-
+online/current-3/normalized-root-2.json	top-level error	PASS	-
+online/current-3/normalized-root-2.json	100k fixture	PASS	100000
+online/current-3/normalized-root-2.json	stage inventory	PASS	-
+online/current-3/normalized-root-2.json	stage errors and totals	PASS	-
+online/current-3/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/current-3/normalized-root-2.json	fresh process identity	PASS	-
+online/current-3/normalized-root-3.json	top-level error	PASS	-
+online/current-3/normalized-root-3.json	100k fixture	PASS	100000
+online/current-3/normalized-root-3.json	stage inventory	PASS	-
+online/current-3/normalized-root-3.json	stage errors and totals	PASS	-
+online/current-3/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/current-3/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/current-3/normalized-root-3.json	fresh process identity	PASS	-
+online/current-3/probe-1.json	top-level error	PASS	-
+online/current-3/probe-1.json	100k fixture	PASS	100000
+online/current-3/probe-1.json	stage inventory	PASS	-
+online/current-3/probe-1.json	stage errors and totals	PASS	-
+online/current-3/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-3/probe-1.json	read fixture and DN variant	PASS	-
+online/current-3/probe-1.json	fresh process identity	PASS	-
+online/current-3/probe-2.json	top-level error	PASS	-
+online/current-3/probe-2.json	100k fixture	PASS	100000
+online/current-3/probe-2.json	stage inventory	PASS	-
+online/current-3/probe-2.json	stage errors and totals	PASS	-
+online/current-3/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-3/probe-2.json	read fixture and DN variant	PASS	-
+online/current-3/probe-2.json	fresh process identity	PASS	-
+online/current-3/probe-3.json	top-level error	PASS	-
+online/current-3/probe-3.json	100k fixture	PASS	100000
+online/current-3/probe-3.json	stage inventory	PASS	-
+online/current-3/probe-3.json	stage errors and totals	PASS	-
+online/current-3/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/current-3/probe-3.json	read fixture and DN variant	PASS	-
+online/current-3/probe-3.json	fresh process identity	PASS	-
+online/current-3/user-bind.json	extended binding inventory	PASS	-
+online/current-3/user-bind.json	extended binding totals	PASS	-
+online/current-3/warmup.json	top-level error	PASS	-
+online/current-3/warmup.json	100k fixture	PASS	100000
+online/current-3/warmup.json	stage inventory	PASS	-
+online/current-3/warmup.json	stage errors and totals	PASS	-
+online/current-3/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/current-3/warmup.json	read fixture and DN variant	PASS	-
+online/openldap-1/fast-1.json	top-level error	PASS	-
+online/openldap-1/fast-1.json	100k fixture	PASS	100000
+online/openldap-1/fast-1.json	stage inventory	PASS	-
+online/openldap-1/fast-1.json	stage errors and totals	PASS	-
+online/openldap-1/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/fast-1.json	read fixture and DN variant	PASS	-
+online/openldap-1/fast-1.json	fresh process identity	PASS	-
+online/openldap-1/fast-2.json	top-level error	PASS	-
+online/openldap-1/fast-2.json	100k fixture	PASS	100000
+online/openldap-1/fast-2.json	stage inventory	PASS	-
+online/openldap-1/fast-2.json	stage errors and totals	PASS	-
+online/openldap-1/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/fast-2.json	read fixture and DN variant	PASS	-
+online/openldap-1/fast-2.json	fresh process identity	PASS	-
+online/openldap-1/fast-3.json	top-level error	PASS	-
+online/openldap-1/fast-3.json	100k fixture	PASS	100000
+online/openldap-1/fast-3.json	stage inventory	PASS	-
+online/openldap-1/fast-3.json	stage errors and totals	PASS	-
+online/openldap-1/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/fast-3.json	read fixture and DN variant	PASS	-
+online/openldap-1/fast-3.json	fresh process identity	PASS	-
+online/openldap-1/long-dn.json	extended binding inventory	PASS	-
+online/openldap-1/long-dn.json	extended binding totals	PASS	-
+online/openldap-1/long-password.json	extended binding inventory	PASS	-
+online/openldap-1/long-password.json	extended binding totals	PASS	-
+online/openldap-1/normalized-root-1.json	top-level error	PASS	-
+online/openldap-1/normalized-root-1.json	100k fixture	PASS	100000
+online/openldap-1/normalized-root-1.json	stage inventory	PASS	-
+online/openldap-1/normalized-root-1.json	stage errors and totals	PASS	-
+online/openldap-1/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/openldap-1/normalized-root-1.json	fresh process identity	PASS	-
+online/openldap-1/normalized-root-2.json	top-level error	PASS	-
+online/openldap-1/normalized-root-2.json	100k fixture	PASS	100000
+online/openldap-1/normalized-root-2.json	stage inventory	PASS	-
+online/openldap-1/normalized-root-2.json	stage errors and totals	PASS	-
+online/openldap-1/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/openldap-1/normalized-root-2.json	fresh process identity	PASS	-
+online/openldap-1/normalized-root-3.json	top-level error	PASS	-
+online/openldap-1/normalized-root-3.json	100k fixture	PASS	100000
+online/openldap-1/normalized-root-3.json	stage inventory	PASS	-
+online/openldap-1/normalized-root-3.json	stage errors and totals	PASS	-
+online/openldap-1/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-1/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/openldap-1/normalized-root-3.json	fresh process identity	PASS	-
+online/openldap-1/probe-1.json	top-level error	PASS	-
+online/openldap-1/probe-1.json	100k fixture	PASS	100000
+online/openldap-1/probe-1.json	stage inventory	PASS	-
+online/openldap-1/probe-1.json	stage errors and totals	PASS	-
+online/openldap-1/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-1/probe-1.json	read fixture and DN variant	PASS	-
+online/openldap-1/probe-1.json	fresh process identity	PASS	-
+online/openldap-1/probe-2.json	top-level error	PASS	-
+online/openldap-1/probe-2.json	100k fixture	PASS	100000
+online/openldap-1/probe-2.json	stage inventory	PASS	-
+online/openldap-1/probe-2.json	stage errors and totals	PASS	-
+online/openldap-1/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-1/probe-2.json	read fixture and DN variant	PASS	-
+online/openldap-1/probe-2.json	fresh process identity	PASS	-
+online/openldap-1/probe-3.json	top-level error	PASS	-
+online/openldap-1/probe-3.json	100k fixture	PASS	100000
+online/openldap-1/probe-3.json	stage inventory	PASS	-
+online/openldap-1/probe-3.json	stage errors and totals	PASS	-
+online/openldap-1/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-1/probe-3.json	read fixture and DN variant	PASS	-
+online/openldap-1/probe-3.json	fresh process identity	PASS	-
+online/openldap-1/user-bind.json	extended binding inventory	PASS	-
+online/openldap-1/user-bind.json	extended binding totals	PASS	-
+online/openldap-1/warmup.json	top-level error	PASS	-
+online/openldap-1/warmup.json	100k fixture	PASS	100000
+online/openldap-1/warmup.json	stage inventory	PASS	-
+online/openldap-1/warmup.json	stage errors and totals	PASS	-
+online/openldap-1/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/openldap-1/warmup.json	read fixture and DN variant	PASS	-
+online/openldap-2/fast-1.json	top-level error	PASS	-
+online/openldap-2/fast-1.json	100k fixture	PASS	100000
+online/openldap-2/fast-1.json	stage inventory	PASS	-
+online/openldap-2/fast-1.json	stage errors and totals	PASS	-
+online/openldap-2/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/fast-1.json	read fixture and DN variant	PASS	-
+online/openldap-2/fast-1.json	fresh process identity	PASS	-
+online/openldap-2/fast-2.json	top-level error	PASS	-
+online/openldap-2/fast-2.json	100k fixture	PASS	100000
+online/openldap-2/fast-2.json	stage inventory	PASS	-
+online/openldap-2/fast-2.json	stage errors and totals	PASS	-
+online/openldap-2/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/fast-2.json	read fixture and DN variant	PASS	-
+online/openldap-2/fast-2.json	fresh process identity	PASS	-
+online/openldap-2/fast-3.json	top-level error	PASS	-
+online/openldap-2/fast-3.json	100k fixture	PASS	100000
+online/openldap-2/fast-3.json	stage inventory	PASS	-
+online/openldap-2/fast-3.json	stage errors and totals	PASS	-
+online/openldap-2/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/fast-3.json	read fixture and DN variant	PASS	-
+online/openldap-2/fast-3.json	fresh process identity	PASS	-
+online/openldap-2/long-dn.json	extended binding inventory	PASS	-
+online/openldap-2/long-dn.json	extended binding totals	PASS	-
+online/openldap-2/long-password.json	extended binding inventory	PASS	-
+online/openldap-2/long-password.json	extended binding totals	PASS	-
+online/openldap-2/normalized-root-1.json	top-level error	PASS	-
+online/openldap-2/normalized-root-1.json	100k fixture	PASS	100000
+online/openldap-2/normalized-root-1.json	stage inventory	PASS	-
+online/openldap-2/normalized-root-1.json	stage errors and totals	PASS	-
+online/openldap-2/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/openldap-2/normalized-root-1.json	fresh process identity	PASS	-
+online/openldap-2/normalized-root-2.json	top-level error	PASS	-
+online/openldap-2/normalized-root-2.json	100k fixture	PASS	100000
+online/openldap-2/normalized-root-2.json	stage inventory	PASS	-
+online/openldap-2/normalized-root-2.json	stage errors and totals	PASS	-
+online/openldap-2/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/openldap-2/normalized-root-2.json	fresh process identity	PASS	-
+online/openldap-2/normalized-root-3.json	top-level error	PASS	-
+online/openldap-2/normalized-root-3.json	100k fixture	PASS	100000
+online/openldap-2/normalized-root-3.json	stage inventory	PASS	-
+online/openldap-2/normalized-root-3.json	stage errors and totals	PASS	-
+online/openldap-2/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-2/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/openldap-2/normalized-root-3.json	fresh process identity	PASS	-
+online/openldap-2/probe-1.json	top-level error	PASS	-
+online/openldap-2/probe-1.json	100k fixture	PASS	100000
+online/openldap-2/probe-1.json	stage inventory	PASS	-
+online/openldap-2/probe-1.json	stage errors and totals	PASS	-
+online/openldap-2/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-2/probe-1.json	read fixture and DN variant	PASS	-
+online/openldap-2/probe-1.json	fresh process identity	PASS	-
+online/openldap-2/probe-2.json	top-level error	PASS	-
+online/openldap-2/probe-2.json	100k fixture	PASS	100000
+online/openldap-2/probe-2.json	stage inventory	PASS	-
+online/openldap-2/probe-2.json	stage errors and totals	PASS	-
+online/openldap-2/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-2/probe-2.json	read fixture and DN variant	PASS	-
+online/openldap-2/probe-2.json	fresh process identity	PASS	-
+online/openldap-2/probe-3.json	top-level error	PASS	-
+online/openldap-2/probe-3.json	100k fixture	PASS	100000
+online/openldap-2/probe-3.json	stage inventory	PASS	-
+online/openldap-2/probe-3.json	stage errors and totals	PASS	-
+online/openldap-2/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-2/probe-3.json	read fixture and DN variant	PASS	-
+online/openldap-2/probe-3.json	fresh process identity	PASS	-
+online/openldap-2/user-bind.json	extended binding inventory	PASS	-
+online/openldap-2/user-bind.json	extended binding totals	PASS	-
+online/openldap-2/warmup.json	top-level error	PASS	-
+online/openldap-2/warmup.json	100k fixture	PASS	100000
+online/openldap-2/warmup.json	stage inventory	PASS	-
+online/openldap-2/warmup.json	stage errors and totals	PASS	-
+online/openldap-2/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/openldap-2/warmup.json	read fixture and DN variant	PASS	-
+online/openldap-3/fast-1.json	top-level error	PASS	-
+online/openldap-3/fast-1.json	100k fixture	PASS	100000
+online/openldap-3/fast-1.json	stage inventory	PASS	-
+online/openldap-3/fast-1.json	stage errors and totals	PASS	-
+online/openldap-3/fast-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/fast-1.json	read fixture and DN variant	PASS	-
+online/openldap-3/fast-1.json	fresh process identity	PASS	-
+online/openldap-3/fast-2.json	top-level error	PASS	-
+online/openldap-3/fast-2.json	100k fixture	PASS	100000
+online/openldap-3/fast-2.json	stage inventory	PASS	-
+online/openldap-3/fast-2.json	stage errors and totals	PASS	-
+online/openldap-3/fast-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/fast-2.json	read fixture and DN variant	PASS	-
+online/openldap-3/fast-2.json	fresh process identity	PASS	-
+online/openldap-3/fast-3.json	top-level error	PASS	-
+online/openldap-3/fast-3.json	100k fixture	PASS	100000
+online/openldap-3/fast-3.json	stage inventory	PASS	-
+online/openldap-3/fast-3.json	stage errors and totals	PASS	-
+online/openldap-3/fast-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/fast-3.json	read fixture and DN variant	PASS	-
+online/openldap-3/fast-3.json	fresh process identity	PASS	-
+online/openldap-3/long-dn.json	extended binding inventory	PASS	-
+online/openldap-3/long-dn.json	extended binding totals	PASS	-
+online/openldap-3/long-password.json	extended binding inventory	PASS	-
+online/openldap-3/long-password.json	extended binding totals	PASS	-
+online/openldap-3/normalized-root-1.json	top-level error	PASS	-
+online/openldap-3/normalized-root-1.json	100k fixture	PASS	100000
+online/openldap-3/normalized-root-1.json	stage inventory	PASS	-
+online/openldap-3/normalized-root-1.json	stage errors and totals	PASS	-
+online/openldap-3/normalized-root-1.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/normalized-root-1.json	read fixture and DN variant	PASS	-
+online/openldap-3/normalized-root-1.json	fresh process identity	PASS	-
+online/openldap-3/normalized-root-2.json	top-level error	PASS	-
+online/openldap-3/normalized-root-2.json	100k fixture	PASS	100000
+online/openldap-3/normalized-root-2.json	stage inventory	PASS	-
+online/openldap-3/normalized-root-2.json	stage errors and totals	PASS	-
+online/openldap-3/normalized-root-2.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/normalized-root-2.json	read fixture and DN variant	PASS	-
+online/openldap-3/normalized-root-2.json	fresh process identity	PASS	-
+online/openldap-3/normalized-root-3.json	top-level error	PASS	-
+online/openldap-3/normalized-root-3.json	100k fixture	PASS	100000
+online/openldap-3/normalized-root-3.json	stage inventory	PASS	-
+online/openldap-3/normalized-root-3.json	stage errors and totals	PASS	-
+online/openldap-3/normalized-root-3.json	operation counts	PASS	connect:1,rootBind:1000,baseSearch:1000,indexedEquality:1000,compareTrue:1000,compareFalse:1000
+online/openldap-3/normalized-root-3.json	read fixture and DN variant	PASS	-
+online/openldap-3/normalized-root-3.json	fresh process identity	PASS	-
+online/openldap-3/probe-1.json	top-level error	PASS	-
+online/openldap-3/probe-1.json	100k fixture	PASS	100000
+online/openldap-3/probe-1.json	stage inventory	PASS	-
+online/openldap-3/probe-1.json	stage errors and totals	PASS	-
+online/openldap-3/probe-1.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-3/probe-1.json	read fixture and DN variant	PASS	-
+online/openldap-3/probe-1.json	fresh process identity	PASS	-
+online/openldap-3/probe-2.json	top-level error	PASS	-
+online/openldap-3/probe-2.json	100k fixture	PASS	100000
+online/openldap-3/probe-2.json	stage inventory	PASS	-
+online/openldap-3/probe-2.json	stage errors and totals	PASS	-
+online/openldap-3/probe-2.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-3/probe-2.json	read fixture and DN variant	PASS	-
+online/openldap-3/probe-2.json	fresh process identity	PASS	-
+online/openldap-3/probe-3.json	top-level error	PASS	-
+online/openldap-3/probe-3.json	100k fixture	PASS	100000
+online/openldap-3/probe-3.json	stage inventory	PASS	-
+online/openldap-3/probe-3.json	stage errors and totals	PASS	-
+online/openldap-3/probe-3.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20
+online/openldap-3/probe-3.json	read fixture and DN variant	PASS	-
+online/openldap-3/probe-3.json	fresh process identity	PASS	-
+online/openldap-3/user-bind.json	extended binding inventory	PASS	-
+online/openldap-3/user-bind.json	extended binding totals	PASS	-
+online/openldap-3/warmup.json	top-level error	PASS	-
+online/openldap-3/warmup.json	100k fixture	PASS	100000
+online/openldap-3/warmup.json	stage inventory	PASS	-
+online/openldap-3/warmup.json	stage errors and totals	PASS	-
+online/openldap-3/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+online/openldap-3/warmup.json	read fixture and DN variant	PASS	-
+paged-recheck/before/warmup.json	top-level error	PASS	-
+paged-recheck/before/warmup.json	100k fixture	PASS	100000
+paged-recheck/before/warmup.json	stage inventory	PASS	-
+paged-recheck/before/warmup.json	stage errors and totals	PASS	-
+paged-recheck/before/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+paged-recheck/before/warmup.json	read fixture and DN variant	PASS	-
+paged-recheck/current/warmup.json	top-level error	PASS	-
+paged-recheck/current/warmup.json	100k fixture	PASS	100000
+paged-recheck/current/warmup.json	stage inventory	PASS	-
+paged-recheck/current/warmup.json	stage errors and totals	PASS	-
+paged-recheck/current/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+paged-recheck/current/warmup.json	read fixture and DN variant	PASS	-
+paged-recheck/openldap/warmup.json	top-level error	PASS	-
+paged-recheck/openldap/warmup.json	100k fixture	PASS	100000
+paged-recheck/openldap/warmup.json	stage inventory	PASS	-
+paged-recheck/openldap/warmup.json	stage errors and totals	PASS	-
+paged-recheck/openldap/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+paged-recheck/openldap/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/before-1/warmup.json	top-level error	PASS	-
+read-recheck/before-1/warmup.json	100k fixture	PASS	100000
+read-recheck/before-1/warmup.json	stage inventory	PASS	-
+read-recheck/before-1/warmup.json	stage errors and totals	PASS	-
+read-recheck/before-1/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/before-1/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/before-2/warmup.json	top-level error	PASS	-
+read-recheck/before-2/warmup.json	100k fixture	PASS	100000
+read-recheck/before-2/warmup.json	stage inventory	PASS	-
+read-recheck/before-2/warmup.json	stage errors and totals	PASS	-
+read-recheck/before-2/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/before-2/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/before-3/warmup.json	top-level error	PASS	-
+read-recheck/before-3/warmup.json	100k fixture	PASS	100000
+read-recheck/before-3/warmup.json	stage inventory	PASS	-
+read-recheck/before-3/warmup.json	stage errors and totals	PASS	-
+read-recheck/before-3/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/before-3/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/current-1/warmup.json	top-level error	PASS	-
+read-recheck/current-1/warmup.json	100k fixture	PASS	100000
+read-recheck/current-1/warmup.json	stage inventory	PASS	-
+read-recheck/current-1/warmup.json	stage errors and totals	PASS	-
+read-recheck/current-1/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/current-1/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/current-2/warmup.json	top-level error	PASS	-
+read-recheck/current-2/warmup.json	100k fixture	PASS	100000
+read-recheck/current-2/warmup.json	stage inventory	PASS	-
+read-recheck/current-2/warmup.json	stage errors and totals	PASS	-
+read-recheck/current-2/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/current-2/warmup.json	read fixture and DN variant	PASS	-
+read-recheck/current-3/warmup.json	top-level error	PASS	-
+read-recheck/current-3/warmup.json	100k fixture	PASS	100000
+read-recheck/current-3/warmup.json	stage inventory	PASS	-
+read-recheck/current-3/warmup.json	stage errors and totals	PASS	-
+read-recheck/current-3/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+read-recheck/current-3/warmup.json	read fixture and DN variant	PASS	-
+root-paired/before/warmup.json	top-level error	PASS	-
+root-paired/before/warmup.json	100k fixture	PASS	100000
+root-paired/before/warmup.json	stage inventory	PASS	-
+root-paired/before/warmup.json	stage errors and totals	PASS	-
+root-paired/before/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+root-paired/current/warmup.json	top-level error	PASS	-
+root-paired/current/warmup.json	100k fixture	PASS	100000
+root-paired/current/warmup.json	stage inventory	PASS	-
+root-paired/current/warmup.json	stage errors and totals	PASS	-
+root-paired/current/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+root-paired/literal-smoke.json	top-level error	PASS	-
+root-paired/literal-smoke.json	100k fixture	PASS	100000
+root-paired/literal-smoke.json	config and setup	PASS	-
+root-paired/literal-smoke.json	endpoints and cleanup	PASS	-
+root-paired/literal-smoke.json	root DN variant	PASS	-
+root-paired/literal-smoke.json	stage/method/members/endpoint/repeats	PASS	15/15
+root-paired/literal-smoke.json	completed and latency counts	PASS	-
+root-paired/literal-smoke.json	request and verification counts	PASS	-
+root-paired/literal-smoke.json	sample errors and totals	PASS	-
+root-paired/literal.json	top-level error	PASS	-
+root-paired/literal.json	100k fixture	PASS	100000
+root-paired/literal.json	config and setup	PASS	-
+root-paired/literal.json	endpoints and cleanup	PASS	-
+root-paired/literal.json	root DN variant	PASS	-
+root-paired/literal.json	stage/method/members/endpoint/repeats	PASS	105/105
+root-paired/literal.json	completed and latency counts	PASS	-
+root-paired/literal.json	request and verification counts	PASS	-
+root-paired/literal.json	sample errors and totals	PASS	-
+root-paired/normalized-smoke.json	top-level error	PASS	-
+root-paired/normalized-smoke.json	100k fixture	PASS	100000
+root-paired/normalized-smoke.json	config and setup	PASS	-
+root-paired/normalized-smoke.json	endpoints and cleanup	PASS	-
+root-paired/normalized-smoke.json	root DN variant	PASS	-
+root-paired/normalized-smoke.json	stage/method/members/endpoint/repeats	PASS	15/15
+root-paired/normalized-smoke.json	completed and latency counts	PASS	-
+root-paired/normalized-smoke.json	request and verification counts	PASS	-
+root-paired/normalized-smoke.json	sample errors and totals	PASS	-
+root-paired/normalized.json	top-level error	PASS	-
+root-paired/normalized.json	100k fixture	PASS	100000
+root-paired/normalized.json	config and setup	PASS	-
+root-paired/normalized.json	endpoints and cleanup	PASS	-
+root-paired/normalized.json	root DN variant	PASS	-
+root-paired/normalized.json	stage/method/members/endpoint/repeats	PASS	105/105
+root-paired/normalized.json	completed and latency counts	PASS	-
+root-paired/normalized.json	request and verification counts	PASS	-
+root-paired/normalized.json	sample errors and totals	PASS	-
+root-paired/openldap/warmup.json	top-level error	PASS	-
+root-paired/openldap/warmup.json	100k fixture	PASS	100000
+root-paired/openldap/warmup.json	stage inventory	PASS	-
+root-paired/openldap/warmup.json	stage errors and totals	PASS	-
+root-paired/openldap/warmup.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2
+write-recheck/before-1/probe.json	top-level error	PASS	-
+write-recheck/before-1/probe.json	100k fixture	PASS	100000
+write-recheck/before-1/probe.json	stage inventory	PASS	-
+write-recheck/before-1/probe.json	stage errors and totals	PASS	-
+write-recheck/before-1/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-1/probe.json	fixed write fixture	PASS	-
+write-recheck/before-1/probe.json	fresh process identity	PASS	-
+write-recheck/before-2/probe.json	top-level error	PASS	-
+write-recheck/before-2/probe.json	100k fixture	PASS	100000
+write-recheck/before-2/probe.json	stage inventory	PASS	-
+write-recheck/before-2/probe.json	stage errors and totals	PASS	-
+write-recheck/before-2/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-2/probe.json	fixed write fixture	PASS	-
+write-recheck/before-2/probe.json	fresh process identity	PASS	-
+write-recheck/before-3/probe.json	top-level error	PASS	-
+write-recheck/before-3/probe.json	100k fixture	PASS	100000
+write-recheck/before-3/probe.json	stage inventory	PASS	-
+write-recheck/before-3/probe.json	stage errors and totals	PASS	-
+write-recheck/before-3/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-3/probe.json	fixed write fixture	PASS	-
+write-recheck/before-3/probe.json	fresh process identity	PASS	-
+write-recheck/before-4/probe.json	top-level error	PASS	-
+write-recheck/before-4/probe.json	100k fixture	PASS	100000
+write-recheck/before-4/probe.json	stage inventory	PASS	-
+write-recheck/before-4/probe.json	stage errors and totals	PASS	-
+write-recheck/before-4/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-4/probe.json	fixed write fixture	PASS	-
+write-recheck/before-4/probe.json	fresh process identity	PASS	-
+write-recheck/before-5/probe.json	top-level error	PASS	-
+write-recheck/before-5/probe.json	100k fixture	PASS	100000
+write-recheck/before-5/probe.json	stage inventory	PASS	-
+write-recheck/before-5/probe.json	stage errors and totals	PASS	-
+write-recheck/before-5/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-5/probe.json	fixed write fixture	PASS	-
+write-recheck/before-5/probe.json	fresh process identity	PASS	-
+write-recheck/before-6/probe.json	top-level error	PASS	-
+write-recheck/before-6/probe.json	100k fixture	PASS	100000
+write-recheck/before-6/probe.json	stage inventory	PASS	-
+write-recheck/before-6/probe.json	stage errors and totals	PASS	-
+write-recheck/before-6/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-6/probe.json	fixed write fixture	PASS	-
+write-recheck/before-6/probe.json	fresh process identity	PASS	-
+write-recheck/before-7/probe.json	top-level error	PASS	-
+write-recheck/before-7/probe.json	100k fixture	PASS	100000
+write-recheck/before-7/probe.json	stage inventory	PASS	-
+write-recheck/before-7/probe.json	stage errors and totals	PASS	-
+write-recheck/before-7/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/before-7/probe.json	fixed write fixture	PASS	-
+write-recheck/before-7/probe.json	fresh process identity	PASS	-
+write-recheck/current-1/probe.json	top-level error	PASS	-
+write-recheck/current-1/probe.json	100k fixture	PASS	100000
+write-recheck/current-1/probe.json	stage inventory	PASS	-
+write-recheck/current-1/probe.json	stage errors and totals	PASS	-
+write-recheck/current-1/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-1/probe.json	fixed write fixture	PASS	-
+write-recheck/current-1/probe.json	fresh process identity	PASS	-
+write-recheck/current-2/probe.json	top-level error	PASS	-
+write-recheck/current-2/probe.json	100k fixture	PASS	100000
+write-recheck/current-2/probe.json	stage inventory	PASS	-
+write-recheck/current-2/probe.json	stage errors and totals	PASS	-
+write-recheck/current-2/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-2/probe.json	fixed write fixture	PASS	-
+write-recheck/current-2/probe.json	fresh process identity	PASS	-
+write-recheck/current-3/probe.json	top-level error	PASS	-
+write-recheck/current-3/probe.json	100k fixture	PASS	100000
+write-recheck/current-3/probe.json	stage inventory	PASS	-
+write-recheck/current-3/probe.json	stage errors and totals	PASS	-
+write-recheck/current-3/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-3/probe.json	fixed write fixture	PASS	-
+write-recheck/current-3/probe.json	fresh process identity	PASS	-
+write-recheck/current-4/probe.json	top-level error	PASS	-
+write-recheck/current-4/probe.json	100k fixture	PASS	100000
+write-recheck/current-4/probe.json	stage inventory	PASS	-
+write-recheck/current-4/probe.json	stage errors and totals	PASS	-
+write-recheck/current-4/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-4/probe.json	fixed write fixture	PASS	-
+write-recheck/current-4/probe.json	fresh process identity	PASS	-
+write-recheck/current-5/probe.json	top-level error	PASS	-
+write-recheck/current-5/probe.json	100k fixture	PASS	100000
+write-recheck/current-5/probe.json	stage inventory	PASS	-
+write-recheck/current-5/probe.json	stage errors and totals	PASS	-
+write-recheck/current-5/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-5/probe.json	fixed write fixture	PASS	-
+write-recheck/current-5/probe.json	fresh process identity	PASS	-
+write-recheck/current-6/probe.json	top-level error	PASS	-
+write-recheck/current-6/probe.json	100k fixture	PASS	100000
+write-recheck/current-6/probe.json	stage inventory	PASS	-
+write-recheck/current-6/probe.json	stage errors and totals	PASS	-
+write-recheck/current-6/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-6/probe.json	fixed write fixture	PASS	-
+write-recheck/current-6/probe.json	fresh process identity	PASS	-
+write-recheck/current-7/probe.json	top-level error	PASS	-
+write-recheck/current-7/probe.json	100k fixture	PASS	100000
+write-recheck/current-7/probe.json	stage inventory	PASS	-
+write-recheck/current-7/probe.json	stage errors and totals	PASS	-
+write-recheck/current-7/probe.json	operation counts	PASS	connect:1,rootBind:2,baseSearch:2,indexedEquality:2,compareTrue:2,compareFalse:2,substringPrefix:2,substringNegative:2,setup:302,userConnect:1,userBind:2,add:100,modify:100,modifyDN:100,delete:100,cleanup:504
+write-recheck/current-7/probe.json	fixed write fixture	PASS	-
+write-recheck/current-7/probe.json	fresh process identity	PASS	-
+writes/before-1/probe.json	top-level error	PASS	-
+writes/before-1/probe.json	100k fixture	PASS	100000
+writes/before-1/probe.json	stage inventory	PASS	-
+writes/before-1/probe.json	stage errors and totals	PASS	-
+writes/before-1/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/before-1/probe.json	fixed write fixture	PASS	-
+writes/before-1/probe.json	fresh process identity	PASS	-
+writes/before-2/probe.json	top-level error	PASS	-
+writes/before-2/probe.json	100k fixture	PASS	100000
+writes/before-2/probe.json	stage inventory	PASS	-
+writes/before-2/probe.json	stage errors and totals	PASS	-
+writes/before-2/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/before-2/probe.json	fixed write fixture	PASS	-
+writes/before-2/probe.json	fresh process identity	PASS	-
+writes/before-3/probe.json	top-level error	PASS	-
+writes/before-3/probe.json	100k fixture	PASS	100000
+writes/before-3/probe.json	stage inventory	PASS	-
+writes/before-3/probe.json	stage errors and totals	PASS	-
+writes/before-3/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/before-3/probe.json	fixed write fixture	PASS	-
+writes/before-3/probe.json	fresh process identity	PASS	-
+writes/current-1/probe.json	top-level error	PASS	-
+writes/current-1/probe.json	100k fixture	PASS	100000
+writes/current-1/probe.json	stage inventory	PASS	-
+writes/current-1/probe.json	stage errors and totals	PASS	-
+writes/current-1/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/current-1/probe.json	fixed write fixture	PASS	-
+writes/current-1/probe.json	fresh process identity	PASS	-
+writes/current-2/probe.json	top-level error	PASS	-
+writes/current-2/probe.json	100k fixture	PASS	100000
+writes/current-2/probe.json	stage inventory	PASS	-
+writes/current-2/probe.json	stage errors and totals	PASS	-
+writes/current-2/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/current-2/probe.json	fixed write fixture	PASS	-
+writes/current-2/probe.json	fresh process identity	PASS	-
+writes/current-3/probe.json	top-level error	PASS	-
+writes/current-3/probe.json	100k fixture	PASS	100000
+writes/current-3/probe.json	stage inventory	PASS	-
+writes/current-3/probe.json	stage errors and totals	PASS	-
+writes/current-3/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/current-3/probe.json	fixed write fixture	PASS	-
+writes/current-3/probe.json	fresh process identity	PASS	-
+writes/openldap-1/probe.json	top-level error	PASS	-
+writes/openldap-1/probe.json	100k fixture	PASS	100000
+writes/openldap-1/probe.json	stage inventory	PASS	-
+writes/openldap-1/probe.json	stage errors and totals	PASS	-
+writes/openldap-1/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/openldap-1/probe.json	fixed write fixture	PASS	-
+writes/openldap-1/probe.json	fresh process identity	PASS	-
+writes/openldap-2/probe.json	top-level error	PASS	-
+writes/openldap-2/probe.json	100k fixture	PASS	100000
+writes/openldap-2/probe.json	stage inventory	PASS	-
+writes/openldap-2/probe.json	stage errors and totals	PASS	-
+writes/openldap-2/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/openldap-2/probe.json	fixed write fixture	PASS	-
+writes/openldap-2/probe.json	fresh process identity	PASS	-
+writes/openldap-3/probe.json	top-level error	PASS	-
+writes/openldap-3/probe.json	100k fixture	PASS	100000
+writes/openldap-3/probe.json	stage inventory	PASS	-
+writes/openldap-3/probe.json	stage errors and totals	PASS	-
+writes/openldap-3/probe.json	operation counts	PASS	connect:1,rootBind:20,baseSearch:20,indexedEquality:20,compareTrue:20,compareFalse:20,substringPrefix:20,substringNegative:20,setup:62,userConnect:1,userBind:20,add:20,modify:20,modifyDN:20,delete:20,cleanup:104
+writes/openldap-3/probe.json	fixed write fixture	PASS	-
+writes/openldap-3/probe.json	fresh process identity	PASS	-
+archive	170 JSON reports: 147 original + 23 recheck	PASS	170/170
+explicit-final/validation.tsv	export identities	PASS	-
+explicit-final/validation.tsv	before	PASS	-
+explicit-final/validation.tsv	current	PASS	-
+explicit-final/validation.tsv	openldap	PASS	-
+explicit-final	password and seeded database cleanup	PASS	-
+explicit-final/concurrent.tsv	concurrent repeats including warmup	PASS	-
+default-final/validation.tsv	export identities	PASS	-
+default-final/validation.tsv	before	PASS	-
+default-final/validation.tsv	current	PASS	-
+default-final/validation.tsv	openldap	PASS	-
+default-final	password and seeded database cleanup	PASS	-
+default-final/concurrent.tsv	concurrent repeats including warmup	PASS	-
+root-paired/validation.tsv	export identities	PASS	-
+root-paired/validation.tsv	before	PASS	-
+root-paired/validation.tsv	current	PASS	-
+root-paired/validation.tsv	openldap	PASS	-
+root-paired	password and seeded database cleanup	PASS	-
+online/validation.tsv	export identities	PASS	-
+online/validation.tsv	before-1	PASS	-
+online/validation.tsv	current-1	PASS	-
+online/validation.tsv	openldap-1	PASS	-
+online/validation.tsv	current-2	PASS	-
+online/validation.tsv	openldap-2	PASS	-
+online/validation.tsv	before-2	PASS	-
+online/validation.tsv	openldap-3	PASS	-
+online/validation.tsv	before-3	PASS	-
+online/validation.tsv	current-3	PASS	-
+online	password and seeded database cleanup	PASS	-
+writes/validation.tsv	export identities	PASS	-
+writes/validation.tsv	before-1	PASS	-
+writes/validation.tsv	current-1	PASS	-
+writes/validation.tsv	openldap-1	PASS	-
+writes/validation.tsv	current-2	PASS	-
+writes/validation.tsv	openldap-2	PASS	-
+writes/validation.tsv	before-2	PASS	-
+writes/validation.tsv	openldap-3	PASS	-
+writes/validation.tsv	before-3	PASS	-
+writes/validation.tsv	current-3	PASS	-
+writes	password and seeded database cleanup	PASS	-
+read-recheck/validation.tsv	export identities	PASS	-
+read-recheck/validation.tsv	before-1	PASS	-
+read-recheck/validation.tsv	current-1	PASS	-
+read-recheck/validation.tsv	current-2	PASS	-
+read-recheck/validation.tsv	before-2	PASS	-
+read-recheck/validation.tsv	before-3	PASS	-
+read-recheck/validation.tsv	current-3	PASS	-
+read-recheck	password and seeded database cleanup	PASS	-
+write-recheck/validation.tsv	export identities	PASS	-
+write-recheck/validation.tsv	before-1	PASS	-
+write-recheck/validation.tsv	current-1	PASS	-
+write-recheck/validation.tsv	current-2	PASS	-
+write-recheck/validation.tsv	before-2	PASS	-
+write-recheck/validation.tsv	before-3	PASS	-
+write-recheck/validation.tsv	current-3	PASS	-
+write-recheck/validation.tsv	current-4	PASS	-
+write-recheck/validation.tsv	before-4	PASS	-
+write-recheck/validation.tsv	before-5	PASS	-
+write-recheck/validation.tsv	current-5	PASS	-
+write-recheck/validation.tsv	current-6	PASS	-
+write-recheck/validation.tsv	before-6	PASS	-
+write-recheck/validation.tsv	before-7	PASS	-
+write-recheck/validation.tsv	current-7	PASS	-
+write-recheck	password and seeded database cleanup	PASS	-
+paged-recheck/validation.tsv	export identities	PASS	-
+paged-recheck/validation.tsv	before	PASS	-
+paged-recheck/validation.tsv	current	PASS	-
+paged-recheck/validation.tsv	openldap	PASS	-
+paged-recheck	password and seeded database cleanup	PASS	-
+exports	50 canonical exports: 27 original + 6 read + 14 write + 3 paged recheck; identical SHA256	PASS	50
+online/timings.tsv	CLI/startup inventory	PASS	-
+writes/timings.tsv	CLI/startup inventory	PASS	-
+read-recheck/timings.tsv	CLI/startup inventory	PASS	-
+write-recheck/timings.tsv	CLI/startup inventory	PASS	-
+paged-recheck/timings.tsv	paired rotation and 0-7 repeats; repeat 0 excluded	PASS	-
+["common","default","distributed","nonrootBase","search_nonrootBase",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootBase","search_nonrootBase",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","groups","memberEquality","search_memberEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","groups","memberEquality","search_memberEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","groups","memberEquality","search_memberEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",10,"before"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",10,"current"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",10,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",1000,"before"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",1000,"current"]	median repeats, operations and times	PASS	-
+["common","default","groups","groupBase","base_member_values",1000,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","groups","nestedMembership","client_bfs_member_equality",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","groups","nestedMembership","client_bfs_member_equality",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_ssha",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_ssha",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_ssha",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_plaintext",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_plaintext",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBind","simple_bind_plaintext",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_ssha",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_ssha",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_plaintext",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_plaintext",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootBase","search_nonrootBase",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootBase","search_nonrootBase",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","default","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootBase","search_nonrootBase",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootBase","search_nonrootBase",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","memberEquality","search_memberEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","memberEquality","search_memberEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","memberEquality","search_memberEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",10,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",10,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",10,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",1000,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",1000,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","groupBase","base_member_values",1000,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","nestedMembership","client_bfs_member_equality",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","nestedMembership","client_bfs_member_equality",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_ssha",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_ssha",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_ssha",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_plaintext",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_plaintext",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBind","simple_bind_plaintext",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_ssha",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_ssha",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_plaintext",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_plaintext",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootBase","search_nonrootBase",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootBase","search_nonrootBase",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats, operations and times	PASS	-
+["common","explicit","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","connect","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","rootBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","baseSearch","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","indexedEquality","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBindWrong","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBindWrong","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","connect","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","rootBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","baseSearch","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","indexedEquality","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","connect","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","rootBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","baseSearch","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","indexedEquality","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringPrefix","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringNegative","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBindWrong","-",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","fast","connect","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","rootBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","baseSearch","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","indexedEquality","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBindWrong","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBindWrong","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","connect","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","rootBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","baseSearch","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","indexedEquality","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","connect","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","rootBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","baseSearch","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","indexedEquality","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringPrefix","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringNegative","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBindWrong","-",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","fast","connect","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","rootBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","baseSearch","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","indexedEquality","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","fast","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","long-dn","userBindWrong","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","long-dn","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","long-password","userBindWrong","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","long-password","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","connect","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","rootBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","baseSearch","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","indexedEquality","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","normalized-root","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","connect","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","rootBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","baseSearch","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","indexedEquality","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringPrefix","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","probe","substringNegative","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","user","user-bind","userBindWrong","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBind","simple_bind_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBind","simple_bind_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBind","simple_bind_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBase","base_objectclass_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBase","base_objectclass_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootBase","base_objectclass_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootEquality","subtree_uid_equality_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootEquality","subtree_uid_equality_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootEquality","subtree_uid_equality_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareTrue","compare_uid_true_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareTrue","compare_uid_true_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareTrue","compare_uid_true_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareFalse","compare_uid_false_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareFalse","compare_uid_false_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","literal","rootCompareFalse","compare_uid_false_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBind","simple_bind_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBind","simple_bind_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBind","simple_bind_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBase","base_objectclass_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBase","base_objectclass_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootBase","base_objectclass_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootEquality","subtree_uid_equality_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootEquality","subtree_uid_equality_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootEquality","subtree_uid_equality_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareTrue","compare_uid_true_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareTrue","compare_uid_true_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareTrue","compare_uid_true_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareFalse","compare_uid_false_root",0,"before"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareFalse","compare_uid_false_root",0,"current"]	median repeats, operations and times	PASS	-
+["root","root","normalized","rootCompareFalse","compare_uid_false_root",0,"openldap"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","connect","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","rootBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","baseSearch","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","indexedEquality","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","substringPrefix","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","substringNegative","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","setup","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","user","fixed-DN","userConnect","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","user","fixed-DN","userBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","add","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","modify","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","modifyDN","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","delete","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","cleanup","-",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","connect","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","rootBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","baseSearch","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","indexedEquality","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","substringPrefix","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","substringNegative","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","setup","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","user","fixed-DN","userConnect","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","user","fixed-DN","userBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","add","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","modify","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","modifyDN","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","delete","-",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","fixed-DN","cleanup","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","connect","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","rootBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","baseSearch","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","indexedEquality","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareTrue","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareFalse","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringPrefix","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringNegative","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","setup","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userConnect","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userBind","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","add","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modify","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modifyDN","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","delete","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","cleanup","-",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","connect","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","rootBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","baseSearch","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","indexedEquality","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareTrue","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareFalse","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringPrefix","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringNegative","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","setup","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userConnect","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userBind","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","add","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modify","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modifyDN","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","delete","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","cleanup","-",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","connect","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","rootBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","baseSearch","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","indexedEquality","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareTrue","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","compareFalse","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringPrefix","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","substringNegative","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","setup","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userConnect","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","user","fixed-DN","userBind","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","add","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modify","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","modifyDN","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","delete","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","fixed-DN","cleanup","-",0,"openldap"]	median repeats, operations and times	PASS	-
+["concurrent","explicit","8-workers","uidEquality","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["concurrent","explicit","8-workers","uidEquality","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["concurrent","explicit","8-workers","uidEquality","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["concurrent","default","8-workers","uidEquality","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["concurrent","default","8-workers","uidEquality","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["concurrent","default","8-workers","uidEquality","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","cli","full_prefix","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","cli","indexed_10000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","cli","concurrent_8x1000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","cli","paged_2x100000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","cli","unindexed_negative_10","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read","root","cli","full_prefix","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","cli","indexed_10000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","cli","concurrent_8x1000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","cli","paged_2x100000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","cli","unindexed_negative_10","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read","root","cli","full_prefix","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","cli","indexed_10000","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","cli","concurrent_8x1000","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","cli","paged_2x100000","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["read","root","cli","unindexed_negative_10","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["writes","root","process","startup","launch-to-ready",0,"before"]	median repeats, operations and times	PASS	-
+["writes","root","process","startup","launch-to-ready",0,"current"]	median repeats, operations and times	PASS	-
+["writes","root","process","startup","launch-to-ready",0,"openldap"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","full_prefix","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","indexed_10000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","concurrent_8x1000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","paged_2x100000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","unindexed_negative_10","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","full_prefix","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","indexed_10000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","concurrent_8x1000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","paged_2x100000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["read-recheck","root","cli","unindexed_negative_10","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["write-recheck","root","process","startup","launch-to-ready",0,"before"]	median repeats, operations and times	PASS	-
+["write-recheck","root","process","startup","launch-to-ready",0,"current"]	median repeats, operations and times	PASS	-
+["paged-recheck","root","paired-cli","paged_2x100000","ldapsearch",0,"current"]	median repeats, operations and times	PASS	-
+["paged-recheck","root","paired-cli","paged_2x100000","ldapsearch",0,"openldap"]	median repeats, operations and times	PASS	-
+["paged-recheck","root","paired-cli","paged_2x100000","ldapsearch",0,"before"]	median repeats, operations and times	PASS	-
+["common","default","distributed","nonrootBase","search_nonrootBase",0]	comparison endpoints and operations	PASS	-
+["common","default","distributed","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operations	PASS	-
+["common","default","groups","memberEquality","search_memberEquality",0]	comparison endpoints and operations	PASS	-
+["common","default","groups","groupBase","base_member_values",10]	comparison endpoints and operations	PASS	-
+["common","default","groups","groupBase","base_member_values",1000]	comparison endpoints and operations	PASS	-
+["common","default","groups","nestedMembership","client_bfs_member_equality",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","userBind","simple_bind_ssha",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","userBind","simple_bind_plaintext",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","userBindWrong","simple_bind_ssha",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","userBindWrong","simple_bind_plaintext",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","nonrootBase","search_nonrootBase",0]	comparison endpoints and operations	PASS	-
+["common","default","hot","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operations	PASS	-
+["common","explicit","distributed","nonrootBase","search_nonrootBase",0]	comparison endpoints and operations	PASS	-
+["common","explicit","distributed","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operations	PASS	-
+["common","explicit","groups","memberEquality","search_memberEquality",0]	comparison endpoints and operations	PASS	-
+["common","explicit","groups","groupBase","base_member_values",10]	comparison endpoints and operations	PASS	-
+["common","explicit","groups","groupBase","base_member_values",1000]	comparison endpoints and operations	PASS	-
+["common","explicit","groups","nestedMembership","client_bfs_member_equality",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","userBind","simple_bind_ssha",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","userBind","simple_bind_plaintext",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_ssha",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","userBindWrong","simple_bind_plaintext",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","nonrootBase","search_nonrootBase",0]	comparison endpoints and operations	PASS	-
+["common","explicit","hot","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","connect","-",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","rootBind","-",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","baseSearch","-",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","indexedEquality","-",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["read","root","fast","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["read","user","long-dn","userBind","-",0]	comparison endpoints and operations	PASS	-
+["read","user","long-dn","userBindWrong","-",0]	comparison endpoints and operations	PASS	-
+["read","root","long-dn","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["read","root","long-dn","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["read","user","long-password","userBind","-",0]	comparison endpoints and operations	PASS	-
+["read","user","long-password","userBindWrong","-",0]	comparison endpoints and operations	PASS	-
+["read","root","long-password","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["read","root","long-password","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","connect","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","rootBind","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","baseSearch","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","indexedEquality","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["read","root","normalized-root","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","connect","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","rootBind","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","baseSearch","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","indexedEquality","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","substringPrefix","-",0]	comparison endpoints and operations	PASS	-
+["read","root","probe","substringNegative","-",0]	comparison endpoints and operations	PASS	-
+["read","user","user-bind","userBind","-",0]	comparison endpoints and operations	PASS	-
+["read","user","user-bind","userBindWrong","-",0]	comparison endpoints and operations	PASS	-
+["root","root","literal","rootBind","simple_bind_root",0]	comparison endpoints and operations	PASS	-
+["root","root","literal","rootBase","base_objectclass_root",0]	comparison endpoints and operations	PASS	-
+["root","root","literal","rootEquality","subtree_uid_equality_root",0]	comparison endpoints and operations	PASS	-
+["root","root","literal","rootCompareTrue","compare_uid_true_root",0]	comparison endpoints and operations	PASS	-
+["root","root","literal","rootCompareFalse","compare_uid_false_root",0]	comparison endpoints and operations	PASS	-
+["root","root","normalized","rootBind","simple_bind_root",0]	comparison endpoints and operations	PASS	-
+["root","root","normalized","rootBase","base_objectclass_root",0]	comparison endpoints and operations	PASS	-
+["root","root","normalized","rootEquality","subtree_uid_equality_root",0]	comparison endpoints and operations	PASS	-
+["root","root","normalized","rootCompareTrue","compare_uid_true_root",0]	comparison endpoints and operations	PASS	-
+["root","root","normalized","rootCompareFalse","compare_uid_false_root",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","connect","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","rootBind","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","baseSearch","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","indexedEquality","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","substringPrefix","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","substringNegative","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","setup","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","user","fixed-DN","userConnect","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","user","fixed-DN","userBind","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","add","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","modify","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","modifyDN","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","delete","-",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","fixed-DN","cleanup","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","connect","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","rootBind","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","baseSearch","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","indexedEquality","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","compareTrue","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","compareFalse","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","substringPrefix","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","substringNegative","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","setup","-",0]	comparison endpoints and operations	PASS	-
+["writes","user","fixed-DN","userConnect","-",0]	comparison endpoints and operations	PASS	-
+["writes","user","fixed-DN","userBind","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","add","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","modify","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","modifyDN","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","delete","-",0]	comparison endpoints and operations	PASS	-
+["writes","root","fixed-DN","cleanup","-",0]	comparison endpoints and operations	PASS	-
+["concurrent","explicit","8-workers","uidEquality","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["concurrent","default","8-workers","uidEquality","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read","root","cli","full_prefix","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read","root","cli","indexed_10000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read","root","cli","concurrent_8x1000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read","root","cli","paged_2x100000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read","root","cli","unindexed_negative_10","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["writes","root","process","startup","launch-to-ready",0]	comparison endpoints and operations	PASS	-
+["read-recheck","root","cli","full_prefix","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read-recheck","root","cli","indexed_10000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read-recheck","root","cli","concurrent_8x1000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read-recheck","root","cli","paged_2x100000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["read-recheck","root","cli","unindexed_negative_10","ldapsearch",0]	comparison endpoints and operations	PASS	-
+["write-recheck","root","process","startup","launch-to-ready",0]	comparison endpoints and operations	PASS	-
+["paged-recheck","root","paired-cli","paged_2x100000","ldapsearch",0]	comparison endpoints and operations	PASS	-
+compare-before.txt	complete unprofiled 3-repeat component	PASS	-
+compare-current.txt	complete unprofiled 3-repeat component	PASS	-
+object-class-bench.txt	warm and cold component inventory and PASS	PASS	-
+object-class-bench.txt	leaf/original	PASS	-
+object-class-bench.txt	leaf/cloning	PASS	-
+object-class-bench.txt	leaf/current	PASS	-
+object-class-bench.txt	leaf/cold	PASS	-
+object-class-bench.txt	root/original	PASS	-
+object-class-bench.txt	root/cloning	PASS	-
+object-class-bench.txt	root/current	PASS	-
+object-class-bench.txt	root/cold	PASS	-
+object-class-bench.txt	unrelated/original	PASS	-
+object-class-bench.txt	unrelated/cloning	PASS	-
+object-class-bench.txt	unrelated/current	PASS	-
+object-class-bench.txt	unrelated/cold	PASS	-
+object-class-bench.txt	unknown/original	PASS	-
+object-class-bench.txt	unknown/cloning	PASS	-
+object-class-bench.txt	unknown/current	PASS	-
+object-class-bench.txt	unknown/cold	PASS	-
+openldap-differential.txt	26 native top-level tests; 355 PASS records	PASS	-
+common-explicit.log	completion marker	PASS	-
+common-default.log	completion marker	PASS	-
+root-paired.log	completion marker	PASS	-
+full-read.log	completion marker	PASS	-
+full-write.log	completion marker	PASS	-
+read-recheck.log	completion marker	PASS	-
+write-recheck.log	completion marker	PASS	-
+paged-recheck.log	completion marker	PASS	-
+schema-test.txt	successful package log	PASS	-
+go-test.txt	successful package log	PASS	-
+openldap-differential.txt	successful package log	PASS	-
+go-vet.txt	log present (empty is not exit proof)	PASS	-
+executable-sha256.txt	before matches recorded SHA256	PASS	-
+executable-sha256.txt	current matches recorded SHA256	PASS	-

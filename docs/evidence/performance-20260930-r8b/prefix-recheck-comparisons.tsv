@@ -1,0 +1,2 @@
+suite	access_mode	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	openldap_over_current_pct	time_reduction_pct
+prefix-recheck	root	paired-cli	full_prefix	ldapsearch	0	1	747	722	645	89.33518005540166	3.346720214190091

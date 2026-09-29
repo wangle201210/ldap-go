@@ -1,0 +1,5 @@
+scope	state
+round	R8b after cold-path guard fix; fresh samples only
+validation	Complete; exit 0 per main
+performance	Five original suites plus independent paired paging/prefix and write recheck included after main finished signal; 47 exports
+prior_diagnosis	Frozen R8 linked only; no intermediate or excluded benchmark logs in R8b

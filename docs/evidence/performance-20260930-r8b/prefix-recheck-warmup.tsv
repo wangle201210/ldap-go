@@ -1,0 +1,4 @@
+endpoint	repeat	operations	total_ms
+before	0	1	726
+current	0	1	733
+openldap	0	1	625

@@ -1,0 +1,2 @@
+suite	access_mode	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	openldap_over_current_pct	time_reduction_pct
+paged-recheck	root	paired-cli	paged_2x100000	ldapsearch	0	2	1234	1248	1391	111.45833333333333	-1.1345218800648205

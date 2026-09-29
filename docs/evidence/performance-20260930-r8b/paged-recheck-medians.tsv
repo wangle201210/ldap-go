@@ -1,0 +1,4 @@
+suite	access_mode	variant	stage	method	members	endpoint	repeats	operations	median_ms
+paged-recheck	root	paired-cli	paged_2x100000	ldapsearch	0	current	7	2	1187
+paged-recheck	root	paired-cli	paged_2x100000	ldapsearch	0	openldap	7	2	1475
+paged-recheck	root	paired-cli	paged_2x100000	ldapsearch	0	before	7	2	1235

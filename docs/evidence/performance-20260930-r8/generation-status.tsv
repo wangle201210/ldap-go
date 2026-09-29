@@ -1,0 +1,5 @@
+scope	state
+qualification	Candidate investigation; PRE-FIX R8; NOT accepted performance or final implementation qualification
+original_five_scripts	Complete; all exit 0 per main
+rechecks	All three exit 0 per main; independent rows retained; 50 total exports
+next_candidate	R8b requires new tests and benchmarks for subsequent two-line production fix

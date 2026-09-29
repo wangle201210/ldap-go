@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+cd /Users/wanna/mine/github/ldap-go
+audit=/var/tmp/ldap-go-perf-20260930-r8
+export CGO_ENABLED=0
+go test ./internal/schema -count=1 >"$audit/schema-test.txt" 2>&1
+go test ./... >"$audit/go-test.txt" 2>&1
+go test ./internal/schema -run '^$' -bench '^BenchmarkEntryHasObjectClassReadOnly$' -benchmem -benchtime=300ms -count=3 >"$audit/object-class-bench.txt" 2>&1
+printf 'Final validation completed.\n'

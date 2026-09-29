@@ -1,0 +1,24 @@
+item	value	source
+baseline	2645eba	main
+qualification_status	Candidate investigation; R8 pre-fix diagnostic evidence; performance NOT accepted; NOT final implementation qualification	main archive-freeze signal
+subsequent_source_change	After all R8 workloads, two-line fix calls names.match only when names != nil, otherwise old predicate; R8b requires new tests and benchmarks	main archive-freeze signal
+production_scope	EntryHasObjectClass readonly without cloning; identical attribute-description fast path; no new cache	main
+candidate_source_diff	R8 measured candidate internal/schema/registry.go: 22 added, 4 removed; current working source subsequently differs	main R8 candidate freeze
+prepared_names	Read existing bounded preparedNames.plans under its mutex; never prepare or populate on miss; cold miss uses old subtype fallback; avoids cold huge-schema table construction	main final refinement
+schema_semantics	Class inheritance uses current registry; existing attribute-name table invalidates on register/upsert/config; helper checks cold/prepared paths and missing objectClass attribute schema	main
+schema_benchmark	BenchmarkEntryHasObjectClassReadOnly explicitly warms the EXISTING prepared-name table before current timing; original/cloning/current/cold remain separate; 300ms x 3	benchmark source and main
+schema_benchmark_cold	cold uses a clone made before table warmup; lookup never populates the table, so all cold iterations exercise the no-prepared fallback; registry/entry setup outside timing	benchmark source and main
+environment	100k; native OpenLDAP 2.6.13; Go 1.26.4; CGO_ENABLED=0; Apple M1 Pro	main
+component_before	/var/tmp/ldap-go-perf-20260930-r7/server-current.test -test.run ^$ -test.bench ^BenchmarkLocalCompare$ -test.benchmem -test.benchtime=1s -test.count=3	main: immutable existing R7 CGO0 binary; no profiling
+component_before_binary_sha256	f8466bd19dbc101efe6796445f0a47dd61dec9d963b5549bbecd842462649be2	read-only hash at evidence generation
+component_current	CGO_ENABLED=0 go test ./internal/server -run ^$ -bench ^BenchmarkLocalCompare$ -benchmem -benchtime=1s -count=3	main: no profiling
+component_preliminary	EXCLUDED; compilation possibly overlapped edits; uncertain source provenance	main
+component_copy_only	EXCLUDED; superseded first candidate	main
+intermediate_validation	Earlier full go test (server 129.250s) and schema logs excluded; final full and focused schema reruns completed	main validation completion
+validation_order	First validate.sh exit 0; R8 candidate vet exit 0, native 355 PASS 11.408s, build hashes and Compare 62.636s; warm-only object benchmark 13.089s superseded	main
+candidate_validation	R8 validate-final.sh exit 0: schema 1.792s, full-suite server 137.887s, object benchmark including cold 17.705s (300ms x 3); before subsequent two-line fix	main validation completion
+host_context	Shared-host timing variability; no causal attribution to background CPU use. Personal process snapshots excluded from archival.	main
+read_recheck	Six fresh Go-only processes in order before1,current1,current2,before2,before3,current3; SDK warmup n=2 only before measured CLI; no native or extended-fixture history; separate from originals	read-recheck.sh and main
+write_recheck	Seven alternating before/current pairs; fixed token; CRUD 100, reads/Bind 2, setup 302, cleanup 504, connections 1; 14 exports; no OpenLDAP measurement; separate from originals	write-recheck.sh and main
+paged_recheck	Fresh before/current/OpenLDAP default-access seeds; SDK n=2 warmup, then rotated paired CLI repeats 0-7; exclude warmup 0; seven measured batches of two 100k traversals; validation outside timing; 3 exports; separate from original and read recheck paging	paged-recheck.sh and main
+grouping	R7 generator and R4 full-read grouping; no cross-round samples	prior evidence

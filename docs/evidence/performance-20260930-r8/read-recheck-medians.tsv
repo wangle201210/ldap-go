@@ -1,0 +1,11 @@
+suite	access_mode	variant	stage	method	members	endpoint	repeats	operations	median_ms
+read-recheck	root	cli	full_prefix	ldapsearch	0	before	9	1	844
+read-recheck	root	cli	indexed_10000	ldapsearch	0	before	3	10000	950
+read-recheck	root	cli	concurrent_8x1000	ldapsearch	0	before	3	8000	361
+read-recheck	root	cli	paged_2x100000	ldapsearch	0	before	3	2	1535
+read-recheck	root	cli	unindexed_negative_10	ldapsearch	0	before	3	10	251
+read-recheck	root	cli	full_prefix	ldapsearch	0	current	9	1	777
+read-recheck	root	cli	indexed_10000	ldapsearch	0	current	3	10000	965
+read-recheck	root	cli	concurrent_8x1000	ldapsearch	0	current	3	8000	342
+read-recheck	root	cli	paged_2x100000	ldapsearch	0	current	3	2	1694
+read-recheck	root	cli	unindexed_negative_10	ldapsearch	0	current	3	10	234

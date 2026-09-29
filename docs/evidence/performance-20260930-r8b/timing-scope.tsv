@@ -1,0 +1,7 @@
+scope	rule
+common/root	Smoke and warmup excluded; setup and verification outside timed SDK calls; method/members/endpoint/variant stay separate.
+read	Three fresh processes per endpoint; probe/fast/normalized-root each 3 measured batches per process; all extended-bind repeats 0-2 measured.
+CLI	Common concurrent repeat 0 excluded; full-read full_prefix has 9 batches per endpoint, other CLI metrics 3.
+writes	Three fresh processes per endpoint; read and CRUD 20 operations; setup 62 and cleanup 104 are separate stage rows; connections 1.
+verification	Raw verification counts and times retained separately; never added to operation total_ms.
+comparisons	Unrounded batch medians; every negative time reduction retained; no recheck substitutes for original results.
