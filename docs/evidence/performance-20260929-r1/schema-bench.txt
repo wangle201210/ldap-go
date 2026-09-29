@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkDNCacheByteInput/warm/string-8  	 3574602	        66.02 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDNCacheByteInput/warm/string-8  	 3598611	        66.00 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDNCacheByteInput/warm/string-8  	 3691890	        65.32 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDNCacheByteInput/warm/bytes-8   	 4853656	        50.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheByteInput/warm/bytes-8   	 4811619	        49.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheByteInput/warm/bytes-8   	 4823268	        49.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDNCacheByteInput/distributed/string-8         	   46705	      5072 ns/op	    2760 B/op	     128 allocs/op
+BenchmarkDNCacheByteInput/distributed/string-8         	   48259	      5038 ns/op	    2760 B/op	     128 allocs/op
+BenchmarkDNCacheByteInput/distributed/string-8         	   47446	      5021 ns/op	    2760 B/op	     128 allocs/op
+BenchmarkDNCacheByteInput/distributed/bytes-8          	   47373	      5057 ns/op	    2760 B/op	     128 allocs/op
+BenchmarkDNCacheByteInput/distributed/bytes-8          	   47124	      5120 ns/op	    2760 B/op	     128 allocs/op
+BenchmarkDNCacheByteInput/distributed/bytes-8          	   47811	      5029 ns/op	    2760 B/op	     128 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	2.920s

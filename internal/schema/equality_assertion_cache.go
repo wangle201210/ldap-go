@@ -53,7 +53,7 @@ func (registry *Registry) normalizeEqualityAssertionLocked(
 		return nil, fmt.Errorf("attribute %q assertion: %w", attributeName, err)
 	}
 	if cacheDN && rule == "distinguishednamematch" {
-		dn, err := registry.normalizeDNCachedLocked(string(value))
+		dn, err := registry.normalizeDNBytesCachedLocked(value)
 		if err != nil {
 			return nil, errors.New("distinguishedNameMatch received invalid DN")
 		}

@@ -40,14 +40,14 @@ func (registry *Registry) evaluateDNEqualityCachedLocked(
 			if !hasValues {
 				// An absent attribute must keep the original false/hasValues=false
 				// pair; Filter performs absent-assertion validation separately.
-				dn, err := registry.normalizeDNCachedLocked(string(assertion))
+				dn, err := registry.normalizeDNBytesCachedLocked(assertion)
 				if err != nil {
 					return directory.FilterUndefinedResult, true
 				}
 				normalizedAssertion = dn.normalizedString()
 				hasValues = true
 			}
-			dn, err := registry.normalizeDNCachedLocked(string(value))
+			dn, err := registry.normalizeDNBytesCachedLocked(value)
 			if err != nil {
 				result = directory.FilterUndefinedResult
 				continue

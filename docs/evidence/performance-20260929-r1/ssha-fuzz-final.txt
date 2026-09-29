@@ -1,0 +1,8 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/47 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 47/47 completed, now fuzzing with 8 workers
+fuzz: elapsed: 3s, execs: 436401 (145400/sec), new interesting: 0 (total: 47)
+fuzz: elapsed: 6s, execs: 897201 (153619/sec), new interesting: 0 (total: 47)
+fuzz: elapsed: 9s, execs: 1344156 (148976/sec), new interesting: 0 (total: 47)
+fuzz: elapsed: 10s, execs: 1490445 (133980/sec), new interesting: 0 (total: 47)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/auth	10.136s

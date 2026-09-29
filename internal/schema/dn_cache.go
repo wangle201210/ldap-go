@@ -104,6 +104,24 @@ func (registry *Registry) normalizeDNCachedLocked(value string) (normalizedDNCac
 	return entry, nil
 }
 
+// The caller holds Registry.mu, as for normalizeDNCachedLocked. A direct map
+// lookup with string(value) avoids copying bytes on hits without retaining
+// caller-owned storage. Misses use the existing invalidation and owned-input path.
+func (registry *Registry) normalizeDNBytesCachedLocked(value []byte) (normalizedDNCacheEntry, error) {
+	if len(value) <= maxCachedDNInput {
+		cache := &registry.dnCache
+		cache.mu.Lock()
+		if cache.generation == registry.preparedNames.generation {
+			if entry, ok := cache.entries[string(value)]; ok {
+				cache.mu.Unlock()
+				return entry, nil
+			}
+		}
+		cache.mu.Unlock()
+	}
+	return registry.normalizeDNCachedLocked(string(value))
+}
+
 func estimatedDNCacheBytes(value string, entry normalizedDNCacheEntry) int {
 	// Allow for map slots, the DN, parsed RDN/AVA objects, nested slice headers,
 	// spare capacity and allocator rounding. Every AVA requires an '=' in the

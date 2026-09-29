@@ -102,16 +102,40 @@ func accessWriterFromContext(ctx context.Context, writer storage.Writer) storage
 
 func accessSubject(reader storage.Reader, subjectDN string) acl.Subject {
 	subject := acl.Subject{DN: subjectDN, RealDN: subjectDN}
-	if provider, ok := reader.(interface{ AccessContext() any }); ok {
-		if contextual, ok := provider.AccessContext().(acl.Subject); ok {
-			subject = contextual
-			subject.DN = subjectDN
-			if subject.RealDN == "" {
-				subject.RealDN = subjectDN
-			}
+	if contextual, ok := readerACLSubject(reader); ok {
+		subject = contextual
+		subject.DN = subjectDN
+		if subject.RealDN == "" {
+			subject.RealDN = subjectDN
 		}
 	}
 	return subject
+}
+
+// Known wrappers only forward the immutable context value. Avoid boxing it at
+// each ACL check, while retaining every call to application-defined accessors.
+func readerACLSubject(reader storage.Reader) (acl.Subject, bool) {
+	for {
+		switch value := reader.(type) {
+		case accessContextReader:
+			return value.subject, true
+		case accessContextWriter:
+			return value.subject, true
+		case storageRevisionReader:
+			reader = value.Reader
+			continue
+		}
+		if source, partitioned := storage.UnwrapPartitionAccessContext(reader); partitioned {
+			reader = source
+			continue
+		}
+		break
+	}
+	if provider, ok := reader.(interface{ AccessContext() any }); ok {
+		contextual, ok := provider.AccessContext().(acl.Subject)
+		return contextual, ok
+	}
+	return acl.Subject{}, false
 }
 
 func (server *Server) connectionACLSubject(state *connectionState) acl.Subject {

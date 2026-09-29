@@ -1,0 +1,46 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/auth
+cpu: Apple M1 Pro
+BenchmarkVerifySSHA/default/correct=true/legacy-8         	  947596	       190.0 ns/op	     108 B/op	       4 allocs/op
+BenchmarkVerifySSHA/default/correct=true/legacy-8         	 1000000	       183.8 ns/op	     108 B/op	       4 allocs/op
+BenchmarkVerifySSHA/default/correct=true/current-8        	 1531531	       115.3 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/default/correct=true/current-8        	 1607931	       111.4 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/default/correct=false/legacy-8        	 1000000	       173.1 ns/op	     108 B/op	       4 allocs/op
+BenchmarkVerifySSHA/default/correct=false/legacy-8        	 1000000	       173.9 ns/op	     108 B/op	       4 allocs/op
+BenchmarkVerifySSHA/default/correct=false/current-8       	 1631174	       111.3 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/default/correct=false/current-8       	 1635477	       110.2 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=true/legacy-8   	  963747	       198.3 ns/op	     188 B/op	       5 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=true/legacy-8   	  954315	       217.1 ns/op	     188 B/op	       5 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=true/current-8  	 1416244	       127.0 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=true/current-8  	 1371682	       132.1 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=false/legacy-8  	  952087	       231.3 ns/op	     188 B/op	       5 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=false/legacy-8  	  831168	       219.0 ns/op	     188 B/op	       5 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=false/current-8 	 1288228	       137.2 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/imported_salt/correct=false/current-8 	 1418253	       129.2 ns/op	       4 B/op	       1 allocs/op
+BenchmarkVerifySSHA/long_password/correct=true/legacy-8   	  228879	       751.8 ns/op	    1228 B/op	       4 allocs/op
+BenchmarkVerifySSHA/long_password/correct=true/legacy-8   	  265116	       720.4 ns/op	    1228 B/op	       4 allocs/op
+BenchmarkVerifySSHA/long_password/correct=true/current-8  	  253987	       682.4 ns/op	    1156 B/op	       2 allocs/op
+BenchmarkVerifySSHA/long_password/correct=true/current-8  	  256956	       698.2 ns/op	    1156 B/op	       2 allocs/op
+BenchmarkVerifySSHA/long_password/correct=false/legacy-8  	  263940	       728.5 ns/op	    1228 B/op	       4 allocs/op
+BenchmarkVerifySSHA/long_password/correct=false/legacy-8  	  258763	       709.7 ns/op	    1228 B/op	       4 allocs/op
+BenchmarkVerifySSHA/long_password/correct=false/current-8 	  264958	       680.3 ns/op	    1156 B/op	       2 allocs/op
+BenchmarkVerifySSHA/long_password/correct=false/current-8 	  264548	       672.8 ns/op	    1156 B/op	       2 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=true/legacy-8       	  272128	       684.8 ns/op	     988 B/op	       5 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=true/legacy-8       	  267295	       677.5 ns/op	     988 B/op	       5 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=true/current-8      	  310538	       608.9 ns/op	     580 B/op	       3 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=true/current-8      	  296292	       591.6 ns/op	     580 B/op	       3 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=false/legacy-8      	  268617	       673.7 ns/op	     988 B/op	       5 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=false/legacy-8      	  277908	       668.8 ns/op	     988 B/op	       5 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=false/current-8     	  308412	       583.6 ns/op	     580 B/op	       3 allocs/op
+BenchmarkVerifySSHA/long_salt/correct=false/current-8     	  316142	       585.5 ns/op	     580 B/op	       3 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=true/legacy-8      	  999097	       189.1 ns/op	     156 B/op	       5 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=true/legacy-8      	  980125	       188.9 ns/op	     156 B/op	       5 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=true/current-8     	 1376072	       130.1 ns/op	      52 B/op	       2 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=true/current-8     	 1397624	       128.6 ns/op	      52 B/op	       2 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=false/legacy-8     	  956068	       190.5 ns/op	     156 B/op	       5 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=false/legacy-8     	  993788	       186.8 ns/op	     156 B/op	       5 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=false/current-8    	 1378227	       129.5 ns/op	      52 B/op	       2 allocs/op
+BenchmarkVerifySSHA/whitespace/correct=false/current-8    	 1421814	       127.9 ns/op	      52 B/op	       2 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/auth	7.361s

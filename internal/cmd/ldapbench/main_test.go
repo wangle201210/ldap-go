@@ -43,6 +43,10 @@ func TestOptionsRejectUnsafeOrInvalidInput(t *testing.T) {
 		{"missing env value", []string{"-read-only", "-password-env=MISSING_SECRET"}, "nonempty"},
 		{"empty env value", []string{"-read-only", "-password-env=EMPTY_SECRET"}, "nonempty"},
 		{"write requires user env", []string{"-write"}, "user-password-env"},
+		{"fixture token read only", []string{"-read-only", "-fixture-token=00112233445566778899aabbccddeeff"}, "fixture-token"},
+		{"fixture token short", []string{"-write", "-fixture-token=01"}, "fixture-token"},
+		{"fixture token nonhex", []string{"-write", "-fixture-token=00112233445566778899aabbccddeezz"}, "fixture-token"},
+		{"fixture token DN injection", []string{"-write", "-fixture-token=x,dc=other"}, "fixture-token"},
 		{"CLI password forbidden", []string{"-read-only", "-password=secret"}, "flag provided but not defined"},
 		{"zero entries", []string{"-read-only", "-entries=0"}, "entries"},
 		{"large entries", []string{"-read-only", "-entries=1000000"}, "entries"},
@@ -57,6 +61,14 @@ func TestOptionsRejectUnsafeOrInvalidInput(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestOptionsFixtureToken(t *testing.T) {
+	args := append(fixtureArgs(), "-write", "-user-password-env=USER_SECRET", "-fixture-token=00112233445566778899AABBCCDDEEFF")
+	c, err := parseOptions(args, testLookup, io.Discard)
+	if err != nil || c.FixtureToken != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("fixture token = %q, error = %v", c.FixtureToken, err)
 	}
 }
 

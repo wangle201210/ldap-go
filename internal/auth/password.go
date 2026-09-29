@@ -62,10 +62,7 @@ func VerifyPassword(stored, supplied []byte) bool {
 			return digest[:]
 		})
 	case "SSHA":
-		return verifyDigest(payload, supplied, true, sha1.Size, func(value []byte) []byte {
-			digest := sha1.Sum(value)
-			return digest[:]
-		})
+		return verifySSHA(payload, supplied)
 	case "SHA256":
 		return verifyDigest(payload, supplied, false, sha256.Size, func(value []byte) []byte {
 			digest := sha256.Sum256(value)
@@ -451,7 +448,7 @@ func splitScheme(stored []byte) (string, []byte) {
 	if len(stored) < 3 || stored[0] != '{' {
 		return "", stored
 	}
-	end := strings.IndexByte(string(stored), '}')
+	end := bytes.IndexByte(stored, '}')
 	if end <= 1 {
 		return "", stored
 	}

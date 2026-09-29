@@ -1,0 +1,9 @@
+stage	operations	endpoint	samples	median_ms
+add	100	before	7	90.14170700000005
+add	100	current	7	97.21745699999997
+modify	100	before	7	43.912080000000024
+modify	100	current	7	42.60729099999998
+modifyDN	100	before	7	134.40266500000004
+modifyDN	100	current	7	137.96675400000007
+delete	100	before	7	111.05974600000002
+delete	100	current	7	107.06641500000002

@@ -32,6 +32,7 @@ type options struct {
 	PasswordEnv     string        `json:"password_env"`
 	UserPasswordEnv string        `json:"user_password_env,omitempty"`
 	Label           string        `json:"label,omitempty"`
+	FixtureToken    string        `json:"fixture_token,omitempty"`
 	ReadOnly        bool          `json:"read_only"`
 	Write           bool          `json:"write"`
 	N               int           `json:"n"`
@@ -107,6 +108,7 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	f.StringVar(&c.Base, "base", "", "required fixture base DN; the temporary OU is created directly below it")
 	f.StringVar(&c.People, "people", "", "required people DN containing uid=scale-%06d entries")
 	f.StringVar(&c.Label, "label", "", "report label, e.g. before/current/native")
+	f.StringVar(&c.FixtureToken, "fixture-token", "", "optional 32-digit hex token for identical write DNs across fresh disposable copies")
 	f.BoolVar(&c.ReadOnly, "read-only", false, "only Bind, Compare and Search on the supplied existing fixture")
 	f.BoolVar(&c.Write, "write", false, "authorize temporary writes on this disposable fixture")
 	f.IntVar(&c.N, "n", 100, "operations per read/Bind/Compare stage, clamped to [1,10000]")
@@ -126,6 +128,13 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	}
 	if c.Write == c.ReadOnly {
 		return c, errors.New("choose exactly one of -read-only or -write")
+	}
+	if c.FixtureToken != "" {
+		token, err := hex.DecodeString(c.FixtureToken)
+		if !c.Write || err != nil || len(token) != 16 {
+			return c, errors.New("-fixture-token requires -write and exactly 32 hexadecimal digits")
+		}
+		c.FixtureToken = hex.EncodeToString(token)
 	}
 	u, err := url.Parse(c.URI)
 	if err != nil || u == nil || (u.Scheme != "ldap" && u.Scheme != "ldaps") || u.Hostname() == "" ||
@@ -377,11 +386,15 @@ func ssha(password string) (string, error) {
 }
 
 func probeWrites(ctx context.Context, c options, r *report, conn *ldap.Conn) (err error) {
-	token := make([]byte, 16)
-	if _, err := rand.Read(token); err != nil {
-		return err
+	fixtureToken := c.FixtureToken
+	if fixtureToken == "" {
+		token := make([]byte, 16)
+		if _, err := rand.Read(token); err != nil {
+			return err
+		}
+		fixtureToken = hex.EncodeToString(token)
 	}
-	ou := "ldapbench-" + hex.EncodeToString(token)
+	ou := "ldapbench-" + fixtureToken
 	r.RunDN = "ou=" + ou + "," + c.Base
 	hash, err := ssha(c.userPassword)
 	if err != nil {

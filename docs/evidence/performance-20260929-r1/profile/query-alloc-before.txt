@@ -1,0 +1,39 @@
+File: profile.test
+Type: alloc_space
+Time: 2026-09-29 19:14:43 CST
+Active filters:
+   focus=trySmallNonRootSearch
+Showing nodes accounting for 228.53MB, 7.37% of 3102.68MB total
+Dropped 40 nodes (cum <= 15.51MB)
+Showing top 30 nodes out of 128
+      flat  flat%   sum%        cum   cum%
+   86.01MB  2.77%  2.77%    86.01MB  2.77%  internal/bytealg.MakeNoZero
+   16.50MB  0.53%  3.30%    16.50MB  0.53%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).evaluateDNEqualityCachedLocked
+      15MB  0.48%  3.79%       15MB  0.48%  go.etcd.io/bbolt.(*Cursor).search
+   10.50MB  0.34%  4.13%    10.50MB  0.34%  github.com/wangle201210/ldap-go/internal/storage.decodeBinaryStoredEntryAttributes
+   10.50MB  0.34%  4.46%    10.50MB  0.34%  github.com/wangle201210/ldap-go/internal/server.accessContextReader.AccessContext
+    7.50MB  0.24%  4.71%   249.03MB  8.03%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch
+    6.50MB  0.21%  4.92%     6.50MB  0.21%  github.com/wangle201210/ldap-go/internal/ldapwire.encodeSearchResultEntryDirect
+       6MB  0.19%  5.11%        6MB  0.19%  github.com/go-ldap/ldap/v3.ParseDN.func1 (inline)
+       5MB  0.16%  5.27%        5MB  0.16%  go.etcd.io/bbolt.cloneBytes (inline)
+       5MB  0.16%  5.43%    15.50MB   0.5%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).prevalidateEqualityIndexCandidates
+       5MB  0.16%  5.59%   107.01MB  3.45%  github.com/wangle201210/ldap-go/internal/storage.forEachReadOnlyEncodedCandidate
+    4.50MB  0.15%  5.74%     4.50MB  0.15%  bytes.Clone (inline)
+       4MB  0.13%  5.87%       20MB  0.64%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).normalizeEqualityAssertionLocked
+       4MB  0.13%  6.00%        4MB  0.13%  github.com/wangle201210/ldap-go/internal/storage.boltSchemaAwareDNMigrationMetadataKey
+    3.50MB  0.11%  6.11%    24.01MB  0.77%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).getSchemaAwareIn
+    3.50MB  0.11%  6.22%        5MB  0.16%  go.etcd.io/bbolt.(*DB).beginTx
+    3.50MB  0.11%  6.33%        6MB  0.19%  github.com/go-ldap/ldap/v3.decodeString
+       3MB 0.097%  6.43%        3MB 0.097%  github.com/wangle201210/ldap-go/internal/storage.partitionedEntryKey (inline)
+       3MB 0.097%  6.53%        3MB 0.097%  github.com/wangle201210/ldap-go/internal/server.(*collectiveAttributePlanCache).plan
+       3MB 0.097%  6.62%       12MB  0.39%  github.com/wangle201210/ldap-go/internal/storage.newBoltTx
+       3MB 0.097%  6.72%        4MB  0.13%  github.com/wangle201210/ldap-go/internal/storage.(*readOnlyCandidateDecoder).borrow
+    2.50MB 0.081%  6.80%     2.50MB 0.081%  github.com/wangle201210/ldap-go/internal/server.(*serializedResponseConnection).writeLockedBatch
+    2.50MB 0.081%  6.88%     2.50MB 0.081%  github.com/wangle201210/ldap-go/internal/storage.genericMetadataKey (inline)
+    2.50MB 0.081%  6.96%     7.50MB  0.24%  go.etcd.io/bbolt.(*Bucket).openBucket
+    2.50MB 0.081%  7.04%     2.50MB 0.081%  unicode/utf8.AppendRune (inline)
+       2MB 0.064%  7.11%        2MB 0.064%  github.com/wangle201210/ldap-go/internal/storage.appendLengthPrefixed (inline)
+       2MB 0.064%  7.17%        2MB 0.064%  github.com/wangle201210/ldap-go/internal/server.databaseSearchRoutesFromPrimary
+       2MB 0.064%  7.24%    10.50MB  0.34%  github.com/wangle201210/ldap-go/internal/storage.(*boltTx).boundedEqualityIndexPostings
+       2MB 0.064%  7.30%        3MB 0.097%  github.com/wangle201210/ldap-go/internal/storage.appendEqualityIndexToken
+       2MB 0.064%  7.37%     2.50MB 0.081%  github.com/go-ldap/ldap/v3.(*AttributeTypeAndValue).String

@@ -85,6 +85,12 @@ and is clamped to 1..1000. JSON records the effective values. All connections
 and requests have the supplied timeout. LDAPS uses normal certificate
 verification; there is no insecure TLS option.
 
+Write fixtures use a random 128-bit token by default. For paired measurements
+with identical DNs, pass the same `-fixture-token` (exactly 32 hexadecimal digits)
+to each fresh disposable copy. The token is recorded in JSON. An existing OU
+still causes setup to fail before cleanup is enabled; it is never adopted.
+This option is rejected in read-only mode.
+
 Both modes measure `rootBind`, `baseSearch`, `indexedEquality`, `compareTrue`,
 `compareFalse`, `substringPrefix`, and `substringNegative`. Each has `n`
 operations over a reused connection, with SDK result validation. Equality and
@@ -103,7 +109,7 @@ failure, while cleanup attempts all known DNs unless its connection closes.
 
 ## Cleanup
 
-All writes stay below a unique `ou=ldapbench-<128-bit token>,<base>` with an
+All writes stay below a newly created `ou=ldapbench-<128-bit token>,<base>` with an
 ownership marker; existing people entries are never written. Setup creates the
 SSHA user and separate modify/rename/delete batches before their measured stages.
 After successfully creating the OU, cleanup runs on success, failure, SIGINT,
