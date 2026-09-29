@@ -565,10 +565,10 @@ changetype: delete
 func TestLDIFImportDeadlineBeforeFirstWriteMarksAllNotAttempted(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{}
-	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, func(config *Config) {
-		config.OperationTimeout = time.Nanosecond
-	})
+	application, _ := newTestApplication(t, &fakeConnector{clients: []Client{client}}, nil)
 	authenticated := loginTestSession(t, application, "dn")
+	// Force synchronous expiry after setup instead of racing a nanosecond timer.
+	application.config.OperationTimeout = -time.Second
 	data := `dn: uid=first,dc=example,dc=com
 changetype: delete
 
