@@ -1,0 +1,72 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkPreparedAttributeSelectionResponse/values1/Select-8  	  816580	       295.9 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1/Select-8  	  834649	       293.6 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1/Select-8  	  793562	       289.0 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1/SelectForResponse-8         	  849619	       288.7 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1/SelectForResponse-8         	  905874	       335.4 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1/SelectForResponse-8         	  859880	       295.2 ns/op	     264 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/Select-8                    	  437188	       530.2 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/Select-8                    	  431864	       472.7 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/Select-8                    	  537799	       467.6 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/SelectForResponse-8         	  524866	       456.8 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/SelectForResponse-8         	  528338	       493.0 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values7/SelectForResponse-8         	  548232	       457.5 ns/op	     704 B/op	      13 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/Select-8                    	  549602	       474.1 ns/op	     768 B/op	      14 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/Select-8                    	  516614	       484.6 ns/op	     768 B/op	      14 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/Select-8                    	  509918	       475.2 ns/op	     768 B/op	      14 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/SelectForResponse-8         	  691965	       387.8 ns/op	     704 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/SelectForResponse-8         	  635025	       402.1 ns/op	     704 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values8/SelectForResponse-8         	  604051	       383.4 ns/op	     704 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/Select-8                   	  436653	       539.8 ns/op	     912 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/Select-8                   	  493886	       571.0 ns/op	     912 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/Select-8                   	  459644	       541.2 ns/op	     912 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/SelectForResponse-8        	  570811	       458.2 ns/op	     848 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/SelectForResponse-8        	  549445	       441.2 ns/op	     848 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values10/SelectForResponse-8        	  601389	       431.7 ns/op	     848 B/op	       7 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/Select-8                 	   10000	     24179 ns/op	   72768 B/op	    1006 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/Select-8                 	   10000	     24417 ns/op	   72768 B/op	    1006 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/Select-8                 	    9930	     25919 ns/op	   72768 B/op	    1006 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/SelectForResponse-8      	   17313	     13900 ns/op	   65088 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/SelectForResponse-8      	   14617	     17168 ns/op	   65088 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/values1000/SelectForResponse-8      	   17232	     13831 ns/op	   65088 B/op	      16 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/Select-8                  	    4692	     57826 ns/op	  278050 B/op	    1004 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/Select-8                  	    4494	     54054 ns/op	  278051 B/op	    1004 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/Select-8                  	    4612	     51843 ns/op	  278051 B/op	    1004 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/SelectForResponse-8       	    5371	     39346 ns/op	  271300 B/op	      20 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/SelectForResponse-8       	    6836	     41856 ns/op	  271300 B/op	      20 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/mixedHuge/SelectForResponse-8       	    6446	     42641 ns/op	  271300 B/op	      20 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/Select-8                        	  979774	       253.4 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/Select-8                        	  964662	       254.1 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/Select-8                        	  996901	       252.8 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/SelectForResponse-8             	  931556	       267.3 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/SelectForResponse-8             	  930517	       254.1 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nil/SelectForResponse-8             	  932445	       279.8 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/Select-8                      	  904749	       272.1 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/Select-8                      	  944060	       314.4 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/Select-8                      	 1000000	       280.8 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/SelectForResponse-8           	  950918	       267.2 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/SelectForResponse-8           	  897181	       274.8 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/empty/SelectForResponse-8           	  952506	       261.1 ns/op	     192 B/op	       5 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/Select-8                  	   54422	      3958 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/Select-8                  	   63820	      3850 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/Select-8                  	   59566	      4136 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/SelectForResponse-8       	   59083	      4345 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/SelectForResponse-8       	   54654	      4726 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/nilValues/SelectForResponse-8       	   57276	      4402 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/Select-8                	   47385	      5736 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/Select-8                	   46162	      5491 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/Select-8                	   49209	      5267 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/SelectForResponse-8     	   44407	      5522 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/SelectForResponse-8     	   41784	      5954 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/emptyValues/SelectForResponse-8     	   41365	      5682 ns/op	   24768 B/op	       6 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/Select-8                  	 1000000	       212.3 ns/op	     160 B/op	       3 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/Select-8                  	 1000000	       207.2 ns/op	     160 B/op	       3 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/Select-8                  	 1000000	       206.3 ns/op	     160 B/op	       3 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/SelectForResponse-8       	 1000000	       211.7 ns/op	     160 B/op	       3 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/SelectForResponse-8       	 1000000	       208.6 ns/op	     160 B/op	       3 allocs/op
+BenchmarkPreparedAttributeSelectionResponse/typesOnly/SelectForResponse-8       	 1000000	       226.1 ns/op	     160 B/op	       3 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	16.371s

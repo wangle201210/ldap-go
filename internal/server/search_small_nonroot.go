@@ -146,7 +146,7 @@ func (server *Server) trySmallNonRootSearch(
 			readable := server.attributesWithPrivilegeValues(state.runtime, tx, state.boundDN, entry, acl.Read, request.TypesOnly, true, selection)
 			readable = server.applyAllowedAttributes(state.runtime, tx, state.boundDN, entry, readable, request.Attributes, request.TypesOnly)
 			// Own selected descriptors and bytes before the candidate callback ends.
-			selected := selection.Select(readable, request.TypesOnly)
+			selected := selection.SelectForResponse(readable, request.TypesOnly)
 			// Match the general visitor: filter and project the next surviving
 			// entry before declaring overflow, but do not reserve or retain it.
 			if count >= limits.size {

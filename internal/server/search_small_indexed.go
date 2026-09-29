@@ -129,7 +129,7 @@ func (server *Server) trySmallIndexedSearch(
 				// while the borrowed entry is still valid inside its callback.
 				var selected directory.Entry
 				if prepared {
-					selected = selection.Select(readable, request.TypesOnly)
+					selected = selection.SelectForResponse(readable, request.TypesOnly)
 				} else {
 					selected = server.selectEntry(state.runtime, readable, request.Attributes, request.TypesOnly)
 				}

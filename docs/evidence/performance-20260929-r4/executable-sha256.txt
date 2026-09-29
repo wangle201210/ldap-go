@@ -1,0 +1,5 @@
+Executable SHA-256, read from /var/tmp/ldap-go-perf-20260929-r4.
+Baseline source: 6f31d43. Current: frozen R4 opt-in response selection changes.
+
+365079e52a578b2180f8fb10d2a647be9d5dd663177587f0a105b63e0ccbb5f3  before
+14f64911aa8f5f1505f36e20b4eb735e7b6216afa27234d0df8a5cb2a6e17202  current
