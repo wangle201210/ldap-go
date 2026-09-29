@@ -1,0 +1,7 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+borrowed-entry-root-missing	members-10	forced-owned	eligible	ns/op	11613	12162	-4.72746060449496
+borrowed-entry-root-missing	members-10	forced-owned	eligible	B/op	12968	13200	-1.7890191239975373
+borrowed-entry-root-missing	members-10	forced-owned	eligible	allocs/op	98	102	-4.081632653061229
+borrowed-entry-root-missing	members-1000	forced-owned	eligible	ns/op	72395	64801	10.489674701291529
+borrowed-entry-root-missing	members-1000	forced-owned	eligible	B/op	82808	9048	89.07351946671818
+borrowed-entry-root-missing	members-1000	forced-owned	eligible	allocs/op	99	97	2.020202020202022

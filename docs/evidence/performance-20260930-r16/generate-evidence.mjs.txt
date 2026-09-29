@@ -1,0 +1,598 @@
+// Adapted from R13. Only --main-finished publishes after main's explicit signal.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+
+const src = '/var/tmp/ldap-go-perf-20260930-r16';
+const frozenSource = path.join(src, 'frozen-source');
+const repo = '/Users/wanna/mine/github/ldap-go';
+const dst = `${repo}/docs/evidence/performance-20260930-r16`;
+// Main rejected R16 and authorized archival; its temporary hashing pause ended.
+const publicationHold = '';
+const archiveState = 'ARCHIVED_REJECTED_NOT_SHIPPED';
+const baseline = '747e5bd307b361ec03705a16303fb9b363c263d1';
+const expectedHashes = {
+  before: '96937b2ddf7bce78eccf7ee728880e5eb68fa560d41df0dcbf2517afa13ad751',
+  current: '7c647988fe088d415725c4f75868bb0fd67c72145877301bedb0a2b2407545ea',
+};
+const preWrapperHash = 'f4ee1a58e66370abd9f9a1ad38facf6a1f83e34a01dd0a2fee98fe43cc69cd56';
+const preWrapperFiles = ['executable-sha256.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt', 'focused-test.txt'].map(f => 'pre-wrapper/' + f);
+const exploratorySrc = '/var/tmp/ldap-go-perf-20260930-r15';
+const initialCurrentHash = '024d4b198359917b5bdc2e23c784f0efe58df9dbb3c0847d2498c8121611ac31';
+const exploratoryRuns = ['explicit-group-recheck', 'default-group-recheck'];
+const exploratoryFiles = [
+  'group-before.txt', 'group-current.txt',
+  ...exploratoryRuns.flatMap(run => [`${run}/groups.json`, `${run}/validation.tsv`]),
+  ...['recheck-group-explicit', 'recheck-group-default'].flatMap(s => [`${s}.sh`, `${s}.log`]),
+];
+const endpoints = ['before', 'current', 'openldap'];
+const runs = ['explicit-final', 'default-final', 'root-paired', 'explicit-group-compare', 'default-group-compare', 'explicit-read-recheck'];
+const scripts = ['common-explicit', 'common-default', 'root-paired', 'group-compare-explicit', 'group-compare-default', 'recheck-explicit-read'];
+const fixtureProofLogs = ['real-fixture-explicit.txt', 'real-fixture-default.txt'];
+const fixtureProofSources = ['internal/server/compare_borrowed_fixture_test.go'];
+const fixtureProofCases = ['TestCompareBorrowedRealFixture', ...['first', 'last', 'missing'].map(name => `TestCompareBorrowedRealFixture/${name}`)];
+const fixtureProofGuards = ['v3', 'noControls', 'DNReference', 'plainBolt', 'localProjection', 'runtimeDNIdentity', 'databaseCacheSafe', 'runtimeProjectionSafe', 'batchValues'];
+const borrowedBench = { file: 'borrowed-path-components.txt', repeats: 5 };
+const profileLogs = ['eligible-profile-both.txt', 'small-eligible-profile.txt'];
+const logs = ['group-before.txt', 'group-current.txt', 'focused-test.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt', ...fixtureProofLogs, ...(borrowedBench.file ? [borrowedBench.file] : [])];
+const signals = ['generator/validation-main.txt', 'generator/main-finished.txt'];
+const binaries = ['before', 'current', 'server-before.test', 'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group'];
+const sourceFiles = [
+  'internal/storage/readonly_first_get.go', 'internal/storage/readonly_first_get_test.go',
+  'internal/storage/index_readonly_candidates.go', 'internal/server/compare_borrowed.go',
+  'internal/server/compare_borrowed_test.go', 'internal/server/write.go',
+  'internal/server/compare_group_bench_test.go', 'internal/server/compare_bench_test.go', 'internal/cmd/ldapcommonbench/main.go',
+  'internal/server/compare_borrowed_bench_test.go',
+  'internal/cmd/ldapcommonbench/group_compare_test.go',
+  ...fixtureProofSources,
+];
+const batches = run => run === 'root-paired' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke']
+  : run.includes('-group-') ? ['groups', 'smoke'] : run === 'explicit-read-recheck' ? ['hot', 'groups', 'smoke'] : ['hot', 'distributed', 'groups', 'smoke'];
+const jsonFiles = runs.flatMap(run => [...batches(run).map(batch => `${run}/${batch}.json`), ...endpoints.map(e => `${run}/${e}/warmup.json`)]);
+const rawFiles = [
+  ...logs, 'executable-sha256.txt', 'validate.sh', 'run-performance.sh', ...signals,
+  ...scripts.flatMap(s => [`${s}.sh`, `${s}.log`]), ...jsonFiles,
+  ...runs.flatMap(run => [`${run}/validation.tsv`, ...endpoints.map(e => `${run}/${e}/server.log`), `${run}/openldap/reindex.log`]),
+  ...runs.slice(0, 2).map(run => `${run}/concurrent.tsv`),
+];
+const inputPath = f => path.join(f.startsWith('generator/') ? dst : src, f);
+const exists = f => fs.existsSync(inputPath(f));
+const snapshots = new Map();
+function regularFile(f) {
+  const stat = fs.lstatSync(f);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Expected regular file: ${f}`);
+  return stat;
+}
+function remember(f, stat) { snapshots.set(f, { size: stat.size, mtimeMs: stat.mtimeMs }); }
+function readPath(f) {
+  const stat = regularFile(f), body = fs.readFileSync(f, 'utf8');
+  remember(f, stat);
+  return body;
+}
+const cache = new Map();
+function read(f) {
+  if (!cache.has(f)) cache.set(f, readPath(inputPath(f)));
+  return cache.get(f);
+}
+const digest = content => createHash('sha256').update(content).digest('hex');
+async function sha(f) {
+  const stat = regularFile(f), hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(f)) hash.update(chunk);
+  remember(f, stat);
+  return hash.digest('hex');
+}
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const same = (a, b) => Array.isArray(a) && Array.isArray(b) && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const finite = n => Number.isFinite(n) && n >= 0;
+const positive = n => Number.isFinite(n) && n > 0;
+const median = xs => { const a = [...xs].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const tsv = rows => rows.map(row => row.map(x => String(x ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const output = new Map(), checks = [['path', 'check', 'status', 'detail']];
+const table = (f, rows) => output.set(f, tsv(rows));
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+const failures = () => checks.slice(1).filter(row => row[2] === 'FAIL');
+function requirePassing() {
+  if (failures().length) throw new Error('Evidence checks failed; nothing published:\n' + tsv([checks[0], ...failures()]));
+}
+function parseTSV(f, header) {
+  const [head, ...rows] = read(f).trim().split(/\r?\n/).map(s => s.split('\t'));
+  check(f, 'TSV schema and nonempty rows', JSON.stringify(head) === JSON.stringify(header) && rows.length > 0 && rows.every(r => r.length === head.length));
+  return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]])));
+}
+const mode = process.argv[2];
+if (process.argv.length !== 3 || !['--inspect', '--components', '--snapshot-sources', '--main-finished'].includes(mode)) {
+  throw new Error('Use --inspect, --components, --snapshot-sources (small source text only), or --main-finished (only after main explicitly confirms completion).');
+}
+if (mode === '--snapshot-sources') {
+  const sourceOutput = sourceFiles.map(f => [f, readPath(path.join(frozenSource, f))]);
+  for (const [f, before] of snapshots) {
+    const after = regularFile(f);
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error(`Source changed during snapshot: ${f}`);
+  }
+  for (const [f, body] of sourceOutput) {
+    const target = path.join(dst, 'source', f + '.txt');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, body);
+  }
+  fs.writeFileSync(path.join(dst, 'source-hashes.tsv'), tsv([['path', 'sha256'], ...sourceOutput.map(([f, body]) => [f, digest(body)])]));
+  console.log(JSON.stringify({ state: 'SOURCE_SNAPSHOT_ONLY_ARCHIVE_UNVERIFIED', source_root: frozenSource, sources: sourceOutput.length, bytes: sourceOutput.reduce((n, [, body]) => n + Buffer.byteLength(body), 0), binary_or_export_hashing: false }));
+  process.exit(0);
+}
+const required = [
+  ...rawFiles.map(inputPath), ...binaries.map(f => path.join(src, f)),
+  ...runs.flatMap(run => endpoints.map(e => path.join(src, run, e, 'data.canonical'))),
+  ...sourceFiles.map(f => path.join(frozenSource, f)),
+  ...profileLogs.map(inputPath),
+  path.join(src, 'group-pre-wrapper.txt'),
+  ...preWrapperFiles.map(f => path.join(src, f)),
+  ...exploratoryFiles.map(f => path.join(exploratorySrc, f)),
+  ...['before', 'current', 'server-before.test'].map(f => path.join(exploratorySrc, f)),
+];
+if (mode === '--inspect') {
+  const missing = required.filter(f => !fs.existsSync(f));
+  const unresolved = [
+    ...(fixtureProofSources.length ? [] : ['real-fixture proof test source path']),
+    ...(borrowedBench.file && Number.isInteger(borrowedBench.repeats) && borrowedBench.repeats > 0 ? [] : ['diagnostic component log path and predetermined repeat count']),
+  ];
+  console.log(JSON.stringify({ state: 'NOT_PUBLISHED', raw_json: jsonFiles.length, exports: runs.length * endpoints.length, missing, unresolved, publication_hold: publicationHold, final_signal_required: true }, null, 2));
+  process.exit(missing.length || unresolved.length || publicationHold ? 1 : 0);
+}
+if (mode === '--main-finished' && publicationHold) throw new Error(`Publication held; nothing read or published: ${publicationHold}`);
+
+const methods = ['R16-baseline-747e5bd', 'R16-current'];
+const componentCases = [
+  ['BenchmarkLocalCompare', 'uid-handler-root', 'targets-1'],
+  ['BenchmarkLocalCompare', 'uid-handler-root', 'targets-1024'],
+  ...['first', 'last', 'missing'].map(name => ['BenchmarkLocalGroupCompare', 'group-handler-root-1000', name]),
+];
+const component = [['suite', 'case', 'implementation', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op']], componentGroups = new Map();
+for (const [index, f] of ['group-before.txt', 'group-current.txt'].entries()) {
+  const body = read(f), keys = [];
+  for (const m of body.matchAll(/^(Benchmark\S+)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op/gm)) {
+    const names = m[1].split('/'), expectedCase = componentCases.find(row => row[0] === names[0] && row[2] === names[1]);
+    check(f, 'realistic UID or Group1000 handler benchmark name', names.length === 2 && !!expectedCase);
+    if (!expectedCase) continue;
+    const key = JSON.stringify([expectedCase[1], names[1], methods[index]]);
+    if (!componentGroups.has(key)) componentGroups.set(key, []);
+    const rows = componentGroups.get(key), row = [...JSON.parse(key), rows.length + 1, ...m.slice(2).map(Number)];
+    rows.push(row); component.push(row); keys.push(key);
+  }
+  const expected = componentCases.map(([, suite, name]) => JSON.stringify([suite, name, methods[index]]));
+  check(f, 'complete benchmark inventory and PASS', same([...new Set(keys)], expected) && /^PASS$/m.test(body) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body) && (index === 0 || /^ok\s/m.test(body)));
+  check(f, 'all benchmark lines parsed', keys.length === (body.match(/^Benchmark\S+/gm) || []).length);
+}
+const cm = [['suite', 'case', 'implementation', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+for (const [key, rows] of componentGroups) {
+  check(key, 'three component repeats', rows.length === 3 && rows.every(r => r.slice(4).every(finite) && positive(r[4]) && positive(r[5])));
+  cm.push([...JSON.parse(key), rows.length, ...[5, 6, 7].map(i => median(rows.map(r => r[i])))]);
+}
+const cc = [['suite', 'case', 'reference', 'candidate', 'metric', 'reference_value', 'candidate_value', 'reduction_pct']];
+for (const [, suite, name] of componentCases) {
+  const [b, c] = methods.map(method => cm.find(r => r[0] === suite && r[1] === name && r[2] === method));
+  check(`${suite}/${name}`, 'paired handler medians', !!b && !!c);
+  if (!b || !c) continue;
+  for (const [i, metric] of [[4, 'ns/op'], [5, 'B/op'], [6, 'allocs/op']]) cc.push([suite, name, ...methods, metric, b[i], c[i], b[i] ? 100 * (1 - c[i] / b[i]) : '-']);
+}
+check('component', '30 samples, ten medians and 15 metric comparisons', component.length === 31 && cm.length === 11 && cc.length === 16);
+table('component-samples.tsv', component); table('component-medians.tsv', cm); table('component-comparisons.tsv', cc);
+if (mode === '--components') {
+  requirePassing();
+  console.log(JSON.stringify({ state: 'PRELIMINARY_COMPONENT_ONLY_NOT_PUBLISHED', baseline, binary_identity: 'NOT_VERIFIED_IN_THIS_MODE', tables: Object.fromEntries(output), checks: checks.length - 1 }, null, 2));
+  process.exit(0);
+}
+
+const missing = required.filter(f => !fs.existsSync(f));
+if (missing.length) throw new Error(`Incomplete inputs; nothing published:\n${missing.join('\n')}`);
+check(signals[0], 'nonempty final validation signal and explicit vet EXIT 0', !!read(signals[0]).trim() && /vet[^\n]*\bEXIT\s+0\b/i.test(read(signals[0])));
+check(signals[1], 'explicit R16 final completion record', /R16/.test(read(signals[1])) && /(?:finished|complet|完成)/i.test(read(signals[1])));
+check('real-fixture', 'actual opt-in test source included in archive inputs', fixtureProofSources.length > 0 && fixtureProofSources.every(f => f.startsWith('internal/') && f.endsWith('_test.go') && sourceFiles.includes(f)));
+check('diagnostic-component', 'actual log path and predetermined repeat count supplied', !!borrowedBench.file && Number.isInteger(borrowedBench.repeats) && borrowedBench.repeats > 0);
+requirePassing();
+const archiveName = f => /\.(sh|log|mjs)$/.test(f) ? `${f}.txt` : f;
+for (const f of rawFiles) output.set(archiveName(f), read(f));
+output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+table('run-sources.tsv', [['logical_run', 'source_run', 'script', 'role', 'included_in_r16_candidate_statistics'], ...runs.map((run, i) => [run, run, scripts[i] + '.sh', run.endsWith('-recheck') ? 'INDEPENDENT_FIXED_COUNT_RECHECK' : 'R16_CANDIDATE_MAIN', true])]);
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const samples = [[...dims, 'repeat', 'operations', 'total_ms', 'source']], groups = new Map();
+function add(key, s, f) {
+  const k = JSON.stringify(key);
+  if (!groups.has(k)) groups.set(k, []);
+  groups.get(k).push(s); samples.push([...key, s.repeat, s.operations, s.total_ms, f]);
+}
+const hot = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0], ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0], ['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10], ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0], ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0], ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'], ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const reports = [['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'errors', 'started_at']];
+const counters = [['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms']];
+for (const f of jsonFiles) {
+  let j;
+  try { j = JSON.parse(read(f)); } catch (err) { check(f, 'valid complete JSON', false, err.message); continue; }
+  const c = j?.config, run = f.split('/')[0], batch = path.basename(f, '.json');
+  const shape = !!c && Array.isArray(batch === 'warmup' ? j.stages : j.samples);
+  check(f, 'report shape', shape);
+  if (!shape) continue;
+  check(f, 'top-level error, fixture and timestamp', j.error === '' && c.entries === 100000 && Number.isFinite(Date.parse(j.started_at)), j.error);
+  reports.push([f, (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), JSON.stringify([j.error, ...(j.stages || []).flatMap(s => s.errors || [])]), j.started_at]);
+  if (batch === 'warmup') {
+    check(f, 'unchanged SDK warmup stages', same(j.stages.map(s => s.name), sdkStages) && c.n === 2 && c.read_only === true && c.write === false);
+    check(f, 'warmup operations and errors', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+    continue;
+  }
+  const root = run === 'root-paired', group = run.includes('-group-'), recheck = run.endsWith('-recheck'), readRecheck = run === 'explicit-read-recheck', smoke = batch.includes('smoke');
+  const repeats = smoke ? 1 : root || recheck || group ? 7 : 3;
+  const n = smoke ? 2 : group ? 1000 : batch === 'groups' ? 100 : 1000;
+  const cases = root ? rootCases : group ? compareCases : readRecheck ? (smoke ? [...hot.slice(4), ...groupCases] : batch === 'hot' ? hot.slice(4) : groupCases) : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? hot.slice(4) : groupCases;
+  const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+  check(f, 'config and setup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && typeof j.run_dn === 'string' && !!j.run_dn);
+  check(f, 'configured stage inventory', same(c.stages, [...new Set(cases.map(row => row[0]))]));
+  check(f, 'endpoints and cleanup', same(c.endpoints?.map(e => e.name), endpoints) && same(j.cleanup_done, endpoints));
+  check(f, 'stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members ?? 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+  check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+  check(f, 'request and WhoAmI counts', j.samples.every(s => Number.isInteger(s.requests) && (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+  check(f, 'sample errors and totals', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms)));
+  check(f, 'total equals sum of measured operation latencies', j.samples.every(s => Array.isArray(s.latency_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+  const rootDN = batch.startsWith('normalized') ? 'CN=ADMIN,DC=SCALE,DC=QUALIFICATION' : 'cn=admin,dc=scale,dc=qualification';
+  check(f, 'root variant or nonroot sample identity', c.root_bind_dn === rootDN && j.samples.every(s => root ? s.root_bind_dn === rootDN : !s.root_bind_dn));
+  for (const s of j.samples) {
+    const dimensions = [root ? 'root' : group ? 'group-compare' : readRecheck ? 'read-recheck' : 'common', root ? 'default' : run.split('-')[0], root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members ?? 0, s.endpoint];
+    counters.push([f, ...dimensions, s.repeat, s.operations, s.completed, s.requests, s.latency_ms?.length, s.verification_requests, s.verification_ms]);
+    if (!smoke) add(dimensions, s, f);
+  }
+}
+check('archive', '37 final reports, five macros and independent read recheck, no bind recheck', jsonFiles.length === 37 && runs.length === 6 && !runs.some(r => r.includes('bind')));
+const exports = [['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_run']];
+for (const run of runs) {
+  const f = `${run}/validation.tsv`, rows = parseTSV(f, ['run', 'canonical_entries', 'canonical_cksum', 'canonical_bytes']);
+  check(f, 'three export identities', same(rows.map(r => r.run), endpoints));
+  for (const endpoint of endpoints) {
+    const r = rows.find(r => r.run === endpoint);
+    if (!r) continue;
+    const canonical = path.join(src, run, endpoint, 'data.canonical');
+    exports.push([run, endpoint, r.canonical_entries, r.canonical_cksum, r.canonical_bytes, await sha(canonical), run]);
+    check(f, endpoint, r.canonical_entries === '100002' && r.canonical_cksum === '2143929969' && r.canonical_bytes === '42712438' && regularFile(canonical).size === 42712438);
+  }
+  // Metadata checks only; never open password files or seeded databases.
+  check(run, 'password and seeded database cleanup', ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !exists(`${run}/${f}`)));
+  if (run.endsWith('-final')) {
+    const f = `${run}/concurrent.tsv`, rows = parseTSV(f, ['side', 'repeat', 'ms']);
+    check(f, 'concurrent warmup and measured repeats', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => positive(+r.ms)));
+    for (const r of rows.filter(r => +r.repeat > 0)) add(['concurrent', run.split('-')[0], 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f);
+  }
+}
+check('exports', '18 identical canonical SHA256 values', exports.length === 19 && new Set(exports.slice(1).map(r => r[5])).size === 1);
+table('export-checks.tsv', exports);
+const summary = [[...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median']];
+for (const [key, rows] of groups) {
+  const d = JSON.parse(key), expected = ['root', 'group-compare', 'read-recheck'].includes(d[0]) ? 7 : 3;
+  check(key, 'median repeats and operations', same(rows.map(s => s.repeat), seq(expected)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => positive(s.total_ms)));
+  const ms = median(rows.map(s => s.total_ms));
+  summary.push([...d, rows.length, rows[0].operations, ms, ms ? rows[0].operations * 1000 / ms : '-']);
+}
+const comparisons = [[...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct']];
+for (const key of new Set(summary.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+  const rows = endpoints.map(e => summary.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+  check(key, 'comparison endpoints and operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+  if (rows.some(r => !r)) continue;
+  const [b, c, o] = rows.map(r => r[10]);
+  comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, c ? 100 * o / c : '-', b ? 100 * (1 - c / b) : '-']);
+}
+check('statistics', '822 measured samples, 162 medians, 54 comparisons without filtering regressions', samples.length === 823 && summary.length === 163 && comparisons.length === 55);
+check('statistics', 'five final macros retain 696 samples and 48 comparisons', samples.slice(1).filter(r => r[0] !== 'read-recheck').length === 696 && comparisons.slice(1).filter(r => r[0] !== 'read-recheck').length === 48);
+check('statistics', 'read recheck has 126 samples and six comparisons', samples.slice(1).filter(r => r[0] === 'read-recheck').length === 126 && comparisons.slice(1).filter(r => r[0] === 'read-recheck').length === 6);
+check('statistics', 'final group 1000 x 7 has 252 samples and 12 comparisons', samples.slice(1).filter(r => r[0] === 'group-compare').length === 252 && comparisons.slice(1).filter(r => r[0] === 'group-compare').length === 12);
+table('samples.tsv', samples); table('medians.tsv', summary); table('comparisons.tsv', comparisons);
+for (const suite of ['common', 'root', 'concurrent', 'group-compare', 'read-recheck']) {
+  table(suite + '-medians.tsv', [summary[0], ...summary.slice(1).filter(r => r[0] === suite)]);
+  table(suite + '-comparisons.tsv', [comparisons[0], ...comparisons.slice(1).filter(r => r[0] === suite)]);
+}
+for (const suite of ['read-recheck']) table(suite + '-samples.tsv', [samples[0], ...samples.slice(1).filter(r => r[0] === suite)]);
+const negatives = comparisons.slice(1).filter(r => r[12] < 0);
+table('negative-comparisons.tsv', [comparisons[0], ...negatives]);
+
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+for (const f of logs) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  const role = f === 'group-before.txt' ? 'BASELINE_747e5bd_SOURCE' : f === borrowedBench.file ? 'R16_PATH_DIAGNOSTIC' : fixtureProofLogs.includes(f) ? 'R16_GUARD_PROOF' : 'R16_CANDIDATE';
+  statuses.push([f, role, Buffer.byteLength(body), count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm), count(/^\s*--- SKIP:/gm), count(/^PASS$/gm), count(/^FAIL(?:\s|$)/gm), count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  check(f, 'no failed tests, package failures or panic', !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  if (f !== 'go-vet.txt') check(f, 'successful log and complete final package record', /(?:^ok\s|^PASS$)/m.test(body) && /(?:^|\n)(?:ok\s[^\n]+|PASS|\?\s[^\n]+\[no test files\])\s*$/.test(body));
+  if (f === 'go-vet.txt') check(f, 'vet has no diagnostics and main confirms EXIT 0', body.trim() === '' && /vet[^\n]*\bEXIT\s+0\b/i.test(read(signals[0])));
+  if (f === 'openldap-differential.txt') check(f, '26 top-level and 355 total native PASS records without skips', count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === 26 && count(/^--- PASS:/gm) === 26 && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+  if (fixtureProofLogs.includes(f)) {
+    const started = [...body.matchAll(/^=== RUN[ \t]+(\S+)\s*$/gm)].map(m => m[1]);
+    const passed = [...body.matchAll(/^\s*--- PASS:[ \t]+(\S+)/gm)].map(m => m[1]);
+    check(f, 'real-fixture parent and first/last/missing all ran and passed without skips', same(started, fixtureProofCases) && same(passed, fixtureProofCases) && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+    const guards = [...body.matchAll(/guards: ([^\r\n]+)/g)].map(m => m[1].trim().split(/\s+/));
+    check(f, 'all nine eligibility guards true outside and inside real transaction', guards.length >= 2 && guards.every(row => same(row, fixtureProofGuards.map(name => `${name}=true`))));
+    check(f, 'fresh successful server package record', /^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/server\s+[\d.]+s$/m.test(body) && !/\(cached\)/.test(body));
+  }
+}
+table('fixture-proof-status.tsv', [
+  ['path', 'access_mode', 'role', 'top_level_RUN', 'top_level_PASS', 'test_PASS', 'test_SKIP', 'source', 'included_in_timing_statistics'],
+  ...fixtureProofLogs.map(f => {
+    const body = read(f), count = re => [...body.matchAll(re)].length;
+    return [f, f.includes('explicit') ? 'explicit' : 'default', 'POST_BUILD_OPT_IN_GUARD_PROOF', count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- SKIP:/gm), fixtureProofSources.join(','), false];
+  }),
+]);
+const borrowedBody = read(borrowedBench.file), borrowedGroups = new Map();
+const borrowedSamples = [component[0]], borrowedMedians = [cm[0]], borrowedComparisons = [cc[0]];
+let borrowedParsed = 0;
+for (const m of borrowedBody.matchAll(/^(Benchmark\S+)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op/gm)) {
+  const names = m[1].split('/');
+  const valid = names.length === 3 && names[0] === 'BenchmarkCompareBorrowedEntry' && ['members-10', 'members-1000'].includes(names[1]) && ['owned', 'eligible'].includes(names[2]);
+  check(borrowedBench.file, 'diagnostic members/missing/mode inventory', valid, m[1]);
+  if (!valid) continue;
+  const key = JSON.stringify(['borrowed-entry-root-missing', names[1], names[2] === 'owned' ? 'forced-owned' : 'eligible']);
+  if (!borrowedGroups.has(key)) borrowedGroups.set(key, []);
+  const rows = borrowedGroups.get(key), row = [...JSON.parse(key), rows.length + 1, ...m.slice(2).map(Number)];
+  rows.push(row); borrowedSamples.push(row); borrowedParsed++;
+}
+check(borrowedBench.file, 'all diagnostic benchmark lines parsed', borrowedParsed === (borrowedBody.match(/^Benchmark\S+/gm) || []).length);
+const borrowedExpected = ['members-10', 'members-1000'].flatMap(name => ['forced-owned', 'eligible'].map(method => JSON.stringify(['borrowed-entry-root-missing', name, method])));
+check(borrowedBench.file, 'four complete diagnostic cases with predetermined repeats', same([...borrowedGroups.keys()], borrowedExpected) && borrowedParsed === 4 * borrowedBench.repeats);
+for (const [key, rows] of borrowedGroups) {
+  check(key, 'diagnostic repeats and numeric metrics', rows.length === borrowedBench.repeats && rows.every(r => r.slice(4).every(finite) && positive(r[4]) && positive(r[5])));
+  borrowedMedians.push([...JSON.parse(key), rows.length, ...[5, 6, 7].map(i => median(rows.map(r => r[i])))]);
+}
+for (const name of ['members-10', 'members-1000']) {
+  const [b, c] = ['forced-owned', 'eligible'].map(method => borrowedMedians.find(r => r[1] === name && r[2] === method));
+  check(name, 'paired forced-owned versus eligible diagnostic medians', !!b && !!c);
+  if (!b || !c) continue;
+  for (const [i, metric] of [[4, 'ns/op'], [5, 'B/op'], [6, 'allocs/op']]) borrowedComparisons.push(['borrowed-entry-root-missing', name, 'forced-owned', 'eligible', metric, b[i], c[i], b[i] ? 100 * (1 - c[i] / b[i]) : '-']);
+}
+table('diagnostic-components/borrowed-entry-samples.tsv', borrowedSamples);
+table('diagnostic-components/borrowed-entry-medians.tsv', borrowedMedians);
+table('diagnostic-components/borrowed-entry-comparisons.tsv', borrowedComparisons);
+const smallEntryDeltas = Object.fromEntries(borrowedComparisons.slice(1).filter(r => r[1] === 'members-10').map(r => [r[4], r[6] - r[5]]));
+table('diagnostic-components/provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['role', 'R16_CANDIDATE_DIAGNOSTIC_ONLY; not pooled with before/current component or network measurements', 'main handoff'],
+  ['scope', 'Root-bound local missing-member Compare; 10/1000 members; forced-owned versus eligible modes use the same candidate source', 'source/internal/server/compare_borrowed_bench_test.go.txt'],
+  ['forced_owned', 'A Store decorator disables borrowing eligibility. This includes the decorator path and is not an isolated decoder microbenchmark.', 'archived benchmark source'],
+  ['eligible', 'Eligibility does not guarantee borrowing: encoded entries smaller than 4096 bytes retain the owned fallback.', 'source/internal/storage/readonly_first_get.go.txt'],
+  ['repeats', borrowedBench.repeats, 'main completed invocation; generator validates every case'],
+  ['log', borrowedBench.file, 'raw log archived unchanged'],
+  ['limits', 'ns/op, B/op and allocs/op are local diagnostic measurements; they do not establish a causal explanation for network regressions or retained-heap improvement.', 'measurement scope'],
+]);
+check('focused-test.txt', 'two fresh successful storage/server package records', [...read('focused-test.txt').matchAll(/^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/(storage|server)\s+[\d.]+s$/gm)].length === 2 && !/\(cached\)/.test(read('focused-test.txt')));
+check('go-test.txt', 'full suite includes storage and server packages', ['storage', 'server'].every(pkg => new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + pkg + '\\s', 'm').test(read('go-test.txt'))));
+check('validate.sh', 'CGO disabled and no new fuzz campaign', read('validate.sh').includes('export CGO_ENABLED=0') && !/-fuzz(?:=|\s)/.test(read('validate.sh')));
+for (const [index, s] of scripts.entries()) {
+  check(s + '.log', 'script completion', read(s + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  const body = read(s + '.sh'), explicit = runs[index].startsWith('explicit-');
+  check(s + '.sh', 'R16 output and correct access seed', body.includes(`audit=${src}`) && body.includes(`out=$audit/${runs[index]}`) && body.includes(`cp "$audit/${explicit ? 'member-acl' : 'member-index'}.db"`) && (explicit ? body.includes('access to attrs=userPassword') : !/^.*'access to /m.test(body)));
+}
+const binaryRows = [['file', 'sha256']];
+for (const f of binaries) binaryRows.push([f, await sha(path.join(src, f))]);
+for (const e of ['before', 'current']) {
+  const actual = binaryRows.find(row => row[0] === e)[1];
+  check(e, 'binary SHA256 matches R16 handoff', actual === expectedHashes[e], actual);
+  check('executable-sha256.txt', e + ' matches measured binary', read('executable-sha256.txt').split('\n').some(line => line.trim().split(/\s+/).join(' ') === `${actual} ${src}/${e}`));
+}
+table('binary-hashes.tsv', binaryRows);
+for (const f of ['before', 'current']) {
+  const metadata = execFileSync('go', ['version', '-m', path.join(src, f)], { encoding: 'utf8', env: { ...process.env, GOTOOLCHAIN: 'local' } });
+  output.set(`binary-metadata/${f}.txt`, metadata);
+  check(f, 'binary metadata recorded with CGO disabled', metadata.includes('CGO_ENABLED=0'));
+  if (f === 'before') check(f, 'baseline actual embedded revision retained as eced1dc dirty', /vcs\.revision=eced1dc[0-9a-f]*/.test(metadata) && metadata.includes('vcs.modified=true'));
+}
+const sourceRows = [['path', 'sha256']];
+for (const f of sourceFiles) {
+  const body = readPath(path.join(frozenSource, f));
+  const snapshot = path.join(dst, 'source', f + '.txt');
+  if (fs.existsSync(snapshot)) check(f, 'frozen candidate source matches preserved snapshot', digest(body) === digest(readPath(snapshot)));
+  sourceRows.push([f, digest(body)]);
+  output.set(`source/${f}.txt`, body);
+}
+table('source-hashes.tsv', sourceRows);
+table('source-origin.tsv', [
+  ['path', 'source_root', 'archive_path', 'role'],
+  ...sourceFiles.map(f => [f, frozenSource, `source/${f}.txt`, 'FROZEN_R16_CANDIDATE_SOURCE_NOT_LIVE_REPOSITORY']),
+]);
+const preWrapperLog = read('group-pre-wrapper.txt');
+check('group-pre-wrapper.txt', 'completed diagnostic component log', /^PASS$/m.test(preWrapperLog) && /^ok\s/m.test(preWrapperLog) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(preWrapperLog));
+output.set('exploratory-r16/group-pre-wrapper.txt', preWrapperLog);
+for (const f of preWrapperFiles) output.set('exploratory-r16/' + f, read(f));
+check('pre-wrapper/executable-sha256.txt', 'superseded production binary identity retained', read('pre-wrapper/executable-sha256.txt').split('\n').some(line => line.trim().split(/\s+/).join(' ') === `${preWrapperHash} ${src}/current`));
+table('exploratory-r16/provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['role', 'PRE_WRAPPER_FIX_DIAGNOSTIC_ONLY; excluded from final statistics', 'main handoff'],
+  ['pre_wrapper_production_binary_sha256', preWrapperHash, 'main handoff; no claim of separately retained component test executable'],
+  ['ordinary_uid_overhead', 'Current UID component showed 11392 B/op and 139 allocs/op versus baseline 11232 B/op and 138 allocs/op, exposing wrapper closure overhead. Preserve raw results; final source creates the wrapper only after canBorrow succeeds.', 'main handoff; group-pre-wrapper.txt'],
+  ['superseded_validation', 'Earlier full server 153.217s, storage 27.332s, webadmin 0.269s and native 10.367s were pre-wrapper-fix diagnostics. Only the new final validation logs and completion signal support R16 publication.', 'main handoff'],
+  ['macro_scope', 'No macros had run for the pre-wrapper-fix R16 candidate.', 'main handoff'],
+]);
+
+// R15 canonical/LDIF files may be deleted by main after its own validation.
+// Exploration depends only on retained JSON, text logs/scripts and binary hashes.
+for (const f of exploratoryFiles) output.set('exploratory-r15/' + archiveName(f), readPath(path.join(exploratorySrc, f)));
+const exploratoryBinaryRows = [['file', 'sha256', 'role', 'included_in_final_statistics']];
+for (const f of ['before', 'current', 'server-before.test']) {
+  const hash = await sha(path.join(exploratorySrc, f));
+  exploratoryBinaryRows.push([f, hash, 'UNADOPTED_R15_INITIAL_CANDIDATE', false]);
+  if (f !== 'server-before.test') check(`exploratory-r15/${f}`, 'initial binary identity', hash === (f === 'before' ? expectedHashes.before : initialCurrentHash), hash);
+}
+table('exploratory-r15/binary-hashes.tsv', exploratoryBinaryRows);
+const exploratorySamples = [[...dims, 'repeat', 'operations', 'total_ms', 'source']];
+const exploratoryMedians = [[...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median']];
+const exploratoryComparisons = [comparisons[0]];
+for (const run of exploratoryRuns) {
+  const f = `exploratory-r15/${run}/groups.json`, j = JSON.parse(output.get(f));
+  const expected = compareCases.flatMap(row => endpoints.flatMap(e => seq(7).map(i => JSON.stringify([...row, e, i]))));
+  check(f, 'initial 1000 x 7 report with 126 samples', j.error === '' && j.config?.n === 1000 && j.config?.repeats === 7 && j.config?.entries === 100000 && Array.isArray(j.samples) && same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members, s.endpoint, s.repeat])), expected));
+  check(f, 'initial operations, WhoAmI, errors and cleanup', same(j.cleanup_done, endpoints) && j.samples?.every(s => s.operations === 1000 && s.completed === 1000 && s.requests === 1000 && s.verification_requests === 1002 && s.latency_ms?.length === 1000 && s.latency_ms.every(finite) && positive(s.total_ms) && finite(s.verification_ms) && !s.error && !s.errors?.length));
+  for (const [stage, method, members] of compareCases) {
+    const d = ['exploratory-r15-group-recheck', run.split('-')[0], 'nonroot', 'groups', stage, method, members];
+    const medians = [];
+    for (const endpoint of endpoints) {
+      const rows = (j.samples || []).filter(s => s.stage === stage && s.method === method && s.members === members && s.endpoint === endpoint);
+      check(f, `${stage}/${members}/${endpoint} seven separate samples`, same(rows.map(s => s.repeat), seq(7)));
+      for (const s of rows) exploratorySamples.push([...d, endpoint, s.repeat, s.operations, s.total_ms, f]);
+      const ms = median(rows.map(s => s.total_ms));
+      medians.push(ms);
+      exploratoryMedians.push([...d, endpoint, rows.length, 1000, ms, 1000000 / ms]);
+    }
+    const [b, c, o] = medians;
+    exploratoryComparisons.push([...d, 1000, b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+  }
+}
+check('exploratory-r15', '252 samples, 36 medians and 12 comparisons excluded from final statistics', exploratorySamples.length === 253 && exploratoryMedians.length === 37 && exploratoryComparisons.length === 13 && samples.slice(1).every(r => !r[0].startsWith('exploratory')));
+table('exploratory-r15/group-samples.tsv', exploratorySamples);
+table('exploratory-r15/group-medians.tsv', exploratoryMedians);
+table('exploratory-r15/group-comparisons.tsv', exploratoryComparisons);
+table('exploratory-r15/provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['role', 'UNADOPTED_R15_INITIAL_CANDIDATE; excluded from all R16 final statistics', 'main handoff'],
+  ['baseline', baseline, 'main handoff; binary-hashes.tsv'],
+  ['initial_current_sha256', initialCurrentHash, 'main handoff; actual retained R15 current executable independently hashed'],
+  ['batch_change', 'Original R15 20 x 5 group observations included small-group negative results. These independent group rechecks used fixed 1000 x 7 batches and retained negative observations.', 'main handoff; raw JSON; group-comparisons.tsv'],
+  ['subsequent_change', 'R16 added lazy decoder acquisition and owned fallback for encoded entries smaller than 4096 bytes. R15 measurements must not be attributed to that final binary.', 'main handoff; final R16 source snapshots'],
+  ['components', 'Original R15 group-before.txt and group-current.txt preserved unchanged; three repeats per first/last/missing case. They do not enter R16 component tables.', 'raw component logs'],
+  ['export_limit', 'R15 validation.tsv files record runner checks. No R15 canonical contents are required or hashed by this generator; main owns verification and deletion of those large temporary exports.', 'main handoff; retained validation.tsv'],
+  ['stopping_rule', 'Fixed seven repeats; no early stopping or repetition selected by favorable results.', 'main instruction; archived recheck scripts'],
+]);
+output.set('exploratory-r15/README.md', '# R15 Initial Candidate Exploration\n\nThese results belong to the unadopted initial R15 candidate, current executable SHA256 `' + initialCurrentHash + '`, before R16 lazy decoder acquisition and the small-entry fallback. They are excluded from every final R16 table.\n\nThe original 20 x 5 experiment showed small-group negative observations. Both independent group rechecks expanded the batch to 1000 x 7 with fixed counts. [Comparisons](group-comparisons.tsv) retain every first/last/missing, member-count and access-mode cell, including all negative reductions. Raw JSON and component logs are preserved unchanged. Initial component measurements remain separate from the final R16 components.\n\nBinary hashes are independently checked from retained executables; binaries are not bundled. Main owns verification and deletion of the R15 canonical exports to release disk space. Their retained validation.tsv records are not new generator SHA256 verification and are not part of R16\'s 18 exports.\n');
+table('fuzz-status.tsv', [['status', 'scope', 'reason'], ['NOT_RUN_R16', 'No fresh fuzz result supplied', 'Do not import historical fuzz counts; raw full and focused test logs have their own scope.']]);
+const profileStatus = [['path', 'role', 'benchmark_cases', 'bytes', 'sha256', 'included_in_timing_comparison', 'binary_profile_archived', 'scope']];
+for (const f of profileLogs) {
+  const body = read(f), mixed = f === 'eligible-profile-both.txt';
+  const cases = [...body.matchAll(/^(Benchmark\S+)-\d+\s+\d+\s+[\d.]+ ns\/op\s+\d+ B\/op\s+\d+ allocs\/op/gm)].map(m => m[1]);
+  const expected = (mixed ? [10, 1000] : [10]).map(n => `BenchmarkCompareBorrowedEntry/members-${n}/eligible`);
+  check(f, 'profile diagnostic actually completed with explicit benchmark scope', same(cases, expected) && /^PASS$/m.test(body) && /^ok\s/m.test(body) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  const target = `exploratory-r16/profiles/${f}`;
+  output.set(target, body);
+  profileStatus.push([target, mixed ? 'MIXED_10_AND_1000_DIAGNOSTIC_ONLY' : 'ANCHORED_10_ONLY_DIAGNOSTIC_ONLY', cases.join(','), Buffer.byteLength(body), digest(body), false, false, mixed ? 'Initial members-10 pattern also matched members-1000. Associated small-eligible.cpu.pprof is mixed despite its filename; binary not read or archived.' : 'Corrected anchored ^members-10$ selects only 10-member eligible. Associated small-eligible-only.cpu.pprof binary not read or archived.']);
+}
+table('profile-status.tsv', profileStatus);
+output.set('exploratory-r16/profiles/README.md', '# R16 Profiling Diagnostics\n\nText logs only; all profiling measurements are excluded from timing and allocation comparison tables. No binary profile was read, hashed or archived.\n\nThe initial unanchored members-10 pattern also selected members-1000. Its log is eligible-profile-both.txt; the associated binary name small-eligible.cpu.pprof does not imply a small-only profile. The corrected anchored ^members-10$ run appears in small-eligible-profile.txt and selected only the 10-member eligible case. Its binary was named small-eligible-only.cpu.pprof.\n\nThese are exploratory profile runs, not unprofiled before/current measurements or proof of retained-heap improvement. R16 is REJECTED / NOT SHIPPED: small-group overhead remained unresolved.\n');
+table('memory-proof.tsv', [
+  ['property', 'evidence', 'scope_or_limit'],
+  ['callback ownership contract', 'WithReadOnlyFirstGet borrows only the first schema-aware Get within the callback; later Gets retain owned-entry semantics', 'Caller must not mutate or retain borrowed data or the supplied reader; clone escaping output'],
+  ['small-entry fallback and lazy decoder', 'Encoded entries smaller than 4096 bytes use the owned decoder; the borrowed decoder is acquired only for eligible larger entries', 'Avoids managing a decoder arena for small entries; no timing or retained-heap claim follows from code alone'],
+  ['scope', 'Concrete read-only Bolt transaction only; known access/revision decorators rebuilt around the same transaction', 'Unknown readers and writable transactions use normal owned Get behavior'],
+  ['eligibility', 'canBorrowCompareEntry gates eligible local DN-valued Compare; handleCompare also checks projection read-only safety with the actual reader', 'Controls, custom stores and unsafe projection/access cases retain the ordinary path'],
+  ['real fixture eligibility and ownership', 'real-fixture-explicit.txt; real-fixture-default.txt; compare_borrowed_fixture_test.go', 'Opt-in proof checks all nine guards, borrowed payload sharing with independent descriptor arenas, owned subsequent Get, first/last/missing wire parity and unchanged storage/config; no timing or retained-heap measurement'],
+  ['lifetime and nested reads', 'readonly_first_get_test.go; compare_borrowed_test.go; focused-test.txt; go-test.txt', 'Source oracles and package logs are preserved; no new fuzz or retained-heap experiment claimed'],
+  ['allocation measurements', 'component-samples.tsv; component-medians.tsv', 'B/op and allocs/op are per-operation allocations, not retained heap; root component identity differs from nonroot LDAP macros'],
+  ['path diagnostics', 'diagnostic-components/borrowed-entry-comparisons.tsv; compare_borrowed_bench_test.go', 'Same-candidate forced-owned versus eligible missing-member handler comparisons for 10/1000 members; kept separate from baseline/current and network statistics'],
+]);
+table('provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['qualification_status', 'REJECTED / NOT SHIPPED. Small-group overhead remained unresolved: direct-handler +549 ns/op, +232 B/op and +4 allocs/op, with multiple small-group network regressions. Main rejected the candidate to avoid regressions in common small-group workloads.', 'main handoff; comparisons.tsv; negative-comparisons.tsv; diagnostic-components/borrowed-entry-comparisons.tsv'],
+  ['withdrawal', 'Main confirmed removal of the six R16 Go files and restoration of write.go to HEAD. R16 was rejected and withdrawn; all archived candidate source comes from frozen-source.', 'main withdrawal handoff; source-origin.tsv'],
+  ['production_baseline', baseline, 'main handoff; git rev-parse 747e5bd'],
+  ['candidate_source_origin', `All 12 source files are read and hashed solely from ${frozenSource}, supplied by main using rsync -aR before withdrawing R16. Original repository-relative paths are preserved. The generator never reads live repository source.`, 'main frozen-source handoff; source-origin.tsv; source-hashes.tsv'],
+  ['baseline_build_metadata', 'The retained baseline is the R13 final executable. Its embedded Go metadata says eced1dc with vcs.modified=true; main identifies its final source as subsequently committed in 747e5bd. This is not claimed to be a clean 747e5bd build.', 'main handoff; binary-metadata/before.txt; binary-hashes.tsv'],
+  ['baseline_binary_sha256', expectedHashes.before, 'main handoff; independently hashed at generation'],
+  ['current_binary_sha256', expectedHashes.current, 'main handoff; independently hashed at generation'],
+  ['production_scope', 'Callback-scoped read-only first Get for eligible local DN Compare, lazy decoder acquisition and owned fallback for encoded entries smaller than 4096 bytes; existing comparison and access logic remains inside the transaction callback.', 'main; source/internal/server/compare_borrowed.go.txt; source/internal/server/write.go.txt; source/internal/storage/readonly_first_get.go.txt'],
+  ['ordinary_compare_wrapper', 'Wrapper closure creation is inside the canBorrow eligibility branch; ordinary requests call compareView directly. Pre-wrapper-fix component and validation observations are diagnostic only.', 'main handoff; source/internal/server/write.go.txt; exploratory-r16/provenance.tsv'],
+  ['real_fixture_guard_proof', 'Additional opt-in tests validate borrowing guards against the real explicit/default 100k seeds after the production binary was frozen. Test-only additions do not change the production binary and do not enter timing statistics. Sources and raw execution logs are archived separately from the earlier full-suite run.', 'main handoff; fixture-proof-status.tsv; real-fixture-explicit.txt; real-fixture-default.txt; source-hashes.tsv'],
+  ['component_identity', 'Real root-bound handleCompare: UID with 1/1024 targets and Group1000 first/last/missing, kept separate. Three unprofiled 500ms repeats per case and implementation; setup and fixture checks outside b.Loop.', 'main handoff; group-before.txt; group-current.txt; archived compare_bench_test.go and compare_group_bench_test.go'],
+  ['component_binary', 'Baseline server-before.test hash recorded. Current log was emitted by go test; no separately retained current test executable is supplied.', 'binary-hashes.tsv; group-current.txt; main validation record'],
+  ['group_compare', 'NONROOT; 1000 operations x 7 per method/member/access/endpoint; setup, Bind and WhoAmI excluded from operation timing.', 'scripts; raw reports; counters.tsv; archived runner source'],
+  ['group_order', 'First/last denotes fixture insertion order, not native OpenLDAP storage order.', 'archived runner source'],
+  ['historical_workloads', 'Only six R16 workload directories and the final before/current component pair enter final statistics. R15 was an unadopted initial candidate and is separately archived for exploration only.', 'run-sources.tsv; exploratory-r15/provenance.tsv'],
+  ['read_recheck', 'Independent explicit read investigation: Base/Equality 1000 x 7; memberEquality/groupBase/nestedMembership 100 x 7. R16 three-repeat common measurements remain intact.', 'recheck-explicit-read.sh.txt; read-recheck-comparisons.tsv'],
+  ['group_batch_size', 'R15 20 x 5 small-group negative observations prompted 1000 x 7 exploration, which still showed small-group regressions. R16 directly uses fixed 1000 x 7 batches after adding lazy decoder acquisition and the small-entry owned fallback.', 'main handoff; exploratory-r15/; group-compare-comparisons.tsv'],
+  ['stopping_rule', 'Each recheck script fixes operations and seven repeats before execution; do not repeat until favorable data or stop early based on observed performance.', 'main instruction; archived recheck scripts'],
+  ['validation', read(signals[0]), signals[0]],
+  ['completion', read(signals[1]), signals[1]],
+  ['generator', 'R13 statistical structure adapted to R16. Evidence worker runs no Go workloads, builds, tests, benchmarks or profiling.', 'generate-evidence.mjs.txt'],
+]);
+table('timing-scope.tsv', [
+  ['scope', 'rule'],
+  ['common', 'Explicit/default: three measured repeats; hot/distributed 1000 operations; groups 100 operations.'],
+  ['root', 'Literal and uppercase normalized root DN remain separate; 1000 operations x 7; default access.'],
+  ['group-compare', 'Final R16 NONROOT; 1000 operations x 7 per method/member/access/endpoint; first/last/missing and 10/1000 members remain separate.'],
+  ['exploratory-r15', 'Unadopted initial candidate; two independent 1000 x 7 group runs and original component logs preserved outside final statistics.'],
+  ['read-recheck', 'Independent explicit access: hot Base/Equality 1000 x 7 and group reads 100 x 7; no distributed, concurrent or Bind measurements.'],
+  ['stopping-rule', 'Fixed counts before each run; no early stopping or repetition selected by favorable results.'],
+  ['component', 'Root-bound real UID handler with 1/1024 targets and Group1000 first/last/missing; three unprofiled 500ms repetitions per case. Setup is outside b.Loop.'],
+  ['borrowed-entry-diagnostic', 'Separate same-candidate missing-member handler benchmark for 10/1000 members, forced-owned and eligible modes; does not replace network results or baseline/current components.'],
+  ['warmup', 'SDK warmups and smoke JSON retained and excluded from medians; concurrent repeat 0 excluded.'],
+  ['concurrent', 'Root-bound CLI; 8 workers x 1000 equality searches; three measured repeats per access mode.'],
+  ['comparisons', 'Unrounded per-cell medians; every method and negative observation retained; no endpoint/access/identity pooling or aggregate parity claim.'],
+  ['memory', 'Per-operation allocations are measured; retained heap is not measured.'],
+  ['archive', 'Explicit text/JSON allowlist; no passwords, databases, LDIF/canonical contents, executable binaries or binary profiles. Exports and binaries are hashed only.'],
+]);
+output.set('limitations.txt', 'R16 does not establish aggregate/native parity or whole compatibility.\nCallback-scoped borrowed data is restricted to eligible local DN Compare in a read-only Bolt transaction. Existing owned-entry fallback remains necessary outside that contract.\nRoot-bound Group1000 component measurements and NONROOT LDAP macros have different identities and timing scopes. First/last denotes fixture insertion order, not native storage order.\nAll positive and negative observations and unchanged-stage regressions are retained without causal attribution to this optimization. B/op and allocs/op do not measure retained heap. No fresh fuzz, race-detector or binary-profile evidence is claimed.\nFor equal operation counts, current/native throughput percent = 100 * native_ms/current_ms; time reduction percent = 100 * (1 - current_ms/before_ms). Negative reduction means slower. No bind recheck or historical timings are pooled.\n\nAll negative macro/concurrent comparisons:\n\n' + tsv([comparisons[0], ...negatives]) + '\nAll group handler component results:\n\n' + tsv(cc));
+
+for (const [f, before] of snapshots) {
+  const after = regularFile(f);
+  check(f, 'input remained unchanged during generation', before.size === after.size && before.mtimeMs === after.mtimeMs);
+}
+table('report-checks.tsv', reports); table('counters.tsv', counters); table('log-status.tsv', statuses);
+check('archive', 'explicit text-only output allowlist', [...output.keys()].every(f => /\.(txt|tsv|json|md)$/.test(f) && !f.split('/').includes('..') && !path.isAbsolute(f) && !/\.(?:pprof|prof|db|mdb|ldif|canonical)(?:$|\.)/.test(f)));
+requirePassing();
+table('checks.tsv', checks);
+table('qualification-status.tsv', [
+  ['item', 'value'],
+  ['status', 'REJECTED'],
+  ['acceptance', 'REJECTED'],
+  ['shipping', 'NOT SHIPPED'],
+  ['withdrawal', 'WITHDRAWN_FROM_MAIN_REPOSITORY_PER_MAIN'],
+  ['unresolved', 'small-group overhead unresolved'],
+  ['performance_target_completion', 'NOT_CLAIMED'],
+  ['small_group_negative_comparisons', comparisons.slice(1).filter(r => r[0] === 'group-compare' && r[6] === 10 && r[12] < 0).length],
+  ['decision_scope', 'Evidence archival only; main project README and performance report remain outside this generator.'],
+]);
+table('generation-status.tsv', [['item', 'value'], ['state', archiveState], ['baseline', baseline], ['current_binary_sha256', expectedHashes.current], ['raw_json', jsonFiles.length], ['main_raw_json', 31], ['read_recheck_raw_json', 6], ['bind_recheck_raw_json', 0], ['exports', exports.length - 1], ['main_exports', 15], ['read_recheck_exports', 3], ['median_groups', summary.length - 1], ['measured_samples', samples.length - 1], ['comparisons', comparisons.length - 1], ['negative_comparisons', negatives.length], ['component_samples', component.length - 1], ['diagnostic_component_samples', borrowedSamples.length - 1], ['fixture_proof_logs', fixtureProofLogs.length], ['exploratory_r15_group_json', 2], ['exploratory_profile_text_logs', profileLogs.length], ['binary_profiles_archived', 0], ['fresh_fuzz_campaign', 'NOT_RUN'], ['failed_checks', 0], ['completion', 'See generator/main-finished.txt and generator/validation-main.txt; empty vet output alone is not exit proof.']]);
+output.set('README.md', `# R16 Evidence
+
+Status: **REJECTED / NOT SHIPPED**. Small-group overhead remained unresolved, and main rejected this candidate to avoid regressions in common small-group workloads. The main performance report remains at R13; these files preserve the unsuccessful candidate for review.
+
+Main confirmed withdrawal of R16: its six new Go files were removed and write.go was restored to HEAD before integrating the next candidate. The frozen source snapshot preserves the rejected implementation independently of those changes.
+
+Baseline \`${baseline}\`; current executable SHA256 \`${expectedHashes.current}\`. Full binary and source hashes are in [binary-hashes.tsv](binary-hashes.tsv) and [source-hashes.tsv](source-hashes.tsv). Eligible local DN Compare uses a callback-scoped read-only first Get, lazy decoder acquisition, and owned fallback for encoded entries smaller than 4096 bytes. Main's environment, validation and completion records are preserved under [generator/](generator/).
+
+All 12 [candidate source files](source-origin.tsv), including the fixture proof and diagnostic benchmark tests, are read and hashed solely from \`${frozenSource}\`. Main preserved this frozen R16 candidate using rsync -aR before withdrawing it. Archive and hash paths retain the original repository-relative names; generation does not depend on live repository source.
+
+The retained baseline is the R13 final executable. Its actual [Go build metadata](binary-metadata/before.txt) records eced1dc with a dirty worktree. Main identifies that final source as subsequently committed in 747e5bd; this archive does not claim a clean 747e5bd build.
+
+Additional [real-fixture guard proofs](fixture-proof-status.tsv) use the explicit and default 100k seeds. Their opt-in test sources and raw logs are archived. These test-only additions followed the full-suite run and frozen production build; they add no timing samples and do not change the production binary.
+
+[Checks](checks.tsv) contain ${checks.length - 1} passing checks. All 18 [exports](export-checks.tsv) have identical canonical SHA256 values: 100,002 entries, cksum 2143929969, and 42,712,438 bytes each. Six workload scripts completed; 37 final raw JSON reports include warmups and smoke. Full tests, vet, native differential checks and focused logs are preserved with their actual cached and skipped counts in [log-status.tsv](log-status.tsv).
+
+[Medians](medians.tsv) and [comparisons](comparisons.tsv) retain ${samples.length - 1} measured samples, ${summary.length - 1} medians and ${comparisons.length - 1} comparisons. Methods, endpoints, access modes, member counts and root DN variants remain separate. Common runs use three repeats, paired root runs seven, and final nonroot group Compare seven 1000-operation batches. The independent explicit [read recheck](read-recheck-comparisons.tsv) uses seven batches and never replaces the original common results. Warmups and smoke are excluded from medians. First/last denotes fixture insertion order, not native storage order.
+
+R15 was an unadopted initial candidate. Negative small-group observations in its 20 x 5 experiment prompted larger 1000 x 7 batches; those still showed small-group regressions. Its two large-batch group JSON reports, original component logs and binary identity are preserved under [exploratory-r15/](exploratory-r15/), excluded from every final comparison. R16 adds the small-entry fallback and lazy decoder. Counts are fixed before execution; there is no repetition until favorable results or performance-based early stopping.
+
+The earlier R16 wrapper diagnostic is preserved under [exploratory-r16/](exploratory-r16/). Final source creates the wrapper only after borrowing eligibility succeeds; earlier component and validation observations are excluded from the final results.
+
+All ${negatives.length} negative reduction rows remain in the complete comparisons and [negative-comparisons.tsv](negative-comparisons.tsv). Component [comparisons](component-comparisons.tsv) retain UID 1/1024-target and Group1000 first/last/missing cases, with ns/op, B/op and allocs/op separate. Each case uses three unprofiled 500ms measurements per implementation. Their root identity differs from nonroot LDAP macros.
+
+The additional [forced-owned versus eligible diagnostic](diagnostic-components/borrowed-entry-comparisons.tsv) measures missing-member Compare for 10/1000 members on the same candidate source. It uses a decorated Store to force the owned path. These local diagnostics are separate from the before/current components and network results; they do not by themselves explain the network regressions.
+
+In the independent five-repeat diagnostic, the 10-member eligible case adds ${smallEntryDeltas['ns/op']} ns/op, ${smallEntryDeltas['B/op']} B/op and ${smallEntryDeltas['allocs/op']} allocs/op versus forced-owned. This regression remains unresolved. [Profiling text logs](profile-status.tsv) distinguish the initial mixed 10/1000-member run from the corrected anchored 10-member run; both are excluded from all comparison tables, and no binary profiles are bundled.
+
+No aggregate/native parity, complete compatibility, retained-heap improvement, fresh fuzz or race-detector result is claimed. No historical timings are pooled. SHA256SUMS covers every archive file except itself, including this README and the generator. No passwords, databases, LDIF/canonical contents, binaries or binary profiles are bundled.
+`);
+
+// Refuse stale or foreign files rather than silently excluding them from SHA256SUMS.
+function existingFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`Refusing archive directory symlink: ${dir}`);
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name, full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Refusing archive symlink: ${full}`);
+    if (entry.isDirectory()) return existingFiles(full, name + '/');
+    if (!entry.isFile()) throw new Error(`Unexpected archive entry: ${full}`);
+    return [name];
+  });
+}
+const unexpected = existingFiles(dst).filter(f => f !== 'SHA256SUMS' && !output.has(f));
+if (unexpected.length) throw new Error(`Unexpected archive files; nothing published: ${unexpected.join(', ')}`);
+for (const [f, content] of output) {
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+}
+const hashes = [];
+for (const f of [...output.keys()].sort()) hashes.push(`${await sha(path.join(dst, f))}  ${f}`);
+fs.writeFileSync(path.join(dst, 'SHA256SUMS'), hashes.join('\n') + '\n');
+console.log(JSON.stringify({ state: archiveState, files: hashes.length, exports: exports.length - 1, median_groups: summary.length - 1, measured_samples: samples.length - 1, component_samples: component.length - 1, negative_comparisons: negatives.length, checks: checks.length - 1, failed_checks: 0 }, null, 2));

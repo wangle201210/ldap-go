@@ -1,0 +1,35 @@
+package server
+
+import (
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+func (server *Server) canBorrowCompareEntry(state *connectionState, database *runtimeDatabase, message ldapwire.Message, request ldapwire.CompareRequest) bool {
+	return state != nil && state.runtime != nil && state.runtime.schema != nil && state.runtime.access != nil &&
+		database != nil && state.protocolVersion == 3 && len(message.Controls) == 0 && !message.ControlsPresent &&
+		state.runtime.schema.IsDNReferenceValued(request.Attribute) &&
+		plainBoltSearchStore(server.config.Store) && localProjectionReadOnly(state.runtime, nil) &&
+		databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) &&
+		databaseSearchResultCacheSafe(state.runtime, *database) && smallIndexedRuntimeProjectionSafe(state.runtime) &&
+		state.runtime.access.CanBatchValues()
+}
+
+// Rebuild only known decorators around the same transaction. Unknown readers
+// retain their normal Get callbacks and owned-entry contract.
+func withCompareBorrowedReader(reader storage.Reader, view func(storage.Reader) error) (bool, error) {
+	switch wrapped := reader.(type) {
+	case accessContextReader:
+		return withCompareBorrowedReader(wrapped.Reader, func(inner storage.Reader) error {
+			wrapped.Reader = inner
+			return view(wrapped)
+		})
+	case storageRevisionReader:
+		return withCompareBorrowedReader(wrapped.Reader, func(inner storage.Reader) error {
+			wrapped.Reader = inner
+			return view(wrapped)
+		})
+	default:
+		return storage.WithReadOnlyFirstGet(reader, view)
+	}
+}

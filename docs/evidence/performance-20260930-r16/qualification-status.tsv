@@ -1,0 +1,9 @@
+item	value
+status	REJECTED
+acceptance	REJECTED
+shipping	NOT SHIPPED
+withdrawal	WITHDRAWN_FROM_MAIN_REPOSITORY_PER_MAIN
+unresolved	small-group overhead unresolved
+performance_target_completion	NOT_CLAIMED
+small_group_negative_comparisons	5
+decision_scope	Evidence archival only; main project README and performance report remain outside this generator.

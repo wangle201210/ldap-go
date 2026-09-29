@@ -1,0 +1,8 @@
+item	value	source
+role	R16_CANDIDATE_DIAGNOSTIC_ONLY; not pooled with before/current component or network measurements	main handoff
+scope	Root-bound local missing-member Compare; 10/1000 members; forced-owned versus eligible modes use the same candidate source	source/internal/server/compare_borrowed_bench_test.go.txt
+forced_owned	A Store decorator disables borrowing eligibility. This includes the decorator path and is not an isolated decoder microbenchmark.	archived benchmark source
+eligible	Eligibility does not guarantee borrowing: encoded entries smaller than 4096 bytes retain the owned fallback.	source/internal/storage/readonly_first_get.go.txt
+repeats	5	main completed invocation; generator validates every case
+log	borrowed-path-components.txt	raw log archived unchanged
+limits	ns/op, B/op and allocs/op are local diagnostic measurements; they do not establish a causal explanation for network regressions or retained-heap improvement.	measurement scope

@@ -1,0 +1,13 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	97.80030000000022	99.37429899999997	83.7685030000001	84.29594356182591	-1.6094009936572284
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	121.45328399999983	117.24870300000003	92.08261799999991	78.53615063016935	3.4618915697658625
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	101.78018299999987	104.80645399999997	83.7124280000001	79.87335207429128	-2.9733401049201413
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	181.14652999999998	177.0246300000001	93.54842499999995	52.84486401694493	2.275450708329829
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	108.62383199999987	112.41237899999993	86.52843099999997	76.97411243293767	-3.4877677672060736
+exploratory-r15-group-recheck	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	176.0658879999998	170.84288299999994	93.523922	54.74265029816901	2.9665059253271453
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	102.38884199999993	103.12965999999993	87.389914	84.73790566166907	-0.7235339178853106
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	117.83153899999994	110.88683399999998	88.14290100000007	79.48905908883654	5.89375735812121
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	101.60914000000007	102.19776399999989	82.25042900000001	80.48163265098451	-0.5793022163161909
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	177.490237	172.10911700000037	92.12913999999996	53.52949431493497	3.0317836580496804
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	116.04008099999996	113.96577999999997	92.52615899999991	81.18766791224519	1.7875728645863287
+exploratory-r15-group-recheck	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	175.43851599999974	170.98633899999996	94.39132799999993	55.20401720514055	2.537742054315928

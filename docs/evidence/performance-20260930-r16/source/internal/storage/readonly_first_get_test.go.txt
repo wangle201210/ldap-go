@@ -1,0 +1,260 @@
+package storage
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"testing"
+
+	"github.com/wangle201210/ldap-go/internal/directory"
+)
+
+func TestReadOnlyFirstGetParity(t *testing.T) {
+	store, schema, _ := newBoltCandidateStore(t, 2)
+	dn, err := directory.ParseDNWithNormalizer("uid=user000000,dc=example", schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDN, err := directory.ParseDNWithNormalizer("uid=user000001,dc=example", schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := readOnlyOverflowEntry(4, 1025)
+	// Neither malformed display DNs nor unrelated bindings are validated by Get.
+	entry.DN = "invalid display DN"
+	key := []byte(partitionedEntryKey("db", dn.Key()))
+	type testCase struct {
+		name     string
+		value    []byte
+		borrowed bool
+		canceled bool
+	}
+	tests := []testCase{
+		{name: "not-found"},
+		{name: "canceled-missing", canceled: true},
+		{name: "canceled-malformed", value: []byte("{"), canceled: true},
+		{name: "unknown-version", value: []byte{0, 'L', 'G', 'E', 4}},
+	}
+	for _, format := range []string{"v1", "v2", "v3", "json"} {
+		value := encodeCandidateTestEntry(t, entry, "unrelated identity", format)
+		tests = append(tests,
+			testCase{name: format, value: value, borrowed: format != "json"},
+			testCase{name: format + "/malformed", value: append(bytes.Clone(value), 0)},
+		)
+		tests = append(tests, testCase{name: format + "/small-owned", value: encodeCandidateTestEntry(t, readOnlyOverflowEntry(4, 10), "", format)})
+	}
+	for _, shape := range []string{"attributes", "values"} {
+		large := readOnlyOverflowEntry(4097)
+		if shape == "attributes" {
+			large = entry.Clone()
+			for len(large.Attributes) <= maxReadOnlyCandidateAttributes {
+				large.Attributes = append(large.Attributes, directory.Attribute{Description: "extra"})
+			}
+		}
+		tests = append(tests, testCase{name: "unsupported-" + shape, value: encodeCandidateTestEntry(t, large, "", "v3")})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			holdIdleReadOnlyCandidateDecoders(t)
+			decoder := new(readOnlyCandidateDecoder)
+			releaseReadOnlyCandidateDecoder(decoder)
+			if err := store.Update(t.Context(), func(writer Writer) error {
+				tx := writer.(*boltTx)
+				if test.value == nil {
+					return tx.entries.Delete(key)
+				}
+				return tx.entries.Put(key, test.value)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.View(t.Context(), func(reader Reader) error {
+				tx := reader.(*boltTx)
+				if test.canceled {
+					ctx, cancel := context.WithCancel(t.Context())
+					cancel()
+					tx.ctx = ctx
+				}
+				want, wantErr := tx.getSchemaAwareIn("db", dn)
+				calls := 0
+				handled, err := WithReadOnlyFirstGet(reader, func(facade Reader) error {
+					calls++
+					getter := facade.(schemaAwareDirectGetter)
+					got, err := getter.getSchemaAwareIn("db", dn)
+					if fmt.Sprint(err) != fmt.Sprint(wantErr) || reflect.TypeOf(err) != reflect.TypeOf(wantErr) || !reflect.DeepEqual(got, want) {
+						t.Fatalf("got %#v, %v; want %#v, %v", got, err, want, wantErr)
+					}
+					for _, sentinel := range []error{context.Canceled, ErrEntryNotFound} {
+						if errors.Is(err, sentinel) != errors.Is(wantErr, sentinel) {
+							t.Fatalf("error identity differs for %v", sentinel)
+						}
+					}
+					if err == nil {
+						value := got.Attributes[0].Values[3]
+						raw := tx.entries.Get(key)
+						position := bytes.Index(raw, value)
+						borrowed := position >= 0 && &value[0] == &raw[position]
+						if borrowed != test.borrowed {
+							t.Fatalf("borrowed = %v, want %v", borrowed, test.borrowed)
+						}
+					}
+					// Failed first attempts must also consume the borrowing opportunity.
+					tx.ctx = t.Context()
+					second, err := getter.getSchemaAwareIn("db", secondDN)
+					if err != nil {
+						return err
+					}
+					value := second.Attributes[1].Values[0]
+					raw := tx.entries.Get([]byte(partitionedEntryKey("db", secondDN.Key())))
+					if position := bytes.Index(raw, value); position < 0 || &value[0] == &raw[position] {
+						t.Fatal("second Get did not return owned payloads")
+					}
+					return err
+				})
+				if !handled || calls != 1 || err != nil {
+					t.Fatalf("handled/calls/error = %v/%d/%v", handled, calls, err)
+				}
+				if len(idleReadOnlyCandidateDecoders) != 1 || acquireReadOnlyCandidateDecoder() != decoder {
+					t.Fatal("callback exit did not release its decoder")
+				}
+				assertReadOnlyCandidateDecoderCleared(t, decoder)
+				if !bytes.Equal(tx.entries.Get(key), test.value) {
+					t.Fatal("callback or release changed Bolt bytes")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReadOnlyFirstGetNestedStabilityAndCleanup(t *testing.T) {
+	for _, mode := range []string{"success", "error", "panic", "no-get"} {
+		t.Run(mode, func(t *testing.T) {
+			holdIdleReadOnlyCandidateDecoders(t)
+			decoder := new(readOnlyCandidateDecoder)
+			releaseReadOnlyCandidateDecoder(decoder)
+			store, schema, _ := newSmallGroupCandidateStore(t, 2, 1000, "v3")
+			firstDN, err := directory.ParseDN("uid=user000000,dc=example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondDN, err := directory.ParseDN("uid=user000001,dc=example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stop := errors.New("callback stop")
+			if err := store.View(t.Context(), func(reader Reader) error {
+				owned := ReaderInPartitionWithNormalizer(reader, "db", schema)
+				want, err := owned.Get(firstDN)
+				if err != nil {
+					return err
+				}
+				calls := 0
+				var handled bool
+				var recovered any
+				func() {
+					defer func() { recovered = recover() }()
+					handled, err = WithReadOnlyFirstGet(reader, func(facade Reader) error {
+						calls++
+						if mode == "no-get" {
+							if len(idleReadOnlyCandidateDecoders) != 1 {
+								t.Fatal("unused reader acquired a decoder")
+							}
+							return nil
+						}
+						revision, ok := ReaderSnapshotRevision(facade)
+						wantRevision, wantOK := ReaderSnapshotRevision(reader)
+						if revision != wantRevision || ok != wantOK {
+							t.Fatal("snapshot revision changed")
+						}
+						_ = facade.(Writer)
+						_ = facade.(equalityIndexStorageReader)
+						_ = facade.(schemaAwareDNIdentityStorage)
+						_ = facade.(stableSchemaAwarePhysicalContinuationIterator)
+						scoped := ReaderInPartitionWithNormalizer(facade, "db", schema)
+						first, err := scoped.Get(firstDN)
+						if err != nil {
+							return err
+						}
+						if &first.Attributes[0] != &decoder.attributes[0] {
+							t.Fatal("first Get did not borrow the acquired decoder")
+						}
+						if len(idleReadOnlyCandidateDecoders) != 0 {
+							t.Fatal("decoder released before callback completion")
+						}
+						second, err := scoped.Get(secondDN)
+						if err != nil {
+							return err
+						}
+						second.Attributes[0].Values[0][0] ^= 0xff
+						second.Attributes[0].Description = "changed owned descriptor"
+						if !reflect.DeepEqual(first, want) {
+							t.Fatal("nested Get changed the first entry")
+						}
+						if fresh, err := owned.Get(firstDN); err != nil || !reflect.DeepEqual(fresh, want) {
+							t.Fatalf("owned Get changed: %v", err)
+						}
+						switch mode {
+						case "error":
+							return stop
+						case "panic":
+							panic(stop)
+						}
+						return nil
+					})
+				}()
+				if calls != 1 {
+					t.Fatalf("callback calls = %d", calls)
+				}
+				if mode == "panic" {
+					if recovered != stop {
+						t.Fatalf("panic = %v", recovered)
+					}
+				} else if !handled || recovered != nil || (mode == "error" && !errors.Is(err, stop)) || (mode != "error" && err != nil) {
+					t.Fatalf("handled/error/panic = %v/%v/%v", handled, err, recovered)
+				}
+				if len(idleReadOnlyCandidateDecoders) != 1 || acquireReadOnlyCandidateDecoder() != decoder {
+					t.Fatal("callback exit did not release its decoder")
+				}
+				assertReadOnlyCandidateDecoderCleared(t, decoder)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReadOnlyFirstGetUnsupportedReaders(t *testing.T) {
+	store, schema, _ := newBoltCandidateStore(t, 1)
+	check := func(reader Reader) {
+		t.Helper()
+		handled, err := WithReadOnlyFirstGet(reader, func(Reader) error {
+			t.Fatal("unsupported reader called callback")
+			return nil
+		})
+		if handled || err != nil {
+			t.Fatalf("handled/error = %v/%v", handled, err)
+		}
+	}
+	check(nil)
+	check((*boltTx)(nil))
+	check(&boltTx{})
+	if err := store.View(t.Context(), func(reader Reader) error {
+		check(struct{ Reader }{reader})
+		check(indexMaintenanceReader{Reader: reader})
+		check(ReaderInPartitionWithNormalizer(reader, "db", schema))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(t.Context(), func(writer Writer) error {
+		check(writer)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

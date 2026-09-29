@@ -1,0 +1,56 @@
+package server
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+func BenchmarkCompareBorrowedEntry(b *testing.B) {
+	for _, members := range []int{10, 1000} {
+		for _, mode := range []string{"owned", "eligible"} {
+			b.Run(fmt.Sprintf("members-%d/%s", members, mode), func(b *testing.B) {
+				server, state := newSmallIndexedFixture(b, 2)
+				state.protocolVersion = 3
+				group := borrowedCompareGroup()
+				group.ReplaceValues("member", group.Values("member")[:members])
+				group = withSubschemaReference(group)
+				dn, err := parseCoreWriteDN(state.runtime, group.DN)
+				if err != nil {
+					b.Fatal(err)
+				}
+				database := databaseForNormalizedDN(state.runtime, dn)
+				if err := server.config.Store.Update(b.Context(), func(writer storage.Writer) error {
+					return writerForDatabase(writer, *database).Put(group, false)
+				}); err != nil {
+					b.Fatal(err)
+				}
+				if mode == "owned" {
+					server.config.Store = struct{ storage.Store }{server.config.Store}
+				}
+				request := ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: []byte("uid=missing," + smallIndexedPeopleDN)}
+				message := ldapwire.Message{ID: 1, Request: request}
+				if server.canBorrowCompareEntry(state, database, message, request) != (mode == "eligible") {
+					b.Fatal("unexpected entry borrowing eligibility")
+				}
+				capture := &smallIndexedCapture{}
+				run := func() {
+					capture.Reset()
+					if err := server.handleCompare(b.Context(), capture, state, message, request); err != nil {
+						b.Fatal(err)
+					}
+				}
+				run()
+				if code, ok := simpleAuditResultCode(capture.Bytes()); !ok || code != int(ldapwire.ResultCompareFalse) {
+					b.Fatal("invalid Compare fixture response")
+				}
+				b.ReportAllocs()
+				for b.Loop() {
+					run()
+				}
+			})
+		}
+	}
+}

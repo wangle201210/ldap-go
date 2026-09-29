@@ -1,0 +1,9 @@
+item	value	source
+role	UNADOPTED_R15_INITIAL_CANDIDATE; excluded from all R16 final statistics	main handoff
+baseline	747e5bd307b361ec03705a16303fb9b363c263d1	main handoff; binary-hashes.tsv
+initial_current_sha256	024d4b198359917b5bdc2e23c784f0efe58df9dbb3c0847d2498c8121611ac31	main handoff; actual retained R15 current executable independently hashed
+batch_change	Original R15 20 x 5 group observations included small-group negative results. These independent group rechecks used fixed 1000 x 7 batches and retained negative observations.	main handoff; raw JSON; group-comparisons.tsv
+subsequent_change	R16 added lazy decoder acquisition and owned fallback for encoded entries smaller than 4096 bytes. R15 measurements must not be attributed to that final binary.	main handoff; final R16 source snapshots
+components	Original R15 group-before.txt and group-current.txt preserved unchanged; three repeats per first/last/missing case. They do not enter R16 component tables.	raw component logs
+export_limit	R15 validation.tsv files record runner checks. No R15 canonical contents are required or hashed by this generator; main owns verification and deletion of those large temporary exports.	main handoff; retained validation.tsv
+stopping_rule	Fixed seven repeats; no early stopping or repetition selected by favorable results.	main instruction; archived recheck scripts

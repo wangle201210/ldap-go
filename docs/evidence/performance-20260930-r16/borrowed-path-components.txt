@@ -1,0 +1,26 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkCompareBorrowedEntry/members-10/owned-8         	   49333	     11579 ns/op	   12968 B/op	      98 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/owned-8         	   51499	     11580 ns/op	   12968 B/op	      98 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/owned-8         	   50288	     11613 ns/op	   12968 B/op	      98 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/owned-8         	   50162	     11747 ns/op	   12968 B/op	      98 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/owned-8         	   50445	     11613 ns/op	   12968 B/op	      98 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/eligible-8      	   49569	     12066 ns/op	   13200 B/op	     102 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/eligible-8      	   48268	     12247 ns/op	   13200 B/op	     102 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/eligible-8      	   48195	     12162 ns/op	   13200 B/op	     102 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/eligible-8      	   49426	     12074 ns/op	   13200 B/op	     102 allocs/op
+BenchmarkCompareBorrowedEntry/members-10/eligible-8      	   47667	     12289 ns/op	   13200 B/op	     102 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/owned-8       	    8246	     72465 ns/op	   82808 B/op	      99 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/owned-8       	    7122	     72395 ns/op	   82808 B/op	      99 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/owned-8       	    7976	     71932 ns/op	   82808 B/op	      99 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/owned-8       	    7329	     72282 ns/op	   82808 B/op	      99 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/owned-8       	    8220	     72882 ns/op	   82808 B/op	      99 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/eligible-8    	    9180	     65049 ns/op	    9048 B/op	      97 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/eligible-8    	    8092	     64287 ns/op	    9048 B/op	      97 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/eligible-8    	    8120	     64054 ns/op	    9048 B/op	      97 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/eligible-8    	    9216	     64809 ns/op	    9048 B/op	      97 allocs/op
+BenchmarkCompareBorrowedEntry/members-1000/eligible-8    	    8353	     64801 ns/op	    9048 B/op	      97 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	13.134s

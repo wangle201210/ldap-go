@@ -1,0 +1,237 @@
+package server
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	ber "github.com/go-asn1-ber/asn1-ber"
+	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+)
+
+func TestCompareBorrowedRealFixture(t *testing.T) {
+	seed := os.Getenv("LDAP_GO_COMPARE_FIXTURE")
+	if seed == "" {
+		t.Skip("set LDAP_GO_COMPARE_FIXTURE to an explicit 100k seed database path")
+	}
+	// Open only the copy with Bolt: server.New may migrate stored configuration.
+	source, err := os.Open(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	path := filepath.Join(t.TempDir(), "compare-fixture.db")
+	destination, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(destination, source)
+	if err := errors.Join(copyErr, destination.Close()); err != nil {
+		t.Fatal(err)
+	}
+	bolt, err := storage.OpenBoltForServer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bolt.Close() })
+	const peopleDN = "ou=people,dc=scale,dc=qualification"
+	const rootDN = "cn=admin,dc=scale,dc=qualification"
+	const userDN = "uid=scale-001001," + peopleDN
+	const groupDN = "cn=borrowed-compare-fixture-1000," + peopleDN
+	server, err := New(Config{
+		Store: bolt, RootDN: rootDN, RootPassword: []byte("fixture-only-dummy-password"),
+		MaxSearchEntries: 100100, MaxSearchCandidates: 100100,
+		MaxSearchCandidateBytes: 819200000, MaxSearchMemoryBytes: 1638400000,
+		// Schema and AccessPolicy remain nil, as in cmd/ldap-go runServe.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &connectionState{runtime: server.runtime.Load(), boundDN: userDN, protocolVersion: 3}
+	if state.runtime == nil || state.runtime.schema == nil || state.runtime.access == nil {
+		t.Fatal("CLI runtime did not load schema and ACL policy")
+	}
+	dn, err := parseCoreWriteDN(state.runtime, groupDN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := databaseForNormalizedDN(state.runtime, dn)
+	if database == nil || server.isRoot(state.runtime, userDN, groupDN, "member") {
+		t.Fatal("fixture must route the group and use a non-root subject")
+	}
+	ctx := withACLSubject(t.Context(), server.connectionACLSubject(state))
+	store := server.config.Store
+	read := func(reader storage.Reader, rawDN string) directory.Entry {
+		t.Helper()
+		target, err := parseCoreWriteDN(state.runtime, rawDN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := reader.Get(target)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", rawDN, err)
+		}
+		return entry
+	}
+	var configBefore, userBefore directory.Entry
+	if err := store.View(ctx, func(reader storage.Reader) error {
+		configBefore = read(storage.ReaderInPartition(reader, configurationStoragePartition), "cn=config").Clone()
+		tx := readerForDatabase(reader, *database)
+		read(tx, peopleDN)
+		userBefore = read(tx, userDN).Clone()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("uid=scale-%06d,%s", 1001+i, peopleDN)
+	}
+	group := withSubschemaReference(nestGroupTestGroup(groupDN, members...))
+	if err := store.Update(t.Context(), func(writer storage.Writer) error {
+		return writerForDatabase(writer, *database).Put(group, false)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := ldapwire.CompareRequest{DN: groupDN, Attribute: "member", Assertion: []byte(members[0])}
+	message := ldapwire.Message{ID: 1, Request: request}
+	logGuards := func(reader storage.Reader) {
+		t.Helper()
+		runtime := state.runtime
+		t.Logf("guards: v3=%t noControls=%t DNReference=%t plainBolt=%t localProjection=%t runtimeDNIdentity=%t databaseCacheSafe=%t runtimeProjectionSafe=%t batchValues=%t",
+			state.protocolVersion == 3, len(message.Controls) == 0 && !message.ControlsPresent,
+			runtime.schema.IsDNReferenceValued(request.Attribute), plainBoltSearchStore(server.config.Store),
+			localProjectionReadOnly(runtime, reader), databaseUsesRuntimeDNIdentity(*database, runtime.schema),
+			databaseSearchResultCacheSafe(runtime, *database), smallIndexedRuntimeProjectionSafe(runtime), runtime.access.CanBatchValues())
+		t.Logf("store=%T reader=%T normalizer=%T schema=%p database=%s partition=%s", server.config.Store, reader, database.dnNormalizer, runtime.schema, database.name, database.partition)
+	}
+	logGuards(nil)
+	if !server.canBorrowCompareEntry(state, database, message, request) {
+		t.Fatal("real fixture is not eligible for borrowed Compare")
+	}
+	revision, known := server.currentStorageSnapshotRevision(ctx)
+	if !known {
+		t.Fatal("fixture has no storage revision")
+	}
+	memberBytes := func(entry directory.Entry) [][]byte {
+		t.Helper()
+		for _, attribute := range entry.Attributes {
+			if attribute.Description == "member" && len(attribute.Values) == 1000 {
+				return attribute.Values // Entry.Values clones and would hide borrowing.
+			}
+		}
+		t.Fatal("target must contain exactly 1000 member values")
+		return nil
+	}
+	var groupBefore directory.Entry
+	if err := store.View(ctx, func(reader storage.Reader) error {
+		logGuards(reader)
+		if !localProjectionReadOnly(state.runtime, reader) {
+			t.Fatal("real transaction failed the reader guard")
+		}
+		handled, err := withCompareBorrowedReader(reader, func(borrowed storage.Reader) error {
+			tx := readerForDatabase(borrowed, *database)
+			first := read(tx, groupDN)
+			groupBefore = first.Clone()
+			values := memberBytes(first)
+			if !reflect.DeepEqual(first.Attributes, group.Attributes) || &withSubschemaReference(first).Attributes[0] != &first.Attributes[0] {
+				t.Fatal("stored Add-shaped group changed or required a subschema clone")
+			}
+			owned := read(tx, groupDN)
+			ownedValues := memberBytes(owned)
+			for i, value := range values {
+				if !bytes.Equal(value, []byte(members[i])) || !bytes.Equal(value, ownedValues[i]) || &value[0] == &ownedValues[i][0] {
+					t.Fatalf("member %d differs or subsequent Get still borrows bytes", i)
+				}
+			}
+			// Independent decoders must share Bolt payloads, not descriptor arenas.
+			nested, err := withCompareBorrowedReader(reader, func(inner storage.Reader) error {
+				again := memberBytes(read(readerForDatabase(inner, *database), groupDN))
+				for i, value := range again {
+					if len(value) == 0 || &value[0] != &values[i][0] || &again[i] == &values[i] {
+						t.Fatalf("member %d did not use schema-aware first-Get borrowing", i)
+					}
+				}
+				return nil
+			})
+			if !nested || err != nil {
+				t.Fatalf("nested real reader borrowing = %t / %v", nested, err)
+			}
+			clear(ownedValues[0])
+			if !reflect.DeepEqual(first, groupBefore) || !reflect.DeepEqual(read(tx, groupDN), groupBefore) {
+				t.Fatal("owned mutation or nested decoder reuse changed the borrowed/stored entry")
+			}
+			return nil
+		})
+		if !handled {
+			t.Fatalf("real decorator stack %T did not reach a read-only Bolt transaction", reader)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, assertion string
+		code            ldapwire.ResultCode
+	}{
+		{"first", members[0], ldapwire.ResultCompareTrue},
+		{"last", members[len(members)-1], ldapwire.ResultCompareTrue},
+		{"missing", "uid=borrowed-compare-missing," + peopleDN, ldapwire.ResultCompareFalse},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Cleanup(func() { server.config.Store = store })
+			request := ldapwire.CompareRequest{DN: groupDN, Attribute: "member", Assertion: []byte(test.assertion)}
+			message := ldapwire.Message{ID: 1, Request: request}
+			observed := &smallIndexedObservedStore{Store: store}
+			var want []byte
+			for _, selected := range []storage.Store{observed, store, store} {
+				server.config.Store = selected
+				if got := server.canBorrowCompareEntry(state, database, message, request); got != (selected == store) {
+					logGuards(nil)
+					t.Fatalf("wrong Compare path for %T", selected)
+				}
+				capture := &smallIndexedCapture{}
+				if err := server.handleCompare(ctx, capture, state, message, request); err != nil {
+					t.Fatal(err)
+				}
+				wire := bytes.Clone(capture.Bytes())
+				packet, err := ber.DecodePacketErr(wire)
+				if err != nil || len(packet.Children) != 2 || packet.Children[1].Tag != ldapwire.ApplicationCompareResponse || len(packet.Children[1].Children) < 3 {
+					t.Fatalf("invalid Compare response: %v", err)
+				}
+				code, err := ber.ParseInt64(packet.Children[1].Children[0].Data.Bytes())
+				if err != nil || code != int64(test.code) {
+					t.Fatalf("Compare result = %d / %v, want %d", code, err, test.code)
+				}
+				if want == nil {
+					want = wire
+				} else if !bytes.Equal(wire, want) {
+					t.Fatal("borrowed response differs from forced owned fallback")
+				}
+			}
+			if observed.views != 1 || observed.updates != 0 {
+				t.Fatalf("fallback views=%d updates=%d", observed.views, observed.updates)
+			}
+		})
+	}
+	if after, ok := server.currentStorageSnapshotRevision(ctx); !ok || after != revision {
+		t.Fatal("Compare changed storage revision")
+	}
+	if err := store.View(ctx, func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, *database)
+		if !reflect.DeepEqual(read(tx, groupDN), groupBefore) || !reflect.DeepEqual(read(tx, userDN), userBefore) ||
+			!reflect.DeepEqual(read(storage.ReaderInPartition(reader, configurationStoragePartition), "cn=config"), configBefore) {
+			t.Fatal("Compare changed group, subject, or cn=config")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

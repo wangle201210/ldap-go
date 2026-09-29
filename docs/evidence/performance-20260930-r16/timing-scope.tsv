@@ -1,0 +1,14 @@
+scope	rule
+common	Explicit/default: three measured repeats; hot/distributed 1000 operations; groups 100 operations.
+root	Literal and uppercase normalized root DN remain separate; 1000 operations x 7; default access.
+group-compare	Final R16 NONROOT; 1000 operations x 7 per method/member/access/endpoint; first/last/missing and 10/1000 members remain separate.
+exploratory-r15	Unadopted initial candidate; two independent 1000 x 7 group runs and original component logs preserved outside final statistics.
+read-recheck	Independent explicit access: hot Base/Equality 1000 x 7 and group reads 100 x 7; no distributed, concurrent or Bind measurements.
+stopping-rule	Fixed counts before each run; no early stopping or repetition selected by favorable results.
+component	Root-bound real UID handler with 1/1024 targets and Group1000 first/last/missing; three unprofiled 500ms repetitions per case. Setup is outside b.Loop.
+borrowed-entry-diagnostic	Separate same-candidate missing-member handler benchmark for 10/1000 members, forced-owned and eligible modes; does not replace network results or baseline/current components.
+warmup	SDK warmups and smoke JSON retained and excluded from medians; concurrent repeat 0 excluded.
+concurrent	Root-bound CLI; 8 workers x 1000 equality searches; three measured repeats per access mode.
+comparisons	Unrounded per-cell medians; every method and negative observation retained; no endpoint/access/identity pooling or aggregate parity claim.
+memory	Per-operation allocations are measured; retained heap is not measured.
+archive	Explicit text/JSON allowlist; no passwords, databases, LDIF/canonical contents, executable binaries or binary profiles. Exports and binaries are hashed only.

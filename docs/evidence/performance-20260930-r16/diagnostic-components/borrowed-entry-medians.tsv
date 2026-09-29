@@ -1,0 +1,5 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+borrowed-entry-root-missing	members-10	forced-owned	5	11613	12968	98
+borrowed-entry-root-missing	members-10	eligible	5	12162	13200	102
+borrowed-entry-root-missing	members-1000	forced-owned	5	72395	82808	99
+borrowed-entry-root-missing	members-1000	eligible	5	64801	9048	97

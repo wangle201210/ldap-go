@@ -1,0 +1,13 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	96.887626	97.57918199999997	79.684708	81.6615863822265	-0.7137712301878318
+group-compare	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	101.66828899999993	96.8896290000001	78.48093600000004	81.00034731271388	4.700246307872691
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	95.98327900000012	95.05567599999988	75.53926999999999	79.46844752332316	0.9664214534702897
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	172.124541	168.94371299999995	90.9036589999999	53.80706827486379	1.8479805270766425
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	102.65578499999988	106.44418600000013	82.08623800000001	77.11669475306046	-3.6903921196455247
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	171.39887299999978	166.9813909999999	91.68183900000004	54.905422964167364	2.577310995504556
+group-compare	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	96.94552600000009	98.22061399999994	81.91149299999988	83.39541941776085	-1.3152623464025126
+group-compare	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	104.70694400000005	104.469495	82.064917	78.55395204121547	0.22677483548756427
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	105.64953900000003	107.02079599999982	83.84332800000004	78.34302409785867	-1.2979299417480439
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	168.03255200000012	162.17174799999992	86.24027700000009	53.17836063529397	3.4878979877661975
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	104.44384800000005	107.06150400000003	82.70261299999997	77.24775938137385	-2.506280695441232
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	185.50840600000012	176.86215100000035	100.99650600000015	57.10464643167206	4.660842700572698

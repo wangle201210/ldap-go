@@ -1,0 +1,6 @@
+item	value	source
+role	PRE_WRAPPER_FIX_DIAGNOSTIC_ONLY; excluded from final statistics	main handoff
+pre_wrapper_production_binary_sha256	f4ee1a58e66370abd9f9a1ad38facf6a1f83e34a01dd0a2fee98fe43cc69cd56	main handoff; no claim of separately retained component test executable
+ordinary_uid_overhead	Current UID component showed 11392 B/op and 139 allocs/op versus baseline 11232 B/op and 138 allocs/op, exposing wrapper closure overhead. Preserve raw results; final source creates the wrapper only after canBorrow succeeds.	main handoff; group-pre-wrapper.txt
+superseded_validation	Earlier full server 153.217s, storage 27.332s, webadmin 0.269s and native 10.367s were pre-wrapper-fix diagnostics. Only the new final validation logs and completion signal support R16 publication.	main handoff
+macro_scope	No macros had run for the pre-wrapper-fix R16 candidate.	main handoff

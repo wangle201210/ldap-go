@@ -1,0 +1,2 @@
+status	scope	reason
+NOT_RUN_R16	No fresh fuzz result supplied	Do not import historical fuzz counts; raw full and focused test logs have their own scope.

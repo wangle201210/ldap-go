@@ -1,0 +1,58 @@
+package storage
+
+import "github.com/wangle201210/ldap-go/internal/directory"
+
+// WithReadOnlyFirstGet calls fn only for a concrete read-only Bolt transaction.
+// The callback's schema-aware partition reader may borrow its first Get result
+// when large enough; subsequent schema-aware Gets return owned entries. The callback must not
+// mutate or retain the borrowed entry, or retain the supplied reader. Clone any
+// output that must outlive the callback. This is intended for eligible Compare
+// operations whose callers enforce read-only use throughout the callback.
+//
+// Unknown readers, including decorators, return false without calling fn.
+// Callers must rewrap known contextual readers themselves to preserve context.
+func WithReadOnlyFirstGet(reader Reader, fn func(Reader) error) (handled bool, err error) {
+	tx, ok := reader.(*boltTx)
+	if !ok || tx == nil || tx.tx == nil || tx.tx.Writable() {
+		return false, nil
+	}
+	readerView := &readOnlyFirstGetReader{boltTx: tx}
+	defer func() {
+		if readerView.decoder != nil {
+			releaseReadOnlyCandidateDecoder(readerView.decoder)
+		}
+	}()
+	return true, fn(readerView)
+}
+
+type readOnlyFirstGetReader struct {
+	*boltTx
+	decoder *readOnlyCandidateDecoder
+	used    bool
+}
+
+func (reader *readOnlyFirstGetReader) getSchemaAwareIn(partition string, dn directory.DN) (directory.Entry, error) {
+	if reader.used {
+		return reader.boltTx.getSchemaAwareIn(partition, dn)
+	}
+	reader.used = true
+	if err := reader.ctx.Err(); err != nil {
+		return directory.Entry{}, err
+	}
+	physicalKey := partitionedEntryKey(partition, dn.Key())
+	value := reader.entries.Get([]byte(physicalKey))
+	if value == nil {
+		return directory.Entry{}, ErrEntryNotFound
+	}
+	// For small entries the owned copy costs less than managing a decoder arena.
+	if len(value) < 4096 {
+		stored, err := decodeStoredEntry(value)
+		return stored.Entry, err
+	}
+	reader.decoder = acquireReadOnlyCandidateDecoder()
+	entry, err := reader.decoder.decode(value)
+	if err != nil {
+		return directory.Entry{}, err
+	}
+	return entry, nil
+}

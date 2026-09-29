@@ -1,0 +1,7 @@
+suite	access_mode	identity	variant	stage	method	members	endpoint	repeats	operations	median_ms	operations_per_second_at_median
+concurrent	explicit	root	8-workers	uidEquality	ldapsearch	0	before	3	8000	295	27118.64406779661
+concurrent	explicit	root	8-workers	uidEquality	ldapsearch	0	current	3	8000	285	28070.175438596492
+concurrent	explicit	root	8-workers	uidEquality	ldapsearch	0	openldap	3	8000	305	26229.508196721312
+concurrent	default	root	8-workers	uidEquality	ldapsearch	0	before	3	8000	308	25974.025974025975
+concurrent	default	root	8-workers	uidEquality	ldapsearch	0	current	3	8000	297	26936.026936026938
+concurrent	default	root	8-workers	uidEquality	ldapsearch	0	openldap	3	8000	310	25806.451612903227

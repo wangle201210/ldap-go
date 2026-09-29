@@ -1,0 +1,24 @@
+item	value
+state	ARCHIVED_REJECTED_NOT_SHIPPED
+baseline	747e5bd307b361ec03705a16303fb9b363c263d1
+current_binary_sha256	7c647988fe088d415725c4f75868bb0fd67c72145877301bedb0a2b2407545ea
+raw_json	37
+main_raw_json	31
+read_recheck_raw_json	6
+bind_recheck_raw_json	0
+exports	18
+main_exports	15
+read_recheck_exports	3
+median_groups	162
+measured_samples	822
+comparisons	54
+negative_comparisons	29
+component_samples	30
+diagnostic_component_samples	20
+fixture_proof_logs	2
+exploratory_r15_group_json	2
+exploratory_profile_text_logs	2
+binary_profiles_archived	0
+fresh_fuzz_campaign	NOT_RUN
+failed_checks	0
+completion	See generator/main-finished.txt and generator/validation-main.txt; empty vet output alone is not exit proof.

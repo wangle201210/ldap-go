@@ -1,0 +1,14 @@
+=== RUN   TestCompareBorrowedRealFixture
+    compare_borrowed_fixture_test.go:115: guards: v3=true noControls=true DNReference=true plainBolt=true localProjection=true runtimeDNIdentity=true databaseCacheSafe=true runtimeProjectionSafe=true batchValues=true
+    compare_borrowed_fixture_test.go:115: store=*server.homedirEffectStore reader=<nil> normalizer=*server.databaseEqualityIndexNormalizer schema=0x70b31caf8140 database={1}mdb partition=openldap:database:uuid:MzExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTEx
+    compare_borrowed_fixture_test.go:135: guards: v3=true noControls=true DNReference=true plainBolt=true localProjection=true runtimeDNIdentity=true databaseCacheSafe=true runtimeProjectionSafe=true batchValues=true
+    compare_borrowed_fixture_test.go:135: store=*server.homedirEffectStore reader=server.storageRevisionReader normalizer=*server.databaseEqualityIndexNormalizer schema=0x70b31caf8140 database={1}mdb partition=openldap:database:uuid:MzExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTEx
+=== RUN   TestCompareBorrowedRealFixture/first
+=== RUN   TestCompareBorrowedRealFixture/last
+=== RUN   TestCompareBorrowedRealFixture/missing
+--- PASS: TestCompareBorrowedRealFixture (2.47s)
+    --- PASS: TestCompareBorrowedRealFixture/first (0.00s)
+    --- PASS: TestCompareBorrowedRealFixture/last (0.00s)
+    --- PASS: TestCompareBorrowedRealFixture/missing (0.00s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	2.496s

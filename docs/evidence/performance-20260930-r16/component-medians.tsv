@@ -1,0 +1,11 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+uid-handler-root	targets-1	R16-baseline-747e5bd	3	11425	11232	138
+uid-handler-root	targets-1024	R16-baseline-747e5bd	3	19616	12037	301
+group-handler-root-1000	first	R16-baseline-747e5bd	3	25138	82456	102
+group-handler-root-1000	last	R16-baseline-747e5bd	3	85580	82536	106
+group-handler-root-1000	missing	R16-baseline-747e5bd	3	77796	82624	111
+uid-handler-root	targets-1	R16-current	3	11383	11232	138
+uid-handler-root	targets-1024	R16-current	3	18653	12037	301
+group-handler-root-1000	first	R16-current	3	15444	8384	96
+group-handler-root-1000	last	R16-current	3	71887	8464	100
+group-handler-root-1000	missing	R16-current	3	64651	8552	105

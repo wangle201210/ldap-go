@@ -1,0 +1,16 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+uid-handler-root	targets-1	R16-baseline-747e5bd	R16-current	ns/op	11425	11383	0.36761487964989126
+uid-handler-root	targets-1	R16-baseline-747e5bd	R16-current	B/op	11232	11232	0
+uid-handler-root	targets-1	R16-baseline-747e5bd	R16-current	allocs/op	138	138	0
+uid-handler-root	targets-1024	R16-baseline-747e5bd	R16-current	ns/op	19616	18653	4.909257748776508
+uid-handler-root	targets-1024	R16-baseline-747e5bd	R16-current	B/op	12037	12037	0
+uid-handler-root	targets-1024	R16-baseline-747e5bd	R16-current	allocs/op	301	301	0
+group-handler-root-1000	first	R16-baseline-747e5bd	R16-current	ns/op	25138	15444	38.56313151404248
+group-handler-root-1000	first	R16-baseline-747e5bd	R16-current	B/op	82456	8384	89.83215290579219
+group-handler-root-1000	first	R16-baseline-747e5bd	R16-current	allocs/op	102	96	5.882352941176472
+group-handler-root-1000	last	R16-baseline-747e5bd	R16-current	ns/op	85580	71887	16.000233699462495
+group-handler-root-1000	last	R16-baseline-747e5bd	R16-current	B/op	82536	8464	89.74508093438016
+group-handler-root-1000	last	R16-baseline-747e5bd	R16-current	allocs/op	106	100	5.660377358490565
+group-handler-root-1000	missing	R16-baseline-747e5bd	R16-current	ns/op	77796	64651	16.896755617255387
+group-handler-root-1000	missing	R16-baseline-747e5bd	R16-current	B/op	82624	8552	89.64949651432997
+group-handler-root-1000	missing	R16-baseline-747e5bd	R16-current	allocs/op	111	105	5.405405405405405
