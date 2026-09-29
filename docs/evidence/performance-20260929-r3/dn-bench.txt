@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/directory
+cpu: Apple M1 Pro
+BenchmarkValidateDN/simple/parse-8         	  144156	      1617 ns/op	     872 B/op	      50 allocs/op
+BenchmarkValidateDN/simple/parse-8         	  150427	      1628 ns/op	     872 B/op	      50 allocs/op
+BenchmarkValidateDN/simple/parse-8         	  150517	      1612 ns/op	     872 B/op	      50 allocs/op
+BenchmarkValidateDN/simple/validate-8      	 3941044	        61.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDN/simple/validate-8      	 3925405	        60.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDN/simple/validate-8      	 3959992	        60.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateDN/escaped/parse-8        	  132132	      1811 ns/op	     968 B/op	      54 allocs/op
+BenchmarkValidateDN/escaped/parse-8        	  132460	      1804 ns/op	     968 B/op	      54 allocs/op
+BenchmarkValidateDN/escaped/parse-8        	  136378	      1810 ns/op	     968 B/op	      54 allocs/op
+BenchmarkValidateDN/escaped/validate-8     	  262590	       920.0 ns/op	     520 B/op	      28 allocs/op
+BenchmarkValidateDN/escaped/validate-8     	  266989	       908.1 ns/op	     520 B/op	      28 allocs/op
+BenchmarkValidateDN/escaped/validate-8     	  263346	       899.2 ns/op	     520 B/op	      28 allocs/op
+BenchmarkValidateDN/multiAVA/parse-8       	  118352	      2064 ns/op	    1080 B/op	      62 allocs/op
+BenchmarkValidateDN/multiAVA/parse-8       	  115254	      2086 ns/op	    1080 B/op	      62 allocs/op
+BenchmarkValidateDN/multiAVA/parse-8       	  117612	      2073 ns/op	    1080 B/op	      62 allocs/op
+BenchmarkValidateDN/multiAVA/validate-8    	  243198	      1009 ns/op	     568 B/op	      31 allocs/op
+BenchmarkValidateDN/multiAVA/validate-8    	  237093	      1007 ns/op	     568 B/op	      31 allocs/op
+BenchmarkValidateDN/multiAVA/validate-8    	  238770	      1007 ns/op	     568 B/op	      31 allocs/op
+BenchmarkValidateDN/invalid/parse-8        	  199347	      1228 ns/op	     720 B/op	      33 allocs/op
+BenchmarkValidateDN/invalid/parse-8        	  196315	      1230 ns/op	     720 B/op	      33 allocs/op
+BenchmarkValidateDN/invalid/parse-8        	  199759	      1254 ns/op	     720 B/op	      33 allocs/op
+BenchmarkValidateDN/invalid/validate-8     	  189105	      1267 ns/op	     720 B/op	      33 allocs/op
+BenchmarkValidateDN/invalid/validate-8     	  193684	      1266 ns/op	     720 B/op	      33 allocs/op
+BenchmarkValidateDN/invalid/validate-8     	  187078	      1256 ns/op	     720 B/op	      33 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/directory	5.818s

@@ -1,45 +1,44 @@
 # Common LDAP performance qualification
 
-September 29, 2026, R2: baseline `b55f670`, frozen executable `current`,
+September 29, 2026, R3: baseline `a9de7d4`, frozen executable `current`,
 100,000 users, Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
 
-**Results remain mixed; overall OpenLDAP parity is unproven and the goal stays
-active.** Versus baseline `b55f670`, common non-root Base/equality medians improve
-2.9-11.3% with default access and 4.5-5.4% with explicit ACLs. However, broader
-literal-root equality is **14.5% slower**, false Compare **10.0% slower**, and
-the fresh-process concurrent CLI check **57.7% slower**. Fixed-fixture Add and
-Delete are **3.9% and 10.0% slower**. These regressions remain in the evidence;
-shared-host measurements do not establish their cause or a uniform gain.
-The separate interleaved follow-up shows literal-root equality 9.6% faster
-and false Compare 0.1% faster, but uppercase-root equality 2.9% slower.
-Its different observer, fixture and request sequence do not invalidate the
-original serial results or establish the cause of their regressions.
+**Results are mixed; overall parity remains unachieved and the goal active.**
+Versus baseline `a9de7d4`, common SSHA Bind improves 5.1% with explicit ACLs
+and 0.5% with default access. Distributed non-root Base/equality is **1.8-3.8%
+slower**, explicit-ACL 1,000-member group Base **7.6% slower**, and paired
+literal-root Bind **6.5% slower**. Fixed-fixture ModifyDN is **13.5% slower**
+in the original 20-operation batches; that slowdown does not reproduce in
+the separate 100-operation recheck, whose other rows remain mixed. Component
+gains do not establish uniform SDK improvement, and shared-host timings do
+not establish causality.
 
-The [R1 archive](common-ldap-performance-20260929-r1.md) preserves the previous
-report verbatim. [R2 evidence index](evidence/performance-20260929-r2/README.md).
+The [R2 archive](common-ldap-performance-20260929-r2.md) preserves the previous
+report verbatim. [R3 evidence index](evidence/performance-20260929-r3/README.md).
 
-## Scope and method
+## Change and method
 
-DN relation helpers extract only the normalizer instead of copying the
-904-byte database value, preserving snapshot and evaluation order. `isRoot`
-adds a pure negative guard with a conservative identity hint, avoiding extra
-normalized-root allocations and handling zero DNs safely. `localProjectionReadOnly`
-uses an indexed pointer where no external callbacks run. Authentication, ACL
-decisions, password algorithms/work factors and cache bounds are unchanged.
+`directory.ValidateDN([]byte)` uses the existing strict `simpleDNDepthBytes`
+path or the original `parseDN` fallback without rendering. DN and
+NameOptionalUID schema validators call it per value; no validation cache is
+added. `operationQueue.pendingAfterPushLocked` counts a virtual append instead
+of creating a temporary counting slice. Notifications and scheduling are
+unchanged. No configuration, password algorithm/work-factor or CGO changes
+are included.
 
 Common tables use medians of three `total_ms` batches. Endpoints rotate per
 request; only SDK calls are timed, excluding setup, connection, verification
-and cleanup. All samples remain, grouped by run, batch, stage, method, member
-count and endpoint. SSHA/plaintext, hot/distributed and group sizes stay
-separate. Hot reads target `scale-001001`; distributed reads sample 1,000 users
+and cleanup. All samples remain grouped by run, batch, stage, method, member
+count and endpoint; SSHA/plaintext, hot/distributed and group sizes stay
+separate. Hot reads use `scale-001001`; distributed reads sample 1,000 users
 across 100k. User reads retain limit 2; nested BFS retains limit 6 and uses
-417 searches per 100 traversals. Common endpoints have uid/member/objectClass
+417 searches per 100 traversals. Common endpoints use uid/member/objectClass
 equality indexes and plaintext loopback LDAP.
 
 `Relative = OpenLDAP/current * 100%`; 100% means parity.
-`Time reduction = (1-current/before) * 100%`, versus baseline `b55f670`;
-negative means slower. Ratios use unrounded medians; 0.0% is rounding, not
-identical times. Frequency is qualitative. [All 72 common medians](evidence/performance-20260929-r2/medians.tsv).
+`Time reduction = (1-current/before) * 100%`, versus baseline `a9de7d4`;
+negative means slower. Ratios use unrounded medians; 0.0% denotes rounding,
+not identical times. Frequency is qualitative. [All 72 common medians](evidence/performance-20260929-r3/medians.tsv).
 
 ## Explicit ACL
 
@@ -52,18 +51,18 @@ access to * by users read by * none
 
 | Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 95.61 ms | 95.78 ms | 75.73 ms | 79.1% | -0.2% |
-| Wrong password, SSHA | Low | 1,000 | 98.75 ms | 98.41 ms | 77.94 ms | 79.2% | 0.3% |
-| User Bind, plaintext diagnostic | Very high | 1,000 | 97.51 ms | 97.48 ms | 76.73 ms | 78.7% | 0.0% |
-| Wrong password, plaintext diagnostic | Low | 1,000 | 91.64 ms | 91.66 ms | 74.08 ms | 80.8% | <0.1% slower |
-| Non-root Base, hot | High | 1,000 | 115.63 ms | 110.38 ms | 87.10 ms | 78.9% | 4.5% |
-| Non-root equality, hot | Very high | 1,000 | 119.88 ms | 114.25 ms | 88.80 ms | 77.7% | 4.7% |
-| Non-root Base, distributed | High | 1,000 | 133.97 ms | 126.69 ms | 89.20 ms | 70.4% | 5.4% |
-| Non-root equality, distributed | Very high | 1,000 | 131.64 ms | 125.10 ms | 90.68 ms | 72.5% | 5.0% |
-| Direct group discovery | High | 100 | 18.70 ms | 17.37 ms | 11.79 ms | 67.9% | 7.1% |
-| Group Base, 10 members | Medium | 100 | 14.66 ms | 13.27 ms | 10.48 ms | 78.9% | 9.5% |
-| Group Base, 1,000 members | Medium | 100 | 96.90 ms | 95.60 ms | 88.50 ms | 92.6% | 1.3% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 58.27 ms | 56.98 ms | 41.52 ms | 72.9% | 2.2% |
+| User Bind, SSHA | Very high | 1,000 | 103.67 ms | 98.39 ms | 78.81 ms | 80.1% | 5.1% |
+| Wrong password, SSHA | Low | 1,000 | 124.06 ms | 103.23 ms | 94.29 ms | 91.3% | 16.8% |
+| User Bind, plaintext diagnostic | Very high | 1,000 | 98.83 ms | 99.85 ms | 79.81 ms | 79.9% | -1.0% |
+| Wrong password, plaintext diagnostic | Low | 1,000 | 98.80 ms | 101.77 ms | 80.71 ms | 79.3% | -3.0% |
+| Non-root Base, hot | High | 1,000 | 108.36 ms | 104.06 ms | 83.31 ms | 80.1% | 4.0% |
+| Non-root equality, hot | Very high | 1,000 | 134.90 ms | 131.73 ms | 101.88 ms | 77.3% | 2.4% |
+| Non-root Base, distributed | High | 1,000 | 135.26 ms | 138.34 ms | 95.73 ms | 69.2% | -2.3% |
+| Non-root equality, distributed | Very high | 1,000 | 145.08 ms | 150.58 ms | 106.64 ms | 70.8% | -3.8% |
+| Direct group discovery | High | 100 | 19.42 ms | 17.73 ms | 12.96 ms | 73.1% | 8.7% |
+| Group Base, 10 members | Medium | 100 | 12.64 ms | 12.78 ms | 9.70 ms | 75.9% | -1.1% |
+| Group Base, 1,000 members | Medium | 100 | 95.97 ms | 103.24 ms | 92.18 ms | 89.3% | -7.6% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 58.85 ms | 60.17 ms | 45.95 ms | 76.4% | -2.3% |
 
 ## Default access
 
@@ -71,216 +70,205 @@ No explicit ACL rules; otherwise the same common-operation method.
 
 | Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 89.37 ms | 89.35 ms | 70.77 ms | 79.2% | 0.0% |
-| Wrong password, SSHA | Low | 1,000 | 99.06 ms | 100.33 ms | 80.38 ms | 80.1% | -1.3% |
-| User Bind, plaintext diagnostic | Very high | 1,000 | 98.32 ms | 98.14 ms | 79.32 ms | 80.8% | 0.2% |
-| Wrong password, plaintext diagnostic | Low | 1,000 | 93.43 ms | 93.96 ms | 74.75 ms | 79.6% | -0.6% |
-| Non-root Base, hot | High | 1,000 | 113.12 ms | 108.68 ms | 87.90 ms | 80.9% | 3.9% |
-| Non-root equality, hot | Very high | 1,000 | 121.82 ms | 118.26 ms | 93.65 ms | 79.2% | 2.9% |
-| Non-root Base, distributed | High | 1,000 | 135.42 ms | 126.90 ms | 91.50 ms | 72.1% | 6.3% |
-| Non-root equality, distributed | Very high | 1,000 | 147.47 ms | 130.79 ms | 113.02 ms | 86.4% | 11.3% |
-| Direct group discovery | High | 100 | 17.90 ms | 17.19 ms | 12.11 ms | 70.4% | 4.0% |
-| Group Base, 10 members | Medium | 100 | 14.92 ms | 14.72 ms | 11.37 ms | 77.2% | 1.3% |
-| Group Base, 1,000 members | Medium | 100 | 100.19 ms | 99.85 ms | 90.09 ms | 90.2% | 0.3% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 56.51 ms | 54.73 ms | 40.87 ms | 74.7% | 3.1% |
+| User Bind, SSHA | Very high | 1,000 | 102.82 ms | 102.32 ms | 91.55 ms | 89.5% | 0.5% |
+| Wrong password, SSHA | Low | 1,000 | 98.83 ms | 99.30 ms | 81.23 ms | 81.8% | -0.5% |
+| User Bind, plaintext diagnostic | Very high | 1,000 | 92.71 ms | 92.17 ms | 75.98 ms | 82.4% | 0.6% |
+| Wrong password, plaintext diagnostic | Low | 1,000 | 90.92 ms | 93.27 ms | 73.24 ms | 78.5% | -2.6% |
+| Non-root Base, hot | High | 1,000 | 115.55 ms | 114.50 ms | 92.69 ms | 81.0% | 0.9% |
+| Non-root equality, hot | Very high | 1,000 | 113.88 ms | 112.39 ms | 88.76 ms | 79.0% | 1.3% |
+| Non-root Base, distributed | High | 1,000 | 128.23 ms | 130.48 ms | 94.27 ms | 72.2% | -1.8% |
+| Non-root equality, distributed | Very high | 1,000 | 150.58 ms | 154.59 ms | 116.07 ms | 75.1% | -2.7% |
+| Direct group discovery | High | 100 | 16.66 ms | 16.47 ms | 11.65 ms | 70.7% | 1.1% |
+| Group Base, 10 members | Medium | 100 | 14.01 ms | 13.70 ms | 10.73 ms | 78.3% | 2.2% |
+| Group Base, 1,000 members | Medium | 100 | 115.36 ms | 113.42 ms | 98.68 ms | 87.0% | 1.7% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 58.32 ms | 55.40 ms | 43.01 ms | 77.6% | 5.0% |
 
-## Broader reads: literal root
+## Serial broader reads: literal root
 
-Three fresh processes per endpoint run in rotating order. SDK rows have nine
-batches: `user-bind.json` for SSHA, `fast-1/2/3.json` for 1,000-call root stages
-and `probe-1/2/3.json` for 20 scans. User-probe repeats 0-2 are all measured;
-`warmup.json` is retained but excluded. Literal root binds as
+Three fresh processes per endpoint run in rotating order. SDK rows use nine
+batches: `user-bind.json` for SSHA, `fast-1/2/3.json` for 1,000-call root
+stages, and `probe-1/2/3.json` for 20 scans. User-probe repeats 0-2 are all
+measured; `warmup.json` is retained but excluded. Literal root binds as
 `cn=admin,dc=scale,dc=qualification`. Root Base reads the fixed base container;
-equality and both Compare stages sample UIDs across the 100k range.
-CLI rows use wall-clock timing including client startup/Bind: nine full-prefix
-batches, three for each other CLI stage. Methods/counts are never pooled.
+equality and both Compare stages use distributed UIDs across the 100k range.
+CLI rows time wall-clock execution including client startup/Bind: nine
+full-prefix batches, three for each other CLI stage. Methods/counts are not pooled.
 
 | Workload | Batches/endpoint | Before (ms) | Current (ms) | OpenLDAP (ms) | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA; 1,000 calls | 9 | 97.46 | 99.12 | 74.93 | 75.6% | -1.7% |
-| Wrong password, SSHA; 1,000 calls | 9 | 89.37 | 97.57 | 74.81 | 76.7% | -9.2% |
-| Root Bind; 1,000 calls | 9 | 71.12 | 67.28 | 76.27 | 113.4% | 5.4% |
-| Root Base, hot container; 1,000 calls | 9 | 102.70 | 100.64 | 84.98 | 84.4% | 2.0% |
-| Root equality, distributed; 1,000 calls | 9 | 106.65 | 122.07 | 93.28 | 76.4% | -14.5% |
-| Root Compare true, distributed; 1,000 calls | 9 | 107.71 | 105.61 | 73.24 | 69.4% | 2.0% |
-| Root Compare false, distributed; 1,000 calls | 9 | 105.00 | 115.47 | 70.54 | 61.1% | -10.0% |
-| Prefix substring scans; 20 scans | 9 | 931.43 | 973.28 | 624.07 | 64.1% | -4.5% |
-| Negative substring scans; 20 scans | 9 | 920.02 | 937.92 | 640.83 | 68.3% | -1.9% |
-| CLI full prefix, 100k returned | 9 | 663.00 | 675.00 | 620.00 | 91.9% | -1.8% |
-| CLI indexed queries, 10,000 | 3 | 896.00 | 985.00 | 885.00 | 89.8% | -9.9% |
-| CLI concurrent indexed, 8 x 1,000 | 3 | 286.00 | 451.00 | 322.00 | 71.4% | -57.7% |
-| CLI paged traversal, 2 x 100k | 3 | 1406.00 | 1397.00 | 1231.00 | 88.1% | 0.6% |
-| CLI negative unindexed equality, 10 | 3 | 263.00 | 264.00 | 434.00 | 164.4% | -0.4% |
+| User Bind, SSHA; 1,000 calls | 9 | 96.97 | 93.02 | 70.18 | 75.4% | 4.1% |
+| Wrong password, SSHA; 1,000 calls | 9 | 91.04 | 87.53 | 70.98 | 81.1% | 3.9% |
+| Root Bind; 1,000 calls | 9 | 70.33 | 69.61 | 64.30 | 92.4% | 1.0% |
+| Root Base, hot container; 1,000 calls | 9 | 101.26 | 97.30 | 82.56 | 84.9% | 3.9% |
+| Root equality, distributed; 1,000 calls | 9 | 107.74 | 108.08 | 88.00 | 81.4% | -0.3% |
+| Root Compare true, distributed; 1,000 calls | 9 | 107.65 | 102.66 | 71.95 | 70.1% | 4.6% |
+| Root Compare false, distributed; 1,000 calls | 9 | 106.98 | 98.74 | 70.23 | 71.1% | 7.7% |
+| Prefix substring scans; 20 scans | 9 | 939.26 | 919.73 | 622.27 | 67.7% | 2.1% |
+| Negative substring scans; 20 scans | 9 | 930.25 | 915.91 | 621.13 | 67.8% | 1.5% |
+| CLI full prefix, 100k returned | 9 | 638.00 | 627.00 | 591.00 | 94.3% | 1.7% |
+| CLI indexed queries, 10,000 | 3 | 847.00 | 875.00 | 669.00 | 76.5% | -3.3% |
+| CLI concurrent indexed, 8 x 1,000 | 3 | 297.00 | 307.00 | 306.00 | 99.7% | -3.4% |
+| CLI paged traversal, 2 x 100k | 3 | 1290.00 | 1311.00 | 1125.00 | 85.8% | -1.6% |
+| CLI negative unindexed equality, 10 | 3 | 249.00 | 241.00 | 382.00 | 158.5% | 3.2% |
 
-The separate common root-bound CLI check, eight clients x 1,000 queries, has
-before/current/native medians **309/314/325 ms, explicit**, and
-**309/303/327 ms, default**. Repeat 0 is warmup; repeats 1-3 are measured.
-These common-run checks remain separate from the fresh-process regression.
+The separate common root-bound CLI checks, eight clients x 1,000 queries,
+have before/current/native medians **365/343/369 ms, explicit**, and
+**317/303/317 ms, default**. Repeat 0 is warmup; repeats 1-3 are measured.
+These common-run checks are separate from the fresh-process replay above.
 
-The original fresh-process concurrent batches are 286/282/322 ms before and
-451/311/462 ms current; none is discarded.
+## Serial broader reads: uppercase root
 
-### Separate concurrent recheck
-
-Six fresh Go processes in alternating pairs use an `n=2` read-only SDK warmup,
-concurrent warmup repeat 0, then three measured eight-client x 1,000-query
-batches per process. Every client in every batch passed exact UID sequence
-and count checks. Medians use all nine post-warmup samples per Go version.
-
-| Eight clients x 1,000 queries | Before (ms) | Current (ms) | Time reduction |
-| --- | ---: | ---: | ---: |
-| Separate concurrent recheck | 338 | 338 | 0.0% |
-
-The original 57.7% slowdown did not reproduce without the preceding full
-workload. Different sequence and warmup history prevent a causal disproof or
-replacement of the original results. All samples remain, including the
-501 ms before and 571 ms current outliers. There is no new native measurement
-or full export; R2's export total remains 27.
-[Timings](evidence/performance-20260929-r2/concurrent-recheck/timings.tsv),
-[completion log](evidence/performance-20260929-r2/concurrent-recheck.log.txt),
-[replay](evidence/performance-20260929-r2/concurrent-recheck.sh.txt).
-
-## Broader reads: uppercase root
-
-`normalized-root-1/2/3.json` supplies nine batches per endpoint using client
+`normalized-root-1/2/3.json` supplies nine batches per endpoint with client
 Bind DN `CN=ADMIN,DC=SCALE,DC=QUALIFICATION`. This spelling identifies the same
-root account; it is a separate client-DN variant, never pooled with literal
-root. Base remains the hot container; equality/Compare remain distributed.
+root account. Base remains the hot container; equality/Compare remain
+distributed. These samples are not pooled with literal root or paired-root SDK.
 
 | Workload | Batches/endpoint | Before (ms) | Current (ms) | OpenLDAP (ms) | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Root Bind; 1,000 calls | 9 | 75.45 | 74.40 | 69.01 | 92.7% | 1.4% |
-| Root Base, hot container; 1,000 calls | 9 | 101.91 | 102.51 | 84.46 | 82.4% | -0.6% |
-| Root equality, distributed; 1,000 calls | 9 | 112.02 | 116.41 | 89.80 | 77.1% | -3.9% |
-| Root Compare true, distributed; 1,000 calls | 9 | 109.15 | 110.73 | 76.54 | 69.1% | -1.4% |
-| Root Compare false, distributed; 1,000 calls | 9 | 112.11 | 105.12 | 72.64 | 69.1% | 6.2% |
+| Root Bind; 1,000 calls | 9 | 77.35 | 73.17 | 64.94 | 88.7% | 5.4% |
+| Root Base, hot container; 1,000 calls | 9 | 110.48 | 106.78 | 82.70 | 77.5% | 3.3% |
+| Root equality, distributed; 1,000 calls | 9 | 115.83 | 115.25 | 86.48 | 75.0% | 0.5% |
+| Root Compare true, distributed; 1,000 calls | 9 | 124.46 | 111.15 | 69.80 | 62.8% | 10.7% |
+| Root Compare false, distributed; 1,000 calls | 9 | 114.89 | 110.82 | 69.21 | 62.5% | 3.5% |
 
-[Read medians](evidence/performance-20260929-r2/read-medians.tsv) retain all
-108 stage/count/variant/endpoint groups. [Read evidence and diagnostic tables](evidence/performance-20260929-r2/read-tables.md)
+[All 108 read median groups](evidence/performance-20260929-r3/read-medians.tsv)
+retain variant, stage, count and endpoint. [Read evidence and diagnostic tables](evidence/performance-20260929-r3/read-tables.md)
 also preserve long-DN/long-password variants separately.
 
-## Interleaved root follow-up
+## Interleaved root SDK
 
-The completed follow-up uses seven repeats per literal/uppercase client-DN
-case, 1,000 primary SDK calls per stage/endpoint/repeat. Medians use all seven
-`total_ms` batches; smoke and warmup records remain separate.
-The [repository runner](../internal/cmd/ldapcommonbench/README.md#optional-root-sdk-stages)
-keeps the fast probe's primary SDK calls: fixed-base Root Base and distributed
-UID equality/Compare. It rotates endpoints per request and performs WhoAmI
-after every timed request, outside the SDK timer. The old fast probe verified
-responses without that per-request WhoAmI observer. The follow-up also creates
-an isolated OU/eight-user fixture and runs service Bind and cleanup. These
-untimed operations still add server work: the observer, fixture and execution
-sequence differ, so results must stay separate and cannot replace the originals.
+Each row is the median of seven batches of 1,000 primary SDK calls per
+endpoint. The [repository runner](../internal/cmd/ldapcommonbench/README.md#optional-root-sdk-stages)
+rotates endpoints per request, followed by untimed WhoAmI checks. Primary
+calls retain fixed-base Root Base and distributed UID equality/Compare.
+The old fast probe verified responses without per-request WhoAmI. This
+runner also creates an isolated OU/eight-user fixture and performs service
+Bind and cleanup. Untimed observer/fixture work still loads the server:
+these results cannot replace or be pooled with the serial read workload.
 
 Literal client DN: `cn=admin,dc=scale,dc=qualification`.
 
 | 1,000 calls | Before (ms) | Current (ms) | OpenLDAP (ms) | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Root Bind | 84.14 | 85.26 | 82.22 | 96.4% | -1.3% |
-| Root Base, hot container | 114.74 | 115.16 | 95.76 | 83.2% | -0.4% |
-| Root equality, distributed | 145.31 | 131.29 | 109.05 | 83.1% | 9.6% |
-| Root Compare true, distributed | 131.17 | 129.63 | 91.49 | 70.6% | 1.2% |
-| Root Compare false, distributed | 125.06 | 124.90 | 87.26 | 69.9% | 0.1% |
+| Root Bind | 82.82 | 88.21 | 82.85 | 93.9% | -6.5% |
+| Root Base, hot container | 125.67 | 127.05 | 105.41 | 83.0% | -1.1% |
+| Root equality, distributed | 150.09 | 150.02 | 119.15 | 79.4% | 0.0% |
+| Root Compare true, distributed | 132.42 | 130.98 | 91.99 | 70.2% | 1.1% |
+| Root Compare false, distributed | 140.07 | 137.48 | 94.61 | 68.8% | 1.8% |
 
 Uppercase client DN: `CN=ADMIN,DC=SCALE,DC=QUALIFICATION`.
 
 | 1,000 calls | Before (ms) | Current (ms) | OpenLDAP (ms) | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Root Bind | 79.34 | 81.01 | 77.30 | 95.4% | -2.1% |
-| Root Base, hot container | 115.50 | 113.98 | 91.02 | 79.9% | 1.3% |
-| Root equality, distributed | 126.57 | 130.24 | 102.28 | 78.5% | -2.9% |
-| Root Compare true, distributed | 126.61 | 126.42 | 82.84 | 65.5% | 0.2% |
-| Root Compare false, distributed | 125.19 | 126.86 | 81.41 | 64.2% | -1.3% |
+| Root Bind | 106.00 | 104.89 | 98.91 | 94.3% | 1.0% |
+| Root Base, hot container | 132.38 | 136.67 | 103.99 | 76.1% | -3.2% |
+| Root equality, distributed | 130.78 | 124.69 | 99.32 | 79.7% | 4.6% |
+| Root Compare true, distributed | 128.93 | 129.69 | 85.71 | 66.1% | -0.6% |
+| Root Compare false, distributed | 143.67 | 142.90 | 97.22 | 68.0% | 0.5% |
 
-The original literal-root equality/false-Compare slowdowns do not reproduce
-in this different workload. Bind is slower in both variants, and uppercase
-equality/false Compare are slower. Neither series establishes uniform gains
-or causality. [All 30 endpoint medians](evidence/performance-20260929-r2/root-paired-medians.tsv)
-and [raw follow-up evidence](evidence/performance-20260929-r2/root-paired/) retain
-both DN variants, all measured batches and both smoke reports.
+[All 30 paired-root medians](evidence/performance-20260929-r3/root-paired-medians.tsv)
+and [raw records](evidence/performance-20260929-r3/root-paired/) retain both
+DN variants and every repeat; smoke and startup warmups are excluded.
 
 ## Fixed-fixture writes and RSS
 
-Twenty operations per stage, three fresh processes per endpoint, with fixed
-token `92cd12ef4156461e9e2807136111af53` and the same run DN in **all nine
-before/current/OpenLDAP instances**. Setup, SDK postcondition checks and
-cleanup are outside timed write stages; durability settings are unchanged.
-This fixture differs from R1's original random-token runs: no cross-round
-pooling or direct R1-table comparison is made. No additional R2 write recheck
-is included.
+Twenty operations per stage, three fresh processes per endpoint. All nine
+before/current/OpenLDAP instances use fixed token
+`92cd12ef4156461e9e2807136111af53` and the same run DN, as in R2's fixed-write
+method. Setup, SDK postconditions and cleanup are outside timed write stages;
+durability settings are unchanged. No cross-round samples are pooled.
 
 | Twenty operations | Before (ms) | Current (ms) | OpenLDAP (ms) | Relative | Time reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Add | 18.36 | 19.07 | 108.84 | 570.8% | -3.9% |
-| Modify, unindexed description | 11.09 | 10.60 | 113.05 | 1066.4% | 4.4% |
-| ModifyDN | 33.44 | 27.33 | 116.31 | 425.5% | 18.3% |
-| Delete | 20.96 | 23.06 | 113.71 | 493.1% | -10.0% |
+| Add | 19.30 | 15.77 | 95.04 | 602.7% | 18.3% |
+| Modify, unindexed description | 9.01 | 8.71 | 91.11 | 1046.2% | 3.3% |
+| ModifyDN | 25.52 | 28.98 | 94.83 | 327.3% | -13.5% |
+| Delete | 21.83 | 18.91 | 97.47 | 515.5% | 13.4% |
+
+**ModifyDN's original 13.5% slowdown is retained.** The completed recheck uses
+seven alternating fresh before/current process pairs, the same fixed token,
+100 writes per stage and `n=2` initial reads. Each median uses seven samples.
+There is no new native result; these different batch sizes and initial-read
+counts are not pooled with or substituted for the original 20-operation rows.
+
+| 100 operations, same fixed DN | Before (ms) | Current (ms) | Time reduction |
+| --- | ---: | ---: | ---: |
+| Add | 93.268 | 92.685 | 0.6% |
+| Modify, unindexed description | 43.735 | 45.797 | -4.7% |
+| ModifyDN | 141.860 | 136.484 | 3.8% |
+| Delete | 103.593 | 106.127 | -2.4% |
+
+The ModifyDN slowdown did not reproduce at the larger batch size. Modify and
+Delete are slower in this recheck; neither uniform gains nor causality are
+established. [All recheck probes](evidence/performance-20260929-r3/write-recheck/)
+and [separate medians](evidence/performance-20260929-r3/write-recheck-medians.tsv)
+retain every sample.
 
 RSS medians use three byte measurements after each workload, before export.
-Read RSS is 1.2% lower; write RSS is 16.3% higher. These observations are not
-allocation profiles or per-operation memory measurements.
+Read RSS is **11.3% higher** and write RSS **0.4% higher**. These are process
+RSS observations, not allocation profiles or per-request memory measurements.
 
 | RSS after workload (bytes) | Before | Current | OpenLDAP |
 | --- | ---: | ---: | ---: |
-| Read/authentication | 437,059,584 | 431,603,712 | 100,270,080 |
-| Writes | 367,853,568 | 427,687,936 | 141,770,752 |
+| Read/authentication | 434,356,224 | 483,229,696 | 151,601,152 |
+| Writes | 412,418,048 | 414,105,600 | 141,295,616 |
 
-[Write probes and checks](evidence/performance-20260929-r2/writes/),
-[all 54 write median groups](evidence/performance-20260929-r2/write-medians.tsv).
+[Write probes and checks](evidence/performance-20260929-r3/writes/),
+[all 54 write median groups](evidence/performance-20260929-r3/write-medians.tsv).
 
 ## Component evidence
 
-The [integrated root component](evidence/performance-20260929-r2/root-component-integrated.txt)
-compares the old predicate with the guard **both using new routing**, three
-repetitions each. It isolates the guard, not the full baseline-to-current SDK
-change. Non-root hot allocations fall; normalized-root allocations stay equal
-and its timings remain slightly slower.
+Three repetitions per case, medians. These isolate component operations, not
+LDAP request latency. DN parsing/rendering is compared with validation only.
 
-| Hot case / databases | Old predicate (ns) | Guard (ns) | B/op, old to guard | Allocs/op |
+| DN case | Parse (ns/op) | Validate (ns/op) | B/op, parse to validate | Allocs/op |
 | --- | ---: | ---: | ---: | ---: |
-| Non-root / 1 | 1,488 | 777.2 | 232 to 120 | 8 to 4 |
-| Non-root / 8 | 7,479 | 5,011 | 1,408 to 960 | 50 to 32 |
-| Non-root / 32 | 27,983 | 20,144 | 5,440 to 3,840 | 194 to 128 |
-| Normalized root / 1 | 1,483 | 1,495 | 232 to 232 | 8 to 8 |
-| Normalized root / 8 | 7,408 | 7,796 | 1,408 to 1,408 | 50 to 50 |
-| Normalized root / 32 | 28,121 | 28,617 | 5,440 to 5,440 | 194 to 194 |
+| Simple | 1,617 | 60.92 | 872 to 0 | 50 to 0 |
+| Escaped | 1,810 | 908.1 | 968 to 520 | 54 to 28 |
+| Multi-AVA | 2,073 | 1,007 | 1,080 to 568 | 62 to 31 |
+| Invalid | 1,230 | 1,266 | 720 to 720 | 33 to 33 |
 
-[Routing prototype samples](evidence/performance-20260929-r2/diagnostics/routing-isolated/routing-prototype-bench.txt)
-are an isolated `059e82d` component comparison of equivalent routing logic,
-not SDK results or a `b55f670` server comparison. Avoiding a 904-byte value copy
-is not a 904 B/op heap-allocation claim. The initial root prototype's roughly
-30% normalized-root slowdown and intermediate repair are preserved as
-diagnostics, separate from the integrated samples. **No new R2 allocation
-profile claim is made.** Later query-trace diagnostics are outside this round.
+The invalid case is **2.9% slower**, with unchanged allocation counts.
+[All DN samples](evidence/performance-20260929-r3/dn-bench.txt).
+
+| Queue case | Reference (ns/op) | Current (ns/op) | B/op, reference to current | Allocs/op |
+| --- | ---: | ---: | ---: | ---: |
+| Idle concurrent admission | 5.521 | 3.059 | 0 to 0 | 0 to 0 |
+| Full scan, 1,024 entries | 2,935 | 761.8 | 9,472 to 0 | 1 to 0 |
+
+Idle reference counting was already stack-optimized: **both idle paths
+allocate zero heap bytes**. No claim is made that one heap allocation was
+removed on every request. Full-scan current samples are 761.8/764.2/720.8 ns;
+761.8 ns is their median. [Every queue case and repetition](evidence/performance-20260929-r3/queue-bench.txt)
+is retained. No new R3 allocation-profile claim is made.
 
 ## Validation and identity
 
-All four original scripts exited 0. Common SDK errors, repeat/count and cleanup checks
-passed; all read-stage errors are empty; write postconditions and cleanup
-passed. **All 24 original exports match** 100,002 entries, POSIX checksum 2143929969
-and 42,712,438 canonical bytes: six common, nine read, nine write.
-The root-paired follow-up also exited 0 with three matching exports, bringing
-R2's total to **27**. Both smoke reports and all 210 measured samples have no
-errors and complete cleanup; every measured sample verifies 1,000 primary SDK
-calls. Runner package tests and vet passed in separately archived logs.
+All five original scripts exited 0. Common/paired SDK errors, counts, repeats
+and cleanup checks passed. All read-stage errors are empty; write
+postconditions and cleanup passed. **All 27 original exports match** 100,002 entries,
+POSIX checksum 2143929969 and 42,712,438 canonical bytes: six common, three
+paired-root, nine read, nine write.
+The larger write recheck also exited 0; all 14 exports match the same fixture,
+bringing the total to **41**. Its stage errors are empty, write postconditions
+passed, and cleanup completed for every process.
 
-Coordinator-confirmed final Go tests passed (server 133.975 s; some packages
-cached), and vet passed with an empty log. Native differential validation has
-355 PASS records, no failures/skips and terminal PASS. Earlier prototype
-validation is separate. No race-detector result is claimed. The
-[September 24 R2 operational-attribute gap](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
-remains outside the passing matrix. General compatibility, deployment
-capacity and overall parity remain unproven; optimization continues.
+Final Go tests passed (server 137.480 s; some packages cached), and the
+coordinator confirmed vet exit 0 with an empty log. Native differential
+validation has 355 PASS records, no failures/skips and terminal PASS
+(11.795 s). DN fuzzing passed 1,177,275 executions. No race-detector result
+is claimed. The [September 24 R2 operational-attribute gap](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
+remains outside the passing matrix. Deployment performance, general
+compatibility and overall parity remain unproven; optimization continues.
 
-Frozen executable SHA-256 supplied by the coordinator:
+Executable SHA-256 read from the frozen audit files:
 
 ```text
-before (b55f670)  9cac059895ac9fff6999e9ce958b1a1f6f3f44ddd447a065e98a94726a5f9df7
-current           d93aea5cd433bbe3b20805074de8e670286f57eefa2ead015a5028dd53de189f
+before (a9de7d4)  d93aea5cd433bbe3b20805074de8e670286f57eefa2ead015a5028dd53de189f
+current           365079e52a578b2180f8fb10d2a647be9d5dd663177587f0a105b63e0ccbb5f3
 ```
 
-Audit: `/var/tmp/ldap-go-perf-20260929-r2`. The evidence index records replay
-dependencies and grouping. Passwords are environment-only in archived replays;
+Audit: `/var/tmp/ldap-go-perf-20260929-r3`. The evidence index records replay
+dependencies and grouping. Archived replays require environment passwords;
 binaries, databases, profiles and large exports are excluded. Documentation
 preparation ran no tests, builds, benchmarks or profiles and made no commits.

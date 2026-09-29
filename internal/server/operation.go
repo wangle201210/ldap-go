@@ -526,20 +526,22 @@ func (queue *operationQueue) push(
 }
 
 func (queue *operationQueue) pendingAfterPushLocked(next *queuedOperation) int {
-	items := make([]*queuedOperation, 0, len(queue.items)+1)
-	items = append(items, queue.items...)
-	items = append(items, next)
-	pending := len(items)
+	count := len(queue.items) + 1
+	pending := count
 	available := queue.maximum - queue.active
 	if queue.fence || available < 0 {
 		available = 0
 	}
-	for _, item := range items {
+	for index := range count {
 		if available == 0 {
 			break
 		}
+		item := next
+		if index < len(queue.items) {
+			item = queue.items[index]
+		}
 		if !item.concurrent {
-			if queue.active == 0 && pending == len(items) {
+			if queue.active == 0 && pending == count {
 				pending--
 			}
 			break

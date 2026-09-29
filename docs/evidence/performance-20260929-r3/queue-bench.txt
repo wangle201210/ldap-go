@@ -1,0 +1,66 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkOperationQueueAdmission/IdleConcurrent/Current-8 	59082565	         3.059 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleConcurrent/Current-8 	63984847	         2.886 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleConcurrent/Current-8 	56546728	         3.077 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleConcurrent/Reference-8         	34163434	         5.521 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleConcurrent/Reference-8         	28781578	         5.637 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleConcurrent/Reference-8         	34519129	         5.279 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Current-8            	73005015	         2.432 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Current-8            	77300196	         2.252 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Current-8            	80923134	         2.242 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Reference-8          	41177756	         4.495 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Reference-8          	39968539	         4.516 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/IdleExclusive/Reference-8          	39162360	         4.521 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Current-8         	32957470	         5.425 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Current-8         	33903355	         5.403 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Current-8         	32376039	         5.414 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Reference-8       	 1657800	       109.3 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Reference-8       	 1579149	       113.2 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ConcurrentWindow/Reference-8       	 1644310	       109.3 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Current-8            	82215243	         2.235 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Current-8            	80962554	         2.456 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Current-8            	79656273	         2.236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Reference-8          	 1624414	       108.7 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Reference-8          	 1605074	       113.4 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveHead/Reference-8          	 1626741	       112.7 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Current-8 	37201934	         4.606 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Current-8 	39545594	         4.688 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Current-8 	38224334	         4.564 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Reference-8         	 1706100	       102.2 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Reference-8         	 1652254	       106.9 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveAfterConcurrent/Reference-8         	 1501848	       121.3 ns/op	     288 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Current-8                 	32273246	         4.689 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Current-8                 	39262021	         4.529 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Current-8                 	38807739	         4.566 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Reference-8               	24648248	         7.318 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Reference-8               	25501467	         7.236 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/ExclusiveCandidate/Reference-8               	25299553	         7.342 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Current-8                      	79155672	         2.256 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Current-8                      	81074982	         2.226 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Current-8                      	80974719	         2.240 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Reference-8                    	   80902	      2350 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Reference-8                    	   52852	      3280 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/Saturated1024/Reference-8                    	   63013	      2729 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Current-8                         	78284967	         2.255 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Current-8                         	81044574	         2.533 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Current-8                         	79316991	         2.272 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Reference-8                       	   79330	      3140 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Reference-8                       	   64132	      2691 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/Fenced1024/Reference-8                       	   58311	      2621 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Current-8                 	21634071	         8.100 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Current-8                 	22956132	         7.958 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Current-8                 	22608565	         8.081 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Reference-8               	   71596	      2825 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Reference-8               	   70160	      2497 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/AvailableSlots1024/Reference-8               	   50620	      3320 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Current-8                       	  222664	       761.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Current-8                       	  260428	       764.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Current-8                       	  251306	       720.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Reference-8                     	   53253	      2935 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Reference-8                     	   54307	      2968 ns/op	    9472 B/op	       1 allocs/op
+BenchmarkOperationQueueAdmission/FullScan1024/Reference-8                     	   64108	      2914 ns/op	    9472 B/op	       1 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	10.904s

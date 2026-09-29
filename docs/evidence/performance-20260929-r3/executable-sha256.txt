@@ -1,0 +1,5 @@
+Executable SHA-256, read from /var/tmp/ldap-go-perf-20260929-r3.
+Baseline source: a9de7d4. Current: frozen R3 DN-validation and queue changes.
+
+d93aea5cd433bbe3b20805074de8e670286f57eefa2ead015a5028dd53de189f  before
+365079e52a578b2180f8fb10d2a647be9d5dd663177587f0a105b63e0ccbb5f3  current

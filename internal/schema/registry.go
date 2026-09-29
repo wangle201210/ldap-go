@@ -3321,13 +3321,13 @@ func validateSyntax(syntax string, maxLength int, value []byte) error {
 			return errors.New("value is not an LDAP boolean")
 		}
 	case SyntaxDistinguishedName:
-		if _, err := directory.ParseDN(string(value)); err != nil {
+		if err := directory.ValidateDN(value); err != nil {
 			return errors.New("value is not a distinguished name")
 		}
 	case SyntaxNameAndOptionalUID:
 		dn, _, _ := splitNameAndOptionalUID(value)
 		if len(dn) > 0 {
-			if _, err := directory.ParseDN(string(dn)); err != nil {
+			if err := directory.ValidateDN(dn); err != nil {
 				return errors.New("value is not a name and optional UID")
 			}
 		}
