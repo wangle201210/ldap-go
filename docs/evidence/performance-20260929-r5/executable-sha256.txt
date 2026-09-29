@@ -1,0 +1,5 @@
+Executable SHA-256, read from /var/tmp/ldap-go-perf-20260929-r5.
+Baseline source: f78523a. Current: frozen R5 canonical audit-result recognition changes.
+
+14f64911aa8f5f1505f36e20b4eb735e7b6216afa27234d0df8a5cb2a6e17202  before
+8551a06409eba3aeff3225748836fc5483c6ec778a207517b025a0df27b279ce  current

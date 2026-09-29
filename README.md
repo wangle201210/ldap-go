@@ -84,6 +84,10 @@ See the [R4 report](docs/common-ldap-performance.md),
 [evidence index](docs/evidence/performance-20260929-r4/README.md) and
 [verbatim R3 archive](docs/common-ldap-performance-20260929-r3.md).
 
+The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
+conditional audit-observer component allocation reduction. It establishes no
+ordinary-request speedup or production-latency gain; the R4 tables above remain unchanged.
+
 ## Requirements
 
 - Go 1.26 or newer.

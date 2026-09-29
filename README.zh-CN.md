@@ -73,6 +73,9 @@ R4 仅在两个小结果搜索路径完成 ACL 检查后选择紧凑复制返回
 [证据索引](docs/evidence/performance-20260929-r4/README.md)和
 [第三轮原文归档](docs/common-ldap-performance-20260929-r3.md)。
 
+独立的 [R5 审计报告](docs/audit-performance-20260929-r5.md)记录条件性审计观察器组件的
+分配减少，未证明普通请求加速或生产延迟改善；上方 R4 对照表保持不变。
+
 ## 环境要求
 
 - Go 1.26 或更高版本。

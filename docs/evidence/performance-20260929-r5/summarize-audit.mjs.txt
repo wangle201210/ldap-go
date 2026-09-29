@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+
+const root = '/var/tmp/ldap-go-perf-20260929-r5';
+const ignored = ['timestamp', 'connection_id', 'message_id', 'remote_address', 'duration_micros'];
+const result = [];
+for (const name of ['audited-paired', 'audited-aa']) {
+  const counts = {};
+  const records = [];
+  for (const side of ['before', 'current']) {
+    const raw = fs.readFileSync(`${root}/${name}/${side}/audit.jsonl`);
+    const lines = raw.toString().trim().split('\n');
+    const groups = new Map();
+    for (const line of lines) {
+      const { event } = JSON.parse(line);
+      const key = JSON.stringify(Object.fromEntries(Object.entries(event).filter(([key]) => !ignored.includes(key)).sort()));
+      groups.set(key, (groups.get(key) ?? 0) + 1);
+    }
+    counts[side] = Object.fromEntries([...groups].sort(([a], [b]) => a.localeCompare(b)));
+    records.push({ side, records: lines.length, semanticGroups: groups.size, sha256: crypto.createHash('sha256').update(raw).digest('hex') });
+  }
+  const equal = JSON.stringify(counts.before) === JSON.stringify(counts.current);
+  if (!equal) throw new Error(`${name}: semantic audit counts differ`);
+  result.push({ name, ignoredFields: ignored, records, semanticCountsEqual: equal });
+  fs.writeFileSync(`${root}/${name}/audit-semantic-counts.json`, JSON.stringify(counts.before, null, 2) + '\n');
+}
+fs.writeFileSync(`${root}/audit-validation.json`, JSON.stringify(result, null, 2) + '\n');
+console.log(JSON.stringify(result, null, 2));

@@ -1,0 +1,52 @@
+[
+  {
+    "name": "audited-paired",
+    "ignoredFields": [
+      "timestamp",
+      "connection_id",
+      "message_id",
+      "remote_address",
+      "duration_micros"
+    ],
+    "records": [
+      {
+        "side": "before",
+        "records": 20294,
+        "semanticGroups": 900,
+        "sha256": "547e081a7cb6a9a78b51649404fc73eb4b378a4587854bf9915a256128fa0ab9"
+      },
+      {
+        "side": "current",
+        "records": 20294,
+        "semanticGroups": 900,
+        "sha256": "ccfcd94e276a2345f2be300439068c354222e8d1abada60fbafc79eb3c965b86"
+      }
+    ],
+    "semanticCountsEqual": true
+  },
+  {
+    "name": "audited-aa",
+    "ignoredFields": [
+      "timestamp",
+      "connection_id",
+      "message_id",
+      "remote_address",
+      "duration_micros"
+    ],
+    "records": [
+      {
+        "side": "before",
+        "records": 6254,
+        "semanticGroups": 500,
+        "sha256": "cb8585fa3c826b261eb27b1290cf3a7bc3c26c7b23d2f2bc7cae86c4788eb5c2"
+      },
+      {
+        "side": "current",
+        "records": 6254,
+        "semanticGroups": 500,
+        "sha256": "569ef7aea7a994dda675d2538f9c957d83f420071877c36ce0472cfa60d924ac"
+      }
+    ],
+    "semanticCountsEqual": true
+  }
+]

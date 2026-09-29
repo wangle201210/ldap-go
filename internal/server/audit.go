@@ -146,6 +146,16 @@ func (observation *operationAuditObservation) observeResponse(encoded []byte) {
 		observation.mu.Unlock()
 		return
 	}
+	if code, ok := simpleAuditResultCode(encoded); ok {
+		observation.mu.Lock()
+		observation.result = code
+		observation.hasResult = true
+		observation.diagnostic = ""
+		observation.referrals = nil
+		observation.responseControls = nil
+		observation.mu.Unlock()
+		return
+	}
 	packet, err := ber.DecodePacketErr(encoded)
 	if err != nil || len(packet.Children) < 2 {
 		return
@@ -229,6 +239,9 @@ func (observation *operationAuditObservation) setResult(code ldapwire.ResultCode
 }
 
 func auditLDAPResultCode(encoded []byte) (int, bool) {
+	if code, ok := simpleAuditResultCode(encoded); ok {
+		return code, true
+	}
 	packet, err := ber.DecodePacketErr(encoded)
 	if err != nil || len(packet.Children) < 2 {
 		return 0, false
