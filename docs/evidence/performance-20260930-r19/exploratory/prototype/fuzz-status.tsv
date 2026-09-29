@@ -1,0 +1,2 @@
+role	target	source	workers	requested_seconds	observed_elapsed_seconds	executions	new_interesting	total_interesting	package_seconds
+ISOLATED_PROTOTYPE	FuzzMatchSimpleRDNValueBytes	exploratory/prototype/single-pass-fuzz.txt	2	15	15	656711	97	111	15.067

@@ -1,0 +1,8 @@
+item	value
+role	R18_SAME_PROCESS_NETWORK_DIAGNOSTIC_ONLY; excluded from every R19 timing/statistics table
+source_revision	8918569d6b7b32c683606e88744eeb1ec36bd4db
+scope	Real loopback TCP; same-process SDK/client/server; CPU profile includes setup/client/background work
+interpretation	Handler-filtered pprof text is diagnostic; no proven cause of R19 network speedup or native parity
+input_buffer	Static investigation only; not implemented
+ENOSPC	First preparation failed before timing; excluded; only successful Base/equality text retained
+excluded_artifacts	No binary pprof, test executables, failed setup logs, databases or credentials bundled

@@ -1,0 +1,16 @@
+run	endpoint	entries	cksum	bytes	sha256	source_path
+explicit-final	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-final/before/data.canonical
+explicit-final	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-final/current/data.canonical
+explicit-final	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-final/openldap/data.canonical
+default-final	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-final/before/data.canonical
+default-final	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-final/current/data.canonical
+default-final	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-final/openldap/data.canonical
+root-paired	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/root-paired/before/data.canonical
+root-paired	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/root-paired/current/data.canonical
+root-paired	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/root-paired/openldap/data.canonical
+explicit-group-compare	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-group-compare/before/data.canonical
+explicit-group-compare	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-group-compare/current/data.canonical
+explicit-group-compare	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/explicit-group-compare/openldap/data.canonical
+default-group-compare	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-compare/before/data.canonical
+default-group-compare	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-compare/current/data.canonical
+default-group-compare	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-compare/openldap/data.canonical

@@ -1,0 +1,7 @@
+run	endpoint	entries	cksum	bytes	sha256	source_path
+default-group-aa	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-aa/before/data.canonical
+default-group-aa	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-aa/current/data.canonical
+default-group-aa	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-aa/openldap/data.canonical
+default-group-swap	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-swap/before/data.canonical
+default-group-swap	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-swap/current/data.canonical
+default-group-swap	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r19/default-group-swap/openldap/data.canonical

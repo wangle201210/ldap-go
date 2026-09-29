@@ -1,0 +1,27 @@
+# R19 Performance Evidence
+
+**Per-operation OpenLDAP parity is not achieved.** This archive retains all positive and negative observations for the targeted DN comparison change.
+
+The [overview](overview.txt) records scope, provenance and validation. Inspect [core comparisons](comparisons.tsv), [raw samples](samples.tsv), [separate calibrations](diagnostics/comparisons.tsv), [formal components](components/before-current/comparisons.tsv), and [checks](checks.tsv). See [source reconstruction](source/RECONSTRUCTION.txt), [source hashes](source-hashes.tsv) and [summary counts](summary.tsv).
+
+R19 PERFORMANCE EVIDENCE
+
+R18 source baseline: 8918569d6b7b32c683606e88744eeb1ec36bd4db. Retained production before SHA256: 5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370; actual embedded revision 15f428a dirty.
+Final R19 current SHA256: 8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98; embedded 8918569d6b7b32c683606e88744eeb1ec36bd4db, modified=true.
+
+Scope: strict ASCII DN leaf comparison only. A once-initialized 256-bool table validates bytes. An exact canonical leaf name and prevalidated suffix enable one value validation/comparison scan. Value mismatch does not skip validation of the remaining bytes. Complex, alias and invalid inputs retain original normalization fallback. No storage/ACL/Bind/queue/audit optimization merged.
+
+Core: five scripts, 31 JSON, 840 samples, 144 medians, 48 comparisons, 15 exports. Negative time reductions: 22/48. Below OpenLDAP throughput: 46/48. All negative values retained; no universal speedup or native-parity claim.
+Calibration: separate default group A/A and startup/port swap, 10 JSON, 252 samples, 36 medians, 12 comparisons, six exports. Label identity and binary SHA are explicit in diagnostics/endpoint-identity.tsv. No pooling or correction of core results.
+Formal components: groups-main-before/current.txt only; actual R18 versus final R19, Group1000/Small10 first/last/missing, 500ms x 3, 36 samples, 12 medians, 18 metric comparisons. Method, root fixture identity, access and member count are separate columns.
+Exploratory prototypes: 15f428a-based table-only, single-pass and alternating three-round logs, plus early 656711-execution fuzz, remain under exploratory/prototype. They do not represent formal R18 before or final R19. No R18 Bind component/calibration archive imported.
+Validation: focused directory/schema, full Go, vet, 355 native PASS records and two final main fuzz logs. Final Parse 558456, Match 621669 executions; early fuzz kept separate.
+Optional exploratory/network-r18 holds only authorized README, benchmark source and successful textual logs/pprof tables. These R18 same-process SDK/server diagnostics include setup. Input buffering was not implemented; ENOSPC preparation failure is excluded. No proven cause of network gain is inferred.
+
+All 21 exports match original canonical content: 100002 entries, cksum 2143929969, 42712438 bytes, SHA256 5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0.
+All seven scripts use APFS cp -c; setup/warmup are outside measured operation time. COW, fixed endpoint order and warm caches remain limitations. Distributed targets do not establish cold-cache performance.
+Source reconstruction: immutable baseline + source/tracked.patch.txt + two source/new files + source/reconstruction.hash. Changed large sources are not bundled twice. Frozen copy: /tmp/ldap-go-r19-evidence-source. CLI source and executable hashes are archived. Do not infer reproducible binaries from source hashes alone.
+Raw JSON/TSV/logs/scripts, counters and verification timing remain inspectable. SHA256SUMS covers every archive file except itself. Databases, credentials, canonical contents, executables and binary profiles are not bundled.
+Main completion signal: generator/main-finished.json. Formal report is maintained by main. This evidence worker executes no build/test/bench and does not hash during macros.
+
+The [formal report](../../common-ldap-performance.md) explains the measured results and practical limits. SHA256SUMS includes this README.

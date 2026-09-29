@@ -1,0 +1,30 @@
+File: nonrootBase.test
+Type: cpu
+Time: 2026-09-30 06:59:34 CST
+Duration: 26.56s, Total samples = 29.25s (110.15%)
+Active filters:
+   focus=runConnectionOperation
+Showing nodes accounting for 7.17s, 24.51% of 29.25s total
+Dropped 172 nodes (cum <= 0.15s)
+Showing top 20 nodes out of 104
+      flat  flat%   sum%        cum   cum%
+     6.86s 23.45% 23.45%      6.86s 23.45%  syscall.rawsyscalln
+     0.06s  0.21% 23.66%      0.06s  0.21%  runtime.memclrNoHeapPointers
+     0.05s  0.17% 23.83%      0.08s  0.27%  runtime.mapaccess2_faststr
+     0.02s 0.068% 23.90%      0.06s  0.21%  github.com/wangle201210/ldap-go/internal/directory.simpleDNDepth
+     0.02s 0.068% 23.97%      0.16s  0.55%  runtime.mallocgcSmallScanNoHeader
+     0.02s 0.068% 24.03%      0.05s  0.17%  strings.ToLower
+     0.01s 0.034% 24.07%      0.07s  0.24%  github.com/wangle201210/ldap-go/internal/directory.DN.SimpleLegacyDisplayRelation
+     0.01s 0.034% 24.10%      0.06s  0.21%  github.com/wangle201210/ldap-go/internal/directory.DN.String (inline)
+     0.01s 0.034% 24.14%      0.06s  0.21%  github.com/wangle201210/ldap-go/internal/directory.parseDN
+     0.01s 0.034% 24.17%      0.06s  0.21%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).NormalizeDNCached
+     0.01s 0.034% 24.21%      0.25s  0.85%  github.com/wangle201210/ldap-go/internal/server.(*Server).isRoot
+     0.01s 0.034% 24.24%      6.90s 23.59%  github.com/wangle201210/ldap-go/internal/server.(*Server).writeSearchResultResponse
+     0.01s 0.034% 24.27%      0.07s  0.24%  github.com/wangle201210/ldap-go/internal/server.databaseDNEqual (inline)
+     0.01s 0.034% 24.31%      0.08s  0.27%  github.com/wangle201210/ldap-go/internal/server.isAnyDatabaseRoot (inline)
+     0.01s 0.034% 24.34%      0.05s  0.17%  github.com/wangle201210/ldap-go/internal/server.parseRuntimeDN
+     0.01s 0.034% 24.38%      0.12s  0.41%  runtime.(*mcache).refill
+     0.01s 0.034% 24.41%      0.08s  0.27%  runtime.(*mheap).alloc.func1
+     0.01s 0.034% 24.44%      0.09s  0.31%  runtime.mallocgcSmallNoscan
+     0.01s 0.034% 24.48%      0.07s  0.24%  runtime.mapassign_faststr
+     0.01s 0.034% 24.51%      0.05s  0.17%  strings.Join

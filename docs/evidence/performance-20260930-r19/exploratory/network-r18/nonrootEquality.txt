@@ -1,0 +1,6 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkNetworkCommon/nonrootEquality/hot-8         	  262923	     88120 ns/op	   27654 B/op	     519 allocs/op
+PASS

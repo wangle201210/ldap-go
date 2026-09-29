@@ -1,0 +1,7 @@
+round	position	endpoint	source
+1	1	before	exploratory/prototype/single-interleaved-before-1.txt
+1	2	current	exploratory/prototype/single-interleaved-current-1.txt
+2	1	current	exploratory/prototype/single-interleaved-current-2.txt
+2	2	before	exploratory/prototype/single-interleaved-before-2.txt
+3	1	before	exploratory/prototype/single-interleaved-before-3.txt
+3	2	current	exploratory/prototype/single-interleaved-current-3.txt

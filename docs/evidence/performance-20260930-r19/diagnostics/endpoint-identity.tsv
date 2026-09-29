@@ -1,0 +1,7 @@
+run	role	endpoint_label	binary	sha256	port	startup_position
+default-group-aa	DIAGNOSTIC	before	current	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+default-group-aa	DIAGNOSTIC	current	current	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29482	2
+default-group-aa	DIAGNOSTIC	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3
+default-group-swap	DIAGNOSTIC	before	before	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	29482	2
+default-group-swap	DIAGNOSTIC	current	current	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+default-group-swap	DIAGNOSTIC	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3

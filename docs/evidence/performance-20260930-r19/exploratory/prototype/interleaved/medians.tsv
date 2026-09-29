@@ -1,0 +1,13 @@
+scope	access_mode	identity	method	members	case	endpoint	repeats	ns_op	B_op	allocs_op
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	first	before	3	23246	82456	102
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	last	before	3	64953	82536	106
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	missing	before	3	57886	82624	111
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	first	before	3	9953	9688	101
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	last	before	3	10772	9768	105
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	missing	before	3	11454	9856	110
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	first	current	3	23096	82456	102
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	last	current	3	58696	82536	106
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	1000	missing	current	3	52358	82624	111
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	first	current	3	9577	9688	101
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	last	current	3	11008	9768	105
+exploratory/prototype/interleaved	fixture-default	root	handleCompare_member	10	missing	current	3	11517	9856	110

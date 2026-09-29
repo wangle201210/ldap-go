@@ -1,0 +1,11 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkLocalGroupCompare/first-8  	   25732	     23246 ns/op	   82456 B/op	     102 allocs/op
+BenchmarkLocalGroupCompare/last-8   	    9505	     67054 ns/op	   82537 B/op	     106 allocs/op
+BenchmarkLocalGroupCompare/missing-8         	   10000	     57450 ns/op	   82624 B/op	     111 allocs/op
+BenchmarkLocalSmallGroupCompare/first-8      	   59905	      9888 ns/op	    9688 B/op	     101 allocs/op
+BenchmarkLocalSmallGroupCompare/last-8       	   55342	     10868 ns/op	    9768 B/op	     105 allocs/op
+BenchmarkLocalSmallGroupCompare/missing-8    	   52910	     11408 ns/op	    9856 B/op	     110 allocs/op
+PASS

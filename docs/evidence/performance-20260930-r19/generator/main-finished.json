@@ -1,0 +1,40 @@
+{
+  "round": "R19",
+  "main_signal": "R19 session61160 EXIT0; validation and all seven macros passed. No CPU tests or benchmarks running. Main explicitly authorized rehashing and complete archive generation.",
+  "completed_at": "2026-09-29T23:32:01Z",
+  "completion_time_kind": "Handoff receipt recorded by evidence worker; not an exact process-exit timestamp",
+  "validation_exit_code": 0,
+  "performance_exit_code": 0,
+  "component_exit_code": 0,
+  "macro_finished": true,
+  "components_finished": true,
+  "current_sha256": "8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98",
+  "before_sha256": "5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370",
+  "source_git_head": "8918569d6b7b32c683606e88744eeb1ec36bd4db",
+  "source_frozen_root": "/tmp/ldap-go-r19-evidence-source",
+  "components": {
+    "before": {
+      "command": "Main-reported parameters: actual R18 before test executable; BenchmarkLocalGroupCompare and BenchmarkLocalSmallGroupCompare; first/last/missing; 500ms x 3. Exact executable path and literal invocation not supplied in handoff.",
+      "source_revision": "8918569d6b7b32c683606e88744eeb1ec36bd4db",
+      "log": "groups-main-before.txt"
+    },
+    "current": {
+      "command": "Main-reported parameters: final frozen R19 main; BenchmarkLocalGroupCompare and BenchmarkLocalSmallGroupCompare; first/last/missing; 500ms x 3. Literal invocation not supplied in handoff.",
+      "source_revision": "8918569d6b7b32c683606e88744eeb1ec36bd4db",
+      "source_modified": true,
+      "log": "groups-main-current.txt"
+    }
+  },
+  "cli_sources": "Sources frozen from main after its production-freeze declaration; CLI files are unchanged from accepted R18 baseline. Executed client paths are in the seven raw scripts; their actual bytes, SHA256 and embedded build metadata are inspected after completion. Source snapshots do not independently prove reproducible binaries.",
+  "main_assessment": "Main reported all validation and seven macros passed; final performance assessment belongs to the main formal report. No universal speedup or native-parity inference.",
+  "validation_reported": {
+    "server_seconds": 156.914,
+    "storage_seconds": 31.977,
+    "webadmin_seconds": 0.372,
+    "native_pass_records": 355,
+    "native_seconds": 11.211,
+    "parse_fuzz_executions": 558456,
+    "match_fuzz_executions": 621669
+  },
+  "static_review_reported": "Independent Lorentz review found no matching/fallback/first-error problem; closed. No separate reviewer transcript provided."
+}

@@ -62,6 +62,13 @@ func (plan *simpleDNComparison) match(registry *Registry, value []byte) (matched
 	}
 	head, tail, hasTail := bytes.Cut(value, []byte(","))
 	if plan.tailReady && hasTail && bytes.Equal(tail, plan.tail[:plan.tailLength]) {
+		leaf := &plan.parts[0]
+		nameLength := len(leaf.name)
+		// An exact prepared name is already valid; fuse value validation and comparison.
+		if len(head) > nameLength && head[nameLength] == '=' && bytes.Equal(head[:nameLength], leaf.name) {
+			leafMatches, simple := directory.MatchSimpleRDNValueBytes(head[nameLength+1:], leaf.value, leaf.fold)
+			return leafMatches && plan.tailMatches, simple
+		}
 		name, actual, simple := directory.ParseSimpleRDNBytes(head)
 		if !simple {
 			return false, false

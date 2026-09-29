@@ -1,0 +1,4 @@
+scope	role	source_revision	source	command_or_design
+before-current/before	FORMAL_R18_VS_FINAL_R19	8918569d6b7b32c683606e88744eeb1ec36bd4db	groups-main-before.txt	Main-reported parameters: actual R18 before test executable; BenchmarkLocalGroupCompare and BenchmarkLocalSmallGroupCompare; first/last/missing; 500ms x 3. Exact executable path and literal invocation not supplied in handoff.
+before-current/current	FORMAL_R18_VS_FINAL_R19	8918569d6b7b32c683606e88744eeb1ec36bd4db	groups-main-current.txt	Main-reported parameters: final frozen R19 main; BenchmarkLocalGroupCompare and BenchmarkLocalSmallGroupCompare; first/last/missing; 500ms x 3. Literal invocation not supplied in handoff.
+benchmark	SAME_SIX_CASE_BENCHMARK	8918569d6b7b32c683606e88744eeb1ec36bd4db	internal/server/compare_group_bench_test.go	1000/10 members x first/last/missing; 500ms x 3; root fixture handler

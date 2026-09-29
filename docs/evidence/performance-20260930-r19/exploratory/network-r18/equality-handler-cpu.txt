@@ -1,0 +1,30 @@
+File: nonrootBase.test
+Type: cpu
+Time: 2026-09-30 07:00:01 CST
+Duration: 29.18s, Total samples = 29.73s (101.88%)
+Active filters:
+   focus=runConnectionOperation
+Showing nodes accounting for 7.73s, 26.00% of 29.73s total
+Dropped 212 nodes (cum <= 0.15s)
+Showing top 20 nodes out of 104
+      flat  flat%   sum%        cum   cum%
+     7.26s 24.42% 24.42%      7.26s 24.42%  syscall.rawsyscalln
+     0.10s  0.34% 24.76%      0.10s  0.34%  runtime.memclrNoHeapPointers
+     0.04s  0.13% 24.89%      0.08s  0.27%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).normalizeDNCachedLocked
+     0.04s  0.13% 25.03%      0.05s  0.17%  runtime.mapaccess2_faststr
+     0.04s  0.13% 25.16%      0.05s  0.17%  strings.ToLower
+     0.03s   0.1% 25.26%      0.09s   0.3%  github.com/wangle201210/ldap-go/internal/server.isAnyDatabaseRoot (inline)
+     0.03s   0.1% 25.36%      0.37s  1.24%  runtime.mallocgc
+     0.03s   0.1% 25.46%      0.11s  0.37%  runtime.mallocgcSmallNoscan
+     0.02s 0.067% 25.53%      0.10s  0.34%  github.com/wangle201210/ldap-go/internal/schema.(*Registry).NormalizeDNCached
+     0.02s 0.067% 25.60%      8.06s 27.11%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch
+     0.02s 0.067% 25.66%      0.07s  0.24%  github.com/wangle201210/ldap-go/internal/server.databaseIndexForDN
+     0.02s 0.067% 25.73%      0.17s  0.57%  runtime.mallocgcSmallScanNoHeader
+     0.01s 0.034% 25.77%      0.33s  1.11%  github.com/wangle201210/ldap-go/internal/server.(*Server).trySmallNonRootSearch.func2.1
+     0.01s 0.034% 25.80%      0.06s   0.2%  github.com/wangle201210/ldap-go/internal/server.databaseDNEqual (inline)
+     0.01s 0.034% 25.83%      0.10s  0.34%  github.com/wangle201210/ldap-go/internal/server.parseRuntimeConnectionDN
+     0.01s 0.034% 25.87%      0.06s   0.2%  github.com/wangle201210/ldap-go/internal/server.smallIndexedEntryInScope
+     0.01s 0.034% 25.90%      0.28s  0.94%  github.com/wangle201210/ldap-go/internal/storage.(*boltNamingContextIndex).decodeRow
+     0.01s 0.034% 25.93%      0.50s  1.68%  github.com/wangle201210/ldap-go/internal/storage.ForEachBoundedReadOnlyFilterCandidate
+     0.01s 0.034% 25.97%      0.10s  0.34%  runtime.growslice
+     0.01s 0.034% 26.00%      0.06s   0.2%  runtime.mapassign_faststr

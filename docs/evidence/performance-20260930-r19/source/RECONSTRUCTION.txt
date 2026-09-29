@@ -1,0 +1,3 @@
+Start from clean baseline 8918569d6b7b32c683606e88744eeb1ec36bd4db. Apply source/tracked.patch.txt with git apply. Copy the two source/new/ files to their relative repository paths, stripping only the final .txt suffix. Verify resulting Go/module files with source/reconstruction.hash (paths relative to reconstructed checkout).
+
+No duplicate full changed-source snapshots are bundled. The independent frozen copy is /tmp/ldap-go-r19-evidence-source; subsequent main changes do not affect generation. CLI source copies and group benchmark source are convenience references, unchanged from the baseline. This is source provenance, not a build-environment or reproducible-binary claim.

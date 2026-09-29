@@ -1,0 +1,2 @@
+scope	access_mode	identity	method	members	case	metric	before	current	absolute_reduction	reduction_pct
+exploratory/prototype/table-only	fixture-default	root	handleCompare_member	10	missing	ns/op	12031	12097	-66	-0.548582827695121

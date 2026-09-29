@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkLocalGroupCompare/first-8  	   23571	     24799 ns/op	   82456 B/op	     102 allocs/op
+BenchmarkLocalGroupCompare/first-8  	   25789	     24001 ns/op	   82456 B/op	     102 allocs/op
+BenchmarkLocalGroupCompare/first-8  	   25491	     24472 ns/op	   82456 B/op	     102 allocs/op
+BenchmarkLocalGroupCompare/last-8   	    8628	     68030 ns/op	   82536 B/op	     106 allocs/op
+BenchmarkLocalGroupCompare/last-8   	    9400	     66777 ns/op	   82536 B/op	     106 allocs/op
+BenchmarkLocalGroupCompare/last-8   	    8689	     68110 ns/op	   82536 B/op	     106 allocs/op
+BenchmarkLocalGroupCompare/missing-8         	   10000	     57252 ns/op	   82624 B/op	     111 allocs/op
+BenchmarkLocalGroupCompare/missing-8         	   10000	     58330 ns/op	   82624 B/op	     111 allocs/op
+BenchmarkLocalGroupCompare/missing-8         	   10000	     57370 ns/op	   82624 B/op	     111 allocs/op
+BenchmarkLocalSmallGroupCompare/first-8      	   61455	     10015 ns/op	    9688 B/op	     101 allocs/op
+BenchmarkLocalSmallGroupCompare/first-8      	   60330	      9938 ns/op	    9688 B/op	     101 allocs/op
+BenchmarkLocalSmallGroupCompare/first-8      	   59944	      9649 ns/op	    9688 B/op	     101 allocs/op
+BenchmarkLocalSmallGroupCompare/last-8       	   55239	     10927 ns/op	    9768 B/op	     105 allocs/op
+BenchmarkLocalSmallGroupCompare/last-8       	   54676	     11291 ns/op	    9768 B/op	     105 allocs/op
+BenchmarkLocalSmallGroupCompare/last-8       	   52654	     12166 ns/op	    9768 B/op	     105 allocs/op
+BenchmarkLocalSmallGroupCompare/missing-8    	   50086	     11799 ns/op	    9856 B/op	     110 allocs/op
+BenchmarkLocalSmallGroupCompare/missing-8    	   50620	     12031 ns/op	    9856 B/op	     110 allocs/op
+BenchmarkLocalSmallGroupCompare/missing-8    	   49657	     12048 ns/op	    9856 B/op	     110 allocs/op
+PASS

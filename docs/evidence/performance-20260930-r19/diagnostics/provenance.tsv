@@ -1,0 +1,6 @@
+item	value
+role	INDEPENDENT_GROUP_CALIBRATION; excluded from core 840/144/48
+aa	Both Go labels execute the same final current binary; differences describe labels, not production improvements.
+startup-port-swap	Current starts first on 29481; before starts second on 29482; startup order and port change jointly.
+counts	Two runs x six cases x three endpoints x seven = 252 samples; 36 medians; 12 comparisons; six exports.
+meaning	No correction or pooling with core; same group calibration semantics as R17, using fresh R19 inputs.

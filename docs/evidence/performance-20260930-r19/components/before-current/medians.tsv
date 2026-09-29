@@ -1,0 +1,13 @@
+scope	access_mode	identity	method	members	case	endpoint	repeats	ns_op	B_op	allocs_op
+components/before-current	fixture-default	root	handleCompare_member	1000	first	before	3	23055	82456	102
+components/before-current	fixture-default	root	handleCompare_member	1000	last	before	3	65022	82536	106
+components/before-current	fixture-default	root	handleCompare_member	1000	missing	before	3	57239	82624	111
+components/before-current	fixture-default	root	handleCompare_member	10	first	before	3	9908	9688	101
+components/before-current	fixture-default	root	handleCompare_member	10	last	before	3	11234	9768	105
+components/before-current	fixture-default	root	handleCompare_member	10	missing	before	3	12122	9856	110
+components/before-current	fixture-default	root	handleCompare_member	1000	first	current	3	24278	82456	102
+components/before-current	fixture-default	root	handleCompare_member	1000	last	current	3	59477	82536	106
+components/before-current	fixture-default	root	handleCompare_member	1000	missing	current	3	52035	82624	111
+components/before-current	fixture-default	root	handleCompare_member	10	first	current	3	9669	9688	101
+components/before-current	fixture-default	root	handleCompare_member	10	last	current	3	11182	9768	105
+components/before-current	fixture-default	root	handleCompare_member	10	missing	current	3	11890	9856	110

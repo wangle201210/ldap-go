@@ -51,33 +51,33 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R18, 100,000 users, production baseline
-`15f428a`, Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`), OpenLDAP 2.6.13.
+Latest comparison: September 30, 2026, R19, 100,000 users, production baseline
+`8918569`, Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`), OpenLDAP 2.6.13.
 Bind and hot lookups use seven SDK batches; group searches use three.
 Relative performance is `OpenLDAP/current * 100%`; 100% means parity.
 Frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 87.86 ms | 71.44 ms | 81.3% | 80.8% |
-| Non-root Base, hot | High | 1,000 | 106.55 ms | 87.26 ms | 81.9% | 79.6% |
-| Non-root equality, hot | Very high | 1,000 | 109.48 ms | 88.75 ms | 81.1% | 78.0% |
-| Direct group discovery | High | 100 | 14.91 ms | 11.50 ms | 77.1% | 74.6% |
-| Group Base, 1,000 members | Medium | 100 | 97.10 ms | 88.62 ms | 91.3% | 94.7% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 45.57 ms | 37.91 ms | 83.2% | 80.1% |
+| User Bind, SSHA | Very high | 1,000 | 89.60 ms | 71.22 ms | 79.5% | 78.3% |
+| Non-root Base, hot | High | 1,000 | 100.88 ms | 80.16 ms | 79.5% | 80.1% |
+| Non-root equality, hot | Very high | 1,000 | 101.94 ms | 82.99 ms | 81.4% | 77.4% |
+| Direct group discovery | High | 100 | 15.16 ms | 11.63 ms | 76.7% | 72.3% |
+| Group Base, 1,000 members | Medium | 100 | 92.46 ms | 86.51 ms | 93.6% | 91.7% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 53.96 ms | 44.78 ms | 83.0% | 78.2% |
 
-R18 reuses an already parsed DN and selected database for guarded local Simple
-Bind. Measured handler cases save about 72 B/op and two allocations.
-Network results and calibrations are mixed; no universal latency gain is claimed.
-All negative observations remain. **Common operations have not individually
-reached parity; fast writes do not offset slow reads.**
-Compare version changes within a run, not across rounds.
+R19 combines strict ASCII DN leaf validation and comparison. Separate
+1,000-member last/missing Compare runs improve 3.7%-7.6% versus the paired
+baseline, with unchanged component allocations. Other rows include negative
+observations, all retained. **Common operations have not individually reached
+parity; fast writes do not offset slow reads.** No universal speedup or
+regression-free result is claimed. Compare versions within a run, not across rounds.
 
-Full tests, vet, 355 native checks and real 100k configuration proofs passed;
+Full tests, vet, 355 native checks and two parser/matcher fuzz campaigns passed;
 21 exports match (15 primary and six calibration). See the
-[R18 report](docs/common-ldap-performance.md) and
-[evidence](docs/evidence/performance-20260930-r18/README.md) for complete results
-and limits. The [R17 archive](docs/common-ldap-performance-20260930-r17.md),
+[R19 report](docs/common-ldap-performance.md) and
+[evidence](docs/evidence/performance-20260930-r19/README.md) for all results
+and limits. The [R18 archive](docs/common-ldap-performance-20260930-r18.md),
 [R8b broad results](docs/common-ldap-performance-20260930-r8b.md) and
 [separate audit study](docs/audit-performance-20260929-r5.md) remain historical.
 

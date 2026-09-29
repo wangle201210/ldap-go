@@ -1,0 +1,13 @@
+item	value	evidence
+round	R19 strict ASCII leaf comparison only	source/provenance.json
+baseline_source	8918569d6b7b32c683606e88744eeb1ec36bd4db	Immutable accepted R18 source
+before_sha256	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	binary-hashes.tsv
+before_embedded	15f428a dirty; distinct from accepted R18 source revision	binary-metadata/before.txt
+current_sha256	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	binary-hashes.tsv
+current_embedded	8918569d6b7b32c683606e88744eeb1ec36bd4db modified=true	binary-metadata/current.txt
+frozen_source	/tmp/ldap-go-r19-evidence-source	source/frozen-source.tsv
+main_completion	R19 session61160 EXIT0; validation and all seven macros passed. No CPU tests or benchmarks running. Main explicitly authorized rehashing and complete archive generation.	generator/main-finished.json
+static_review	Main reported: independent Lorentz review found no matching/fallback/first-error issue and was closed; not a runtime test	User main handoff; no separate reviewer transcript archived
+scope	256-bool table initialized once; exact canonical leaf name and validated suffix enable fused value validation/comparison; mismatches still validate remaining bytes; complex/alias/invalid input retain original fallback	source/tracked.patch.txt
+excluded_changes	No storage, ACL, Bind, queue or audit optimization merged in R19	baseline-relative patch inventory
+worker_execution	No build/test/bench executed; go version -m is metadata inspection; all hashes gated on final main completion	generate-evidence.mjs.txt

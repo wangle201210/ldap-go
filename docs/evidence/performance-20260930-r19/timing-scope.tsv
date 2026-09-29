@@ -1,0 +1,16 @@
+scope	rule
+common-hot	Explicit/default nonroot correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.
+common-distributed	Explicit/default nonroot Base/equality; 1000 x 3; warmed rotating targets, not controlled cold cache.
+common-groups	Explicit/default nonroot member equality, Base 10/1000 and nested membership; 100 x 3.
+root	Default access; literal and normalized root identities separate; five cases, 1000 x 7.
+group-compare	Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7. First/last refer to fixture insertion order.
+concurrent	Root ldapsearch; 8 x 1000; warmup repeat 0 excluded, three measured repeats; includes process overhead.
+calibration	Separate default group A/A and startup/port swap; six cases x three endpoints x seven repeats per run; 252/36/12 total. Never pooled with core.
+operation-timing	Setup and WhoAmI verification outside operation latency; Bind times Bind explicitly; raw request/verification/latency counters retained.
+APFS	Seven scripts use cp -c independent writable clones on every endpoint; setup/warmup excluded; COW and warm caches remain limitations.
+formal-components	Actual R18 test executable vs final R19 main; root handler fixture, 1000/10 x first/last/missing, 500ms x 3; separate from network macros.
+prototype	15f428a-based table-only, single-pass and three interleaved rounds kept independently; not formal R18 production or final R19 results.
+network-profile	Separate R18 same-process SDK/server CPU diagnostics include setup; text only, no causal network-speedup inference.
+exclusions	SDK warmups, smoke, concurrent repeat 0, exploratory profiles and prototypes excluded from core medians; R18 Bind components/calibrations not imported.
+formulas	time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current; all negative observations retained.
+stopping-rule	Predetermined counts; no favorable sample selection, diagnostic subtraction, historical pooling or regression-free claim.

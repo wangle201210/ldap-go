@@ -1,0 +1,652 @@
+// Evidence only: no build/test/bench, and no hashing until main's final handoff.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const repo = '/Users/wanna/mine/github/ldap-go';
+const src = '/var/tmp/ldap-go-perf-20260930-r19';
+const dst = path.join(repo, 'docs/evidence/performance-20260930-r19');
+const baseline = '8918569d6b7b32c683606e88744eeb1ec36bd4db';
+const baselineHash = '5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370';
+const canonicalHash = '5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0';
+const frozenRoot = '/tmp/ldap-go-r19-evidence-source';
+const signalFile = 'generator/main-finished.json';
+const signalPath = path.join(dst, signalFile);
+const keySources = ['internal/directory/dn_simple_rdn_bytes.go', 'internal/schema/compare_simple_dn.go',
+  'internal/schema/compare_simple_dn_leaf_bench_test.go', 'internal/schema/compare_simple_dn_leaf_test.go'];
+const newSources = ['internal/directory/dn_simple_rdn_byteclass_test.go', 'internal/directory/dn_simple_rdn_match_test.go'];
+const cliSources = ['internal/cmd/ldapcommonbench/main.go', 'internal/cmd/ldapcommonbench/group_compare_test.go',
+  'internal/cmd/ldapbench/main.go', 'internal/cmd/ldifcanonical/main.go'];
+const componentSource = 'internal/server/compare_group_bench_test.go';
+const frozenFiles = [...keySources, ...newSources, ...cliSources, componentSource].sort();
+const endpoints = ['before', 'current', 'openldap'];
+const rootDN = 'cn=admin,dc=scale,dc=qualification';
+const plans = [
+  { run: 'explicit-final', script: 'common-explicit', suite: 'common', access: 'explicit' },
+  { run: 'default-final', script: 'common-default', suite: 'common', access: 'default' },
+  { run: 'root-paired', script: 'root-paired', suite: 'root', access: 'default' },
+  { run: 'explicit-group-compare', script: 'group-compare-explicit', suite: 'group-compare', access: 'explicit' },
+  { run: 'default-group-compare', script: 'group-compare-default', suite: 'group-compare', access: 'default' },
+  { run: 'default-group-aa', script: 'group-aa', suite: 'aa', access: 'default', diagnostic: true },
+  { run: 'default-group-swap', script: 'group-swap', suite: 'startup-port-swap', access: 'default', diagnostic: true },
+];
+const bindCases = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0],
+  ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0]];
+const reads = [['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const hot = [...bindCases, ...reads];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10],
+  ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0],
+  ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0],
+  ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'],
+  ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const batches = p => p.diagnostic ? ['smoke', 'groups'] : p.suite === 'root' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke']
+  : p.suite === 'group-compare' ? ['smoke', 'groups'] : ['smoke', 'hot', 'distributed', 'groups'];
+const jsonFiles = p => [...batches(p).map(b => p.run + '/' + b + '.json'), ...endpoints.map(e => p.run + '/' + e + '/warmup.json')];
+const logs = ['groups-main-before.txt', 'groups-main-current.txt', 'focused-main.txt', 'parse-fuzz-main.txt',
+  'match-fuzz-main.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt'];
+const interleavedRuns = Array.from({ length: 3 }, (_, i) => i + 1).flatMap(round =>
+  (round % 2 ? ['before', 'current'] : ['current', 'before']).map((side, i) => ({
+    file: 'single-interleaved-' + side + '-' + round + '.txt', side, round, position: i + 1,
+  })));
+const exploratoryFiles = ['groups-before.txt', 'groups-current.txt', 'groups-single-pass.txt',
+  'focused-test.txt', 'single-pass-tests.txt', 'single-pass-fuzz.txt', 'dn_simple_rdn_bytes.candidate.go.txt',
+  'table-only-source/dn_simple_rdn_bytes.go', 'table-only-source/dn_simple_rdn_byteclass_test.go',
+  ...interleavedRuns.map(r => r.file)];
+const networkFiles = ['README.md', 'benchmark-source.go.txt', 'nonrootBase.txt', 'nonrootEquality.txt',
+  'base-handler-cpu.txt', 'equality-handler-cpu.txt'];
+const binaries = ['before', 'current', 'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group'];
+const auxiliaryBinaries = [
+  ['ldapbench', '/var/tmp/ldap-go-perf-round4-20260922/ldapbench'],
+  ['ldifcanonical', '/var/tmp/ldap-go-perf-round2-20260922/ldifcanonical'],
+];
+const rawFiles = [...logs, 'validate.sh', 'run-performance.sh', 'executable-sha256.txt', ...plans.flatMap(p => [
+  p.script + '.sh', p.script + '.log', ...jsonFiles(p), p.run + '/validation.tsv', p.run + '/openldap/reindex.log',
+  ...endpoints.map(e => p.run + '/' + e + '/server.log'), ...(p.suite === 'common' ? [p.run + '/concurrent.tsv'] : []),
+])];
+const same = (a, b) => Array.isArray(a) && Array.isArray(b) && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const mode = process.argv[2];
+if (process.argv.length !== 3 || !['--inspect', '--freeze-source', '--main-finished'].includes(mode)) {
+  throw new Error('Use --inspect, --freeze-source (small source copies only; no hash), or --main-finished.');
+}
+if (mode === '--freeze-source') {
+  if (fs.existsSync(frozenRoot)) throw new Error('Frozen source already exists; do not overwrite it.');
+  const tracked = git(['diff', '--name-only', baseline, '--', 'internal', 'cmd', 'go.mod', 'go.sum']).trim().split('\n').filter(Boolean);
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', 'internal', 'cmd']).trim().split('\n').filter(Boolean);
+  const head = git(['rev-parse', 'HEAD']).trim();
+  if (head !== baseline || !same(tracked, keySources) || !same(untracked, newSources)) throw new Error('Source inventory differs from the authorized four tracked/two new files.');
+  const patch = git(['diff', '--full-index', '--binary', baseline, '--', ...keySources]);
+  const bodies = new Map(frozenFiles.map(f => [f, fs.readFileSync(path.join(repo, f))]));
+  if (patch !== git(['diff', '--full-index', '--binary', baseline, '--', ...keySources]) ||
+      [...bodies].some(([f, body]) => !body.equals(fs.readFileSync(path.join(repo, f)))) ||
+      git(['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed while copying.');
+  for (const [f, body] of bodies) {
+    const file = path.join(frozenRoot, f);
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body, { flag: 'wx' });
+  }
+  fs.writeFileSync(path.join(frozenRoot, 'tracked.patch'), patch, { flag: 'wx' });
+  fs.writeFileSync(path.join(frozenRoot, 'capture.json'), JSON.stringify({
+    round: 'R19', baseline, source_git_head: head, captured_at: new Date().toISOString(),
+    tracked, new_sources: newSources, frozen_files: frozenFiles, hashing_performed: false,
+  }, null, 2) + '\n', { flag: 'wx' });
+  console.log(JSON.stringify({ state: 'SOURCE_FROZEN', frozenRoot, files: frozenFiles.length, hashing: false }));
+  process.exit(0);
+}
+const required = [...rawFiles, ...exploratoryFiles, ...binaries, 'member-acl.db', 'member-index.db',
+  ...plans.flatMap(p => endpoints.map(e => p.run + '/' + e + '/data.canonical')),
+].map(f => path.join(src, f));
+required.push(signalPath, ...frozenFiles.map(f => path.join(frozenRoot, f)), path.join(frozenRoot, 'tracked.patch'),
+  path.join(frozenRoot, 'capture.json'), ...auxiliaryBinaries.map(([, f]) => f));
+const missing = required.filter(f => !fs.existsSync(f));
+if (mode === '--inspect') {
+  console.log(JSON.stringify({ state: 'PREPARED_NOT_GENERATED', hashing: false, frozenRoot,
+    expected_core: { scripts: 5, json: 31, samples: 840, medians: 144, comparisons: 48, exports: 15 },
+    expected_calibration: { scripts: 2, json: 10, samples: 252, medians: 36, comparisons: 12, exports: 6 },
+    expected_main_components: { samples: 36, medians: 12, metric_comparisons: 18 },
+    required_handoff: { round: 'R19', main_signal: 'Exact explicit main completion statement', completed_at: 'ISO timestamp',
+      validation_exit_code: 0, performance_exit_code: 0, component_exit_code: 0, macro_finished: true, components_finished: true,
+      current_sha256: 'Final pipeline current hash', source_git_head: baseline,
+      components: { before: { command: 'Main-reported R18 test executable invocation parameters',
+        source_revision: baseline }, current: { command: 'Main-reported final R19 invocation parameters', source_revision: baseline } },
+      cli_sources: 'Recorded relationship of frozen CLI sources to executed clients',
+      main_assessment: 'Main conclusion; no universal speedup or native-parity inference' },
+    optional_network_texts: networkFiles, missing }, null, 2));
+  process.exit(0);
+}
+if (missing.length) throw new Error('Incomplete inputs; nothing published:\n' + missing.join('\n'));
+const output = new Map(), checks = [['path', 'check', 'status', 'detail']], trackedReads = new Map();
+const sha = body => createHash('sha256').update(body).digest('hex');
+const tsv = rows => rows.map(r => r.map(v => String(v ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const finite = n => Number.isFinite(n) && n >= 0;
+const positive = n => Number.isFinite(n) && n > 0;
+const median = values => { const a = [...values].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const table = (f, rows) => output.set(f, tsv(rows));
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+function requirePassing() {
+  const failures = checks.slice(1).filter(r => r[2] === 'FAIL');
+  if (failures.length) throw new Error('Evidence checks failed; nothing published:\n' + tsv([checks[0], ...failures]));
+}
+function remember(f) {
+  const s = fs.lstatSync(f), previous = trackedReads.get(f);
+  if (!s.isFile() || s.isSymbolicLink()) throw new Error('Expected regular file: ' + f);
+  const stamp = [s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs].join(':');
+  if (previous && previous !== stamp) throw new Error('Input changed: ' + f);
+  trackedReads.set(f, stamp);
+}
+function readPath(f) { remember(f); const body = fs.readFileSync(f, 'utf8'); remember(f); return body; }
+const read = f => readPath(path.join(src, f));
+const archiveName = f => /\.(sh|log|mjs|go)$/.test(f) ? f + '.txt' : f;
+function safeRelative(f) { return typeof f === 'string' && f.length > 0 && !path.isAbsolute(f) && !f.split('/').some(p => ['..', '.', ''].includes(p)); }
+function rawArchivePath(f) {
+  if (exploratoryFiles.includes(f)) return 'exploratory/prototype/' + archiveName(f);
+  const diagnostic = plans.some(p => p.diagnostic && (f.startsWith(p.run + '/') || f.startsWith(p.script + '.')));
+  return (diagnostic ? 'diagnostics/' : '') + archiveName(f);
+}
+function parseTSV(f, header) {
+  const [head, ...rows] = read(f).trim().split(/\r?\n/).map(s => s.split('\t'));
+  check(f, 'TSV header and rows', JSON.stringify(head) === JSON.stringify(header) && rows.length > 0 && rows.every(r => r.length === head.length));
+  return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]])));
+}
+const signal = JSON.parse(readPath(signalPath));
+check(signalFile, 'explicit final macro/component success and identity', signal.round === 'R19' &&
+  signal.macro_finished === true && signal.components_finished === true &&
+  signal.validation_exit_code === 0 && signal.performance_exit_code === 0 && signal.component_exit_code === 0 &&
+  typeof signal.main_signal === 'string' && !!signal.main_signal.trim() && Number.isFinite(Date.parse(signal.completed_at)) &&
+  /^[a-f0-9]{64}$/.test(signal.current_sha256) && signal.current_sha256 !== baselineHash && signal.source_git_head === baseline);
+check(signalFile, 'main component invocation parameters and source revisions', ['before', 'current'].every(e =>
+  typeof signal.components?.[e]?.command === 'string' && !!signal.components[e].command.trim() &&
+  signal.components[e].source_revision === baseline));
+check(signalFile, 'CLI source provenance recorded', typeof signal.cli_sources === 'string' && !!signal.cli_sources.trim());
+requirePassing();
+output.set(signalFile, readPath(signalPath));
+const expectedHashes = Object.fromEntries([...read('executable-sha256.txt').matchAll(/^([a-f0-9]{64})\s+(.+)$/gm)].map(m => [path.basename(m[2]), m[1]]));
+check('executable-sha256.txt', 'pipeline hashes equal retained R18 and final R19 handoff', same(Object.keys(expectedHashes), ['before', 'current']) &&
+  read('executable-sha256.txt').trim().split('\n').length === 2 && expectedHashes.before === baselineHash && expectedHashes.current === signal.current_sha256);
+requirePassing();
+for (const f of [...rawFiles, ...exploratoryFiles]) output.set(rawArchivePath(f), read(f));
+output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const sampleHeader = [...dims, 'repeat', 'operations', 'total_ms', 'source'];
+const medianHeader = [...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median'];
+const comparisonHeader = [...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct'];
+const reportHeader = ['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'error', 'started_at'];
+const counterHeader = ['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms'];
+const makeCollection = () => ({ samples: [sampleHeader], groups: new Map(), medians: [medianHeader], comparisons: [comparisonHeader], reports: [reportHeader], counters: [counterHeader] });
+const core = makeCollection(), diagnostics = makeCollection();
+diagnostics.comparisons[0] = [...dims.slice(0, -1), 'operations', 'before_label_ms', 'current_label_ms', 'openldap_ms', 'current_label_over_openldap_throughput_pct', 'label_time_reduction_pct'];
+function add(collection, dimensions, s, f, repeats) {
+  const key = JSON.stringify(dimensions);
+  if (!collection.groups.has(key)) collection.groups.set(key, { repeats, rows: [] });
+  const group = collection.groups.get(key);
+  if (group.repeats !== repeats) throw new Error(`Mixed repeat design: ${key}`);
+  group.rows.push(s);
+  collection.samples.push([...dimensions, s.repeat, s.operations, s.total_ms, rawArchivePath(f)]);
+}
+const identities = [['run', 'role', 'endpoint_label', 'binary', 'sha256', 'port', 'startup_position']];
+for (const p of plans) {
+  const body = read(p.script + '.sh'), swap = p.suite === 'startup-port-swap', aa = p.suite === 'aa';
+  const ports = { before: swap ? 29482 : 29481, current: swap ? 29481 : 29482, openldap: 29483 };
+  const startup = swap ? ['current', 'before', 'openldap'] : endpoints;
+  check(p.script + '.log', 'successful script completion', read(p.script + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  check(p.script + '.sh', 'round, access mode and uniform APFS clone setup', body.includes(`audit=${src}`) && body.includes(`out=$audit/${p.run}`) &&
+    body.includes(`cp -c "$audit/${p.access === 'explicit' ? 'member-acl' : 'member-index'}.db"`) &&
+    body.includes('cp -c "$source_dir/openldap-1/data/data.mdb"') && [...body.matchAll(/^\s*cp /gm)].length === 2 &&
+    (p.access === 'explicit' ? body.includes('access to attrs=userPassword') : !/^.*'access to /m.test(body)));
+  check(p.script + '.sh', 'startup and Go executable mapping', body.includes(`for side in ${startup.join(' ')}; do`) &&
+    (aa ? body.includes('binary=$audit/current') && !body.includes('binary=$audit/$side') : body.includes('binary=$audit/$side')));
+  if (p.diagnostic) check(p.script + '.sh', 'predetermined six group Compare cases at 1000 x 7', body.includes('-stages groupCompareTrueFirst,groupCompareTrueLast,groupCompareFalse') && body.includes('-group-sizes 10,1000') && body.includes('-n 1000 -repeats 7'));
+  if (p.suite === 'common') check(p.script + '.sh', 'eight concurrent workers, 1000 validated results, warm0 plus three',
+    body.includes('for repeat in 0 1 2 3; do') && body.includes('for worker in 0 1 2 3 4 5 6 7; do') && body.includes('i=1001;i<=2000;i++') && body.includes('-eq 1000 ]'));
+  for (const e of endpoints) {
+    check(p.script + '.sh', `${e} endpoint port`, body.includes(`${e}) port=${ports[e]};;`) && body.includes(`-endpoint ${e}=ldap://127.0.0.1:${ports[e]}`));
+    const binary = e === 'openldap' ? 'openldap' : aa ? 'current' : e;
+    identities.push([p.run, p.diagnostic ? 'DIAGNOSTIC' : 'CORE', e, binary, expectedHashes[binary] ?? 'OPENLDAP_2.6.13_REFERENCE', ports[e], startup.indexOf(e) + 1]);
+  }
+  const collection = p.diagnostic ? diagnostics : core;
+  for (const f of jsonFiles(p)) {
+    const j = JSON.parse(read(f)), c = j.config, batch = path.basename(f, '.json');
+    const warmup = batch === 'warmup', smoke = batch.includes('smoke'), root = p.suite === 'root', group = p.suite === 'group-compare';
+    check(f, 'error-free report shape, 100k fixture and timestamp', !!c && Array.isArray(warmup ? j.stages : j.samples) && j.error === '' && c.entries === 100000 && Number.isFinite(Date.parse(j.started_at)));
+    requirePassing();
+    collection.reports.push([rawArchivePath(f), (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), j.error, j.started_at]);
+    if (warmup) {
+      const e = f.split('/')[1];
+      check(f, 'SDK warmup endpoint, inventory and read-only mode', c.uri === `ldap://127.0.0.1:${ports[e]}` && c.n === 2 && c.read_only === true && c.write === false && same(j.stages.map(s => s.name), sdkStages));
+      check(f, 'warmup counters, errors and timing totals', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+      continue;
+    }
+    const repeats = smoke ? 1 : p.diagnostic || root || group || batch === 'hot' ? 7 : 3;
+    const n = smoke ? 2 : p.suite === 'common' && batch === 'groups' ? 100 : 1000;
+    const cases = p.diagnostic ? compareCases : root ? rootCases : group ? compareCases : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? reads : groupCases;
+    const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+    check(f, 'operation and repeat count, disposable setup and cleanup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && !!j.run_dn && same(j.cleanup_done, endpoints));
+    check(f, 'configured stages and endpoint addresses', same(c.stages, [...new Set(cases.map(r => r[0]))]) && same(c.endpoints?.map(e => `${e.name}=${e.uri}`), endpoints.map(e => `${e}=ldap://127.0.0.1:${ports[e]}`)));
+    check(f, 'exact stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members ?? 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+    check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+    check(f, 'request and WhoAmI verification counts', j.samples.every(s => Number.isInteger(s.requests) && (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+    check(f, 'sample errors and timing totals', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms)));
+    check(f, 'latency sum equals total', j.samples.every(s => Array.isArray(s.latency_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+    const expectedDN = batch.startsWith('normalized') ? rootDN.toUpperCase() : rootDN;
+    check(f, 'root variant and nonroot identity', c.root_bind_dn === expectedDN && j.samples.every(s => root ? s.root_bind_dn === expectedDN : !s.root_bind_dn));
+    if (p.suite === 'common' && ['hot', 'distributed'].includes(batch)) check(f, 'hot versus distributed target selection', batch === 'hot' ? c.uid === 'scale-001001' : !c.uid);
+    for (const s of j.samples) {
+      const d = [p.suite, p.access, root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members ?? 0, s.endpoint];
+      collection.counters.push([rawArchivePath(f), ...d, s.repeat, s.operations, s.completed, s.requests, s.latency_ms?.length, s.verification_requests, s.verification_ms]);
+      if (!smoke) add(collection, d, s, f, repeats);
+    }
+  }
+  if (p.suite === 'common') {
+    const f = `${p.run}/concurrent.tsv`, rows = parseTSV(f, ['side', 'repeat', 'ms']);
+    check(f, 'warmup and three measured repeats per endpoint', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => positive(+r.ms)));
+    for (const r of rows.filter(r => +r.repeat > 0)) add(core, ['concurrent', p.access, 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f, 3);
+  }
+}
+check('run-performance.sh', 'seven fixed sequential scripts', JSON.stringify([...read('run-performance.sh').matchAll(/^sh "\$audit\/([^"\n]+)\.sh"/gm)].map(m => m[1])) === JSON.stringify(plans.map(p => p.script)) && !/\s&(?:\s|$)/m.test(read('run-performance.sh')));
+table('endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'CORE'));
+table('diagnostics/endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'DIAGNOSTIC'));
+table('run-sources.tsv', [['run', 'script', 'access_mode', 'role'], ...plans.map(p => [p.run, p.script + '.sh', p.access, p.diagnostic ? 'DIAGNOSTIC' : 'CORE'])]);
+function summarize(collection, prefix, expected) {
+  for (const [key, group] of collection.groups) {
+    const d = JSON.parse(key), rows = group.rows;
+    check(key, 'fixed repeat inventory and equal operations', same(rows.map(s => s.repeat), seq(group.repeats)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => positive(s.total_ms)));
+    const ms = median(rows.map(s => s.total_ms));
+    collection.medians.push([...d, rows.length, rows[0].operations, ms, rows[0].operations * 1000 / ms]);
+  }
+  for (const key of new Set(collection.medians.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+    const rows = endpoints.map(e => collection.medians.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+    check(key, 'three endpoints with equal operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+    if (rows.some(r => !r)) continue;
+    const [b, c, o] = rows.map(r => r[10]);
+    collection.comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+  }
+  check(prefix || 'core', 'samples, medians, comparisons and JSON totals', [collection.samples.length - 1, collection.medians.length - 1, collection.comparisons.length - 1, collection.reports.length - 1].every((n, i) => n === expected[i]), expected.join('/'));
+  for (const name of ['samples', 'medians', 'comparisons', 'reports', 'counters']) table(prefix + name + '.tsv', collection[name]);
+  collection.negatives = collection.comparisons.slice(1).filter(r => r[12] < 0);
+  collection.belowNative = collection.comparisons.slice(1).filter(r => r[11] < 100);
+  table(prefix + 'negative-comparisons.tsv', [collection.comparisons[0], ...collection.negatives]);
+  table(prefix + 'below-openldap-comparisons.tsv', [collection.comparisons[0], ...collection.belowNative]);
+}
+summarize(core, '', [840, 144, 48, 31]);
+summarize(diagnostics, 'diagnostics/', [252, 36, 12, 10]);
+const counts = [['scope', 'variant', 'samples', 'medians', 'comparisons']];
+for (const [scope, collection] of [['core', core], ['diagnostics', diagnostics]]) {
+  for (const variant of new Set(collection.samples.slice(1).map(r => `${r[0]}/${r[3]}`))) {
+    const matches = r => `${r[0]}/${r[3]}` === variant;
+    counts.push([scope, variant, collection.samples.slice(1).filter(matches).length, collection.medians.slice(1).filter(matches).length, collection.comparisons.slice(1).filter(matches).length]);
+  }
+}
+check('core', '252 hot, 36 distributed, 72 group reads, 210 root, 252 group Compare, 18 concurrent samples',
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'hot').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'distributed').length === 36 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'groups').length === 72 &&
+  core.samples.slice(1).filter(r => r[0] === 'root').length === 210 && core.samples.slice(1).filter(r => r[0] === 'group-compare').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'concurrent').length === 18);
+table('statistics-inventory.tsv', counts);
+requirePassing();
+
+
+function components(prefix, files, repeats = 3) {
+  const dimensions = ['scope', 'access_mode', 'identity', 'method', 'members', 'case'];
+  const rows = [[...dimensions, 'endpoint', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op', 'source']];
+  const groups = new Map();
+  const expression = /^(BenchmarkLocal(?:Small)?GroupCompare)\/(first|last|missing)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op\s*$/gm;
+  for (const { file, side, round } of files) {
+    const body = read(file), parsed = [...body.matchAll(expression)];
+    check(file, 'complete six-case component log and PASS', parsed.length === (body.match(/^Benchmark\S+/gm) || []).length &&
+      parsed.length === (round ? 6 : 18) && /^cpu: Apple M1 Pro$/m.test(body) &&
+      /^pkg: github\.com\/wangle201210\/ldap-go\/internal\/server$/m.test(body) && /^PASS$/m.test(body) &&
+      /(?:^|\n)(?:PASS|ok\s+\S+\s+[\d.]+s)\s*$/.test(body) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+    for (const m of parsed) {
+      const members = m[1].includes('Small') ? 10 : 1000;
+      const key = JSON.stringify([prefix.replace(/\/$/, ''), 'fixture-default', 'root', 'handleCompare_member', members, m[2], side]);
+      if (!groups.has(key)) groups.set(key, []);
+      const values = groups.get(key), row = [...JSON.parse(key), round ?? values.length + 1, ...m.slice(3).map(Number), rawArchivePath(file)];
+      values.push(row); rows.push(row);
+    }
+  }
+  check(prefix, '12 groups and 36 samples', groups.size === 12 && rows.length === 37);
+  const medians = [[...dimensions, 'endpoint', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+  const ranges = [[...dimensions, 'endpoint', 'metric', 'min', 'median', 'max']];
+  for (const [key, values] of groups) {
+    check(key, 'complete repeats and finite component metrics', same(values.map(r => r[7]), seq(repeats)) &&
+      values.every(r => positive(r[8]) && positive(r[9]) && finite(r[10]) && finite(r[11])));
+    medians.push([...JSON.parse(key), values.length, ...[9, 10, 11].map(i => median(values.map(r => r[i])))]);
+    for (const [i, metric] of [[9, 'ns/op'], [10, 'B/op'], [11, 'allocs/op']]) {
+      const measured = values.map(r => r[i]);
+      ranges.push([...JSON.parse(key), metric, Math.min(...measured), median(measured), Math.max(...measured)]);
+    }
+  }
+  const comparisons = [[...dimensions, 'metric', 'before', 'current', 'absolute_reduction', 'reduction_pct']];
+  for (const members of [10, 1000]) for (const kind of ['first', 'last', 'missing']) {
+    const [b, c] = ['before', 'current'].map(side => medians.slice(1).find(r => r[4] === members && r[5] === kind && r[6] === side));
+    check(prefix + members + '/' + kind, 'both endpoint medians', !!b && !!c);
+    if (!b || !c) continue;
+    for (const [i, metric] of [[8, 'ns/op'], [9, 'B/op'], [10, 'allocs/op']]) {
+      comparisons.push([...b.slice(0, 6), metric, b[i], c[i], b[i] - c[i], b[i] ? 100 * (1 - c[i] / b[i]) : null]);
+    }
+  }
+  const negatives = comparisons.slice(1).filter(r => r[10] < 0);
+  for (const [name, values] of Object.entries({ samples: rows, medians, comparisons, ranges,
+    'negative-comparisons': [comparisons[0], ...negatives] })) table(prefix + name + '.tsv', values);
+  return { samples: rows.length - 1, medians: medians.length - 1, metric_comparisons: comparisons.length - 1, negatives: negatives.length };
+}
+const mainComponents = components('components/before-current/', endpoints.slice(0, 2).map(side => ({ file: 'groups-main-' + side + '.txt', side })));
+const tableOnly = components('exploratory/prototype/table-only/', [
+  { file: 'groups-before.txt', side: 'before' }, { file: 'groups-current.txt', side: 'current' }]);
+const singlePass = components('exploratory/prototype/single-pass/', [
+  { file: 'groups-before.txt', side: 'before' }, { file: 'groups-single-pass.txt', side: 'current' }]);
+const interleaved = components('exploratory/prototype/interleaved/', interleavedRuns);
+table('components/provenance.tsv', [['scope', 'role', 'source_revision', 'source', 'command_or_design'],
+  ...['before', 'current'].map(side => ['before-current/' + side, 'FORMAL_R18_VS_FINAL_R19', baseline,
+    'groups-main-' + side + '.txt', signal.components[side].command]),
+  ['benchmark', 'SAME_SIX_CASE_BENCHMARK', baseline, componentSource, '1000/10 members x first/last/missing; 500ms x 3; root fixture handler'],
+]);
+table('exploratory/prototype/provenance.tsv', [['scope', 'role', 'source_revision', 'detail'],
+  ['table-only', 'ISOLATED_PROTOTYPE_NOT_FORMAL_R18', '15f428a', 'groups-before/current.txt; table-only-source retained'],
+  ['single-pass', 'ISOLATED_PROTOTYPE_NOT_FINAL_R19', '15f428a', 'groups-before.txt vs groups-single-pass.txt; same exploratory baseline'],
+  ['interleaved', 'ISOLATED_PROTOTYPE_NOT_FINAL_R19', '15f428a', 'Three pre-existing alternating before/current rounds; never pooled with formal components'],
+  ['single-pass-fuzz', 'EARLY_EXPLORATORY_FUZZ', '15f428a', '656711 executions; independent of final main Parse/Match fuzz'],
+  ['scope', 'EXCLUDED_FROM_CORE_AND_CALIBRATION', '-', 'All negative values retained; prototype allocation/CPU results do not establish final R19 behavior'],
+]);
+table('exploratory/prototype/interleaved/run-order.tsv', [['round', 'position', 'endpoint', 'source'],
+  ...interleavedRuns.map(r => [r.round, r.position, r.side, rawArchivePath(r.file)])]);
+
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+const fuzzRows = [['role', 'target', 'source', 'workers', 'requested_seconds', 'observed_elapsed_seconds', 'executions', 'new_interesting', 'total_interesting', 'package_seconds']];
+for (const f of [...logs, ...exploratoryFiles.filter(f => /(?:groups-|interleaved-|fuzz|tests|focused-test)/.test(f))]) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  const role = exploratoryFiles.includes(f) ? 'ISOLATED_PROTOTYPE' : 'R19_MAIN';
+  statuses.push([rawArchivePath(f), role, Buffer.byteLength(body), count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm),
+    count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm), count(/^\s*--- SKIP:/gm), count(/^PASS$/gm),
+    count(/^FAIL(?:\s|$)/gm), count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  check(f, 'no failures or panic', !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  if (f === 'go-vet.txt') check(f, 'empty vet log and main confirmed success', !body.trim() && signal.validation_exit_code === 0);
+  else check(f, 'successful complete log', /(?:^|\n)(?:PASS|ok\s[^\n]+|\?\s[^\n]+\[no test files\])\s*$/.test(body));
+  if (f === 'openldap-differential.txt') check(f, '355 native PASS records, 26 top-level tests, no skips',
+    count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === 26 &&
+    count(/^--- PASS:/gm) === 26 && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+  if (f.includes('fuzz')) {
+    const last = [...body.matchAll(/^fuzz: elapsed: ([\d.]+)s, execs: (\d+) .*new interesting: (\d+) \(total: (\d+)\)/gm)].at(-1);
+    check(f, 'two-worker completed fuzz with nonzero executions', !!last && +last[2] > 0 && body.includes('now fuzzing with 2 workers'));
+    if (last) fuzzRows.push([role, f === 'parse-fuzz-main.txt' ? 'FuzzParseSimpleRDNBytes' : 'FuzzMatchSimpleRDNValueBytes',
+      rawArchivePath(f), 2, 15, +last[1], +last[2], +last[3], +last[4], body.match(/^ok\s+\S+\s+([\d.]+)s\s*$/m)?.[1]]);
+    if (f === 'single-pass-fuzz.txt') check(f, 'early fuzz stays separate at 656711 executions', last?.[2] === '656711');
+  }
+}
+const validationScript = read('validate.sh');
+check('focused-main.txt', 'fresh directory/schema tests', ['directory', 'schema'].every(p =>
+  new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + p + '\\s+[\\d.]+s\\s*$', 'm').test(read('focused-main.txt'))) &&
+  !read('focused-main.txt').includes('(cached)'));
+check('go-test.txt', 'full Go suite includes directory/schema/storage/server', ['directory', 'schema', 'storage', 'server'].every(p =>
+  new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + p + '\\s', 'm').test(read('go-test.txt'))));
+check('validate.sh', 'fullgo/vet/native/build/hash and two 15s two-worker fuzz invocations',
+  ['export CGO_ENABLED=0', 'go test ./...', 'go vet ./...', 'go build -o', 'shasum -a 256',
+    "'^FuzzParseSimpleRDNBytes$'", "'^FuzzMatchSimpleRDNValueBytes$'"].every(s => validationScript.includes(s)) &&
+  [...validationScript.matchAll(/-fuzztime=15s -parallel=2/g)].length === 2);
+table('log-status.tsv', statuses);
+table('fuzz-status.tsv', [fuzzRows[0], ...fuzzRows.slice(1).filter(r => r[0] === 'R19_MAIN')]);
+table('exploratory/prototype/fuzz-status.tsv', [fuzzRows[0], ...fuzzRows.slice(1).filter(r => r[0] !== 'R19_MAIN')]);
+const hasNetwork = fs.existsSync(path.join(src, 'network-diagnostic'));
+if (hasNetwork) {
+  for (const f of networkFiles) {
+    const body = read('network-diagnostic/' + f);
+    check(f, 'network diagnostic text only', !body.includes('\0') && Buffer.byteLength(body) < 1024 * 1024);
+    output.set('exploratory/network-r18/' + f, body);
+  }
+  table('exploratory/network-r18/provenance.tsv', [['item', 'value'],
+    ['role', 'R18_SAME_PROCESS_NETWORK_DIAGNOSTIC_ONLY; excluded from every R19 timing/statistics table'],
+    ['source_revision', baseline], ['scope', 'Real loopback TCP; same-process SDK/client/server; CPU profile includes setup/client/background work'],
+    ['interpretation', 'Handler-filtered pprof text is diagnostic; no proven cause of R19 network speedup or native parity'],
+    ['input_buffer', 'Static investigation only; not implemented'],
+    ['ENOSPC', 'First preparation failed before timing; excluded; only successful Base/equality text retained'],
+    ['excluded_artifacts', 'No binary pprof, test executables, failed setup logs, databases or credentials bundled'],
+  ]);
+}
+requirePassing();
+
+
+// Reconstruct unchanged source from immutable Git objects; read changed bytes only
+// from the frozen copy. The archive needs one patch, two new files and CLI references.
+const capture = JSON.parse(readPath(path.join(frozenRoot, 'capture.json')));
+check('source', 'frozen capture has authorized baseline and exact inventory', capture.baseline === baseline &&
+  capture.source_git_head === baseline && same(capture.tracked, keySources) && same(capture.new_sources, newSources) &&
+  same(capture.frozen_files, frozenFiles));
+const baselineFiles = git(['ls-tree', '-r', '--name-only', baseline]).trim().split('\n')
+  .filter(f => !f.startsWith('docs/') && (f.endsWith('.go') || /(^|\/)go\.(mod|sum)$/.test(f)));
+const sourceFiles = [...new Set([...baselineFiles, ...frozenFiles])].sort();
+const objects = execFileSync('git', ['cat-file', '--batch'], { cwd: repo,
+  input: baselineFiles.map(f => baseline + ':' + f + '\n').join(''), maxBuffer: 64 * 1024 * 1024 });
+const baselineBodies = new Map();
+let offset = 0;
+for (const f of baselineFiles) {
+  const end = objects.indexOf(10, offset), header = objects.subarray(offset, end).toString('utf8');
+  const matched = header.match(/^[a-f0-9]{40} blob (\d+)$/);
+  if (!matched) throw new Error('Invalid baseline blob for ' + f);
+  const size = +matched[1], start = end + 1;
+  baselineBodies.set(f, objects.subarray(start, start + size).toString('utf8')); offset = start + size + 1;
+}
+if (offset !== objects.length) throw new Error('Baseline blob inventory mismatch');
+const sourceBodies = new Map(baselineBodies);
+for (const f of frozenFiles) sourceBodies.set(f, readPath(path.join(frozenRoot, f)));
+const sourcePatch = readPath(path.join(frozenRoot, 'tracked.patch'));
+const patchFiles = [];
+function gitBlob(body) { return createHash('sha1').update('blob ' + Buffer.byteLength(body) + '\0').update(body).digest('hex'); }
+for (const section of sourcePatch.split('diff --git ').slice(1)) {
+  const filename = section.match(/^a\/(\S+) b\/\1\n/)?.[1];
+  const blobs = section.match(/^index ([a-f0-9]{40})\.\.([a-f0-9]{40}) /m);
+  patchFiles.push(filename);
+  check(filename ?? 'source-patch', 'full patch blob identities equal immutable baseline and captured bytes', !!blobs &&
+    baselineBodies.has(filename) && sourceBodies.has(filename) &&
+    gitBlob(baselineBodies.get(filename)) === blobs[1] && gitBlob(sourceBodies.get(filename)) === blobs[2]);
+}
+check('source', 'baseline-relative four tracked files plus exactly two new files', same(patchFiles, keySources) &&
+  same(sourceFiles.filter(f => !baselineFiles.includes(f)), newSources));
+check('source', 'CLI and group component instrumentation unchanged from baseline',
+  [...cliSources, componentSource].every(f => baselineBodies.get(f) === sourceBodies.get(f)));
+const sourceRows = [['path', 'sha256', 'bytes', 'reconstruction'], ...sourceFiles.map(f => {
+  const body = sourceBodies.get(f);
+  return [f, sha(body), Buffer.byteLength(body), newSources.includes(f) ? 'source/new/' + f + '.txt'
+    : keySources.includes(f) ? 'baseline + source/tracked.patch.txt' : 'immutable baseline ' + baseline];
+})];
+table('source-hashes.tsv', sourceRows);
+output.set('source/tracked.patch.txt', sourcePatch);
+for (const f of newSources) output.set('source/new/' + f + '.txt', sourceBodies.get(f));
+for (const f of cliSources) output.set('source/cli/' + f + '.txt', sourceBodies.get(f));
+output.set('components/before-current/compare_group_bench_test.go.txt', sourceBodies.get(componentSource));
+table('cli-source-hashes.tsv', [['path', 'sha256', 'archive_path'], ...cliSources.map(f =>
+  [f, sha(sourceBodies.get(f)), 'source/cli/' + f + '.txt'])]);
+table('source/frozen-source.tsv', [['path', 'sha256', 'bytes', 'frozen_path'], ...frozenFiles.map(f =>
+  [f, sha(sourceBodies.get(f)), Buffer.byteLength(sourceBodies.get(f)), path.join(frozenRoot, f)])]);
+output.set('source/reconstruction.hash', sourceRows.slice(1).map(r => r[1] + '  ' + r[0]).join('\n') + '\n');
+output.set('source/provenance.json', JSON.stringify({ ...capture, source_root: frozenRoot,
+  patch_sha256: sha(sourcePatch), source_files: sourceFiles.length,
+  reconstruction: 'Immutable R18 baseline + tracked.patch.txt + source/new files (strip final .txt); CLI copies are references only.',
+  scope: 'R19 strict ASCII leaf validation/comparison only; no storage/ACL/Bind/queue/audit optimization.',
+  unchanged_source: 'All remaining Go and module bytes read from immutable baseline, never later live main.',
+  component_source: componentSource, component_source_sha256: sha(sourceBodies.get(componentSource)),
+  cli_confirmation: signal.cli_sources,
+}, null, 2) + '\n');
+output.set('source/RECONSTRUCTION.txt', 'Start from clean baseline ' + baseline + '. Apply source/tracked.patch.txt with git apply. Copy the two source/new/ files to their relative repository paths, stripping only the final .txt suffix. Verify resulting Go/module files with source/reconstruction.hash (paths relative to reconstructed checkout).\n\nNo duplicate full changed-source snapshots are bundled. The independent frozen copy is ' + frozenRoot + '; subsequent main changes do not affect generation. CLI source copies and group benchmark source are convenience references, unchanged from the baseline. This is source provenance, not a build-environment or reproducible-binary claim.\n');
+requirePassing();
+
+// Large reads and all SHA256 work are gated by main's explicit final completion.
+async function facts(file, countLines = false) {
+  remember(file);
+  const hash = createHash('sha256');
+  let bytes = 0, lines = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    hash.update(chunk); bytes += chunk.length;
+    if (countLines) for (let i = chunk.indexOf(10); i >= 0; i = chunk.indexOf(10, i + 1)) lines++;
+  }
+  remember(file);
+  return { sha256: hash.digest('hex'), bytes, lines };
+}
+const exportHeader = ['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_path'];
+const exports = [exportHeader], diagnosticExports = [exportHeader];
+for (const p of plans) {
+  const f = p.run + '/validation.tsv', rows = parseTSV(f, ['run', 'canonical_entries', 'canonical_cksum', 'canonical_bytes']);
+  check(f, 'three canonical export identities', same(rows.map(r => r.run), endpoints));
+  for (const e of endpoints) {
+    const row = rows.find(r => r.run === e), file = path.join(src, p.run, e, 'data.canonical');
+    const actual = await facts(file, true), checksum = execFileSync('cksum', [file], { encoding: 'utf8' }).trim().split(/\s+/);
+    (p.diagnostic ? diagnosticExports : exports).push([p.run, e, actual.lines, checksum[0], actual.bytes, actual.sha256, file]);
+    check(file, 'export content, recorded validation and original canonical fixture agree',
+      row?.canonical_entries === String(actual.lines) && row?.canonical_cksum === checksum[0] &&
+      row?.canonical_bytes === String(actual.bytes) && actual.lines === 100002 && actual.bytes === 42712438 &&
+      checksum[0] === '2143929969' && +checksum[1] === actual.bytes && actual.sha256 === canonicalHash);
+  }
+  check(p.run, 'password and disposable endpoint DBs cleaned up',
+    ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !fs.existsSync(path.join(src, p.run, f))));
+}
+check('exports', '15 core exports and six separate calibration exports', exports.length === 16 && diagnosticExports.length === 7);
+table('export-checks.tsv', exports); table('diagnostics/export-checks.tsv', diagnosticExports);
+const binaryRows = [['file', 'sha256', 'bytes', 'source_path']];
+const metadataRows = [['file', 'go_version', 'vcs_revision', 'vcs_modified', 'CGO_ENABLED', 'GOOS', 'GOARCH']];
+for (const [name, file] of [...binaries.map(f => [f, path.join(src, f)]), ...auxiliaryBinaries,
+  ...(signal.components.before.test_binary ? [['component-before', signal.components.before.test_binary]] : [])]) {
+  const actual = await facts(file); binaryRows.push([name, actual.sha256, actual.bytes, file]);
+  if (['before', 'current'].includes(name)) check(name, 'actual executable equals pipeline and main handoff', actual.sha256 === expectedHashes[name], actual.sha256);
+  const metadata = execFileSync('go', ['version', '-m', file], { encoding: 'utf8', env: { ...process.env, GOTOOLCHAIN: 'local' } });
+  output.set('binary-metadata/' + name + '.txt', metadata);
+  const field = key => metadata.match(new RegExp('(?:^|\\s)' + key.replaceAll('.', '\\.') + '=([^\\s]+)'))?.[1] ?? 'NOT_EMBEDDED';
+  const version = metadata.split('\n')[0].match(/go[\d.]+/)?.[0] ?? 'NOT_EMBEDDED';
+  metadataRows.push([name, version, field('vcs.revision'), field('vcs.modified'), field('CGO_ENABLED'), field('GOOS'), field('GOARCH')]);
+  check(name, 'Go executable metadata retained', version !== 'NOT_EMBEDDED');
+  if (['before', 'current'].includes(name)) check(name, 'Go1.26.4 CGO-disabled darwin/arm64',
+    version === 'go1.26.4' && field('CGO_ENABLED') === '0' && field('GOOS') === 'darwin' && field('GOARCH') === 'arm64');
+  if (name === 'before') check(name, 'actual R18 executable embeds 15f428a dirty',
+    field('vcs.revision').startsWith('15f428a') && field('vcs.modified') === 'true');
+  if (name === 'current') check(name, 'current actual embedded revision and dirty flag',
+    field('vcs.revision') === signal.source_git_head && field('vcs.modified') === 'true');
+}
+table('binary-hashes.tsv', binaryRows); table('binary-metadata.tsv', metadataRows);
+const fixtures = [['file', 'sha256', 'bytes', 'access_mode']];
+for (const [file, access] of [['member-acl.db', 'explicit'], ['member-index.db', 'default']]) {
+  const actual = await facts(path.join(src, file)); fixtures.push([file, actual.sha256, actual.bytes, access]);
+}
+table('fixture-hashes.tsv', fixtures);
+const currentMetadata = metadataRows.find(r => r[0] === 'current');
+
+table('timing-scope.tsv', [['scope', 'rule'],
+  ['common-hot', 'Explicit/default nonroot correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.'],
+  ['common-distributed', 'Explicit/default nonroot Base/equality; 1000 x 3; warmed rotating targets, not controlled cold cache.'],
+  ['common-groups', 'Explicit/default nonroot member equality, Base 10/1000 and nested membership; 100 x 3.'],
+  ['root', 'Default access; literal and normalized root identities separate; five cases, 1000 x 7.'],
+  ['group-compare', 'Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7. First/last refer to fixture insertion order.'],
+  ['concurrent', 'Root ldapsearch; 8 x 1000; warmup repeat 0 excluded, three measured repeats; includes process overhead.'],
+  ['calibration', 'Separate default group A/A and startup/port swap; six cases x three endpoints x seven repeats per run; 252/36/12 total. Never pooled with core.'],
+  ['operation-timing', 'Setup and WhoAmI verification outside operation latency; Bind times Bind explicitly; raw request/verification/latency counters retained.'],
+  ['APFS', 'Seven scripts use cp -c independent writable clones on every endpoint; setup/warmup excluded; COW and warm caches remain limitations.'],
+  ['formal-components', 'Actual R18 test executable vs final R19 main; root handler fixture, 1000/10 x first/last/missing, 500ms x 3; separate from network macros.'],
+  ['prototype', '15f428a-based table-only, single-pass and three interleaved rounds kept independently; not formal R18 production or final R19 results.'],
+  ['network-profile', 'Separate R18 same-process SDK/server CPU diagnostics include setup; text only, no causal network-speedup inference.'],
+  ['exclusions', 'SDK warmups, smoke, concurrent repeat 0, exploratory profiles and prototypes excluded from core medians; R18 Bind components/calibrations not imported.'],
+  ['formulas', 'time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current; all negative observations retained.'],
+  ['stopping-rule', 'Predetermined counts; no favorable sample selection, diagnostic subtraction, historical pooling or regression-free claim.'],
+]);
+table('diagnostics/provenance.tsv', [['item', 'value'],
+  ['role', 'INDEPENDENT_GROUP_CALIBRATION; excluded from core 840/144/48'],
+  ['aa', 'Both Go labels execute the same final current binary; differences describe labels, not production improvements.'],
+  ['startup-port-swap', 'Current starts first on 29481; before starts second on 29482; startup order and port change jointly.'],
+  ['counts', 'Two runs x six cases x three endpoints x seven = 252 samples; 36 medians; 12 comparisons; six exports.'],
+  ['meaning', 'No correction or pooling with core; same group calibration semantics as R17, using fresh R19 inputs.'],
+]);
+table('provenance.tsv', [['item', 'value', 'evidence'],
+  ['round', 'R19 strict ASCII leaf comparison only', 'source/provenance.json'],
+  ['baseline_source', baseline, 'Immutable accepted R18 source'],
+  ['before_sha256', baselineHash, 'binary-hashes.tsv'],
+  ['before_embedded', '15f428a dirty; distinct from accepted R18 source revision', 'binary-metadata/before.txt'],
+  ['current_sha256', expectedHashes.current, 'binary-hashes.tsv'],
+  ['current_embedded', currentMetadata[2] + ' modified=' + currentMetadata[3], 'binary-metadata/current.txt'],
+  ['frozen_source', frozenRoot, 'source/frozen-source.tsv'],
+  ['main_completion', signal.main_signal, signalFile],
+  ['static_review', 'Main reported: independent Lorentz review found no matching/fallback/first-error issue and was closed; not a runtime test', 'User main handoff; no separate reviewer transcript archived'],
+  ['scope', '256-bool table initialized once; exact canonical leaf name and validated suffix enable fused value validation/comparison; mismatches still validate remaining bytes; complex/alias/invalid input retain original fallback', 'source/tracked.patch.txt'],
+  ['excluded_changes', 'No storage, ACL, Bind, queue or audit optimization merged in R19', 'baseline-relative patch inventory'],
+  ['worker_execution', 'No build/test/bench executed; go version -m is metadata inspection; all hashes gated on final main completion', 'generate-evidence.mjs.txt'],
+]);
+const summary = [['item', 'value'], ['state', 'EVIDENCE_COMPLETE'],
+  ['per_operation_native_parity', core.belowNative.length ? 'NOT_ACHIEVED' : 'OBSERVED_MEDIANS_ONLY'],
+  ['main_assessment', signal.main_assessment ?? 'See formal main report; archive makes no universal speedup claim'],
+  ['core_scripts', 5], ['core_json', core.reports.length - 1], ['core_samples', core.samples.length - 1],
+  ['core_medians', core.medians.length - 1], ['core_comparisons', core.comparisons.length - 1], ['core_exports', exports.length - 1],
+  ['negative_core_comparisons', core.negatives.length], ['below_openldap_core_comparisons', core.belowNative.length],
+  ['calibration_scripts', 2], ['calibration_json', diagnostics.reports.length - 1], ['calibration_samples', diagnostics.samples.length - 1],
+  ['calibration_medians', diagnostics.medians.length - 1], ['calibration_comparisons', diagnostics.comparisons.length - 1],
+  ['calibration_exports', diagnosticExports.length - 1], ['negative_calibration_comparisons', diagnostics.negatives.length],
+  ...Object.entries({ formal_components: mainComponents, prototype_table_only: tableOnly,
+    prototype_single_pass: singlePass, prototype_interleaved: interleaved }).flatMap(([scope, result]) =>
+    Object.entries(result).map(([key, value]) => [scope + '_' + key, value])),
+  ['final_fuzz_runs', 2], ['network_diagnostic_text_files', hasNetwork ? networkFiles.length : 0],
+  ['source_files', sourceFiles.length], ['failed_checks', 0]];
+table('summary.tsv', summary);
+output.set('overview.txt', [
+  'R19 PERFORMANCE EVIDENCE',
+  '',
+  'R18 source baseline: ' + baseline + '. Retained production before SHA256: ' + baselineHash + '; actual embedded revision 15f428a dirty.',
+  'Final R19 current SHA256: ' + expectedHashes.current + '; embedded ' + currentMetadata[2] + ', modified=' + currentMetadata[3] + '.',
+  '',
+  'Scope: strict ASCII DN leaf comparison only. A once-initialized 256-bool table validates bytes. An exact canonical leaf name and prevalidated suffix enable one value validation/comparison scan. Value mismatch does not skip validation of the remaining bytes. Complex, alias and invalid inputs retain original normalization fallback. No storage/ACL/Bind/queue/audit optimization merged.',
+  '',
+  'Core: five scripts, 31 JSON, 840 samples, 144 medians, 48 comparisons, 15 exports. Negative time reductions: ' + core.negatives.length + '/48. Below OpenLDAP throughput: ' + core.belowNative.length + '/48. All negative values retained; no universal speedup or native-parity claim.',
+  'Calibration: separate default group A/A and startup/port swap, 10 JSON, 252 samples, 36 medians, 12 comparisons, six exports. Label identity and binary SHA are explicit in diagnostics/endpoint-identity.tsv. No pooling or correction of core results.',
+  'Formal components: groups-main-before/current.txt only; actual R18 versus final R19, Group1000/Small10 first/last/missing, 500ms x 3, 36 samples, 12 medians, 18 metric comparisons. Method, root fixture identity, access and member count are separate columns.',
+  'Exploratory prototypes: 15f428a-based table-only, single-pass and alternating three-round logs, plus early 656711-execution fuzz, remain under exploratory/prototype. They do not represent formal R18 before or final R19. No R18 Bind component/calibration archive imported.',
+  'Validation: focused directory/schema, full Go, vet, 355 native PASS records and two final main fuzz logs. Final Parse ' +
+    fuzzRows.find(r => r[0] === 'R19_MAIN' && r[1] === 'FuzzParseSimpleRDNBytes')?.[6] + ', Match ' +
+    fuzzRows.find(r => r[0] === 'R19_MAIN' && r[1] === 'FuzzMatchSimpleRDNValueBytes')?.[6] + ' executions; early fuzz kept separate.',
+  hasNetwork ? 'Optional exploratory/network-r18 holds only authorized README, benchmark source and successful textual logs/pprof tables. These R18 same-process SDK/server diagnostics include setup. Input buffering was not implemented; ENOSPC preparation failure is excluded. No proven cause of network gain is inferred.' : 'No optional network profile texts archived.',
+  '',
+  'All 21 exports match original canonical content: 100002 entries, cksum 2143929969, 42712438 bytes, SHA256 ' + canonicalHash + '.',
+  'All seven scripts use APFS cp -c; setup/warmup are outside measured operation time. COW, fixed endpoint order and warm caches remain limitations. Distributed targets do not establish cold-cache performance.',
+  'Source reconstruction: immutable baseline + source/tracked.patch.txt + two source/new files + source/reconstruction.hash. Changed large sources are not bundled twice. Frozen copy: ' + frozenRoot + '. CLI source and executable hashes are archived. Do not infer reproducible binaries from source hashes alone.',
+  'Raw JSON/TSV/logs/scripts, counters and verification timing remain inspectable. SHA256SUMS covers every archive file except itself. Databases, credentials, canonical contents, executables and binary profiles are not bundled.',
+  'Main completion signal: ' + signalFile + '. Formal report is maintained by main. This evidence worker executes no build/test/bench and does not hash during macros.',
+  '',
+].join('\n'));
+output.set('README.md', [
+  '# R19 Performance Evidence', '',
+  '**Per-operation OpenLDAP parity is not achieved.** This archive retains all positive and negative observations for the targeted DN comparison change.', '',
+  'The [overview](overview.txt) records scope, provenance and validation. Inspect [core comparisons](comparisons.tsv), [raw samples](samples.tsv), [separate calibrations](diagnostics/comparisons.tsv), [formal components](components/before-current/comparisons.tsv), and [checks](checks.tsv). See [source reconstruction](source/RECONSTRUCTION.txt), [source hashes](source-hashes.tsv) and [summary counts](summary.tsv).', '',
+  output.get('overview.txt'),
+  'The [formal report](../../common-ldap-performance.md) explains the measured results and practical limits. SHA256SUMS includes this README.', '',
+].join('\n'));
+output.set('limitations.txt', 'Local medians do not establish universal speedup, regression-free behavior, complete compatibility, statistical significance, native parity or causal attribution. All negative values remain. Core, group calibration, formal components, prototype exploration and R18 network diagnostics are separate populations. APFS COW, fixed endpoint order and warm caches may affect observations. No race-detector, retained-heap or controlled cold-cache evidence is claimed. Embedded dirty binary provenance remains explicit.\n');
+requirePassing();
+for (const f of trackedReads.keys()) remember(f);
+table('checks.tsv', checks);
+function existingFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Archive symlink: ' + dir);
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name, full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error('Archive symlink: ' + full);
+    if (entry.isDirectory()) return existingFiles(full, name + '/');
+    if (!entry.isFile()) throw new Error('Unexpected archive entry: ' + full);
+    return [name];
+  });
+}
+const unexpected = existingFiles(dst).filter(f => f !== 'SHA256SUMS' && !output.has(f));
+if (unexpected.length) throw new Error('Unexpected archive files; nothing published: ' + unexpected.join(', '));
+function write(f, body) {
+  if (!safeRelative(f)) throw new Error('Unsafe archive path: ' + f);
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, body);
+}
+for (const [f, body] of output) write(f, body);
+write('SHA256SUMS', [...output].sort(([a], [b]) => a.localeCompare(b)).map(([f, body]) => sha(body) + '  ' + f).join('\n') + '\n');
+for (const [f, body] of output) if (sha(fs.readFileSync(path.join(dst, f))) !== sha(body)) throw new Error('Archive verification failed: ' + f);
+if (!same(existingFiles(dst), [...output.keys(), 'SHA256SUMS'])) throw new Error('Archive inventory mismatch');
+console.log(JSON.stringify({ state: 'EVIDENCE_COMPLETE', files_in_manifest: output.size, checks: checks.length - 1, failed_checks: 0,
+  core: { samples: core.samples.length - 1, medians: core.medians.length - 1, comparisons: core.comparisons.length - 1, exports: exports.length - 1,
+    negatives: core.negatives.length, below_openldap: core.belowNative.length },
+  calibration: { samples: diagnostics.samples.length - 1, medians: diagnostics.medians.length - 1, comparisons: diagnostics.comparisons.length - 1,
+    exports: diagnosticExports.length - 1, negatives: diagnostics.negatives.length },
+  components: mainComponents, current_sha256: expectedHashes.current }, null, 2));

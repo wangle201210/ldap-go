@@ -1,0 +1,3 @@
+role	target	source	workers	requested_seconds	observed_elapsed_seconds	executions	new_interesting	total_interesting	package_seconds
+R19_MAIN	FuzzParseSimpleRDNBytes	parse-fuzz-main.txt	2	15	16	558456	9	93	16.031
+R19_MAIN	FuzzMatchSimpleRDNValueBytes	match-fuzz-main.txt	2	15	15	621669	44	155	15.111

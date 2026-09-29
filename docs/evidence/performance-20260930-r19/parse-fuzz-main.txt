@@ -1,0 +1,10 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/84 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 84/84 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 128258 (42723/sec), new interesting: 2 (total: 86)
+fuzz: elapsed: 6s, execs: 256984 (42917/sec), new interesting: 3 (total: 87)
+fuzz: elapsed: 9s, execs: 369631 (37542/sec), new interesting: 5 (total: 89)
+fuzz: elapsed: 12s, execs: 492187 (40866/sec), new interesting: 9 (total: 93)
+fuzz: elapsed: 15s, execs: 558456 (22084/sec), new interesting: 9 (total: 93)
+fuzz: elapsed: 16s, execs: 558456 (0/sec), new interesting: 9 (total: 93)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/directory	16.031s

@@ -1,0 +1,39 @@
+{
+  "round": "R19",
+  "baseline": "8918569d6b7b32c683606e88744eeb1ec36bd4db",
+  "source_git_head": "8918569d6b7b32c683606e88744eeb1ec36bd4db",
+  "captured_at": "2026-09-29T23:27:41.779Z",
+  "tracked": [
+    "internal/directory/dn_simple_rdn_bytes.go",
+    "internal/schema/compare_simple_dn.go",
+    "internal/schema/compare_simple_dn_leaf_bench_test.go",
+    "internal/schema/compare_simple_dn_leaf_test.go"
+  ],
+  "new_sources": [
+    "internal/directory/dn_simple_rdn_byteclass_test.go",
+    "internal/directory/dn_simple_rdn_match_test.go"
+  ],
+  "frozen_files": [
+    "internal/cmd/ldapbench/main.go",
+    "internal/cmd/ldapcommonbench/group_compare_test.go",
+    "internal/cmd/ldapcommonbench/main.go",
+    "internal/cmd/ldifcanonical/main.go",
+    "internal/directory/dn_simple_rdn_byteclass_test.go",
+    "internal/directory/dn_simple_rdn_bytes.go",
+    "internal/directory/dn_simple_rdn_match_test.go",
+    "internal/schema/compare_simple_dn.go",
+    "internal/schema/compare_simple_dn_leaf_bench_test.go",
+    "internal/schema/compare_simple_dn_leaf_test.go",
+    "internal/server/compare_group_bench_test.go"
+  ],
+  "hashing_performed": false,
+  "source_root": "/tmp/ldap-go-r19-evidence-source",
+  "patch_sha256": "0c47def073171ba5fc39187b79cb8811e7ec2e09c5b5cb98fb04115ffb877310",
+  "source_files": 1301,
+  "reconstruction": "Immutable R18 baseline + tracked.patch.txt + source/new files (strip final .txt); CLI copies are references only.",
+  "scope": "R19 strict ASCII leaf validation/comparison only; no storage/ACL/Bind/queue/audit optimization.",
+  "unchanged_source": "All remaining Go and module bytes read from immutable baseline, never later live main.",
+  "component_source": "internal/server/compare_group_bench_test.go",
+  "component_source_sha256": "0750499b126ec8713c9594b26807a0af5a43a59175d792732d704df4961a6c1d",
+  "cli_confirmation": "Sources frozen from main after its production-freeze declaration; CLI files are unchanged from accepted R18 baseline. Executed client paths are in the seven raw scripts; their actual bytes, SHA256 and embedded build metadata are inspected after completion. Source snapshots do not independently prove reproducible binaries."
+}

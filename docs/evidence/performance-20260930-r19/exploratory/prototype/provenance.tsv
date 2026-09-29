@@ -1,0 +1,6 @@
+scope	role	source_revision	detail
+table-only	ISOLATED_PROTOTYPE_NOT_FORMAL_R18	15f428a	groups-before/current.txt; table-only-source retained
+single-pass	ISOLATED_PROTOTYPE_NOT_FINAL_R19	15f428a	groups-before.txt vs groups-single-pass.txt; same exploratory baseline
+interleaved	ISOLATED_PROTOTYPE_NOT_FINAL_R19	15f428a	Three pre-existing alternating before/current rounds; never pooled with formal components
+single-pass-fuzz	EARLY_EXPLORATORY_FUZZ	15f428a	656711 executions; independent of final main Parse/Match fuzz
+scope	EXCLUDED_FROM_CORE_AND_CALIBRATION	-	All negative values retained; prototype allocation/CPU results do not establish final R19 behavior

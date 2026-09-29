@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+: "${LDAP_BENCH_PASSWORD:?set disposable root password}"
+audit=/var/tmp/ldap-go-perf-20260930-r19
+sh "$audit/common-explicit.sh" >"$audit/common-explicit.log" 2>&1
+sh "$audit/common-default.sh" >"$audit/common-default.log" 2>&1
+sh "$audit/root-paired.sh" >"$audit/root-paired.log" 2>&1
+sh "$audit/group-compare-explicit.sh" >"$audit/group-compare-explicit.log" 2>&1
+sh "$audit/group-compare-default.sh" >"$audit/group-compare-default.log" 2>&1
+sh "$audit/group-aa.sh" >"$audit/group-aa.log" 2>&1
+sh "$audit/group-swap.sh" >"$audit/group-swap.log" 2>&1
+printf 'Performance comparison completed.\n'

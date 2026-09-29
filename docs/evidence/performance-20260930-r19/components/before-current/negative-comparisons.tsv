@@ -1,0 +1,2 @@
+scope	access_mode	identity	method	members	case	metric	before	current	absolute_reduction	reduction_pct
+components/before-current	fixture-default	root	handleCompare_member	1000	first	ns/op	23055	24278	-1223	-5.304706137497295

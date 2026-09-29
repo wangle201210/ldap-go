@@ -1,0 +1,6 @@
+scope	access_mode	identity	method	members	case	metric	before	current	absolute_reduction	reduction_pct
+exploratory/prototype/single-pass	fixture-default	root	handleCompare_member	10	first	ns/op	9938	10063	-125	-1.2577983497685574
+exploratory/prototype/single-pass	fixture-default	root	handleCompare_member	10	last	ns/op	11291	12342	-1051	-9.30829864493845
+exploratory/prototype/single-pass	fixture-default	root	handleCompare_member	1000	first	ns/op	24472	32697	-8225	-33.60983981693364
+exploratory/prototype/single-pass	fixture-default	root	handleCompare_member	1000	last	ns/op	68030	72306	-4276	-6.285462296045852
+exploratory/prototype/single-pass	fixture-default	root	handleCompare_member	1000	missing	ns/op	57370	72683	-15313	-26.691650688513157

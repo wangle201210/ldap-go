@@ -1,0 +1,143 @@
+diff --git a/internal/directory/dn_simple_rdn_bytes.go b/internal/directory/dn_simple_rdn_bytes.go
+index 0f8d3642e40424dc4e7ae1b2688a609751e79fd9..33fb156d919bdfa7734f14b148e12fb7a9ab2243 100644
+--- a/internal/directory/dn_simple_rdn_bytes.go
++++ b/internal/directory/dn_simple_rdn_bytes.go
+@@ -2,6 +2,16 @@ package directory
+ 
+ import "bytes"
+ 
++// Initialized once and only read by the strict RDN helpers below.
++var simpleRDNValueByteClass = func() [256]bool {
++	var allowed [256]bool
++	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._"
++	for i := range len(alphabet) {
++		allowed[alphabet[i]] = true
++	}
++	return allowed
++}()
++
+ // ParseSimpleRDNBytes recognizes exactly one RDN in SimpleDNDepthBytes' strict
+ // ASCII subset. The returned attribute and assertion borrow value, which is
+ // neither modified nor retained. A false result requires the full DN parser;
+@@ -14,9 +24,35 @@ func ParseSimpleRDNBytes(value []byte) (attribute, assertion []byte, simple bool
+ 	// Validating both fields also rejects commas, so no separate RDN split is
+ 	// needed. Keep the value alphabet identical to simpleDNDepthBytes.
+ 	for _, c := range assertion {
+-		if !asciiDNAttributeLetter(c) && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
++		if !simpleRDNValueByteClass[c] {
+ 			return nil, nil, false
+ 		}
+ 	}
+ 	return attribute, assertion, true
+ }
++
++// MatchSimpleRDNValueBytes validates actual in ParseSimpleRDNBytes' strict value
++// subset while comparing it with expected. The caller must validate the RDN name
++// separately. Expected must be nonempty, in the same subset, and normalized for
++// DN caseIgnore[IA5]Match (fold=true) or caseExact[IA5]Match (fold=false); no other
++// matching rules are supported. Neither input is modified or retained. A false
++// simple result requires full DN normalization, even after a value mismatch.
++func MatchSimpleRDNValueBytes(actual, expected []byte, fold bool) (matched, simple bool) {
++	if len(actual) == 0 {
++		return false, false
++	}
++	matched = len(actual) == len(expected)
++	for i, c := range actual {
++		if !simpleRDNValueByteClass[c] {
++			return false, false
++		}
++		// A mismatch skips comparison, but never validation of the remaining bytes.
++		if matched {
++			if fold && c >= 'A' && c <= 'Z' {
++				c += 'a' - 'A'
++			}
++			matched = c == expected[i]
++		}
++	}
++	return matched, true
++}
+diff --git a/internal/schema/compare_simple_dn.go b/internal/schema/compare_simple_dn.go
+index 13e64196e2606550bb3238a07333a2193f735f8d..aac314bc3abed27c6c00ceb2f9f19e7dff39cd2d 100644
+--- a/internal/schema/compare_simple_dn.go
++++ b/internal/schema/compare_simple_dn.go
+@@ -62,6 +62,13 @@ func (plan *simpleDNComparison) match(registry *Registry, value []byte) (matched
+ 	}
+ 	head, tail, hasTail := bytes.Cut(value, []byte(","))
+ 	if plan.tailReady && hasTail && bytes.Equal(tail, plan.tail[:plan.tailLength]) {
++		leaf := &plan.parts[0]
++		nameLength := len(leaf.name)
++		// An exact prepared name is already valid; fuse value validation and comparison.
++		if len(head) > nameLength && head[nameLength] == '=' && bytes.Equal(head[:nameLength], leaf.name) {
++			leafMatches, simple := directory.MatchSimpleRDNValueBytes(head[nameLength+1:], leaf.value, leaf.fold)
++			return leafMatches && plan.tailMatches, simple
++		}
+ 		name, actual, simple := directory.ParseSimpleRDNBytes(head)
+ 		if !simple {
+ 			return false, false
+diff --git a/internal/schema/compare_simple_dn_leaf_bench_test.go b/internal/schema/compare_simple_dn_leaf_bench_test.go
+index a9cf1b796ce333e8a707b4a2a77ce4a42fd05b60..e8da0099326f889d9a220ed81357e9c60299bb98 100644
+--- a/internal/schema/compare_simple_dn_leaf_bench_test.go
++++ b/internal/schema/compare_simple_dn_leaf_bench_test.go
+@@ -14,6 +14,9 @@ func BenchmarkSimpleDNTailLeaf(b *testing.B) {
+ 		{"short-hit", "cn=alice", "cn=alice", true, true},
+ 		{"short-miss", "cn=alice", "cn=other", false, true},
+ 		{"fold", "cn=alice", "CN=ALICE", true, true},
++		{"exact-name-fold", "cn=a_b.c-9", "cn=A_B.C-9", true, true},
++		{"exact-name-case-exact", "eqExact=A_b.c-9", "eqExact=A_b.c-9", true, true},
++		{"short-length-miss", "cn=alice", "cn=x", false, true},
+ 		{"alias", "uid=alice", "USERID=ALICE", true, true},
+ 		{"OID", "cn=alice", "2.5.4.3=ALICE", true, true},
+ 		{"exact-miss", "eqExact=Alice", "eqExact=alice", false, true},
+diff --git a/internal/schema/compare_simple_dn_leaf_test.go b/internal/schema/compare_simple_dn_leaf_test.go
+index edf5008ef753c9c800cb0e8c68a281e3b1ba773b..e3961d66d9fa5d11bcb7587e9190d627fa9f0239 100644
+--- a/internal/schema/compare_simple_dn_leaf_test.go
++++ b/internal/schema/compare_simple_dn_leaf_test.go
+@@ -72,6 +72,8 @@ func TestSimpleDNTailLeafFirstError(t *testing.T) {
+ 	for _, tail := range []string{"dc=example", "dc=other"} {
+ 		for _, invalid := range []string{
+ 			"broken," + tail, "=alice," + tail, "2.05.4.3=alice," + tail,
++			"cn=xxxx+," + tail, "cn=x+," + tail, "cn=xxxxxx+," + tail,
++			"cn=x+CN=bob," + tail,
+ 			"cn=alice+CN=bob," + tail, "leafUnknown=x," + tail,
+ 			"cn=alice,dc=example,", "cn=alice,tailUnknown=x", "cn=alice,dc=x+domainComponent=y",
+ 		} {
+@@ -100,3 +102,39 @@ func TestSimpleDNTailLeafFirstError(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestSimpleDNTailPreparedName(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	for _, leaf := range []string{"cn=A_b.c-9", "eqExact=A_b.c-9", "homeDirectory=A_b.c-9"} {
++		for _, tail := range []string{"dc=example", "dc=other"} {
++			t.Run(leaf+"/"+tail, func(t *testing.T) {
++				assertion := leaf + ",dc=example"
++				normalized, err := registry.NormalizeEqualityAssertion("member", []byte(assertion))
++				if err != nil {
++					t.Fatal(err)
++				}
++				registry.mu.RLock()
++				plan := registry.prepareSimpleDNComparisonLocked(normalized)
++				registry.mu.RUnlock()
++				if plan.count != 2 {
++					t.Fatal("fixture must prepare a two-RDN comparison")
++				}
++				prefix := string(plan.parts[0].name) + "="
++				check := simpleDNTailChecker(t, registry, assertion)
++				check([]byte(prefix+"warm,"+tail), true)
++				for _, tc := range []struct {
++					value   string
++					handled bool
++				}{
++					{"A_b.c-9", true}, {"a_b.c-9", true}, {"A_B.C-9", true},
++					{"x_b.c-9", true}, {"x", true}, {"longer-value", true},
++					{"", false}, {"x_b.c-!", false}, {"x_b.c-\xff", false},
++					{"x!", false}, {"longer-value!", false}, {"x\u00e9", false},
++					{`x\`, false}, {"x+uid=y", false}, {"x=y", false},
++				} {
++					check([]byte(prefix+tc.value+","+tail), tc.handled)
++				}
++			})
++		}
++	}
++}

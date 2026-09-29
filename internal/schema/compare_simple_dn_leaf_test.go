@@ -72,6 +72,8 @@ func TestSimpleDNTailLeafFirstError(t *testing.T) {
 	for _, tail := range []string{"dc=example", "dc=other"} {
 		for _, invalid := range []string{
 			"broken," + tail, "=alice," + tail, "2.05.4.3=alice," + tail,
+			"cn=xxxx+," + tail, "cn=x+," + tail, "cn=xxxxxx+," + tail,
+			"cn=x+CN=bob," + tail,
 			"cn=alice+CN=bob," + tail, "leafUnknown=x," + tail,
 			"cn=alice,dc=example,", "cn=alice,tailUnknown=x", "cn=alice,dc=x+domainComponent=y",
 		} {
@@ -97,6 +99,42 @@ func TestSimpleDNTailLeafFirstError(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+func TestSimpleDNTailPreparedName(t *testing.T) {
+	registry := equalityEvaluationRegistry(t)
+	for _, leaf := range []string{"cn=A_b.c-9", "eqExact=A_b.c-9", "homeDirectory=A_b.c-9"} {
+		for _, tail := range []string{"dc=example", "dc=other"} {
+			t.Run(leaf+"/"+tail, func(t *testing.T) {
+				assertion := leaf + ",dc=example"
+				normalized, err := registry.NormalizeEqualityAssertion("member", []byte(assertion))
+				if err != nil {
+					t.Fatal(err)
+				}
+				registry.mu.RLock()
+				plan := registry.prepareSimpleDNComparisonLocked(normalized)
+				registry.mu.RUnlock()
+				if plan.count != 2 {
+					t.Fatal("fixture must prepare a two-RDN comparison")
+				}
+				prefix := string(plan.parts[0].name) + "="
+				check := simpleDNTailChecker(t, registry, assertion)
+				check([]byte(prefix+"warm,"+tail), true)
+				for _, tc := range []struct {
+					value   string
+					handled bool
+				}{
+					{"A_b.c-9", true}, {"a_b.c-9", true}, {"A_B.C-9", true},
+					{"x_b.c-9", true}, {"x", true}, {"longer-value", true},
+					{"", false}, {"x_b.c-!", false}, {"x_b.c-\xff", false},
+					{"x!", false}, {"longer-value!", false}, {"x\u00e9", false},
+					{`x\`, false}, {"x+uid=y", false}, {"x=y", false},
+				} {
+					check([]byte(prefix+tc.value+","+tail), tc.handled)
+				}
+			})
 		}
 	}
 }
