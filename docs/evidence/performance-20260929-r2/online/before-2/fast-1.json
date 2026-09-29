@@ -1,0 +1,68 @@
+{
+  "config": {
+    "uri": "ldap://127.0.0.1:29481",
+    "bind_dn": "cn=admin,dc=scale,dc=qualification",
+    "base": "dc=scale,dc=qualification",
+    "people": "ou=people,dc=scale,dc=qualification",
+    "password_env": "LDAP_BENCH_PASSWORD",
+    "label": "before-2-fast-1",
+    "read_only": true,
+    "write": false,
+    "n": 1000,
+    "write_batch": 100,
+    "entries": 100000
+  },
+  "started_at": "2026-09-29T12:23:12.938836Z",
+  "timeout_ms": 10000,
+  "stages": [
+    {
+      "name": "connect",
+      "operations": 1,
+      "total_ms": 1.547083,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "rootBind",
+      "operations": 1000,
+      "total_ms": 75.62686,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "baseSearch",
+      "operations": 1000,
+      "total_ms": 99.195905,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "indexedEquality",
+      "operations": 1000,
+      "total_ms": 111.87277400000008,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareTrue",
+      "operations": 1000,
+      "total_ms": 107.70916099999998,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareFalse",
+      "operations": 1000,
+      "total_ms": 106.96419400000005,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    }
+  ],
+  "error": ""
+}

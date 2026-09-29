@@ -1,0 +1,42 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/original-8         	  106196	      1896 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/original-8         	  147988	      1693 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/original-8         	  147548	      1746 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/guard-8            	  276553	       918.9 ns/op	     120 B/op	       4 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/guard-8            	  270522	      1134 ns/op	     120 B/op	       4 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/hot/guard-8            	  263542	       905.2 ns/op	     120 B/op	       4 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/original-8 	   17967	     13415 ns/op	    7273 B/op	     267 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/original-8 	   16653	     14067 ns/op	    7273 B/op	     267 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/original-8 	   18330	     13568 ns/op	    7274 B/op	     267 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/guard-8    	   36350	      6666 ns/op	    3641 B/op	     133 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/guard-8    	   36615	      6586 ns/op	    3641 B/op	     133 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/nonroot/distributed/guard-8    	   36246	      6676 ns/op	    3641 B/op	     133 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/original-8    	 9312867	        25.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/original-8    	 9298180	        25.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/original-8    	 9031000	        26.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/guard-8       	 8333127	        26.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/guard-8       	 8992356	        27.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/hot/guard-8       	 9040512	        26.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/original-8         	 9212034	        25.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/original-8         	 9304894	        25.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/original-8         	 9328448	        25.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/guard-8            	 9336523	        26.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/guard-8            	 9077427	        25.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-literal/distributed/guard-8            	 9250826	        25.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/original-8              	  142798	      1700 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/original-8              	  147265	      1705 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/original-8              	  149010	      1697 ns/op	     232 B/op	       8 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/guard-8                 	  112533	      2135 ns/op	     296 B/op	      10 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/guard-8                 	  107414	      2211 ns/op	     296 B/op	      10 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/hot/guard-8                 	  120078	      2244 ns/op	     296 B/op	      10 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/original-8      	   30027	      7794 ns/op	    3798 B/op	     139 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/original-8      	   29725	      8134 ns/op	    3798 B/op	     139 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/original-8      	   31363	      7592 ns/op	    3798 B/op	     139 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/guard-8         	   30168	      8038 ns/op	    3862 B/op	     141 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/guard-8         	   30249	      8039 ns/op	    3862 B/op	     141 allocs/op
+BenchmarkRootPredicate/indexed/dbs=1/root-normalized/distributed/guard-8         	   29862	      8042 ns/op	    3862 B/op	     141 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	9.011s

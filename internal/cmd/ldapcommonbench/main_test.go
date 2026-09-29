@@ -227,11 +227,19 @@ type fakeClient struct {
 	client
 	dn         string
 	retainBind bool
+	bind       func(string, string) error
+	whoAmI     func() (*ldap.WhoAmIResult, error)
 	search     func(*ldap.SearchRequest) (*ldap.SearchResult, error)
+	compare    func(string, string, string) (bool, error)
 	del        func(*ldap.DelRequest) error
 }
 
 func (f *fakeClient) Bind(dn, password string) error {
+	if f.bind != nil {
+		if err := f.bind(dn, password); err != nil {
+			return err
+		}
+	}
 	if strings.HasSuffix(password, "-wrong") {
 		if !f.retainBind {
 			f.dn = ""
@@ -243,6 +251,9 @@ func (f *fakeClient) Bind(dn, password string) error {
 }
 
 func (f *fakeClient) WhoAmI([]ldap.Control) (*ldap.WhoAmIResult, error) {
+	if f.whoAmI != nil {
+		return f.whoAmI()
+	}
 	id := ""
 	if f.dn != "" {
 		id = "dn:" + f.dn
@@ -252,6 +263,10 @@ func (f *fakeClient) WhoAmI([]ldap.Control) (*ldap.WhoAmIResult, error) {
 
 func (f *fakeClient) Search(q *ldap.SearchRequest) (*ldap.SearchResult, error) { return f.search(q) }
 func (f *fakeClient) Del(q *ldap.DelRequest) error                             { return f.del(q) }
+
+func (f *fakeClient) Compare(dn, attribute, value string) (bool, error) {
+	return f.compare(dn, attribute, value)
+}
 
 func TestTimedClientDelegatesAndCountsCallsIncludingErrors(t *testing.T) {
 	query := ldap.NewSearchRequest("dc=fixture", ldap.ScopeBaseObject, ldap.NeverDerefAliases, 2, 0, false, "(objectClass=*)", []string{"uid"}, nil)
@@ -278,6 +293,21 @@ func TestTimedClientDelegatesAndCountsCallsIncludingErrors(t *testing.T) {
 			t.Fatalf("Search changed outcome or count: %p, %v, %d", got, gotErr, timed.requests)
 		}
 	}
+	for i, tc := range []struct {
+		result bool
+		err    error
+	}{{true, nil}, {false, nil}, {false, sdkErr}} {
+		conn.compare = func(dn, attribute, value string) (bool, error) {
+			if dn != query.BaseDN || attribute != "uid" || value != "ldapbench-absent" {
+				t.Fatal("Compare must receive the original arguments")
+			}
+			return tc.result, tc.err
+		}
+		got, err := timed.Compare(query.BaseDN, "uid", "ldapbench-absent")
+		if got != tc.result || !errors.Is(err, tc.err) || timed.requests != 5+i {
+			t.Fatalf("Compare changed outcome or count: %t, %v, %d", got, err, timed.requests)
+		}
+	}
 	elapsed := timed.elapsed
 	if elapsed <= 0 {
 		t.Fatal("SDK calls must record elapsed time")
@@ -288,8 +318,220 @@ func TestTimedClientDelegatesAndCountsCallsIncludingErrors(t *testing.T) {
 	if err := assertEntries(result, []*ldap.Entry{ldap.NewEntry(query.BaseDN, map[string][]string{"uid": {"user"}})}); err == nil {
 		t.Fatal("timing must not suppress result assertions")
 	}
-	if timed.requests != 4 || timed.elapsed != elapsed {
+	if timed.requests != 7 || timed.elapsed != elapsed {
 		t.Fatal("WhoAmI and local assertions must not change measured time/counts")
+	}
+}
+
+func TestRootOptionsAndSampling(t *testing.T) {
+	wantDefaults := []string{"userBind", "userBindWrong", "nonrootBase", "nonrootEquality", "memberEquality", "groupBase", "nestedMembership"}
+	for _, args := range [][]string{nil, {"-stages=all"}} {
+		if c := testOptions(t, args...); !slices.Equal(c.Stages, wantDefaults) {
+			t.Fatalf("default stages changed: %v", c.Stages)
+		}
+	}
+	c := testOptions(t, "-stages="+strings.Join(rootStageNames, ","), "-people=ou=people,dc=fixture", "-root-bind-dn=CN=ADMIN,DC=FIXTURE")
+	if c.RootBindDN != "CN=ADMIN,DC=FIXTURE" || !slices.Equal(c.Stages, rootStageNames) {
+		t.Fatal("root stages and literal client DN must be preserved")
+	}
+	f := buildFixture(c, "root", "password")
+	if len(f.entries) != 9 || len(f.pool) != 0 || needsGroups(c) {
+		t.Fatal("root-only selection must keep the disposable OU/eight-user flow without groups")
+	}
+	testOptions(t, "-stages=rootBind,rootBase")
+	for _, args := range [][]string{
+		{"-stages=rootEquality"}, {"-stages=rootCompareTrue"}, {"-stages=rootCompareFalse"},
+		{"-stages=rootBind,rootBind"}, {"-stages=rootBind", "-setup-disposable=false"},
+	} {
+		if _, err := parseOptions(append(testArgs(), args...), testLookup, io.Discard); err == nil {
+			t.Fatalf("expected rejection: %v", args)
+		}
+	}
+	for _, tc := range []struct {
+		n, entries int
+		want       []string
+	}{
+		{4, 100000, []string{"scale-000001", "scale-033334", "scale-066667", "scale-100000", "scale-000001"}},
+		{1, 100000, []string{"scale-000001", "scale-000001"}},
+		{4, 2, []string{"scale-000001", "scale-000002", "scale-000001", "scale-000002"}},
+		{4, 1, []string{"scale-000001", "scale-000001"}},
+	} {
+		c.N, c.Entries = tc.n, tc.entries
+		for i, want := range tc.want {
+			if got := sampleUID(c, i); got != want {
+				t.Fatalf("N=%d entries=%d iteration=%d: %s, want %s", c.N, c.Entries, i, got, want)
+			}
+		}
+	}
+}
+
+func TestRootStagesRequestShapesIdentityAndRotation(t *testing.T) {
+	for _, rootDN := range []string{"cn=admin,dc=fixture", "CN=ADMIN,DC=FIXTURE"} {
+		c := testOptions(t, "-n=4", "-repeats=2", "-stages="+strings.Join(rootStageNames, ",")+",nonrootBase",
+			"-people=ou=people,dc=fixture", "-uid=scale-000007", "-root-bind-dn="+rootDN,
+			"-endpoint=native=ldap://localhost:2389", "-endpoint=before=ldap://localhost:3389")
+		f := buildFixture(c, "root", "password")
+		methods := []string{"simple_bind_root", "base_objectclass_root", "subtree_uid_equality_root", "compare_uid_true_root", "compare_uid_false_root", "search_nonrootBase"}
+		for index, b := range benchmarks(c, f) {
+			t.Run(rootDN+"/"+b.name, func(t *testing.T) {
+				if b.method != methods[index] {
+					t.Fatalf("method label = %q, want %q", b.method, methods[index])
+				}
+				for repeat := range c.Repeats {
+					var order []int
+					var conns []client
+					for i := range c.Endpoints {
+						iteration, binds := 0, 0
+						conn := &fakeClient{}
+						conn.bind = func(dn, password string) error {
+							if dn != rootDN || password != c.password {
+								t.Fatal("root Bind must send the exact supplied DN and root password")
+							}
+							if b.name == "rootBind" && binds > 0 {
+								order = append(order, i)
+							}
+							binds++
+							return nil
+						}
+						conn.whoAmI = func() (*ldap.WhoAmIResult, error) {
+							return &ldap.WhoAmIResult{AuthzID: "dn:" + strings.ToLower(conn.dn)}, nil
+						}
+						conn.search = func(q *ldap.SearchRequest) (*ldap.SearchResult, error) {
+							order = append(order, i)
+							uid := []string{"scale-000001", "scale-033334", "scale-066667", "scale-100000"}[iteration]
+							iteration++
+							base, scope, filter, attrs := c.Base, ldap.ScopeBaseObject, "(objectClass=*)", []string{"objectClass"}
+							entry := ldap.NewEntry(strings.ToUpper(c.Base), map[string][]string{"OBJECTCLASS": {"top", "domain"}})
+							if b.name == "rootEquality" {
+								base, scope, filter, attrs = c.People, ldap.ScopeWholeSubtree, "(uid="+uid+")", []string{"uid"}
+								entry = scaleEntry(c, uid)
+							}
+							if q.BaseDN != base || q.Scope != scope || q.Filter != filter || !slices.Equal(q.Attributes, attrs) ||
+								q.SizeLimit != 2 || q.TimeLimit != 0 || q.TypesOnly || q.DerefAliases != ldap.NeverDerefAliases || len(q.Controls) != 0 {
+								t.Fatalf("root request differs from fast-probe SDK call: %+v", q)
+							}
+							return &ldap.SearchResult{Entries: []*ldap.Entry{entry}}, nil
+						}
+						conn.compare = func(dn, attribute, value string) (bool, error) {
+							order = append(order, i)
+							uid := []string{"scale-000001", "scale-033334", "scale-066667", "scale-100000"}[iteration]
+							iteration++
+							want := uid
+							if b.name == "rootCompareFalse" {
+								want = "ldapbench-absent"
+							}
+							if dn != "uid="+uid+","+c.People || attribute != "uid" || value != want {
+								t.Fatalf("unexpected Compare(%q, %q, %q)", dn, attribute, value)
+							}
+							return b.name == "rootCompareTrue", nil
+						}
+						c.Endpoints[i].root = conn
+						conns = append(conns, &fakeClient{
+							bind: func(dn, password string) error {
+								if b.root || dn != f.users[0].DN || password != f.password {
+									t.Fatal("root stage used nonroot connection or nonroot credentials changed")
+								}
+								return nil
+							},
+							search: func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+								order = append(order, i)
+								return &ldap.SearchResult{Entries: []*ldap.Entry{target(c, f, 0)}}, nil
+							},
+						})
+					}
+					var r report
+					if err := measure(t.Context(), c, f, b, repeat, conns, &r); err != nil {
+						t.Fatal(err)
+					}
+					var want []int
+					for iteration := range c.N {
+						for offset := range len(conns) {
+							want = append(want, (iteration+repeat+offset)%len(conns))
+						}
+					}
+					if !slices.Equal(order, want) {
+						t.Fatalf("request rotation = %v, want %v", order, want)
+					}
+					for i, row := range r.Samples {
+						wantDN := ""
+						if b.root {
+							wantDN = rootDN
+						}
+						if row.Endpoint != c.Endpoints[i].Name || row.Stage != b.name || row.Method != b.method || row.RootBindDN != wantDN || row.Repeat != repeat+1 ||
+							row.Members != 0 || row.Operations != c.N || row.Completed != c.N || row.Requests != c.N || row.VerificationRequests != 2+c.N || len(row.LatencyMS) != c.N {
+							t.Fatalf("incorrect root/nonroot sample or verification counts: %+v", row)
+						}
+						var total float64
+						for _, ms := range row.LatencyMS {
+							total += ms
+						}
+						if total != row.TotalMS {
+							t.Fatal("samples must contain only this endpoint's timed SDK calls")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRootStageFailuresKeepPartialCounts(t *testing.T) {
+	sdkErr := errors.New("SDK failure")
+	for _, tc := range []struct {
+		name, stage string
+		result      *ldap.SearchResult
+		err         error
+	}{
+		{"bind error", "rootBind", nil, sdkErr},
+		{"bind identity mismatch", "rootBind", nil, nil},
+		{"nil base", "rootBase", nil, nil},
+		{"base SDK error", "rootBase", nil, sdkErr},
+		{"missing base", "rootBase", &ldap.SearchResult{}, nil},
+		{"nil base entry", "rootBase", &ldap.SearchResult{Entries: []*ldap.Entry{nil}}, nil},
+		{"base referral", "rootBase", &ldap.SearchResult{Referrals: []string{"ldap://other"}}, nil},
+		{"wrong base DN", "rootBase", &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry("dc=other", map[string][]string{"objectClass": {"domain"}})}}, nil},
+		{"missing objectClass", "rootBase", &ldap.SearchResult{Entries: []*ldap.Entry{ldap.NewEntry("dc=fixture", nil)}}, nil},
+		{"missing UID", "rootEquality", &ldap.SearchResult{}, nil},
+		{"compare true mismatch", "rootCompareTrue", nil, nil},
+		{"compare false mismatch", "rootCompareFalse", nil, nil},
+		{"compare SDK error", "rootCompareTrue", nil, sdkErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testOptions(t, "-n=2", "-stages="+tc.stage, "-people=ou=people,dc=fixture", "-root-bind-dn=CN=ADMIN,DC=FIXTURE")
+			f := buildFixture(c, "failure", "password")
+			binds := 0
+			c.Endpoints[0].root = &fakeClient{
+				bind: func(string, string) error {
+					binds++
+					if binds > 1 {
+						return tc.err
+					}
+					return nil
+				},
+				whoAmI: func() (*ldap.WhoAmIResult, error) {
+					dn := "cn=admin,dc=fixture"
+					if binds > 1 {
+						dn = "cn=other,dc=fixture"
+					}
+					return &ldap.WhoAmIResult{AuthzID: "dn:" + dn}, nil
+				},
+				search:  func(*ldap.SearchRequest) (*ldap.SearchResult, error) { return tc.result, tc.err },
+				compare: func(string, string, string) (bool, error) { return tc.stage == "rootCompareFalse", tc.err },
+			}
+			var r report
+			err := measure(t.Context(), c, f, benchmarks(c, f)[0], 0, nil, &r)
+			if err == nil || (tc.err != nil && !errors.Is(err, tc.err)) {
+				t.Fatalf("expected assertion/SDK failure, got %v", err)
+			}
+			row := r.Samples[0]
+			verification := 2
+			if tc.name == "bind identity mismatch" {
+				verification++
+			}
+			if row.Operations != 1 || row.Requests != 1 || row.Completed != 0 || len(row.LatencyMS) != 0 || row.VerificationRequests != verification {
+				t.Fatalf("failed root operation must retain partial counts: %+v", row)
+			}
+		})
 	}
 }
 

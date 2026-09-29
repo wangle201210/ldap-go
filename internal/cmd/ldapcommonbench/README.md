@@ -4,6 +4,8 @@ A sequential `github.com/go-ldap/ldap/v3` runner for ordinary-user Bind,
 nonroot Base/UID equality, direct-group discovery, group member reads, and
 portable client-side nested membership. Supply named ldap-go/OpenLDAP endpoints
 running on **disposable task copies**. One endpoint is supported for profiling.
+Optional root Bind, Base, UID equality and true/false Compare stages use a
+separate root connection per endpoint; default stages are unchanged.
 This tool never starts servers, changes server configuration/indexes, or touches
 database files. No CGO, external LDAP executable, or server package is used.
 
@@ -65,6 +67,49 @@ also assert exact `cn` and `sn`. UID filter values and RDNs are escaped separate
 An equality filter alone cannot certify that the server used an index. Configure
 and verify equivalent indexes outside this runner.
 
+## Optional root SDK stages
+
+Select root stages explicitly; `all` still means only the original nonroot
+stages. `rootEquality`, `rootCompareTrue` and `rootCompareFalse` require `-people`
+and sample the existing scale pool (100,000 entries by default). They always use
+`count = min(n, entries)` and
+`1 + (iteration % count) * (entries - 1) / max(1, count - 1)` with zero-based
+iteration, matching `fast-probe.go` from round 6. `-uid` applies only to nonroot
+Base/equality and does not override root sampling. Use the same `n` as the
+reference probe; this harness retains its documented bounds rather than the
+reference probe's 10,000-operation clamp.
+
+Build the same harness for before/R1 `b55f670`, current/R2 and native comparisons.
+The following is an example pairwise invocation; run the same command for each
+pair of caller-managed disposable endpoints:
+
+```sh
+/var/tmp/ldapcommonbench \
+  -endpoint beforeR1=ldap://127.0.0.1:29481 \
+  -endpoint currentR2=ldap://127.0.0.1:29482 \
+  -base dc=scale,dc=qualification \
+  -people ou=people,dc=scale,dc=qualification -entries 100000 \
+  -root-bind-dn cn=admin,dc=scale,dc=qualification \
+  -root-password-env LDAPCOMMON_ROOT_PASSWORD -setup-disposable \
+  -stages rootBind,rootBase,rootEquality,rootCompareTrue,rootCompareFalse \
+  -n 100 -repeats 3 > beforeR1-currentR2-rootliteral-sdk.json
+```
+
+For the separate `rootnormalized` client-path run, repeat with
+`-root-bind-dn CN=ADMIN,DC=SCALE,DC=QUALIFICATION` and write to
+`beforeR1-currentR2-rootnormalized-sdk.json`. Keep server startup root DNs
+configured lowercase for both runs. The client sends the supplied DN unchanged;
+WhoAmI is verified semantically with parsed, case-folded DN equality, including
+after every measured root Bind. Keep the exact `root_bind_dn` in sample grouping:
+never pool these two client-DN variants or root and nonroot measurements.
+Retain endpoint, stage, method, repeat and group member count where applicable.
+Whole-process `rootIndex` results and these SDK-only samples are separate methods.
+
+Root-only runs still require `-setup-disposable`, create the existing isolated
+OU/eight-user fixture, and perform its existing service Bind and cleanup flow.
+No new fixture ownership or role configuration is introduced. These untimed
+operations and WhoAmI requests still generate server work.
+
 ## Fixtures and stages
 
 Each invocation creates `ou=ldapcommonbench-<random token>,<base>` on each
@@ -90,8 +135,9 @@ written or deleted. The default requires no scale fixture conventions. Plain
 `groupOfNames` DN references permit adding the small cycle before all its entries
 exist; no native transitive-membership extension or overlay is required.
 
-`-stages` defaults to `all`, or accepts a comma-separated subset in execution
-order. `base` and `equality` are aliases for `nonrootBase` and `nonrootEquality`.
+`-stages` defaults to `all` (the seven original stages below), or accepts a
+comma-separated subset in execution order, including optional root stages.
+`base` and `equality` are aliases for `nonrootBase` and `nonrootEquality`.
 
 | Stage | Measured operation and assertion |
 | --- | --- |
@@ -102,6 +148,11 @@ order. `base` and `equality` are aliases for `nonrootBase` and `nonrootEquality`
 | `memberEquality` | `(member=<user DN>)` discovery within the isolated OU; exact direct parent group DNs and CNs, including an immediate nested-group parent where applicable. |
 | `groupBase` | One method instance per direct-group size; Base read requesting only `member`, asserting the complete distinct member set. |
 | `nestedMembership` | `client_bfs_member_equality`: breadth-first parent discovery using repeated standard member equality searches, with a visited set and exact transitive result assertion. |
+| `rootBind` (opt-in) | `simple_bind_root`: Simple Bind with the exact client root DN/password, followed by an untimed WhoAmI check. |
+| `rootBase` (opt-in) | `base_objectclass_root`: Search at `-base`, base scope, `(objectClass=*)`, size limit 2, requesting only `objectClass`; exactly the base DN with nonempty objectClass values. |
+| `rootEquality` (opt-in) | `subtree_uid_equality_root`: Search under `-people`, subtree scope, sampled `(uid=scale-NNNNNN)`, size limit 2, requesting only `uid`; exactly the expected DN and single UID. |
+| `rootCompareTrue` (opt-in) | `compare_uid_true_root`: Compare the sampled entry's `uid` against its sampled UID; require true. |
+| `rootCompareFalse` (opt-in) | `compare_uid_false_root`: Compare the sampled entry's `uid` against `ldapbench-absent`; require false. |
 
 Nested membership uses the **same portable SDK algorithm on every server**.
 It is a client traversal, not a native transitive LDAP operation. Returned DNs
@@ -119,13 +170,17 @@ rotate between **individual LDAP requests**, not only between full traversals.
 Connections are reused. There is no concurrency or implicit warmup. Wrong-Bind
 samples first successfully rebind the same account so each tests an authenticated
 to anonymous transition. Every timed request checks its outcome and is followed
-by an untimed WhoAmI assertion. All searches run as the SSHA service user.
+by an untimed WhoAmI assertion. Nonroot searches run as the SSHA service user;
+root stages use the endpoint's dedicated, reused root connection with the same
+per-request endpoint rotation. Root searches use no alias dereferencing,
+time limit, types-only projection or controls, matching the reference SDK calls.
 
 Each `samples` row identifies endpoint, stage, method, 1-based repeat, and group
-member count where applicable. `operations` counts attempted logical operations;
+member count where applicable. Root rows additionally preserve the exact client
+`root_bind_dn` for separate case-variant sample groups. `operations` counts attempted logical operations;
 `completed` counts fully verified ones; `requests` counts attempted timed SDK
-Bind/Search calls. `latency_ms` contains one sample per completed logical
-operation. `total_ms` sums only time inside SDK `Bind`/`Search` calls, including
+Bind/Search/Compare calls. `latency_ms` contains one sample per completed logical
+operation. `total_ms` sums only time inside SDK `Bind`/`Search`/`Compare` calls, including
 calls returning errors. Request construction, DN parsing, member-set validation,
 sorting and traversal bookkeeping are outside the timer. Full assertions still
 run before results are accepted or discovered groups are enqueued. Nested sample

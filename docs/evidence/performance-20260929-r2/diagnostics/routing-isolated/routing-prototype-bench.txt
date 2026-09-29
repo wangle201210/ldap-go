@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/before-8  	 1504989	       159.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/before-8  	 1507674	       159.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/before-8  	 1530144	       157.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/current-8 	 1629316	       147.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/current-8 	 1623254	       147.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=1/current-8 	 1637805	       146.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/before-8  	  198304	      1217 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/before-8  	  196639	      1225 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/before-8  	  190654	      1226 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/current-8 	  211330	      1141 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/current-8 	  208186	      1173 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=8/current-8 	  212815	      1143 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/before-8 	   47080	      5327 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/before-8 	   45124	      5041 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/before-8 	   47680	      5230 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/current-8         	   51556	      4682 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/current-8         	   52375	      4581 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-simple/databases=32/current-8         	   49389	      4689 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/before-8         	   73221	      3286 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/before-8         	   73330	      3317 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/before-8         	   72612	      3289 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/current-8        	   73774	      3261 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/current-8        	   75590	      3228 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=1/current-8        	   71412	      3208 ns/op	    1408 B/op	      82 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/before-8         	   10000	     26052 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/before-8         	    9378	     26226 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/before-8         	   10000	     26017 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/current-8        	    9470	     25698 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/current-8        	   10000	     26465 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=8/current-8        	    9182	     26903 ns/op	   11152 B/op	     656 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/before-8        	    2222	    107530 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/before-8        	    2356	    105930 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/before-8        	    2175	    106227 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/current-8       	    2456	    103058 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/current-8       	    2289	    101666 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/legacy-fallback/databases=32/current-8       	    2443	    103004 ns/op	   44896 B/op	    2624 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/before-8           	  679204	       413.2 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/before-8           	  698494	       350.4 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/before-8           	  705172	       348.1 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/current-8          	  794208	       304.6 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/current-8          	  802574	       303.8 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=1/current-8          	  791164	       303.8 ns/op	      72 B/op	       2 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/before-8           	   88651	      2692 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/before-8           	   91108	      2650 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/before-8           	   90541	      2657 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/current-8          	  102933	      2360 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/current-8          	  103608	      2350 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=8/current-8          	  104242	      2394 ns/op	     520 B/op	      16 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/before-8          	   21747	     10991 ns/op	    2224 B/op	      64 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/before-8          	   22550	     10697 ns/op	    2224 B/op	      64 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/before-8          	   22268	     10861 ns/op	    2224 B/op	      64 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/current-8         	   25848	      9268 ns/op	    2224 B/op	      64 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/current-8         	   26034	      9244 ns/op	    2224 B/op	      64 allocs/op
+BenchmarkDatabaseDNRoutingIndexValueCopy/schema-cached/databases=32/current-8         	   25620	      9355 ns/op	    2224 B/op	      64 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	13.229s

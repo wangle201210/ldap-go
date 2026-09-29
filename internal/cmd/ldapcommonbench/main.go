@@ -25,10 +25,12 @@ import (
 )
 
 var stageNames = []string{"userBind", "userBindWrong", "nonrootBase", "nonrootEquality", "memberEquality", "groupBase", "nestedMembership"}
+var rootStageNames = []string{"rootBind", "rootBase", "rootEquality", "rootCompareTrue", "rootCompareFalse"}
 
 type endpoint struct {
 	Name string `json:"name"`
 	URI  string `json:"uri"`
+	root client
 }
 
 type options struct {
@@ -52,6 +54,7 @@ type sample struct {
 	Endpoint             string    `json:"endpoint"`
 	Stage                string    `json:"stage"`
 	Method               string    `json:"method"`
+	RootBindDN           string    `json:"root_bind_dn,omitempty"`
 	Members              int       `json:"members,omitzero"`
 	Repeat               int       `json:"repeat"`
 	Operations           int       `json:"operations"`
@@ -128,11 +131,11 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 				return errors.New("endpoint names and URIs must be unique")
 			}
 		}
-		c.Endpoints = append(c.Endpoints, endpoint{name, uri})
+		c.Endpoints = append(c.Endpoints, endpoint{Name: name, URI: uri})
 		return nil
 	})
 	f.StringVar(&c.Base, "base", "", "required disposable data base DN")
-	f.StringVar(&c.RootBindDN, "root-bind-dn", "", "required setup/cleanup Bind DN")
+	f.StringVar(&c.RootBindDN, "root-bind-dn", "", "required setup/cleanup and optional root-stage Bind DN; sent exactly as supplied")
 	f.StringVar(&c.RootPasswordEnv, "root-password-env", "", "required environment variable containing root password")
 	f.BoolVar(&c.SetupDisposable, "setup-disposable", false, "authorize isolated fixture writes on disposable task copies")
 	f.IntVar(&c.N, "n", 100, "operations per endpoint, method and repeat, in [1,100000]")
@@ -140,8 +143,8 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	f.DurationVar(&c.Timeout, "timeout", 10*time.Second, "connect/request timeout, in (0,5m]")
 	f.StringVar(&c.People, "people", "", "optional existing scale UID pool below base; never modified")
 	f.IntVar(&c.Entries, "entries", 100000, "contiguous existing scale-%06d pool size, in [1,999999]")
-	f.StringVar(&c.UID, "uid", "", "optional fixed existing UID for Base/equality; requires -people")
-	stages := f.String("stages", "all", "comma-separated stages (base/equality aliases supported): "+strings.Join(stageNames, ","))
+	f.StringVar(&c.UID, "uid", "", "optional fixed existing UID for nonroot Base/equality only; requires -people")
+	stages := f.String("stages", "all", "comma-separated stages (base/equality aliases supported): "+strings.Join(stageNames, ",")+"; opt-in only (excluded from all): "+strings.Join(rootStageNames, ","))
 	sizes := f.String("group-sizes", "10,1000", "distinct direct-group member counts, each in [8,10000]")
 	if err := f.Parse(args); err != nil {
 		return c, err
@@ -182,11 +185,14 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 			} else if name == "equality" {
 				name = "nonrootEquality"
 			}
-			if !slices.Contains(stageNames, name) || slices.Contains(c.Stages, name) {
+			if (!slices.Contains(stageNames, name) && !slices.Contains(rootStageNames, name)) || slices.Contains(c.Stages, name) {
 				return c, fmt.Errorf("unknown or duplicate stage %q", name)
 			}
 			c.Stages = append(c.Stages, name)
 		}
+	}
+	if c.People == "" && (slices.Contains(c.Stages, "rootEquality") || slices.Contains(c.Stages, "rootCompareTrue") || slices.Contains(c.Stages, "rootCompareFalse")) {
+		return c, errors.New("rootEquality and rootCompare stages require -people with an existing scale UID pool")
 	}
 	for value := range strings.SplitSeq(*sizes, ",") {
 		n, err := strconv.Atoi(value)
@@ -295,10 +301,14 @@ func target(c options, f fixture, iteration int) *ldap.Entry {
 	}
 	uid := c.UID
 	if uid == "" {
-		count := min(c.N, c.Entries)
-		uid = fmt.Sprintf("scale-%06d", 1+(iteration%count)*(c.Entries-1)/max(1, count-1))
+		uid = sampleUID(c, iteration)
 	}
 	return scaleEntry(c, uid)
+}
+
+func sampleUID(c options, iteration int) string {
+	count := min(c.N, c.Entries)
+	return fmt.Sprintf("scale-%06d", 1+(iteration%count)*(c.Entries-1)/max(1, count-1))
 }
 
 func project(entry *ldap.Entry, attrs ...string) *ldap.Entry {
@@ -313,6 +323,7 @@ type client interface {
 	Bind(string, string) error
 	WhoAmI([]ldap.Control) (*ldap.WhoAmIResult, error)
 	Search(*ldap.SearchRequest) (*ldap.SearchResult, error)
+	Compare(string, string, string) (bool, error)
 	Add(*ldap.AddRequest) error
 	Del(*ldap.DelRequest) error
 	Close() error
@@ -336,6 +347,14 @@ func (c *timedClient) Bind(dn, password string) error {
 func (c *timedClient) Search(request *ldap.SearchRequest) (*ldap.SearchResult, error) {
 	start := time.Now()
 	result, err := c.client.Search(request)
+	c.elapsed += time.Since(start)
+	c.requests++
+	return result, err
+}
+
+func (c *timedClient) Compare(dn, attribute, value string) (bool, error) {
+	start := time.Now()
+	result, err := c.client.Compare(dn, attribute, value)
 	c.elapsed += time.Since(start)
 	c.requests++
 	return result, err
@@ -470,6 +489,11 @@ func probe(ctx context.Context, c options, r *report) (err error) {
 		for _, conn := range conns {
 			_ = conn.Close()
 		}
+		for _, e := range c.Endpoints {
+			if e.root != nil {
+				_ = e.root.Close()
+			}
+		}
 		for i, dns := range owned {
 			if len(dns) == 0 {
 				continue
@@ -533,6 +557,12 @@ func probe(ctx context.Context, c options, r *report) (err error) {
 				return fmt.Errorf("%s seed pool: %w", e.Name, err)
 			}
 		}
+		if slices.ContainsFunc(c.Stages, func(name string) bool { return slices.Contains(rootStageNames, name) }) {
+			c.Endpoints[i].root, err = dial(c, e)
+			if err != nil {
+				return fmt.Errorf("%s root connect: %w", e.Name, err)
+			}
+		}
 	}
 	for _, b := range benchmarks(c, f) {
 		for repeat := range c.Repeats {
@@ -548,24 +578,31 @@ type benchmark struct {
 	name, method string
 	user         *ldap.Entry
 	group        *ldap.Entry
+	root         bool
 }
 
 func benchmarks(c options, f fixture) []benchmark {
 	var result []benchmark
 	for _, name := range c.Stages {
 		switch name {
+		case "rootBind", "rootBase", "rootEquality", "rootCompareTrue", "rootCompareFalse":
+			method := map[string]string{
+				"rootBind": "simple_bind_root", "rootBase": "base_objectclass_root", "rootEquality": "subtree_uid_equality_root",
+				"rootCompareTrue": "compare_uid_true_root", "rootCompareFalse": "compare_uid_false_root",
+			}[name]
+			result = append(result, benchmark{name: name, method: method, root: true})
 		case "userBind", "userBindWrong":
-			result = append(result, benchmark{name, "simple_bind_ssha", f.users[0], nil}, benchmark{name, "simple_bind_plaintext", f.users[1], nil})
+			result = append(result, benchmark{name: name, method: "simple_bind_ssha", user: f.users[0]}, benchmark{name: name, method: "simple_bind_plaintext", user: f.users[1]})
 		case "groupBase":
 			for _, group := range f.groups[:f.direct] {
-				result = append(result, benchmark{name, "base_member_values", f.users[0], group})
+				result = append(result, benchmark{name: name, method: "base_member_values", user: f.users[0], group: group})
 			}
 		default:
 			method := "search_" + name
 			if name == "nestedMembership" {
 				method = "client_bfs_member_equality"
 			}
-			result = append(result, benchmark{name, method, f.users[0], nil})
+			result = append(result, benchmark{name: name, method: method, user: f.users[0]})
 		}
 	}
 	return result
@@ -606,6 +643,34 @@ func (t *traversal) step(conn client, f fixture) error {
 
 func request(conn client, c options, f fixture, b benchmark, iteration int, walk *traversal) error {
 	switch b.name {
+	case "rootBind":
+		return conn.Bind(c.RootBindDN, c.password)
+	case "rootBase":
+		result, err := conn.Search(ldap.NewSearchRequest(c.Base, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 2, 0, false, "(objectClass=*)", []string{"objectClass"}, nil))
+		if err != nil {
+			return err
+		}
+		if result == nil || len(result.Referrals) != 0 || len(result.Entries) != 1 || result.Entries[0] == nil ||
+			!sameDN(result.Entries[0].DN, c.Base) || len(result.Entries[0].GetEqualFoldAttributeValues("objectClass")) == 0 {
+			return fmt.Errorf("root Base search did not return exactly %q with objectClass and no referrals", c.Base)
+		}
+		return nil
+	case "rootEquality":
+		uid := sampleUID(c, iteration)
+		return search(conn, c.People, ldap.ScopeWholeSubtree, "(uid="+uid+")", []*ldap.Entry{scaleEntry(c, uid)}, "uid")
+	case "rootCompareTrue", "rootCompareFalse":
+		uid := sampleUID(c, iteration)
+		want := b.name == "rootCompareTrue"
+		value := uid
+		if !want {
+			value = "ldapbench-absent"
+		}
+		dn := "uid=" + uid + "," + c.People
+		got, err := conn.Compare(dn, "uid", value)
+		if err == nil && got != want {
+			return fmt.Errorf("Compare at %q returned %t, want %t", dn, got, want)
+		}
+		return err
 	case "userBind":
 		return conn.Bind(b.user.DN, f.password)
 	case "userBindWrong":
@@ -666,18 +731,31 @@ func (s *sample) bind(conn client, dn, password string) error {
 }
 
 func measure(ctx context.Context, c options, f fixture, b benchmark, repeat int, conns []client, r *report) error {
+	var bindDN, password string
+	if b.root {
+		bindDN, password = c.RootBindDN, c.password
+		conns = make([]client, len(c.Endpoints))
+		for i, e := range c.Endpoints {
+			conns[i] = e.root
+		}
+	} else {
+		bindDN, password = b.user.DN, f.password
+	}
 	rows := make([]*sample, len(conns))
 	for i, conn := range conns {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		s := &sample{Endpoint: c.Endpoints[i].Name, Stage: b.name, Method: b.method, Repeat: repeat + 1, LatencyMS: []float64{}}
+		if b.root {
+			s.RootBindDN = c.RootBindDN
+		}
 		if b.group != nil {
 			s.Members = len(b.group.GetAttributeValues("member"))
 		}
 		rows[i] = s
 		r.Samples = append(r.Samples, s)
-		if err := s.bind(conn, b.user.DN, f.password); err != nil {
+		if err := s.bind(conn, bindDN, password); err != nil {
 			return fmt.Errorf("%s preparation: %w", s.Endpoint, err)
 		}
 	}
@@ -716,7 +794,7 @@ func measure(ctx context.Context, c options, f fixture, b benchmark, repeat int,
 				if err != nil {
 					return fmt.Errorf("%s operation %d request %d: %w", s.Endpoint, iteration+1, step+1, err)
 				}
-				dn := b.user.DN
+				dn := bindDN
 				if b.name == "userBindWrong" {
 					dn = ""
 				}

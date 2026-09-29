@@ -2881,6 +2881,12 @@ func (server *Server) isRoot(
 	if targetDN == "" {
 		return attribute == "children" && isAnyDatabaseRoot(runtime, subject)
 	}
+	// With immutable local normalization, no matching root in any database
+	// implies no match in the target's database. Recompute on every call.
+	if localProjectionReadOnly(runtime, nil) &&
+		!rootIdentityMayMatch(runtime, subject) && !isAnyDatabaseRoot(runtime, subject) {
+		return false
+	}
 	target, err := parseRuntimeConnectionDN(runtime, targetDN)
 	if err != nil {
 		return false
@@ -2902,6 +2908,22 @@ func (server *Server) isDatabaseRoot(
 	}
 	subject, err := parseRuntimeDN(rawDN, database.dnNormalizer)
 	return err == nil && databaseRootMatches(runtime, database, subject)
+}
+
+// A stored identity match only declines the negative fast path. Mixed legacy
+// and schema identities can both overmatch and miss; this never grants access.
+func rootIdentityMayMatch(runtime *runtimeState, subject directory.DN) bool {
+	// Empty keys also cover zero-valued DNs, which Equal cannot safely compare.
+	if subject.Key() == "" {
+		return true
+	}
+	for index := range runtime.databases {
+		root := runtime.databases[index].rootDN
+		if root != nil && (root.Key() == "" || root.Equal(subject)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isAnyDatabaseRoot(runtime *runtimeState, subject directory.DN) bool {

@@ -247,7 +247,8 @@ func localProjectionReadOnly(runtime *runtimeState, reader storage.Reader) bool 
 		}
 		break
 	}
-	for _, database := range runtime.databases {
+	for index := range runtime.databases {
+		database := &runtime.databases[index]
 		if database.relay != nil || database.rwm != nil {
 			return false
 		}

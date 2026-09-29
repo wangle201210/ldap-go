@@ -3940,7 +3940,7 @@ func normalizeRuntimeDatabaseDN(
 	database runtimeDatabase,
 	dn directory.DN,
 ) (directory.DN, error) {
-	return parseRuntimeDN(dn.String(), database.dnNormalizer)
+	return normalizeRuntimeDN(database.dnNormalizer, dn)
 }
 
 func databaseDNEqual(
@@ -3948,17 +3948,7 @@ func databaseDNEqual(
 	left directory.DN,
 	right directory.DN,
 ) bool {
-	if database.dnNormalizer == nil {
-		if equal, _, ok := left.SimpleLegacyDisplayRelation(right); ok {
-			return equal
-		}
-	}
-	left, err := normalizeRuntimeDatabaseDN(database, left)
-	if err != nil {
-		return false
-	}
-	right, err = normalizeRuntimeDatabaseDN(database, right)
-	return err == nil && left.Equal(right)
+	return databaseDNEqualWithNormalizer(database.dnNormalizer, left, right)
 }
 
 func databaseDNAtOrBelow(
@@ -3966,17 +3956,7 @@ func databaseDNAtOrBelow(
 	dn directory.DN,
 	base directory.DN,
 ) bool {
-	if database.dnNormalizer == nil {
-		if equal, ancestor, ok := base.SimpleLegacyDisplayRelation(dn); ok {
-			return equal || ancestor
-		}
-	}
-	dn, err := normalizeRuntimeDatabaseDN(database, dn)
-	if err != nil {
-		return false
-	}
-	base, err = normalizeRuntimeDatabaseDN(database, base)
-	return err == nil && (base.Equal(dn) || base.AncestorOf(dn))
+	return databaseDNAtOrBelowWithNormalizer(database.dnNormalizer, dn, base)
 }
 
 func databaseDNStrictlyBelow(
@@ -3984,17 +3964,7 @@ func databaseDNStrictlyBelow(
 	dn directory.DN,
 	base directory.DN,
 ) bool {
-	if database.dnNormalizer == nil {
-		if _, ancestor, ok := base.SimpleLegacyDisplayRelation(dn); ok {
-			return ancestor
-		}
-	}
-	dn, err := normalizeRuntimeDatabaseDN(database, dn)
-	if err != nil {
-		return false
-	}
-	base, err = normalizeRuntimeDatabaseDN(database, base)
-	return err == nil && base.AncestorOf(dn)
+	return databaseDNStrictlyBelowWithNormalizer(database.dnNormalizer, dn, base)
 }
 
 func configuredDatabasePartition(name string) string {

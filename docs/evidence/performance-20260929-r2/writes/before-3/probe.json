@@ -1,0 +1,151 @@
+{
+  "config": {
+    "uri": "ldap://127.0.0.1:29481",
+    "bind_dn": "cn=admin,dc=scale,dc=qualification",
+    "base": "dc=scale,dc=qualification",
+    "people": "ou=people,dc=scale,dc=qualification",
+    "password_env": "LDAP_BENCH_PASSWORD",
+    "user_password_env": "LDAP_BENCH_USER_PASSWORD",
+    "label": "before-3",
+    "fixture_token": "92cd12ef4156461e9e2807136111af53",
+    "read_only": false,
+    "write": true,
+    "n": 20,
+    "write_batch": 20,
+    "entries": 100000
+  },
+  "started_at": "2026-09-29T12:26:18.683836Z",
+  "timeout_ms": 10000,
+  "run_dn": "ou=ldapbench-92cd12ef4156461e9e2807136111af53,dc=scale,dc=qualification",
+  "stages": [
+    {
+      "name": "connect",
+      "operations": 1,
+      "total_ms": 0.324959,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "rootBind",
+      "operations": 20,
+      "total_ms": 3.117581,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "baseSearch",
+      "operations": 20,
+      "total_ms": 4.1814160000000005,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "indexedEquality",
+      "operations": 20,
+      "total_ms": 3.8480830000000004,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareTrue",
+      "operations": 20,
+      "total_ms": 3.963332,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareFalse",
+      "operations": 20,
+      "total_ms": 3.1149170000000006,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "substringPrefix",
+      "operations": 20,
+      "total_ms": 941.5287900000001,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "substringNegative",
+      "operations": 20,
+      "total_ms": 940.4903349999998,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "setup",
+      "operations": 62,
+      "total_ms": 761.2069150000002,
+      "verification_operations": 61,
+      "verification_ms": 13.753249000000007,
+      "errors": []
+    },
+    {
+      "name": "userConnect",
+      "operations": 1,
+      "total_ms": 0.18675,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "userBind",
+      "operations": 20,
+      "total_ms": 2.960169000000001,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "add",
+      "operations": 20,
+      "total_ms": 20.291915999999997,
+      "verification_operations": 20,
+      "verification_ms": 6.448999,
+      "errors": []
+    },
+    {
+      "name": "modify",
+      "operations": 20,
+      "total_ms": 11.090125,
+      "verification_operations": 20,
+      "verification_ms": 4.268625,
+      "errors": []
+    },
+    {
+      "name": "modifyDN",
+      "operations": 20,
+      "total_ms": 34.877168999999995,
+      "verification_operations": 40,
+      "verification_ms": 10.304960000000001,
+      "errors": []
+    },
+    {
+      "name": "delete",
+      "operations": 20,
+      "total_ms": 21.522793999999998,
+      "verification_operations": 20,
+      "verification_ms": 4.445212000000001,
+      "errors": []
+    },
+    {
+      "name": "cleanup",
+      "operations": 104,
+      "total_ms": 75.44187299999997,
+      "verification_operations": 2,
+      "verification_ms": 0.498291,
+      "errors": []
+    }
+  ],
+  "error": ""
+}
