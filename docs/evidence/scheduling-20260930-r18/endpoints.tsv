@@ -1,0 +1,5 @@
+role	uri	gomaxprocs	pid	binary	sha256	private_db
+go2	ldap://127.0.0.1:29581	2	37728	/var/tmp/ldap-go-perf-20260930-r18/current	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	/var/tmp/ldap-go-scheduling-diagnostic-20260930/run/private/go2/data.db
+go4	ldap://127.0.0.1:29582	4	37753	/var/tmp/ldap-go-perf-20260930-r18/current	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	/var/tmp/ldap-go-scheduling-diagnostic-20260930/run/private/go4/data.db
+go8	ldap://127.0.0.1:29583	8	37782	/var/tmp/ldap-go-perf-20260930-r18/current	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	/var/tmp/ldap-go-scheduling-diagnostic-20260930/run/private/go8/data.db
+openldap	ldap://127.0.0.1:29584	native	37812	/var/tmp/ldap-go-openldap-reference-audit-2.6/servers/slapd/.libs/slapd	cf9990858407290ace7f65cb352e12c8cfc776b50faad843a8e0d4b9e3ff245d	/var/tmp/ldap-go-scheduling-diagnostic-20260930/run/private/openldap/data/data.mdb

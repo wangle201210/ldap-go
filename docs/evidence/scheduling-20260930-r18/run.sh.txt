@@ -1,0 +1,306 @@
+#!/bin/sh
+# Preparation only: main decides whether to run after ALL R19 benches finish.
+set -eu
+set +x
+
+if [ "$#" -ne 1 ] || [ "$1" != --run-after-r19 ]; then
+  printf '%s\n' 'Prepared only. Main must finish all R19 benches before deciding to run with --run-after-r19.' >&2
+  exit 2
+fi
+: "${LDAP_BENCH_PASSWORD:?supply the existing fixture password through the environment}"
+export LDAP_BENCH_PASSWORD
+umask 077
+ulimit -c 0
+
+task=/var/tmp/ldap-go-scheduling-diagnostic-20260930
+r18=/var/tmp/ldap-go-perf-20260930-r18
+native_env=/var/tmp/ldap-go-openldap-reference-audit-2.6/openldap-reference.env
+native_seed=/var/tmp/ldap-go-perf-round4-20260922/online-accepted/openldap-1
+canonical=/var/tmp/ldap-go-perf-round15-20260923/online/before-1/data.canonical
+binary=$r18/current
+seed=$r18/member-index.db
+sdk=$r18/ldapcommonbench
+warmup=/var/tmp/ldap-go-perf-round4-20260922/ldapbench
+canonicalizer=/var/tmp/ldap-go-perf-round2-20260922/ldifcanonical
+binary_sha=5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370
+seed_sha=d80c928a0cde9dab070827bbc1c585ddb7995f4fb640a9bc689dfc4c92a3c192
+canonical_sha=5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0
+source_commit=8918569d6b7b32c683606e88744eeb1ec36bd4db
+base=dc=scale,dc=qualification
+root_dn=cn=admin,$base
+people_dn=ou=people,$base
+out=$task/run
+private=$out/private
+
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+check_sha() { [ "$(sha256 "$1")" = "$2" ] || fail "SHA256 mismatch: $1"; }
+port_for() {
+  case "$1" in go2) printf 29581;; go4) printf 29582;; go8) printf 29583;; openldap) printf 29584;; *) return 1;; esac
+}
+
+# Source only the original native environment; never edit it or rebuild tools.
+. "$native_env"
+slapd=$OPENLDAP_SLAPD
+slapindex=$OPENLDAP_BUILD/reference-tools/slapindex
+ldapsearch=$OPENLDAP_BUILD/clients/tools/ldapsearch
+ldapwhoami=$OPENLDAP_BUILD/clients/tools/ldapwhoami
+for tool in shasum awk sed sort cmp cksum wc tr date sleep ps lsof jq gdate cp; do
+  command -v "$tool" >/dev/null || fail "Missing tool: $tool"
+done
+for file in "$binary" "$sdk" "$warmup" "$canonicalizer" "$slapd" "$slapindex" "$ldapsearch" "$ldapwhoami"; do
+  [ -x "$file" ] || fail "Missing executable: $file"
+done
+for file in "$seed" "$canonical" "$native_seed/data/data.mdb" "$native_seed/slapd.conf"; do
+  [ -r "$file" ] || fail "Missing fixture: $file"
+done
+for port in 29581 29582 29583 29584; do
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null; then
+    fail "Port $port is occupied; no process will be stopped."
+  else
+    [ "$?" -eq 1 ] || fail "Cannot inspect port $port"
+  fi
+done
+[ ! -L "$task" ] || fail 'Task directory must not be a symlink'
+mkdir "$out" || fail 'run/ already exists; refuse overwrite or automatic rerun'
+
+servers=
+workers=
+active=
+owned_child() { [ "$(ps -p "$1" -o ppid= 2>/dev/null | tr -d ' ')" = "$$" ]; }
+stop_children() {
+  for child in "$@"; do
+    if owned_child "$child"; then kill -TERM "$child" 2>/dev/null || true; fi
+  done
+  stop_deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    alive=
+    for child in "$@"; do
+      if owned_child "$child"; then alive="$alive $child"; fi
+    done
+    [ -n "$alive" ] || break
+    if [ "$(date +%s)" -ge "$stop_deadline" ]; then
+      for child in $alive; do
+        if owned_child "$child"; then kill -KILL "$child" 2>/dev/null || true; fi
+      done
+      break
+    fi
+    sleep 0.1
+  done
+  for child in "$@"; do wait "$child" 2>/dev/null || true; done
+}
+cleanup() {
+  result=$?
+  trap - 0
+  trap '' HUP INT TERM
+  set +e
+  # Give SDK deferred cleanup a chance while its private servers are still up.
+  stop_children $active $workers
+  stop_children $servers
+  # This directory was created exclusively by this invocation, never a seed.
+  rm -rf "$private"
+  exit "$result"
+}
+trap cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir "$private" "$private/tmp"
+export TMPDIR=$private/tmp
+cd "$private"
+printf '%s' "$LDAP_BENCH_PASSWORD" >"$private/password"
+
+# All hashing/copying/index preparation occurs outside measured batches.
+check_sha "$binary" "$binary_sha"
+check_sha "$sdk" afdfd3e9b4680795bbe87e30362f0b00bf50e80c1af6543c728f8ccea8a5aa30
+check_sha "$warmup" fae263b244c29060a0c9e08b9f360f1a6657948325b61f7d41c279f939115308
+check_sha "$canonicalizer" 38296f7a421ac866f3eb732b461792c3f9c87f671a956c2db02332c08236140f
+check_sha "$seed" "$seed_sha"
+check_sha "$canonical" "$canonical_sha"
+[ "$(wc -l <"$canonical" | tr -d ' ')" -eq 100002 ] || fail 'Canonical count mismatch'
+set -- $(cksum "$canonical")
+[ "$1" = 2143929969 ] && [ "$2" = 42712438 ] || fail 'Canonical checksum/size mismatch'
+shasum -a 256 "$binary" "$sdk" "$warmup" "$canonicalizer" "$seed" "$canonical" \
+  "$native_env" "$native_seed/data/data.mdb" "$native_seed/slapd.conf" \
+  "$slapd" "$ldapsearch" "$ldapwhoami" "$OPENLDAP_BUILD/servers/slapd/.libs/slapd" \
+  "$OPENLDAP_BUILD/clients/tools/.libs/ldapsearch" "$OPENLDAP_BUILD/clients/tools/.libs/ldapwhoami" >"$out/input-sha256.txt"
+printf 'source_commit\t%s\nclient_GOMAXPROCS\t%s\nGODEBUG\t%s\nGOGC\t%s\nGOMEMLIMIT\t%s\n' \
+  "$source_commit" "${GOMAXPROCS-unset}" "${GODEBUG-unset}" "${GOGC-unset}" "${GOMEMLIMIT-unset}" >"$out/runtime.tsv"
+printf 'role\turi\tgomaxprocs\tpid\tbinary\tsha256\tprivate_db\n' >"$out/endpoints.tsv"
+
+for role in go2 go4 go8 openldap; do
+  mkdir "$out/$role" "$private/$role"
+  if [ "$role" = openldap ]; then
+    mkdir "$private/openldap/data"
+    cp -c "$native_seed/data/data.mdb" "$private/openldap/data/data.mdb"
+    sed -e 's|^index uid eq|index uid,member eq|' \
+      -e "s|^directory .*|directory $private/openldap/data|" \
+      -e "s|^pidfile .*|pidfile $private/openldap/slapd.pid|" \
+      -e "s|^argsfile .*|argsfile $private/openldap/slapd.args|" \
+      -e "s|^include .*/core.schema|include $OPENLDAP_SCHEMA_DIR/core.schema|" \
+      -e "s|^include .*/cosine.schema|include $OPENLDAP_SCHEMA_DIR/cosine.schema|" \
+      -e "s|^include .*/inetorgperson.schema|include $OPENLDAP_SCHEMA_DIR/inetorgperson.schema|" \
+      "$native_seed/slapd.conf" >"$private/openldap/slapd.conf"
+    "$slapindex" -f "$private/openldap/slapd.conf" -n 1 member >"$out/openldap/reindex.log" 2>&1 &
+    active=$!
+    wait "$active"
+    active=
+  else
+    cp -c "$seed" "$private/$role/data.db"
+    check_sha "$private/$role/data.db" "$seed_sha"
+  fi
+done
+
+owns_listener() {
+  owned_child "$1" &&
+    [ "$(lsof -nP -a -p "$1" -iTCP:"$2" -sTCP:LISTEN -t 2>/dev/null)" = "$1" ]
+}
+check_role() {
+  role_pid=$(awk -F '\t' -v role="$1" '$1 == role {print $4}' "$out/endpoints.tsv")
+  owns_listener "$role_pid" "$(port_for "$1")" || fail "Lost owned listener: $1"
+}
+
+for role in go2 go4 go8 openldap; do
+  port=$(port_for "$role")
+  uri=ldap://127.0.0.1:$port
+  if [ "$role" = openldap ]; then
+    role_binary=$OPENLDAP_BUILD/servers/slapd/.libs/slapd
+    role_sha=$(sha256 "$role_binary")
+    role_db=$private/openldap/data/data.mdb
+    procs=native
+    "$slapd" -f "$private/openldap/slapd.conf" -h "$uri" -d 0 >"$out/$role/server.log" 2>&1 &
+  else
+    role_binary=$binary
+    role_sha=$binary_sha
+    role_db=$private/$role/data.db
+    procs=${role#go}
+    GOMAXPROCS="$procs" LDAP_GO_ROOT_PASSWORD="$LDAP_BENCH_PASSWORD" "$binary" serve \
+      -db "$role_db" -listen 127.0.0.1:$port -root-dn "$root_dn" \
+      -search-limit 100100 -search-candidate-limit 100100 \
+      -search-candidate-bytes 819200000 -search-memory-bytes 1638400000 \
+      >"$out/$role/server.log" 2>&1 &
+  fi
+  pid=$!
+  servers="$servers $pid"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$role" "$uri" "$procs" "$pid" \
+    "$role_binary" "$role_sha" "$role_db" >>"$out/endpoints.tsv"
+  deadline=$(( $(date +%s) + 60 ))
+  until owns_listener "$pid" "$port"; do
+    owned_child "$pid" || fail "$role exited before listening"
+    [ "$(date +%s)" -lt "$deadline" ] || fail "$role startup timed out"
+    sleep 0.05
+  done
+  until "$ldapwhoami" -H "$uri" -x -D "$root_dn" -y "$private/password" \
+      -o nettimeout=1 >"$out/$role/readiness.txt" 2>"$out/$role/readiness.stderr"; do
+    check_role "$role"
+    [ "$(date +%s)" -lt "$deadline" ] || fail "$role Bind readiness timed out"
+    sleep 0.05
+  done
+  "$warmup" -uri "$uri" -bind-dn "$root_dn" -password-env LDAP_BENCH_PASSWORD \
+    -base "$base" -people "$people_dn" -read-only -n 2 -entries 100000 \
+    -label "$role-warmup" >"$out/$role/warmup.json" 2>"$out/$role/warmup.stderr" &
+  active=$!
+  wait "$active"
+  active=
+  jq -e '.error == "" and .config.read_only == true and (.stages | length > 0) and all(.stages[]; (.errors | length) == 0)' \
+    "$out/$role/warmup.json" >"$out/$role/warmup.validation.txt"
+done
+
+for role in go2 go4 go8 openldap; do check_role "$role"; done
+# One fixed SDK invocation; all original verification/WhoAmI/cleanup remains.
+"$sdk" -endpoint go2=ldap://127.0.0.1:29581 -endpoint go4=ldap://127.0.0.1:29582 \
+  -endpoint go8=ldap://127.0.0.1:29583 -endpoint openldap=ldap://127.0.0.1:29584 \
+  -base "$base" -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD \
+  -timeout 30s -setup-disposable -people "$people_dn" -entries 100000 -uid scale-001001 \
+  -stages userBind,userBindWrong,base,equality -n 1000 -repeats 7 \
+  >"$out/hot.json" 2>"$out/hot.stderr" &
+active=$!
+wait "$active"
+active=
+jq -e '
+  .error == "" and .config.n == 1000 and .config.repeats == 7 and
+  .config.uid == "scale-001001" and .config.entries == 100000 and
+  .config.stages == ["userBind","userBindWrong","nonrootBase","nonrootEquality"] and
+  (.config.endpoints | map(.name)) == ["go2","go4","go8","openldap"] and
+  (.cleanup_done | sort) == ["go2","go4","go8","openldap"] and
+  .setup_adds == 36 and (.samples | length) == 168 and
+  all(.samples[];
+    .operations == 1000 and .completed == 1000 and .requests == 1000 and
+    (.latency_ms | length) == 1000 and (.root_bind_dn // "") == "" and
+    .verification_requests == (if .stage == "userBindWrong" then 3002 else 1002 end)) and
+  (.samples | group_by(.endpoint) | length) == 4 and
+  all(.samples | group_by(.endpoint)[];
+    (map([.stage,.method]) | unique | sort) ==
+      ([["userBind","simple_bind_ssha"],["userBind","simple_bind_plaintext"],
+        ["userBindWrong","simple_bind_ssha"],["userBindWrong","simple_bind_plaintext"],
+        ["nonrootBase","search_nonrootBase"],["nonrootEquality","search_nonrootEquality"]] | sort)) and
+  all(.samples | group_by([.endpoint,.stage,.method])[]; (map(.repeat) | sort) == [1,2,3,4,5,6,7])
+' "$out/hot.json" >"$out/hot.validation.txt"
+
+# Separate wall-clock throughput diagnostic: root Bind, as in common-default.sh.
+awk 'BEGIN {for(i=1001;i<=2000;i++) printf "scale-%06d\n",i}' >"$out/values.txt"
+printf 'role\trepeat\tphase\torder\tclients\tuids_per_client\tcompleted\telapsed_ns\tms\tqueries_per_second\n' >"$out/concurrent.tsv"
+for repeat in 0 1 2 3; do
+  case "$repeat" in
+    0) roles='go2 go4 go8 openldap'; phase=warmup;;
+    1) roles='go4 go8 openldap go2'; phase=measured;;
+    2) roles='go8 openldap go2 go4'; phase=measured;;
+    3) roles='openldap go2 go4 go8'; phase=measured;;
+  esac
+  order=0
+  for role in $roles; do
+    order=$((order+1))
+    check_role "$role"
+    port=$(port_for "$role")
+    batch=$out/$role/concurrent-$repeat
+    mkdir "$batch"
+    workers=
+    start=$(gdate +%s%N)
+    for worker in 0 1 2 3 4 5 6 7; do
+      "$ldapsearch" -H ldap://127.0.0.1:$port -x -D "$root_dn" -y "$private/password" \
+        -LLL -o ldif-wrap=no -b "$people_dn" -f "$out/values.txt" '(uid=%s)' uid \
+        >"$batch/client-$worker.ldif" 2>"$batch/client-$worker.stderr" &
+      workers="$workers $!"
+    done
+    for worker_pid in $workers; do wait "$worker_pid"; done
+    workers=
+    end=$(gdate +%s%N)
+    elapsed=$((end-start))
+    [ "$elapsed" -gt 0 ] || fail 'Invalid wall-clock interval'
+    for worker in 0 1 2 3 4 5 6 7; do
+      [ "$(awk '/^dn: / {n++} END {print n+0}' "$batch/client-$worker.ldif")" -eq 1000 ] || fail 'Client entry count mismatch'
+      awk '/^uid: / {print $2}' "$batch/client-$worker.ldif" >"$batch/client-$worker.values"
+      cmp "$out/values.txt" "$batch/client-$worker.values"
+    done
+    awk -v role="$role" -v repeat="$repeat" -v phase="$phase" -v order="$order" -v ns="$elapsed" \
+      'BEGIN {printf "%s\t%d\t%s\t%d\t8\t1000\t8000\t%.0f\t%.6f\t%.3f\n",role,repeat,phase,order,ns,ns/1000000,8000*1000000000/ns}' \
+      >>"$out/concurrent.tsv"
+  done
+done
+
+printf 'role\tcanonical_entries\tcanonical_cksum\tcanonical_bytes\tsha256\tcmp\n' >"$out/validation.tsv"
+for role in go2 go4 go8 openldap; do
+  check_role "$role"
+  port=$(port_for "$role")
+  directory=$out/$role
+  "$ldapsearch" -H ldap://127.0.0.1:$port -x -D "$root_dn" -y "$private/password" \
+    -LLL -o ldif-wrap=no -E pr=10000/noprompt -b "$base" '(objectClass=*)' '*' \
+    >"$directory/data.ldif" 2>"$directory/export.stderr" &
+  active=$!
+  wait "$active"
+  active=
+  "$canonicalizer" -in "$directory/data.ldif" >"$private/data.unsorted"
+  LC_ALL=C sort -T "$private/tmp" "$private/data.unsorted" >"$directory/data.canonical"
+  count=$(wc -l <"$directory/data.canonical" | tr -d ' ')
+  [ "$count" -eq 100002 ] || fail "$role canonical count mismatch"
+  set -- $(cksum "$directory/data.canonical")
+  [ "$1" = 2143929969 ] && [ "$2" = 42712438 ] || fail "$role canonical checksum/size mismatch"
+  check_sha "$directory/data.canonical" "$canonical_sha"
+  cmp "$canonical" "$directory/data.canonical"
+  printf '%s\t%s\t%s\t%s\t%s\tPASS\n' "$role" "$count" "$1" "$2" "$canonical_sha" >>"$out/validation.tsv"
+done
+check_sha "$binary" "$binary_sha"
+check_sha "$seed" "$seed_sha"
+check_sha "$canonical" "$canonical_sha"
+printf '%s\n' 'Fixed scheduling diagnostic complete; four canonical exports match.' >"$out/COMPLETE"
+# Exit trap stops only our child PIDs and removes private DBs/password/config.
