@@ -1,0 +1,3 @@
+scope	target	credential	metric	string	reuse	reduction_pct
+components/same-candidate	rotate256	secret	ns/op	18377	18508	-0.7128475812156587
+components/same-candidate	rotate256	wrong	ns/op	18068	18613	-3.0163825547929957

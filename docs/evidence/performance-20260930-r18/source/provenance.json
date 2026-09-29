@@ -1,0 +1,35 @@
+{
+  "round": "R18",
+  "baseline": "15f428a9f409c00e9de02a5b0d6ed81053e47c36",
+  "captured_at": "2026-09-29T22:34:15.376Z",
+  "source_root": "/var/tmp/ldap-go-perf-20260930-r18/frozen-source",
+  "git_head": "15f428a9f409c00e9de02a5b0d6ed81053e47c36",
+  "git_status": " M internal/server/ppolicy.go\n M internal/server/server.go\n?? docs/evidence/performance-20260930-r18/\n?? internal/server/bind_handler_bench_test.go\n?? internal/server/bind_route_reuse.go\n?? internal/server/bind_route_reuse_bench_test.go\n?? internal/server/bind_route_reuse_fixture_test.go\n?? internal/server/bind_route_reuse_test.go\n",
+  "files": 1299,
+  "scope": "All final tracked and R18 new Go sources plus go.mod/go.sum; no duplicate whole server snapshots",
+  "new_sources": [
+    "internal/server/bind_handler_bench_test.go",
+    "internal/server/bind_route_reuse.go",
+    "internal/server/bind_route_reuse_bench_test.go",
+    "internal/server/bind_route_reuse_fixture_test.go",
+    "internal/server/bind_route_reuse_test.go"
+  ],
+  "deleted_sources": [],
+  "portable_benchmark": "internal/server/bind_handler_bench_test.go",
+  "initial_source_root": "/Users/wanna/mine/github/ldap-go",
+  "frozen_patch": "/var/tmp/ldap-go-perf-20260930-r18/source-changes.patch",
+  "frozen_files": [
+    "internal/cmd/ldapbench/main.go",
+    "internal/cmd/ldapcommonbench/group_compare_test.go",
+    "internal/cmd/ldapcommonbench/main.go",
+    "internal/server/bind_handler_bench_test.go",
+    "internal/server/bind_route_reuse.go",
+    "internal/server/bind_route_reuse_bench_test.go",
+    "internal/server/bind_route_reuse_fixture_test.go",
+    "internal/server/bind_route_reuse_test.go",
+    "internal/server/ppolicy.go",
+    "internal/server/server.go"
+  ],
+  "frozen_verified_at": "2026-09-29T22:37:14.359Z",
+  "unchanged_source": "Immutable baseline 15f428a9f409c00e9de02a5b0d6ed81053e47c36; full final hashes remain unchanged"
+}

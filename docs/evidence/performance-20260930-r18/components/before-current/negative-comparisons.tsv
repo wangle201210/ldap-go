@@ -1,0 +1,3 @@
+scope	target	credential	metric	before	current	reduction_pct
+components/before-current	hot	wrong	ns/op	11721	11732	-0.0938486477263023
+components/before-current	rotate256	wrong	ns/op	17946	18477	-2.958876629889673

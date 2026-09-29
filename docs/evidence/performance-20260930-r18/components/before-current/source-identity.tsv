@@ -1,0 +1,3 @@
+endpoint	source_path	sha256	source_revision	test_binary
+before	/var/tmp/ldap-go-bind-baseline-20260930/internal/server/bind_handler_bench_test.go	d71ec932c9982ac53619773b5a48ac7a40ed7c1228fb87939c85800adcbc1d18	15f428a9f409c00e9de02a5b0d6ed81053e47c36	server-before.test
+current	/Users/wanna/mine/github/ldap-go/internal/server/bind_handler_bench_test.go	d71ec932c9982ac53619773b5a48ac7a40ed7c1228fb87939c85800adcbc1d18	15f428a9f409c00e9de02a5b0d6ed81053e47c36	server-current.test

@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkHandleBindRouteReuse/hot/secret/reuse-8         	   48910	     11842 ns/op	   10320 B/op	     142 allocs/op
+BenchmarkHandleBindRouteReuse/hot/secret/reuse-8         	   51171	     11648 ns/op	   10320 B/op	     142 allocs/op
+BenchmarkHandleBindRouteReuse/hot/secret/reuse-8         	   51099	     11662 ns/op	   10320 B/op	     142 allocs/op
+BenchmarkHandleBindRouteReuse/hot/secret/string-8        	   48757	     12089 ns/op	   10392 B/op	     144 allocs/op
+BenchmarkHandleBindRouteReuse/hot/secret/string-8        	   47703	     12395 ns/op	   10392 B/op	     144 allocs/op
+BenchmarkHandleBindRouteReuse/hot/secret/string-8        	   48223	     12428 ns/op	   10392 B/op	     144 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/reuse-8          	   50229	     11883 ns/op	   10224 B/op	     139 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/reuse-8          	   49576	     12014 ns/op	   10224 B/op	     139 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/reuse-8          	   51282	     11805 ns/op	   10224 B/op	     139 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/string-8         	   49472	     12134 ns/op	   10296 B/op	     141 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/string-8         	   47935	     12414 ns/op	   10296 B/op	     141 allocs/op
+BenchmarkHandleBindRouteReuse/hot/wrong/string-8         	   47919	     12437 ns/op	   10296 B/op	     141 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/reuse-8   	   32540	     18453 ns/op	   11325 B/op	     273 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/reuse-8   	   32556	     18493 ns/op	   11324 B/op	     273 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/reuse-8   	   32445	     18494 ns/op	   11325 B/op	     273 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/string-8  	   31760	     18913 ns/op	   11397 B/op	     275 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/string-8  	   31566	     18949 ns/op	   11396 B/op	     275 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/secret/string-8  	   32148	     18722 ns/op	   11397 B/op	     275 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/reuse-8    	   32708	     18354 ns/op	   11228 B/op	     270 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/reuse-8    	   32720	     18330 ns/op	   11228 B/op	     270 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/reuse-8    	   32557	     18593 ns/op	   11228 B/op	     270 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/string-8   	   32305	     18680 ns/op	   11300 B/op	     272 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/string-8   	   31728	     19007 ns/op	   11300 B/op	     272 allocs/op
+BenchmarkHandleBindRouteReuse/rotate256/wrong/string-8   	   32571	     18573 ns/op	   11300 B/op	     272 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	16.111s

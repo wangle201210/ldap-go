@@ -1,0 +1,11 @@
+path	sha256	frozen_path
+internal/cmd/ldapbench/main.go	251497d4a5ae99da1da5d461120d087c29aac504759b0aaa4609e194fbf2854f	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/cmd/ldapbench/main.go
+internal/cmd/ldapcommonbench/group_compare_test.go	6396779e5772eb8dfd68abd0bfba1815c66597e1768b4dfc0f814eca6268cec8	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/cmd/ldapcommonbench/group_compare_test.go
+internal/cmd/ldapcommonbench/main.go	620df9d47ca7ce263e9dbe8190dd4943b25e77d6543c35035aea25eb3de920ad	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/cmd/ldapcommonbench/main.go
+internal/server/bind_handler_bench_test.go	d71ec932c9982ac53619773b5a48ac7a40ed7c1228fb87939c85800adcbc1d18	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/bind_handler_bench_test.go
+internal/server/bind_route_reuse.go	c6efff44bb382e12138b9d5ac455a50e6c7c339fa0b61dd00880f2d3e9841909	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/bind_route_reuse.go
+internal/server/bind_route_reuse_bench_test.go	755375e63290fa17190b04b9785ed90a06ebd8d77963bf4577586a01f5d87a6f	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/bind_route_reuse_bench_test.go
+internal/server/bind_route_reuse_fixture_test.go	9f75d89029aec12fe25852f306c754b602ebf084c85cdd36cf6b47f883b2475b	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/bind_route_reuse_fixture_test.go
+internal/server/bind_route_reuse_test.go	b546a6d82b3bae1145bc174a961498660d3cbe644997d96ea6bc87ced6a92a27	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/bind_route_reuse_test.go
+internal/server/ppolicy.go	2b6011ae6a4e7a1ddc0092a48b02f384f74c991763882f12518610e78611d6dc	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/ppolicy.go
+internal/server/server.go	9501c7c29048462d8efbfd89f01c75b2390108beae5de283ede5cfd11f068527	/var/tmp/ldap-go-perf-20260930-r18/frozen-source/internal/server/server.go

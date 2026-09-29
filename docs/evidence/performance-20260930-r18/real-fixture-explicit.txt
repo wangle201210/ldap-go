@@ -1,0 +1,19 @@
+=== RUN   TestBindRouteReuseRealFixture
+    bind_route_reuse_fixture_test.go:91: rawStore=*storage.Bolt store=*server.homedirEffectStore reader=<nil> schema=0x495a25d732c0 currentRuntime=true revision=1 plainRawBolt=true plainStoreBolt=true localProjection=true features={authzid:false sockOverlay:false metaBackend:false dnssrvBackend:false ldapBackend:false passwdBackend:false sockBackend:false chain:false retcode:false pcache:false noOpSearch:false rwmRewriteRelay:false sqlBackend:false searchPreDispatch:false} radius=false
+    bind_route_reuse_fixture_test.go:91: database[0]={0}config partition=openldap:config normalizer=<nil> plain=true localStorage=false runtimeDNIdentity=false suffixes=1 overlays=[] hidden=false disabled=false subordinate=false shadow=false relay=false rwm=false ppolicy=false lastBind=false lastBindOverlay=false TOTP=0
+    bind_route_reuse_fixture_test.go:91: database[1]={1}mdb partition=openldap:database:uuid:MzExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTEx normalizer=*server.databaseEqualityIndexNormalizer plain=true localStorage=true runtimeDNIdentity=true suffixes=1 overlays=[] hidden=false disabled=false subordinate=false shadow=false relay=false rwm=false ppolicy=false lastBind=false lastBindOverlay=false TOTP=0
+    bind_route_reuse_fixture_test.go:129: actual raw Bolt reader=*storage.boltTx
+    bind_route_reuse_fixture_test.go:137: rawStore=*storage.Bolt store=*server.homedirEffectStore reader=server.storageRevisionReader schema=0x495a25d732c0 currentRuntime=true revision=1 plainRawBolt=true plainStoreBolt=true localProjection=true features={authzid:false sockOverlay:false metaBackend:false dnssrvBackend:false ldapBackend:false passwdBackend:false sockBackend:false chain:false retcode:false pcache:false noOpSearch:false rwmRewriteRelay:false sqlBackend:false searchPreDispatch:false} radius=false
+    bind_route_reuse_fixture_test.go:137: database[0]={0}config partition=openldap:config normalizer=<nil> plain=true localStorage=false runtimeDNIdentity=false suffixes=1 overlays=[] hidden=false disabled=false subordinate=false shadow=false relay=false rwm=false ppolicy=false lastBind=false lastBindOverlay=false TOTP=0
+    bind_route_reuse_fixture_test.go:137: database[1]={1}mdb partition=openldap:database:uuid:MzExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTEx normalizer=*server.databaseEqualityIndexNormalizer plain=true localStorage=true runtimeDNIdentity=true suffixes=1 overlays=[] hidden=false disabled=false subordinate=false shadow=false relay=false rwm=false ppolicy=false lastBind=false lastBindOverlay=false TOTP=0
+    bind_route_reuse_fixture_test.go:139: actual partition reader=storage.schemaAwarePartitionReader
+    bind_route_reuse_fixture_test.go:159: real configuration=cn=config attributes=2; existing user=uid=scale-001001,ou=people,dc=scale,dc=qualification; route identity and database agree
+=== RUN   TestBindRouteReuseRealFixture/success
+=== RUN   TestBindRouteReuseRealFixture/wrong
+=== RUN   TestBindRouteReuseRealFixture/success-again
+--- PASS: TestBindRouteReuseRealFixture (3.02s)
+    --- PASS: TestBindRouteReuseRealFixture/success (0.00s)
+    --- PASS: TestBindRouteReuseRealFixture/wrong (0.00s)
+    --- PASS: TestBindRouteReuseRealFixture/success-again (0.00s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	3.049s

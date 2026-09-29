@@ -51,32 +51,33 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R17, 100,000 users, production baseline
-`747e5bd`, Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`), OpenLDAP 2.6.13.
-These are medians of three SDK batches with per-request endpoint rotation.
+Latest comparison: September 30, 2026, R18, 100,000 users, production baseline
+`15f428a`, Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`), OpenLDAP 2.6.13.
+Bind and hot lookups use seven SDK batches; group searches use three.
 Relative performance is `OpenLDAP/current * 100%`; 100% means parity.
 Frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 90.97 ms | 71.57 ms | 78.7% | 80.6% |
-| Non-root Base, hot | High | 1,000 | 100.57 ms | 80.67 ms | 80.2% | 78.7% |
-| Non-root equality, hot | Very high | 1,000 | 116.00 ms | 91.84 ms | 79.2% | 76.4% |
-| Direct group discovery | High | 100 | 13.82 ms | 10.61 ms | 76.7% | 71.9% |
-| Group Base, 1,000 members | Medium | 100 | 96.15 ms | 90.06 ms | 93.7% | 100.3% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 47.19 ms | 38.59 ms | 81.8% | 79.0% |
+| User Bind, SSHA | Very high | 1,000 | 87.86 ms | 71.44 ms | 81.3% | 80.8% |
+| Non-root Base, hot | High | 1,000 | 106.55 ms | 87.26 ms | 81.9% | 79.6% |
+| Non-root equality, hot | Very high | 1,000 | 109.48 ms | 88.75 ms | 81.1% | 78.0% |
+| Direct group discovery | High | 100 | 14.91 ms | 11.50 ms | 77.1% | 74.6% |
+| Group Base, 1,000 members | Medium | 100 | 97.10 ms | 88.62 ms | 91.3% | 94.7% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 45.57 ms | 37.91 ms | 83.2% | 80.1% |
 
-R17 removes repeated simple DN leaf parsing. In separate seven-batch,
-1,000-call group tests, last/missing Compare on 1,000-member groups improves
-8.2%-9.9% versus the paired baseline. All negative observations remain.
-A/A and startup-order calibration show material measurement variation.
-**Common operations have not individually reached parity; fast writes do not
-offset slow reads.** Compare version changes within a run, not across rounds.
+R18 reuses an already parsed DN and selected database for guarded local Simple
+Bind. Measured handler cases save about 72 B/op and two allocations.
+Network results and calibrations are mixed; no universal latency gain is claimed.
+All negative observations remain. **Common operations have not individually
+reached parity; fast writes do not offset slow reads.**
+Compare version changes within a run, not across rounds.
 
-Full tests, vet, 355 native checks and parser fuzzing passed; 21 exports match
-(15 primary and six calibration). See the [R17 report](docs/common-ldap-performance.md)
-and [evidence](docs/evidence/performance-20260930-r17/README.md) for all methods,
-negative results and limits. The [R13 archive](docs/common-ldap-performance-20260930-r13.md),
+Full tests, vet, 355 native checks and real 100k configuration proofs passed;
+21 exports match (15 primary and six calibration). See the
+[R18 report](docs/common-ldap-performance.md) and
+[evidence](docs/evidence/performance-20260930-r18/README.md) for complete results
+and limits. The [R17 archive](docs/common-ldap-performance-20260930-r17.md),
 [R8b broad results](docs/common-ldap-performance-20260930-r8b.md) and
 [separate audit study](docs/audit-performance-20260929-r5.md) remain historical.
 

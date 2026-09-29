@@ -1,0 +1,13 @@
+scope	target	credential	metric	before	current	reduction_pct
+components/interleaved	hot	correct	ns/op	12136	12027	0.8981542518127883
+components/interleaved	hot	correct	B/op	10392	10320	0.6928406466512715
+components/interleaved	hot	correct	allocs/op	144	142	1.388888888888884
+components/interleaved	hot	wrong	ns/op	12091	12011	0.6616491605326291
+components/interleaved	hot	wrong	B/op	10296	10224	0.6993006993006978
+components/interleaved	hot	wrong	allocs/op	141	139	1.4184397163120588
+components/interleaved	rotate256	correct	ns/op	18593	18542	0.27429677835744126
+components/interleaved	rotate256	correct	B/op	11397	11324	0.6405194349390242
+components/interleaved	rotate256	correct	allocs/op	275	273	0.727272727272732
+components/interleaved	rotate256	wrong	ns/op	18470	18354	0.6280454791553924
+components/interleaved	rotate256	wrong	B/op	11300	11228	0.6371681415929253
+components/interleaved	rotate256	wrong	allocs/op	272	270	0.7352941176470562

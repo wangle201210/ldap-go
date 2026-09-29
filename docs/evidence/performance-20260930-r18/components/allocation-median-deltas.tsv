@@ -1,0 +1,17 @@
+scope	target	credential	control_B_op	candidate_B_op	median_B_saved	control_allocs_op	candidate_allocs_op	median_allocs_saved
+components/same-candidate	hot	secret	10392	10320	72	144	142	2
+components/same-candidate	hot	wrong	10296	10224	72	141	139	2
+components/same-candidate	rotate256	secret	11396	11325	71	275	273	2
+components/same-candidate	rotate256	wrong	11300	11228	72	272	270	2
+exploratory/components	hot	secret	10392	10320	72	144	142	2
+exploratory/components	hot	wrong	10296	10224	72	141	139	2
+exploratory/components	rotate256	secret	11397	11325	72	275	273	2
+exploratory/components	rotate256	wrong	11300	11228	72	272	270	2
+components/before-current	hot	correct	10392	10320	72	144	142	2
+components/before-current	hot	wrong	10296	10224	72	141	139	2
+components/before-current	rotate256	correct	11396	11325	71	275	273	2
+components/before-current	rotate256	wrong	11300	11228	72	272	270	2
+components/interleaved	hot	correct	10392	10320	72	144	142	2
+components/interleaved	hot	wrong	10296	10224	72	141	139	2
+components/interleaved	rotate256	correct	11397	11324	73	275	273	2
+components/interleaved	rotate256	wrong	11300	11228	72	272	270	2

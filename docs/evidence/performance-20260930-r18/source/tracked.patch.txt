@@ -1,0 +1,55 @@
+diff --git a/internal/server/ppolicy.go b/internal/server/ppolicy.go
+index 91bb548eef29897fc4cb9b3c84923a6824724e6f..d6b5ebfb989f71c1f4d0f3691455cc7034415a4c 100644
+--- a/internal/server/ppolicy.go
++++ b/internal/server/ppolicy.go
+@@ -461,6 +461,21 @@ func (server *Server) authenticatePasswordBind(
+ 	if err != nil {
+ 		return result, nil
+ 	}
++	return server.authenticateResolvedPasswordBind(ctx, runtime, database, dn, rawDN, password, requestControl)
++}
++
++// Both entry points join before root authentication. Policy, ACL and storage
++// snapshots below are deliberately shared, including their error ordering.
++func (server *Server) authenticateResolvedPasswordBind(
++	ctx context.Context,
++	runtime *runtimeState,
++	database *runtimeDatabase,
++	dn directory.DN,
++	rawDN string,
++	password []byte,
++	requestControl bool,
++) (passwordBindResult, error) {
++	var result passwordBindResult
+ 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
+ 		authenticatedDN := dn.String()
+ 		if database.rootDN != nil && database.rootPasswordSet &&
+diff --git a/internal/server/server.go b/internal/server/server.go
+index c83f2e3b296e7085ff0e2e928a099fa737fd1ef7..a9988c4bcb21f001538c76996b2bdb9b2347e5e3 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -2085,6 +2085,7 @@ func (server *Server) handleBind(
+ 			nil,
+ 		))
+ 	}
++	reusePasswordRoute := server.canReuseSimpleBindRoute(state, message, request)
+ 	requestDN, err := parseRuntimeConnectionDN(state.runtime, request.Name)
+ 	if err != nil {
+ 		clearSASLSession(state)
+@@ -2469,12 +2470,14 @@ func (server *Server) handleBind(
+ 		}
+ 	}
+ 
+-	bindResult, err := server.authenticatePasswordBind(
++	bindResult, err := server.authenticateSimpleBindRoute(
+ 		ctx,
+ 		state.runtime,
+-		requestDN.String(),
++		policyDatabase,
++		requestDN,
+ 		password,
+ 		controls.passwordPolicy,
++		reusePasswordRoute,
+ 	)
+ 	if err != nil {
+ 		if failure := asOperationFailure(err); failure != nil {

@@ -1,0 +1,13 @@
+scope	target	credential	metric	string	reuse	reduction_pct
+components/same-candidate	hot	secret	ns/op	12462	12257	1.6450008024394114
+components/same-candidate	hot	secret	B/op	10392	10320	0.6928406466512715
+components/same-candidate	hot	secret	allocs/op	144	142	1.388888888888884
+components/same-candidate	hot	wrong	ns/op	12088	11952	1.1250827266710783
+components/same-candidate	hot	wrong	B/op	10296	10224	0.6993006993006978
+components/same-candidate	hot	wrong	allocs/op	141	139	1.4184397163120588
+components/same-candidate	rotate256	secret	ns/op	18377	18508	-0.7128475812156587
+components/same-candidate	rotate256	secret	B/op	11396	11325	0.6230256230256193
+components/same-candidate	rotate256	secret	allocs/op	275	273	0.727272727272732
+components/same-candidate	rotate256	wrong	ns/op	18068	18613	-3.0163825547929957
+components/same-candidate	rotate256	wrong	B/op	11300	11228	0.6371681415929253
+components/same-candidate	rotate256	wrong	allocs/op	272	270	0.7352941176470562

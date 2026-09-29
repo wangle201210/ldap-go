@@ -1,0 +1,6 @@
+item	value
+role	INDEPENDENT_BIND_DIAGNOSTICS; excluded from core 840/144/48
+aa	Both Go endpoint labels execute identical current binary; differences are label observations, not baseline production improvements.
+startup-port-swap	Real current starts first on 29481; real before starts second on 29482. Startup order and port change together and cannot be isolated.
+counts	Each run: four cases x three endpoints x seven repeats = 84 samples; two runs yield 168/24/8 and six exports.
+limits	No pooling, subtraction, noise correction, replacement of original negatives, causal attribution or statistical significance claim.

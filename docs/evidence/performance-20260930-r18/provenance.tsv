@@ -1,0 +1,14 @@
+item	value	source
+baseline_source	15f428a9f409c00e9de02a5b0d6ed81053e47c36	main handoff
+baseline_binary	7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3	retained R17 production executable
+baseline_embedded_revision	302898b; vcs.modified=true; not a clean 15f428a build	binary-metadata/before.txt
+current_binary	5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370	validate; handoff; independent post-completion hash
+current_embedded_revision	15f428a9f409c00e9de02a5b0d6ed81053e47c36; vcs.modified=true	binary-metadata/current.txt
+production_scope	Reuse standard local SimpleBind parsed DN/database. Guard before first parse excludes callbacks, overlays, controls and other unsupported paths. Original string entry, security/root decisions, two Store.View snapshots and final password verification remain shared.	main handoff; source/tracked.patch.txt; source/new/
+real_fixture	Actual 100k CLI seeds with unmodified runtime guard fields; eligibility, reader stack, identity and revisions; success/wrong/success-again	real-fixture-explicit.txt; real-fixture-default.txt
+candidate_components	Same candidate reuse/string control, not the original before; prototype exploration remains separate	components/provenance.tsv
+portable_components	Independent BenchmarkHandleSimpleBind run on frozen baseline and candidate; commands and source revisions retained	generator/main-finished.json
+runner_sources	CLI sources retained for timing interpretation; binaries have independent hashes and embedded metadata. No claim that retained runners were freshly built from archived sources.	cli-source-hashes.tsv; binary-metadata/
+environment	100k fixture; Apple M1 Pro; Go1.26.4; CGO_ENABLED=0 production; OpenLDAP2.6.13 reference	main handoff; scripts; logs; binary metadata
+main_completion	交替5轮组件完成EXIT0，所有4case每次仍少72B/2alloc，中位数减少hotcorrect0.90%、hotwrong0.66%、rotatecorrect0.27%、rotatewrong0.63%；有离群值全部保留，不替换原3次negative。当前无任何bench，可运行heavy hash生成R18完整证据，source production冻结。主线程下一步仅在其它isolated worktree跑单元tests（非benchmark）。请尽快出core medians/comparisons及README/SHA，不要将同candidate/string诊断称作旧版before。R18拟保留为小型分配优化，CPU/网络收益小且混合；仍未native逐项追平。	generator/main-finished.json
+evidence_scope	No build/test/bench execution by evidence worker; go version -m reads metadata only; hashes only after main completion	generate-evidence.mjs.txt

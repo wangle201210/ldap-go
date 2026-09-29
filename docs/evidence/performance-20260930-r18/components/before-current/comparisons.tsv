@@ -1,0 +1,13 @@
+scope	target	credential	metric	before	current	reduction_pct
+components/before-current	hot	correct	ns/op	12197	11613	4.788062638353696
+components/before-current	hot	correct	B/op	10392	10320	0.6928406466512715
+components/before-current	hot	correct	allocs/op	144	142	1.388888888888884
+components/before-current	hot	wrong	ns/op	11721	11732	-0.0938486477263023
+components/before-current	hot	wrong	B/op	10296	10224	0.6993006993006978
+components/before-current	hot	wrong	allocs/op	141	139	1.4184397163120588
+components/before-current	rotate256	correct	ns/op	18740	18611	0.6883671291355364
+components/before-current	rotate256	correct	B/op	11396	11325	0.6230256230256193
+components/before-current	rotate256	correct	allocs/op	275	273	0.727272727272732
+components/before-current	rotate256	wrong	ns/op	17946	18477	-2.958876629889673
+components/before-current	rotate256	wrong	B/op	11300	11228	0.6371681415929253
+components/before-current	rotate256	wrong	allocs/op	272	270	0.7352941176470562

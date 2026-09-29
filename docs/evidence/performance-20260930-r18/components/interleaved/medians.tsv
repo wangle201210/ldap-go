@@ -1,0 +1,9 @@
+scope	target	credential	implementation	repeats	ns_op	B_op	allocs_op
+components/interleaved	hot	correct	before	5	12136	10392	144
+components/interleaved	hot	wrong	before	5	12091	10296	141
+components/interleaved	rotate256	correct	before	5	18593	11397	275
+components/interleaved	rotate256	wrong	before	5	18470	11300	272
+components/interleaved	hot	correct	current	5	12027	10320	142
+components/interleaved	hot	wrong	current	5	12011	10224	139
+components/interleaved	rotate256	correct	current	5	18542	11324	273
+components/interleaved	rotate256	wrong	current	5	18354	11228	270

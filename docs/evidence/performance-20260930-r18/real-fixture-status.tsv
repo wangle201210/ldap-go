@@ -1,0 +1,3 @@
+access_mode	source	package_seconds	cases	runtime_mutation_for_eligibility
+explicit	real-fixture-explicit.txt	3.049	success,wrong,success-again	NONE; guard asserted before insertion; original identity/readers/revisions checked
+default	real-fixture-default.txt	3.422	success,wrong,success-again	NONE; guard asserted before insertion; original identity/readers/revisions checked

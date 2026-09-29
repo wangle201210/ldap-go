@@ -1,0 +1,9 @@
+scope	target	credential	implementation	repeats	ns_op	B_op	allocs_op
+exploratory/components	hot	secret	reuse	3	11662	10320	142
+exploratory/components	hot	secret	string	3	12395	10392	144
+exploratory/components	hot	wrong	reuse	3	11883	10224	139
+exploratory/components	hot	wrong	string	3	12414	10296	141
+exploratory/components	rotate256	secret	reuse	3	18493	11325	273
+exploratory/components	rotate256	secret	string	3	18913	11397	275
+exploratory/components	rotate256	wrong	reuse	3	18354	11228	270
+exploratory/components	rotate256	wrong	string	3	18680	11300	272

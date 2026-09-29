@@ -1,0 +1,11 @@
+round	position	endpoint	source	test_binary
+1	1	before	bind-interleaved-before-1.txt	server-before.test
+1	2	current	bind-interleaved-current-1.txt	server-current.test
+2	1	current	bind-interleaved-current-2.txt	server-current.test
+2	2	before	bind-interleaved-before-2.txt	server-before.test
+3	1	before	bind-interleaved-before-3.txt	server-before.test
+3	2	current	bind-interleaved-current-3.txt	server-current.test
+4	1	current	bind-interleaved-current-4.txt	server-current.test
+4	2	before	bind-interleaved-before-4.txt	server-before.test
+5	1	before	bind-interleaved-before-5.txt	server-before.test
+5	2	current	bind-interleaved-current-5.txt	server-current.test

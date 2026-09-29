@@ -1,0 +1,6 @@
+item	value
+role	INDEPENDENT_COMPONENT_DIAGNOSTIC; never pooled with or substituted for original three-repeat matched components or core macros
+design	Five additional rounds fixed before execution; odd rounds before then current; even rounds current then before; four portable cases, 500ms each
+trigger	Main observed original matched hot/correct improvement with small hot/wrong and rotate256/wrong negative medians and overlapping sample ranges; original negative values retained
+counts	10 logs; four cases x two binaries x five rounds = 40 samples; eight medians and 12 metric comparisons
+limits	No pooling, subtraction, favorable-round selection, significance claim or causal attribution; range overlap alone does not prove equivalence or measurement noise

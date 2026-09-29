@@ -1,0 +1,13 @@
+scope	target	credential	metric	string	reuse	reduction_pct
+exploratory/components	hot	secret	ns/op	12395	11662	5.913674868898755
+exploratory/components	hot	secret	B/op	10392	10320	0.6928406466512715
+exploratory/components	hot	secret	allocs/op	144	142	1.388888888888884
+exploratory/components	hot	wrong	ns/op	12414	11883	4.2774287095215024
+exploratory/components	hot	wrong	B/op	10296	10224	0.6993006993006978
+exploratory/components	hot	wrong	allocs/op	141	139	1.4184397163120588
+exploratory/components	rotate256	secret	ns/op	18913	18493	2.220694760217845
+exploratory/components	rotate256	secret	B/op	11397	11325	0.6317451961042386
+exploratory/components	rotate256	secret	allocs/op	275	273	0.727272727272732
+exploratory/components	rotate256	wrong	ns/op	18680	18354	1.7451820128479678
+exploratory/components	rotate256	wrong	B/op	11300	11228	0.6371681415929253
+exploratory/components	rotate256	wrong	allocs/op	272	270	0.7352941176470562

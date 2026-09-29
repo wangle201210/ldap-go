@@ -1,0 +1,628 @@
+// R18 evidence only. No build, test, benchmark, or hash before main completion.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const repo = '/Users/wanna/mine/github/ldap-go';
+const src = '/var/tmp/ldap-go-perf-20260930-r18';
+const dst = path.join(repo, 'docs/evidence/performance-20260930-r18');
+const baseline = '15f428a9f409c00e9de02a5b0d6ed81053e47c36';
+const baselineHash = '7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3';
+const validatedCurrentHash = '5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370';
+const portableSourceHash = 'd71ec932c9982ac53619773b5a48ac7a40ed7c1228fb87939c85800adcbc1d18';
+const canonicalHash = '5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0';
+const signalFile = 'generator/main-finished.json';
+const frozenRoot = path.join(src, 'frozen-source');
+const frozenPatch = path.join(src, 'source-changes.patch');
+const frozenNote = `Independent frozen-source directory: ${frozenRoot}. Its ten relevant Go files and source-changes.patch were checked against the completed archive. Other Go/module files are identified by the immutable accepted baseline ${baseline}; reconstruction does not depend on live main.`;
+const endpoints = ['before', 'current', 'openldap'];
+const rootDN = 'cn=admin,dc=scale,dc=qualification';
+const plans = [
+  { run: 'explicit-final', script: 'common-explicit', suite: 'common', access: 'explicit' },
+  { run: 'default-final', script: 'common-default', suite: 'common', access: 'default' },
+  { run: 'root-paired', script: 'root-paired', suite: 'root', access: 'default' },
+  { run: 'explicit-group-compare', script: 'group-compare-explicit', suite: 'group-compare', access: 'explicit' },
+  { run: 'default-group-compare', script: 'group-compare-default', suite: 'group-compare', access: 'default' },
+  { run: 'default-bind-aa', script: 'bind-aa', suite: 'aa', access: 'default', diagnostic: true },
+  { run: 'default-bind-swap', script: 'bind-swap', suite: 'startup-port-swap', access: 'default', diagnostic: true },
+];
+const bindCases = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0],
+  ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0]];
+const reads = [['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const hot = [...bindCases, ...reads];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10],
+  ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0],
+  ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0], ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'],
+  ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const batches = p => p.diagnostic ? ['smoke', 'bind'] : p.suite === 'root' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke']
+  : p.suite === 'group-compare' ? ['smoke', 'groups'] : ['smoke', 'hot', 'distributed', 'groups'];
+const jsonFiles = p => [...batches(p).map(b => `${p.run}/${b}.json`), ...endpoints.map(e => `${p.run}/${e}/warmup.json`)];
+const logs = ['bind-focused-main.txt', 'bind-focused.txt', 'bind-components-main.txt', 'bind-components.txt',
+  'real-fixture-explicit.txt', 'real-fixture-default.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt'];
+const matchedLogs = ['bind-matched-before.txt', 'bind-matched-current.txt'];
+const matchedBinaries = ['server-before.test', 'server-current.test'];
+const interleavedRuns = Array.from({ length: 5 }, (_, i) => i + 1).flatMap(round =>
+  (round % 2 ? ['before', 'current'] : ['current', 'before']).map((side, i) => ({
+    file: `bind-interleaved-${side}-${round}.txt`, side, round, position: i + 1,
+  })));
+const binaries = ['before', 'current', 'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group'];
+const auxiliaryBinaries = [
+  ['ldapbench', '/var/tmp/ldap-go-perf-round4-20260922/ldapbench'],
+  ['ldifcanonical', '/var/tmp/ldap-go-perf-round2-20260922/ldifcanonical'],
+];
+const keySources = ['internal/server/server.go', 'internal/server/ppolicy.go', 'internal/server/bind_route_reuse.go',
+  'internal/server/bind_route_reuse_test.go', 'internal/server/bind_route_reuse_bench_test.go', 'internal/server/bind_route_reuse_fixture_test.go'];
+const cliSources = ['internal/cmd/ldapcommonbench/main.go', 'internal/cmd/ldapcommonbench/group_compare_test.go',
+  'internal/cmd/ldapbench/main.go', 'internal/cmd/ldifcanonical/main.go'];
+const rawFiles = [...logs, 'validate.sh', 'run-performance.sh', 'executable-sha256.txt', ...plans.flatMap(p => [
+  `${p.script}.sh`, `${p.script}.log`, ...jsonFiles(p), `${p.run}/validation.tsv`, `${p.run}/openldap/reindex.log`,
+  ...endpoints.map(e => `${p.run}/${e}/server.log`), ...(p.suite === 'common' ? [`${p.run}/concurrent.tsv`] : []),
+])];
+const signalPath = path.join(dst, signalFile);
+const mode = process.argv[2];
+if (process.argv.length !== 3 || !['--inspect', '--main-finished', '--refresh-frozen-source'].includes(mode)) {
+  throw new Error('Use --inspect, --main-finished, or --refresh-frozen-source (completed archive and small source files only).');
+}
+const required = [...rawFiles, ...binaries, ...matchedLogs, ...matchedBinaries, ...interleavedRuns.map(r => r.file), 'member-acl.db', 'member-index.db',
+  ...plans.flatMap(p => endpoints.map(e => `${p.run}/${e}/data.canonical`))].map(f => path.join(src, f));
+required.push(signalPath, ...auxiliaryBinaries.map(([, f]) => f));
+const missing = required.filter(f => !fs.existsSync(f));
+if (mode === '--inspect') {
+  console.log(JSON.stringify({ state: 'PREPARED_NOT_GENERATED', hashing: false, final_signal_required: true,
+    expected_core: { scripts: 5, json: 31, samples: 840, medians: 144, comparisons: 48, exports: 15 },
+    expected_diagnostics: { scripts: 2, json: 10, samples: 168, medians: 24, comparisons: 8, exports: 6 },
+    expected_component_diagnostics: { rounds: 5, logs: 10, samples: 40, medians: 8, metric_comparisons: 12 },
+    required_handoff: { round: 'R18', main_signal: 'Exact explicit completion message', completed_at: 'ISO timestamp',
+      validation_exit_code: 0, performance_exit_code: 0, component_exit_code: 0, macro_finished: true, components_finished: true,
+      component_diagnostics_finished: true, component_diagnostics_exit_code: 0,
+      current_sha256: validatedCurrentHash, source_git_head: 'Full actual source HEAD',
+      portable_components: { source: 'internal/server/bind_handler_bench_test.go', repeats: 3,
+        before: { log: 'bind-matched-before.txt', test_binary: 'server-before.test', source_root: '<clean baseline worktree>', command: '<actual command>', source_revision: baseline },
+        current: { log: 'bind-matched-current.txt', test_binary: 'server-current.test', source_root: repo, command: '<actual command>', source_revision: '<actual source revision>' } } },
+    missing }, null, 2));
+  process.exit(0);
+}
+if (missing.length) throw new Error(`Incomplete inputs; nothing published:\n${missing.join('\n')}`);
+
+const output = new Map();
+const checks = [['path', 'check', 'status', 'detail']];
+const trackedReads = new Map();
+const sha = body => createHash('sha256').update(body).digest('hex');
+const tsv = rows => rows.map(r => r.map(v => String(v ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const same = (a, b) => Array.isArray(a) && Array.isArray(b) && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const finite = n => Number.isFinite(n) && n >= 0;
+const positive = n => Number.isFinite(n) && n > 0;
+const median = values => { const a = [...values].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const table = (f, rows) => output.set(f, tsv(rows));
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+function requirePassing() {
+  const failures = checks.slice(1).filter(r => r[2] === 'FAIL');
+  if (failures.length) throw new Error('Evidence checks failed; nothing published:\n' + tsv([checks[0], ...failures]));
+}
+function remember(f) {
+  const s = fs.lstatSync(f), previous = trackedReads.get(f);
+  if (!s.isFile() || s.isSymbolicLink()) throw new Error(`Expected regular file: ${f}`);
+  const stamp = `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+  if (previous && previous !== stamp) throw new Error(`Input changed: ${f}`);
+  trackedReads.set(f, stamp);
+}
+function readPath(f) { remember(f); const body = fs.readFileSync(f, 'utf8'); remember(f); return body; }
+const read = f => readPath(path.join(src, f));
+const frozenFiles = [...keySources, 'internal/server/bind_handler_bench_test.go', ...cliSources.slice(0, 3)].sort();
+if (mode === '--refresh-frozen-source') {
+  const manifest = readPath(path.join(dst, 'SHA256SUMS')).trim().split('\n');
+  for (const line of manifest) {
+    const [, expected, f] = line.match(/^([a-f0-9]{64})  (.+)$/) ?? [];
+    if (!safeRelative(f)) throw new Error('Invalid existing manifest path');
+    const body = readPath(path.join(dst, f));
+    if (sha(body) !== expected) throw new Error(`Existing archive hash mismatch: ${f}`);
+    output.set(f, body);
+  }
+  const originalHashes = new Map(output.get('source-hashes.tsv').trim().split('\n').slice(1).map(line => line.split('\t').slice(0, 2)));
+  const frozenRows = [['path', 'sha256', 'frozen_path']];
+  const refreshedChecks = output.get('checks.tsv').trim().split('\n').map(line => line.split('\t')).filter(r => !r[1]?.startsWith('frozen-source refresh:'));
+  for (const f of frozenFiles) {
+    const hash = sha(readPath(path.join(frozenRoot, f)));
+    if (hash !== originalHashes.get(f)) throw new Error(`Frozen source differs from completed archive: ${f}`);
+    frozenRows.push([f, hash, path.join(frozenRoot, f)]);
+    refreshedChecks.push([f, 'frozen-source refresh: exact final source hash', 'PASS', hash]);
+  }
+  const normalizePatch = body => body.replace(/^index [a-f0-9]+\.\.[a-f0-9]+(.*)$/gm, 'index VERIFIED$1');
+  if (normalizePatch(readPath(frozenPatch)) !== normalizePatch(output.get('source/tracked.patch.txt'))) throw new Error('Frozen patch differs from archived tracked patch');
+  refreshedChecks.push(['source/tracked.patch.txt', 'frozen-source refresh: same patch hunks; only Git object abbreviation differs', 'PASS', frozenPatch]);
+  table('source/frozen-source.tsv', frozenRows); table('checks.tsv', refreshedChecks);
+  const provenance = JSON.parse(output.get('source/provenance.json'));
+  provenance.initial_source_root = provenance.initial_source_root ?? provenance.source_root;
+  provenance.source_root = frozenRoot;
+  provenance.frozen_patch = frozenPatch;
+  provenance.frozen_files = frozenFiles;
+  provenance.frozen_verified_at = new Date().toISOString();
+  provenance.unchanged_source = `Immutable baseline ${baseline}; full final hashes remain unchanged`;
+  output.set('source/provenance.json', JSON.stringify(provenance, null, 2) + '\n');
+  for (const f of ['README.md', 'source/RECONSTRUCTION.md']) {
+    if (!output.get(f).includes('Independent frozen-source directory:')) output.set(f, output.get(f).trimEnd() + '\n\n' + frozenNote + '\n');
+  }
+  output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+  for (const f of trackedReads.keys()) remember(f);
+  for (const [f, body] of output) write(f, body);
+  write('SHA256SUMS', [...output].sort(([a], [b]) => a.localeCompare(b)).map(([f, body]) => `${sha(body)}  ${f}`).join('\n') + '\n');
+  console.log(JSON.stringify({ state: 'FROZEN_SOURCE_VERIFIED', large_file_reads: false, files_in_manifest: output.size, checks: refreshedChecks.length - 1, frozen_sources: frozenFiles.length, core_statistics_changed: false }, null, 2));
+  process.exit(0);
+}
+const archiveName = f => /\.(sh|log|mjs)$/.test(f) ? f + '.txt' : f;
+function safeRelative(f) { return typeof f === 'string' && f.length > 0 && !path.isAbsolute(f) && !f.split('/').some(p => ['..', '.', ''].includes(p)); }
+function rawArchivePath(f) {
+  if (['bind-focused.txt', 'bind-components.txt'].includes(f)) return `exploratory/${f}`;
+  const diagnostic = plans.find(p => p.diagnostic && (f.startsWith(p.run + '/') || f.startsWith(p.script + '.')));
+  return (diagnostic ? 'diagnostics/' : '') + archiveName(f);
+}
+function parseTSV(f, header) {
+  const [head, ...rows] = read(f).trim().split(/\r?\n/).map(s => s.split('\t'));
+  check(f, 'TSV header and rows', JSON.stringify(head) === JSON.stringify(header) && rows.length > 0 && rows.every(r => r.length === head.length));
+  return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]])));
+}
+const signal = JSON.parse(readPath(signalPath));
+check(signalFile, 'explicit macro and component completion; all serial exits successful', signal.round === 'R18' &&
+  signal.macro_finished === true && signal.components_finished === true && signal.component_diagnostics_finished === true &&
+  signal.component_diagnostics_exit_code === 0 && signal.validation_exit_code === 0 &&
+  signal.performance_exit_code === 0 && signal.component_exit_code === 0 && typeof signal.main_signal === 'string' &&
+  !!signal.main_signal.trim() && Number.isFinite(Date.parse(signal.completed_at)) && signal.current_sha256 === validatedCurrentHash && /^[a-f0-9]{40}$/.test(signal.source_git_head));
+const portable = signal.portable_components;
+check(signalFile, 'portable component source, repeat count and before/current provenance', !!portable && safeRelative(portable.source) &&
+  portable.source === 'internal/server/bind_handler_bench_test.go' && portable.repeats === 3 &&
+  ['before', 'current'].every(e => safeRelative(portable[e]?.log) && safeRelative(portable[e]?.test_binary) &&
+    typeof portable[e]?.source_root === 'string' && path.isAbsolute(portable[e].source_root) && typeof portable[e]?.command === 'string' && !!portable[e].command.trim()) &&
+  portable.before.log !== portable.current.log && portable.before.test_binary !== portable.current.test_binary &&
+  same(['before', 'current'].map(e => portable[e].log), matchedLogs) && same(['before', 'current'].map(e => portable[e].test_binary), matchedBinaries) &&
+  portable.before.source_revision === baseline && portable.current.source_revision === signal.source_git_head);
+requirePassing();
+for (const e of ['before', 'current']) remember(path.join(src, portable[e].log));
+output.set(signalFile, readPath(signalPath));
+const expectedHashes = Object.fromEntries([...read('executable-sha256.txt').matchAll(/^([a-f0-9]{64})\s+(.+)$/gm)].map(m => [path.basename(m[2]), m[1]]));
+check('executable-sha256.txt', 'validated baseline/current hashes match handoff', same(Object.keys(expectedHashes), ['before', 'current']) &&
+  expectedHashes.before === baselineHash && expectedHashes.current === signal.current_sha256 &&
+  read('executable-sha256.txt').trim().split('\n').length === 2);
+for (const f of rawFiles) output.set(rawArchivePath(f), read(f));
+output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const sampleHeader = [...dims, 'repeat', 'operations', 'total_ms', 'source'];
+const medianHeader = [...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median'];
+const comparisonHeader = [...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct'];
+const reportHeader = ['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'error', 'started_at'];
+const counterHeader = ['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms'];
+const makeCollection = () => ({ samples: [sampleHeader], groups: new Map(), medians: [medianHeader], comparisons: [comparisonHeader], reports: [reportHeader], counters: [counterHeader] });
+const core = makeCollection(), diagnostics = makeCollection();
+diagnostics.comparisons[0] = [...dims.slice(0, -1), 'operations', 'before_label_ms', 'current_label_ms', 'openldap_ms', 'current_label_over_openldap_throughput_pct', 'label_time_reduction_pct'];
+function add(collection, dimensions, s, f, repeats) {
+  const key = JSON.stringify(dimensions);
+  if (!collection.groups.has(key)) collection.groups.set(key, { repeats, rows: [] });
+  const group = collection.groups.get(key);
+  if (group.repeats !== repeats) throw new Error(`Mixed repeat design: ${key}`);
+  group.rows.push(s);
+  collection.samples.push([...dimensions, s.repeat, s.operations, s.total_ms, rawArchivePath(f)]);
+}
+const identities = [['run', 'role', 'endpoint_label', 'binary', 'sha256', 'port', 'startup_position']];
+for (const p of plans) {
+  const body = read(p.script + '.sh'), swap = p.suite === 'startup-port-swap', aa = p.suite === 'aa';
+  const ports = { before: swap ? 29482 : 29481, current: swap ? 29481 : 29482, openldap: 29483 };
+  const startup = swap ? ['current', 'before', 'openldap'] : endpoints;
+  check(p.script + '.log', 'successful script completion', read(p.script + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  check(p.script + '.sh', 'round, access mode and uniform APFS clone setup', body.includes(`audit=${src}`) && body.includes(`out=$audit/${p.run}`) &&
+    body.includes(`cp -c "$audit/${p.access === 'explicit' ? 'member-acl' : 'member-index'}.db"`) &&
+    body.includes('cp -c "$source_dir/openldap-1/data/data.mdb"') && [...body.matchAll(/^\s*cp /gm)].length === 2 &&
+    (p.access === 'explicit' ? body.includes('access to attrs=userPassword') : !/^.*'access to /m.test(body)));
+  check(p.script + '.sh', 'startup and Go executable mapping', body.includes(`for side in ${startup.join(' ')}; do`) &&
+    (aa ? body.includes('binary=$audit/current') && !body.includes('binary=$audit/$side') : body.includes('binary=$audit/$side')));
+  if (p.diagnostic) check(p.script + '.sh', 'predetermined four Bind cases at 1000 x 7', body.includes('-stages userBind,userBindWrong') && body.includes('-n 1000 -repeats 7'));
+  if (p.suite === 'common') check(p.script + '.sh', 'eight concurrent workers, 1000 validated results, warm0 plus three',
+    body.includes('for repeat in 0 1 2 3; do') && body.includes('for worker in 0 1 2 3 4 5 6 7; do') && body.includes('i=1001;i<=2000;i++') && body.includes('-eq 1000 ]'));
+  for (const e of endpoints) {
+    check(p.script + '.sh', `${e} endpoint port`, body.includes(`${e}) port=${ports[e]};;`) && body.includes(`-endpoint ${e}=ldap://127.0.0.1:${ports[e]}`));
+    const binary = e === 'openldap' ? 'openldap' : aa ? 'current' : e;
+    identities.push([p.run, p.diagnostic ? 'DIAGNOSTIC' : 'CORE', e, binary, expectedHashes[binary] ?? 'OPENLDAP_2.6.13_REFERENCE', ports[e], startup.indexOf(e) + 1]);
+  }
+  const collection = p.diagnostic ? diagnostics : core;
+  for (const f of jsonFiles(p)) {
+    const j = JSON.parse(read(f)), c = j.config, batch = path.basename(f, '.json');
+    const warmup = batch === 'warmup', smoke = batch.includes('smoke'), root = p.suite === 'root', group = p.suite === 'group-compare';
+    check(f, 'error-free report shape, 100k fixture and timestamp', !!c && Array.isArray(warmup ? j.stages : j.samples) && j.error === '' && c.entries === 100000 && Number.isFinite(Date.parse(j.started_at)));
+    requirePassing();
+    collection.reports.push([rawArchivePath(f), (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), j.error, j.started_at]);
+    if (warmup) {
+      const e = f.split('/')[1];
+      check(f, 'SDK warmup endpoint, inventory and read-only mode', c.uri === `ldap://127.0.0.1:${ports[e]}` && c.n === 2 && c.read_only === true && c.write === false && same(j.stages.map(s => s.name), sdkStages));
+      check(f, 'warmup counters, errors and timing totals', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+      continue;
+    }
+    const repeats = smoke ? 1 : p.diagnostic || root || group || batch === 'hot' ? 7 : 3;
+    const n = smoke ? 2 : p.suite === 'common' && batch === 'groups' ? 100 : 1000;
+    const cases = p.diagnostic ? bindCases : root ? rootCases : group ? compareCases : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? reads : groupCases;
+    const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+    check(f, 'operation and repeat count, disposable setup and cleanup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && !!j.run_dn && same(j.cleanup_done, endpoints));
+    check(f, 'configured stages and endpoint addresses', same(c.stages, [...new Set(cases.map(r => r[0]))]) && same(c.endpoints?.map(e => `${e.name}=${e.uri}`), endpoints.map(e => `${e}=ldap://127.0.0.1:${ports[e]}`)));
+    check(f, 'exact stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members ?? 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+    check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+    check(f, 'request and WhoAmI verification counts', j.samples.every(s => Number.isInteger(s.requests) && (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+    check(f, 'sample errors and timing totals', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms)));
+    check(f, 'latency sum equals total', j.samples.every(s => Array.isArray(s.latency_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+    const expectedDN = batch.startsWith('normalized') ? rootDN.toUpperCase() : rootDN;
+    check(f, 'root variant and nonroot identity', c.root_bind_dn === expectedDN && j.samples.every(s => root ? s.root_bind_dn === expectedDN : !s.root_bind_dn));
+    if (p.suite === 'common' && ['hot', 'distributed'].includes(batch)) check(f, 'hot versus distributed target selection', batch === 'hot' ? c.uid === 'scale-001001' : !c.uid);
+    for (const s of j.samples) {
+      const d = [p.suite, p.access, root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members ?? 0, s.endpoint];
+      collection.counters.push([rawArchivePath(f), ...d, s.repeat, s.operations, s.completed, s.requests, s.latency_ms?.length, s.verification_requests, s.verification_ms]);
+      if (!smoke) add(collection, d, s, f, repeats);
+    }
+  }
+  if (p.suite === 'common') {
+    const f = `${p.run}/concurrent.tsv`, rows = parseTSV(f, ['side', 'repeat', 'ms']);
+    check(f, 'warmup and three measured repeats per endpoint', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => positive(+r.ms)));
+    for (const r of rows.filter(r => +r.repeat > 0)) add(core, ['concurrent', p.access, 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f, 3);
+  }
+}
+check('run-performance.sh', 'seven fixed sequential scripts', JSON.stringify([...read('run-performance.sh').matchAll(/^sh "\$audit\/([^"\n]+)\.sh"/gm)].map(m => m[1])) === JSON.stringify(plans.map(p => p.script)) && !/\s&(?:\s|$)/m.test(read('run-performance.sh')));
+table('endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'CORE'));
+table('diagnostics/endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'DIAGNOSTIC'));
+table('run-sources.tsv', [['run', 'script', 'access_mode', 'role'], ...plans.map(p => [p.run, p.script + '.sh', p.access, p.diagnostic ? 'DIAGNOSTIC' : 'CORE'])]);
+function summarize(collection, prefix, expected) {
+  for (const [key, group] of collection.groups) {
+    const d = JSON.parse(key), rows = group.rows;
+    check(key, 'fixed repeat inventory and equal operations', same(rows.map(s => s.repeat), seq(group.repeats)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => positive(s.total_ms)));
+    const ms = median(rows.map(s => s.total_ms));
+    collection.medians.push([...d, rows.length, rows[0].operations, ms, rows[0].operations * 1000 / ms]);
+  }
+  for (const key of new Set(collection.medians.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+    const rows = endpoints.map(e => collection.medians.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+    check(key, 'three endpoints with equal operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+    if (rows.some(r => !r)) continue;
+    const [b, c, o] = rows.map(r => r[10]);
+    collection.comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+  }
+  check(prefix || 'core', 'samples, medians, comparisons and JSON totals', [collection.samples.length - 1, collection.medians.length - 1, collection.comparisons.length - 1, collection.reports.length - 1].every((n, i) => n === expected[i]), expected.join('/'));
+  for (const name of ['samples', 'medians', 'comparisons', 'reports', 'counters']) table(prefix + name + '.tsv', collection[name]);
+  collection.negatives = collection.comparisons.slice(1).filter(r => r[12] < 0);
+  collection.belowNative = collection.comparisons.slice(1).filter(r => r[11] < 100);
+  table(prefix + 'negative-comparisons.tsv', [collection.comparisons[0], ...collection.negatives]);
+  table(prefix + 'below-openldap-comparisons.tsv', [collection.comparisons[0], ...collection.belowNative]);
+}
+summarize(core, '', [840, 144, 48, 31]);
+summarize(diagnostics, 'diagnostics/', [168, 24, 8, 10]);
+const counts = [['scope', 'variant', 'samples', 'medians', 'comparisons']];
+for (const [scope, collection] of [['core', core], ['diagnostics', diagnostics]]) {
+  for (const variant of new Set(collection.samples.slice(1).map(r => `${r[0]}/${r[3]}`))) {
+    const matches = r => `${r[0]}/${r[3]}` === variant;
+    counts.push([scope, variant, collection.samples.slice(1).filter(matches).length, collection.medians.slice(1).filter(matches).length, collection.comparisons.slice(1).filter(matches).length]);
+  }
+}
+check('core', '252 hot, 36 distributed, 72 group reads, 210 root, 252 group Compare, 18 concurrent samples',
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'hot').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'distributed').length === 36 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'groups').length === 72 &&
+  core.samples.slice(1).filter(r => r[0] === 'root').length === 210 && core.samples.slice(1).filter(r => r[0] === 'group-compare').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'concurrent').length === 18);
+table('statistics-inventory.tsv', counts);
+requirePassing();
+
+const componentAllocationRows = [['scope', 'target', 'credential', 'control_B_op', 'candidate_B_op', 'median_B_saved', 'control_allocs_op', 'candidate_allocs_op', 'median_allocs_saved']];
+function components(prefix, files, matched, repeats = matched ? portable.repeats : 3) {
+  const rows = [['scope', 'target', 'credential', 'implementation', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op', 'source']];
+  const groups = new Map(), implementations = matched ? ['before', 'current'] : ['string', 'reuse'];
+  const credentials = matched ? ['correct', 'wrong'] : ['secret', 'wrong'];
+  const expression = matched
+    ? /^(BenchmarkHandleSimpleBind)\/(hot|rotate256)\/(correct|wrong)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op\s*$/gm
+    : /^(BenchmarkHandleBindRouteReuse)\/(hot|rotate256)\/(secret|wrong)\/(reuse|string)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op\s*$/gm;
+  for (const { file, side, round } of files) {
+    const body = read(file), parsed = [...body.matchAll(expression)];
+    const archived = matched ? prefix + path.basename(file) : rawArchivePath(file);
+    if (matched) output.set(archived, body);
+    check(file, 'all benchmark rows parsed, M1 Pro, package and PASS', parsed.length === (body.match(/^Benchmark\S+/gm) || []).length &&
+      parsed.length > 0 && /^cpu: Apple M1 Pro$/m.test(body) && /^pkg: github\.com\/wangle201210\/ldap-go\/internal\/server$/m.test(body) &&
+      /^PASS$/m.test(body) && (matched ? /(?:^|\n)PASS\s*$/.test(body) : /^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/server\s+[\d.]+s\s*$/m.test(body)) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+    if (round) check(file, 'one measurement of each portable case per interleaved round', same(parsed.map(m => `${m[2]}/${m[3]}`), ['hot/correct', 'hot/wrong', 'rotate256/correct', 'rotate256/wrong']));
+    for (const m of parsed) {
+      const key = JSON.stringify([prefix.slice(0, -1), m[2], m[3], matched ? side : m[4]]);
+      if (!groups.has(key)) groups.set(key, []);
+      const values = groups.get(key), row = [...JSON.parse(key), round ?? values.length + 1, ...m.slice(matched ? 4 : 5).map(Number), archived];
+      values.push(row); rows.push(row);
+    }
+  }
+  const expected = ['hot', 'rotate256'].flatMap(t => credentials.flatMap(c => implementations.map(e => JSON.stringify([prefix.slice(0, -1), t, c, e]))));
+  check(prefix, 'complete eight groups and predetermined repeats', same([...groups.keys()], expected) && rows.length === 1 + expected.length * repeats);
+  const medians = [['scope', 'target', 'credential', 'implementation', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+  const ranges = [['scope', 'target', 'credential', 'implementation', 'metric', 'min', 'median', 'max']];
+  for (const [key, values] of groups) {
+    check(key, 'finite component metrics and repeat inventory', same(values.map(r => r[4]), seq(repeats)) && values.every(r => r.slice(5, 9).every(finite) && positive(r[5]) && positive(r[6])));
+    medians.push([...JSON.parse(key), values.length, ...[6, 7, 8].map(i => median(values.map(r => r[i])))]);
+    for (const [i, metric] of [[6, 'ns/op'], [7, 'B/op'], [8, 'allocs/op']]) {
+      const measured = values.map(r => r[i]);
+      ranges.push([...JSON.parse(key), metric, Math.min(...measured), median(measured), Math.max(...measured)]);
+    }
+  }
+  const pairs = [['scope', 'target', 'credential', 'metric', implementations[0], implementations[1], 'reduction_pct']];
+  for (const t of ['hot', 'rotate256']) for (const c of credentials) {
+    const [b, a] = implementations.map(e => medians.find(r => r[1] === t && r[2] === c && r[3] === e));
+    check(prefix + t + '/' + c, 'paired component medians', !!b && !!a);
+    if (!b || !a) continue;
+    componentAllocationRows.push([prefix.slice(0, -1), t, c, b[6], a[6], b[6] - a[6], b[7], a[7], b[7] - a[7]]);
+    for (const [i, metric] of [[5, 'ns/op'], [6, 'B/op'], [7, 'allocs/op']]) pairs.push([prefix.slice(0, -1), t, c, metric, b[i], a[i], b[i] ? 100 * (1 - a[i] / b[i]) : null]);
+  }
+  table(prefix + 'samples.tsv', rows); table(prefix + 'medians.tsv', medians); table(prefix + 'comparisons.tsv', pairs);
+  table(prefix + 'ranges.tsv', ranges);
+  table(prefix + 'negative-comparisons.tsv', [pairs[0], ...pairs.slice(1).filter(r => r[6] < 0)]);
+  return { samples: rows.length - 1, medians: medians.length - 1, comparisons: pairs.length - 1, negatives: pairs.slice(1).filter(r => r[6] < 0).length };
+}
+const sameCandidate = components('components/same-candidate/', [{ file: 'bind-components-main.txt' }], false);
+const exploratory = components('exploratory/components/', [{ file: 'bind-components.txt' }], false);
+const matched = components('components/before-current/', ['before', 'current'].map(side => ({ file: portable[side].log, side })), true);
+const interleaved = components('components/interleaved/', interleavedRuns, true, 5);
+table('components/allocation-median-deltas.tsv', componentAllocationRows);
+check('component-interleaved', '40 diagnostic samples, eight medians, 12 metric comparisons', interleaved.samples === 40 && interleaved.medians === 8 && interleaved.comparisons === 12);
+table('components/interleaved/run-order.tsv', [['round', 'position', 'endpoint', 'source', 'test_binary'],
+  ...interleavedRuns.map(r => [r.round, r.position, r.side, r.file, portable[r.side].test_binary])]);
+table('components/interleaved/provenance.tsv', [['item', 'value'],
+  ['role', 'INDEPENDENT_COMPONENT_DIAGNOSTIC; never pooled with or substituted for original three-repeat matched components or core macros'],
+  ['design', 'Five additional rounds fixed before execution; odd rounds before then current; even rounds current then before; four portable cases, 500ms each'],
+  ['trigger', 'Main observed original matched hot/correct improvement with small hot/wrong and rotate256/wrong negative medians and overlapping sample ranges; original negative values retained'],
+  ['counts', '10 logs; four cases x two binaries x five rounds = 40 samples; eight medians and 12 metric comparisons'],
+  ['limits', 'No pooling, subtraction, favorable-round selection, significance claim or causal attribution; range overlap alone does not prove equivalence or measurement noise'],
+]);
+table('components/provenance.tsv', [['scope', 'role', 'source', 'command_or_design'],
+  ['same-candidate', 'MAIN_CANDIDATE_INTERNAL_CONTROL_NOT_BASELINE', 'bind-components-main.txt', 'hot/rotate256 x secret/wrong x reuse/string; three 500ms repeats; equivalent retained runtime disables route reuse'],
+  ['exploratory', 'ISOLATED_PROTOTYPE_NOT_MAIN_BASELINE', 'exploratory/bind-components.txt', 'same eight-case exploratory design; excluded from before/current and macro statistics'],
+  ...['before', 'current'].map(e => [`before-current/${e}`, 'FROZEN_SOURCE_PORTABLE_HANDLER', portable[e].log, portable[e].command]),
+  ['portable-source', portable.source, baseline, 'Same portable benchmark source must run on clean production baseline and final candidate; independent from candidate-only route control'],
+  ['setup-failure', 'EXCLUDED_BEFORE_MEASUREMENT', 'main handoff', 'Initial baseline go test -c setup failed because --no-checkout left the sparse worktree index/source uninitialized. Main repaired it with git read-tree -m -u HEAD, retaining the independent portable benchmark. No performance samples came from that attempt.'],
+  ['interleaved', 'INDEPENDENT_COMPONENT_DIAGNOSTIC', 'components/interleaved/', 'Additional five fixed alternating-order rounds; one 500ms sample/case/side/round; original matched three repeats unchanged'],
+]);
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+for (const f of [...logs, portable.before.log, portable.current.log, ...interleavedRuns.map(r => r.file)]) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  const archived = f.startsWith('bind-interleaved-') ? 'components/interleaved/' + path.basename(f)
+    : f === portable.before.log || f === portable.current.log ? 'components/before-current/' + path.basename(f) : rawArchivePath(f);
+  statuses.push([archived, ['bind-focused.txt', 'bind-components.txt'].includes(f) ? 'ISOLATED_PROTOTYPE' : 'R18_MAIN', Buffer.byteLength(body),
+    count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm), count(/^\s*--- SKIP:/gm), count(/^PASS$/gm), count(/^FAIL(?:\s|$)/gm), count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  check(f, 'no failures or panic', !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  if (f === 'go-vet.txt') check(f, 'empty vet log plus confirmed successful exit', body.trim() === '' && signal.validation_exit_code === 0);
+  else check(f, 'complete successful log', /(?:^ok\s|^PASS$)/m.test(body) && /(?:^|\n)(?:ok\s[^\n]+|PASS|\?\s[^\n]+\[no test files\])\s*$/.test(body));
+  if (f === 'openldap-differential.txt') check(f, '26 top-level, 355 native PASS records and no skips', count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === 26 && count(/^--- PASS:/gm) === 26 && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+  if (f.startsWith('real-fixture-')) {
+    check(f, 'real fixture ran without skip, success/wrong/success-again', /^=== RUN   TestBindRouteReuseRealFixture$/m.test(body) &&
+      ['success', 'wrong', 'success-again'].every(c => body.includes(`--- PASS: TestBindRouteReuseRealFixture/${c} (`)) && !/--- SKIP:/.test(body));
+    check(f, 'real CLI seed runtime, reader, identity and revision evidence', ['currentRuntime=true revision=1', 'plainRawBolt=true plainStoreBolt=true localProjection=true',
+      'actual raw Bolt reader=*storage.boltTx', 'actual partition reader=storage.schemaAwarePartitionReader', 'reader=server.storageRevisionReader',
+      'existing user=uid=scale-001001,ou=people,dc=scale,dc=qualification; route identity and database agree'].every(s => body.includes(s)));
+  }
+}
+check('bind-focused-main.txt', 'fresh main server package check', /^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/server\s+[\d.]+s\s*$/m.test(read('bind-focused-main.txt')) && !/\(cached\)/.test(read('bind-focused-main.txt')));
+check('go-test.txt', 'full suite includes directory, schema, storage and server', ['directory', 'schema', 'storage', 'server'].every(p => new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + p + '\\s', 'm').test(read('go-test.txt'))));
+check('validate.sh', 'fullgo, vet, native, build/hash sequence and no new fuzz', read('validate.sh').includes('export CGO_ENABLED=0') && read('validate.sh').includes('go test ./...') && read('validate.sh').includes('go vet ./...') && !/-fuzz(?:\s|=)/.test(read('validate.sh')));
+table('log-status.tsv', statuses);
+table('real-fixture-status.tsv', [['access_mode', 'source', 'package_seconds', 'cases', 'runtime_mutation_for_eligibility'], ...['explicit', 'default'].map(access => {
+  const file = `real-fixture-${access}.txt`;
+  return [access, file, read(file).match(/^ok\s+\S+\s+([\d.]+)s\s*$/m)?.[1], 'success,wrong,success-again', 'NONE; guard asserted before insertion; original identity/readers/revisions checked'];
+})]);
+requirePassing();
+
+// Source bodies are read once; the patch and Git blob identities bind the archive
+// to those bytes even if main later advances. No whole server source copies.
+const sourceHead = signal.source_git_head;
+check('source', 'immutable accepted baseline agrees with handoff context', git(['rev-parse', baseline]).trim() === sourceHead);
+const sourceSpec = ['go.mod', 'go.sum', ':(glob)**/go.mod', ':(glob)**/go.sum', ':(glob)**/*.go', ':(exclude,glob)docs/**'];
+const baselineFiles = git(['ls-tree', '-r', '--name-only', baseline]).trim().split('\n').filter(f => !f.startsWith('docs/') && (f.endsWith('.go') || /(^|\/)go\.(mod|sum)$/.test(f)));
+const sourceFiles = [...new Set([...baselineFiles, ...frozenFiles])].sort();
+check('source', 'all required candidate and CLI sources present', [...keySources, ...cliSources, portable.source].every(f => sourceFiles.includes(f)));
+const unchangedFiles = baselineFiles.filter(f => !frozenFiles.includes(f));
+const objects = execFileSync('git', ['cat-file', '--batch'], { cwd: repo,
+  input: unchangedFiles.map(f => `${baseline}:${f}\n`).join(''), maxBuffer: 64 * 1024 * 1024 });
+const sourceBodies = new Map();
+let offset = 0;
+for (const f of unchangedFiles) {
+  const end = objects.indexOf(10, offset), header = objects.subarray(offset, end).toString('utf8');
+  const matched = header.match(/^[a-f0-9]{40} blob (\d+)$/);
+  if (!matched) throw new Error(`Invalid baseline Git blob for ${f}: ${header}`);
+  const size = +matched[1], start = end + 1;
+  sourceBodies.set(f, objects.subarray(start, start + size).toString('utf8'));
+  offset = start + size + 1;
+}
+if (offset !== objects.length) throw new Error('Baseline Git blob inventory mismatch');
+for (const f of frozenFiles) sourceBodies.set(f, readPath(path.join(frozenRoot, f)));
+const sourcePatch = readPath(frozenPatch);
+const newSources = sourceFiles.filter(f => !baselineFiles.includes(f));
+const deletedSources = baselineFiles.filter(f => !sourceFiles.includes(f));
+check('source', 'all new source files are R18 server sources', newSources.every(f => keySources.includes(f) || f === portable.source));
+check('source', 'no production source deletions', deletedSources.length === 0);
+for (const section of sourcePatch.split('diff --git ').slice(1)) {
+  const filename = section.match(/^a\/(\S+) b\/\1\n/)?.[1];
+  const finalBlob = section.match(/^index [a-f0-9]+\.\.([a-f0-9]+)/m)?.[1];
+  const body = sourceBodies.get(filename);
+  const actualBlob = body === undefined ? null : createHash('sha1').update(`blob ${Buffer.byteLength(body)}\0`).update(body).digest('hex');
+  check(filename ?? 'source-patch', 'tracked patch final Git blob equals frozen source bytes', !!filename && !!finalBlob && actualBlob?.startsWith(finalBlob));
+}
+table('source-hashes.tsv', [['path', 'sha256', 'bytes', 'reconstruction'], ...sourceFiles.map(f => {
+  const body = sourceBodies.get(f);
+  return [f, sha(body), Buffer.byteLength(body), newSources.includes(f) ? 'source/new/' + f + '.txt' : 'baseline + source/tracked.patch.txt'];
+})]);
+output.set('source/tracked.patch.txt', sourcePatch);
+table('source/frozen-source.tsv', [['path', 'sha256', 'frozen_path'], ...frozenFiles.map(f => [f, sha(sourceBodies.get(f)), path.join(frozenRoot, f)])]);
+for (const f of newSources) output.set('source/new/' + f + '.txt', sourceBodies.get(f));
+for (const f of cliSources) output.set('source/cli/' + f + '.txt', sourceBodies.get(f));
+output.set('source/provenance.json', JSON.stringify({ round: 'R18', baseline, captured_at: new Date().toISOString(),
+  source_root: frozenRoot, frozen_patch: frozenPatch, frozen_files: frozenFiles, git_head: sourceHead, files: sourceFiles.length,
+  scope: 'All final tracked and R18 new Go sources plus go.mod/go.sum; no duplicate whole server snapshots', new_sources: newSources,
+  deleted_sources: deletedSources, portable_benchmark: portable.source }, null, 2) + '\n');
+table('cli-source-hashes.tsv', [['path', 'sha256', 'archive_path'], ...cliSources.map(f => [f, sha(sourceBodies.get(f)), 'source/cli/' + f + '.txt'])]);
+check('portable-source', 'independent portable BenchmarkHandleSimpleBind source', sourceBodies.get(portable.source)?.includes('func BenchmarkHandleSimpleBind(') &&
+  !/canReuseSimpleBindRoute|authenticateSimpleBindRoute|bindRouteSSHA|bindRouteRequest/.test(sourceBodies.get(portable.source) ?? ''));
+const portableSources = [['endpoint', 'source_path', 'sha256', 'source_revision', 'test_binary']];
+for (const e of ['before', 'current']) {
+  const file = path.join(e === 'current' ? frozenRoot : portable[e].source_root, portable.source), body = readPath(file);
+  const hash = sha(body);
+  check(file, 'portable benchmark identical across worktrees and main handoff', body === sourceBodies.get(portable.source) && hash === portableSourceHash);
+  portableSources.push([e, file, hash, portable[e].source_revision, portable[e].test_binary]);
+}
+table('components/before-current/source-identity.tsv', portableSources);
+const baselineRoot = portable.before.source_root;
+const baselineGit = args => execFileSync('git', ['-C', baselineRoot, ...args], { encoding: 'utf8' });
+const baselineChanges = [...new Set([
+  ...baselineGit(['diff', '--name-only', baseline, '--', ...sourceSpec]).trim().split('\n'),
+  ...baselineGit(['ls-files', '--others', '--exclude-standard', '--', ...sourceSpec]).trim().split('\n'),
+].filter(Boolean))];
+check('portable-baseline', 'clean baseline production source plus only portable instrumentation',
+  baselineGit(['rev-parse', 'HEAD']).trim() === baseline && baselineChanges.every(f => f === portable.source));
+output.set('components/before-current/baseline-source-status.txt', baselineGit(['status', '--short']));
+const serverBody = sourceBodies.get('internal/server/server.go'), policyBody = sourceBodies.get('internal/server/ppolicy.go');
+check('candidate-source', 'guard precedes initial parse and resolved path retains string fallback',
+  serverBody.includes('reusePasswordRoute := server.canReuseSimpleBindRoute(state, message, request)\n\trequestDN, err := parseRuntimeConnectionDN') &&
+  policyBody.includes('return server.authenticateResolvedPasswordBind(ctx, runtime, database, dn, rawDN, password, requestControl)') &&
+  sourceBodies.get('internal/server/bind_route_reuse.go').includes('return server.authenticatePasswordBind(ctx, runtime, rawDN, password, requestControl)'));
+requirePassing();
+
+// Large reads begin only after the explicit main signal and text checks pass.
+async function facts(file, countLines = false) {
+  remember(file);
+  const hash = createHash('sha256');
+  let bytes = 0, lines = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    hash.update(chunk); bytes += chunk.length;
+    if (countLines) for (let i = chunk.indexOf(10); i >= 0; i = chunk.indexOf(10, i + 1)) lines++;
+  }
+  remember(file);
+  return { sha256: hash.digest('hex'), bytes, lines };
+}
+const exportHeader = ['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_path'];
+const exports = [exportHeader], diagnosticExports = [exportHeader];
+for (const p of plans) {
+  const f = `${p.run}/validation.tsv`, rows = parseTSV(f, ['run', 'canonical_entries', 'canonical_cksum', 'canonical_bytes']);
+  check(f, 'three canonical export identities', same(rows.map(r => r.run), endpoints));
+  for (const e of endpoints) {
+    const row = rows.find(r => r.run === e), file = path.join(src, p.run, e, 'data.canonical');
+    const actual = await facts(file, true), checksum = execFileSync('cksum', [file], { encoding: 'utf8' }).trim().split(/\s+/);
+    (p.diagnostic ? diagnosticExports : exports).push([p.run, e, actual.lines, checksum[0], actual.bytes, actual.sha256, file]);
+    check(file, 'actual export content, validation TSV and canonical fixture agree', row?.canonical_entries === String(actual.lines) &&
+      row?.canonical_cksum === checksum[0] && row?.canonical_bytes === String(actual.bytes) && actual.lines === 100002 && actual.bytes === 42712438 &&
+      checksum[0] === '2143929969' && +checksum[1] === actual.bytes && actual.sha256 === canonicalHash);
+  }
+  check(p.run, 'disposable password and endpoint databases cleaned up', ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !fs.existsSync(path.join(src, p.run, f))));
+}
+check('exports', '15 core plus six diagnostic exports', exports.length === 16 && diagnosticExports.length === 7);
+table('export-checks.tsv', exports); table('diagnostics/export-checks.tsv', diagnosticExports);
+const binaryRows = [['file', 'sha256', 'bytes', 'source_path']], metadataRows = [['file', 'go_version', 'vcs_revision', 'vcs_modified', 'CGO_ENABLED', 'GOOS', 'GOARCH']];
+for (const [name, file] of [...binaries.map(f => [f, path.join(src, f)]), ...auxiliaryBinaries,
+  ...['before', 'current'].map(e => ['component-' + e, path.join(src, portable[e].test_binary)])]) {
+  const actual = await facts(file); binaryRows.push([name, actual.sha256, actual.bytes, file]);
+  if (['before', 'current'].includes(name)) check(name, 'actual binary equals validate and handoff hash', actual.sha256 === expectedHashes[name], actual.sha256);
+  const metadata = execFileSync('go', ['version', '-m', file], { encoding: 'utf8', env: { ...process.env, GOTOOLCHAIN: 'local' } });
+  output.set(`binary-metadata/${name}.txt`, metadata);
+  const field = key => metadata.match(new RegExp('(?:^|\\s)' + key.replaceAll('.', '\\.') + '=([^\\s]+)'))?.[1] ?? 'NOT_EMBEDDED';
+  const version = metadata.split('\n')[0].match(/go[\d.]+/)?.[0] ?? 'NOT_EMBEDDED';
+  metadataRows.push([name, version, field('vcs.revision'), field('vcs.modified'), field('CGO_ENABLED'), field('GOOS'), field('GOARCH')]);
+  check(name, 'Go executable metadata retained', version !== 'NOT_EMBEDDED');
+  if (['before', 'current'].includes(name)) check(name, 'Go1.26.4 CGO-disabled darwin/arm64', version === 'go1.26.4' && field('CGO_ENABLED') === '0' && field('GOOS') === 'darwin' && field('GOARCH') === 'arm64');
+  if (name === 'before') check(name, 'actual retained R17 binary embeds 302898b dirty', field('vcs.revision').startsWith('302898b') && field('vcs.modified') === 'true');
+  if (name === 'current') check(name, 'actual current revision and dirty bit', field('vcs.revision') === signal.source_git_head && field('vcs.modified') === 'true');
+}
+table('binary-hashes.tsv', binaryRows); table('binary-metadata.tsv', metadataRows);
+const fixtures = [['file', 'sha256', 'bytes', 'access_mode']];
+for (const [file, access] of [['member-acl.db', 'explicit'], ['member-index.db', 'default']]) {
+  const actual = await facts(path.join(src, file)); fixtures.push([file, actual.sha256, actual.bytes, access]);
+}
+table('fixture-hashes.tsv', fixtures);
+const currentMetadata = metadataRows.find(r => r[0] === 'current');
+table('timing-scope.tsv', [['scope', 'rule'],
+  ['common-hot', 'Explicit/default nonroot; correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.'],
+  ['common-distributed', 'Explicit/default nonroot Base/equality; 1000 x 3. Rotated targets after SDK warmup; not a controlled cold-cache experiment.'],
+  ['common-groups', 'Explicit/default nonroot member equality, 10/1000-member Base, nested membership; 100 x 3.'],
+  ['root', 'Default access; literal and uppercase normalized root DN kept separate; five cases, each 1000 x 7.'],
+  ['group-compare', 'Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7; first/last refer to fixture insertion order.'],
+  ['concurrent', 'Root CLI equality; 8 workers x 1000 results; repeat 0 warmup excluded, repeats 1-3 measured; includes worker process overhead.'],
+  ['diagnostics', 'Separate default Bind A/A and startup/port swap; four cases, each 1000 x 7; 168 samples, 24 medians, 8 comparisons; never pooled with core.'],
+  ['operation-timing', 'Setup and WhoAmI verification excluded from measured latency. Bind stages time Bind explicitly. Raw counters and verification timing retained.'],
+  ['APFS', 'All seven scripts use independent writable cp -c clones for all endpoints. Setup/warmup excluded; COW sharing and filesystem/cache behavior remain limitations.'],
+  ['components', 'Local handler benchmarks are separate from LDAP macros. Candidate reuse/string is not baseline/current. Portable same-source benchmark represents frozen production before/current.'],
+  ['exclusions', 'SDK warmups, smoke, concurrent repeat 0 and prototype exploration excluded from core medians; no new fuzz in R18.'],
+  ['stopping-rule', 'Predetermined counts; no favorable selection, retries until passing, historical pooling or diagnostic correction.'],
+  ['formulas', 'time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current. All negative values retained.'],
+]);
+table('diagnostics/provenance.tsv', [['item', 'value'],
+  ['role', 'INDEPENDENT_BIND_DIAGNOSTICS; excluded from core 840/144/48'],
+  ['aa', 'Both Go endpoint labels execute identical current binary; differences are label observations, not baseline production improvements.'],
+  ['startup-port-swap', 'Real current starts first on 29481; real before starts second on 29482. Startup order and port change together and cannot be isolated.'],
+  ['counts', 'Each run: four cases x three endpoints x seven repeats = 84 samples; two runs yield 168/24/8 and six exports.'],
+  ['limits', 'No pooling, subtraction, noise correction, replacement of original negatives, causal attribution or statistical significance claim.'],
+]);
+table('provenance.tsv', [['item', 'value', 'source'],
+  ['baseline_source', baseline, 'main handoff'], ['baseline_binary', baselineHash, 'retained R17 production executable'],
+  ['baseline_embedded_revision', '302898b; vcs.modified=true; not a clean 15f428a build', 'binary-metadata/before.txt'],
+  ['current_binary', expectedHashes.current, 'validate; handoff; independent post-completion hash'],
+  ['current_embedded_revision', `${currentMetadata[2]}; vcs.modified=${currentMetadata[3]}`, 'binary-metadata/current.txt'],
+  ['production_scope', 'Reuse standard local SimpleBind parsed DN/database. Guard before first parse excludes callbacks, overlays, controls and other unsupported paths. Original string entry, security/root decisions, two Store.View snapshots and final password verification remain shared.', 'main handoff; source/tracked.patch.txt; source/new/'],
+  ['real_fixture', 'Actual 100k CLI seeds with unmodified runtime guard fields; eligibility, reader stack, identity and revisions; success/wrong/success-again', 'real-fixture-explicit.txt; real-fixture-default.txt'],
+  ['candidate_components', 'Same candidate reuse/string control, not the original before; prototype exploration remains separate', 'components/provenance.tsv'],
+  ['portable_components', 'Independent BenchmarkHandleSimpleBind run on frozen baseline and candidate; commands and source revisions retained', signalFile],
+  ['runner_sources', 'CLI sources retained for timing interpretation; binaries have independent hashes and embedded metadata. No claim that retained runners were freshly built from archived sources.', 'cli-source-hashes.tsv; binary-metadata/'],
+  ['environment', '100k fixture; Apple M1 Pro; Go1.26.4; CGO_ENABLED=0 production; OpenLDAP2.6.13 reference', 'main handoff; scripts; logs; binary metadata'],
+  ['main_completion', signal.main_signal, signalFile],
+  ['evidence_scope', 'No build/test/bench execution by evidence worker; go version -m reads metadata only; hashes only after main completion', 'generate-evidence.mjs.txt'],
+]);
+const parity = core.belowNative.length ? 'NOT_ACHIEVED' : 'OBSERVED_MEDIANS_ONLY';
+table('summary.tsv', [['item', 'value'], ['state', 'EVIDENCE_COMPLETE'], ['per_operation_native_parity', parity],
+  ['main_assessment', signal.main_assessment],
+  ['core_scripts', 5], ['core_json', core.reports.length - 1], ['core_samples', core.samples.length - 1], ['core_medians', core.medians.length - 1],
+  ['core_comparisons', core.comparisons.length - 1], ['core_exports', exports.length - 1], ['negative_core_comparisons', core.negatives.length],
+  ['below_openldap_core_comparisons', core.belowNative.length], ['diagnostic_scripts', 2], ['diagnostic_json', diagnostics.reports.length - 1],
+  ['diagnostic_samples', diagnostics.samples.length - 1], ['diagnostic_medians', diagnostics.medians.length - 1], ['diagnostic_comparisons', diagnostics.comparisons.length - 1],
+  ['diagnostic_exports', diagnosticExports.length - 1], ['negative_diagnostic_comparisons', diagnostics.negatives.length],
+  ...Object.entries({ same_candidate: sameCandidate, portable_before_current: matched, component_diagnostic_interleaved: interleaved, isolated_prototype: exploratory }).flatMap(([scope, result]) => Object.entries(result).map(([key, value]) => [`${scope}_${key}`, value])),
+  ['source_files', sourceFiles.length], ['new_fuzz_runs', 0], ['failed_checks', 0]]);
+output.set('source/RECONSTRUCTION.md', `# Source Reconstruction\n\nStart with a clean checkout of baseline \`${baseline}\` in a separate working directory. Apply \`source/tracked.patch.txt\` with \`git apply\`. Copy each file under \`source/new/\` into that checkout at the same relative path after removing only its final \`.txt\` suffix. New-file inventory is in \`source/provenance.json\`. Verify every resulting Go source and module file against \`source-hashes.tsv\`.\n\nThe patch is relative to the baseline commit, not the embedded revision of the retained production executable. No whole \`server.go\` or \`ppolicy.go\` copy is bundled. CLI source copies are convenience references; the patch and new-file inventory remain authoritative for reconstruction. Hashes cover all final Go sources and \`go.mod/go.sum\`, not a standalone repository or build environment. Source hashes are derived from stable captured bytes and patch final blob identities are checked.\n\nFor the portable baseline benchmark, use a clean baseline production checkout plus only \`${portable.source}\` from the reconstructed candidate. It is benchmark instrumentation, not production baseline source. Main's actual commands, source revisions and log names are retained in \`generator/main-finished.json\`. This evidence generator does not execute those commands.\n`);
+output.set('limitations.txt', 'Observed local medians do not establish regression-free performance, complete compatibility, statistical significance or causal attribution. All negative reductions and below-native values remain. Same-candidate components are not original baseline comparisons. Diagnostics never replace core results. No new R18 fuzz, race-detector, retained-heap or controlled cold-cache result is claimed. APFS COW, warm caches and fixed endpoint order may affect results. Binary embedded dirty provenance is retained. Canonical data, databases and executables are identified by hashes and local paths, not bundled.\n');
+output.set('README.md', `# R18 Performance Evidence\n\nStatus: **EVIDENCE COMPLETE; ${core.belowNative.length ? 'PER-OPERATION OPENLDAP PARITY NOT ACHIEVED' : 'OBSERVED MEDIAN PARITY ONLY'}**. ${core.negatives.length}/48 core comparisons have negative median time reductions; ${core.belowNative.length}/48 remain below OpenLDAP throughput. All negative observations are retained without diagnostic correction.\n\nBaseline source is \`${baseline}\`; retained R17 production binary SHA256 is \`${baselineHash}\`. Its actual embedded revision is **302898b, dirty**, not a clean 15f428a build. Current SHA256 is \`${expectedHashes.current}\`; embedded revision \`${currentMetadata[2]}\`, modified=\`${currentMetadata[3]}\`. See [binary identities](binary-hashes.tsv) and [raw build metadata](binary-metadata.tsv).\n\nR18 reuses the parsed DN and selected database on eligible standard local SimpleBind paths. The guard runs before the first parse and excludes callbacks, overlays, controls and other unsupported paths. The original string entry, security/root handling, two Store.View snapshots and final password check remain shared. [Baseline patch](source/tracked.patch.txt), [new source files](source/new/), [all final Go/module hashes](source-hashes.tsv) and [reconstruction instructions](source/RECONSTRUCTION.md) preserve source evidence without duplicate full server files. Necessary [CLI sources and hashes](cli-source-hashes.tsv) are retained.\n\nFive core scripts: **31 JSON, 840 samples, 144 medians, 48 comparisons, 15 exports**. Hot Bind correct/wrong SSHA/plaintext plus Base/equality uses 1000 x 7; distributed uses 1000 x 3; group reads 100 x 3; root and group Compare 1000 x 7; concurrent equality uses 8 x 1000, warmup 0 then three measurements. See [inventory](statistics-inventory.tsv), [samples](samples.tsv), [medians](medians.tsv), [comparisons](comparisons.tsv), [negatives](negative-comparisons.tsv) and [below-native cells](below-openldap-comparisons.tsv). Raw latency/counter/verification metadata remain in JSON and [counters](counters.tsv).\n\nTwo separate default Bind [diagnostics](diagnostics/provenance.tsv): **10 JSON, 168 samples, 24 medians, 8 comparisons, six exports**. A/A runs current on both Go labels. Swap starts current first on 29481 and before second on 29482. Four Bind cases each use 1000 x 7; smoke and three SDK warmups per run are excluded from medians. [Endpoint identities](diagnostics/endpoint-identity.tsv), [diagnostic comparisons](diagnostics/comparisons.tsv) and [negatives](diagnostics/negative-comparisons.tsv) retain label semantics. Neither diagnostics nor prototype results replace core negatives.\n\n[Same-candidate components](components/same-candidate/comparisons.tsv) use main's eight-case hot/rotate256 x secret/wrong x reuse/string control, 500ms x 3. They are not the original baseline. [Portable before/current components](components/before-current/comparisons.tsv) use the independent four-case BenchmarkHandleSimpleBind on the actual frozen source baseline and candidate; ${matched.samples} samples, ${matched.medians} medians and ${matched.comparisons} metric comparisons. [Commands/provenance](components/provenance.tsv) and all raw logs remain separate from [isolated prototype exploration](exploratory/).\n\n[Validation logs](log-status.tsv) retain fresh main focused checks, full Go suite with cached status, empty vet with successful completion signal, and **355 native PASS records**. [Real fixture checks](real-fixture-status.tsv) actually ran on explicit/default 100k CLI seeds: success/wrong/success-again, with unmodified eligibility runtime, identity, reader stack and revisions checked. No new fuzz ran in R18 and no historical fuzz evidence is imported.\n\nAll **21 exports** independently match 100,002 entries, cksum 2143929969, 42,712,438 bytes, SHA256 \`${canonicalHash}\`: [15 core](export-checks.tsv), [six diagnostic](diagnostics/export-checks.tsv). All seven scripts use APFS \`cp -c\`; setup/warmup are outside operation timing. COW sharing and cache behavior remain limitations; distributed targets do not establish cold-cache performance. [Timing rules](timing-scope.tsv) and [limitations](limitations.txt) define the scope.\n\n[Main's completion signal](generator/main-finished.json) gates generation and hashing. [Checks](checks.tsv) record validation; SHA256SUMS covers every archive file except itself, including this README and generator. No production, main README, formal report or previous archive is changed. Databases, passwords, canonical/LDIF contents, executables and profiles are not bundled.\n`);
+output.set('source/RECONSTRUCTION.md', output.get('source/RECONSTRUCTION.md').replace("Main's actual commands", 'Main-reported invocation parameters'));
+for (const f of ['README.md', 'source/RECONSTRUCTION.md']) output.set(f, output.get(f).trimEnd() + '\n\n' + frozenNote + '\n');
+output.set('README.md', output.get('README.md').replace('\n\nBaseline source', '\n\nMain proposes retaining R18 as a small allocation optimization. CPU and network benefits are small and mixed; no regression-free or native-parity claim is made.\n\nBaseline source'));
+const allocationNote = ['components/before-current', 'components/interleaved'].map(scope => {
+  const rows = componentAllocationRows.slice(1).filter(r => r[0] === scope);
+  return `${scope === 'components/before-current' ? 'Original three-repeat' : 'Additional five-round'} per-case median differences: ${Math.min(...rows.map(r => r[5]))}-${Math.max(...rows.map(r => r[5]))} B/op saved, ${[...new Set(rows.map(r => r[8]))].join('/')} allocs/op saved`;
+}).join('. ');
+output.set('README.md', output.get('README.md').replace('\n\n[Validation logs]', `\n\n${allocationNote}. These are differences of separate sample medians, not a claim that every individual measurement saves exactly 72 B. See [exact allocation deltas](components/allocation-median-deltas.tsv); raw B/op variation and all samples remain intact.\n\n[Validation logs]`));
+output.set('README.md', output.get('README.md').replace('\n\n[Validation logs]', `\n\nAn additional five predetermined [alternating-order component rounds](components/interleaved/provenance.tsv) are a separate diagnostic: odd rounds before/current, even rounds current/before, four cases at 500ms each. They retain **40 samples, eight medians and 12 metric comparisons** in [separate tables](components/interleaved/comparisons.tsv), plus [run order](components/interleaved/run-order.tsv), [ranges](components/interleaved/ranges.tsv), raw logs and [negative values](components/interleaved/negative-comparisons.tsv). The original three-repeat matched samples, medians and negatives remain unchanged. Overlapping ranges do not establish equivalence or prove measurement noise.\n\n[Validation logs]`));
+requirePassing();
+for (const f of trackedReads.keys()) remember(f);
+check('source', 'frozen tracked patch unchanged through generation', readPath(frozenPatch) === sourcePatch);
+requirePassing();
+table('checks.tsv', checks);
+function existingFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`Archive symlink: ${dir}`);
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name, full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Archive symlink: ${full}`);
+    if (entry.isDirectory()) return existingFiles(full, name + '/');
+    if (!entry.isFile()) throw new Error(`Unexpected archive entry: ${full}`);
+    return [name];
+  });
+}
+const unexpected = existingFiles(dst).filter(f => f !== 'SHA256SUMS' && !output.has(f));
+if (unexpected.length) throw new Error(`Unexpected archive files; nothing published: ${unexpected.join(', ')}`);
+function write(f, body) {
+  if (!safeRelative(f)) throw new Error(`Unsafe archive path: ${f}`);
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, body);
+}
+for (const [f, body] of output) write(f, body);
+write('SHA256SUMS', [...output].sort(([a], [b]) => a.localeCompare(b)).map(([f, body]) => `${sha(body)}  ${f}`).join('\n') + '\n');
+for (const [f, body] of output) if (sha(fs.readFileSync(path.join(dst, f))) !== sha(body)) throw new Error(`Archive verification failed: ${f}`);
+if (!same(existingFiles(dst), [...output.keys(), 'SHA256SUMS'])) throw new Error('Archive manifest inventory mismatch');
+console.log(JSON.stringify({ state: 'EVIDENCE_COMPLETE', files_in_manifest: output.size, checks: checks.length - 1, failed_checks: 0,
+  core: { samples: core.samples.length - 1, medians: core.medians.length - 1, comparisons: core.comparisons.length - 1, exports: exports.length - 1 },
+  diagnostics: { samples: diagnostics.samples.length - 1, medians: diagnostics.medians.length - 1, comparisons: diagnostics.comparisons.length - 1, exports: diagnosticExports.length - 1 },
+  portable_components: matched, component_diagnostics: interleaved, current_sha256: expectedHashes.current }, null, 2));

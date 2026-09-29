@@ -2085,6 +2085,7 @@ func (server *Server) handleBind(
 			nil,
 		))
 	}
+	reusePasswordRoute := server.canReuseSimpleBindRoute(state, message, request)
 	requestDN, err := parseRuntimeConnectionDN(state.runtime, request.Name)
 	if err != nil {
 		clearSASLSession(state)
@@ -2469,12 +2470,14 @@ func (server *Server) handleBind(
 		}
 	}
 
-	bindResult, err := server.authenticatePasswordBind(
+	bindResult, err := server.authenticateSimpleBindRoute(
 		ctx,
 		state.runtime,
-		requestDN.String(),
+		policyDatabase,
+		requestDN,
 		password,
 		controls.passwordPolicy,
+		reusePasswordRoute,
 	)
 	if err != nil {
 		if failure := asOperationFailure(err); failure != nil {

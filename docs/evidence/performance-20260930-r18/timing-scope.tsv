@@ -1,0 +1,14 @@
+scope	rule
+common-hot	Explicit/default nonroot; correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.
+common-distributed	Explicit/default nonroot Base/equality; 1000 x 3. Rotated targets after SDK warmup; not a controlled cold-cache experiment.
+common-groups	Explicit/default nonroot member equality, 10/1000-member Base, nested membership; 100 x 3.
+root	Default access; literal and uppercase normalized root DN kept separate; five cases, each 1000 x 7.
+group-compare	Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7; first/last refer to fixture insertion order.
+concurrent	Root CLI equality; 8 workers x 1000 results; repeat 0 warmup excluded, repeats 1-3 measured; includes worker process overhead.
+diagnostics	Separate default Bind A/A and startup/port swap; four cases, each 1000 x 7; 168 samples, 24 medians, 8 comparisons; never pooled with core.
+operation-timing	Setup and WhoAmI verification excluded from measured latency. Bind stages time Bind explicitly. Raw counters and verification timing retained.
+APFS	All seven scripts use independent writable cp -c clones for all endpoints. Setup/warmup excluded; COW sharing and filesystem/cache behavior remain limitations.
+components	Local handler benchmarks are separate from LDAP macros. Candidate reuse/string is not baseline/current. Portable same-source benchmark represents frozen production before/current.
+exclusions	SDK warmups, smoke, concurrent repeat 0 and prototype exploration excluded from core medians; no new fuzz in R18.
+stopping-rule	Predetermined counts; no favorable selection, retries until passing, historical pooling or diagnostic correction.
+formulas	time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current. All negative values retained.

@@ -461,6 +461,21 @@ func (server *Server) authenticatePasswordBind(
 	if err != nil {
 		return result, nil
 	}
+	return server.authenticateResolvedPasswordBind(ctx, runtime, database, dn, rawDN, password, requestControl)
+}
+
+// Both entry points join before root authentication. Policy, ACL and storage
+// snapshots below are deliberately shared, including their error ordering.
+func (server *Server) authenticateResolvedPasswordBind(
+	ctx context.Context,
+	runtime *runtimeState,
+	database *runtimeDatabase,
+	dn directory.DN,
+	rawDN string,
+	password []byte,
+	requestControl bool,
+) (passwordBindResult, error) {
+	var result passwordBindResult
 	if rootPassword, ok := databaseAuthenticationRoot(runtime, *database, dn); ok {
 		authenticatedDN := dn.String()
 		if database.rootDN != nil && database.rootPasswordSet &&

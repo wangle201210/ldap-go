@@ -1,0 +1,52 @@
+{
+  "round": "R18",
+  "main_signal": "交替5轮组件完成EXIT0，所有4case每次仍少72B/2alloc，中位数减少hotcorrect0.90%、hotwrong0.66%、rotatecorrect0.27%、rotatewrong0.63%；有离群值全部保留，不替换原3次negative。当前无任何bench，可运行heavy hash生成R18完整证据，source production冻结。主线程下一步仅在其它isolated worktree跑单元tests（非benchmark）。请尽快出core medians/comparisons及README/SHA，不要将同candidate/string诊断称作旧版before。R18拟保留为小型分配优化，CPU/网络收益小且混合；仍未native逐项追平。",
+  "completed_at": "2026-09-29T22:31:22Z",
+  "timestamp_note": "Evidence worker recorded the received final completion signal; Asia/Shanghai date is 2026-09-30.",
+  "validation_exit_code": 0,
+  "performance_exit_code": 0,
+  "component_exit_code": 0,
+  "component_diagnostics_exit_code": 0,
+  "macro_finished": true,
+  "components_finished": true,
+  "component_diagnostics_finished": true,
+  "current_sha256": "5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370",
+  "source_git_head": "15f428a9f409c00e9de02a5b0d6ed81053e47c36",
+  "main_assessment": "PROPOSED_RETENTION_AS_SMALL_ALLOCATION_OPTIMIZATION; CPU/network benefits small and mixed; per-operation native parity not achieved",
+  "prior_main_signals": [
+    "R18fulltests PASS server139.182s/webadmin0.272；actual100kproof日志PASS3.049/3.422已完整；currenthash5546307a886f3b507e8f418eebeab0e020d074a1a49cea476fc66f657c3c6370，before7dd5...。",
+    "R18七scripts均passed，session13871结束，native355 PASS10.074s；core15+Bind诊断6=21exports。",
+    "基线sparse worktree因--no-checkout没有初始化index/源码，首次go test-c setup失败（没有性能样本），已用git read-tree -m -u HEAD补齐，不覆盖独有portablebenchmark。",
+    "真正matched before/current 3×500ms已结束，都PASS；4case每次少72B/2alloc，hotcorrect约4.8%快，但wrong/rotatewrong中位数有0.1%/3%负值且样本范围重叠。预先固定追加5轮交替顺序组件校准（odd before-current/even current-before，每case500ms，独立日志，不替换原3次）。"
+  ],
+  "portable_components": {
+    "source": "internal/server/bind_handler_bench_test.go",
+    "source_sha256": "d71ec932c9982ac53619773b5a48ac7a40ed7c1228fb87939c85800adcbc1d18",
+    "repeats": 3,
+    "benchtime": "500ms",
+    "command_provenance": "Main supplied executable names, benchmark selector, duration and repeat count. The exact shell command line was not supplied; command fields below describe those reported invocation parameters.",
+    "before": {
+      "log": "bind-matched-before.txt",
+      "test_binary": "server-before.test",
+      "source_root": "/var/tmp/ldap-go-bind-baseline-20260930",
+      "source_revision": "15f428a9f409c00e9de02a5b0d6ed81053e47c36",
+      "command": "Direct retained server-before.test; BenchmarkHandleSimpleBind; four cases; 500ms per case; count=3 (main-reported invocation parameters)."
+    },
+    "current": {
+      "log": "bind-matched-current.txt",
+      "test_binary": "server-current.test",
+      "source_root": "/Users/wanna/mine/github/ldap-go",
+      "source_revision": "15f428a9f409c00e9de02a5b0d6ed81053e47c36",
+      "command": "Direct retained server-current.test; BenchmarkHandleSimpleBind; four cases; 500ms per case; count=3 (main-reported invocation parameters)."
+    }
+  },
+  "interleaved_components": {
+    "rounds": 5,
+    "benchtime": "500ms",
+    "repeats_per_round": 1,
+    "odd_order": ["before", "current"],
+    "even_order": ["current", "before"],
+    "logs": "bind-interleaved-{before,current}-{1..5}.txt",
+    "role": "Separate diagnostic; no replacement or pooling of the original three-repeat matched component measurements."
+  }
+}

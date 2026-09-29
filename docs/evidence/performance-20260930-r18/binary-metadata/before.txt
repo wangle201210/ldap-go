@@ -1,0 +1,43 @@
+/var/tmp/ldap-go-perf-20260930-r18/before: go1.26.4
+	path	github.com/wangle201210/ldap-go/cmd/ldap-go
+	mod	github.com/wangle201210/ldap-go	v0.0.0-20260929213010-302898b7d671+dirty	
+	dep	gitee.com/Trisia/gotlcp	v1.5.0	h1:Q5ZCrSRqjVv+65/ekNDU0NVNPSWVSdNlko47U7Xbfl4=
+	dep	github.com/Azure/go-ntlmssp	v0.1.1	h1:l+FM/EEMb0U9QZE7mKNEDw5Mu3mFiaa2GKOoTSsNDPw=
+	dep	github.com/ebitengine/purego	v0.10.0	h1:QIw4xfpWT6GWTzaW5XEKy3HXoqrJGx1ijYHzTF0/ISU=
+	dep	github.com/emmansun/gmsm	v0.44.0	h1:QAg/Xuha84+AUPFIe7T8Ly4S8z54+UPwpBnHS8Y8Ubc=
+	dep	github.com/go-asn1-ber/asn1-ber	v1.5.8	h1:H9AZkK22UOmfX8J84ubyaZxKJZ3FMHVwn8swoMML7iQ=
+	dep	github.com/go-ldap/ldap/v3	v3.4.14	h1:D6PYdEgsaVzsXyr6w/yDC06Ria4uUhWm+Rb+er8lfAs=
+	dep	github.com/go-ldap/ldif	v0.0.0-20260715232944-3a3254950c8d	h1:gfmXr8f7X8j5qzYbRlg1CgxkducFXyHJ/wKRrTabRxA=
+	dep	github.com/google/uuid	v1.6.0	h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+	dep	github.com/hashicorp/go-uuid	v1.0.3	h1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=
+	dep	github.com/jcmturner/aescts/v2	v2.0.0	h1:9YKLH6ey7H4eDBXW8khjYslgyqG2xZikXP0EQFKrle8=
+	dep	github.com/jcmturner/dnsutils/v2	v2.0.0	h1:lltnkeZGL0wILNvrNiVCR6Ro5PGU/SeBvVO/8c/iPbo=
+	dep	github.com/jcmturner/gofork	v1.7.6	h1:QH0l3hzAU1tfT3rZCnW5zXl+orbkNMMRGJfdJjHVETg=
+	dep	github.com/jcmturner/goidentity/v6	v6.0.1	h1:VKnZd2oEIMorCTsFBnJWbExfNN7yZr3EhJAxwOkZg6o=
+	dep	github.com/jcmturner/gokrb5/v8	v8.4.4	h1:x1Sv4HaTpepFkXbt2IkL29DXRf8sOfZXo8eRKh687T8=
+	dep	github.com/jcmturner/rpc/v2	v2.0.3	h1:7FXXj8Ti1IaVFpSAziCZWNzbNuZmnvw/i6CqLNdWfZY=
+	dep	github.com/openwall/yescrypt-go	v1.0.0	h1:jsGk48zkFvtUjGVOhYPGh+CS595JmTRcKnpggK2AON4=
+	dep	github.com/sergeymakinen/go-crypt	v1.0.5	h1:oioEKvHDE17/rtEYmghLEsPBYEYuGZ4cIvfvmpNoUzE=
+	dep	github.com/slingdata-io/godbc	v0.0.9	h1:wh5MSI6l+eyTQ8pSbQcO4j195HwBXrVmNYRnHaGJKK8=
+	dep	github.com/tarantool/go-gostcrypto	v0.1.0	h1:sGjZil1nfXzxvBU4TOIZErTXcvCuCLH/pZnwfXr9uaY=
+	dep	github.com/xdg-go/scram	v1.2.0
+	=>	./third_party/xdg-go-scram	(devel)	
+	
+	dep	github.com/xdg-go/stringprep	v1.0.4	h1:XLI/Ng3O1Atzq0oBs3TWm+5ZVgkq2aqdlvP9JtoZ6c8=
+	dep	go.etcd.io/bbolt	v1.5.0	h1:S7GAl7Fxv12yohbwFfIbQCGDWbQbtDGPET4P/bD4lxU=
+	dep	golang.org/x/crypto	v0.54.0	h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
+	dep	golang.org/x/net	v0.57.0	h1:K5+3DljvIuDG9/Jv9rvyMywYNFCQ9RSUY6OOTTkT+tE=
+	dep	golang.org/x/sys	v0.47.0	h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+	dep	golang.org/x/term	v0.45.0	h1:NwWyBmoJCbfTHpxrWoZ9C6/VxOf7ic219I8xZZFdrf0=
+	dep	golang.org/x/text	v0.40.0	h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
+	dep	layeh.com/radius	v0.0.0-20231213012653-1006025d24f8	h1:orYXpi6BJZdvgytfHH4ybOe4wHnLbbS71Cmd8mWdZjs=
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOOS=darwin
+	build	GOARM64=v8.0
+	build	vcs=git
+	build	vcs.revision=302898b7d671c5509437fb7dad1c2313c631bd41
+	build	vcs.time=2026-09-29T21:30:10Z
+	build	vcs.modified=true

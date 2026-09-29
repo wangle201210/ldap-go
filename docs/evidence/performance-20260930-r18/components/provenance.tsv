@@ -1,0 +1,8 @@
+scope	role	source	command_or_design
+same-candidate	MAIN_CANDIDATE_INTERNAL_CONTROL_NOT_BASELINE	bind-components-main.txt	hot/rotate256 x secret/wrong x reuse/string; three 500ms repeats; equivalent retained runtime disables route reuse
+exploratory	ISOLATED_PROTOTYPE_NOT_MAIN_BASELINE	exploratory/bind-components.txt	same eight-case exploratory design; excluded from before/current and macro statistics
+before-current/before	FROZEN_SOURCE_PORTABLE_HANDLER	bind-matched-before.txt	Direct retained server-before.test; BenchmarkHandleSimpleBind; four cases; 500ms per case; count=3 (main-reported invocation parameters).
+before-current/current	FROZEN_SOURCE_PORTABLE_HANDLER	bind-matched-current.txt	Direct retained server-current.test; BenchmarkHandleSimpleBind; four cases; 500ms per case; count=3 (main-reported invocation parameters).
+portable-source	internal/server/bind_handler_bench_test.go	15f428a9f409c00e9de02a5b0d6ed81053e47c36	Same portable benchmark source must run on clean production baseline and final candidate; independent from candidate-only route control
+setup-failure	EXCLUDED_BEFORE_MEASUREMENT	main handoff	Initial baseline go test -c setup failed because --no-checkout left the sparse worktree index/source uninitialized. Main repaired it with git read-tree -m -u HEAD, retaining the independent portable benchmark. No performance samples came from that attempt.
+interleaved	INDEPENDENT_COMPONENT_DIAGNOSTIC	components/interleaved/	Additional five fixed alternating-order rounds; one 500ms sample/case/side/round; original matched three repeats unchanged
