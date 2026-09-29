@@ -1,0 +1,7 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+group-handler-root-1000	first	R12-baseline-eced1dc	3	41685	89568	423
+group-handler-root-1000	last	R12-baseline-eced1dc	3	107416	89648	427
+group-handler-root-1000	missing	R12-baseline-eced1dc	3	94094	89608	428
+group-handler-root-1000	first	R13-current	3	24602	82456	102
+group-handler-root-1000	last	R13-current	3	85546	82536	106
+group-handler-root-1000	missing	R13-current	3	75189	82624	111

@@ -1,0 +1,3 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_ssha	0	1000	101.59125000000004	102.92216300000004	81.62766699999992	79.31009669899755	-1.31006656577215
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_plaintext	0	1000	98.46191899999998	97.36614199999997	79.26625700000018	81.41049380389356	1.1128942144627674

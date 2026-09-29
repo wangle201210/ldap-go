@@ -454,7 +454,7 @@ func validateCompareRequest(
 			"inappropriate matching request",
 		)
 	}
-	normalized, err := registry.NormalizeEqualityAssertion(
+	normalized, err := registry.NormalizeEqualityAssertionCachedDN(
 		request.Attribute,
 		request.Assertion,
 	)

@@ -1,0 +1,12 @@
+scope	rule
+common	Explicit/default 3 measured repeats; hot/distributed 1000 ops; groups 100 ops.
+root	Literal and uppercase (raw variant normalized) DN remain separate; 1000 ops x 7; default access.
+group-compare	NONROOT; 20 ops x 5 per method/member/access/endpoint; setup, Bind and WhoAmI excluded from total_ms.
+bind-recheck	Separate default-access userBind-only run, SSHA and plaintext, 1000 ops x 7 per endpoint; member-index seed, no ACL append, unchanged source. Original common/default hot 3-repeat results remain intact; no pooling. Three extra exports, 18 overall.
+group-component	Root-bound real handler; fixed 1000-member group with stored operational attributes including subschemaSubentry; baseline eced1dc versus R13; unprofiled 500ms x 3; b.Loop excludes setup.
+exploratory-profile	Baseline-only first CPU/memory profiles predate optimization and include fixture setup and GC. Raw data preserved under exploratory/; excluded from comparison tables and retained-memory claims.
+warmup	SDK warmups and smoke JSON retained and excluded from medians; concurrent repeat 0 excluded.
+concurrent	Root-bound CLI; 8 workers x 1000 equality searches; 3 measured repeats per access mode.
+comparisons	Unrounded per-cell batch medians; all fields and negative results retained; no pooled endpoint/access/identity results or aggregate parity claim.
+memory	Existing bounded DN normalization cache with owned input and unchanged conservative accounting limits; mutation/ownership/bounds oracles; component B/op and allocs/op retained. No measured retained-heap improvement claimed.
+archive	Explicit allowlist; no passwords, DB, LDIF/canonical contents or executable binaries. Hashes identify binaries and canonical exports; baseline exploratory profiles are separately labelled.

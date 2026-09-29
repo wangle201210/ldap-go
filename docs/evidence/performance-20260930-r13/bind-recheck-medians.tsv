@@ -1,0 +1,7 @@
+suite	access_mode	identity	variant	stage	method	members	endpoint	repeats	operations	median_ms	operations_per_second_at_median
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_ssha	0	before	7	1000	101.59125000000004	9843.367415993007
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_ssha	0	current	7	1000	102.92216300000004	9716.080296524662
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_ssha	0	openldap	7	1000	81.62766699999992	12250.74826651607
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_plaintext	0	before	7	1000	98.46191899999998	10156.210747832369
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_plaintext	0	current	7	1000	97.36614199999997	10270.510666839406
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_plaintext	0	openldap	7	1000	79.26625700000018	12615.708598426663

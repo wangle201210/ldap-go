@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R12, 100,000 users, baseline `31f3c08`,
+Latest comparison: September 30, 2026, R13, 100,000 users, baseline `eced1dc`,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13. Rows are
 medians of three SDK batches with per-request endpoint rotation. Relative
 performance is `OpenLDAP/current * 100%`; 100% means parity. Frequency is
@@ -59,33 +59,33 @@ qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 86.60 ms | 70.41 ms | 81.3% | 80.8% |
-| Non-root Base, hot | High | 1,000 | 106.54 ms | 85.84 ms | 80.6% | 78.5% |
-| Non-root equality, hot | Very high | 1,000 | 110.37 ms | 87.50 ms | 79.3% | 78.0% |
-| Direct group discovery | High | 100 | 17.89 ms | 13.55 ms | 75.8% | 75.0% |
-| Group Base, 1,000 members | Medium | 100 | 93.19 ms | 88.26 ms | 94.7% | 97.6% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 45.47 ms | 37.32 ms | 82.1% | 81.3% |
+| User Bind, SSHA | Very high | 1,000 | 101.95 ms | 87.45 ms | 85.8% | 79.3% |
+| Non-root Base, hot | High | 1,000 | 108.59 ms | 86.53 ms | 79.7% | 77.8% |
+| Non-root equality, hot | Very high | 1,000 | 126.23 ms | 101.04 ms | 80.0% | 78.0% |
+| Direct group discovery | High | 100 | 15.40 ms | 11.52 ms | 74.8% | 71.1% |
+| Group Base, 1,000 members | Medium | 100 | 97.24 ms | 91.08 ms | 93.7% | 92.2% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 49.81 ms | 40.51 ms | 81.3% | 81.5% |
 
-For the measured simple-DN fixtures, 1,000-member last/missing Compare calls are
-34.3%-38.8% faster than `31f3c08`, reaching 45.3%-48.7% of OpenLDAP. Default
-first-member Compare is 5.7%-6.3% slower; an independent first-member component
-recheck remains 2.1% slower. All negative results remain. **Per-operation parity is not achieved;
+All measured group Compare cells improve 9.0%-20.3% versus `eced1dc`.
+For 1,000-member groups, first-member Compare reaches 79.1%-80.1% of native,
+last/missing 50.2%-56.4%. Default SSHA Bind is 5.6% slower initially and 1.3%
+slower in an independent seven-repeat recheck. All negatives remain.
+**Per-operation parity is not achieved;
 fast writes do not offset slow reads.** Shared-host results do not establish causality.
 
-R12 reuses a fully validated equal DN suffix within the request using an owned
-512-byte buffer; unsupported shapes/rules retain the full path. Full tests,
-995,633 differential fuzz executions, vet and 355 native checks passed; 15
-qualified exports match. A disk-full export attempt was excluded and rerun.
-R11's unexercised clone candidate was withdrawn. Broad reads/writes remain R8b;
-the operational-attribute gap remains. No persistent cache was added.
+R13 explicitly reuses the existing bounded DN normalization cache for server
+Compare while retaining per-request syntax checks, schema invalidation and the
+uncached default API. No authorization or comparison result is cached. Full
+tests, cold/warm cache oracles, vet and 355 native checks passed; 18 exports match.
+Broad reads/writes remain R8b evidence; the operational-attribute gap remains.
 
-See the [R12 report](docs/common-ldap-performance.md),
-[evidence index](docs/evidence/performance-20260930-r12/README.md) and
-[verbatim R10 archive](docs/common-ldap-performance-20260930-r10.md).
+See the [R13 report](docs/common-ldap-performance.md),
+[evidence index](docs/evidence/performance-20260930-r13/README.md) and
+[verbatim R12 archive](docs/common-ldap-performance-20260930-r12.md).
 
 The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
 conditional audit-observer component allocation reduction. It establishes no
-ordinary-request speedup or production-latency gain and is separate from R12.
+ordinary-request speedup or production-latency gain and is separate from R13.
 
 ## Requirements
 

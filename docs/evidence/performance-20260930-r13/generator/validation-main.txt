@@ -1,0 +1,12 @@
+Main final validation signal, received 2026-09-30:
+Final validation EXIT 0. Full suite: server 138.392s; webadmin 0.338s. Other package results, including cached results, are preserved in go-test.txt.
+Vet EXIT 0 per main. Empty go-vet.txt is preserved but is not standalone exit proof.
+Native OpenLDAP differential: 355 PASS records, package 10.247s, EXIT 0; independently count records from openldap-differential.txt during generation.
+Additional new cache tests in schema/server completed with -count=1 and EXIT 0; raw log cache-final-test.txt. Earlier focused-test.txt is also preserved.
+Source is frozen. All Go workloads use CGO_ENABLED=0, Go 1.26.4, Apple M1 Pro; native OpenLDAP 2.6.13.
+No new fuzz run. Existing cache invariants and comparison oracles remain meaningful and are covered by the full suite; this is not a claim of a fresh fuzz campaign.
+Component before/current: unprofiled 500ms x 3, real root-bound handleCompare with fixed Group1000 fixture and stored operational attributes. Medians must come from raw group-before.txt and group-current.txt.
+server-before.test was compiled from baseline eced1dcfd1dc229eee7b79bef4b1a9480e151149 for the first exploratory profile before optimization, then used for the unprofiled baseline component run. The first CPU/memory profiles include fixture setup and GC and are not before/after timing comparisons or retained-heap proof.
+Default CompareEntryAttribute remains uncached. CompareEntryAttributeCachedDN is opt-in for immutable published runtime schema and reuses only DN normalization, not authorization or comparison results. validateCompareRequest uses existing NormalizeEqualityAssertionCachedDN, validating syntax and length on every call. Registry API schema changes invalidate cache generations. Existing limits remain 128 entries, 1 MiB conservative byte budget, input at most 1024 bytes, depth at most 32.
+VALIDATION SIGNAL ONLY. Five macros are running with 15 exports planned. Wait for main's explicit final completion signal before publication.
+Evidence worker owns only docs/evidence/performance-20260930-r13/** and /var/tmp/r13generator. Main owns README and formal report. Worker runs no Go builds, tests, benchmarks or profiling.

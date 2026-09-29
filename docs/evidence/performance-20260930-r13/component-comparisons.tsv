@@ -1,0 +1,10 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	ns/op	41685	24602	40.98116828595418
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	B/op	89568	82456	7.9403358342265085
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	allocs/op	423	102	75.88652482269504
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	ns/op	107416	85546	20.360095330304606
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	B/op	89648	82536	7.933250044618956
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	allocs/op	427	106	75.17564402810304
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	ns/op	94094	75189	20.091610517142435
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	B/op	89608	82624	7.7939469690206264
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	allocs/op	428	111	74.06542056074767

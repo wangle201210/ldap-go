@@ -1,0 +1,40 @@
+R13 does not establish aggregate/native parity or whole compatibility.
+Default CompareEntryAttribute remains uncached. The new opt-in API reuses existing bounded DN normalization only; authorization and comparison results are not cached. Published runtime schema must remain immutable except through registry API methods, which invalidate cache generations. Shared Names slices are included in that contract. validateCompareRequest retains syntax and length validation on every call through NormalizeEqualityAssertionCachedDN.
+Cache limits remain 128 entries, 1 MiB conservative estimated byte accounting, input <=1024 bytes and depth <=32. Over-limit inputs retain uncached normalization; the byte estimate is not an exact retained-heap measurement.
+The realistic root-bound Group1000 handler component is distinct from NONROOT LDAP macros. Before uses server-before.test compiled from eced1dc before optimization, then measured unprofiled for 500ms x 3; current uses the same fixture and timing scope. Setup is outside b.Loop.
+The earlier first CPU/memory profiles include fixture setup and GC, were recorded only before optimization, and are archived separately under exploratory/. They are not a before/after timing comparison or retained-memory proof. No new fuzz campaign was run; full tests and additional cache tests passed, retaining meaningful existing cache invariants and comparison oracles.
+All positive and negative observations and unchanged-stage regressions are retained; no causal attribution is claimed for unrelated stages. B/op and allocs/op are not retained-heap measurements.
+For equal operation counts, current/native throughput = native_ms/current_ms. Exact 1000-member last/missing results follow:
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	4.320168	3.829041	2.1612090000000004	56.442566167351046	11.368238457393321
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	3.8538749999999995	3.3008739999999994	1.8495849999999998	56.03318999755823	14.349219940968505
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	3.485043	3.1490819999999995	1.5815010000000003	50.221016791560224	9.640081915775522
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	3.5271680000000005	3.0382909999999996	1.550126	51.01966862291993	13.860326471548866
+
+All group handler component results:
+
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	ns/op	41685	24602	40.98116828595418
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	B/op	89568	82456	7.9403358342265085
+group-handler-root-1000	first	R12-baseline-eced1dc	R13-current	allocs/op	423	102	75.88652482269504
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	ns/op	107416	85546	20.360095330304606
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	B/op	89648	82536	7.933250044618956
+group-handler-root-1000	last	R12-baseline-eced1dc	R13-current	allocs/op	427	106	75.17564402810304
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	ns/op	94094	75189	20.091610517142435
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	B/op	89608	82624	7.7939469690206264
+group-handler-root-1000	missing	R12-baseline-eced1dc	R13-current	allocs/op	428	111	74.06542056074767
+
+First/last denotes fixture insertion order, not native storage order. Historical workloads are not pooled into R13.
+
+Original default-access SSHA userBind results are retained alongside a separate 1000-op x 7 recheck for SSHA and plaintext. The recheck uses the default member-index seed without ACL append and unchanged source/binaries. These medians are not pooled with or substituted for the original 3-repeat macro. Original default bind comparisons:
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+common	default	nonroot	hot	userBind	simple_bind_ssha	0	1000	96.54104900000002	101.946363	87.44905100000001	85.77947111266737	-5.5989799737933055
+common	default	nonroot	hot	userBind	simple_bind_plaintext	0	1000	101.59343400000019	102.47004800000003	80.963583	79.01194991145117	-0.862864818606135
+
+Separate bind recheck comparisons:
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_ssha	0	1000	101.59125000000004	102.92216300000004	81.62766699999992	79.31009669899755	-1.31006656577215
+bind-recheck	default	nonroot	recheck	userBind	simple_bind_plaintext	0	1000	98.46191899999998	97.36614199999997	79.26625700000018	81.41049380389356	1.1128942144627674

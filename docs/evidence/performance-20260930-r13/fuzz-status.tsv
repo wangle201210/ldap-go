@@ -1,0 +1,2 @@
+status	scope	reason
+NOT_RUN_R13	No new fuzz campaign; full suite and focused new cache tests completed	Existing bounded-cache invariants and comparison oracles remain meaningful; no historical fuzz execution count imported.

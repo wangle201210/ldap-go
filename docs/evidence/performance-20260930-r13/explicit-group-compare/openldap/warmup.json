@@ -1,0 +1,84 @@
+{
+  "config": {
+    "uri": "ldap://127.0.0.1:29483",
+    "bind_dn": "cn=admin,dc=scale,dc=qualification",
+    "base": "dc=scale,dc=qualification",
+    "people": "ou=people,dc=scale,dc=qualification",
+    "password_env": "LDAP_BENCH_PASSWORD",
+    "label": "openldap-warmup",
+    "read_only": true,
+    "write": false,
+    "n": 2,
+    "write_batch": 100,
+    "entries": 100000
+  },
+  "started_at": "2026-09-29T20:13:56.499486Z",
+  "timeout_ms": 10000,
+  "stages": [
+    {
+      "name": "connect",
+      "operations": 1,
+      "total_ms": 0.414042,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "rootBind",
+      "operations": 2,
+      "total_ms": 0.36883299999999997,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "baseSearch",
+      "operations": 2,
+      "total_ms": 0.371167,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "indexedEquality",
+      "operations": 2,
+      "total_ms": 0.43704200000000004,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareTrue",
+      "operations": 2,
+      "total_ms": 0.31062500000000004,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "compareFalse",
+      "operations": 2,
+      "total_ms": 0.263583,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "substringPrefix",
+      "operations": 2,
+      "total_ms": 67.254583,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    },
+    {
+      "name": "substringNegative",
+      "operations": 2,
+      "total_ms": 63.929916,
+      "verification_operations": 0,
+      "verification_ms": 0,
+      "errors": []
+    }
+  ],
+  "error": ""
+}

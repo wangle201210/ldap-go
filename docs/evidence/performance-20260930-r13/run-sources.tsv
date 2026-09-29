@@ -1,0 +1,7 @@
+logical_run	source_run	script	role	included_in_official_statistics
+explicit-final	explicit-final	common-explicit.sh	OFFICIAL_MAIN	true
+default-final	default-final	common-default.sh	OFFICIAL_MAIN	true
+root-paired	root-paired	root-paired.sh	OFFICIAL_MAIN	true
+explicit-group-compare	explicit-group-compare	group-compare-explicit.sh	OFFICIAL_MAIN	true
+default-group-compare	default-group-compare	group-compare-default.sh	OFFICIAL_MAIN	true
+default-bind-recheck	default-bind-recheck	recheck-bind.sh	SEPARATE_BIND_RECHECK	true

@@ -1,0 +1,239 @@
+// R12 parser minimally adapted for R13. Publish only after main's final completion signal.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+if (!process.argv.includes('--main-finished')) throw new Error('Wait for main; then supply --main-finished and generator/main-finished.txt.');
+const src = '/var/tmp/ldap-go-perf-20260930-r13';
+const repo = '/Users/wanna/mine/github/ldap-go';
+const dst = `${repo}/docs/evidence/performance-20260930-r13`;
+const handoff = path.dirname(fileURLToPath(import.meta.url));
+const baseline = 'eced1dcfd1dc229eee7b79bef4b1a9480e151149';
+const endpoints = ['before', 'current', 'openldap'];
+const recheckRun = 'default-bind-recheck';
+const runs = ['explicit-final', 'default-final', 'root-paired', 'explicit-group-compare', 'default-group-compare', recheckRun];
+const scripts = ['common-explicit', 'common-default', 'root-paired', 'group-compare-explicit', 'group-compare-default', 'recheck-bind'];
+const logicalRun = run => run;
+const logs = ['group-before.txt', 'group-current.txt', 'focused-test.txt', 'cache-final-test.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt'];
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const inputPath = f => f.startsWith('generator/') ? path.join(handoff, f.slice('generator/'.length)) : path.join(src, f);
+const read = f => fs.readFileSync(inputPath(f), 'utf8');
+const exists = f => fs.existsSync(inputPath(f));
+const sha = f => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+const median = xs => { const a = [...xs].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const tsv = rows => rows.map(row => row.map(x => String(x ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const output = new Map();
+const table = (f, rows) => output.set(f, tsv(rows));
+const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const finite = n => Number.isFinite(n) && n >= 0;
+const checks = [['path', 'check', 'status', 'detail']];
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+const parseTSV = f => { const [head, ...rows] = read(f).trim().split('\n').map(s => s.split('\t')); return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]]))); };
+const batches = r => r === recheckRun ? ['recheck'] : r === 'root-paired' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke'] : logicalRun(r).endsWith('group-compare') ? ['groups', 'smoke'] : ['hot', 'distributed', 'groups', 'smoke'];
+const jsonFiles = runs.flatMap(r => [...batches(r).map(b => `${r}/${b}.json`), ...endpoints.map(e => `${r}/${e}/warmup.json`)]);
+const profiles = ['first.cpu.pprof', 'first.mem.pprof'];
+const files = [...logs, 'executable-sha256.txt', 'validate.sh', 'run-performance.sh', 'generator/validation-main.txt', 'generator/main-finished.txt', ...scripts.flatMap(s => [`${s}.sh`, `${s}.log`]), ...jsonFiles, ...runs.flatMap(r => [`${r}/validation.tsv`, ...endpoints.map(e => `${r}/${e}/server.log`), `${r}/openldap/reindex.log`]), ...runs.slice(0, 2).map(r => `${r}/concurrent.tsv`)];
+const missing = [...files, 'first-profile.txt', ...profiles].filter(f => !exists(f));
+if (missing.length) throw new Error(`Incomplete inputs: ${missing.join(', ')}`);
+if (['generator/main-finished.txt', 'generator/validation-main.txt'].some(f => !read(f).trim())) throw new Error('Main completion and validation records must be nonempty.');
+const archiveName = f => /\.(sh|log|mjs)$/.test(f) ? `${f}.txt` : f;
+for (const f of files) output.set(archiveName(f), read(f));
+output.set('exploratory/first-profile.txt', read('first-profile.txt'));
+for (const f of profiles) output.set('exploratory/' + f, fs.readFileSync(inputPath(f)));
+table('run-sources.tsv', [['logical_run', 'source_run', 'script', 'role', 'included_in_official_statistics'], ...runs.map((run, i) => [logicalRun(run), run, scripts[i] + '.sh', run === recheckRun ? 'SEPARATE_BIND_RECHECK' : 'OFFICIAL_MAIN', true])]);
+output.set('generate-evidence.mjs.txt', fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'));
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const samples = [[...dims, 'repeat', 'operations', 'total_ms', 'source']], groups = new Map();
+function add(key, s, f) { const k = JSON.stringify(key); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); samples.push([...key, s.repeat, s.operations, s.total_ms, f]); }
+const hot = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0], ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0], ['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10], ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0], ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0], ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'], ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const reports = [['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'errors', 'started_at']];
+const counters = [['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms']];
+for (const f of jsonFiles) {
+  const j = JSON.parse(read(f)), c = j.config, run = logicalRun(f.split('/')[0]), batch = path.basename(f, '.json');
+  check(f, 'top-level error and fixture', j.error === '' && c.entries === 100000, j.error);
+  reports.push([f, (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), JSON.stringify([j.error, ...(j.stages || []).flatMap(s => s.errors || [])]), j.started_at]);
+  if (batch === 'warmup') {
+    check(f, 'unchanged SDK warmup stages', same(j.stages.map(s => s.name), sdkStages) && c.n === 2 && c.read_only === true && c.write === false);
+    check(f, 'warmup operations and errors', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+    continue;
+  }
+  const root = run === 'root-paired', group = run.endsWith('group-compare'), recheck = run === recheckRun, smoke = batch.includes('smoke');
+  const repeats = smoke ? 1 : root || recheck ? 7 : group ? 5 : 3, n = smoke ? 2 : group ? 20 : batch === 'groups' ? 100 : 1000;
+  const cases = recheck ? hot.slice(0, 2) : root ? rootCases : group ? compareCases : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? hot.slice(4) : groupCases;
+  const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+  check(f, 'config and setup', c.n === n && c.repeats === repeats && c.setup_disposable === true && j.setup_adds > 0 && !!j.run_dn);
+  check(f, 'endpoints and cleanup', same(c.endpoints.map(e => e.name), endpoints) && same(j.cleanup_done, endpoints));
+  check(f, 'stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members || 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+  check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+  check(f, 'request and WhoAmI counts', j.samples.every(s => (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+  check(f, 'sample errors and totals', j.samples.every(s => !s.error && !s.errors?.length && finite(s.total_ms) && finite(s.verification_ms)));
+  const rootDN = batch.startsWith('normalized') ? 'CN=ADMIN,DC=SCALE,DC=QUALIFICATION' : 'cn=admin,dc=scale,dc=qualification';
+  check(f, 'root variant or nonroot sample identity', c.root_bind_dn === rootDN && j.samples.every(s => root ? s.root_bind_dn === rootDN : !s.root_bind_dn));
+  for (const s of j.samples) {
+    const dimensions = [recheck ? 'bind-recheck' : root ? 'root' : group ? 'group-compare' : 'common', root ? 'default' : run.split('-')[0], root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members || 0, s.endpoint];
+    counters.push([f, ...dimensions, s.repeat, s.operations, s.completed, s.requests, s.latency_ms.length, s.verification_requests, s.verification_ms]);
+    if (!smoke) add(dimensions, s, f);
+  }
+}
+check('archive', '31 main plus four separate bind recheck raw JSON reports', jsonFiles.length === 35 && jsonFiles.filter(f => !f.startsWith(recheckRun + '/')).length === 31);
+check('recheck-bind.sh', 'default access seed and seven-repeat userBind-only scope', read('recheck-bind.sh').includes('cp "$audit/member-index.db"') && !/member-acl\.db|^access to|access-configuration/m.test(read('recheck-bind.sh')) && read('recheck-bind.sh').includes('-stages userBind -n 1000 -repeats 7'));
+const exports = [['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_run']];
+for (const run of runs) {
+  const f = `${run}/validation.tsv`, rows = parseTSV(f);
+  check(f, 'three export identities', same(rows.map(r => r.run), endpoints));
+  for (const r of rows) {
+    const canonical = path.join(src, run, r.run, 'data.canonical');
+    exports.push([logicalRun(run), r.run, r.canonical_entries, r.canonical_cksum, r.canonical_bytes, sha(canonical), run]);
+    check(f, r.run, +r.canonical_entries === 100002 && +r.canonical_cksum === 2143929969 && +r.canonical_bytes === 42712438 && fs.statSync(canonical).size === 42712438);
+  }
+  check(run, 'password and seeded database cleanup', ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !exists(`${run}/${f}`)));
+  if (run.endsWith('-final')) {
+    const f = `${run}/concurrent.tsv`, rows = parseTSV(f);
+    check(f, 'concurrent warmup and measured repeats', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => finite(+r.ms)));
+    for (const r of rows.filter(r => +r.repeat > 0)) add(['concurrent', run.split('-')[0], 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f);
+  }
+}
+check('exports', '18 identical canonical SHA256 values: 15 main plus three recheck', exports.length === 19 && exports.slice(1).filter(r => r[0] === recheckRun).length === 3 && new Set(exports.slice(1).map(r => r[5])).size === 1);
+table('export-checks.tsv', exports);
+const summary = [[...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median']];
+for (const [key, rows] of groups) {
+  const d = JSON.parse(key), expected = ['root', 'bind-recheck'].includes(d[0]) ? 7 : d[0] === 'group-compare' ? 5 : 3;
+  check(key, 'median repeats and operations', same(rows.map(s => s.repeat), seq(expected)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => finite(s.total_ms)));
+  const ms = median(rows.map(s => s.total_ms));
+  summary.push([...d, rows.length, rows[0].operations, ms, ms ? rows[0].operations * 1000 / ms : '-']);
+}
+const comparisons = [[...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct']];
+for (const key of new Set(summary.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+  const rows = endpoints.map(e => summary.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+  check(key, 'comparison endpoints and operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+  if (rows.some(r => !r)) continue;
+  const [b, c, o] = rows.map(r => r[10]);
+  comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, c ? 100 * o / c : '-', b ? 100 * (1 - c / b) : '-']);
+}
+table('samples.tsv', samples); table('medians.tsv', summary); table('comparisons.tsv', comparisons);
+
+for (const suite of ['common', 'root', 'concurrent', 'group-compare', 'bind-recheck']) {
+  table(suite + '-medians.tsv', [summary[0], ...summary.slice(1).filter(r => r[0] === suite)]);
+  table(suite + '-comparisons.tsv', [comparisons[0], ...comparisons.slice(1).filter(r => r[0] === suite)]);
+}
+table('bind-recheck-samples.tsv', [samples[0], ...samples.slice(1).filter(r => r[0] === 'bind-recheck')]);
+check('bind-recheck', '42 separate samples and original default SSHA result retained', samples.slice(1).filter(r => r[0] === 'bind-recheck').length === 42 && summary.slice(1).filter(r => r[0] === 'common' && r[1] === 'default' && r[3] === 'hot' && r[4] === 'userBind' && r[5] === 'simple_bind_ssha').every(r => r[8] === 3));
+const methods = ['R12-baseline-eced1dc', 'R13-current'];
+const component = [['suite', 'case', 'implementation', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op']], componentGroups = new Map();
+for (const [index, f] of ['group-before.txt', 'group-current.txt'].entries()) {
+  const body = read(f), keys = [];
+  for (const m of body.matchAll(/^(Benchmark\S+)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op/gm)) {
+    const names = m[1].split('/');
+    const key = JSON.stringify(['group-handler-root-1000', names[1], methods[index]]);
+    check(f, 'realistic handler benchmark name', names.length === 2 && names[0] === 'BenchmarkLocalGroupCompare');
+    if (!componentGroups.has(key)) componentGroups.set(key, []);
+    const rows = componentGroups.get(key), row = [...JSON.parse(key), rows.length + 1, ...m.slice(2).map(Number)];
+    rows.push(row); component.push(row); keys.push(key);
+  }
+  const expected = ['first', 'last', 'missing'].map(c => JSON.stringify(['group-handler-root-1000', c, methods[index]]));
+  check(f, 'complete benchmark inventory and PASS', same([...new Set(keys)], expected) && /^PASS$/m.test(body) && !/^FAIL(?:\s|$)/m.test(body) && (index === 0 || /^ok\s/m.test(body)));
+}
+const cm = [['suite', 'case', 'implementation', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+for (const [key, rows] of componentGroups) {
+  check(key, 'three component repeats', rows.length === 3 && rows.every(r => r.slice(4).every(finite) && r[4] > 0));
+  cm.push([...JSON.parse(key), rows.length, ...[5, 6, 7].map(i => median(rows.map(r => r[i])))]);
+}
+const cc = [['suite', 'case', 'reference', 'candidate', 'metric', 'reference_value', 'candidate_value', 'reduction_pct']];
+for (const name of ['first', 'last', 'missing']) {
+  const [b, c] = methods.map(method => cm.find(r => r[1] === name && r[2] === method));
+  check(name, 'paired group handler medians', !!b && !!c);
+  if (!b || !c) continue;
+  for (const [i, metric] of [[4, 'ns/op'], [5, 'B/op'], [6, 'allocs/op']]) cc.push(['group-handler-root-1000', name, ...methods, metric, b[i], c[i], b[i] ? 100 * (1 - c[i] / b[i]) : '-']);
+}
+table('component-samples.tsv', component); table('component-medians.tsv', cm); table('component-comparisons.tsv', cc);
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+for (const f of logs) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  statuses.push([f, f === 'group-before.txt' ? 'FINAL_BASELINE_eced1dc' : 'FINAL_R13', Buffer.byteLength(body), count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm), count(/^\s*--- SKIP:/gm), count(/^PASS$/gm), count(/^FAIL(?:\s|$)/gm), count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  if (f !== 'go-vet.txt') check(f, 'final successful log', !/^FAIL(?:\s|$)/m.test(body) && (/^ok\s/m.test(body) || /^PASS$/m.test(body)));
+  if (f === 'openldap-differential.txt') check(f, '355 native PASS records without skips', count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) > 0 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === count(/^--- PASS:/gm) && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+}
+check('validate.sh', 'no CGO and no new fuzz campaign', read('validate.sh').includes('export CGO_ENABLED=0') && !/-fuzz(?:=|\s)/.test(read('validate.sh')));
+check('cache-final-test.txt', 'two fresh successful schema/server package records', [...read('cache-final-test.txt').matchAll(/^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/(schema|server)\s+[\d.]+s$/gm)].length === 2 && !/\(cached\)/.test(read('cache-final-test.txt')));
+table('fuzz-status.tsv', [['status', 'scope', 'reason'], ['NOT_RUN_R13', 'No new fuzz campaign; full suite and focused new cache tests completed', 'Existing bounded-cache invariants and comparison oracles remain meaningful; no historical fuzz execution count imported.']]);
+for (const s of scripts) check(s + '.log', 'script completion', read(s + '.log').includes('Common-operation comparison passed.'));
+const binaries = [['file', 'sha256']];
+for (const f of ['before', 'current', 'server-before.test', 'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group']) binaries.push([f, sha(path.join(src, f))]);
+for (const e of endpoints.slice(0, 2)) check('executable-sha256.txt', e + ' matches', read('executable-sha256.txt').split('\n').some(l => l.trim().split(/\s+/).join(' ') === binaries.find(r => r[0] === e)[1] + ' ' + src + '/' + e));
+table('binary-hashes.tsv', binaries);
+const sourceFiles = ['internal/schema/compare_entry.go', 'internal/schema/compare_entry_cache_test.go', 'internal/schema/compare_simple_dn.go', 'internal/schema/dn_cache.go', 'internal/schema/dn_cache_test.go', 'internal/schema/dn_cache_bytes_test.go', 'internal/schema/equality_assertion_cache.go', 'internal/schema/equality_assertion_cache_test.go', 'internal/schema/registry.go', 'internal/server/sock_backend_frontend.go', 'internal/server/write.go', 'internal/server/compare_assertion_cache_test.go', 'internal/server/compare_group_bench_test.go', 'internal/cmd/ldapcommonbench/main.go', 'internal/cmd/ldapcommonbench/group_compare_test.go'];
+table('source-hashes.tsv', [['path', 'sha256'], ...sourceFiles.map(f => [f, sha(path.join(repo, f))])]);
+for (const f of sourceFiles.filter(f => !['registry.go', 'sock_backend_frontend.go', 'write.go', 'main.go'].includes(path.basename(f)))) output.set('source/' + path.basename(f) + '.txt', fs.readFileSync(path.join(repo, f), 'utf8'));
+const profileBody = read('first-profile.txt');
+check('first-profile.txt', 'successful baseline exploration excluded from comparison inputs', /^PASS$/m.test(profileBody) && /^ok\s/m.test(profileBody) && !logs.includes('first-profile.txt'));
+table('profile-status.tsv', [['path', 'role', 'baseline', 'binary', 'bytes', 'sha256', 'included_in_timing_comparison', 'scope'], ...['first-profile.txt', ...profiles].map(f => ['exploratory/' + f, 'BASELINE_EXPLORATORY_ONLY', baseline, 'server-before.test', fs.statSync(inputPath(f)).size, sha(inputPath(f)), false, 'Recorded before optimization; CPU/memory exploration includes fixture setup and GC; not before/after timing or retained-heap proof.'])]);
+table('memory-proof.tsv', [
+  ['property', 'evidence', 'scope_or_limit'],
+  ['scope', 'CompareEntryAttributeCachedDN opts into the existing registry DN normalization cache; default CompareEntryAttribute passes cacheDN=false', 'No cached authorization or comparison result; unsupported matching rules retain existing behavior'],
+  ['unchanged bounds', 'maxCachedDNs=128; maxCachedDNBytes=1<<20; maxCachedDNInput=1024; maxCachedDNDepth=32', 'Byte budget uses conservative estimatedDNCacheBytes accounting, not an exact Go heap measurement; over-limit inputs are normalized without retention'],
+  ['owned input and output', 'strings.Clone owns raw keys and parser input on misses; byte-input hits do not retain caller storage; assertion normalization returns independently owned bytes', 'TestCompareEntryAttributeCachedDNOwnership; existing DN and equality-assertion ownership tests; cache-final-test.txt; go-test.txt'],
+  ['live validation', 'normalizeEqualityAssertionLocked validates effective syntax and length before consulting DN normalization cache on every call', 'TestCompareAssertionCacheKeepsValidationLive checks warm-cache syntax-length and equality-rule changes; no validation-result cache'],
+  ['schema invalidation', 'Cache generation follows preparedNames.generation; registry mutation APIs invalidate results', 'Published runtime schema must be immutable except through registry methods, including shared Names slices; direct edits violate opt-in contract'],
+  ['bounds and oracle coverage', 'TestCompareEntryAttributeCachedDNParity, Ownership, SchemaChange, Bounds; TestCompareEntryAttributeRemainsUncached; existing cache invariants', 'Full suite and final focused cache tests passed per main; no new fuzz campaign or retained-heap experiment'],
+  ['allocation measurements', 'component-samples.tsv; component-medians.tsv', 'B/op and allocs/op from unprofiled handler benchmarks; not a measurement of retained heap'],
+  ['exploratory profiles', 'exploratory/first.cpu.pprof; exploratory/first.mem.pprof; exploratory/first-profile.txt', 'Baseline eced1dc only, before optimization; includes fixture setup and GC; excluded from timing comparisons and retained-memory claims']
+]);
+table('provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['production_baseline', baseline + ' (R12)', 'main; git rev-parse eced1dc'],
+  ['production_scope', 'Default CompareEntryAttribute stays uncached. New CompareEntryAttributeCachedDN opts into the existing bounded DN normalization cache for published runtime schema; handleCompare selects that API. validateCompareRequest uses existing NormalizeEqualityAssertionCachedDN. Only DN normalization is reused, never authorization or comparison results.', 'compare_entry.go; sock_backend_frontend.go; write.go; main'],
+  ['ownership', 'Cache misses own input with strings.Clone; byte-input hits do not retain caller buffers. Normalized assertion bytes are independently owned. Existing per-request simple-DN fast comparison remains in use.', 'memory-proof.tsv; archived source'],
+  ['schema_contract', 'Published runtime schema is immutable except through registry API mutation methods, which invalidate the cache generation. Shared Names slices are included in this opt-in contract. Default uncached comparison remains available for callers outside that contract.', 'dn_cache.go; compare_entry.go; new schema-change and uncached-default tests'],
+  ['validation_on_each_call', 'NormalizeEqualityAssertionCachedDN checks effective syntax and length before any DN cache lookup; updates to syntax length and equality rules remain live.', 'equality_assertion_cache.go; compare_assertion_cache_test.go'],
+  ['implementation_constraints', 'Reuses existing cache with unchanged 128-entry, 1 MiB conservative accounting, <=1024-byte input and <=32-depth limits. No authorization/result cache, storage/index changes or CGO.', 'main; dn_cache.go'],
+  ['environment', '100k macro fixture; Apple M1 Pro; Go 1.26.4; CGO_ENABLED=0 for all Go; native OpenLDAP 2.6.13', 'main'],
+  ['group_component_fixture', 'BenchmarkLocalGroupCompare uses actual root-bound handleCompare, fixed 1000-member group, subschemaSubentry already stored, expected first/last/missing LDAP result checks. Setup and fixture result checks are outside the timed b.Loop.', 'source/compare_group_bench_test.go.txt; main'],
+  ['component_before', 'server-before.test was compiled from source eced1dc for the first exploratory profile before optimization, then executed for fresh unprofiled 500ms x 3 measurements. Same realistic root Group1000 handler fixture.', 'main; group-before.txt; binary-hashes.tsv'],
+  ['component_current', 'Actual R13 bounded-normalization-cache integration; same handler fixture; unprofiled 500ms x 3. Current component log comes from go test; no separately retained current component test executable was supplied.', 'main; group-current.txt'],
+  ['component_identity', 'Root fixture; local handler timing. Kept separate from nonroot LDAP group-compare macro identity and native timing.', 'benchmark source; component suite name; counters.tsv'],
+  ['compare_uid_component', 'No R13 CompareUID component measurement supplied; benchmark code is not evidence of execution. No historical component logs imported.', 'main scope'],
+  ['exploratory_profile', 'First CPU/memory profiles were recorded before optimization using source eced1dc and include fixture setup and GC. Raw profiles and profile log are archived under exploratory/, excluded from all component comparisons. No current profile or retained-memory claim.', 'main; profile-status.tsv'],
+  ['group_compare', 'Explicit/default NONROOT Bind plus WhoAmI before measurement and after each operation; 20 ops x 5; first/last/missing x 10/1000 members; shared assertions on all endpoints.', 'runner; scripts; counters.tsv'],
+  ['group_order', 'First/last means fixture insertion order, not native OpenLDAP storage order.', 'runner; main'],
+  ['default_stages', 'SDK defaults unchanged; group Compare is opt-in; NoRootFallback preserves failures and partial counts without retry as root.', 'runner; group_compare_test.go'],
+  ['historical_workloads', 'Only the five R13 macros, the separate default bind recheck and the R13 before/current handler component pair enter statistics. Existing SDK workload scripts retain their common/root/group dimensions. No historical timings or diagnostics imported.', 'main scope; run-sources.tsv'],
+  ['default_bind_recheck', 'Original default SSHA userBind regression is retained. A separate default-access run executes userBind only for both password schemes at 1000 ops x 7, with the member-index seed and no ACL append, unchanged source and binaries. Separate suite and tables; no pooling or replacement. Three extra canonical exports bring the total to 18.', 'main; recheck-bind.sh.txt; bind-recheck-comparisons.tsv'],
+  ['fuzz', 'No new fuzz run. Existing cache invariants and comparison oracles remain meaningful; full suite and additional focused cache tests passed. No historical fuzz count claimed as R13 work.', 'main; fuzz-status.tsv; raw validation logs'],
+  ['validation', read('generator/validation-main.txt'), 'main final validation signal; raw logs'],
+  ['completion', read('generator/main-finished.txt'), 'main final performance signal'],
+  ['generator', 'R12 parser minimally adapted to five R13 macros, the separate default bind recheck and real group handler components, removing prior retry and first-only component recheck diagnostics. Worker runs no workloads, Go builds, tests, benchmarks or profiling. Main owns README and formal reports.', 'generate-evidence.mjs.txt']
+]);
+table('timing-scope.tsv', [
+  ['scope', 'rule'],
+  ['common', 'Explicit/default 3 measured repeats; hot/distributed 1000 ops; groups 100 ops.'],
+  ['root', 'Literal and uppercase (raw variant normalized) DN remain separate; 1000 ops x 7; default access.'],
+  ['group-compare', 'NONROOT; 20 ops x 5 per method/member/access/endpoint; setup, Bind and WhoAmI excluded from total_ms.'],
+  ['bind-recheck', 'Separate default-access userBind-only run, SSHA and plaintext, 1000 ops x 7 per endpoint; member-index seed, no ACL append, unchanged source. Original common/default hot 3-repeat results remain intact; no pooling. Three extra exports, 18 overall.'],
+  ['group-component', 'Root-bound real handler; fixed 1000-member group with stored operational attributes including subschemaSubentry; baseline eced1dc versus R13; unprofiled 500ms x 3; b.Loop excludes setup.'],
+  ['exploratory-profile', 'Baseline-only first CPU/memory profiles predate optimization and include fixture setup and GC. Raw data preserved under exploratory/; excluded from comparison tables and retained-memory claims.'],
+  ['warmup', 'SDK warmups and smoke JSON retained and excluded from medians; concurrent repeat 0 excluded.'],
+  ['concurrent', 'Root-bound CLI; 8 workers x 1000 equality searches; 3 measured repeats per access mode.'],
+  ['comparisons', 'Unrounded per-cell batch medians; all fields and negative results retained; no pooled endpoint/access/identity results or aggregate parity claim.'],
+  ['memory', 'Existing bounded DN normalization cache with owned input and unchanged conservative accounting limits; mutation/ownership/bounds oracles; component B/op and allocs/op retained. No measured retained-heap improvement claimed.'],
+  ['archive', 'Explicit allowlist; no passwords, DB, LDIF/canonical contents or executable binaries. Hashes identify binaries and canonical exports; baseline exploratory profiles are separately labelled.']
+]);
+output.set('limitations.txt', 'R13 does not establish aggregate/native parity or whole compatibility.\nDefault CompareEntryAttribute remains uncached. The new opt-in API reuses existing bounded DN normalization only; authorization and comparison results are not cached. Published runtime schema must remain immutable except through registry API methods, which invalidate cache generations. Shared Names slices are included in that contract. validateCompareRequest retains syntax and length validation on every call through NormalizeEqualityAssertionCachedDN.\nCache limits remain 128 entries, 1 MiB conservative estimated byte accounting, input <=1024 bytes and depth <=32. Over-limit inputs retain uncached normalization; the byte estimate is not an exact retained-heap measurement.\nThe realistic root-bound Group1000 handler component is distinct from NONROOT LDAP macros. Before uses server-before.test compiled from eced1dc before optimization, then measured unprofiled for 500ms x 3; current uses the same fixture and timing scope. Setup is outside b.Loop.\nThe earlier first CPU/memory profiles include fixture setup and GC, were recorded only before optimization, and are archived separately under exploratory/. They are not a before/after timing comparison or retained-memory proof. No new fuzz campaign was run; full tests and additional cache tests passed, retaining meaningful existing cache invariants and comparison oracles.\nAll positive and negative observations and unchanged-stage regressions are retained; no causal attribution is claimed for unrelated stages. B/op and allocs/op are not retained-heap measurements.\nFor equal operation counts, current/native throughput = native_ms/current_ms. Exact 1000-member last/missing results follow:\n\n' + tsv([comparisons[0], ...comparisons.slice(1).filter(r => r[0] === 'group-compare' && r[6] === 1000 && ['groupCompareTrueLast', 'groupCompareFalse'].includes(r[4]))]) + '\nAll group handler component results:\n\n' + tsv(cc) + '\nFirst/last denotes fixture insertion order, not native storage order. Historical workloads are not pooled into R13.\n');
+output.set('limitations.txt', output.get('limitations.txt') + '\nOriginal default-access SSHA userBind results are retained alongside a separate 1000-op x 7 recheck for SSHA and plaintext. The recheck uses the default member-index seed without ACL append and unchanged source/binaries. These medians are not pooled with or substituted for the original 3-repeat macro. Original default bind comparisons:\n\n' + tsv([comparisons[0], ...comparisons.slice(1).filter(r => r[0] === 'common' && r[1] === 'default' && r[3] === 'hot' && r[4] === 'userBind')]) + '\nSeparate bind recheck comparisons:\n\n' + tsv([comparisons[0], ...comparisons.slice(1).filter(r => r[0] === 'bind-recheck')]));
+table('report-checks.tsv', reports); table('counters.tsv', counters); table('log-status.tsv', statuses); table('checks.tsv', checks);
+const failures = checks.slice(1).filter(r => r[2] === 'FAIL');
+table('generation-status.tsv', [['item', 'value'], ['state', failures.length ? 'CHECK_FAILED' : 'PUBLISHED_AFTER_MAIN_FINISHED'], ['baseline', baseline], ['raw_json', jsonFiles.length], ['main_raw_json', 31], ['bind_recheck_raw_json', 4], ['default_group_official_source', 'default-group-compare'], ['exports', exports.length - 1], ['main_exports', 15], ['bind_recheck_exports', 3], ['median_groups', summary.length - 1], ['measured_samples', samples.length - 1], ['bind_recheck_samples', 42], ['component_samples', component.length - 1], ['exploratory_profiles', profiles.length], ['fresh_fuzz_campaign', 'NOT_RUN'], ['failed_checks', failures.length], ['completion', 'See generator/main-finished.txt and validation-main.txt; empty vet output alone does not establish exit status.']]);
+if (failures.length) throw new Error('Evidence checks failed; nothing published: ' + JSON.stringify(failures));
+for (const [f, content] of output) {
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+}
+// Main owns README.md. Preserve it and include it if present at publication.
+const archived = [...output.keys(), ...(fs.existsSync(path.join(dst, 'README.md')) ? ['README.md'] : [])].sort();
+const hashes = archived.map(f => sha(path.join(dst, f)) + '  ' + f);
+fs.writeFileSync(path.join(dst, 'SHA256SUMS'), hashes.join('\n') + '\n');
+console.log(JSON.stringify({ files: hashes.length, exports: exports.length - 1, median_groups: summary.length - 1, measured_samples: samples.length - 1, component_samples: component.length - 1, checks: checks.length - 1, failed_checks: failures }, null, 2));
