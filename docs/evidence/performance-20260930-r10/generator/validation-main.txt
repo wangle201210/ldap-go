@@ -1,0 +1,12 @@
+Main confirmed R10 validate.sh EXIT 0 and final source unchanged.
+Full-suite server: 138.878s; webadmin: 0.269s.
+Focused tests: directory 3.039s; schema 1.853s.
+FuzzCompareEntryAttributeSimpleDN: 1086188 executions, requested 30s, final progress 31s, package 31.024s, PASS.
+Vet: exit 0.
+Native differential: 355 PASS records, 0 FAIL, 0 SKIP, 11.371s.
+Current Compare benchmark: 60.736s, 1s x 3, unprofiled.
+Group component benchmark: 6.537s; original is the old public three-method oracle with 2N normalization (pre-R9), new is R10, first/last/absent. This is not a comparison with the R9 baseline.
+The fast plan builds only after the first fully normalized nonmatch, not a first match; at most 8 single-AVA RDNs, values letters/digits/._-, supported caseIgnore/Exact[IA5] rules and same attribute identities. Other cases retain full normalization and error order.
+No persistent cache, public storage index, storage change or CGO is introduced.
+Main reports native source review: compare.c/attr.c attr_valfind uses a_nvals normalized values and binary search when the sorted flag is present, otherwise linear search. No claim is made that the configured member attribute is sorted.
+All five official macro scripts are now running, expected 15 exports. This is the validation signal only; wait for main's final macro completion signal before publication.

@@ -1,0 +1,16 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+compare	targets-1	R9-baseline-19b05f6	R10-current	ns/op	11538	11322	1.8720748829953227
+compare	targets-1	R9-baseline-19b05f6	R10-current	B/op	11232	11232	0
+compare	targets-1	R9-baseline-19b05f6	R10-current	allocs/op	138	138	0
+compare	targets-1024	R9-baseline-19b05f6	R10-current	ns/op	19219	19188	0.16129871481346258
+compare	targets-1024	R9-baseline-19b05f6	R10-current	B/op	12037	12037	0
+compare	targets-1024	R9-baseline-19b05f6	R10-current	allocs/op	301	301	0
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/first	pre-R9-public-oracle-original-2N	R10-new	ns/op	38712	7163	81.49669353172143
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/first	pre-R9-public-oracle-original-2N	R10-new	B/op	94816	3472	96.33817077286534
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/first	pre-R9-public-oracle-original-2N	R10-new	allocs/op	1180	170	85.59322033898304
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/last	pre-R9-public-oracle-original-2N	R10-new	ns/op	7424151	112960	98.4784792227421
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/last	pre-R9-public-oracle-original-2N	R10-new	B/op	3672648	3584	99.90241373526676
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/last	pre-R9-public-oracle-original-2N	R10-new	allocs/op	171010	173	99.89883632536109
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/absent	pre-R9-public-oracle-original-2N	R10-new	ns/op	7335155	110059	98.49956817545096
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/absent	pre-R9-public-oracle-original-2N	R10-new	B/op	3648640	3560	99.90242939835116
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/absent	pre-R9-public-oracle-original-2N	R10-new	allocs/op	171010	173	99.89883632536109

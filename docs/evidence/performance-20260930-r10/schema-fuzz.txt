@@ -1,0 +1,15 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/54 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 54/54 completed, now fuzzing with 4 workers
+fuzz: elapsed: 3s, execs: 81539 (27178/sec), new interesting: 87 (total: 141)
+fuzz: elapsed: 6s, execs: 134506 (17653/sec), new interesting: 138 (total: 192)
+fuzz: elapsed: 9s, execs: 134506 (0/sec), new interesting: 138 (total: 192)
+fuzz: elapsed: 12s, execs: 299227 (54943/sec), new interesting: 153 (total: 207)
+fuzz: elapsed: 15s, execs: 398649 (33131/sec), new interesting: 161 (total: 215)
+fuzz: elapsed: 18s, execs: 485305 (28883/sec), new interesting: 167 (total: 221)
+fuzz: elapsed: 21s, execs: 797670 (104150/sec), new interesting: 186 (total: 240)
+fuzz: elapsed: 24s, execs: 932654 (44997/sec), new interesting: 211 (total: 265)
+fuzz: elapsed: 27s, execs: 1032863 (33405/sec), new interesting: 229 (total: 283)
+fuzz: elapsed: 30s, execs: 1086188 (17773/sec), new interesting: 238 (total: 292)
+fuzz: elapsed: 31s, execs: 1086188 (0/sec), new interesting: 238 (total: 292)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	31.024s

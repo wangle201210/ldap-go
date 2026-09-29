@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+const audit = '/var/tmp/ldap-go-perf-20260930-r10';
+for (const mode of ['explicit', 'default']) {
+  const source = fs.readFileSync(`${audit}/common-${mode}.sh`, 'utf8');
+  const start = source.indexOf('\nLDAP_BENCH_PASSWORD="$LDAP_BENCH_PASSWORD" "$audit/ldapcommonbench"');
+  const validation = source.indexOf("\nprintf 'run\\tcanonical_entries");
+  if (start < 0 || validation < start) throw new Error('Unexpected script');
+  const args = mode === 'explicit'
+    ? '-uid scale-001001 -stages userBindWrong -n 1000 -repeats 7'
+    : '-stages memberEquality -group-sizes 10,1000 -n 100 -repeats 7';
+  const command = `
+LDAP_BENCH_PASSWORD="$LDAP_BENCH_PASSWORD" "$audit/ldapcommonbench" \\
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \\
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \\
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -timeout 30s -setup-disposable \\
+  -people "$people_dn" ${args} >"$out/recheck.json"
+`;
+  fs.writeFileSync(`${audit}/recheck-${mode}.sh`,
+    (source.slice(0, start) + command + source.slice(validation))
+      .replace(`out=$audit/${mode}-final`, `out=$audit/${mode}-recheck`));
+}

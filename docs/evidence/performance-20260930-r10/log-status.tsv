@@ -1,0 +1,10 @@
+path	role	bytes	package_ok	cached_package_ok	test_PASS	test_FAIL	test_SKIP	PASS_lines	FAIL_lines	top_level_RUN	top_level_PASS
+compare-before.txt	FINAL	715	0	0	0	0	0	1	0	0	0
+compare-current.txt	FINAL	776	1	0	0	0	0	1	0	0	0
+group-component.txt	FINAL_COMPONENT: pre-R9 public oracle original 2N vs R10, not R9 baseline	2413	1	0	0	0	0	1	0	0	0
+focused-test.txt	FINAL	123	2	0	0	0	0	0	0	0	0
+schema-focused.txt	FINAL	60	1	0	0	0	0	0	0	0	0
+schema-fuzz.txt	FINAL	1103	1	0	0	0	0	1	0	0	0
+go-test.txt	FINAL	1477	23	10	0	0	0	0	0	0	0
+go-vet.txt	FINAL	0	0	0	0	0	0	0	0	0	0
+openldap-differential.txt	FINAL	73125	1	0	355	0	0	1	0	26	26

@@ -1,0 +1,13 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	20	2.544961	2.418041	1.4988749999999997	61.987162335129945	4.987109822115143
+group-compare	explicit	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	20	2.6640420000000002	2.366333	1.530127	64.66237000455979	11.175086578965354
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	20	3.3342490000000002	2.245873	1.430539	63.69634436141313	32.642313156575895
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	96.933248	7.150081	2.5416279999999998	35.546842056754315	92.62370636749941
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	20	3.5402530000000003	2.563793	1.7056679999999997	66.52908405631811	27.58164458867771
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	96.72441500000001	7.167333	2.7700400000000007	38.64812755316379	92.58994432791349
+group-compare	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	20	2.225834	2.222375	1.515874	68.20964058720963	0.15540242443955465
+group-compare	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	20	2.386165	2.300706	1.523624	66.22419379094939	3.5814371596264327
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	20	3.2201669999999996	2.130168	1.391959	65.34503381892884	33.84914509092229
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	95.36125	6.620123999999999	2.0549589999999998	31.041095302746598	93.05784687176396
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	20	3.353457	2.397583	1.499417	62.5386900057266	28.50413767046961
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	96.12524900000001	8.102834	2.891666	35.68709416976825	91.57054563260482

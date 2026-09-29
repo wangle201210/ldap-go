@@ -1,0 +1,19 @@
+R10 measurements do not establish aggregate/native parity or whole compatibility.
+The direct DN plan builds only after the first fully normalized nonmatch, not a first match, and applies to at most eight single-AVA RDNs with ASCII letters/digits/._- values, supported caseIgnore/Exact[IA5] equality rules and the same attribute identities.
+Unsupported or complex inputs fall back to full normalization so comparison error order is preserved; not every DN is accelerated.
+For equal operation counts, current throughput / native throughput = native_ms / current_ms.
+The exact 1000-member last/missing evidence follows; all positive and negative results remain in comparisons.tsv.
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	96.933248	7.150081	2.5416279999999998	35.546842056754315	92.62370636749941
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	96.72441500000001	7.167333	2.7700400000000007	38.64812755316379	92.58994432791349
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	95.36125	6.620123999999999	2.0549589999999998	31.041095302746598	93.05784687176396
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	96.12524900000001	8.102834	2.891666	35.68709416976825	91.57054563260482
+
+First/last denotes fixture insertion order, not native storage order.
+Group component original/new compares the pre-R9 public three-method oracle (original 2N normalization) with R10, not the R9 baseline.
+Only before/current macro and Compare component results use the R9 baseline 19b05f6.
+Main reports native compare.c/attr.c attr_valfind uses a_nvals normalized values, binary search with the sorted flag, otherwise linear search. This does not show that the configured member attribute is sorted.
+Broad read/write performance was not rerun in R10; R8b results remain historical only.
+
+Independent rechecks retain the original default memberEquality and explicit plaintext wrong-password Bind regressions. Seven-repeat recheck measurements remain separate in recheck-comparisons.tsv; they do not replace or pool with original three-repeat results.

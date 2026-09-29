@@ -1,0 +1,11 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+compare	targets-1	R9-baseline-19b05f6	3	11538	11232	138
+compare	targets-1024	R9-baseline-19b05f6	3	19219	12037	301
+compare	targets-1	R10-current	3	11322	11232	138
+compare	targets-1024	R10-current	3	19188	12037	301
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/first	pre-R9-public-oracle-original-2N	3	38712	94816	1180
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/first	R10-new	3	7163	3472	170
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/last	pre-R9-public-oracle-original-2N	3	7424151	3672648	171010
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/last	R10-new	3	112960	3584	173
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/absent	pre-R9-public-oracle-original-2N	3	7335155	3648640	171010
+schema-public-oracle	BenchmarkCompareEntryAttributeGroup1000/absent	R10-new	3	110059	3560	173

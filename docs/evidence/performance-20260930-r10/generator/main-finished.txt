@@ -1,0 +1,10 @@
+FINAL: Main confirmed ALL R10 WORKLOADS FINISHED, EXIT 0.
+Five original scripts: common-explicit.sh, common-default.sh, root-paired.sh, group-compare-explicit.sh, group-compare-default.sh.
+Two independent rechecks: recheck-default.sh, recheck-explicit.sh.
+Main independently verified all 21 exports match: 100002 entries, cksum 2143929969, 42712438 bytes.
+Final source is frozen and final tests were confirmed separately in validation-main.txt.
+Publish complete evidence, evidence README and tables now, then freeze. Main owns formal reports.
+Original macro results use the real R9 baseline 19b05f6. Component group original is the old pre-R9 public three-method 2N oracle, not that baseline.
+Keep original results and rechecks separate, including every negative result.
+Default memberEquality recheck: before 14.936ms, current 15.019ms, native 11.559ms, approximately 0.6 percent slower than baseline. Explicit wrong-password Bind recheck JSON is complete; derive exact results from it.
+Group1000 last/missing improved substantially against baseline but remain below native throughput; no aggregate or native parity claim.

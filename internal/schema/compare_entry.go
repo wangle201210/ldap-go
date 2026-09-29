@@ -18,8 +18,9 @@ func (registry *Registry) CompareEntryAttribute(
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 
-	var ruleReady, dnRule, assertionReady bool
+	var ruleReady, dnRule, assertionReady, planReady bool
 	var normalizedAssertion []byte
+	var dnPlan simpleDNComparison
 	for _, attribute := range entry.Attributes {
 		if !registry.attributeDescriptionSubtype(attribute.Description, description) {
 			continue
@@ -39,6 +40,12 @@ func (registry *Registry) CompareEntryAttribute(
 			var comparison int
 			var err error
 			if dnRule {
+				if matched, handled := dnPlan.match(registry, value); handled {
+					if matched {
+						return true, true, nil
+					}
+					continue
+				}
 				// Keep left-to-right comparison order while normalizing the fixed
 				// assertion only once within this schema snapshot.
 				left, leftErr := registry.normalizeWithRuleLocked("distinguishedNameMatch", value)
@@ -51,6 +58,10 @@ func (registry *Registry) CompareEntryAttribute(
 					return true, false, errors.New("distinguishedNameMatch received invalid DN")
 				}
 				comparison = bytes.Compare(left, normalizedAssertion)
+				if comparison != 0 && !planReady {
+					planReady = true
+					dnPlan = registry.prepareSimpleDNComparisonLocked(normalizedAssertion)
+				}
 			} else {
 				comparison, err = registry.compareLocked(description, "", value, assertion)
 			}

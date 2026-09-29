@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R9, 100,000 users, baseline `6840e54`,
+Latest comparison: September 30, 2026, R10, 100,000 users, baseline `19b05f6`,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13. Rows are
 medians of three SDK batches with per-request endpoint rotation. Relative
 performance is `OpenLDAP/current * 100%`; 100% means parity. Frequency is
@@ -59,34 +59,34 @@ qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 105.42 ms | 85.51 ms | 81.1% | 81.3% |
-| Non-root Base, hot | High | 1,000 | 122.17 ms | 98.85 ms | 80.9% | 78.4% |
-| Non-root equality, hot | Very high | 1,000 | 121.52 ms | 94.31 ms | 77.6% | 78.6% |
-| Direct group discovery | High | 100 | 15.71 ms | 11.49 ms | 73.1% | 75.2% |
-| Group Base, 1,000 members | Medium | 100 | 105.35 ms | 97.27 ms | 92.3% | 92.0% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 62.71 ms | 47.92 ms | 76.4% | 81.0% |
+| User Bind, SSHA | Very high | 1,000 | 91.95 ms | 74.83 ms | 81.4% | 81.8% |
+| Non-root Base, hot | High | 1,000 | 107.42 ms | 81.92 ms | 76.3% | 80.8% |
+| Non-root equality, hot | Very high | 1,000 | 117.75 ms | 87.73 ms | 74.5% | 75.3% |
+| Direct group discovery | High | 100 | 18.22 ms | 13.68 ms | 75.1% | 75.8% |
+| Group Base, 1,000 members | Medium | 100 | 129.55 ms | 129.31 ms | 99.8% | 92.8% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 54.01 ms | 42.31 ms | 78.3% | 79.2% |
 
-New non-root group Compare tests measure first/last/missing fixture members.
-For 1,000-member groups, last/missing comparisons are 48%-54% faster than
-`6840e54`, but still only 3.6%-4.5% of OpenLDAP performance. Default direct-group
-and nested searches are both 4.1% slower; distributed equality is 3.4% slower.
-All negative rows remain. **Per-operation parity is not achieved;
+For eligible simple-DN fixtures, 1,000-member last/missing Compare calls are
+91.6%-93.1% faster than `19b05f6`, but still only 31.0%-38.6% of OpenLDAP.
+Default direct-group search is 9.2% slower and explicit wrong-password plaintext
+Bind 7.7% slower in the original run; separate seven-repeat rechecks show
+0.6%/0.9% slowdowns. All original negatives remain. **Per-operation parity is not achieved;
 fast writes do not offset slow reads.** Shared-host results do not establish causality.
 
-R9 combines Compare selection/comparison without cloning values and normalizes
-the fixed DN assertion once per request, preserving presence and first-error
-semantics. Full tests, schema oracles, differential fuzzing, vet and 355 native
-checks passed; all 15 exports match. A pre-existing deadline-test race was fixed
-without changing import behavior. Broad reads/writes remain R8b evidence;
-the operational-attribute gap remains.
+R10 compares eligible simple DN values directly after full normalization of
+the first value/assertion. Unsupported shapes/rules retain the original path;
+no new persistent cache or storage format is introduced. Full tests, schema
+oracles, 1,086,188 fuzz executions, vet and 355 native checks passed; all 21
+exports match. Broad reads/writes remain R8b evidence. The operational-attribute
+gap remains; complex DNs are not claimed to share the fast-path gains.
 
-See the [R9 report](docs/common-ldap-performance.md),
-[evidence index](docs/evidence/performance-20260930-r9/README.md) and
-[verbatim R8b archive](docs/common-ldap-performance-20260930-r8b.md).
+See the [R10 report](docs/common-ldap-performance.md),
+[evidence index](docs/evidence/performance-20260930-r10/README.md) and
+[verbatim R9 archive](docs/common-ldap-performance-20260930-r9.md).
 
 The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
 conditional audit-observer component allocation reduction. It establishes no
-ordinary-request speedup or production-latency gain and is separate from R9.
+ordinary-request speedup or production-latency gain and is separate from R10.
 
 ## Requirements
 

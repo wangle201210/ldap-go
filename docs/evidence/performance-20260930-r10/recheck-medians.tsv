@@ -1,0 +1,10 @@
+suite	access_mode	identity	variant	stage	method	members	endpoint	repeats	operations	median_ms	operations_per_second_at_median
+recheck	default	nonroot	recheck	memberEquality	search_memberEquality	0	before	7	100	14.935506	6695.454442588018
+recheck	default	nonroot	recheck	memberEquality	search_memberEquality	0	current	7	100	15.019408999999994	6658.051591777016
+recheck	default	nonroot	recheck	memberEquality	search_memberEquality	0	openldap	7	100	11.558661999999995	8651.520392239176
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_ssha	0	before	7	1000	99.91005400000003	10009.00269756635
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_ssha	0	current	7	1000	99.161119	10084.597774658028
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_ssha	0	openldap	7	1000	80.79619499999997	12376.820467845057
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_plaintext	0	before	7	1000	87.31160600000013	11453.231085910831
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_plaintext	0	current	7	1000	88.08764099999995	11352.330345638393
+recheck	explicit	nonroot	recheck	userBindWrong	simple_bind_plaintext	0	openldap	7	1000	70.42379699999995	14199.7455774786
