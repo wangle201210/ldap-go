@@ -1,0 +1,14 @@
+path	role	scope	CGO_ENABLED	confirmed_exit	bytes	top_level_PASS_records	top_level_SKIP_records	all_PASS_records	all_SKIP_records	ok_package_records	cached_package_records	terminal_PASS_present	failure_present	explanation
+common-explicit.log	common-explicit	Original explicit ACL common operations; three measured repeats		0	36	0	0	0	0	0	0	False	False	-
+common-default.log	common-default	Original default-access common operations; three measured repeats		0	36	0	0	0	0	0	0	False	False	-
+root-paired.log	root-paired	Literal/uppercase root; seven measured repeats per variant		0	36	0	0	0	0	0	0	False	False	-
+groups-recheck-explicit.log	groups-recheck-explicit	Independent explicit ACL 1000-member group Base; seven repeats, 100 calls		0	36	0	0	0	0	0	0	False	False	-
+groups-recheck-default.log	groups-recheck-default	Independent default distributed Base/equality, then 1000-member group Base; seven repeats each		0	36	0	0	0	0	0	0	False	False	-
+decode-test-initial.txt	initial-fixture-failure	Initial targeted ldapwire validation; superseded fixture expectation		1	288	0	0	0	0	0	0	False	True	selected-attribute/truncated-0 removed a complete optional field, leaving a valid message; test corrected to skip that valid case. No product fix followed from this failure. Exit 1 reported by coordinator.
+decode-test.txt	focused-tests	Uncached focused ldapwire suite after fixture correction	0	0	62	0	0	0	0	1	0	False	False	-
+decode-fuzz.txt	fuzz	FuzzReadSearchMessageReference; 30s requested, four workers; complete output	0	0	1099	0	0	0	0	1	0	True	False	-
+go-test.txt	go-tests	Full Go suite with CGO disabled; some packages cached; nonverbose output gives package results, not business-test counts	0	0	1487	0	0	0	0	23	15	False	False	-
+go-vet.txt	vet	Full Go vet; empty output, success confirmed through validate.sh exit 0	0	0	0	0	0	0	0	0	0	False	False	-
+openldap-differential.txt	differential	Uncached native reference test selection from R5 PASS/run inventory; exact selector construction in validate.sh	0	0	73125	26	0	355	0	1	0	True	False	-
+decode-before.txt	decode-before	Complete before component output; five repetitions, 1s benchtime; extra unanchored cases preserved	0	0	28939	0	0	0	0	1	0	True	False	-
+decode-current.txt	decode-current	Complete current component output; five repetitions, 500ms benchtime; anchored selection	0	0	10433	0	0	0	0	1	0	True	False	-

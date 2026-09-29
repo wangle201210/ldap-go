@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 29, 2026, R4, 100,000 users, baseline `6f31d43`,
+Latest comparison: September 29-30, 2026, R6, 100,000 users, baseline `45c8e5d`,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13. Rows are
 medians of three SDK batches with per-request endpoint rotation. Relative
 performance is `OpenLDAP/current * 100%`; 100% means parity. Frequency is
@@ -59,34 +59,34 @@ qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 106.07 ms | 87.71 ms | 82.7% | 80.1% |
-| Non-root Base, hot | High | 1,000 | 122.21 ms | 96.08 ms | 78.6% | 78.7% |
-| Non-root equality, hot | Very high | 1,000 | 124.05 ms | 97.79 ms | 78.8% | 76.3% |
-| Direct group discovery | High | 100 | 15.25 ms | 11.29 ms | 74.0% | 67.8% |
-| Group Base, 1,000 members | Medium | 100 | 106.10 ms | 98.04 ms | 92.4% | 93.9% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 56.18 ms | 42.67 ms | 75.9% | 74.0% |
+| User Bind, SSHA | Very high | 1,000 | 112.53 ms | 92.17 ms | 81.9% | 80.2% |
+| Non-root Base, hot | High | 1,000 | 116.65 ms | 94.02 ms | 80.6% | 79.0% |
+| Non-root equality, hot | Very high | 1,000 | 121.35 ms | 94.36 ms | 77.8% | 77.0% |
+| Direct group discovery | High | 100 | 18.93 ms | 16.05 ms | 84.8% | 70.7% |
+| Group Base, 1,000 members | Medium | 100 | 108.42 ms | 100.62 ms | 92.8% | 83.8% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 57.20 ms | 44.32 ms | 77.5% | 78.0% |
 
-Versus baseline `6f31d43`, 1,000-member group Base improves 2.5% with explicit
-ACLs but is 0.4% slower with default access. Default hot non-root Base is
-4.9% slower and explicit distributed equality is 5.5% slower. Fixed-write
-Add improves 14.8%, Modify is 3.4% slower, ModifyDN improves 3.0%, and Delete
-improves 0.4%. **No uniform latency gain or overall parity is proven; work
-continues.** Shared-host results do not establish causality.
+Versus baseline `45c8e5d`, direct group discovery improves 2.7% with explicit
+ACLs and 6.4% with default access. The initial 1,000-member group rows are
+7.5% and 3.2% slower respectively; independent seven-repeat rechecks show
+0.6% improvement and 1.9% slowdown. Default distributed Base/equality are
+7.3%/11.6% slower initially; those larger regressions do not recur in their
+separate recheck. All results remain. **Per-operation parity is not achieved;
+fast writes do not offset slow reads.** Shared-host results do not establish causality.
 
-R4 opts into response-owned value packing in two small-search paths after
-ACL checks. Default selection, cache deep-cloning and logical candidate
-budgets remain unchanged. The 1,000-value component drops from 1,006 to 16
-allocations; this is not an every-request or whole-process allocation claim.
-Full tests, vet and 355 native checks without skips passed; all 27 export
-records match. The previously documented operational-attribute gap remains.
+R6 avoids packet-tree decoding for eligible long simple Search requests.
+The long-request component drops from 214 to 12 allocations; already-fast
+short controls have slightly slower medians. Full tests, vet, 355 native
+checks without skips and differential fuzzing passed; all 15 exports match.
+Broad reads/writes were last measured in R4. The operational-attribute gap remains.
 
-See the [R4 report](docs/common-ldap-performance.md),
-[evidence index](docs/evidence/performance-20260929-r4/README.md) and
-[verbatim R3 archive](docs/common-ldap-performance-20260929-r3.md).
+See the [R6 report](docs/common-ldap-performance.md),
+[evidence index](docs/evidence/performance-20260929-r6/README.md) and
+[verbatim R4 archive](docs/common-ldap-performance-20260929-r4.md).
 
 The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
 conditional audit-observer component allocation reduction. It establishes no
-ordinary-request speedup or production-latency gain; the R4 tables above remain unchanged.
+ordinary-request speedup or production-latency gain and is separate from R6.
 
 ## Requirements
 

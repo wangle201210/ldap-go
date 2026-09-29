@@ -1,0 +1,20 @@
+import fs from 'node:fs';
+
+const audit = '/var/tmp/ldap-go-perf-20260929-r6';
+for (const mode of ['explicit', 'default']) {
+  const source = fs.readFileSync(`${audit}/common-${mode}.sh`, 'utf8');
+  const begin = source.indexOf('\nLDAP_BENCH_PASSWORD="$LDAP_BENCH_PASSWORD" "$audit/ldapcommonbench"');
+  const stage = source.indexOf('-stages memberEquality,groupBase,nestedMembership');
+  const groupStart = source.lastIndexOf('\nLDAP_BENCH_PASSWORD=', stage);
+  const groupEnd = source.indexOf('\nawk ', stage);
+  const validation = source.indexOf("\nprintf 'run\\tcanonical_entries");
+  if (!(begin > 0 && groupStart > begin && groupEnd > stage && validation > groupEnd)) {
+    throw new Error(`Unexpected common script structure: ${mode}`);
+  }
+  let group = source.slice(groupStart, groupEnd)
+    .replace('-stages memberEquality,groupBase,nestedMembership', '-stages groupBase')
+    .replace('-group-sizes 10,1000 -n 100 -repeats 3', '-group-sizes 1000 -n 100 -repeats 7');
+  const output = (source.slice(0, begin) + group + source.slice(validation))
+    .replace(`out=$audit/${mode}-final`, `out=$audit/${mode}-groups-recheck`);
+  fs.writeFileSync(`${audit}/groups-recheck-${mode}.sh`, output);
+}

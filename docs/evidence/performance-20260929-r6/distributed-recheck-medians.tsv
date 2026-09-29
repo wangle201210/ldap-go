@@ -1,0 +1,7 @@
+run	batch	stage	method	members	endpoint	repeats	operations	requests	verification_requests	median_ms
+default-groups-recheck	distributed	nonrootBase	search_nonrootBase	0	before	7	1000	1000	1002	132.38848199999995
+default-groups-recheck	distributed	nonrootBase	search_nonrootBase	0	current	7	1000	1000	1002	129.2183890000001
+default-groups-recheck	distributed	nonrootBase	search_nonrootBase	0	openldap	7	1000	1000	1002	96.36012699999995
+default-groups-recheck	distributed	nonrootEquality	search_nonrootEquality	0	before	7	1000	1000	1002	134.31249200000002
+default-groups-recheck	distributed	nonrootEquality	search_nonrootEquality	0	current	7	1000	1000	1002	133.90993299999985
+default-groups-recheck	distributed	nonrootEquality	search_nonrootEquality	0	openldap	7	1000	1000	1002	100.76261399999986

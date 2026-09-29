@@ -10,12 +10,12 @@ import (
 // decodeBindCompareFrame recognizes Simple Bind and Compare requests without
 // controls and with minimal definite lengths. Other encodings use the BER decoder.
 func decodeBindCompareFrame(frame []byte) (Message, bool) {
-	content, rest, ok := bindCompareElement(frame, 0x30)
+	content, rest, ok := definiteRequestElement(frame, 0x30)
 	if !ok || len(rest) != 0 ||
 		(ber.MaxPacketLengthBytes > 0 && int64(len(content)) > ber.MaxPacketLengthBytes) {
 		return Message{}, false
 	}
-	idBytes, rest, ok := bindCompareElement(content, 0x02)
+	idBytes, rest, ok := definiteRequestElement(content, 0x02)
 	if !ok || len(idBytes) == 0 {
 		return Message{}, false
 	}
@@ -35,13 +35,13 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 	if ber.MaxNestingDepth > 0 && ber.MaxNestingDepth <= depth {
 		return Message{}, false
 	}
-	operation, rest, ok := bindCompareElement(rest, tag)
+	operation, rest, ok := definiteRequestElement(rest, tag)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
 
 	if tag == 0x60 {
-		versionBytes, rest, ok := bindCompareElement(operation, 0x02)
+		versionBytes, rest, ok := definiteRequestElement(operation, 0x02)
 		if !ok || len(versionBytes) == 0 {
 			return Message{}, false
 		}
@@ -49,11 +49,11 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 		if err != nil || version < 0 || version > math.MaxInt32 {
 			return Message{}, false
 		}
-		name, rest, ok := bindCompareElement(rest, 0x04)
+		name, rest, ok := definiteRequestElement(rest, 0x04)
 		if !ok {
 			return Message{}, false
 		}
-		password, rest, ok := bindCompareElement(rest, 0x80)
+		password, rest, ok := definiteRequestElement(rest, 0x80)
 		if !ok || len(rest) != 0 {
 			return Message{}, false
 		}
@@ -69,19 +69,19 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 		}}, true
 	}
 
-	dn, rest, ok := bindCompareElement(operation, 0x04)
+	dn, rest, ok := definiteRequestElement(operation, 0x04)
 	if !ok {
 		return Message{}, false
 	}
-	assertion, rest, ok := bindCompareElement(rest, 0x30)
+	assertion, rest, ok := definiteRequestElement(rest, 0x30)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
-	attribute, rest, ok := bindCompareElement(assertion, 0x04)
+	attribute, rest, ok := definiteRequestElement(assertion, 0x04)
 	if !ok || len(attribute) == 0 {
 		return Message{}, false
 	}
-	value, rest, ok := bindCompareElement(rest, 0x04)
+	value, rest, ok := definiteRequestElement(rest, 0x04)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
@@ -97,7 +97,7 @@ func decodeBindCompareFrame(frame []byte) (Message, bool) {
 
 // The fixed request shape bounds traversal; each child is bounded by its parent.
 // Unsupported lengths fall back without constructing errors or partial requests.
-func bindCompareElement(data []byte, tag byte) (value, rest []byte, ok bool) {
+func definiteRequestElement(data []byte, tag byte) (value, rest []byte, ok bool) {
 	if len(data) < 2 || data[0] != tag {
 		return nil, nil, false
 	}

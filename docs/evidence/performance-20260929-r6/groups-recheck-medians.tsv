@@ -1,0 +1,7 @@
+run	batch	stage	method	members	endpoint	repeats	operations	requests	verification_requests	median_ms
+default-groups-recheck	groups	groupBase	base_member_values	1000	before	7	100	100	102	102.26258000000001
+default-groups-recheck	groups	groupBase	base_member_values	1000	current	7	100	100	102	104.20478999999997
+default-groups-recheck	groups	groupBase	base_member_values	1000	openldap	7	100	100	102	92.91415800000001
+explicit-groups-recheck	groups	groupBase	base_member_values	1000	before	7	100	100	102	102.17936999999998
+explicit-groups-recheck	groups	groupBase	base_member_values	1000	current	7	100	100	102	101.55729
+explicit-groups-recheck	groups	groupBase	base_member_values	1000	openldap	7	100	100	102	93.85246100000006

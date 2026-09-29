@@ -1,0 +1,16 @@
+path	samples	operations_per_sample	repeats	setup_adds	cleanup_done	errors	started_at
+explicit-final/smoke.json	30	2	1	42	before,current,openldap	none	2026-09-29T16:00:25.791628Z
+explicit-final/hot.json	54	1000	3	27	before,current,openldap	none	2026-09-29T16:00:38.433492Z
+explicit-final/distributed.json	18	1000	3	27	before,current,openldap	none	2026-09-29T16:00:52.194838Z
+explicit-final/groups.json	36	100	3	42	before,current,openldap	none	2026-09-29T16:00:56.846704Z
+default-final/smoke.json	30	2	1	42	before,current,openldap	none	2026-09-29T16:01:36.410249Z
+default-final/hot.json	54	1000	3	27	before,current,openldap	none	2026-09-29T16:01:48.794026Z
+default-final/distributed.json	18	1000	3	27	before,current,openldap	none	2026-09-29T16:02:02.415634Z
+default-final/groups.json	36	100	3	42	before,current,openldap	none	2026-09-29T16:02:07.095075Z
+root-paired/literal-smoke.json	15	2	1	27	before,current,openldap	none	2026-09-29T16:02:46.322004Z
+root-paired/literal.json	105	1000	7	27	before,current,openldap	none	2026-09-29T16:02:47.946898Z
+root-paired/normalized-smoke.json	15	2	1	27	before,current,openldap	none	2026-09-29T16:03:08.980948Z
+root-paired/normalized.json	105	1000	7	27	before,current,openldap	none	2026-09-29T16:03:09.128952Z
+explicit-groups-recheck/groups.json	21	100	7	39	before,current,openldap	none	2026-09-29T16:04:09.850774Z
+default-groups-recheck/distributed.json	42	1000	7	27	before,current,openldap	none	2026-09-29T16:05:23.57702Z
+default-groups-recheck/groups.json	21	100	7	39	before,current,openldap	none	2026-09-29T16:05:34.314864Z

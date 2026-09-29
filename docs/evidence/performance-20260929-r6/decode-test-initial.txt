@@ -1,0 +1,6 @@
+--- FAIL: TestSearchLongLengthFallback (0.01s)
+    --- FAIL: TestSearchLongLengthFallback/selected-attribute/truncated-0 (0.00s)
+        decode_search_long_test.go:243: fast path = true, want false (frame length 63)
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/ldapwire	2.633s
+FAIL

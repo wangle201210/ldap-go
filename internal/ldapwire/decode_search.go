@@ -8,17 +8,17 @@ import (
 	"github.com/wangle201210/ldap-go/internal/directory"
 )
 
-// decodeShortSearchFrame recognizes only short-form lengths, a leaf equality or
-// presence filter, and no controls. Every mismatch falls back to the BER decoder,
+// decodeSimpleSearchFrame recognizes minimal definite lengths, a leaf equality
+// or presence filter, and no controls. Every mismatch falls back to the BER decoder,
 // which remains responsible for errors and all other accepted BER encodings.
-func decodeShortSearchFrame(frame []byte) (Message, bool) {
-	content, rest, ok := shortSearchElement(frame, 0x30)
+func decodeSimpleSearchFrame(frame []byte) (Message, bool) {
+	content, rest, ok := definiteRequestElement(frame, 0x30)
 	if !ok || len(rest) != 0 ||
 		(ber.MaxPacketLengthBytes > 0 && int64(len(content)) > ber.MaxPacketLengthBytes) ||
 		(ber.MaxNestingDepth > 0 && ber.MaxNestingDepth <= 3) {
 		return Message{}, false
 	}
-	idBytes, rest, ok := shortSearchElement(content, 0x02)
+	idBytes, rest, ok := definiteRequestElement(content, 0x02)
 	if !ok || len(idBytes) == 0 {
 		return Message{}, false
 	}
@@ -26,19 +26,19 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 	if err != nil || id <= 0 || id > math.MaxInt32 {
 		return Message{}, false
 	}
-	operation, rest, ok := shortSearchElement(rest, 0x63)
+	operation, rest, ok := definiteRequestElement(rest, 0x63)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
 
-	base, rest, ok := shortSearchElement(operation, 0x04)
+	base, rest, ok := definiteRequestElement(operation, 0x04)
 	if !ok {
 		return Message{}, false
 	}
 	var numbers [4]int64
 	for i, tag := range [...]byte{0x0a, 0x0a, 0x02, 0x02} {
 		var value []byte
-		value, rest, ok = shortSearchElement(rest, tag)
+		value, rest, ok = definiteRequestElement(rest, tag)
 		if !ok || len(value) == 0 {
 			return Message{}, false
 		}
@@ -47,7 +47,7 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 			return Message{}, false
 		}
 	}
-	boolean, rest, ok := shortSearchElement(rest, 0x01)
+	boolean, rest, ok := definiteRequestElement(rest, 0x01)
 	if !ok || len(boolean) != 1 || len(rest) == 0 {
 		return Message{}, false
 	}
@@ -55,18 +55,18 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 	if filterTag != 0xa3 && filterTag != 0x87 {
 		return Message{}, false
 	}
-	filterValue, rest, ok := shortSearchElement(rest, filterTag)
+	filterValue, rest, ok := definiteRequestElement(rest, filterTag)
 	if !ok {
 		return Message{}, false
 	}
 	attribute := filterValue
 	var assertion []byte
 	if filterTag == 0xa3 {
-		attribute, filterValue, ok = shortSearchElement(filterValue, 0x04)
+		attribute, filterValue, ok = definiteRequestElement(filterValue, 0x04)
 		if !ok {
 			return Message{}, false
 		}
-		assertion, filterValue, ok = shortSearchElement(filterValue, 0x04)
+		assertion, filterValue, ok = definiteRequestElement(filterValue, 0x04)
 		if !ok || len(filterValue) != 0 {
 			return Message{}, false
 		}
@@ -74,13 +74,13 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 	if len(attribute) == 0 {
 		return Message{}, false
 	}
-	selection, rest, ok := shortSearchElement(rest, 0x30)
+	selection, rest, ok := definiteRequestElement(rest, 0x30)
 	if !ok || len(rest) != 0 {
 		return Message{}, false
 	}
 	count := 0
 	for rest = selection; len(rest) > 0; count++ {
-		_, rest, ok = shortSearchElement(rest, 0x04)
+		_, rest, ok = definiteRequestElement(rest, 0x04)
 		if !ok {
 			return Message{}, false
 		}
@@ -91,7 +91,7 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 	attributes := make([]string, count)
 	for i := range attributes {
 		var value []byte
-		value, selection, _ = shortSearchElement(selection, 0x04)
+		value, selection, _ = definiteRequestElement(selection, 0x04)
 		attributes[i] = string(value)
 	}
 	filter := directory.Filter{Kind: directory.FilterPresent, Attribute: string(attribute)}
@@ -106,14 +106,4 @@ func decodeShortSearchFrame(frame []byte) (Message, bool) {
 		DerefAliases: int(numbers[1]), SizeLimit: int(numbers[2]), TimeLimit: int(numbers[3]),
 		TypesOnly: boolean[0] != 0, Filter: filter, Attributes: attributes,
 	}}, true
-}
-
-// shortSearchElement deliberately supports neither high tags nor long or
-// indefinite lengths. The enclosing frame bounds all work to 127 content bytes.
-func shortSearchElement(data []byte, tag byte) (value, rest []byte, ok bool) {
-	if len(data) < 2 || data[0] != tag || data[1] >= 0x80 || int(data[1]) > len(data)-2 {
-		return nil, nil, false
-	}
-	end := 2 + int(data[1])
-	return data[2:end], data[end:], true
 }

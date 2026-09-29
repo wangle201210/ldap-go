@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+"""Stage R6 evidence from FINISHED saved data only; never run a workload.
+
+Invoke only after the coordinator's finished-data signal. See the adjacent
+prepare-ldap-go-r6-docs.md for the completion manifest and publication steps.
+This program deliberately has no repository publication option.
+"""
+
+import argparse
+import csv
+import hashlib
+import io
+import json
+import math
+import re
+from collections import defaultdict
+from pathlib import Path
+from statistics import median
+
+
+REPO = Path('/Users/wanna/mine/github/ldap-go')
+AUDIT = Path('/var/tmp/ldap-go-perf-20260929-r6')
+EVIDENCE = Path('docs/evidence/performance-20260929-r6')
+R4_SHA = '4a159a1ec9df33995a5c76266974a844eb706b24d7cd5ea8b80ecf55009bdcf4'
+ENDPOINTS = ('before', 'current', 'openldap')
+RECHECKS = ('explicit-groups-recheck', 'default-groups-recheck')
+RUNS = ('explicit-final', 'default-final', 'root-paired', *RECHECKS)
+SCRIPTS = ('common-explicit', 'common-default', 'root-paired',
+           'groups-recheck-explicit', 'groups-recheck-default')
+ROOT_DN = 'cn=admin,dc=scale,dc=qualification'
+MAX_TEXT_BYTES = 16 * 1024 * 1024
+ROWS = [
+    ('hot', 'userBind', 'simple_bind_ssha', 0, 'User Bind, SSHA', 'Very high'),
+    ('hot', 'userBindWrong', 'simple_bind_ssha', 0, 'Wrong password, SSHA', 'Low'),
+    ('hot', 'userBind', 'simple_bind_plaintext', 0, 'User Bind, plaintext diagnostic', 'Very high'),
+    ('hot', 'userBindWrong', 'simple_bind_plaintext', 0, 'Wrong password, plaintext diagnostic', 'Low'),
+    ('hot', 'nonrootBase', 'search_nonrootBase', 0, 'Non-root Base, hot', 'High'),
+    ('hot', 'nonrootEquality', 'search_nonrootEquality', 0, 'Non-root equality, hot', 'Very high'),
+    ('distributed', 'nonrootBase', 'search_nonrootBase', 0, 'Non-root Base, distributed', 'High'),
+    ('distributed', 'nonrootEquality', 'search_nonrootEquality', 0, 'Non-root equality, distributed', 'Very high'),
+    ('groups', 'memberEquality', 'search_memberEquality', 0, 'Direct group discovery', 'High'),
+    ('groups', 'groupBase', 'base_member_values', 10, 'Group Base, 10 members', 'Medium'),
+    ('groups', 'groupBase', 'base_member_values', 1000, 'Group Base, 1,000 members', 'Medium'),
+    ('groups', 'nestedMembership', 'client_bfs_member_equality', 0, 'Nested membership, client BFS', 'Medium-high'),
+]
+ROOT_ROWS = [
+    ('rootBind', 'simple_bind_root'),
+    ('rootBase', 'base_objectclass_root'),
+    ('rootEquality', 'subtree_uid_equality_root'),
+    ('rootCompareTrue', 'compare_uid_true_root'),
+    ('rootCompareFalse', 'compare_uid_false_root'),
+]
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def text_file(path):
+    require(path.is_file() and not path.is_symlink(), f'Missing/nonregular file: {path}')
+    require(path.stat().st_size <= MAX_TEXT_BYTES, f'Oversize text: {path}; do not truncate')
+    data = path.read_bytes()
+    text = data.decode('utf-8')
+    require('\x00' not in text, f'Binary content: {path}')
+    # Scripts already use environment credentials; refuse new literal assignments.
+    for match in re.finditer(r'\b[A-Z_]*PASSWORD\s*=\s*([^\s]+)', text):
+        require('$' in match[1], f'Literal password assignment in {path}')
+    require(not re.search(r'(?im)^\s*(?:rootpw|userPassword)\s*[:= ]', text),
+            f'Credential-bearing content in {path}')
+    require(not re.search(r'(?i)"(?:password|root_password|user_password)"\s*:', text),
+            f'Credential-bearing JSON in {path}')
+    require(not re.search(r'(?<!\S)-w\s+(?!["\']?\$)\S+', text),
+            f'Literal command-line password in {path}')
+    return data
+
+
+def tsv(columns, rows):
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter='\t', lineterminator='\n')
+    writer.writerow(columns)
+    writer.writerows(rows)
+    return output.getvalue().encode()
+
+
+def finite_positive(value):
+    return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+
+
+def inspect_report(path, expected, repeats, operations, root_dn=None):
+    report = json.loads(text_file(path))
+    cfg = report['config']
+    require(not report.get('error'), f'{path}: report error')
+    require(sorted(report['cleanup_done']) == sorted(ENDPOINTS), f'{path}: cleanup')
+    require(sorted(e['name'] for e in cfg['endpoints']) == sorted(ENDPOINTS), f'{path}: endpoints')
+    require(cfg['n'] == operations and cfg['repeats'] == repeats, f'{path}: batch dimensions')
+    require(cfg['entries'] == 100000 and cfg['setup_disposable'], f'{path}: fixture')
+    require(report['timeout_ms'] == 30000, f'{path}: timeout')
+    if root_dn:
+        require(cfg['root_bind_dn'] == root_dn, f'{path}: client root DN')
+    groups = defaultdict(list)
+    for sample in report['samples']:
+        key = (sample['stage'], sample['method'], sample.get('members', 0), sample['endpoint'])
+        require(not sample.get('error'), f'{path}: sample error')
+        require(sample['completed'] == sample['operations'] == operations, f'{path}: completed count')
+        require(len(sample['latency_ms']) == operations, f'{path}: latency count')
+        require(all(finite_positive(t) for t in sample['latency_ms']), f'{path}: invalid latency')
+        require(finite_positive(sample['total_ms']), f'{path}: invalid total')
+        require(math.isclose(sum(sample['latency_ms']), sample['total_ms'], rel_tol=1e-9, abs_tol=1e-6),
+                f'{path}: total differs from latency sum')
+        requests = sample['requests']
+        require(requests >= operations if sample['stage'] == 'nestedMembership' else requests == operations,
+                f'{path}: request count')
+        verification = (3 * operations if sample['stage'] == 'userBindWrong' else requests) + 2
+        require(sample['verification_requests'] == verification, f'{path}: verification count')
+        if root_dn:
+            require(sample.get('root_bind_dn') == root_dn, f'{path}: sample root DN')
+        groups[key].append(sample)
+    require(set(groups) == {(*r, endpoint) for r in expected for endpoint in ENDPOINTS},
+            f'{path}: missing or unexpected stage/method/member/endpoint group')
+    for samples in groups.values():
+        require(sorted(s['repeat'] for s in samples) == list(range(1, repeats + 1)), f'{path}: repeats')
+    for stage, method, members in expected:
+        counts = {(s['operations'], s['requests'], s['verification_requests'])
+                  for endpoint in ENDPOINTS for s in groups[(stage, method, members, endpoint)]}
+        require(len(counts) == 1, f'{path}: counts differ between endpoints/repeats')
+    return report, groups
+
+
+def common_table(run, groups):
+    lines = [f'## {run}', '',
+             '| Workload | Typical use | Calls | Before | Current | OpenLDAP | Relative | Time reduction |',
+             '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for batch, stage, method, members, label, frequency in ROWS:
+        key = (run, batch, stage, method, members)
+        before, current, native = [median(s['total_ms'] for s in groups[(*key, ep)]) for ep in ENDPOINTS]
+        calls = f"{groups[(*key, 'before')][0]['operations']:,}"
+        if stage == 'nestedMembership':
+            calls += ' traversals'
+        lines.append(f'| {label} | {frequency} | {calls} | {before:.2f} ms | {current:.2f} ms | '
+                     f'{native:.2f} ms | {100*native/current:.1f}% | {100*(1-current/before):.1f}% |')
+    return '\n'.join(lines)
+
+
+def benchmark_rows(path, side):
+    text = text_file(path).decode()
+    require(re.search(r'^PASS$', text, re.M) and re.search(r'^ok\s', text, re.M),
+            f'{path}: missing completed benchmark footer')
+    rows = []
+    repetitions = defaultdict(int)
+    for line in text.splitlines():
+        if not line.startswith('Benchmark'):
+            continue
+        parts = line.split()
+        require(len(parts) >= 8 and len(parts) % 2 == 0, f'{path}: incomplete benchmark line')
+        name = parts[0]
+        metrics = dict(zip(parts[3::2], parts[2::2]))
+        require({'ns/op', 'B/op', 'allocs/op'} <= metrics.keys(), f'{path}: missing metrics')
+        repetitions[name] += 1
+        for unit, value in metrics.items():
+            number = float(value)
+            require(math.isfinite(number) and number >= 0, f'{path}: invalid metric')
+            rows.append([side, name, repetitions[name], int(parts[1]), unit, number])
+    require(rows, f'{path}: no benchmark samples')
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--completion', type=Path, required=True)
+    parser.add_argument('--stage-dir', type=Path, required=True)
+    args = parser.parse_args()
+    stage = args.stage_dir.resolve()
+    require(Path('/var/tmp').resolve() in stage.parents, 'Stage must be below /var/tmp')
+    require(AUDIT.resolve() != stage and AUDIT.resolve() not in stage.parents, 'Use a separate staging directory')
+    require(not stage.exists(), 'Use a new staging directory; nothing is overwritten')
+    completion_data = text_file(args.completion)
+    completion = json.loads(completion_data)
+    require(completion.get('finished') is True and completion.get('baseline') == '45c8e5d',
+            'Require the coordinator finished-data signal and baseline 45c8e5d')
+    require(completion.get('finished_signal') and completion.get('environment'),
+            'Record the actual completion signal and environment; do not infer them')
+    original = (REPO / 'docs/common-ldap-performance.md').read_bytes()
+    require(sha(original) == R4_SHA, 'Current report differs from inspected R4; review before archiving')
+    files = {}
+    source_hashes = []
+    checks = []
+    groups = {}
+    root_groups = {}
+    recheck_groups = {}
+
+    def add(name, data):
+        require(name not in files, f'Duplicate evidence destination: {name}')
+        files[name] = data if isinstance(data, bytes) else data.encode()
+
+    def archive(relative, destination=None):
+        path = AUDIT / relative
+        require(AUDIT.resolve() in path.resolve().parents, 'Source must remain inside the R6 audit')
+        data = text_file(path)
+        add(destination or relative, data)
+        source_hashes.append([str(relative), sha(data), len(data)])
+        return data
+
+    for script in SCRIPTS:
+        data = archive(f'{script}.sh', f'{script}.sh.txt')
+        require(b'${LDAP_BENCH_PASSWORD:?' in data, f'{script}: require environment password')
+    archive('validate.sh', 'validate.sh.txt')
+    archive('prepare-group-recheck.mjs', 'prepare-group-recheck.mjs.txt')
+    add('completion.json', completion_data)
+    logs = completion['logs']
+    require(len({entry['path'] for entry in logs}) == len(logs), 'Duplicate log entries')
+    require({*SCRIPTS, 'go-tests', 'vet',
+             'differential', 'fuzz', 'decode-before', 'decode-current'} <= {e['role'] for e in logs},
+            'Missing required completed-log role')
+    disk_logs = {p.name for p in AUDIT.iterdir() if p.is_file() and p.suffix in ('.txt', '.log')
+                 and p.name != 'executable-sha256.txt'}
+    require(disk_logs <= {entry['path'] for entry in logs}, 'Completion manifest omits audit text logs')
+    log_rows = []
+    for entry in logs:
+        relative = entry['path']
+        require(Path(relative).suffix in ('.txt', '.log'), 'Only text logs may be archived')
+        initial_failure = relative == 'decode-test-initial.txt'
+        expected_exit = entry['exit_code'] != 0 if initial_failure else entry['exit_code'] == 0
+        require(type(entry['exit_code']) is int and expected_exit,
+                f'{relative}: missing/nonzero coordinator-confirmed exit; review failures explicitly')
+        require(entry.get('command') and entry.get('scope'), f'{relative}: require command and scope')
+        if initial_failure:
+            require(entry['role'] == 'initial-fixture-failure' and entry.get('explanation'),
+                    'Initial fixture failure needs a separate role and explanation')
+        if entry['role'] == 'go-tests':
+            require(entry.get('cgo_enabled') in ('0', '1'), f'{relative}: record CGO_ENABLED')
+        text = archive(relative, relative + '.txt' if relative.endswith('.log') else relative).decode()
+        has_failure = bool(re.search(r'(?m)^(?:FAIL(?:\s|$)|--- FAIL:|panic:|fatal error:)', text))
+        require(has_failure == initial_failure,
+                f'{relative}: failure marker; retain and review instead of publishing a passing claim')
+        if initial_failure:
+            require('selected-attribute/truncated-0' in text, 'Initial failure differs from the explained fixture case')
+        if entry['role'] in SCRIPTS:
+            require(relative == f"{entry['role']}.log", f'{relative}: script log mapping')
+            require(text.rstrip().endswith('Common-operation comparison passed.'), f'{relative}: completion footer')
+        log_rows.append([relative, entry['role'], entry['scope'], entry.get('cgo_enabled', ''),
+                         entry['exit_code'], len(text.encode()),
+                         len(re.findall(r'^--- PASS:', text, re.M)),
+                         len(re.findall(r'^--- SKIP:', text, re.M)),
+                         len(re.findall(r'^\s*--- PASS:', text, re.M)),
+                         len(re.findall(r'^\s*--- SKIP:', text, re.M)),
+                         len(re.findall(r'^ok\s', text, re.M)),
+                         len(re.findall(r'^ok\s.*\(cached\)', text, re.M)),
+                         bool(re.search(r'^PASS$', text, re.M)), has_failure, entry.get('explanation', '-')])
+    add('log-status.tsv', tsv(['path', 'role', 'scope', 'CGO_ENABLED', 'confirmed_exit', 'bytes',
+                             'top_level_PASS_records', 'top_level_SKIP_records', 'all_PASS_records',
+                             'all_SKIP_records', 'ok_package_records',
+                             'cached_package_records', 'terminal_PASS_present', 'failure_present', 'explanation'], log_rows))
+
+    for run in RUNS:
+        if run == 'root-paired':
+            specs = [(v + suffix, [(s, m, 0) for s, m in ROOT_ROWS],
+                      1 if suffix else 7, 2 if suffix else 1000,
+                      ROOT_DN if v == 'literal' else ROOT_DN.upper())
+                     for v in ('literal', 'normalized') for suffix in ('-smoke', '')]
+        elif run in RECHECKS:
+            specs = [('groups', [('groupBase', 'base_member_values', 1000)], 7, 100, None)]
+            if run == 'default-groups-recheck':
+                specs.insert(0, ('distributed', [r[1:4] for r in ROWS if r[0] == 'distributed'], 7, 1000, None))
+        else:
+            specs = [(batch, sorted({r[1:4] for r in ROWS if batch == 'smoke' or r[0] == batch}),
+                      1 if batch == 'smoke' else 3,
+                      2 if batch == 'smoke' else 100 if batch == 'groups' else 1000, None)
+                     for batch in ('smoke', 'hot', 'distributed', 'groups')]
+        expected_jsons = {f'{batch}.json' for batch, *_ in specs}
+        expected_jsons |= {f'{ep}/warmup.json' for ep in ENDPOINTS}
+        actual_jsons = {str(p.relative_to(AUDIT / run)) for p in (AUDIT / run).rglob('*.json')}
+        require(actual_jsons == expected_jsons, f'{run}: unexpected/missing JSON; review without dropping samples')
+        for batch, expected, repeats, n, root_dn in specs:
+            relative = f'{run}/{batch}.json'
+            report, local = inspect_report(AUDIT / relative, expected, repeats, n, root_dn)
+            archive(relative)
+            cfg = report['config']
+            if run != 'root-paired':
+                require(cfg.get('uid', '') == ('scale-001001' if batch in ('smoke', 'hot') else ''),
+                        f'{relative}: hot/distributed selection changed')
+            checks.append([relative, len(report['samples']), n, repeats, report['setup_adds'],
+                           ','.join(report['cleanup_done']), 'none', report['started_at']])
+            if 'smoke' in batch:
+                continue
+            for key, samples in local.items():
+                if run == 'root-paired':
+                    root_groups[(batch, root_dn, key[0], key[1], key[3])] = samples
+                elif run in RECHECKS:
+                    recheck_groups[(run, batch, *key)] = samples
+                else:
+                    groups[(run, batch, *key)] = samples
+        for endpoint in ENDPOINTS:
+            relative = f'{run}/{endpoint}/warmup.json'
+            warmup = json.loads(archive(relative))
+            require(not warmup.get('error') and warmup['stages'], f'{relative}: warmup error')
+            require(all(not s.get('errors') for s in warmup['stages']), f'{relative}: warmup stage error')
+        data = archive(f'{run}/validation.tsv').decode()
+        exports = list(csv.DictReader(io.StringIO(data), delimiter='\t'))
+        require(sorted(e['run'] for e in exports) == sorted(ENDPOINTS), f'{run}: export endpoints')
+        for export in exports:
+            require([export[k] for k in ('canonical_entries', 'canonical_cksum', 'canonical_bytes')]
+                    == ['100002', '2143929969', '42712438'], f'{run}: export mismatch')
+        for leftover in ('password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'):
+            require(not (AUDIT / run / leftover).exists(), f'{run}: cleanup artifact still present')
+
+    add('report-checks.tsv', tsv(['path', 'samples', 'operations_per_sample', 'repeats', 'setup_adds',
+                                'cleanup_done', 'errors', 'started_at'], checks))
+    add('medians.tsv', tsv(['run', 'batch', 'stage', 'method', 'members', 'endpoint', 'repeats',
+                           'operations', 'requests', 'verification_requests', 'median_ms'],
+                          [list(k) + [len(v), v[0]['operations'], v[0]['requests'],
+                                      v[0]['verification_requests'], median(s['total_ms'] for s in v)]
+                           for k, v in sorted(groups.items())]))
+    add('root-paired-medians.tsv', tsv(['variant', 'root_bind_dn', 'stage', 'method', 'endpoint',
+                                       'repeats', 'operations', 'requests', 'verification_requests', 'median_ms'],
+                                      [list(k) + [len(v), v[0]['operations'], v[0]['requests'],
+                                                  v[0]['verification_requests'], median(s['total_ms'] for s in v)]
+                                       for k, v in sorted(root_groups.items())]))
+    add('common-tables.md', '# R6 common operations\n\n'
+        'Baseline `45c8e5d`. Relative = OpenLDAP/current * 100%; '
+        'time reduction = (1-current/before) * 100%. Negative reductions remain.\n\n'
+        + '\n\n'.join(common_table(run, groups) for run in RUNS[:2]) + '\n')
+    add('groups-recheck-medians.tsv', tsv(
+        ['run', 'batch', 'stage', 'method', 'members', 'endpoint', 'repeats',
+         'operations', 'requests', 'verification_requests', 'median_ms'],
+        [list(k) + [len(v), v[0]['operations'], v[0]['requests'], v[0]['verification_requests'],
+                    median(s['total_ms'] for s in v)] for k, v in sorted(recheck_groups.items()) if k[1] == 'groups']))
+    recheck_lines = ['# R6 independent 1,000-member group recheck', '',
+        'Seven repeats of 100 calls per endpoint, after the original common and root runs.',
+        'Fresh processes and the same initial seeds; this table contains only groupBase with 1,000 members.',
+        'The default session first ran the separately reported distributed Base/equality recheck.',
+        'The original three-repeat group regressions remain in common-tables.md.',
+        'These samples are neither pooled with nor substituted for the original runs.', '',
+        '| Access | Calls | Repeats | Before | Current | OpenLDAP | Relative | Time reduction |',
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for run in RECHECKS:
+        before, current, native = [median(s['total_ms'] for s in recheck_groups[
+            (run, 'groups', 'groupBase', 'base_member_values', 1000, ep)]) for ep in ENDPOINTS]
+        recheck_lines.append(f'| {run} | 100 | 7 | {before:.2f} ms | {current:.2f} ms | '
+                             f'{native:.2f} ms | {100*native/current:.1f}% | {100*(1-current/before):.1f}% |')
+    add('groups-recheck-tables.md', '\n'.join(recheck_lines) + '\n')
+    add('distributed-recheck-medians.tsv', tsv(
+        ['run', 'batch', 'stage', 'method', 'members', 'endpoint', 'repeats',
+         'operations', 'requests', 'verification_requests', 'median_ms'],
+        [list(k) + [len(v), v[0]['operations'], v[0]['requests'], v[0]['verification_requests'],
+                    median(s['total_ms'] for s in v)] for k, v in sorted(recheck_groups.items()) if k[1] == 'distributed']))
+    distributed_lines = ['# R6 independent default-access distributed recheck', '',
+        'Seven repeats of 1,000 calls per endpoint, before the default 1,000-member group recheck.',
+        'Fresh processes and initial seeds; original three-repeat Base/equality rows remain unchanged.',
+        'No pooling with or substitution for the original common samples.', '',
+        '| Workload | Calls | Repeats | Before | Current | OpenLDAP | Relative | Time reduction |',
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for batch, name, method, members, label, _ in ROWS:
+        if batch != 'distributed':
+            continue
+        before, current, native = [median(s['total_ms'] for s in recheck_groups[
+            ('default-groups-recheck', batch, name, method, members, ep)]) for ep in ENDPOINTS]
+        distributed_lines.append(f'| {label} | 1,000 | 7 | {before:.2f} ms | {current:.2f} ms | '
+                                 f'{native:.2f} ms | {100*native/current:.1f}% | {100*(1-current/before):.1f}% |')
+    add('distributed-recheck-tables.md', '\n'.join(distributed_lines) + '\n')
+    root_lines = ['# R6 paired root operations', '',
+                  'Baseline `45c8e5d`; seven batches per variant. Literal and uppercase client DNs stay separate.',
+                  'Root Base uses a fixed container; equality and Compare use distributed UIDs.',
+                  'Untimed WhoAmI and fixture work prevent pooling with the historical R4 serial probe.', '']
+    for variant in ('literal', 'normalized'):
+        root_dn = ROOT_DN if variant == 'literal' else ROOT_DN.upper()
+        root_lines += [f'## {variant}: `{root_dn}`', '',
+                       '| Stage | Method | Calls | Before | Current | OpenLDAP | Relative | Time reduction |',
+                       '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+        for stage_name, method in ROOT_ROWS:
+            values = [median(s['total_ms'] for s in root_groups[(variant, root_dn, stage_name, method, ep)])
+                      for ep in ENDPOINTS]
+            before, current, native = values
+            root_lines.append(f'| {stage_name} | {method} | 1,000 | {before:.2f} ms | {current:.2f} ms | '
+                              f'{native:.2f} ms | {100*native/current:.1f}% | {100*(1-current/before):.1f}% |')
+        root_lines.append('')
+    add('root-paired-tables.md', '\n'.join(root_lines))
+    concurrent_rows = []
+    for run in RUNS[:2]:
+        data = archive(f'{run}/concurrent.tsv').decode()
+        rows = list(csv.DictReader(io.StringIO(data), delimiter='\t'))
+        require(len(rows) == 12 and {r['side'] for r in rows} == set(ENDPOINTS), f'{run}: CLI dimensions')
+        for endpoint in ENDPOINTS:
+            samples = [r for r in rows if r['side'] == endpoint]
+            require(sorted(int(s['repeat']) for s in samples) == [0, 1, 2, 3], f'{run}: CLI repeats')
+            require(all(finite_positive(float(s['ms'])) for s in samples), f'{run}: CLI latency')
+            concurrent_rows.append([run, endpoint, 3, median(float(s['ms']) for s in samples if s['repeat'] != '0')])
+    add('concurrent-medians.tsv', tsv(['run', 'endpoint', 'measured_repeats', 'median_ms'], concurrent_rows))
+
+    bench_rows = []
+    for side in ('before', 'current'):
+        entries = [e for e in logs if e['role'] == f'decode-{side}']
+        require(len(entries) == 1, f'decode-{side}: require one complete log')
+        bench_rows.extend(benchmark_rows(AUDIT / entries[0]['path'], side))
+    add('decode-samples.tsv', tsv(['side', 'benchmark_with_CPU_suffix', 'repeat', 'iterations', 'unit', 'value'], bench_rows))
+    bench_groups = defaultdict(list)
+    for side, name, repeat, iterations, unit, value in bench_rows:
+        bench_groups[(side, name, unit)].append(value)
+    add('decode-medians.tsv', tsv(['side', 'benchmark_with_CPU_suffix', 'unit', 'repeats', 'median'],
+                                 [list(k) + [len(v), median(v)] for k, v in sorted(bench_groups.items())]))
+
+    def component_value(side, fixture, reference, unit):
+        prefix = 'BenchmarkReadSearchMessage' + ('PacketReference' if reference else '')
+        keys = [k for k in bench_groups if k[0] == side and k[2] == unit
+                and re.fullmatch(re.escape(prefix + '/' + fixture) + r'-\d+', k[1])]
+        require(len(keys) == 1, f'{side}/{fixture}/{unit}: ambiguous or missing component group')
+        return median(bench_groups[keys[0]])
+
+    component_lines = ['# R6 Search decode component', '',
+        'Five repetitions per case: before uses 1s benchtime, current uses 500ms.',
+        'The unequal sample durations and shared host limit causal claims.',
+        '`Long` is the existing affected fixture with a real before/current comparison.',
+        'Equality and Presence are already-fast short controls; their slower medians remain visible.',
+        '`GroupBase` and `MemberEquality` were added after the before benchmark was compiled.',
+        'Their reference is current PacketReference, not the before executable.',
+        'The unanchored before selection also ran Bind/Compare PacketReference cases; all remain',
+        'in the raw log and TSVs. The current selection is anchored. Unmatched cases are not paired.', '',
+        '| Fixture | Comparison | Unit | Reference | Current | Reduction |',
+        '| --- | --- | --- | ---: | ---: | ---: |']
+    for fixture in ('Equality', 'Presence', 'Long', 'GroupBase', 'MemberEquality'):
+        new_fixture = fixture in ('GroupBase', 'MemberEquality')
+        for unit in ('ns/op', 'B/op', 'allocs/op'):
+            reference = component_value('current' if new_fixture else 'before', fixture, new_fixture, unit)
+            current = component_value('current', fixture, False, unit)
+            reduction = f'{100*(1-current/reference):.1f}%' if reference else 'n/a'
+            label = 'current PacketReference/current fast decoder' if new_fixture else 'before/current'
+            if fixture in ('Equality', 'Presence'):
+                label += '; already-fast control'
+            component_lines.append(f'| {fixture} | {label} | {unit} | {reference:g} | {current:g} | {reduction} |')
+    component_lines += ['', 'Component measurements do not establish per-operation SDK parity or production performance.', '']
+    add('decode-tables.md', '\n'.join(component_lines))
+
+    binary_rows = []
+    binary_hashes = {}
+    for name in ('before', 'current', 'ldapcommonbench', 'ldapcommonbench-root'):
+        path = AUDIT / name
+        require(path.is_file(), f'Missing frozen executable: {name}')
+        with path.open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        binary_rows.append(f'{digest}  {name}\n')
+        binary_hashes[name] = digest
+    recorded_hashes = archive('executable-sha256.txt', 'executable-sha256-recorded.txt').decode()
+    recorded = {}
+    for line in recorded_hashes.splitlines():
+        digest, name = line.split(maxsplit=1)
+        recorded[Path(name).name] = digest
+    require(recorded == {name: binary_hashes[name] for name in ('before', 'current')},
+            'Frozen executable hashes differ from the completed validation record')
+    add('executable-sha256.txt', ''.join(binary_rows))
+    add('source-sha256.tsv', tsv(['source_relative_path', 'sha256', 'bytes'], source_hashes))
+    add('generate.py.txt', Path(__file__).read_bytes())
+    add('README.md', f'''# September 29-30, 2026 R6 evidence
+
+Audit: `{AUDIT}`; baseline `45c8e5d`. This archive is generated from completed
+saved evidence only. Execution crossed local midnight in Asia/Shanghai;
+the round and archive paths retain `20260929-r6`. Raw timestamps remain.
+See [the report](../../common-ldap-performance.md) and
+[the verbatim R4 report](../../common-ldap-performance-20260929-r4.md).
+
+## Scope and grouping
+
+R6 extends simple Search decoding to minimally encoded long BER lengths.
+Group Base, direct membership and nested BFS leaf requests exceed 127 content
+bytes and are affected; scale-pool hot/distributed Base/equality were already
+fast. [Common tables](common-tables.md) and `medians.tsv` retain 72 groups,
+three total_ms batches each. ACL, hot/distributed, stage, method, member count
+and endpoint are separate. [Root tables](root-paired-tables.md) retain 30
+groups, seven batches each, including exact literal/uppercase root DNs.
+`concurrent-medians.tsv` excludes repeat 0 as warmup and keeps repeats 1-3.
+All per-request latency arrays, smoke reports and 15 warmup JSONs remain.
+Setup, connections, verification and cleanup are outside timed SDK calls.
+
+[Independent group rechecks](groups-recheck-tables.md) and
+`groups-recheck-medians.tsv` retain six additional endpoint groups: explicit
+and default access, seven 100-call batches of 1,000-member group Base each,
+using fresh processes and the same initial seeds. The original three-repeat
+group regressions remain unchanged. Rechecks are neither pooled with nor
+substituted for the original common runs.
+
+[Default distributed rechecks](distributed-recheck-tables.md) retain six
+additional endpoint groups, seven 1,000-call batches of Base and equality.
+They run before the group workload in the same fresh default recheck session.
+The original default distributed regressions remain; these samples do not
+replace or pool with them. That session still has only three final exports.
+
+Relative = OpenLDAP/current * 100%; 100% is parity. Time reduction =
+(1-current/before) * 100%, using unrounded medians. Negative rows remain.
+Parity is assessed per operation. Fast writes never offset slow reads, and
+no cross-method, cross-variant or cross-round aggregate establishes parity.
+
+## Validation and component
+
+`report-checks.tsv` records sample counts, operation counts, repeats, setup,
+errors and cleanup for every measured/smoke report. All 15 R6 export records
+match 100,002 entries, checksum 2143929969 and 42,712,438 canonical bytes.
+Nine exports belong to the original three scripts; six belong to the two
+independent group rechecks. Five completion logs and confirmed exits remain.
+`completion.json` records commands, environment and confirmed exit status;
+`log-status.tsv` counts only the records actually present in each complete
+log. An empty vet log is not standalone proof of success. Cached packages,
+CGO configuration, focused/full tests, native checks and fuzz runs remain
+separate; no business-test count is inferred from incomplete/nonverbose logs.
+
+`decode-test-initial.txt` retains the initial targeted failure at
+`selected-attribute/truncated-0`: removing the complete optional attribute
+field still gives a valid message. The fixture expectation was corrected by
+skipping that valid case; no product fix followed from this failure. This
+failed attempt is separate from the subsequent completed validation suite.
+
+[Decode tables](decode-tables.md), `decode-samples.tsv`, `decode-medians.tsv`
+and the complete before/current logs retain every recorded benchmark case,
+repetition and metric. Only Long is used for the affected before/current
+comparison; the new GroupBase/MemberEquality fixtures compare current with
+current PacketReference. Already-fast Equality/Presence controls retain their
+slower before/current medians. Both logs contain five repetitions per case,
+with before benchtime 1s and current 500ms. Unequal sample durations and
+shared-host variability limit causal claims. Component gains do not prove
+SDK parity or that every query is faster.
+
+## Historical coverage and replay
+
+Broad serial reads, full scans, extended fixtures, RSS and fixed writes were
+last measured in [September 29, 2026 R4](../performance-20260929-r4/README.md),
+baseline `6f31d43`. They are historical evidence, not fresh R6 measurements.
+No R4 samples or checks are added to R6 totals. The previous operational-
+attribute gap remains outside the passing matrix. Shared-host timings do
+not establish causality or deployment performance.
+
+The five performance `*.sh.txt` recipes require environment passwords, unused output
+directories, persistent native OpenLDAP dependencies and the historical
+fixture/probe/canonical-reference paths named by each script. They are
+archived without execution, together with `validate.sh.txt`. No passwords, binaries, databases, profiles,
+LDIF or large exports are bundled. `executable-sha256.txt` hashes frozen
+executables; `source-sha256.tsv` records source text hashes and sizes;
+`SHA256SUMS` hashes every evidence file except itself. R4 is archived byte
+for byte. Documentation preparation runs no builds, benchmarks or tests.
+Exact component commands and their complete output are retained.
+''')
+    add('SHA256SUMS', ''.join(f'{sha(data)}  {name}\n' for name, data in sorted(files.items())))
+
+    # Read and validate everything before creating the candidate evidence tree.
+    target = stage / EVIDENCE
+    target.mkdir(parents=True)
+    for name, data in files.items():
+        destination = target / name
+        require(target in destination.resolve().parents, 'Evidence destination escaped staging')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    (stage / 'docs/common-ldap-performance-20260929-r4.md').write_bytes(original)
+    print(f'Staged {len(files)} evidence files and the verbatim R4 report in {stage}')
+    print('Repository reports and READMEs were not modified. Review before publication.')
+
+
+if __name__ == '__main__':
+    main()

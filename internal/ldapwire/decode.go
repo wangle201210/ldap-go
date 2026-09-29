@@ -103,7 +103,7 @@ func readMessageWithFilterDepthProviderAndSize(
 	if err != nil {
 		return Message{}, 0, err
 	}
-	if message, ok := decodeShortSearchFrame(frame); ok {
+	if message, ok := decodeSimpleSearchFrame(frame); ok {
 		if maxFilterDepth() < 0 {
 			return Message{}, len(frame), fmt.Errorf("%w: %w", ErrMalformedMessage, ErrFilterTooDeep)
 		}

@@ -71,8 +71,8 @@ func searchTestFields() [][]byte {
 func TestShortSearchFrameEligibility(t *testing.T) {
 	for name, frame := range searchDecodeFixtures(t) {
 		t.Run(name, func(t *testing.T) {
-			got, ok := decodeShortSearchFrame(frame)
-			if want := name == "Equality" || name == "Presence"; ok != want {
+			got, ok := decodeSimpleSearchFrame(frame)
+			if want := name != "Controls" && name != "Nested"; ok != want {
 				t.Fatalf("fast path = %v, want %v", ok, want)
 			}
 			if ok {
@@ -191,7 +191,7 @@ func TestShortSearchLengthBoundary(t *testing.T) {
 		if len(frame)-headerLength != contentLength {
 			t.Fatalf("fixture content length = %d, want %d", len(frame)-headerLength, contentLength)
 		}
-		if _, ok := decodeShortSearchFrame(frame); ok != (contentLength < 128) {
+		if _, ok := decodeSimpleSearchFrame(frame); !ok {
 			t.Fatalf("content length %d: fast path = %v", contentLength, ok)
 		}
 		compareSearchDecode(t, frame, int64(len(frame)), uint64(contentLength), 0)
@@ -264,8 +264,8 @@ func TestShortSearchStreamAndOwnership(t *testing.T) {
 		if stream.Len() != 0 {
 			t.Fatal("unread stream data")
 		}
-		if got, ok := decodeShortSearchFrame(frame); ok {
-			want, _ := decodeShortSearchFrame(bytes.Clone(frame))
+		if got, ok := decodeSimpleSearchFrame(frame); ok {
+			want, _ := decodeSimpleSearchFrame(bytes.Clone(frame))
 			clear(frame)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatal("decoded request aliases input frame")
@@ -296,6 +296,12 @@ func TestPacketStringCopiesData(t *testing.T) {
 
 func FuzzReadSearchMessageReference(f *testing.F) {
 	for _, frame := range searchDecodeFixtures(f) {
+		f.Add(frame, int8(0))
+	}
+	for _, frame := range searchLongDecodeFixtures() {
+		f.Add(frame, int8(0))
+	}
+	for _, frame := range searchLongLengthEdgeFrames() {
 		f.Add(frame, int8(0))
 	}
 	for _, frame := range searchDecodeEdgeFrames() {

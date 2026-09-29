@@ -13,7 +13,7 @@ func searchDecodeFixtures(tb testing.TB) map[string][]byte {
 	tb.Helper()
 	equality := directory.Filter{Kind: directory.FilterEquality, Attribute: "uid", Assertion: []byte("alice")}
 	fixtures := make(map[string][]byte)
-	for _, name := range []string{"Equality", "Presence", "Controls", "Nested", "Long"} {
+	for _, name := range []string{"Equality", "Presence", "Controls", "Nested", "Long", "GroupBase", "MemberEquality"} {
 		message := Message{ID: 1234, Request: SearchRequest{
 			BaseDN: "dc=example,dc=com", Scope: directory.ScopeWholeSubtree,
 			Filter: equality, Attributes: []string{"uid", "cn", "mail"},
@@ -32,6 +32,18 @@ func searchDecodeFixtures(tb testing.TB) map[string][]byte {
 			}}
 		case "Long":
 			request.Filter.Assertion = bytes.Repeat([]byte("a"), 256)
+		case "GroupBase":
+			request.BaseDN = "cn=direct-10,ou=ldapcommonbench-abcdefghijklmnopqrstuvwxyz,dc=scale,dc=qualification"
+			request.Scope = directory.ScopeBase
+			request.SizeLimit = 2
+			request.Filter = directory.Filter{Kind: directory.FilterPresent, Attribute: "objectClass"}
+			request.Attributes = []string{"member"}
+		case "MemberEquality":
+			request.BaseDN = "ou=ldapcommonbench-abcdefghijklmnopqrstuvwxyz,dc=scale,dc=qualification"
+			request.SizeLimit = 6
+			request.Filter = directory.Filter{Kind: directory.FilterEquality, Attribute: "member",
+				Assertion: []byte("uid=common-abcdefghijklmnopqrstuvwxyz-000000," + request.BaseDN)}
+			request.Attributes = []string{"cn"}
 		}
 		message.Request = request
 		encoded, err := EncodeRequestMessage(message)
@@ -53,12 +65,12 @@ func BenchmarkReadSearchMessagePacketReference(b *testing.B) {
 
 func BenchmarkShortSearchFrameFallback(b *testing.B) {
 	fixtures := searchDecodeFixtures(b)
-	for _, name := range []string{"Controls", "Nested", "Long"} {
+	for _, name := range []string{"Controls", "Nested"} {
 		b.Run(name, func(b *testing.B) {
 			frame := fixtures[name]
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, ok := decodeShortSearchFrame(frame); ok {
+				if _, ok := decodeSimpleSearchFrame(frame); ok {
 					b.Fatal("unexpected fast path match")
 				}
 			}
@@ -68,7 +80,7 @@ func BenchmarkShortSearchFrameFallback(b *testing.B) {
 
 func benchmarkReadSearchMessage(b *testing.B, read func(io.Reader, int64, uint64, func() int) (Message, int, error)) {
 	fixtures := searchDecodeFixtures(b)
-	for _, name := range []string{"Equality", "Presence", "Controls", "Nested", "Long"} {
+	for _, name := range []string{"Equality", "Presence", "Controls", "Nested", "Long", "GroupBase", "MemberEquality"} {
 		b.Run(name, func(b *testing.B) {
 			frame := fixtures[name]
 			reader := bytes.NewReader(frame)

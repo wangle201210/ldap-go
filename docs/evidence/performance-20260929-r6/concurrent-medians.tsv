@@ -1,0 +1,7 @@
+run	endpoint	measured_repeats	median_ms
+explicit-final	before	3	349.0
+explicit-final	current	3	341.0
+explicit-final	openldap	3	357.0
+default-final	before	3	393.0
+default-final	current	3	351.0
+default-final	openldap	3	340.0

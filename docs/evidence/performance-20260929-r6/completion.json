@@ -1,0 +1,49 @@
+{
+  "finished": true,
+  "finished_signal": "Coordinator: ALL R6 WORKLOADS FINISHED EXIT0: three main scripts and explicit/default rechecks; all 15 exports match. No production change since validation.",
+  "baseline": "45c8e5d",
+  "execution_dates_local": "2026-09-29 through 2026-09-30",
+  "timezone": "Asia/Shanghai",
+  "environment": {
+    "cpu": "Apple M1 Pro",
+    "os_arch": "darwin/arm64",
+    "go": "1.26.4",
+    "CGO_ENABLED": "0",
+    "openldap": "2.6.13",
+    "entries": 100000,
+    "source": "Previously checked environment, reconfirmed by coordinator for all R6 runs"
+  },
+  "validation": {
+    "script": "validate.sh",
+    "exit_code": 0,
+    "source": "Coordinator-confirmed exit 0; script uses set -eu",
+    "build_command": "CGO_ENABLED=0 go build -o /var/tmp/ldap-go-perf-20260929-r6/current ./cmd/ldap-go",
+    "build_log": "No separate build output log; successful validation script and recorded executable hash retained"
+  },
+  "performance": {
+    "original_runner": "run-performance.sh",
+    "original_runner_exit_code": 0,
+    "recheck_exit_codes": {"groups-recheck-explicit.sh": 0, "groups-recheck-default.sh": 0},
+    "source": "Coordinator-confirmed exits and five terminal script completion logs"
+  },
+  "benchmark_protocol": {
+    "before": {"benchtime": "1s", "count": 5, "selection": "unanchored; includes extra Bind/Compare PacketReference cases", "exact_command_recorded": true},
+    "current": {"benchtime": "500ms", "count": 5, "selection": "anchored command preserved in validate.sh"},
+    "new_fixtures": "GroupBase and MemberEquality were added after the before benchmark was compiled; current PacketReference is their reference"
+  },
+  "logs": [
+    {"path": "common-explicit.log", "role": "common-explicit", "scope": "Original explicit ACL common operations; three measured repeats", "command": "sh /var/tmp/ldap-go-perf-20260929-r6/common-explicit.sh", "exit_code": 0},
+    {"path": "common-default.log", "role": "common-default", "scope": "Original default-access common operations; three measured repeats", "command": "sh /var/tmp/ldap-go-perf-20260929-r6/common-default.sh", "exit_code": 0},
+    {"path": "root-paired.log", "role": "root-paired", "scope": "Literal/uppercase root; seven measured repeats per variant", "command": "sh /var/tmp/ldap-go-perf-20260929-r6/root-paired.sh", "exit_code": 0},
+    {"path": "groups-recheck-explicit.log", "role": "groups-recheck-explicit", "scope": "Independent explicit ACL 1000-member group Base; seven repeats, 100 calls", "command": "sh /var/tmp/ldap-go-perf-20260929-r6/groups-recheck-explicit.sh", "exit_code": 0},
+    {"path": "groups-recheck-default.log", "role": "groups-recheck-default", "scope": "Independent default distributed Base/equality, then 1000-member group Base; seven repeats each", "command": "sh /var/tmp/ldap-go-perf-20260929-r6/groups-recheck-default.sh", "exit_code": 0},
+    {"path": "decode-test-initial.txt", "role": "initial-fixture-failure", "scope": "Initial targeted ldapwire validation; superseded fixture expectation", "command": "go test ./internal/ldapwire -count=1", "cgo_enabled": "0", "exit_code": 1, "explanation": "First validate.sh invocation exited at this command. selected-attribute/truncated-0 removed a complete optional field, leaving a valid message; test corrected to skip that valid case. No product fix followed from this failure."},
+    {"path": "decode-test.txt", "role": "focused-tests", "scope": "Uncached focused ldapwire suite after fixture correction", "command": "go test ./internal/ldapwire -count=1", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "decode-fuzz.txt", "role": "fuzz", "scope": "FuzzReadSearchMessageReference; 30s requested, four workers; complete output", "command": "go test ./internal/ldapwire -run '^$' -fuzz '^FuzzReadSearchMessageReference$' -fuzztime=30s -parallel=4", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "go-test.txt", "role": "go-tests", "scope": "Full Go suite with CGO disabled; some packages cached; nonverbose output gives package results, not business-test counts", "command": "go test ./...", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "go-vet.txt", "role": "vet", "scope": "Full Go vet; empty output, success confirmed through validate.sh exit 0", "command": "go vet ./...", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "openldap-differential.txt", "role": "differential", "scope": "Uncached native reference test selection from R5 PASS/run inventory; exact selector construction in validate.sh", "command": "LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 go test ./internal/server -run \"^($reference_tests)$\" -count=1 -timeout=5m -v", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "decode-before.txt", "role": "decode-before", "scope": "Complete before component output; five repetitions, default 1s benchtime; extra unanchored cases preserved", "command": "CGO_ENABLED=0 go test ./internal/ldapwire -run '^$' -bench 'BenchmarkReadSearchMessage/|BenchmarkReadBind|BenchmarkReadCompare' -benchmem -count=5", "cgo_enabled": "0", "exit_code": 0},
+    {"path": "decode-current.txt", "role": "decode-current", "scope": "Complete current component output; five repetitions, 500ms benchtime; anchored selection", "command": "go test ./internal/ldapwire -run '^$' -bench '^(BenchmarkReadSearchMessage|BenchmarkReadSearchMessagePacketReference|BenchmarkReadBindCompareMessage)$/^(Equality|Presence|Controls|Nested|Long|GroupBase|MemberEquality|Bind|Compare)$' -benchmem -benchtime=500ms -count=5", "cgo_enabled": "0", "exit_code": 0}
+  ]
+}
