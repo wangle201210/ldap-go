@@ -1,0 +1,11 @@
+path	rows	n	repeats	setup_adds	cleanup_done	error	started_at
+default-group-aa/groups.json	126	1000	7	42	before,current,openldap	-	2026-09-29T21:43:50.855315Z
+default-group-aa/smoke.json	18	2	1	42	before,current,openldap	-	2026-09-29T21:43:37.25984Z
+default-group-aa/before/warmup.json	8	2	-	-	-	-	2026-09-29T21:43:32.849605Z
+default-group-aa/current/warmup.json	8	2	-	-	-	-	2026-09-29T21:43:35.998174Z
+default-group-aa/openldap/warmup.json	8	2	-	-	-	-	2026-09-29T21:43:37.065467Z
+default-group-swap/groups.json	126	1000	7	42	before,current,openldap	-	2026-09-29T21:44:57.903641Z
+default-group-swap/smoke.json	18	2	1	42	before,current,openldap	-	2026-09-29T21:44:44.414934Z
+default-group-swap/before/warmup.json	8	2	-	-	-	-	2026-09-29T21:44:43.297612Z
+default-group-swap/current/warmup.json	8	2	-	-	-	-	2026-09-29T21:44:40.109449Z
+default-group-swap/openldap/warmup.json	8	2	-	-	-	-	2026-09-29T21:44:44.259794Z

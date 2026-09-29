@@ -1,0 +1,20 @@
+item	value	source
+status	EVIDENCE_COMPLETE; main tentatively accepts R17 as a targeted DN optimization; native per-operation parity is not achieved and no regression-free or conclusive causal claim is made.	generator/main-finished.json
+per_operation_native_parity	NOT_ACHIEVED	below-openldap-comparisons.tsv
+baseline_source	747e5bd307b361ec03705a16303fb9b363c263d1	main handoff
+baseline_binary	96937b2ddf7bce78eccf7ee728880e5eb68fa560d41df0dcbf2517afa13ad751	retained R13 final; independently hashed
+baseline_embedded_revision	eced1dc with vcs.modified=true; subsequently committed as 747e5bd according to main. Not a clean 747e5bd build.	binary-metadata/before.txt
+current_binary	7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3	executable-sha256.txt; completion signal; independently hashed
+current_embedded_revision	302898b7d671c5509437fb7dad1c2313c631bd41; vcs.modified=true	binary-metadata/current.txt
+production_scope	ASCII attribute-letter bitfold is exhaustive over 256 byte values; strict ASCII single-RDN helper avoids repeated leaf scan on the schema common-tail path. No borrowed Get, cache or password change.	main handoff; seven frozen DN/helper/test/bench source files
+documentation_commit	302898b archives rejected R16 and changes docs only; it is not a new production optimization.	generator/source-snapshot.json
+source_freeze	11 selected files frozen at 2026-09-29T21:39:27.804Z; sourceRoot=/Users/wanna/mine/github/ldap-go/docs/evidence/performance-20260930-r17/source. This is a scoped source archive, not a standalone full repository.	source-origin.tsv; source-hashes.tsv
+original_name_source_snapshot	/Users/wanna/mine/github/ldap-go/docs/evidence/performance-20260930-r17/_source-snapshot preserves original relative paths, filenames and bytes independently of live main. Leading underscore avoids Go recursive package discovery. Only the selected 11 sources are included.	source-origin.tsv; source-hashes.tsv
+matched_component_command	Six cases, before/current, three 500ms unprofiled repeats, as supplied by main. Logs retain measured iterations; duration is invocation provenance, not inferable solely from ns/op.	main handoff; groups-matched-before.txt; groups-matched-current.txt
+component_test_binary	Baseline server-before.test retained and hashed; current component emitted by go test, no separately retained current test executable supplied.	binary-hashes.tsv; raw component logs
+runner_source	Current CLI source archived for timing semantics. Retained common/root/group executables have individual hashes and build metadata; no claim that all were freshly built from this snapshot.	source-origin.tsv; binary-metadata/
+environment	100k fixture; Apple M1 Pro; Go1.26.4; CGO_ENABLED=0; OpenLDAP2.6.13 (main supplied reference environment).	main handoff; scripts; component logs; binary-metadata.tsv
+setup_failure_and_restart	Initial ENOSPC before formal timing; excluded and retained. Recovery uses uniform APFS cp -c clones for all endpoints, fresh run directories and unchanged production/validation.	excluded-setup-failure/provenance.tsv; final scripts; generator/validation-main.json
+independent_calibration	Two additional default group runs: candidate/candidate A/A and real before/current with startup order and ports swapped. Separate 252 samples, 36 medians, 12 label comparisons, six exports. Core statistics and negatives unchanged. No significance or causal claim.	diagnostics/provenance.tsv; diagnostics/endpoint-identity.tsv; generator/diagnostics-finished.json
+validation_signal	R17五macro session69840已EXIT0，全15exports通过，端口测试进程均已退出。当前无benchmark，可以运行生成器大hash。最终productionhash7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3；validate所有logs完整，sources主repo冻结。	generator/main-finished.json
+generator_scope	Evidence worker runs no build, Go test, benchmark or profile. go version -m only reads embedded executable metadata. Large-file hashing starts after main completion.	generate-evidence.mjs.txt

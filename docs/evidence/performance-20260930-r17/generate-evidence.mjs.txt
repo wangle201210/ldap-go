@@ -1,0 +1,533 @@
+// R17 only. --main-finished requires a recorded explicit completion signal.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const repo = '/Users/wanna/mine/github/ldap-go';
+const src = '/var/tmp/ldap-go-perf-20260930-r17';
+const dst = path.join(repo, 'docs/evidence/performance-20260930-r17');
+const sourceRoot = path.join(dst, 'source');
+const originalSourceRoot = path.join(dst, '_source-snapshot');
+const baseline = '747e5bd307b361ec03705a16303fb9b363c263d1';
+const baselineHash = '96937b2ddf7bce78eccf7ee728880e5eb68fa560d41df0dcbf2517afa13ad751';
+const canonicalHash = '5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0';
+const endpoints = ['before', 'current', 'openldap'];
+const runs = ['explicit-final', 'default-final', 'root-paired', 'explicit-group-compare', 'default-group-compare'];
+const scripts = ['common-explicit', 'common-default', 'root-paired', 'group-compare-explicit', 'group-compare-default'];
+const diagnosticRuns = [
+  { run: 'default-group-aa', script: 'group-aa', kind: 'aa' },
+  { run: 'default-group-swap', script: 'group-swap', kind: 'startup-port-swap' },
+];
+const changedSources = [
+  'internal/directory/dn.go', 'internal/directory/dn_ascii_attribute_letter_test.go',
+  'internal/directory/dn_simple_rdn_bytes.go', 'internal/directory/dn_simple_rdn_bytes_test.go',
+  'internal/schema/compare_simple_dn.go', 'internal/schema/compare_simple_dn_leaf_test.go',
+  'internal/schema/compare_simple_dn_leaf_bench_test.go',
+];
+const sourceFiles = [...changedSources, 'internal/server/compare_group_bench_test.go',
+  'internal/cmd/ldapcommonbench/main.go', 'internal/cmd/ldapcommonbench/group_compare_test.go',
+  'internal/cmd/ldapbench/main.go'];
+const binaries = ['before', 'current', 'server-before.test', 'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group'];
+const logs = ['focused-test.txt', 'fuzz-final.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt',
+  'groups-matched-before.txt', 'groups-matched-current.txt', 'group-before.txt', 'group-current.txt', 'dn-leaf-fuzz.txt'];
+const failedSetupFiles = ['common-explicit-failed-disk.sh', 'common-explicit-failed-disk.log',
+  'explicit-failed-disk/before/warmup.json', 'explicit-failed-disk/before/server.log'];
+const batches = run => run === 'root-paired' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke']
+  : run.includes('-group-') ? ['groups', 'smoke'] : ['hot', 'distributed', 'groups', 'smoke'];
+const jsonFiles = runs.flatMap(run => [...batches(run).map(batch => `${run}/${batch}.json`), ...endpoints.map(e => `${run}/${e}/warmup.json`)]);
+const diagnosticJSON = diagnosticRuns.flatMap(({ run }) => ['groups.json', 'smoke.json', ...endpoints.map(e => `${e}/warmup.json`)].map(f => `${run}/${f}`));
+const diagnosticFiles = [...diagnosticJSON, ...diagnosticRuns.flatMap(({ run, script }) => [
+  script + '.sh', script + '.log', `${run}/validation.tsv`, `${run}/openldap/reindex.log`, ...endpoints.map(e => `${run}/${e}/server.log`),
+])];
+const rawFiles = [...logs, 'validate.sh', 'run-performance.sh', 'executable-sha256.txt',
+  ...scripts.flatMap(s => [`${s}.sh`, `${s}.log`]), ...jsonFiles,
+  ...runs.flatMap(run => [`${run}/validation.tsv`, ...endpoints.map(e => `${run}/${e}/server.log`), `${run}/openldap/reindex.log`]),
+  ...runs.slice(0, 2).map(run => `${run}/concurrent.tsv`)];
+const signalFile = 'generator/main-finished.json';
+const validationSignalFile = 'generator/validation-main.json';
+const diagnosticSignalFile = 'generator/diagnostics-finished.json';
+const snapshotFile = 'generator/source-snapshot.json';
+const digest = body => createHash('sha256').update(body).digest('hex');
+const tsv = rows => rows.map(row => row.map(x => String(x ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const same = (a, b) => Array.isArray(a) && Array.isArray(b) && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const finite = n => Number.isFinite(n) && n >= 0;
+const positive = n => Number.isFinite(n) && n > 0;
+const median = values => { const a = [...values].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const trackedReads = new Map();
+function statFile(f) {
+  const s = fs.lstatSync(f);
+  if (!s.isFile() || s.isSymbolicLink()) throw new Error(`Expected regular file: ${f}`);
+  return s;
+}
+function remember(f) {
+  const s = statFile(f);
+  const previous = trackedReads.get(f);
+  if (previous && (previous.size !== s.size || previous.mtimeMs !== s.mtimeMs)) throw new Error(`Input changed: ${f}`);
+  trackedReads.set(f, { size: s.size, mtimeMs: s.mtimeMs });
+}
+function readPath(f) { remember(f); return fs.readFileSync(f, 'utf8'); }
+const read = f => readPath(path.join(src, f));
+async function fileFacts(f, countLines = false) {
+  remember(f);
+  const hash = createHash('sha256');
+  let bytes = 0, lines = 0;
+  for await (const chunk of fs.createReadStream(f)) {
+    hash.update(chunk); bytes += chunk.length;
+    if (countLines) for (let i = chunk.indexOf(10); i >= 0; i = chunk.indexOf(10, i + 1)) lines++;
+  }
+  return { sha256: hash.digest('hex'), bytes, lines };
+}
+function write(f, body) {
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, body);
+}
+function stableInputs() { for (const f of trackedReads.keys()) remember(f); }
+const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+const mode = process.argv[2];
+if (process.argv.length !== 3 || !['--snapshot-sources', '--inspect', '--main-finished'].includes(mode)) {
+  throw new Error('Use --snapshot-sources (small source text only), --inspect (existence only), or --main-finished (after explicit main completion).');
+}
+if (mode === '--snapshot-sources') {
+  if (fs.existsSync(path.join(dst, snapshotFile))) throw new Error('Frozen source already exists; do not overwrite it.');
+  const bodies = sourceFiles.map(f => [f, readPath(path.join(repo, f))]);
+  const snapshot = { state: 'SOURCE_SNAPSHOT_ONLY_NOT_PUBLISHED', round: 'R17', captured_at: new Date().toISOString(),
+    source_root: repo, archive_source_root: sourceRoot, git_head: git(['rev-parse', 'HEAD']).trim(),
+    git_status: git(['status', '--short']),
+    documentation_commit_paths: git(['diff-tree', '--no-commit-id', '--name-only', '-r', '302898b']).trim().split('\n'),
+    sources: bodies.map(([f, body]) => ({ path: f, sha256: digest(body) })) };
+  const diff = git(['diff', '--', ...changedSources, 'internal/server/compare_group_bench_test.go']);
+  stableInputs();
+  for (const [f, body] of bodies) write(`source/${f}.txt`, body);
+  write(snapshotFile, JSON.stringify(snapshot, null, 2) + '\n');
+  write('generator/source-tracked.diff.txt', diff);
+  console.log(JSON.stringify({ state: snapshot.state, sources: bodies.length, bytes: bodies.reduce((n, [, body]) => n + Buffer.byteLength(body), 0), source_root: sourceRoot, binary_or_export_hashing: false }, null, 2));
+  process.exit(0);
+}
+const required = [...rawFiles.map(f => path.join(src, f)), ...diagnosticFiles.map(f => path.join(src, f)), ...failedSetupFiles.map(f => path.join(src, f)), ...binaries.map(f => path.join(src, f)),
+  ...['member-acl.db', 'member-index.db'].map(f => path.join(src, f)),
+  ...[...runs, ...diagnosticRuns.map(d => d.run)].flatMap(run => endpoints.map(e => path.join(src, run, e, 'data.canonical'))),
+  ...sourceFiles.map(f => path.join(sourceRoot, f + '.txt')),
+  ...[signalFile, validationSignalFile, diagnosticSignalFile, snapshotFile, 'generator/source-tracked.diff.txt'].map(f => path.join(dst, f))];
+const missing = required.filter(f => !fs.existsSync(f));
+if (mode === '--inspect') {
+  console.log(JSON.stringify({ state: 'NOT_PUBLISHED', final_signal_required: true, large_file_hashing: false,
+    expected: { scripts: 5, raw_json: 31, exports: 15, samples: 696, medians: 144, comparisons: 48, matched_component_samples: 36,
+      separate_diagnostic_scripts: 2, separate_diagnostic_exports: 6, separate_diagnostic_samples: 252 }, missing }, null, 2));
+  process.exit(missing.length ? 1 : 0);
+}
+if (missing.length) throw new Error(`Incomplete inputs; nothing published:\n${missing.join('\n')}`);
+const output = new Map(), checks = [['path', 'check', 'status', 'detail']];
+const table = (f, rows) => output.set(f, tsv(rows));
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+function requirePassing() {
+  const failures = checks.slice(1).filter(r => r[2] === 'FAIL');
+  if (failures.length) throw new Error('Evidence checks failed; nothing published:\n' + tsv([checks[0], ...failures]));
+}
+function parseTSV(f, header) {
+  const [head, ...rows] = read(f).trim().split(/\r?\n/).map(s => s.split('\t'));
+  check(f, 'TSV schema and nonempty rows', same(head, header) && JSON.stringify(head) === JSON.stringify(header) && rows.length > 0 && rows.every(r => r.length === head.length));
+  return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]])));
+}
+const signal = JSON.parse(readPath(path.join(dst, signalFile)));
+const validationSignal = JSON.parse(readPath(path.join(dst, validationSignalFile)));
+const diagnosticSignal = JSON.parse(readPath(path.join(dst, diagnosticSignalFile)));
+check(signalFile, 'explicit R17 completion with successful serial validation and performance exits',
+  signal.round === 'R17' && signal.validation_exit_code === 0 && signal.performance_exit_code === 0 &&
+  typeof signal.main_signal === 'string' && signal.main_signal.trim().length > 0 && Number.isFinite(Date.parse(signal.completed_at)) && /^[a-f0-9]{64}$/.test(signal.current_sha256));
+check(validationSignalFile, 'main confirmed final validation and unchanged candidate hash', validationSignal.round === 'R17' && validationSignal.validation_exit_code === 0 && validationSignal.current_sha256 === signal.current_sha256);
+check(diagnosticSignalFile, 'explicit two-diagnostic completion and unchanged production hash', diagnosticSignal.round === 'R17' && diagnosticSignal.performance_exit_code === 0 && diagnosticSignal.current_sha256 === signal.current_sha256 && typeof diagnosticSignal.main_signal === 'string' && !!diagnosticSignal.main_signal.trim());
+const executableHashes = [...read('executable-sha256.txt').matchAll(/^([a-f0-9]{64})\s+(.+)$/gm)];
+const expectedHashes = Object.fromEntries(executableHashes.map(m => [path.basename(m[2]), m[1]]));
+check('executable-sha256.txt', 'exact final before/current identities and handoff match', same(Object.keys(expectedHashes), ['before', 'current']) && executableHashes.length === 2 && executableHashes.every(m => m[2] === path.join(src, path.basename(m[2]))) && expectedHashes.before === baselineHash && expectedHashes.current === signal.current_sha256);
+for (const [i, script] of scripts.entries()) {
+  const body = read(script + '.sh'), explicit = runs[i].startsWith('explicit-');
+  check(script + '.log', 'successful script completion', read(script + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  check(script + '.sh', 'R17 run, access seed and uniform APFS COW setup', body.includes(`audit=${src}`) && body.includes(`out=$audit/${runs[i]}`) && body.includes(`cp -c "$audit/${explicit ? 'member-acl' : 'member-index'}.db"`) && body.includes('cp -c "$source_dir/openldap-1/data/data.mdb"') && [...body.matchAll(/^\s*cp /gm)].length === 2 && (explicit ? body.includes('access to attrs=userPassword') : !/^.*'access to /m.test(body)));
+}
+check('run-performance.sh', 'five fixed sequential workloads', JSON.stringify([...read('run-performance.sh').matchAll(/^sh "\$audit\/([^"\n]+)\.sh"/gm)].map(m => m[1])) === JSON.stringify(scripts) && !/\s&(?:\s|$)/m.test(read('run-performance.sh')));
+requirePassing();
+const archiveName = f => /\.(sh|log|mjs)$/.test(f) ? f + '.txt' : f;
+const exploratory = f => ['group-before.txt', 'group-current.txt', 'dn-leaf-fuzz.txt'].includes(f);
+for (const f of rawFiles) output.set((exploratory(f) ? 'exploratory/' : '') + archiveName(f), read(f));
+for (const f of [signalFile, validationSignalFile, diagnosticSignalFile, snapshotFile, 'generator/source-tracked.diff.txt']) output.set(f, readPath(path.join(dst, f)));
+for (const f of diagnosticFiles) output.set('diagnostics/' + archiveName(f), read(f));
+for (const f of failedSetupFiles) output.set('excluded-setup-failure/' + archiveName(f), read(f));
+const failedWarmup = JSON.parse(read('explicit-failed-disk/before/warmup.json'));
+check('excluded-setup-failure', 'ENOSPC during plain-copy setup before formal timing', /current\/data\.db:.*No space left on device/.test(read('common-explicit-failed-disk.log')) && !read('common-explicit-failed-disk.log').includes('Common-operation comparison passed.') && read('common-explicit-failed-disk.sh').includes('cp "$audit/member-acl.db"') && !read('common-explicit-failed-disk.sh').includes('cp -c '));
+check('excluded-setup-failure', 'only completed before warmup, no formal workload JSON', failedWarmup.error === '' && failedWarmup.config?.n === 2 && Array.isArray(failedWarmup.stages) && ['hot', 'distributed', 'groups', 'smoke'].every(batch => !fs.existsSync(path.join(src, 'explicit-failed-disk', batch + '.json'))));
+table('excluded-setup-failure/provenance.tsv', [['item', 'value'],
+  ['role', 'EXCLUDED_SETUP_FAILURE; zero formal timing samples'],
+  ['cause', 'ENOSPC copying current/data.db during first common-explicit setup. before warmup completed; formal smoke/hot/distributed/group/concurrent timing had not started.'],
+  ['recovery', 'Main renamed the failed directory/log/script, removed partial databases, restored 2.9GiB space, then restarted the fixed five-script sequence in fresh run directories.'],
+  ['method_change', 'All final scripts use cp -c for both native and Go fixture copies: independent writable APFS copy-on-write clones. Production binary and validation unchanged.'],
+  ['path_note', 'The failed raw log and saved script retain their original explicit-final pathname; the directory was subsequently renamed explicit-failed-disk.'],
+  ['formal_statistics', 'Excluded from all 31 final JSON reports, 696 samples, 144 medians and 48 comparisons. Failure warmup is preserved only here.'],
+]);
+output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+table('run-sources.tsv', [['run', 'script', 'access_mode', 'role'], ...runs.map((run, i) => [run, scripts[i] + '.sh', run.startsWith('explicit') ? 'explicit' : 'default', 'R17_ONLY'])]);
+
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const samples = [[...dims, 'repeat', 'operations', 'total_ms', 'source']], groups = new Map();
+function add(key, s, f) {
+  const k = JSON.stringify(key);
+  if (!groups.has(k)) groups.set(k, []);
+  groups.get(k).push(s); samples.push([...key, s.repeat, s.operations, s.total_ms, f]);
+}
+const hot = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0], ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0], ['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10], ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0], ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0], ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'], ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const reports = [['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'error', 'started_at']];
+const counters = [['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms']];
+for (const f of jsonFiles) {
+  const j = JSON.parse(read(f)), c = j.config, run = f.split('/')[0], batch = path.basename(f, '.json');
+  const shape = !!c && Array.isArray(batch === 'warmup' ? j.stages : j.samples);
+  check(f, 'report shape', shape);
+  if (!shape) continue;
+  check(f, 'error-free report, 100k fixture and timestamp', j.error === '' && c.entries === 100000 && Number.isFinite(Date.parse(j.started_at)), j.error);
+  reports.push([f, (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), j.error, j.started_at]);
+  if (batch === 'warmup') {
+    check(f, 'SDK warmup inventory and read-only mode', same(j.stages.map(s => s.name), sdkStages) && c.n === 2 && c.read_only === true && c.write === false);
+    check(f, 'warmup operation counters, errors and totals', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+    continue;
+  }
+  const root = run === 'root-paired', group = run.includes('-group-'), smoke = batch.includes('smoke');
+  const repeats = smoke ? 1 : root || group ? 7 : 3;
+  const n = smoke ? 2 : group ? 1000 : batch === 'groups' ? 100 : 1000;
+  const cases = root ? rootCases : group ? compareCases : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? hot.slice(4) : groupCases;
+  const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+  check(f, 'fixed operation/repeat count and disposable setup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && typeof j.run_dn === 'string' && !!j.run_dn);
+  check(f, 'configured stages', same(c.stages, [...new Set(cases.map(r => r[0]))]));
+  check(f, 'endpoint inventory and cleanup', same(c.endpoints?.map(e => e.name), endpoints) && same(j.cleanup_done, endpoints));
+  check(f, 'stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members ?? 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+  check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+  check(f, 'request and WhoAmI counters', j.samples.every(s => Number.isInteger(s.requests) && (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+  check(f, 'sample errors and timing totals', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms)));
+  check(f, 'measured latency sum equals total', j.samples.every(s => Array.isArray(s.latency_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+  const rootDN = batch.startsWith('normalized') ? 'CN=ADMIN,DC=SCALE,DC=QUALIFICATION' : 'cn=admin,dc=scale,dc=qualification';
+  check(f, 'root DN variant and nonroot identity distinction', c.root_bind_dn === rootDN && j.samples.every(s => root ? s.root_bind_dn === rootDN : !s.root_bind_dn));
+  if (!root && !group && ['hot', 'distributed'].includes(batch)) check(f, 'fixed hot UID versus distributed target selection', batch === 'hot' ? c.uid === 'scale-001001' : !c.uid);
+  for (const s of j.samples) {
+    const dimensions = [root ? 'root' : group ? 'group-compare' : 'common', root ? 'default' : run.split('-')[0], root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members ?? 0, s.endpoint];
+    counters.push([f, ...dimensions, s.repeat, s.operations, s.completed, s.requests, s.latency_ms?.length, s.verification_requests, s.verification_ms]);
+    if (!smoke) add(dimensions, s, f);
+  }
+}
+for (const run of runs.slice(0, 2)) {
+  const f = `${run}/concurrent.tsv`, rows = parseTSV(f, ['side', 'repeat', 'ms']);
+  check(f, 'concurrent warmup and measured repeats', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => positive(+r.ms)));
+  for (const r of rows.filter(r => +r.repeat > 0)) add(['concurrent', run.split('-')[0], 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f);
+}
+const medians = [[...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median']];
+for (const [key, rows] of groups) {
+  const d = JSON.parse(key), expected = ['root', 'group-compare'].includes(d[0]) ? 7 : 3;
+  check(key, 'median repeat inventory and equal operation counts', same(rows.map(s => s.repeat), seq(expected)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => positive(s.total_ms)));
+  const ms = median(rows.map(s => s.total_ms));
+  medians.push([...d, rows.length, rows[0].operations, ms, rows[0].operations * 1000 / ms]);
+}
+const comparisons = [[...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct']];
+for (const key of new Set(medians.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+  const rows = endpoints.map(e => medians.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+  check(key, 'three comparison endpoints and equal operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+  if (rows.some(r => !r)) continue;
+  const [b, c, o] = rows.map(r => r[10]);
+  comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+}
+check('statistics', 'five scripts and 31 raw JSON reports', runs.length === 5 && jsonFiles.length === 31);
+check('statistics', '696 samples, 144 medians and 48 comparisons', samples.length === 697 && medians.length === 145 && comparisons.length === 49);
+check('statistics', '18 concurrent samples; 252 group Compare samples; no rechecks', samples.slice(1).filter(r => r[0] === 'concurrent').length === 18 && samples.slice(1).filter(r => r[0] === 'group-compare').length === 252 && samples.slice(1).every(r => ['common', 'root', 'group-compare', 'concurrent'].includes(r[0])));
+const negatives = comparisons.slice(1).filter(r => r[12] < 0);
+const belowNative = comparisons.slice(1).filter(r => r[11] < 100);
+table('samples.tsv', samples); table('medians.tsv', medians); table('comparisons.tsv', comparisons);
+table('negative-comparisons.tsv', [comparisons[0], ...negatives]);
+table('below-openldap-comparisons.tsv', [comparisons[0], ...belowNative]);
+table('reports.tsv', reports); table('counters.tsv', counters);
+
+const diagnosticSamples = [samples[0]], diagnosticMedians = [medians[0]];
+const diagnosticComparisons = [[...dims.slice(0, -1), 'operations', 'before_label_ms', 'current_label_ms', 'openldap_ms', 'current_label_over_openldap_throughput_pct', 'label_time_reduction_pct']];
+const diagnosticCounters = [counters[0]], diagnosticReports = [reports[0]];
+const diagnosticIdentity = [['run', 'kind', 'endpoint_label', 'binary', 'sha256', 'port', 'startup_position']];
+for (const { run, script, kind } of diagnosticRuns) {
+  const body = read(script + '.sh'), aa = kind === 'aa';
+  const ports = aa ? { before: 29481, current: 29482, openldap: 29483 } : { before: 29482, current: 29481, openldap: 29483 };
+  const startup = aa ? ['before', 'current', 'openldap'] : ['current', 'before', 'openldap'];
+  check(script + '.log', 'diagnostic script completed', read(script + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  check(script + '.sh', 'default access APFS clone and predetermined group design', body.includes(`out=$audit/${run}`) && body.includes('cp -c "$audit/member-index.db"') && body.includes('cp -c "$source_dir/openldap-1/data/data.mdb"') && !body.includes('access to attrs=userPassword') && body.includes('-group-sizes 10,1000 -n 1000 -repeats 7'));
+  check(script + '.sh', 'startup order and binary mapping', body.includes(`for side in ${startup.join(' ')}; do`) && (aa ? body.includes('binary=$audit/current') && !body.includes('binary=$audit/$side') : body.includes('binary=$audit/$side')));
+  for (const e of endpoints) {
+    check(script + '.sh', `${e} port mapping`, body.includes(`${e}) port=${ports[e]};;`) && body.includes(`-endpoint ${e}=ldap://127.0.0.1:${ports[e]}`));
+    const binary = e === 'openldap' ? 'openldap' : aa ? 'current' : e;
+    diagnosticIdentity.push([run, kind, e, binary, expectedHashes[binary] ?? 'REFERENCE_OPENLDAP_2.6.13', ports[e], startup.indexOf(e) + 1]);
+  }
+  const collected = [];
+  for (const f of diagnosticJSON.filter(f => f.startsWith(run + '/'))) {
+    const j = JSON.parse(read(f)), c = j.config, warmup = f.endsWith('/warmup.json'), smoke = f.endsWith('/smoke.json');
+    check(f, 'complete error-free diagnostic report with 100k fixture', j.error === '' && c?.entries === 100000 && Number.isFinite(Date.parse(j.started_at)));
+    diagnosticReports.push([f, (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), j.error, j.started_at]);
+    if (warmup) {
+      const e = f.split('/')[1];
+      check(f, 'diagnostic SDK warmup inventory, endpoint, counters and errors', c.uri === `ldap://127.0.0.1:${ports[e]}` && c.n === 2 && c.read_only === true && c.write === false && same(j.stages.map(s => s.name), sdkStages) && j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+      continue;
+    }
+    const n = smoke ? 2 : 1000, repeats = smoke ? 1 : 7;
+    const expected = compareCases.flatMap(c => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...c, e, i]))));
+    check(f, 'diagnostic operation/repeat counts, setup and cleanup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && !!j.run_dn && same(j.cleanup_done, endpoints));
+    check(f, 'diagnostic methods, members, endpoints and port mapping', same(c.stages, [...new Set(compareCases.map(r => r[0]))]) && same(c.group_sizes, [10, 1000]) && same(c.endpoints.map(e => `${e.name}=${e.uri}`), endpoints.map(e => `${e}=ldap://127.0.0.1:${ports[e]}`)) && same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members, s.endpoint, s.repeat])), expected));
+    check(f, 'diagnostic nonroot identity and counters', c.root_bind_dn === 'cn=admin,dc=scale,dc=qualification' && j.samples.every(s => !s.root_bind_dn && s.operations === n && s.completed === n && s.requests === n && s.verification_requests === n + 2 && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+    check(f, 'diagnostic errors and latency sums', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+    for (const s of j.samples) {
+      const d = [kind, 'default', 'nonroot', smoke ? 'smoke' : 'groups', s.stage, s.method, s.members, s.endpoint];
+      diagnosticCounters.push([f, ...d, s.repeat, s.operations, s.completed, s.requests, s.latency_ms.length, s.verification_requests, s.verification_ms]);
+      if (!smoke) { collected.push(s); diagnosticSamples.push([...d, s.repeat, s.operations, s.total_ms, 'diagnostics/' + f]); }
+    }
+  }
+  for (const [stage, method, members] of compareCases) {
+    const d = [kind, 'default', 'nonroot', 'groups', stage, method, members], times = [];
+    for (const endpoint of endpoints) {
+      const rows = collected.filter(s => s.stage === stage && s.method === method && s.members === members && s.endpoint === endpoint);
+      check(`${run}/${stage}/${members}/${endpoint}`, 'seven independent diagnostic repeats', same(rows.map(s => s.repeat), seq(7)));
+      const ms = median(rows.map(s => s.total_ms)); times.push(ms);
+      diagnosticMedians.push([...d, endpoint, rows.length, 1000, ms, 1000000 / ms]);
+    }
+    const [b, c, o] = times;
+    diagnosticComparisons.push([...d, 1000, b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+  }
+}
+check('diagnostics', 'separate 10 JSON, 252 samples, 36 medians and 12 comparisons', diagnosticJSON.length === 10 && diagnosticSamples.length === 253 && diagnosticMedians.length === 37 && diagnosticComparisons.length === 13);
+table('diagnostics/samples.tsv', diagnosticSamples); table('diagnostics/medians.tsv', diagnosticMedians); table('diagnostics/comparisons.tsv', diagnosticComparisons);
+table('diagnostics/negative-comparisons.tsv', [diagnosticComparisons[0], ...diagnosticComparisons.slice(1).filter(r => r[12] < 0)]);
+table('diagnostics/counters.tsv', diagnosticCounters); table('diagnostics/reports.tsv', diagnosticReports); table('diagnostics/endpoint-identity.tsv', diagnosticIdentity);
+const corePreserved = [['path', 'sha256', 'unchanged_from_original_core_archive']];
+for (const f of ['samples.tsv', 'medians.tsv', 'comparisons.tsv', 'negative-comparisons.tsv', 'below-openldap-comparisons.tsv']) {
+  const hash = digest(output.get(f)), previous = path.join(dst, f);
+  check(f, 'core statistics unchanged by calibration', fs.existsSync(previous) && digest(readPath(previous)) === hash);
+  corePreserved.push([f, hash, true]);
+}
+table('diagnostics/core-statistics-preserved.tsv', corePreserved);
+table('diagnostics/provenance.tsv', [['item', 'value'],
+  ['role', 'INDEPENDENT_MEASUREMENT_CALIBRATION_ONLY; not part of formal 696/144/48 statistics'],
+  ['trigger', 'Main observed small negative group rows under both access modes with unchanged component allocation counts, then predetermined two separate default-access 1000 x 7 calibrations.'],
+  ['aa', 'Both before/current labels execute the same candidate binary. Original labels, ports and startup order retained. Label difference measures this A/A run, not a production baseline improvement.'],
+  ['startup-port-swap', 'Real baseline/current binaries unchanged. Current starts first on 29481, before second on 29482; client endpoints map to their correct labels. Startup order and ports change together, so their individual effects cannot be isolated.'],
+  ['counts', 'Each diagnostic: six method/member cases x three endpoints x seven repeats = 126 measured samples; six exports total. Smoke/SDK warmups excluded from medians.'],
+  ['limits', 'No pooling, subtraction, noise correction, replacement of original negative values, causal attribution or statistical significance claim. The two diagnostics cannot establish that original regressions are only measurement error.'],
+  ['method', 'Same APFS COW fixture setup and runner timing rules as core group Compare; default access only.'],
+]);
+
+function components(files, matched) {
+  const scope = matched ? 'matched' : 'exploratory';
+  const prefix = matched ? '' : 'exploratory/';
+  const members = matched ? [10, 1000] : [1000];
+  const rows = [['scope', 'identity', 'members', 'case', 'endpoint', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op', 'source']], sets = new Map();
+  for (const [i, f] of files.entries()) {
+    const body = read(f), parsed = [...body.matchAll(/^(BenchmarkLocal(?:Small)?GroupCompare)\/(first|last|missing)-\d+\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op/gm)];
+    check(f, 'all component lines parsed, correct CPU and successful log', parsed.length === (body.match(/^Benchmark\S+/gm) || []).length && /^PASS$/m.test(body) && /^cpu: Apple M1 Pro$/m.test(body) && !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+    for (const m of parsed) {
+      const key = JSON.stringify([scope, 'root', m[1].includes('Small') ? 10 : 1000, m[2], endpoints[i]]);
+      if (!sets.has(key)) sets.set(key, []);
+      const group = sets.get(key), row = [...JSON.parse(key), group.length + 1, ...m.slice(3).map(Number), prefix + f];
+      group.push(row); rows.push(row);
+    }
+  }
+  const expected = members.flatMap(n => ['first', 'last', 'missing'].flatMap(c => ['before', 'current'].map(e => JSON.stringify([scope, 'root', n, c, e]))));
+  check(scope, 'component inventory and three repeats per side', same([...sets.keys()], expected) && rows.length === 1 + expected.length * 3);
+  const summary = [['scope', 'identity', 'members', 'case', 'endpoint', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+  for (const [key, values] of sets) {
+    check(key, 'three finite component samples', values.length === 3 && values.every(r => r.slice(6, 10).every(finite) && positive(r[6]) && positive(r[7])));
+    summary.push([...JSON.parse(key), values.length, ...[7, 8, 9].map(i => median(values.map(r => r[i])))]);
+  }
+  const pairs = [['scope', 'identity', 'members', 'case', 'metric', 'before', 'current', 'reduction_pct']];
+  for (const n of members) for (const c of ['first', 'last', 'missing']) {
+    const [b, a] = ['before', 'current'].map(e => summary.find(r => r[2] === n && r[3] === c && r[4] === e));
+    check(`${scope}/${n}/${c}`, 'paired component medians', !!b && !!a);
+    if (!b || !a) continue;
+    for (const [i, metric] of [[6, 'ns/op'], [7, 'B/op'], [8, 'allocs/op']]) pairs.push([scope, 'root', n, c, metric, b[i], a[i], b[i] ? 100 * (1 - a[i] / b[i]) : null]);
+    if (matched) check(`${scope}/${n}/${c}`, 'allocs/op unchanged in all six samples', sets.get(JSON.stringify([scope, 'root', n, c, 'before'])).every(r => r[9] === b[8]) && sets.get(JSON.stringify([scope, 'root', n, c, 'current'])).every(r => r[9] === b[8]));
+  }
+  table(prefix + 'component-samples.tsv', rows); table(prefix + 'component-medians.tsv', summary); table(prefix + 'component-comparisons.tsv', pairs);
+  table(prefix + 'component-negative-comparisons.tsv', [pairs[0], ...pairs.slice(1).filter(r => r[7] < 0)]);
+  return { samples: rows.length - 1, medians: summary.length - 1, comparisons: pairs.length - 1, negatives: pairs.slice(1).filter(r => r[7] < 0).length };
+}
+const matchedComponents = components(['groups-matched-before.txt', 'groups-matched-current.txt'], true);
+const exploratoryComponents = components(['group-before.txt', 'group-current.txt'], false);
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+for (const f of logs) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  statuses.push([(exploratory(f) ? 'exploratory/' : '') + f, exploratory(f) ? 'EXPLORATORY_ONLY' : 'R17_FINAL', Buffer.byteLength(body), count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm), count(/^\s*--- SKIP:/gm), count(/^PASS$/gm), count(/^FAIL(?:\s|$)/gm), count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  check(f, 'no failures or panic', !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  if (f === 'go-vet.txt') check(f, 'no diagnostics and successful serial validation confirmed', body.trim() === '' && signal.validation_exit_code === 0);
+  else check(f, 'successful complete log', /(?:^ok\s|^PASS$)/m.test(body) && /(?:^|\n)(?:ok\s[^\n]+|PASS|\?\s[^\n]+\[no test files\])\s*$/.test(body));
+  if (f === 'openldap-differential.txt') check(f, '26 top-level and 355 total native PASS records without skips', count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === 26 && count(/^--- PASS:/gm) === 26 && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+}
+check('focused-test.txt', 'fresh complete directory and schema packages', [...read('focused-test.txt').matchAll(/^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/(directory|schema)\s+[\d.]+s$/gm)].length === 2 && !/\(cached\)/.test(read('focused-test.txt')));
+check('go-test.txt', 'full suite includes directory, schema, storage and server', ['directory', 'schema', 'storage', 'server'].every(pkg => new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + pkg + '\\s', 'm').test(read('go-test.txt'))));
+check('validate.sh', 'CGO disabled and final 15-second targeted fuzz configured', read('validate.sh').includes('export CGO_ENABLED=0') && read('validate.sh').includes("-fuzz '^FuzzParseSimpleRDNBytes$' -fuzztime=15s -parallel=2"));
+const fuzzRows = [['path', 'role', 'executions', 'elapsed_seconds_last_progress', 'new_interesting', 'total_corpus']];
+for (const f of ['fuzz-final.txt', 'dn-leaf-fuzz.txt']) {
+  const progress = [...read(f).matchAll(/^fuzz: elapsed: (\d+)s, execs: (\d+) \([^\n]+\), new interesting: (\d+) \(total: (\d+)\)$/gm)];
+  const last = progress.at(-1);
+  check(f, 'completed fuzz progress with at least 15 seconds', !!last && +last[1] >= 15 && +last[2] > 0);
+  if (last) fuzzRows.push([(exploratory(f) ? 'exploratory/' : '') + f, exploratory(f) ? 'EXPLORATORY_ONLY' : 'FINAL', +last[2], +last[1], +last[3], +last[4]]);
+}
+table('fuzz-status.tsv', fuzzRows); table('log-status.tsv', statuses);
+const frozen = JSON.parse(output.get(snapshotFile));
+check(snapshotFile, 'exact frozen source inventory', frozen.round === 'R17' && same(frozen.sources?.map(s => s.path), sourceFiles));
+check(snapshotFile, '302898b changed documentation only', frozen.documentation_commit_paths.length > 0 && frozen.documentation_commit_paths.every(f => f.startsWith('docs/')));
+const sourceRows = [['path', 'sha256']], sourceOrigins = [['path', 'source_root', 'archive_path', 'original_name_snapshot_path', 'role']];
+for (const f of sourceFiles) {
+  const body = readPath(path.join(sourceRoot, f + '.txt')), hash = digest(body);
+  check(f, 'frozen source hash unchanged', frozen.sources.some(s => s.path === f && s.sha256 === hash));
+  output.set(`source/${f}.txt`, body); sourceRows.push([f, hash]);
+  output.set(`_source-snapshot/${f}`, body);
+  sourceOrigins.push([f, sourceRoot, `source/${f}.txt`, `_source-snapshot/${f}`, changedSources.includes(f) ? 'R17_DN_SOURCE_OR_TEST' : 'BENCHMARK_SOURCE']);
+}
+table('source-hashes.tsv', sourceRows); table('source-origin.tsv', sourceOrigins);
+const groupSource = output.get('source/internal/server/compare_group_bench_test.go.txt');
+check('component-source', '10/1000-member benchmarks share parameterized helper', groupSource.includes('benchmarkLocalGroupCompare(b, 1000)') && groupSource.includes('benchmarkLocalGroupCompare(b, 10)') && groupSource.includes('func benchmarkLocalGroupCompare(b *testing.B, members int)') && groupSource.includes('make([][]byte, members)'));
+requirePassing();
+
+// Large-file reads begin only after explicit completion and all text checks pass.
+const exports = [['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_path']];
+const diagnosticExports = [exports[0]];
+for (const run of [...runs, ...diagnosticRuns.map(d => d.run)]) {
+  const f = `${run}/validation.tsv`, rows = parseTSV(f, ['run', 'canonical_entries', 'canonical_cksum', 'canonical_bytes']);
+  check(f, 'three export identities', same(rows.map(r => r.run), endpoints));
+  for (const endpoint of endpoints) {
+    const r = rows.find(r => r.run === endpoint), file = path.join(src, run, endpoint, 'data.canonical');
+    const facts = await fileFacts(file, true), checksum = execFileSync('cksum', [file], { encoding: 'utf8' }).trim().split(/\s+/);
+    (runs.includes(run) ? exports : diagnosticExports).push([run, endpoint, facts.lines, checksum[0], facts.bytes, facts.sha256, file]);
+    check(file, 'actual export content matches final TSV and fixture', r?.canonical_entries === String(facts.lines) && r?.canonical_cksum === checksum[0] && r?.canonical_bytes === String(facts.bytes) && facts.lines === 100002 && facts.bytes === 42712438 && checksum[0] === '2143929969' && +checksum[1] === facts.bytes && facts.sha256 === canonicalHash);
+  }
+  check(run, 'disposable password and seeded databases cleaned up', ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !fs.existsSync(path.join(src, run, f))));
+}
+check('exports', 'all 15 canonical exports are identical', exports.length === 16 && new Set(exports.slice(1).map(r => r[5])).size === 1);
+table('export-checks.tsv', exports);
+check('diagnostic-exports', 'six separate diagnostic exports match the fixture', diagnosticExports.length === 7 && diagnosticExports.slice(1).every(r => r[5] === canonicalHash));
+table('diagnostics/export-checks.tsv', diagnosticExports);
+const binaryRows = [['file', 'sha256', 'bytes']], metadataRows = [['file', 'go_version', 'vcs_revision', 'vcs_modified', 'CGO_ENABLED', 'GOOS', 'GOARCH']];
+for (const f of binaries) {
+  const facts = await fileFacts(path.join(src, f));
+  binaryRows.push([f, facts.sha256, facts.bytes]);
+  if (['before', 'current'].includes(f)) check(f, 'actual binary hash equals executable-sha256 and handoff', facts.sha256 === expectedHashes[f], facts.sha256);
+  const metadata = execFileSync('go', ['version', '-m', path.join(src, f)], { encoding: 'utf8', env: { ...process.env, GOTOOLCHAIN: 'local' } });
+  output.set(`binary-metadata/${f}.txt`, metadata);
+  const field = name => metadata.match(new RegExp('(?:^|\\s)' + name.replaceAll('.', '\\.') + '=([^\\s]+)'))?.[1] ?? 'NOT_EMBEDDED';
+  const version = metadata.split('\n')[0].match(/go[\d.]+/)?.[0] ?? 'NOT_EMBEDDED';
+  metadataRows.push([f, version, field('vcs.revision'), field('vcs.modified'), field('CGO_ENABLED'), field('GOOS'), field('GOARCH')]);
+  check(f, 'Go1.26.4 CGO-disabled darwin/arm64 build metadata', version === 'go1.26.4' && field('CGO_ENABLED') === '0' && field('GOOS') === 'darwin' && field('GOARCH') === 'arm64');
+  if (f === 'before') check(f, 'actual baseline metadata is eced1dc dirty, not a clean 747e5bd claim', field('vcs.revision').startsWith('eced1dc') && field('vcs.modified') === 'true');
+  if (f === 'current') check(f, 'actual candidate metadata retains dirty source revision', field('vcs.revision') === frozen.git_head && field('vcs.modified') === 'true');
+}
+table('binary-hashes.tsv', binaryRows); table('binary-metadata.tsv', metadataRows);
+const fixtures = [['file', 'sha256', 'bytes', 'access_mode']];
+for (const [f, access] of [['member-acl.db', 'explicit'], ['member-index.db', 'default']]) {
+  const facts = await fileFacts(path.join(src, f)); fixtures.push([f, facts.sha256, facts.bytes, access]);
+}
+table('fixture-hashes.tsv', fixtures);
+const candidateMetadata = metadataRows.find(r => r[0] === 'current');
+const finalFuzz = fuzzRows.find(r => r[1] === 'FINAL');
+const parity = belowNative.length ? 'NOT_ACHIEVED' : 'OBSERVED_MEDIANS_ONLY';
+table('timing-scope.tsv', [
+  ['scope', 'rule'],
+  ['common', 'Explicit/default NONROOT. Three repeats: hot/distributed 1000 operations; group reads 100 operations. SSHA/plaintext, correct/wrong credentials and individual read methods remain separate.'],
+  ['hot-versus-distributed', 'Hot uses scale-001001; distributed rotates targets. All servers receive SDK warmup; distributed does not establish a cold OS/database-cache measurement. No cache flush or separate cold-start experiment is claimed.'],
+  ['root', 'Default access, literal and uppercase normalized root DN separated. Five methods; 1000 operations x 7.'],
+  ['group-compare', 'Explicit/default NONROOT. First/last/missing x 10/1000 members; directly fixed at 1000 operations x 7, no read recheck. First/last means fixture insertion order, not native storage order.'],
+  ['concurrent', 'Root CLI, 8 workers x 1000 equality searches, three measured repeats per access mode. Wall time includes worker process overhead. Repeat 0 is warmup.'],
+  ['network-operation-timing', 'Runner records operation latency separately from setup, Bind and WhoAmI checks, except that Bind stages explicitly time Bind. Raw counters retain verification work.'],
+  ['matched-components', 'Root-bound real handleCompare; 10/1000 members share helper with only member-count parameter changed. Six cases x before/current x three 500ms runs. These are not network or nonroot measurements.'],
+  ['exploratory', 'Earlier isolated 1000-member component and initial 471894-execution fuzz retained separately, excluded from formal statistics.'],
+  ['stopping-rule', 'Fixed counts before execution. No favorable-result selection, repetition until passing, or historical pooling.'],
+  ['APFS-clone-setup', 'All three endpoints use cp -c independent writable COW fixture clones in final scripts. Clone, warmup and disposable setup are outside operation timing. This is not an independent physical-copy or cold-cache comparison; COW page sharing and writes may affect filesystem/cache behavior.'],
+  ['exclusions', 'SDK warmups, smoke, concurrent repeat 0 and exploratory components excluded from final macro medians.'],
+  ['formulas', 'time_reduction_pct=100*(1-current_ms/before_ms); current_over_openldap_throughput_pct=100*openldap_ms/current_ms. Negative reductions and native ratios below 100 are retained.'],
+]);
+table('provenance.tsv', [
+  ['item', 'value', 'source'],
+  ['status', 'EVIDENCE_COMPLETE; main tentatively accepts R17 as a targeted DN optimization; native per-operation parity is not achieved and no regression-free or conclusive causal claim is made.', signalFile],
+  ['per_operation_native_parity', parity, 'below-openldap-comparisons.tsv'],
+  ['baseline_source', baseline, 'main handoff'],
+  ['baseline_binary', baselineHash, 'retained R13 final; independently hashed'],
+  ['baseline_embedded_revision', 'eced1dc with vcs.modified=true; subsequently committed as 747e5bd according to main. Not a clean 747e5bd build.', 'binary-metadata/before.txt'],
+  ['current_binary', expectedHashes.current, 'executable-sha256.txt; completion signal; independently hashed'],
+  ['current_embedded_revision', `${candidateMetadata[2]}; vcs.modified=${candidateMetadata[3]}`, 'binary-metadata/current.txt'],
+  ['production_scope', 'ASCII attribute-letter bitfold is exhaustive over 256 byte values; strict ASCII single-RDN helper avoids repeated leaf scan on the schema common-tail path. No borrowed Get, cache or password change.', 'main handoff; seven frozen DN/helper/test/bench source files'],
+  ['documentation_commit', '302898b archives rejected R16 and changes docs only; it is not a new production optimization.', snapshotFile],
+  ['source_freeze', `${sourceFiles.length} selected files frozen at ${frozen.captured_at}; sourceRoot=${sourceRoot}. This is a scoped source archive, not a standalone full repository.`, 'source-origin.tsv; source-hashes.tsv'],
+  ['original_name_source_snapshot', `${originalSourceRoot} preserves original relative paths, filenames and bytes independently of live main. Leading underscore avoids Go recursive package discovery. Only the selected ${sourceFiles.length} sources are included.`, 'source-origin.tsv; source-hashes.tsv'],
+  ['matched_component_command', 'Six cases, before/current, three 500ms unprofiled repeats, as supplied by main. Logs retain measured iterations; duration is invocation provenance, not inferable solely from ns/op.', 'main handoff; groups-matched-before.txt; groups-matched-current.txt'],
+  ['component_test_binary', 'Baseline server-before.test retained and hashed; current component emitted by go test, no separately retained current test executable supplied.', 'binary-hashes.tsv; raw component logs'],
+  ['runner_source', 'Current CLI source archived for timing semantics. Retained common/root/group executables have individual hashes and build metadata; no claim that all were freshly built from this snapshot.', 'source-origin.tsv; binary-metadata/'],
+  ['environment', '100k fixture; Apple M1 Pro; Go1.26.4; CGO_ENABLED=0; OpenLDAP2.6.13 (main supplied reference environment).', 'main handoff; scripts; component logs; binary-metadata.tsv'],
+  ['setup_failure_and_restart', 'Initial ENOSPC before formal timing; excluded and retained. Recovery uses uniform APFS cp -c clones for all endpoints, fresh run directories and unchanged production/validation.', 'excluded-setup-failure/provenance.tsv; final scripts; generator/validation-main.json'],
+  ['independent_calibration', 'Two additional default group runs: candidate/candidate A/A and real before/current with startup order and ports swapped. Separate 252 samples, 36 medians, 12 label comparisons, six exports. Core statistics and negatives unchanged. No significance or causal claim.', 'diagnostics/provenance.tsv; diagnostics/endpoint-identity.tsv; generator/diagnostics-finished.json'],
+  ['validation_signal', signal.main_signal, signalFile],
+  ['generator_scope', 'Evidence worker runs no build, Go test, benchmark or profile. go version -m only reads embedded executable metadata. Large-file hashing starts after main completion.', 'generate-evidence.mjs.txt'],
+]);
+const limitations = 'Main tentatively accepts a targeted DN optimization, not native per-operation parity. No regression-free, aggregate/native parity, complete compatibility or conclusive causal claim is made. All small-group and common-operation negative observations remain present. Per-operation allocation counts do not measure retained heap. No race-detector or separate cold-cache result is claimed. All final endpoint fixture copies are independent writable APFS COW clones (cp -c); setup/warmup is excluded, but filesystem page sharing and COW writes may affect cache/I/O behavior. Initial ENOSPC occurred before formal timing and is excluded. Component root identity differs from nonroot LDAP macros. Production source outside the selected snapshot is represented by baseline/revision provenance, not duplicated here. Historical timing data and R16 rejected implementation are not pooled into R17.\n';
+output.set('limitations.txt', limitations);
+table('summary.tsv', [['item', 'value'], ['state', 'EVIDENCE_COMPLETE'], ['per_operation_native_parity', parity],
+  ['main_assessment', 'TENTATIVELY_ACCEPTED_TARGETED_DN_OPTIMIZATION'],
+  ['workload_scripts', 5], ['raw_json', jsonFiles.length], ['exports', exports.length - 1], ['measured_samples', samples.length - 1], ['concurrent_samples', 18],
+  ['medians', medians.length - 1], ['comparisons', comparisons.length - 1], ['negative_macro_comparisons', negatives.length], ['below_openldap_comparisons', belowNative.length],
+  ['matched_component_samples', matchedComponents.samples], ['matched_component_medians', matchedComponents.medians], ['matched_component_metric_comparisons', matchedComponents.comparisons], ['negative_matched_component_metrics', matchedComponents.negatives],
+  ['exploratory_component_samples', exploratoryComponents.samples], ['excluded_setup_failures', 1], ['excluded_setup_failure_json', 1], ['final_fuzz_executions', finalFuzz[2]], ['source_files', sourceFiles.length], ['failed_checks', 0]]);
+output.set('summary.tsv', output.get('summary.tsv') + tsv([
+  ['separate_diagnostic_scripts', 2], ['separate_diagnostic_json', 10], ['separate_diagnostic_samples', diagnosticSamples.length - 1],
+  ['separate_diagnostic_medians', diagnosticMedians.length - 1], ['separate_diagnostic_comparisons', diagnosticComparisons.length - 1], ['separate_diagnostic_exports', diagnosticExports.length - 1],
+]));
+output.set('README.md', `# R17 Evidence
+
+Status: **EVIDENCE COMPLETE; ${belowNative.length ? 'PER-OPERATION OPENLDAP PARITY NOT ACHIEVED' : 'OBSERVED MEDIAN PARITY ONLY'}**. Main tentatively accepts R17 as a targeted DN optimization. ${belowNative.length} of 48 comparable cells remain below OpenLDAP throughput; ${negatives.length} show negative median time reductions versus baseline. All small-group and common-operation negative observations remain. No regression-free or conclusive causal claim is made. The main report and rejected R16 archive are unchanged by this evidence task.
+
+Baseline source: \`${baseline}\`, retained R13 final binary SHA256 \`${baselineHash}\`. Its embedded revision is eced1dc with \`vcs.modified=true\`, not a clean 747e5bd build. Current SHA256: \`${expectedHashes.current}\`; actual embedded revision \`${candidateMetadata[2]}\`, \`vcs.modified=${candidateMetadata[3]}\`. See [binary hashes](binary-hashes.tsv) and [build metadata](binary-metadata.tsv). Commit 302898b changed documentation only.
+
+R17 changes ASCII attribute-letter testing to an equivalent bitfold over all 256 byte values and introduces strict ASCII single-RDN parsing to avoid duplicate leaf scanning on the schema common-tail path. No borrowed Get, cache or password change is included. The [frozen source snapshot](source-origin.tsv) contains only the seven DN/helper/test/bench files, the shared group component benchmark, and necessary CLI sources; [source hashes](source-hashes.tsv) identify all ${sourceFiles.length} files.
+
+The independent [original-name source snapshot](_source-snapshot/) at \`${originalSourceRoot}\` preserves all selected relative paths, filenames and bytes. It no longer depends on live main, so subsequent candidates need not keep main frozen. The leading underscore excludes it from Go recursive package discovery; this selected snapshot is not a standalone build tree.
+
+Five serial macro scripts produced 31 raw JSON reports and **696 measured samples (18 concurrent), 144 medians, 48 comparisons**. See [samples](samples.tsv), [medians](medians.tsv), [comparisons](comparisons.tsv), [all negative reductions](negative-comparisons.tsv), and [all cells below OpenLDAP](below-openldap-comparisons.tsv). Unrounded values remain intact. Identity, access mode, method, member count, hot/distributed targets and root DN variant are never pooled.
+
+Common runs use three repeats; root runs use seven. Nonroot group Compare directly uses 1000 operations x 7 for 10/1000 members and first/last/missing. No read recheck is included. SDK warmups, smoke and concurrent repeat 0 are retained but excluded from medians. Distributed targets are not a controlled cold-cache experiment. First/last means fixture insertion order. [Timing scope](timing-scope.tsv) documents exclusions and formulas.
+
+The first setup failed with ENOSPC while copying the current database, before any formal timing. Its original script/log and before warmup are preserved under [excluded-setup-failure/](excluded-setup-failure/) and excluded from all formal counts. After space recovery, all five scripts restarted in fresh directories using \`cp -c\` uniformly for before/current/native: independent writable APFS COW clones. Clone/setup/warmup are not timed; page sharing and COW behavior remain a filesystem/cache limitation. The production binary and completed validation were unchanged.
+
+The formal [matched components](component-comparisons.tsv) use groups-matched-before/current.txt: six cases x two implementations x three 500ms measurements, with one helper parameterized by 10/1000 members. Allocs/op are unchanged; all ${matchedComponents.negatives} negative metric comparisons are retained in [component negatives](component-negative-comparisons.tsv). These root-bound local handler timings are separate from nonroot LDAP macros. Earlier isolated 1000-member component results and the initial 471894-execution fuzz are under [exploratory/](exploratory/), outside formal results.
+
+Two subsequent, predetermined [diagnostics](diagnostics/provenance.tsv) calibrate default-access group measurements: candidate/candidate A/A with original labels/ports, and real before/current with current starting first on port 29481 and before second on 29482. They retain separate [medians](diagnostics/medians.tsv), [label comparisons](diagnostics/comparisons.tsv) and [endpoint identities](diagnostics/endpoint-identity.tsv): 252 samples, 36 medians, 12 comparisons, and six additional verified exports. Both use 1000 x 7 for all six cases. [Core statistics remain byte-identical](diagnostics/core-statistics-preserved.tsv). These diagnostics neither replace nor correct any original negative value; changing startup order and ports together does not isolate either cause. No statistical significance or measurement-error-only explanation is claimed.
+
+Final validation preserves fresh full directory/schema package checks, full-suite logs including cached counts, empty vet output plus main's successful serial-validation signal, **355 native PASS records**, and the final 15-second FuzzParseSimpleRDNBytes run with **${finalFuzz[2]} executions**. See [log status](log-status.tsv), [fuzz status](fuzz-status.tsv), and [main completion](generator/main-finished.json). The initial fuzz is not substituted for the final run.
+
+All **15 exports** were read and verified: 100,002 entries, cksum 2143929969, 42,712,438 bytes and SHA256 \`${canonicalHash}\` each. See [export checks](export-checks.tsv). [Checks](checks.tsv) records ${checks.length - 1} passing checks. Fixture hashes and raw JSON/TSV/logs/scripts are retained; binary and canonical content are identified by hashes rather than bundled. Environment: 100k fixture, M1 Pro, Go1.26.4, CGO_ENABLED=0, OpenLDAP2.6.13.
+
+No historical timing data, aggregate parity, retained-heap improvement, separate cold-cache or race result is claimed. SHA256SUMS covers every archive file except itself, including this README and generator. Passwords, databases, LDIF/canonical contents, executables and profiles are not bundled.
+`);
+requirePassing();
+stableInputs();
+table('checks.tsv', checks);
+function existingFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`Archive symlink: ${dir}`);
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name, full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Archive symlink: ${full}`);
+    if (entry.isDirectory()) return existingFiles(full, name + '/');
+    if (!entry.isFile()) throw new Error(`Unexpected archive entry: ${full}`);
+    return [name];
+  });
+}
+const unexpected = existingFiles(dst).filter(f => f !== 'SHA256SUMS' && !output.has(f));
+if (unexpected.length) throw new Error(`Unexpected archive files; nothing published: ${unexpected.join(', ')}`);
+for (const [f, body] of output) write(f, body);
+const manifest = [...output.keys()].sort().map(f => `${digest(fs.readFileSync(path.join(dst, f)))}  ${f}`).join('\n') + '\n';
+write('SHA256SUMS', manifest);
+for (const [f, body] of output) if (digest(fs.readFileSync(path.join(dst, f))) !== digest(body)) throw new Error(`Archive verification failed: ${f}`);
+if (!same(existingFiles(dst), [...output.keys(), 'SHA256SUMS'])) throw new Error('Archive manifest inventory mismatch');
+console.log(JSON.stringify({ state: 'EVIDENCE_COMPLETE', files_in_manifest: output.size, checks: checks.length - 1, failed_checks: 0,
+  samples: samples.length - 1, medians: medians.length - 1, comparisons: comparisons.length - 1, exports: exports.length - 1,
+  negative_macro_comparisons: negatives.length, below_openldap_comparisons: belowNative.length, current_sha256: expectedHashes.current }, null, 2));

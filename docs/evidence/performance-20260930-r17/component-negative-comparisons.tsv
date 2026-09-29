@@ -1,0 +1,2 @@
+scope	identity	members	case	metric	before	current	reduction_pct
+matched	root	10	first	ns/op	10057	10359	-3.0028835636869866

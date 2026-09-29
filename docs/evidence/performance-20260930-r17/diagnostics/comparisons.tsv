@@ -1,0 +1,13 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_label_ms	current_label_ms	openldap_ms	current_label_over_openldap_throughput_pct	label_time_reduction_pct
+aa	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	94.23601399999986	95.10749699999981	78.87413899999999	82.93156847561674	-0.9247876294937063
+aa	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	110.09852099999988	112.56936799999995	87.895176	78.08090030318021	-2.2442145249163437
+aa	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	93.0149070000001	93.35038599999986	76.23375099999998	81.6640983144945	-0.36067229524807676
+aa	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	168.77182300000007	155.99306600000014	94.85573999999986	60.807664361183704	7.571617567939592
+aa	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	95.66819399999997	98.75774200000004	78.82663699999998	79.8181847859583	-3.2294411243929844
+aa	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	150.50092399999997	153.12886599999996	94.52891900000006	61.73161303238547	-1.746130143360447
+startup-port-swap	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	10	1000	95.0787370000001	96.63791500000004	79.26539600000012	82.0230817272911	-1.6398808494899608
+startup-port-swap	default	nonroot	groups	groupCompareTrueFirst	compare_member_true_first	1000	1000	114.93824099999986	111.42512100000019	87.66355400000003	78.6748564535998	3.0565284185962827
+startup-port-swap	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	10	1000	105.90478799999994	104.9284839999999	85.74422300000006	81.71682247882295	0.9218695570213931
+startup-port-swap	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	1000	176.23542199999991	163.2035710000001	94.10877299999997	57.66342759742672	7.394569634247439
+startup-port-swap	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	10	1000	102.48244700000002	103.24087300000029	83.26414999999999	80.65037381076752	-0.7400545383154933
+startup-port-swap	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	1000	167.46701000000016	147.1055940000002	87.00559	59.14499077445	12.158463926716045

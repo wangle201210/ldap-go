@@ -1,0 +1,13 @@
+scope	identity	members	case	endpoint	repeats	ns_op	B_op	allocs_op
+matched	root	1000	first	before	3	26367	82456	102
+matched	root	1000	last	before	3	83280	82536	106
+matched	root	1000	missing	before	3	74671	82624	111
+matched	root	10	first	before	3	10057	9688	101
+matched	root	10	last	before	3	11373	9768	105
+matched	root	10	missing	before	3	11939	9856	110
+matched	root	1000	first	current	3	25946	82456	102
+matched	root	1000	last	current	3	67966	82536	106
+matched	root	1000	missing	current	3	61521	82624	111
+matched	root	10	first	current	3	10359	9688	101
+matched	root	10	last	current	3	11351	9768	105
+matched	root	10	missing	current	3	11868	9856	110

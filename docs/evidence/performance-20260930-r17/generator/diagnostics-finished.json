@@ -1,0 +1,9 @@
+{
+  "round": "R17",
+  "performance_exit_code": 0,
+  "current_sha256": "7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3",
+  "main_signal": "两项额外校准均exit0，group-aa.log/group-swap.log都有passed，端点已退出。可以执行全部hash/generation。core15+diagnostic6=21exports；core统计不变。",
+  "main_interpretation": "同binaryAA小组current标签慢0.4-3.2%，large-last同binary也快7.6%，所以小幅差异不能归因代码，绝不替换核心负值。swap各行新JSON也已完整。",
+  "scope": "Separate default-access A/A and startup-order/port-swap calibration. No pooling with formal results, no replacement of original negatives, no statistical significance claim.",
+  "cpu_handoff": "Main confirms CPU idle and waits for evidence worker's heavy-hash completion before next candidate Bind microbenchmarks. Prior target tests passed in an independent worktree; application source unchanged."
+}

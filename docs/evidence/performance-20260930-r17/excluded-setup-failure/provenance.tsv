@@ -1,0 +1,7 @@
+item	value
+role	EXCLUDED_SETUP_FAILURE; zero formal timing samples
+cause	ENOSPC copying current/data.db during first common-explicit setup. before warmup completed; formal smoke/hot/distributed/group/concurrent timing had not started.
+recovery	Main renamed the failed directory/log/script, removed partial databases, restored 2.9GiB space, then restarted the fixed five-script sequence in fresh run directories.
+method_change	All final scripts use cp -c for both native and Go fixture copies: independent writable APFS copy-on-write clones. Production binary and validation unchanged.
+path_note	The failed raw log and saved script retain their original explicit-final pathname; the directory was subsequently renamed explicit-failed-disk.
+formal_statistics	Excluded from all 31 final JSON reports, 696 samples, 144 medians and 48 comparisons. Failure warmup is preserved only here.

@@ -1,130 +1,147 @@
 # Common LDAP performance qualification
 
-September 30, 2026, R13; baseline `eced1dc` (R12), 100,000 users, Apple M1 Pro,
-Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
+September 30, 2026, R17; production baseline `747e5bd` (R13), 100,000 users,
+Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
 
-**Per-operation parity remains unmet.** All measured non-root group Compare
-cells improve 9.0%-20.3%. First-member Compare on 1,000-member groups reaches
-79.1%-80.1% of native performance; last/missing cases reach 50.2%-56.4%.
-Ordinary-operation negatives remain and are not offset by these gains.
+**Per-operation parity remains unmet.** In the primary network runs,
+1,000-member last/missing Compare improves 8.2%-9.9%; the independent
+startup-order/port swap observes 7.4%/12.2%. Small-group and ordinary-operation
+negative observations remain. These gains do not offset slower common reads.
 
-[R13 evidence](evidence/performance-20260930-r13/README.md) retains all samples,
-counters, scripts and checks. [R12](common-ldap-performance-20260930-r12.md) is
-archived verbatim. Historical R8b broad scans/writes were not rerun.
+[R17 evidence](evidence/performance-20260930-r17/README.md) preserves samples,
+scripts, counters, hashes and checks. [R13](common-ldap-performance-20260930-r13.md)
+is archived verbatim. The [R16 borrowing experiment](evidence/performance-20260930-r16/README.md)
+was rejected and withdrawn after reproducing extra small-entry overhead.
+R17 does not contain that storage change.
 
 ## Implementation
 
-The server opts into the existing bounded DN normalization cache when validating
-Compare assertions and comparing entry DN values. Assertion syntax and length
-are still checked on every request. ACL, assertion controls, referral handling,
-attribute presence and first-error ordering remain in place. No authorization
-or Compare result is cached.
+The simple DN comparator parses a leaf RDN once when its already-validated
+suffix matches. The new byte helper retains the strict existing ASCII grammar,
+attribute-type validation and full-parser fallback for complex inputs.
+The ASCII letter predicate folds the case bit before checking one range;
+all 256 byte inputs are tested against the previous predicate.
 
-`CompareEntryAttribute` retains its uncached behavior; the new explicit
-`CompareEntryAttributeCachedDN` shares `NormalizeDNCached`'s immutable-schema
-contract and bounds: at most 128 entries and 1 MiB, 1,024-byte inputs and depth
-32. Registry mutation APIs invalidate normalization. Failed normalizations are
-not cached. Published runtime schemas use this contract; callers that directly
-edit shared schema slices must retain the uncached API. Other comparison rules
-and ordered values preserve their existing paths.
+No entry ownership, data format, authorization, password handling, normalization
+cache bounds or comparison-result caching changes. Attribute aliases, OIDs,
+case-exact matching, multivalued RDN fallback and first-error ordering retain
+their previous behavior. The changes remove repeated parsing work.
 
 ## Method
 
-Common SDK rows use three batches; paired root rows use seven. Non-root group
-Compare uses five batches of 20 calls with per-request endpoint rotation and
-the same group/assertion DN on every endpoint. Bind/WhoAmI verification, setup,
-connection and cleanup remain outside timed SDK calls. First/last means fixture
-order, not an assumption about native storage order. There is no root fallback.
+Common SDK rows use three batches; root rows use seven. Group Compare uses
+seven batches of 1,000 calls with per-request endpoint rotation, identical
+assertions, non-root identities and no root fallback. First/last refers to
+fixture insertion order, not assumed native storage order. Setup, connections,
+identity verification and cleanup are outside SDK timing.
 
-Medians describe whole-batch time. Frequency is qualitative. Relative =
-`OpenLDAP/current * 100%`, with 100% parity. Time reduction =
-`(1-current/before) * 100%`; negative means slower. Ratios use unrounded medians.
-Methods, access modes, sizes, variants and independent rechecks remain separate.
+Medians are whole-batch times. Frequency is qualitative, not measured traffic.
+Relative = `OpenLDAP/current * 100%`; 100% means parity.
+Time reduction = `(1-current/before) * 100%`; negative means slower.
+Ratios use unrounded medians. Compare code changes using the paired before/current
+results within a run; do not interpret changes in ratios across rounds as
+version regressions.
+
+Final fixture copies use APFS copy-on-write clones for all three endpoints.
+Each database remains independently writable; the same warmup is retained.
+An earlier attempt exhausted disk space while copying the second database,
+before any timed samples. Its setup logs and original script are archived
+separately and excluded from statistics.
 
 ## Group Compare
 
-Default access, 20 calls per batch; typical use is medium and application-dependent.
+Default access, 1,000 calls per batch; typical use is medium and application-dependent.
 
 | Members | Assertion | Before | Current | OpenLDAP | Relative | Time reduction |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 10 | First fixture member | 2.40 ms | 1.91 ms | 1.52 ms | 79.7% | 20.3% |
-| 10 | Last fixture member | 2.17 ms | 1.82 ms | 1.53 ms | 84.1% | 15.9% |
-| 10 | Missing member | 2.23 ms | 1.89 ms | 1.52 ms | 80.1% | 15.0% |
-| 1,000 | First fixture member | 2.50 ms | 2.28 ms | 1.80 ms | 79.1% | 9.0% |
-| 1,000 | Last fixture member | 3.49 ms | 3.15 ms | 1.58 ms | 50.2% | 9.6% |
-| 1,000 | Missing member | 3.53 ms | 3.04 ms | 1.55 ms | 51.0% | 13.9% |
+| 10 | First fixture member | 89.72 ms | 91.25 ms | 75.80 ms | 83.1% | -1.7% |
+| 10 | Last fixture member | 90.68 ms | 91.08 ms | 75.33 ms | 82.7% | -0.4% |
+| 10 | Missing member | 94.62 ms | 95.85 ms | 77.07 ms | 80.4% | -1.3% |
+| 1,000 | First fixture member | 101.36 ms | 101.09 ms | 79.33 ms | 78.5% | 0.3% |
+| 1,000 | Last fixture member | 160.16 ms | 146.98 ms | 83.87 ms | 57.1% | 8.2% |
+| 1,000 | Missing member | 154.29 ms | 139.02 ms | 80.83 ms | 58.1% | 9.9% |
 
-Explicit ACL 1,000-member first/last/missing cases change from
-2.605/4.320/3.854 ms to 2.127/3.829/3.301 ms, versus native
-1.704/2.161/1.850 ms. Time reductions are 18.3%/11.4%/14.3%; relative performance
-is 80.1%/56.4%/56.0%. The remaining native gap is still material.
+Explicit ACL 1,000-member first/last/missing changes from
+102.902/158.219/154.555 ms to 100.952/145.285/141.177 ms, versus native
+78.953/81.038/81.497 ms. Time reductions are 1.9%/8.2%/8.7%.
+Explicit small-group rows are 0.2%-0.6% slower in the primary run.
 
 ## Common operations
 
-Default-access snapshot; complete explicit/default/root rows remain in evidence.
+Primary runs; all explicit/default/root rows remain in evidence.
 
-| Workload | Typical use | Calls | Current | OpenLDAP | Relative |
-| --- | --- | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 101.95 ms | 87.45 ms | 85.8% |
-| Non-root Base, hot | High | 1,000 | 108.59 ms | 86.53 ms | 79.7% |
-| Non-root equality, hot | Very high | 1,000 | 126.23 ms | 101.04 ms | 80.0% |
-| Direct group discovery | High | 100 | 15.40 ms | 11.52 ms | 74.8% |
-| Group Base, 1,000 members | Medium | 100 | 97.24 ms | 91.08 ms | 93.7% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 49.81 ms | 40.51 ms | 81.3% |
+| Workload | Typical use | Calls | Current, default | OpenLDAP, default | Relative, default | Relative, explicit ACL |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| User Bind, SSHA | Very high | 1,000 | 90.97 ms | 71.57 ms | 78.7% | 80.6% |
+| Non-root Base, hot | High | 1,000 | 100.57 ms | 80.67 ms | 80.2% | 78.7% |
+| Non-root equality, hot | Very high | 1,000 | 116.00 ms | 91.84 ms | 79.2% | 76.4% |
+| Direct group discovery | High | 100 | 13.82 ms | 10.61 ms | 76.7% | 71.9% |
+| Group Base, 1,000 members | Medium | 100 | 96.15 ms | 90.06 ms | 93.7% | 100.3% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 47.19 ms | 38.59 ms | 81.8% | 79.0% |
 
-Default SSHA Bind is 5.6% slower in the original run. Explicit large-group Base
-is 4.1% slower, direct group discovery 2.6% slower and distributed equality 2.0%
-slower. All negative rows remain; these variations are not assigned a causal
-explanation. Explicit ACL rules are unchanged:
+Default SSHA Bind and hot Base are 2.2% and 1.5% slower than the paired baseline.
+Explicit hot equality, direct group discovery and nested membership are
+1.9%, 2.2% and 2.3% slower. No universal speedup or absence of regression is
+claimed. ACL configuration is unchanged:
 
 ```text
 access to attrs=userPassword by self write by anonymous auth by * none
 access to * by users read by * none
 ```
 
-The independent default Bind recheck uses fresh endpoints and seven batches of
-1,000 calls, without replacing the original samples:
+## Calibration
 
-| Recheck | Before | Current | OpenLDAP | Time reduction |
-| --- | ---: | ---: | ---: | ---: |
-| SSHA Bind | 101.59 ms | 102.92 ms | 81.63 ms | -1.3% |
-| Plaintext Bind diagnostic | 98.46 ms | 97.37 ms | 79.27 ms | 1.1% |
+Two additional default-access group runs were fixed in advance at 1,000 calls
+and seven repeats. They remain separate from the primary tables.
 
-The larger SSHA slowdown did not recur, but its recheck remains slower. No
-universal gain or aggregate parity is claimed.
+The A/A run uses the exact same R17 executable for both Go endpoint labels.
+The label named current is 0.4%-3.2% slower for small groups; the large last-member
+case is 7.6% faster despite identical code. This demonstrates measurement
+variation, not a code effect. Small differences in the primary runs therefore
+cannot establish a causal regression or its absence.
+
+The independent A/B swap starts current first on port 29481 and before second
+on 29482. Large first/last/missing time reductions are 3.1%/7.4%/12.2%.
+Small first/last/missing changes are -1.6%/+0.9%/-0.7%.
+Neither calibration replaces, pools with, or removes any primary sample.
+No statistical-significance claim is made.
 
 ## Component and validation
 
-The realistic root group handler fixture includes stored operational attributes.
-Three unprofiled 500ms repetitions, before/current medians:
+Matched root-handler fixtures differ only in member count. Before/current
+medians use three unprofiled 500ms repetitions; allocation counts are unchanged.
 
-| 1,000-member case | ns/op | B/op | Allocations/op |
-| --- | ---: | ---: | ---: |
-| First | 41,685 / 24,602 | 89,568 / 82,456 | 423 / 102 |
-| Last | 107,416 / 85,546 | 89,648 / 82,536 | 427 / 106 |
-| Missing | 94,094 / 75,189 | 89,608 / 82,624 | 428 / 111 |
+| Members | Case | Before ns/op | Current ns/op | B/op, both | Allocations/op, both |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 10 | First | 10,057 | 10,359 | 9,688 | 101 |
+| 10 | Last | 11,373 | 11,351 | 9,768 | 105 |
+| 10 | Missing | 11,939 | 11,868 | 9,856 | 110 |
+| 1,000 | First | 26,367 | 25,946 | 82,456 | 102 |
+| 1,000 | Last | 83,280 | 67,966 | 82,536 | 106 |
+| 1,000 | Missing | 74,671 | 61,521 | 82,624 | 111 |
 
-The exploratory first-member CPU/memory profile includes fixture setup and GC;
-it is not a timing pair or a whole-process memory claim. The component fixture
-is repeated, so the cache is warm during its measured loop. Live SDK tables
-provide separate behavior and latency evidence.
+The final full Go test run passed (server 155.966s, storage 29.912s,
+webadmin 0.395s), as did vet and native differential checks
+(355 PASS records, 11.408s). Final parser fuzzing passed 454,926 executions
+in approximately 16 seconds. Logs identify cached packages. The earlier
+isolated component/fuzz observations remain separate. No race-detector run
+or complete OpenLDAP compatibility is claimed.
 
-Full Go tests passed (server 138.392s, webadmin 0.338s), vet and native
-differential validation (355 PASS records, no failures/skips, 10.247s). Final
-cache-specific checks passed (schema 0.076s, server 0.055s) after tests were
-frozen. They cover cold/warm oracle parity, input reuse, failures, schema
-mutation, limits, unchanged default behavior and validation after cache warmup.
-No new fuzz or race-detector run is claimed in R13.
-
-All six performance scripts passed. **18 exports match** 100,002 entries,
-cksum 2143929969 and 42,712,438 canonical bytes: 15 original plus three Bind
-recheck exports. The [existing operational-attribute gap](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
+All five primary scripts and both calibration scripts passed.
+**21 exports match**: 15 primary plus six calibration exports, each with
+100,002 entries, cksum 2143929969 and 42,712,438 canonical bytes.
+Historical R8b broad scans/writes were not rerun. The
+[existing operational-attribute gap](common-ldap-performance-20260924-r2.md#existing-operational-attribute-gap)
 remains outside the passing matrix. Shared-host results do not establish
 deployment performance. The optimization goal remains active.
 
 Frozen executable SHA-256:
 
 ```text
-before (eced1dc)  6d0b5a6cdfe26121ab9a3785beccb517264b35aa7b0ef3baa84d4a09eb7d1184
-current           96937b2ddf7bce78eccf7ee728880e5eb68fa560d41df0dcbf2517afa13ad751
+before  96937b2ddf7bce78eccf7ee728880e5eb68fa560d41df0dcbf2517afa13ad751
+current 7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3
 ```
+
+The baseline reuses the R13 final executable; its embedded VCS metadata records
+an earlier dirty build. Evidence preserves actual metadata and source hashes
+rather than claiming a clean build of the subsequently committed baseline.

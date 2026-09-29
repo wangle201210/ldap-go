@@ -1,0 +1,59 @@
+diff --git a/internal/directory/dn.go b/internal/directory/dn.go
+index 9972c6e..86f0223 100644
+--- a/internal/directory/dn.go
++++ b/internal/directory/dn.go
+@@ -128,7 +128,8 @@ func validDNAttributeType(value string) bool {
+ }
+ 
+ func asciiDNAttributeLetter(value byte) bool {
+-	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
++	value |= 0x20
++	return value >= 'a' && value <= 'z'
+ }
+ 
+ // ParseDNWithNormalizer builds a schema-aware identity key while retaining the
+diff --git a/internal/schema/compare_simple_dn.go b/internal/schema/compare_simple_dn.go
+index 98bda45..13e6419 100644
+--- a/internal/schema/compare_simple_dn.go
++++ b/internal/schema/compare_simple_dn.go
+@@ -62,10 +62,10 @@ func (plan *simpleDNComparison) match(registry *Registry, value []byte) (matched
+ 	}
+ 	head, tail, hasTail := bytes.Cut(value, []byte(","))
+ 	if plan.tailReady && hasTail && bytes.Equal(tail, plan.tail[:plan.tailLength]) {
+-		if depth, simple := directory.SimpleDNDepthBytes(head); !simple || depth != 1 {
++		name, actual, simple := directory.ParseSimpleRDNBytes(head)
++		if !simple {
+ 			return false, false
+ 		}
+-		name, actual, _ := bytes.Cut(head, []byte("="))
+ 		leafMatches, eligible := plan.parts[0].match(registry, name, actual)
+ 		return leafMatches && plan.tailMatches, eligible
+ 	}
+diff --git a/internal/server/compare_group_bench_test.go b/internal/server/compare_group_bench_test.go
+index 20d9ef0..4efc87b 100644
+--- a/internal/server/compare_group_bench_test.go
++++ b/internal/server/compare_group_bench_test.go
+@@ -10,6 +10,14 @@ import (
+ )
+ 
+ func BenchmarkLocalGroupCompare(b *testing.B) {
++	benchmarkLocalGroupCompare(b, 1000)
++}
++
++func BenchmarkLocalSmallGroupCompare(b *testing.B) {
++	benchmarkLocalGroupCompare(b, 10)
++}
++
++func benchmarkLocalGroupCompare(b *testing.B, members int) {
+ 	server, state := newSmallIndexedFixture(b, 8)
+ 	state.protocolVersion = 3
+ 	const groupDN = "cn=group,ou=people,dc=example,dc=com"
+@@ -18,7 +26,7 @@ func BenchmarkLocalGroupCompare(b *testing.B) {
+ 		b.Fatal(err)
+ 	}
+ 	database := databaseForNormalizedDN(state.runtime, dn)
+-	values := make([][]byte, 1000)
++	values := make([][]byte, members)
+ 	for i := range values {
+ 		values[i] = fmt.Appendf(nil, "uid=person-%05d,%s", i, smallIndexedPeopleDN)
+ 	}

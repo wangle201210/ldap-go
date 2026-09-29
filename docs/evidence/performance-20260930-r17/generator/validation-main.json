@@ -1,0 +1,15 @@
+{
+  "round": "R17",
+  "validation_exit_code": 0,
+  "current_sha256": "7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3",
+  "main_signal": "R17 validate全部PASS(fullserver155.966s/storage29.912/webadmin0.395、native新log)、hashcurrent7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3。",
+  "reported_full_suite_seconds": {
+    "server": 155.966,
+    "storage": 29.912,
+    "webadmin": 0.395
+  },
+  "setup_failure": "First common-explicit setup hit ENOSPC copying current/data.db before formal timing; preserved as explicit-failed-disk and common-explicit-failed-disk.log/.sh. Partial databases removed by main.",
+  "restart_method": "Main recovered 2.9GiB and restarted five macros in fresh directories. All before/current/native fixture copies uniformly use cp -c independent writable APFS COW clones. Setup and warmup excluded from timing.",
+  "validation_reuse": "Main confirmed production code and binary hash unchanged; validation does not need rerun.",
+  "performance_completion": "NOT_YET_CONFIRMED; this validation record does not authorize final evidence generation."
+}

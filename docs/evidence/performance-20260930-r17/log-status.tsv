@@ -1,0 +1,11 @@
+path	role	bytes	package_ok	cached_package_ok	test_PASS	test_FAIL	test_SKIP	PASS_lines	FAIL_lines	top_level_RUN	top_level_PASS
+focused-test.txt	R17_FINAL	123	2	0	0	0	0	0	0	0	0
+fuzz-final.txt	R17_FINAL	688	1	0	0	0	0	1	0	0	0
+go-test.txt	R17_FINAL	1473	23	7	0	0	0	0	0	0	0
+go-vet.txt	R17_FINAL	0	0	0	0	0	0	0	0	0	0
+openldap-differential.txt	R17_FINAL	73125	1	0	355	0	0	1	0	26	26
+groups-matched-before.txt	R17_FINAL	1939	0	0	0	0	0	1	0	0	0
+groups-matched-current.txt	R17_FINAL	2000	1	0	0	0	0	1	0	0	0
+exploratory/group-before.txt	EXPLORATORY_ONLY	1030	0	0	0	0	0	1	0	0	0
+exploratory/group-current.txt	EXPLORATORY_ONLY	1090	1	0	0	0	0	1	0	0	0
+exploratory/dn-leaf-fuzz.txt	EXPLORATORY_ONLY	687	1	0	0	0	0	1	0	0	0

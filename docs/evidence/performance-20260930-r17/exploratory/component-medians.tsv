@@ -1,0 +1,7 @@
+scope	identity	members	case	endpoint	repeats	ns_op	B_op	allocs_op
+exploratory	root	1000	first	before	3	26337	82456	102
+exploratory	root	1000	last	before	3	83037	82536	106
+exploratory	root	1000	missing	before	3	76102	82624	111
+exploratory	root	1000	first	current	3	24745	82456	102
+exploratory	root	1000	last	current	3	66206	82536	106
+exploratory	root	1000	missing	current	3	58685	82624	111

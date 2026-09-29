@@ -1,0 +1,6 @@
+run	script	access_mode	role
+explicit-final	common-explicit.sh	explicit	R17_ONLY
+default-final	common-default.sh	default	R17_ONLY
+root-paired	root-paired.sh	default	R17_ONLY
+explicit-group-compare	group-compare-explicit.sh	explicit	R17_ONLY
+default-group-compare	group-compare-default.sh	default	R17_ONLY

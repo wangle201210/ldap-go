@@ -1,0 +1,8 @@
+item	value
+role	INDEPENDENT_MEASUREMENT_CALIBRATION_ONLY; not part of formal 696/144/48 statistics
+trigger	Main observed small negative group rows under both access modes with unchanged component allocation counts, then predetermined two separate default-access 1000 x 7 calibrations.
+aa	Both before/current labels execute the same candidate binary. Original labels, ports and startup order retained. Label difference measures this A/A run, not a production baseline improvement.
+startup-port-swap	Real baseline/current binaries unchanged. Current starts first on 29481, before second on 29482; client endpoints map to their correct labels. Startup order and ports change together, so their individual effects cannot be isolated.
+counts	Each diagnostic: six method/member cases x three endpoints x seven repeats = 126 measured samples; six exports total. Smoke/SDK warmups excluded from medians.
+limits	No pooling, subtraction, noise correction, replacement of original negative values, causal attribution or statistical significance claim. The two diagnostics cannot establish that original regressions are only measurement error.
+method	Same APFS COW fixture setup and runner timing rules as core group Compare; default access only.

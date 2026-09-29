@@ -1,0 +1,3 @@
+path	role	executions	elapsed_seconds_last_progress	new_interesting	total_corpus
+fuzz-final.txt	FINAL	454926	16	12	84
+exploratory/dn-leaf-fuzz.txt	EXPLORATORY_ONLY	471894	16	65	72

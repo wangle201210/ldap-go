@@ -1,0 +1,13 @@
+scope	rule
+common	Explicit/default NONROOT. Three repeats: hot/distributed 1000 operations; group reads 100 operations. SSHA/plaintext, correct/wrong credentials and individual read methods remain separate.
+hot-versus-distributed	Hot uses scale-001001; distributed rotates targets. All servers receive SDK warmup; distributed does not establish a cold OS/database-cache measurement. No cache flush or separate cold-start experiment is claimed.
+root	Default access, literal and uppercase normalized root DN separated. Five methods; 1000 operations x 7.
+group-compare	Explicit/default NONROOT. First/last/missing x 10/1000 members; directly fixed at 1000 operations x 7, no read recheck. First/last means fixture insertion order, not native storage order.
+concurrent	Root CLI, 8 workers x 1000 equality searches, three measured repeats per access mode. Wall time includes worker process overhead. Repeat 0 is warmup.
+network-operation-timing	Runner records operation latency separately from setup, Bind and WhoAmI checks, except that Bind stages explicitly time Bind. Raw counters retain verification work.
+matched-components	Root-bound real handleCompare; 10/1000 members share helper with only member-count parameter changed. Six cases x before/current x three 500ms runs. These are not network or nonroot measurements.
+exploratory	Earlier isolated 1000-member component and initial 471894-execution fuzz retained separately, excluded from formal statistics.
+stopping-rule	Fixed counts before execution. No favorable-result selection, repetition until passing, or historical pooling.
+APFS-clone-setup	All three endpoints use cp -c independent writable COW fixture clones in final scripts. Clone, warmup and disposable setup are outside operation timing. This is not an independent physical-copy or cold-cache comparison; COW page sharing and writes may affect filesystem/cache behavior.
+exclusions	SDK warmups, smoke, concurrent repeat 0 and exploratory components excluded from final macro medians.
+formulas	time_reduction_pct=100*(1-current_ms/before_ms); current_over_openldap_throughput_pct=100*openldap_ms/current_ms. Negative reductions and native ratios below 100 are retained.

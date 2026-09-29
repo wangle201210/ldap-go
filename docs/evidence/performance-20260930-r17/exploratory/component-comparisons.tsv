@@ -1,0 +1,10 @@
+scope	identity	members	case	metric	before	current	reduction_pct
+exploratory	root	1000	first	ns/op	26337	24745	6.044727949272888
+exploratory	root	1000	first	B/op	82456	82456	0
+exploratory	root	1000	first	allocs/op	102	102	0
+exploratory	root	1000	last	ns/op	83037	66206	20.269277550971253
+exploratory	root	1000	last	B/op	82536	82536	0
+exploratory	root	1000	last	allocs/op	106	106	0
+exploratory	root	1000	missing	ns/op	76102	58685	22.886389319597377
+exploratory	root	1000	missing	B/op	82624	82624	0
+exploratory	root	1000	missing	allocs/op	111	111	0

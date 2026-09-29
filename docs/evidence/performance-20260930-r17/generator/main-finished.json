@@ -1,0 +1,12 @@
+{
+  "round": "R17",
+  "validation_exit_code": 0,
+  "performance_exit_code": 0,
+  "performance_session": 69840,
+  "completed_at": "2026-09-29T21:41:55Z",
+  "timestamp_scope": "Time the explicit main completion signal was recorded; not the measured process end time.",
+  "current_sha256": "7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3",
+  "main_signal": "R17五macro session69840已EXIT0，全15exports通过，端口测试进程均已退出。当前无benchmark，可以运行生成器大hash。最终productionhash7dd5d031ee6b9ffbdacfc9e302f1fd9626de90fe9d1359486808ff97d5699ab3；validate所有logs完整，sources主repo冻结。",
+  "main_assessment": "R17暂将接受为有针对性DN优化，尚未native逐项追平，保留所有small/common负值、别声称无回归/因果明确。",
+  "source_handoff": "Main requests an independent original-name source snapshot so later candidates no longer block on source freezing. Planned Bind target tests run in a separate worktree, not benchmarks, with main unchanged."
+}

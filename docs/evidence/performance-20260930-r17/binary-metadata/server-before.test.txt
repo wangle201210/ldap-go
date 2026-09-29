@@ -1,0 +1,9 @@
+/var/tmp/ldap-go-perf-20260930-r17/server-before.test: go1.26.4
+	path	github.com/wangle201210/ldap-go/internal/server.test
+	mod	github.com/wangle201210/ldap-go	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOOS=darwin
+	build	GOARM64=v8.0
