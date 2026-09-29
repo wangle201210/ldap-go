@@ -1,0 +1,15 @@
+run	metric	ms
+before-1	startup	1567
+current-1	startup	1379
+current-2	startup	1347
+before-2	startup	1367
+before-3	startup	1336
+current-3	startup	1420
+current-4	startup	1344
+before-4	startup	1400
+before-5	startup	1331
+current-5	startup	1346
+current-6	startup	1334
+before-6	startup	1330
+before-7	startup	1315
+current-7	startup	1358

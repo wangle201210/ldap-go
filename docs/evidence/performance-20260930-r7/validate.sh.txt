@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+cd /Users/wanna/mine/github/ldap-go
+audit=/var/tmp/ldap-go-perf-20260930-r7
+export CGO_ENABLED=0
+go test ./internal/server -run 'Test(CompareLegacy|CoreWriteLegacy|RuntimeLegacyDN|DNIdentityCompareCore|DNIdentityCoreWritePaths|DNIdentity.*Write)' -count=1 >"$audit/focused-test.txt" 2>&1
+# Full suite runs separately before this script: CGO_ENABLED=0 go test ./...
+go vet ./... >"$audit/go-vet.txt" 2>&1
+. /var/tmp/ldap-go-openldap-reference-audit-2.6/openldap-reference.env
+reference_tests=$(awk '/^=== RUN   / && $3 !~ /\// {printf "%s%s", sep, $3; sep="|"}' docs/evidence/performance-20260929-r5/openldap-differential.txt)
+LDAP_GO_OPENLDAP_REFERENCE_TESTS=1 go test ./internal/server -run "^($reference_tests)$" -count=1 -timeout=5m -v >"$audit/openldap-differential.txt" 2>&1
+go build -o "$audit/current" ./cmd/ldap-go
+shasum -a 256 "$audit/before" "$audit/current" >"$audit/executable-sha256.txt"
+printf 'Validation completed.\n'

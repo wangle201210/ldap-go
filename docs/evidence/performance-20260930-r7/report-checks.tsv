@@ -1,0 +1,50 @@
+path	samples_or_stages	n	repeats	setup_adds	cleanup_done	errors	started_at
+default-final/before/warmup.json	8	2				[""]	2026-09-29T16:34:02.515909Z
+default-final/current/warmup.json	8	2				[""]	2026-09-29T16:34:05.192569Z
+default-final/distributed.json	18	1000	3	27	before,current,openldap	[""]	2026-09-29T16:34:34.874145Z
+default-final/groups.json	36	100	3	42	before,current,openldap	[""]	2026-09-29T16:34:39.69357Z
+default-final/hot.json	54	1000	3	27	before,current,openldap	[""]	2026-09-29T16:34:18.638962Z
+default-final/openldap/warmup.json	8	2				[""]	2026-09-29T16:34:06.028545Z
+default-final/smoke.json	30	2	1	42	before,current,openldap	[""]	2026-09-29T16:34:06.182255Z
+default-recheck/before/warmup.json	8	2				[""]	2026-09-29T16:37:58.576745Z
+default-recheck/current/warmup.json	8	2				[""]	2026-09-29T16:38:01.61508Z
+default-recheck/distributed.json	42	1000	7	27	before,current,openldap	[""]	2026-09-29T16:38:12.820616Z
+default-recheck/hot.json	42	1000	7	27	before,current,openldap	[""]	2026-09-29T16:38:03.887773Z
+default-recheck/openldap/warmup.json	8	2				[""]	2026-09-29T16:38:03.727314Z
+explicit-final/before/warmup.json	8	2				[""]	2026-09-29T16:32:49.303559Z
+explicit-final/current/warmup.json	8	2				[""]	2026-09-29T16:32:52.226918Z
+explicit-final/distributed.json	18	1000	3	27	before,current,openldap	[""]	2026-09-29T16:33:20.333287Z
+explicit-final/groups.json	36	100	3	42	before,current,openldap	[""]	2026-09-29T16:33:24.944987Z
+explicit-final/hot.json	54	1000	3	27	before,current,openldap	[""]	2026-09-29T16:33:05.995489Z
+explicit-final/openldap/warmup.json	8	2				[""]	2026-09-29T16:32:53.357773Z
+explicit-final/smoke.json	30	2	1	42	before,current,openldap	[""]	2026-09-29T16:32:53.533521Z
+root-paired/before/warmup.json	8	2				[""]	2026-09-29T16:35:17.413742Z
+root-paired/current/warmup.json	8	2				[""]	2026-09-29T16:35:22.133899Z
+root-paired/literal-smoke.json	15	2	1	27	before,current,openldap	[""]	2026-09-29T16:35:23.637713Z
+root-paired/literal.json	105	1000	7	27	before,current,openldap	[""]	2026-09-29T16:35:25.820243Z
+root-paired/normalized-smoke.json	15	2	1	27	before,current,openldap	[""]	2026-09-29T16:35:46.779679Z
+root-paired/normalized.json	105	1000	7	27	before,current,openldap	[""]	2026-09-29T16:35:46.919279Z
+root-paired/openldap/warmup.json	8	2				[""]	2026-09-29T16:35:23.372986Z
+write-recheck/before-1/probe.json	16	2				[""]	2026-09-29T16:39:01.803055Z
+write-recheck/before-2/probe.json	16	2				[""]	2026-09-29T16:39:22.633537Z
+write-recheck/before-3/probe.json	16	2				[""]	2026-09-29T16:39:29.596965Z
+write-recheck/before-4/probe.json	16	2				[""]	2026-09-29T16:39:51.041333Z
+write-recheck/before-5/probe.json	16	2				[""]	2026-09-29T16:39:58.080244Z
+write-recheck/before-6/probe.json	16	2				[""]	2026-09-29T16:40:18.327817Z
+write-recheck/before-7/probe.json	16	2				[""]	2026-09-29T16:40:25.270916Z
+write-recheck/current-1/probe.json	16	2				[""]	2026-09-29T16:39:08.686949Z
+write-recheck/current-2/probe.json	16	2				[""]	2026-09-29T16:39:15.568906Z
+write-recheck/current-3/probe.json	16	2				[""]	2026-09-29T16:39:36.914747Z
+write-recheck/current-4/probe.json	16	2				[""]	2026-09-29T16:39:43.959779Z
+write-recheck/current-5/probe.json	16	2				[""]	2026-09-29T16:40:04.890745Z
+write-recheck/current-6/probe.json	16	2				[""]	2026-09-29T16:40:11.601293Z
+write-recheck/current-7/probe.json	16	2				[""]	2026-09-29T16:40:32.319827Z
+writes/before-1/probe.json	16	20				[""]	2026-09-29T16:36:18.763705Z
+writes/before-2/probe.json	16	20				[""]	2026-09-29T16:36:52.332776Z
+writes/before-3/probe.json	16	20				[""]	2026-09-29T16:37:05.314674Z
+writes/current-1/probe.json	16	20				[""]	2026-09-29T16:36:26.793154Z
+writes/current-2/probe.json	16	20				[""]	2026-09-29T16:36:39.688291Z
+writes/current-3/probe.json	16	20				[""]	2026-09-29T16:37:13.405082Z
+writes/openldap-1/probe.json	16	20				[""]	2026-09-29T16:36:33.637148Z
+writes/openldap-2/probe.json	16	20				[""]	2026-09-29T16:36:46.515867Z
+writes/openldap-3/probe.json	16	20				[""]	2026-09-29T16:36:59.427704Z

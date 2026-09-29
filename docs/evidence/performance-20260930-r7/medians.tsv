@@ -1,0 +1,201 @@
+suite	access_mode	variant	stage	method	members	endpoint	repeats	operations	median_ms
+common	default	distributed	nonrootBase	search_nonrootBase	0	before	3	1000	142.87650099999996
+common	default	distributed	nonrootBase	search_nonrootBase	0	current	3	1000	142.89676100000005
+common	default	distributed	nonrootBase	search_nonrootBase	0	openldap	3	1000	101.18080299999995
+common	default	distributed	nonrootEquality	search_nonrootEquality	0	before	3	1000	144.168182
+common	default	distributed	nonrootEquality	search_nonrootEquality	0	current	3	1000	156.216305
+common	default	distributed	nonrootEquality	search_nonrootEquality	0	openldap	3	1000	109.66451699999992
+common	default	groups	memberEquality	search_memberEquality	0	before	3	100	16.453831
+common	default	groups	memberEquality	search_memberEquality	0	current	3	100	16.558795999999997
+common	default	groups	memberEquality	search_memberEquality	0	openldap	3	100	12.34016799999999
+common	default	groups	groupBase	base_member_values	10	before	3	100	26.144166999999992
+common	default	groups	groupBase	base_member_values	10	current	3	100	18.893670999999998
+common	default	groups	groupBase	base_member_values	10	openldap	3	100	17.969291999999992
+common	default	groups	groupBase	base_member_values	1000	before	3	100	109.22808799999994
+common	default	groups	groupBase	base_member_values	1000	current	3	100	105.723083
+common	default	groups	groupBase	base_member_values	1000	openldap	3	100	96.22428899999997
+common	default	groups	nestedMembership	client_bfs_member_equality	0	before	3	100	48.729091
+common	default	groups	nestedMembership	client_bfs_member_equality	0	current	3	100	50.05421599999992
+common	default	groups	nestedMembership	client_bfs_member_equality	0	openldap	3	100	39.97291099999998
+common	default	hot	userBind	simple_bind_ssha	0	before	3	1000	139.72766399999998
+common	default	hot	userBind	simple_bind_ssha	0	current	3	1000	149.1830559999997
+common	default	hot	userBind	simple_bind_ssha	0	openldap	3	1000	119.84037299999989
+common	default	hot	userBind	simple_bind_plaintext	0	before	3	1000	125.92903099999994
+common	default	hot	userBind	simple_bind_plaintext	0	current	3	1000	126.28575399999998
+common	default	hot	userBind	simple_bind_plaintext	0	openldap	3	1000	102.7504629999999
+common	default	hot	userBindWrong	simple_bind_ssha	0	before	3	1000	113.897579
+common	default	hot	userBindWrong	simple_bind_ssha	0	current	3	1000	108.09881299999996
+common	default	hot	userBindWrong	simple_bind_ssha	0	openldap	3	1000	94.46448300000003
+common	default	hot	userBindWrong	simple_bind_plaintext	0	before	3	1000	114.77302300000001
+common	default	hot	userBindWrong	simple_bind_plaintext	0	current	3	1000	111.4282019999999
+common	default	hot	userBindWrong	simple_bind_plaintext	0	openldap	3	1000	93.972787
+common	default	hot	nonrootBase	search_nonrootBase	0	before	3	1000	126.87534599999991
+common	default	hot	nonrootBase	search_nonrootBase	0	current	3	1000	124.54862600000008
+common	default	hot	nonrootBase	search_nonrootBase	0	openldap	3	1000	101.21945599999985
+common	default	hot	nonrootEquality	search_nonrootEquality	0	before	3	1000	128.96421400000006
+common	default	hot	nonrootEquality	search_nonrootEquality	0	current	3	1000	129.55812400000005
+common	default	hot	nonrootEquality	search_nonrootEquality	0	openldap	3	1000	102.930301
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	before	7	1000	130.71574700000008
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	current	7	1000	131.32180000000005
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	openldap	7	1000	98.01690499999998
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	before	7	1000	133.84584899999982
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	current	7	1000	131.9413209999999
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	openldap	7	1000	99.36284900000003
+default-recheck	default	hot	userBind	simple_bind_ssha	0	before	7	1000	99.63245500000004
+default-recheck	default	hot	userBind	simple_bind_ssha	0	current	7	1000	98.29000800000016
+default-recheck	default	hot	userBind	simple_bind_ssha	0	openldap	7	1000	78.18167399999989
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	before	7	1000	97.61771000000006
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	current	7	1000	97.38453299999989
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	openldap	7	1000	79.11504099999995
+common	explicit	distributed	nonrootBase	search_nonrootBase	0	before	3	1000	142.11320199999986
+common	explicit	distributed	nonrootBase	search_nonrootBase	0	current	3	1000	141.74198599999988
+common	explicit	distributed	nonrootBase	search_nonrootBase	0	openldap	3	1000	103.05429199999988
+common	explicit	distributed	nonrootEquality	search_nonrootEquality	0	before	3	1000	145.10499700000005
+common	explicit	distributed	nonrootEquality	search_nonrootEquality	0	current	3	1000	147.99867699999987
+common	explicit	distributed	nonrootEquality	search_nonrootEquality	0	openldap	3	1000	106.69866799999997
+common	explicit	groups	memberEquality	search_memberEquality	0	before	3	100	16.716834000000006
+common	explicit	groups	memberEquality	search_memberEquality	0	current	3	100	15.121457000000003
+common	explicit	groups	memberEquality	search_memberEquality	0	openldap	3	100	11.703536
+common	explicit	groups	groupBase	base_member_values	10	before	3	100	13.367207000000004
+common	explicit	groups	groupBase	base_member_values	10	current	3	100	12.952332999999996
+common	explicit	groups	groupBase	base_member_values	10	openldap	3	100	10.112833000000007
+common	explicit	groups	groupBase	base_member_values	1000	before	3	100	106.30229299999992
+common	explicit	groups	groupBase	base_member_values	1000	current	3	100	106.71567099999994
+common	explicit	groups	groupBase	base_member_values	1000	openldap	3	100	95.66558099999995
+common	explicit	groups	nestedMembership	client_bfs_member_equality	0	before	3	100	53.97524599999998
+common	explicit	groups	nestedMembership	client_bfs_member_equality	0	current	3	100	53.452125999999986
+common	explicit	groups	nestedMembership	client_bfs_member_equality	0	openldap	3	100	42.693365
+common	explicit	hot	userBind	simple_bind_ssha	0	before	3	1000	114.87816199999989
+common	explicit	hot	userBind	simple_bind_ssha	0	current	3	1000	111.54131399999996
+common	explicit	hot	userBind	simple_bind_ssha	0	openldap	3	1000	90.4072840000001
+common	explicit	hot	userBind	simple_bind_plaintext	0	before	3	1000	101.99603800000004
+common	explicit	hot	userBind	simple_bind_plaintext	0	current	3	1000	99.39821800000006
+common	explicit	hot	userBind	simple_bind_plaintext	0	openldap	3	1000	80.26162099999995
+common	explicit	hot	userBindWrong	simple_bind_ssha	0	before	3	1000	103.12183000000002
+common	explicit	hot	userBindWrong	simple_bind_ssha	0	current	3	1000	102.20396600000012
+common	explicit	hot	userBindWrong	simple_bind_ssha	0	openldap	3	1000	79.11076599999998
+common	explicit	hot	userBindWrong	simple_bind_plaintext	0	before	3	1000	108.06008799999996
+common	explicit	hot	userBindWrong	simple_bind_plaintext	0	current	3	1000	104.46930800000008
+common	explicit	hot	userBindWrong	simple_bind_plaintext	0	openldap	3	1000	89.05346999999996
+common	explicit	hot	nonrootBase	search_nonrootBase	0	before	3	1000	141.97859199999996
+common	explicit	hot	nonrootBase	search_nonrootBase	0	current	3	1000	133.99290300000004
+common	explicit	hot	nonrootBase	search_nonrootBase	0	openldap	3	1000	107.47779700000007
+common	explicit	hot	nonrootEquality	search_nonrootEquality	0	before	3	1000	143.70050899999995
+common	explicit	hot	nonrootEquality	search_nonrootEquality	0	current	3	1000	135.39763000000005
+common	explicit	hot	nonrootEquality	search_nonrootEquality	0	openldap	3	1000	108.60796699999993
+root	root	literal	rootBind	simple_bind_root	0	before	7	1000	79.08913300000005
+root	root	literal	rootBind	simple_bind_root	0	current	7	1000	79.41671499999987
+root	root	literal	rootBind	simple_bind_root	0	openldap	7	1000	79.27099399999994
+root	root	literal	rootBase	base_objectclass_root	0	before	7	1000	119.65716100000007
+root	root	literal	rootBase	base_objectclass_root	0	current	7	1000	115.23771399999993
+root	root	literal	rootBase	base_objectclass_root	0	openldap	7	1000	91.21143500000014
+root	root	literal	rootEquality	subtree_uid_equality_root	0	before	7	1000	141.0471229999999
+root	root	literal	rootEquality	subtree_uid_equality_root	0	current	7	1000	139.66032499999992
+root	root	literal	rootEquality	subtree_uid_equality_root	0	openldap	7	1000	120.07936299999994
+root	root	literal	rootCompareTrue	compare_uid_true_root	0	before	7	1000	126.29040699999993
+root	root	literal	rootCompareTrue	compare_uid_true_root	0	current	7	1000	121.10628599999994
+root	root	literal	rootCompareTrue	compare_uid_true_root	0	openldap	7	1000	85.63795899999997
+root	root	literal	rootCompareFalse	compare_uid_false_root	0	before	7	1000	119.83899600000005
+root	root	literal	rootCompareFalse	compare_uid_false_root	0	current	7	1000	117.14121500000005
+root	root	literal	rootCompareFalse	compare_uid_false_root	0	openldap	7	1000	81.1871310000001
+root	root	normalized	rootBind	simple_bind_root	0	before	7	1000	77.18574399999993
+root	root	normalized	rootBind	simple_bind_root	0	current	7	1000	79.2565549999999
+root	root	normalized	rootBind	simple_bind_root	0	openldap	7	1000	78.12562499999989
+root	root	normalized	rootBase	base_objectclass_root	0	before	7	1000	121.70377799999991
+root	root	normalized	rootBase	base_objectclass_root	0	current	7	1000	119.58286499999994
+root	root	normalized	rootBase	base_objectclass_root	0	openldap	7	1000	95.67312299999998
+root	root	normalized	rootEquality	subtree_uid_equality_root	0	before	7	1000	119.9663509999999
+root	root	normalized	rootEquality	subtree_uid_equality_root	0	current	7	1000	120.47263199999993
+root	root	normalized	rootEquality	subtree_uid_equality_root	0	openldap	7	1000	95.91716099999994
+root	root	normalized	rootCompareTrue	compare_uid_true_root	0	before	7	1000	130.0995379999999
+root	root	normalized	rootCompareTrue	compare_uid_true_root	0	current	7	1000	126.96122400000004
+root	root	normalized	rootCompareTrue	compare_uid_true_root	0	openldap	7	1000	86.38887899999992
+root	root	normalized	rootCompareFalse	compare_uid_false_root	0	before	7	1000	129.1696309999999
+root	root	normalized	rootCompareFalse	compare_uid_false_root	0	current	7	1000	120.84055399999981
+root	root	normalized	rootCompareFalse	compare_uid_false_root	0	openldap	7	1000	83.82310100000005
+write-recheck	root	fixed-DN	connect		0	before	7	1	0.282333
+write-recheck	root	fixed-DN	rootBind		0	before	7	2	0.36650000000000005
+write-recheck	root	fixed-DN	baseSearch		0	before	7	2	1.315042
+write-recheck	root	fixed-DN	indexedEquality		0	before	7	2	0.6382920000000001
+write-recheck	root	fixed-DN	compareTrue		0	before	7	2	1.118333
+write-recheck	root	fixed-DN	compareFalse		0	before	7	2	0.32583300000000004
+write-recheck	root	fixed-DN	substringPrefix		0	before	7	2	92.27491699999999
+write-recheck	root	fixed-DN	substringNegative		0	before	7	2	92.367418
+write-recheck	root	fixed-DN	setup		0	before	7	302	981.0742359999997
+write-recheck	user	fixed-DN	userConnect		0	before	7	1	0.201958
+write-recheck	user	fixed-DN	userBind		0	before	7	2	0.348501
+write-recheck	root	fixed-DN	add		0	before	7	100	91.78733600000005
+write-recheck	root	fixed-DN	modify		0	before	7	100	42.376456000000005
+write-recheck	root	fixed-DN	modifyDN		0	before	7	100	134.03870500000005
+write-recheck	root	fixed-DN	delete		0	before	7	100	105.243045
+write-recheck	root	fixed-DN	cleanup		0	before	7	504	347.7712010000001
+write-recheck	root	fixed-DN	connect		0	current	7	1	0.285083
+write-recheck	root	fixed-DN	rootBind		0	current	7	2	0.32825
+write-recheck	root	fixed-DN	baseSearch		0	current	7	2	1.173
+write-recheck	root	fixed-DN	indexedEquality		0	current	7	2	0.655917
+write-recheck	root	fixed-DN	compareTrue		0	current	7	2	1.039917
+write-recheck	root	fixed-DN	compareFalse		0	current	7	2	0.28537599999999996
+write-recheck	root	fixed-DN	substringPrefix		0	current	7	2	91.83754099999999
+write-recheck	root	fixed-DN	substringNegative		0	current	7	2	92.256208
+write-recheck	root	fixed-DN	setup		0	current	7	302	978.2520029999997
+write-recheck	user	fixed-DN	userConnect		0	current	7	1	0.205
+write-recheck	user	fixed-DN	userBind		0	current	7	2	0.35487599999999997
+write-recheck	root	fixed-DN	add		0	current	7	100	89.794705
+write-recheck	root	fixed-DN	modify		0	current	7	100	43.598122999999994
+write-recheck	root	fixed-DN	modifyDN		0	current	7	100	136.65675100000004
+write-recheck	root	fixed-DN	delete		0	current	7	100	102.85420900000003
+write-recheck	root	fixed-DN	cleanup		0	current	7	504	345.4796470000003
+writes	root	fixed-DN	connect		0	before	3	1	0.290375
+writes	root	fixed-DN	rootBind		0	before	3	20	3.513753
+writes	root	fixed-DN	baseSearch		0	before	3	20	3.312624
+writes	root	fixed-DN	indexedEquality		0	before	3	20	3.767205999999999
+writes	root	fixed-DN	compareTrue		0	before	3	20	3.253248
+writes	root	fixed-DN	compareFalse		0	before	3	20	2.5854580000000005
+writes	root	fixed-DN	substringPrefix		0	before	3	20	953.2685440000001
+writes	root	fixed-DN	substringNegative		0	before	3	20	961.8476230000001
+writes	root	fixed-DN	setup		0	before	3	62	775.8872889999999
+writes	user	fixed-DN	userConnect		0	before	3	1	0.206917
+writes	user	fixed-DN	userBind		0	before	3	20	2.514417
+writes	root	fixed-DN	add		0	before	3	20	16.958458
+writes	root	fixed-DN	modify		0	before	3	20	8.669251
+writes	root	fixed-DN	modifyDN		0	before	3	20	29.966835
+writes	root	fixed-DN	delete		0	before	3	20	20.122415000000007
+writes	root	fixed-DN	cleanup		0	before	3	104	73.74575200000001
+writes	root	fixed-DN	connect		0	current	3	1	0.304
+writes	root	fixed-DN	rootBind		0	current	3	20	2.531624
+writes	root	fixed-DN	baseSearch		0	current	3	20	3.7201649999999997
+writes	root	fixed-DN	indexedEquality		0	current	3	20	3.7015840000000004
+writes	root	fixed-DN	compareTrue		0	current	3	20	3.203665
+writes	root	fixed-DN	compareFalse		0	current	3	20	2.6471279999999995
+writes	root	fixed-DN	substringPrefix		0	current	3	20	947.4566239999999
+writes	root	fixed-DN	substringNegative		0	current	3	20	941.075337
+writes	root	fixed-DN	setup		0	current	3	62	774.0403800000003
+writes	user	fixed-DN	userConnect		0	current	3	1	0.210916
+writes	user	fixed-DN	userBind		0	current	3	20	3.0949539999999995
+writes	root	fixed-DN	add		0	current	3	20	23.850330999999997
+writes	root	fixed-DN	modify		0	current	3	20	9.753333999999999
+writes	root	fixed-DN	modifyDN		0	current	3	20	32.12766500000001
+writes	root	fixed-DN	delete		0	current	3	20	23.328207
+writes	root	fixed-DN	cleanup		0	current	3	104	87.11608399999999
+writes	root	fixed-DN	connect		0	openldap	3	1	0.303708
+writes	root	fixed-DN	rootBind		0	openldap	3	20	2.567795
+writes	root	fixed-DN	baseSearch		0	openldap	3	20	2.79625
+writes	root	fixed-DN	indexedEquality		0	openldap	3	20	3.7307520000000003
+writes	root	fixed-DN	compareTrue		0	openldap	3	20	2.5973729999999997
+writes	root	fixed-DN	compareFalse		0	openldap	3	20	2.1136640000000004
+writes	root	fixed-DN	substringPrefix		0	openldap	3	20	627.626459
+writes	root	fixed-DN	substringNegative		0	openldap	3	20	630.210665
+writes	root	fixed-DN	setup		0	openldap	3	62	309.90929700000004
+writes	user	fixed-DN	userConnect		0	openldap	3	1	0.216958
+writes	user	fixed-DN	userBind		0	openldap	3	20	2.955332
+writes	root	fixed-DN	add		0	openldap	3	20	99.907666
+writes	root	fixed-DN	modify		0	openldap	3	20	88.64424500000003
+writes	root	fixed-DN	modifyDN		0	openldap	3	20	85.66829
+writes	root	fixed-DN	delete		0	openldap	3	20	104.741166
+writes	root	fixed-DN	cleanup		0	openldap	3	104	293.38549800000004
+concurrent	explicit	8-workers	uidEquality	ldapsearch	0	before	3	8000	452
+concurrent	explicit	8-workers	uidEquality	ldapsearch	0	current	3	8000	382
+concurrent	explicit	8-workers	uidEquality	ldapsearch	0	openldap	3	8000	358
+concurrent	default	8-workers	uidEquality	ldapsearch	0	before	3	8000	355
+concurrent	default	8-workers	uidEquality	ldapsearch	0	current	3	8000	398
+concurrent	default	8-workers	uidEquality	ldapsearch	0	openldap	3	8000	486

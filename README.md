@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 29-30, 2026, R6, 100,000 users, baseline `45c8e5d`,
+Latest comparison: September 30, 2026, R7, 100,000 users, baseline `fa4d51a`,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13. Rows are
 medians of three SDK batches with per-request endpoint rotation. Relative
 performance is `OpenLDAP/current * 100%`; 100% means parity. Frequency is
@@ -59,34 +59,35 @@ qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 112.53 ms | 92.17 ms | 81.9% | 80.2% |
-| Non-root Base, hot | High | 1,000 | 116.65 ms | 94.02 ms | 80.6% | 79.0% |
-| Non-root equality, hot | Very high | 1,000 | 121.35 ms | 94.36 ms | 77.8% | 77.0% |
-| Direct group discovery | High | 100 | 18.93 ms | 16.05 ms | 84.8% | 70.7% |
-| Group Base, 1,000 members | Medium | 100 | 108.42 ms | 100.62 ms | 92.8% | 83.8% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 57.20 ms | 44.32 ms | 77.5% | 78.0% |
+| User Bind, SSHA | Very high | 1,000 | 149.18 ms | 119.84 ms | 80.3% | 81.1% |
+| Non-root Base, hot | High | 1,000 | 124.55 ms | 101.22 ms | 81.3% | 80.2% |
+| Non-root equality, hot | Very high | 1,000 | 129.56 ms | 102.93 ms | 79.4% | 80.2% |
+| Direct group discovery | High | 100 | 16.56 ms | 12.34 ms | 74.5% | 77.4% |
+| Group Base, 1,000 members | Medium | 100 | 105.72 ms | 96.22 ms | 91.0% | 89.6% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 50.05 ms | 39.97 ms | 79.9% | 79.9% |
 
-Versus baseline `45c8e5d`, direct group discovery improves 2.7% with explicit
-ACLs and 6.4% with default access. The initial 1,000-member group rows are
-7.5% and 3.2% slower respectively; independent seven-repeat rechecks show
-0.6% improvement and 1.9% slowdown. Default distributed Base/equality are
-7.3%/11.6% slower initially; those larger regressions do not recur in their
-separate recheck. All results remain. **Per-operation parity is not achieved;
+Versus baseline `fa4d51a`, seven-repeat Compare SDK batches improve 2.3%-6.4%
+across true/false results and literal/uppercase root DNs, but remain at
+68.0%-70.7% of OpenLDAP. Initial default SSHA Bind/distributed equality are
+6.8%/8.4% slower; those large regressions do not recur in independent rechecks.
+Initial write regressions and seven-pair rechecks remain documented; recheck
+Modify/ModifyDN are still 2.9%/2.0% slower. **Per-operation parity is not achieved;
 fast writes do not offset slow reads.** Shared-host results do not establish causality.
 
-R6 avoids packet-tree decoding for eligible long simple Search requests.
-The long-request component drops from 214 to 12 allocations; already-fast
-short controls have slightly slower medians. Full tests, vet, 355 native
-checks without skips and differential fuzzing passed; all 15 exports match.
-Broad reads/writes were last measured in R4. The operational-attribute gap remains.
+R7 reuses bounded syntax parsing in core-write and Compare preparation;
+schema/reader callbacks and authorization remain live. Compare component
+allocations drop from 357 to 165 for one target, and 464 to 325 for rotating
+targets. Full tests, focused oracles, vet and 355 native checks without skips
+passed; all 35 exports match. Broad scans were last measured in R4.
+The operational-attribute gap remains.
 
-See the [R6 report](docs/common-ldap-performance.md),
-[evidence index](docs/evidence/performance-20260929-r6/README.md) and
-[verbatim R4 archive](docs/common-ldap-performance-20260929-r4.md).
+See the [R7 report](docs/common-ldap-performance.md),
+[evidence index](docs/evidence/performance-20260930-r7/README.md) and
+[verbatim R6 archive](docs/common-ldap-performance-20260929-r6.md).
 
 The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
 conditional audit-observer component allocation reduction. It establishes no
-ordinary-request speedup or production-latency gain and is separate from R6.
+ordinary-request speedup or production-latency gain and is separate from R7.
 
 ## Requirements
 

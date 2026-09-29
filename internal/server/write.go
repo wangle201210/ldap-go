@@ -3125,7 +3125,7 @@ func (server *Server) handleCompare(
 				return getErr
 			}
 		}
-		entry, err = normalizeCompareEntryDN(tx, entry)
+		entry, err = normalizeCompareEntryDN(state.runtime, tx, entry)
 		if err != nil {
 			return err
 		}
@@ -3276,10 +3276,11 @@ func (server *Server) handleCompare(
 }
 
 func normalizeCompareEntryDN(
+	runtime *runtimeState,
 	reader storage.Reader,
 	entry directory.Entry,
 ) (directory.Entry, error) {
-	dn, err := directory.ParseDN(entry.DN)
+	dn, err := parseRuntimeLegacyDN(runtime, entry.DN)
 	if err != nil {
 		return directory.Entry{}, err
 	}
@@ -3312,8 +3313,8 @@ func normalizeCompareACLEntry(
 	if subject.Equal(target) {
 		return entry, nil
 	}
-	legacySubject, subjectErr := directory.ParseDN(boundDN)
-	legacyTarget, targetErr := directory.ParseDN(entry.DN)
+	legacySubject, subjectErr := parseRuntimeLegacyDN(runtime, boundDN)
+	legacyTarget, targetErr := parseRuntimeLegacyDN(runtime, entry.DN)
 	if subjectErr != nil || targetErr != nil || !legacySubject.Equal(legacyTarget) {
 		return entry, nil
 	}
@@ -4569,7 +4570,7 @@ func parseCoreWriteDN(
 	runtime *runtimeState,
 	value string,
 ) (directory.DN, error) {
-	legacy, err := directory.ParseDN(value)
+	legacy, err := parseRuntimeLegacyDN(runtime, value)
 	if err != nil || runtime == nil || isConfigurationDN(legacy) {
 		return legacy, err
 	}

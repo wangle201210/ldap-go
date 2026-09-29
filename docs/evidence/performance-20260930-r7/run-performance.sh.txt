@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+: "${LDAP_BENCH_PASSWORD:?set disposable fixture password}"
+audit=/var/tmp/ldap-go-perf-20260930-r7
+sh "$audit/common-explicit.sh" >"$audit/common-explicit.log" 2>&1
+sh "$audit/common-default.sh" >"$audit/common-default.log" 2>&1
+sh "$audit/root-paired.sh" >"$audit/root-paired.log" 2>&1
+sh "$audit/full-write.sh" >"$audit/full-write.log" 2>&1
+printf 'Performance comparison completed.\n'

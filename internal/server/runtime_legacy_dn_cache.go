@@ -26,6 +26,14 @@ func newRuntimeLegacyDNCache() *runtimeLegacyDNCache {
 	return &runtimeLegacyDNCache{}
 }
 
+func parseRuntimeLegacyDN(runtime *runtimeState, raw string) (directory.DN, error) {
+	var cache *runtimeLegacyDNCache
+	if runtime != nil {
+		cache = runtime.legacyDNs
+	}
+	return cache.parse(raw)
+}
+
 func (cache *runtimeLegacyDNCache) parse(raw string) (directory.DN, error) {
 	if cache == nil || len(raw) > maxRuntimeLegacyDNInput {
 		return directory.ParseDN(raw)

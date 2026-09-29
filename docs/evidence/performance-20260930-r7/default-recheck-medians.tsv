@@ -1,0 +1,13 @@
+suite	access_mode	variant	stage	method	members	endpoint	repeats	operations	median_ms
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	before	7	1000	130.71574700000008
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	current	7	1000	131.32180000000005
+default-recheck	default	distributed	nonrootBase	search_nonrootBase	0	openldap	7	1000	98.01690499999998
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	before	7	1000	133.84584899999982
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	current	7	1000	131.9413209999999
+default-recheck	default	distributed	nonrootEquality	search_nonrootEquality	0	openldap	7	1000	99.36284900000003
+default-recheck	default	hot	userBind	simple_bind_ssha	0	before	7	1000	99.63245500000004
+default-recheck	default	hot	userBind	simple_bind_ssha	0	current	7	1000	98.29000800000016
+default-recheck	default	hot	userBind	simple_bind_ssha	0	openldap	7	1000	78.18167399999989
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	before	7	1000	97.61771000000006
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	current	7	1000	97.38453299999989
+default-recheck	default	hot	userBind	simple_bind_plaintext	0	openldap	7	1000	79.11504099999995
