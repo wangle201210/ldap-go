@@ -1,0 +1,8 @@
+item	value
+state	PUBLISHED_AFTER_MAIN_FINISHED
+raw_json	31
+exports	15
+median_groups	144
+measured_samples	624
+failed_checks	0
+completion	See generator/main-finished.txt; an empty vet log alone is not exit proof.

@@ -1,0 +1,11 @@
+Main confirmed final validate.sh EXIT 0 before the five macro scripts started.
+Full-suite server: 128.953s; webadmin: 0.288s; all tests include CLI tests.
+Schema focused test: 1.585s (read from schema-test.txt).
+Schema fuzz: 679744 executions, requested 30s, final progress 31s, package 31.055s, PASS.
+Vet: exit 0.
+Native differential: 355 PASS records, 0 FAIL, 0 SKIP, 10.175s.
+Runner test: 0.070s; schema benchmark: 10.954s; final Compare benchmark: 62.238s.
+Final production source frozen: lazy DN assertion reuse applies only to nonordered canonical DN rules.
+LDIF deadline baseline: 10000 runs, 125 failures. Test-only fix: 10000 passing runs, 1.230s.
+Test-only commit 0a29f60 was local and not yet pushed when this validation signal arrived.
+This is the final validation signal, not the five-script performance completion signal.

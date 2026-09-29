@@ -1,0 +1,15 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+compare	targets-1	before	3	12724	11768	149
+compare	targets-1024	before	3	20253	12422	309
+compare	targets-1	current	3	11794	11232	138
+compare	targets-1024	current	3	19597	12037	301
+schema	BenchmarkCompareEntryAttributeUIDSingle	original	3	486.9	160	13
+schema	BenchmarkCompareEntryAttributeUIDSingle	new	3	484.9	144	12
+schema	BenchmarkCompareEntryAttributeGroup1000/first	original	3	43374	94816	1180
+schema	BenchmarkCompareEntryAttributeGroup1000/first	new	3	7743	3472	170
+schema	BenchmarkCompareEntryAttributeGroup1000/last	original	3	7896295	3672647	171010
+schema	BenchmarkCompareEntryAttributeGroup1000/last	new	3	4018116	1767107	84086
+schema	BenchmarkCompareEntryAttributeGroup1000/absent	original	3	8108898	3648649	171010
+schema	BenchmarkCompareEntryAttributeGroup1000/absent	new	3	4042042	1767085	84086
+schema	BenchmarkCompareEntryAttributeError	original	3	912.8	232	12
+schema	BenchmarkCompareEntryAttributeError	new	3	911.7	200	11

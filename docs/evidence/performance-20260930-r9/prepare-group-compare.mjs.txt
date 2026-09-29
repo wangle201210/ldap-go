@@ -1,0 +1,20 @@
+import fs from 'node:fs';
+const audit = '/var/tmp/ldap-go-perf-20260930-r9';
+for (const mode of ['explicit', 'default']) {
+  const source = fs.readFileSync(`${audit}/common-${mode}.sh`, 'utf8');
+  const start = source.indexOf('\nLDAP_BENCH_PASSWORD="$LDAP_BENCH_PASSWORD" "$audit/ldapcommonbench"');
+  const validation = source.indexOf("\nprintf 'run\\tcanonical_entries");
+  if (start < 0 || validation < start) throw new Error('Unexpected common script');
+  const command = `
+LDAP_BENCH_PASSWORD="$LDAP_BENCH_PASSWORD" "$audit/ldapcommonbench-group" \\
+  -endpoint before=ldap://127.0.0.1:29481 -endpoint current=ldap://127.0.0.1:29482 \\
+  -endpoint openldap=ldap://127.0.0.1:29483 -base dc=scale,dc=qualification \\
+  -root-bind-dn "$root_dn" -root-password-env LDAP_BENCH_PASSWORD -timeout 30s -setup-disposable \\
+  -people "$people_dn" -stages groupCompareTrueFirst,groupCompareTrueLast,groupCompareFalse \\
+  -group-sizes 10,1000`;
+  const body = command + ` -n 2 -repeats 1 >"$out/smoke.json"\n` +
+    command + ` -n 20 -repeats 5 >"$out/groups.json"\n`;
+  fs.writeFileSync(`${audit}/group-compare-${mode}.sh`,
+    (source.slice(0, start) + body + source.slice(validation))
+      .replace(`out=$audit/${mode}-final`, `out=$audit/${mode}-group-compare`));
+}

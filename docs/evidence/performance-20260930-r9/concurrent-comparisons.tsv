@@ -1,0 +1,3 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+concurrent	explicit	root	8-workers	uidEquality	ldapsearch	0	8000	446	409	336	82.15158924205379	8.29596412556054
+concurrent	default	root	8-workers	uidEquality	ldapsearch	0	8000	351	419	417	99.52267303102626	-19.373219373219364

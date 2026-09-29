@@ -1,0 +1,13 @@
+R9 does not establish native OpenLDAP parity or aggregate parity.
+The 1000-member last/missing cases still have a large native gap despite lower current latency.
+For equal operation counts, current throughput / native throughput = native_ms / current_ms.
+The exact per-case evidence follows; all other positive and negative results remain in comparisons.tsv.
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	201.430249	103.91841700000002	4.723625999999999	4.5455138139758215	48.40972618764919
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	222.02791800000003	103.801332	4.017873	3.8707335663091484	53.24852255742001
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	213.629417	110.82912499999999	4.579456999999999	4.1319977939011965	48.12085032278116
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	220.38475100000002	102.044291	3.6897089999999997	3.615791695784333	53.697208841822274
+
+First/last denotes fixture insertion order, not native storage order.
+Broad read/write performance was not rerun in R9; R8b results remain historical only.

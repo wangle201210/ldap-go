@@ -26,6 +26,7 @@ import (
 
 var stageNames = []string{"userBind", "userBindWrong", "nonrootBase", "nonrootEquality", "memberEquality", "groupBase", "nestedMembership"}
 var rootStageNames = []string{"rootBind", "rootBase", "rootEquality", "rootCompareTrue", "rootCompareFalse"}
+var groupCompareStageNames = []string{"groupCompareTrueFirst", "groupCompareTrueLast", "groupCompareFalse"}
 
 type endpoint struct {
 	Name string `json:"name"`
@@ -144,7 +145,7 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	f.StringVar(&c.People, "people", "", "optional existing scale UID pool below base; never modified")
 	f.IntVar(&c.Entries, "entries", 100000, "contiguous existing scale-%06d pool size, in [1,999999]")
 	f.StringVar(&c.UID, "uid", "", "optional fixed existing UID for nonroot Base/equality only; requires -people")
-	stages := f.String("stages", "all", "comma-separated stages (base/equality aliases supported): "+strings.Join(stageNames, ",")+"; opt-in only (excluded from all): "+strings.Join(rootStageNames, ","))
+	stages := f.String("stages", "all", "comma-separated stages (base/equality aliases supported): "+strings.Join(stageNames, ",")+"; opt-in only (excluded from all): "+strings.Join(rootStageNames, ",")+","+strings.Join(groupCompareStageNames, ",")+" (group Compare first/last refer to fixture insertion order)")
 	sizes := f.String("group-sizes", "10,1000", "distinct direct-group member counts, each in [8,10000]")
 	if err := f.Parse(args); err != nil {
 		return c, err
@@ -185,7 +186,7 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 			} else if name == "equality" {
 				name = "nonrootEquality"
 			}
-			if (!slices.Contains(stageNames, name) && !slices.Contains(rootStageNames, name)) || slices.Contains(c.Stages, name) {
+			if (!slices.Contains(stageNames, name) && !slices.Contains(rootStageNames, name) && !slices.Contains(groupCompareStageNames, name)) || slices.Contains(c.Stages, name) {
 				return c, fmt.Errorf("unknown or duplicate stage %q", name)
 			}
 			c.Stages = append(c.Stages, name)
@@ -215,7 +216,8 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 }
 
 func needsGroups(c options) bool {
-	return slices.Contains(c.Stages, "memberEquality") || slices.Contains(c.Stages, "groupBase") || slices.Contains(c.Stages, "nestedMembership")
+	return slices.Contains(c.Stages, "memberEquality") || slices.Contains(c.Stages, "groupBase") || slices.Contains(c.Stages, "nestedMembership") ||
+		slices.ContainsFunc(c.Stages, func(name string) bool { return slices.Contains(groupCompareStageNames, name) })
 }
 
 type fixture struct {
@@ -593,9 +595,13 @@ func benchmarks(c options, f fixture) []benchmark {
 			result = append(result, benchmark{name: name, method: method, root: true})
 		case "userBind", "userBindWrong":
 			result = append(result, benchmark{name: name, method: "simple_bind_ssha", user: f.users[0]}, benchmark{name: name, method: "simple_bind_plaintext", user: f.users[1]})
-		case "groupBase":
+		case "groupBase", "groupCompareTrueFirst", "groupCompareTrueLast", "groupCompareFalse":
+			method := map[string]string{
+				"groupBase": "base_member_values", "groupCompareTrueFirst": "compare_member_true_first",
+				"groupCompareTrueLast": "compare_member_true_last", "groupCompareFalse": "compare_member_false_missing",
+			}[name]
 			for _, group := range f.groups[:f.direct] {
-				result = append(result, benchmark{name: name, method: "base_member_values", user: f.users[0], group: group})
+				result = append(result, benchmark{name: name, method: method, user: f.users[0], group: group})
 			}
 		default:
 			method := "search_" + name
@@ -695,6 +701,21 @@ func request(conn client, c options, f fixture, b benchmark, iteration int, walk
 		return search(conn, base, ldap.ScopeWholeSubtree, "(uid="+ldap.EscapeFilter(entry.GetAttributeValue("uid"))+")", []*ldap.Entry{entry}, attrs...)
 	case "groupBase":
 		return expectBase(conn, b.group, "member")
+	case "groupCompareTrueFirst", "groupCompareTrueLast", "groupCompareFalse":
+		// First/last use shared fixture insertion order, not endpoint storage order.
+		members := b.group.GetAttributeValues("member")
+		want := b.name != "groupCompareFalse"
+		value := members[0]
+		if b.name == "groupCompareTrueLast" {
+			value = members[len(members)-1]
+		} else if !want {
+			value = "uid=ldapbench-absent," + f.runDN
+		}
+		got, err := conn.Compare(b.group.DN, "member", value)
+		if err == nil && got != want {
+			return fmt.Errorf("Compare at %q returned %t, want %t", b.group.DN, got, want)
+		}
+		return err
 	case "memberEquality", "nestedMembership":
 		if err := walk.step(conn, f); err != nil {
 			return err

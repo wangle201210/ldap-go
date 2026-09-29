@@ -1,0 +1,9 @@
+Main confirmed ALL R9 PERFORMANCE FINISHED, EXIT 0 for all five scripts:
+common-explicit.sh, common-default.sh, root-paired.sh,
+group-compare-explicit.sh, group-compare-default.sh.
+Main independently verified all 15 exports: 100002 entries, cksum 2143929969, 42712438 bytes.
+Final production source is frozen. Final validate.sh EXIT 0 was confirmed separately.
+Publish evidence, tables and evidence README now; main owns formal reports and repository README.
+Keep the initial full-suite failure and baseline deadline stress failures separate from final validation.
+R8b broad read/write results are historical and were not rerun in R9.
+Do not claim whole compatibility or aggregate/native parity.

@@ -1,0 +1,27 @@
+ok  	github.com/wangle201210/ldap-go/cmd/ldap-go	8.414s
+ok  	github.com/wangle201210/ldap-go/cmd/slapdconf-convert	2.875s
+ok  	github.com/wangle201210/ldap-go/internal/aci	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/acl	0.078s
+ok  	github.com/wangle201210/ldap-go/internal/audit	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/auth	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/buildcontract	3.218s
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldapbench	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldapcommonbench	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/cmd/ldifcanonical	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/directory	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/gmtransport	0.167s
+ok  	github.com/wangle201210/ldap-go/internal/ldapwire	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/lloadd	5.914s
+ok  	github.com/wangle201210/ldap-go/internal/mdbentry	0.041s
+ok  	github.com/wangle201210/ldap-go/internal/migration	0.979s
+ok  	github.com/wangle201210/ldap-go/internal/migration/slapdconf	1.802s
+ok  	github.com/wangle201210/ldap-go/internal/saslkrb5	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/schema	2.790s
+ok  	github.com/wangle201210/ldap-go/internal/server	136.542s
+ok  	github.com/wangle201210/ldap-go/internal/storage	(cached)
+ok  	github.com/wangle201210/ldap-go/internal/testutil/ldapdiff	(cached)
+--- FAIL: TestLDIFImportDeadlineBeforeFirstWriteMarksAllNotAttempted (0.00s)
+    ldif_test.go:586: status = 504, result = webadmin.ldifImportResponse{Results:[]webadmin.ldifImportResult{webadmin.ldifImportResult{Record:1, DN:"uid=first,dc=example,dc=com", Operation:"delete", Success:false, Status:"unknown", Error:(*webadmin.apiError)(0x78741030e410)}, webadmin.ldifImportResult{Record:2, DN:"uid=second,dc=example,dc=com", Operation:"delete", Success:false, Status:"not_attempted", Error:(*webadmin.apiError)(nil)}}, Applied:0, Failed:0, Unknown:1, Aborted:true, AbortReason:"batch operation deadline exceeded", Error:(*webadmin.apiError)(0x78741030e460)}, body = {"results":[{"record":1,"dn":"uid=first,dc=example,dc=com","operation":"delete","success":false,"status":"unknown","error":{"code":"ldap_result_unknown","message":"LDAP write result is unknown because the LDIF import was canceled during the operation","applied":0}},{"record":2,"dn":"uid=second,dc=example,dc=com","operation":"delete","success":false,"status":"not_attempted"}],"applied":0,"failed":0,"unknown":1,"aborted":true,"abort_reason":"batch operation deadline exceeded","error":{"code":"ldap_result_unknown","message":"LDAP write result is unknown because the LDIF import was canceled during the operation","applied":0}}
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/webadmin	0.351s
+FAIL

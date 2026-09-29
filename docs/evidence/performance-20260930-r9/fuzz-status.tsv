@@ -1,0 +1,2 @@
+target	requested_seconds	final_elapsed_seconds	executions	new_interesting	total_interesting	package_result
+FuzzCompareEntryAttribute	30	31	679744	115	346	ok   github.com/wangle201210/ldap-go/internal/schema 31.055s

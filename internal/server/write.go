@@ -3217,10 +3217,12 @@ func (server *Server) handleCompare(
 			}
 			return nil
 		}
-		if !state.runtime.schema.HasAttributeDescription(
+		present, matched, compareErr := state.runtime.schema.CompareEntryAttribute(
 			entry,
 			request.Attribute,
-		) {
+			request.Assertion,
+		)
+		if !present {
 			if dynlistPlans != nil {
 				handled, matched, compareErr := dynlistPlans.dynamicGroupCompare(
 					*database,
@@ -3240,30 +3242,17 @@ func (server *Server) handleCompare(
 			}
 			return operationFailed(ldapwire.ResultNoSuchAttribute, "")
 		}
-		for _, value := range state.runtime.schema.AttributeValues(
-			entry,
-			request.Attribute,
-		) {
-			comparison, compareErr := state.runtime.schema.Compare(
-				request.Attribute,
-				"",
-				value,
-				request.Assertion,
-			)
-			if compareErr != nil {
-				var assertionError *schema.SchemaDescriptionAssertionError
-				if errors.As(compareErr, &assertionError) {
-					if assertionError.Unknown {
-						return nil
-					}
-					return operationFailed(ldapwire.ResultInvalidAttributeSyntax, assertionError.Error())
+		if compareErr != nil {
+			if assertionError, ok := errors.AsType[*schema.SchemaDescriptionAssertionError](compareErr); ok {
+				if assertionError.Unknown {
+					return nil
 				}
-				return operationFailed(ldapwire.ResultInappropriateMatching, compareErr.Error())
+				return operationFailed(ldapwire.ResultInvalidAttributeSyntax, assertionError.Error())
 			}
-			if comparison == 0 {
-				result.Code = ldapwire.ResultCompareTrue
-				break
-			}
+			return operationFailed(ldapwire.ResultInappropriateMatching, compareErr.Error())
+		}
+		if matched {
+			result.Code = ldapwire.ResultCompareTrue
 		}
 		return nil
 	})

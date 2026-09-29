@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkCompareEntryAttributeUIDSingle/original-8         	  778784	       486.9 ns/op	     160 B/op	      13 allocs/op
+BenchmarkCompareEntryAttributeUIDSingle/original-8         	  761677	       468.6 ns/op	     160 B/op	      13 allocs/op
+BenchmarkCompareEntryAttributeUIDSingle/original-8         	  829039	       498.5 ns/op	     160 B/op	      13 allocs/op
+BenchmarkCompareEntryAttributeUIDSingle/new-8              	  764899	       484.9 ns/op	     144 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeUIDSingle/new-8              	  705495	       500.5 ns/op	     144 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeUIDSingle/new-8              	  712394	       481.6 ns/op	     144 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/original-8   	    8280	     43196 ns/op	   94816 B/op	    1180 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/original-8   	    8132	     43647 ns/op	   94816 B/op	    1180 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/original-8   	    7347	     43374 ns/op	   94816 B/op	    1180 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/new-8        	   46329	      7906 ns/op	    3472 B/op	     170 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/new-8        	   46522	      7743 ns/op	    3472 B/op	     170 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/first/new-8        	   47586	      7361 ns/op	    3472 B/op	     170 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/original-8    	      45	   7896295 ns/op	 3672660 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/original-8    	      43	   7829402 ns/op	 3672647 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/original-8    	      43	   7990723 ns/op	 3672641 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/new-8         	      88	   3904835 ns/op	 1767107 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/new-8         	      90	   4018116 ns/op	 1767106 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/last/new-8         	      87	   4080544 ns/op	 1767109 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/original-8  	      37	   8108898 ns/op	 3648644 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/original-8  	      42	   8026886 ns/op	 3648649 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/original-8  	      42	   8157490 ns/op	 3648665 B/op	  171010 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/new-8       	      96	   4125168 ns/op	 1767088 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/new-8       	      80	   4042042 ns/op	 1767085 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeGroup1000/absent/new-8       	      92	   3782998 ns/op	 1767080 B/op	   84086 allocs/op
+BenchmarkCompareEntryAttributeError/original-8             	  470664	       829.2 ns/op	     232 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeError/original-8             	  422173	       912.8 ns/op	     232 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeError/original-8             	  470754	       955.4 ns/op	     232 B/op	      12 allocs/op
+BenchmarkCompareEntryAttributeError/new-8                  	  346339	       911.7 ns/op	     200 B/op	      11 allocs/op
+BenchmarkCompareEntryAttributeError/new-8                  	  443802	       976.2 ns/op	     200 B/op	      11 allocs/op
+BenchmarkCompareEntryAttributeError/new-8                  	  439238	       846.3 ns/op	     200 B/op	      11 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	10.954s

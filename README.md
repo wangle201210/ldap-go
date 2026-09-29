@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R8b, 100,000 users, baseline `2645eba`,
+Latest comparison: September 30, 2026, R9, 100,000 users, baseline `6840e54`,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13. Rows are
 medians of three SDK batches with per-request endpoint rotation. Relative
 performance is `OpenLDAP/current * 100%`; 100% means parity. Frequency is
@@ -59,35 +59,34 @@ qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 91.42 ms | 73.11 ms | 80.0% | 81.3% |
-| Non-root Base, hot | High | 1,000 | 114.02 ms | 92.36 ms | 81.0% | 77.9% |
-| Non-root equality, hot | Very high | 1,000 | 119.22 ms | 93.10 ms | 78.1% | 77.4% |
-| Direct group discovery | High | 100 | 14.87 ms | 11.90 ms | 80.0% | 75.7% |
-| Group Base, 1,000 members | Medium | 100 | 97.25 ms | 89.19 ms | 91.7% | 93.1% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 49.14 ms | 40.02 ms | 81.4% | 77.6% |
+| User Bind, SSHA | Very high | 1,000 | 105.42 ms | 85.51 ms | 81.1% | 81.3% |
+| Non-root Base, hot | High | 1,000 | 122.17 ms | 98.85 ms | 80.9% | 78.4% |
+| Non-root equality, hot | Very high | 1,000 | 121.52 ms | 94.31 ms | 77.6% | 78.6% |
+| Direct group discovery | High | 100 | 15.71 ms | 11.49 ms | 73.1% | 75.2% |
+| Group Base, 1,000 members | Medium | 100 | 105.35 ms | 97.27 ms | 92.3% | 92.0% |
+| Nested membership, client BFS | Medium-high | 100 traversals | 62.71 ms | 47.92 ms | 76.4% | 81.0% |
 
-Versus baseline `2645eba`, default SSHA Bind/direct group discovery improve
-2.4%/2.9%, while hot equality/nested membership are 2.4%/1.9% slower. Broad
-indexed/concurrent batches improve 10.0%/23.3%, but full-prefix scanning is
-9.3% slower initially. Separate rotating rechecks improve paging/prefix by
-3.9%/3.3%. Original write regressions and rechecks remain; recheck Add/ModifyDN
-are still 1.7%/1.9% slower. **Per-operation parity is not achieved;
+New non-root group Compare tests measure first/last/missing fixture members.
+For 1,000-member groups, last/missing comparisons are 48%-54% faster than
+`6840e54`, but still only 3.6%-4.5% of OpenLDAP performance. Default direct-group
+and nested searches are both 4.1% slower; distributed equality is 3.4% slower.
+All negative rows remain. **Per-operation parity is not achieved;
 fast writes do not offset slow reads.** Shared-host results do not establish causality.
 
-R8b removes value cloning in object-class checks and reuses existing prepared
-attribute names without building a table on a miss. Compare component
-allocations drop from 165 to 149 for one target, and 325 to 309 for rotating
-targets; paired Compare SDK latency is essentially unchanged. Full tests,
-schema oracles, vet and 355 native checks passed; all 47 final exports match.
-The operational-attribute gap remains. Superseded R8 diagnostics stay separate.
+R9 combines Compare selection/comparison without cloning values and normalizes
+the fixed DN assertion once per request, preserving presence and first-error
+semantics. Full tests, schema oracles, differential fuzzing, vet and 355 native
+checks passed; all 15 exports match. A pre-existing deadline-test race was fixed
+without changing import behavior. Broad reads/writes remain R8b evidence;
+the operational-attribute gap remains.
 
-See the [R8b report](docs/common-ldap-performance.md),
-[evidence index](docs/evidence/performance-20260930-r8b/README.md) and
-[verbatim R7 archive](docs/common-ldap-performance-20260930-r7.md).
+See the [R9 report](docs/common-ldap-performance.md),
+[evidence index](docs/evidence/performance-20260930-r9/README.md) and
+[verbatim R8b archive](docs/common-ldap-performance-20260930-r8b.md).
 
 The separate [R5 audit report](docs/audit-performance-20260929-r5.md) records a
 conditional audit-observer component allocation reduction. It establishes no
-ordinary-request speedup or production-latency gain and is separate from R8b.
+ordinary-request speedup or production-latency gain and is separate from R9.
 
 ## Requirements
 
