@@ -1,0 +1,4 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	ns/op	40150	40979	-2.064757160647579
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	B/op	89568	89568	0
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	allocs/op	423	423	0

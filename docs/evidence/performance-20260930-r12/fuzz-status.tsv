@@ -1,0 +1,2 @@
+target	requested_seconds	workers	final_elapsed_seconds	executions	new_interesting	total_interesting	package_result
+FuzzCompareEntryAttributeTailReuse	30	4	31	995633	281	293	ok   github.com/wangle201210/ldap-go/internal/schema 31.025s

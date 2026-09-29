@@ -1,0 +1,11 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+compare	targets-1	R10-baseline-31f3c08	3	11211	11232	138
+compare	targets-1024	R10-baseline-31f3c08	3	19069	12037	301
+compare	targets-1	R11-current	3	11416	11232	138
+compare	targets-1024	R11-current	3	20022	12037	301
+projection-helper	BenchmarkCompareSubschemaReference/values1	same-process-original-withSubschemaReference	3	332.2	456	9
+projection-helper	BenchmarkCompareSubschemaReference/values1	same-process-current-withCompareSubschemaReference	3	319.5	456	9
+projection-helper	BenchmarkCompareSubschemaReference/values10	same-process-original-withSubschemaReference	3	603.9	1104	18
+projection-helper	BenchmarkCompareSubschemaReference/values10	same-process-current-withCompareSubschemaReference	3	465.1	1008	9
+projection-helper	BenchmarkCompareSubschemaReference/values1000	same-process-original-withSubschemaReference	3	27983	72960	1008
+projection-helper	BenchmarkCompareSubschemaReference/values1000	same-process-current-withCompareSubschemaReference	3	16610	64128	18

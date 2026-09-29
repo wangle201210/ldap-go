@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+audit=/var/tmp/ldap-go-perf-20260930-r12
+for run in before-1 current-1 current-2 before-2 before-3 current-3; do
+  side=${run%-*}
+  "$audit/group-$side.test" -test.run '^$' -test.bench '^BenchmarkLocalGroupCompare$/^first$' \
+    -test.benchmem -test.benchtime=1s -test.count=1 >"$audit/group-first-$run.txt" 2>&1
+done
+printf 'First-member component recheck completed.\n'

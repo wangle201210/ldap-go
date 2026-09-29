@@ -1,0 +1,7 @@
+FINAL: Main confirmed all five original R11 macro scripts complete, EXIT 0, with 15 exports.
+Scripts: common-explicit.sh, common-default.sh, root-paired.sh, group-compare-explicit.sh, group-compare-default.sh.
+R11 CANDIDATE REJECTED / NOT ACCEPTED FOR THE GOAL. Diagnostic archive only.
+Normal Add sets subschemaSubentry at internal/server/write.go:4305, so normal SDK group fixtures bypass the missing-subschemaSubentry clone branch entirely. Macro data cannot establish or attribute gains to this optimization.
+Main withdrew and reverted its R11 candidate production code/tests. The evidence worker observed a clean working tree before publication; archived current binary/logs describe the withdrawn candidate.
+The proposed explicit SSHA Bind seven-repeat recheck was cancelled because the candidate was withdrawn. Preserve the original negative without causal attribution.
+Publish only concise R11 diagnostic logs, components, raw JSON, tables and hashes with the branch-not-exercised limitation, then freeze. No README, formal report or R10 archive changes. No further workloads.

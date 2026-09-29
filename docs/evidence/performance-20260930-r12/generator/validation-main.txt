@@ -1,0 +1,15 @@
+Main confirmed R12 validate.sh EXIT 0; final production source is frozen.
+Schema package: 1.589s, PASS.
+FuzzCompareEntryAttributeTailReuse: requested 30s, 4 workers, 995633 executions; final progress 31s; package 31.025s, PASS.
+Full suite: server 138.638s; webadmin 0.449s. Other package results, including cached results, remain in go-test.txt.
+Vet: EXIT 0 per main. The empty go-vet.txt is retained but is not standalone exit proof.
+Native differential: 355 PASS records, 0 FAIL, 0 SKIP, 26 top-level RUN and PASS records; package 10.230s. Counts independently checked from openldap-differential.txt by the evidence worker.
+Build completed. The evidence worker independently recomputed before/current SHA256 and matched executable-sha256.txt:
+before e6898cab705cb5b7f2ccd521961e25e1f9e4dd48ecf260e7acb2134cc00c18bf
+current 6d0b5a6cdfe26121ab9a3785beccb517264b35aa7b0ef3baa84d4a09eb7d1184
+Group handler benchmark: before/current 500ms x 3, unprofiled, root fixture with 1000 members and stored operational attributes including subschemaSubentry. Before is R10 production plus the same benchmark, compiled after R11 candidate reversion.
+R12 reuses a fully validated raw DN tail only within a request, copied into an owned 512-byte buffer. Exact tail hits still validate leaf syntax/type. Changed/unsupported inputs preserve the R10 fallback; tail publication follows validation of all DN attribute types. No persistent cache, retained borrowed tail, storage/index/auth changes or CGO.
+Environment per main: Apple M1 Pro; Go 1.26.4; CGO_ENABLED=0; native OpenLDAP 2.6.13.
+R11 rejected diagnostic archive remains separate. Its exploratory group CPU/memory profile includes fixture setup and is not R12 timing or retained-memory proof.
+This is the VALIDATION SIGNAL ONLY. The five macro scripts are running, with 15 exports planned. Wait for main's final macro completion signal before publication.
+Evidence worker ran no workloads, Go builds or Go tests. Main owns the README and formal report.

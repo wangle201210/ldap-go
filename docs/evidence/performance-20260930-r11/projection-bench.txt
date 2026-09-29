@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkCompareSubschemaReference/values1/compact=false-8         	 1000000	       332.5 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1/compact=false-8         	 1000000	       332.2 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1/compact=false-8         	 1000000	       315.7 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1/compact=true-8          	 1000000	       317.7 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1/compact=true-8          	 1000000	       322.1 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1/compact=true-8          	 1000000	       319.5 ns/op	     456 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=false-8        	  656864	       602.5 ns/op	    1104 B/op	      18 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=false-8        	  584095	       622.2 ns/op	    1104 B/op	      18 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=false-8        	  600328	       603.9 ns/op	    1104 B/op	      18 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=true-8         	  861828	       470.5 ns/op	    1008 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=true-8         	  779403	       465.1 ns/op	    1008 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values10/compact=true-8         	  763567	       460.5 ns/op	    1008 B/op	       9 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=false-8      	   13231	     27231 ns/op	   72960 B/op	    1008 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=false-8      	   12967	     27983 ns/op	   72960 B/op	    1008 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=false-8      	   10000	     30147 ns/op	   72960 B/op	    1008 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=true-8       	   25411	     15418 ns/op	   64128 B/op	      18 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=true-8       	   19729	     17035 ns/op	   64128 B/op	      18 allocs/op
+BenchmarkCompareSubschemaReference/values1000/compact=true-8       	   21732	     16610 ns/op	   64128 B/op	      18 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	6.347s

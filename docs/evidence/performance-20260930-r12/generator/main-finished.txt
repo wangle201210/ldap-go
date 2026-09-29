@@ -1,0 +1,9 @@
+FINAL: Main confirmed all five official R12 macro runs completed with EXIT 0; final production source is unchanged and frozen.
+Official scripts: common-explicit.sh, common-default.sh, root-paired.sh, group-compare-explicit.sh, group-compare-default-retry.sh.
+The first four original scripts yielded 12 verified exports. The entire default group stage was rerun in the fresh default-group-compare-retry directory and completed with EXIT 0 and three verified exports.
+All 15 official canonical exports have 100002 entries, cksum 2143929969 and 42712438 bytes. The generator independently hashes each canonical file; canonical contents are not archived.
+The original group-compare-default.sh exited 1 during canonical export with no space left on device, after SDK calls completed. Its original log, JSON and partial export validation remain FAILED_DIAGNOSTIC_ONLY and are excluded from official samples, medians and exports. Only the successful full retry qualifies for the logical default group result. No pooling or individual-sample replacement.
+Main cleaned verified R11 scratch before the retry; no source or workload changes. R11 withdrawn compact-clone diagnostic evidence remains separately labelled and is not the baseline.
+Production baseline: R10 commit 31f3c087729e4ef9526d201412e7cc2d676d35a6. R11 was withdrawn, not committed.
+All final validation was already confirmed in generator/validation-main.txt; executable-sha256.txt identifies the final before/current binaries.
+Publish R12 evidence, tables and README now, then freeze. No more workloads. Main owns the formal report.

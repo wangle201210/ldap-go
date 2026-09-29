@@ -1,0 +1,12 @@
+scope	rule
+common	Explicit/default 3 measured repeats; hot/distributed 1000 ops; groups 100 ops.
+root	Literal and uppercase (raw variant normalized) DN remain separate; 1000 ops x 7; default access.
+group-compare	NONROOT; 20 ops x 5 per method/member/access/endpoint; setup, Bind and WhoAmI excluded from total_ms.
+default-group-recovery	Official logical default label maps exclusively to default-group-compare-retry. Original failed default-group-compare is retained under diagnostic/ and excluded from official samples, medians and 15 export checks.
+group-component	Root-bound real handler; fixed 1000-member group with stored subschemaSubentry; R10 plus same benchmark versus R12; unprofiled 500ms x 3; b.Loop excludes setup.
+first-component-recheck	Six fresh processes, before1/current1/current2/before2/before3/current3; first-only, 1s x 1 per process, unprofiled, same root Group1000 fixture. Separate tables and medians; originals retained; no native endpoint or export added.
+warmup	SDK warmups and smoke JSON retained and excluded from medians; concurrent repeat 0 excluded.
+concurrent	Root-bound CLI; 8 workers x 1000 equality searches; 3 measured repeats per access mode.
+comparisons	Unrounded per-cell batch medians; all fields and negative results retained; no pooled endpoint/access/identity results or aggregate parity claim.
+memory	Owned per-request 512-byte tail and source mutation/isolation tests; component B/op and allocs/op retained; no R12 heap-profile claim.
+archive	Explicit allowlist; no passwords, DB, LDIF/canonical contents, binaries or profiles. Hashes identify binaries and canonical exports without archiving their contents.

@@ -1,0 +1,3 @@
+suite	case	implementation	fresh_processes	ns_op	B_op	allocs_op
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	3	40150	89568	423
+group-first-recheck-root-1000	first	R12-current	3	40979	89568	423

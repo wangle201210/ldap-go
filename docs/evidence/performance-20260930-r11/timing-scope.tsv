@@ -1,0 +1,10 @@
+scope	rule
+common	Explicit/default 3 measured repeats; hot/distributed 1000 ops, groups 100 ops.
+root	Literal and uppercase (raw variant named normalized) DN remain separate; 1000 ops x 7; default-access fixture.
+group-compare	20 ops x 5 per method/member/access/endpoint; setup, Bind and WhoAmI excluded from measured total_ms.
+warmup	Raw SDK warmups and smoke JSON retained but excluded from medians; concurrent repeat 0 excluded.
+concurrent	Root-bound CLI, 8 workers x 1000 equality searches; 3 measured repeats for each access mode.
+compare-component	Immutable R10 baseline 31f3c08 and current R11, unprofiled 1s x 3.
+projection-component	Original/current helper in the same current process; 300ms x 3; 1/10/1000 values; not all-handler gain.
+comparisons	Unrounded per-cell batch medians; every negative retained; no aggregate parity or pooled endpoints/access modes.
+archive	Explicit file allowlist; no DB, LDIF, canonical contents, executable, profile, password file or process listing.

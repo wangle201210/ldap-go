@@ -1,0 +1,10 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	ns/op	39558	41101	-3.9006016482127537
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	B/op	89568	89568	0
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	allocs/op	423	423	0
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	ns/op	198513	103786	47.71828545233814
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	B/op	89648	89648	0
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	allocs/op	427	427	0
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	ns/op	188560	90839	51.8248833262622
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	B/op	89608	89608	0
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	allocs/op	428	428	0

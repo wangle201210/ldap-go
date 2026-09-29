@@ -1,0 +1,16 @@
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+compare	targets-1	R10-baseline-31f3c08	R11-current	ns/op	11211	11416	-1.8285612345018354
+compare	targets-1	R10-baseline-31f3c08	R11-current	B/op	11232	11232	0
+compare	targets-1	R10-baseline-31f3c08	R11-current	allocs/op	138	138	0
+compare	targets-1024	R10-baseline-31f3c08	R11-current	ns/op	19069	20022	-4.997640148932825
+compare	targets-1024	R10-baseline-31f3c08	R11-current	B/op	12037	12037	0
+compare	targets-1024	R10-baseline-31f3c08	R11-current	allocs/op	301	301	0
+projection-helper	BenchmarkCompareSubschemaReference/values1	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	ns/op	332.2	319.5	3.8229981938591173
+projection-helper	BenchmarkCompareSubschemaReference/values1	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	B/op	456	456	0
+projection-helper	BenchmarkCompareSubschemaReference/values1	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	allocs/op	9	9	0
+projection-helper	BenchmarkCompareSubschemaReference/values10	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	ns/op	603.9	465.1	22.983937738036087
+projection-helper	BenchmarkCompareSubschemaReference/values10	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	B/op	1104	1008	8.695652173913048
+projection-helper	BenchmarkCompareSubschemaReference/values10	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	allocs/op	18	9	50
+projection-helper	BenchmarkCompareSubschemaReference/values1000	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	ns/op	27983	16610	40.64253296644391
+projection-helper	BenchmarkCompareSubschemaReference/values1000	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	B/op	72960	64128	12.105263157894742
+projection-helper	BenchmarkCompareSubschemaReference/values1000	same-process-original-withSubschemaReference	same-process-current-withCompareSubschemaReference	allocs/op	1008	18	98.21428571428571

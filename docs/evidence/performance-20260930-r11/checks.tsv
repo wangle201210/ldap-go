@@ -1,0 +1,423 @@
+path	check	status	detail
+explicit-final/hot.json	top-level error and fixture	PASS	-
+explicit-final/hot.json	config and setup	PASS	-
+explicit-final/hot.json	endpoints and cleanup	PASS	-
+explicit-final/hot.json	stage/method/members/endpoint/repeat inventory	PASS	54/54
+explicit-final/hot.json	operation and latency counts	PASS	-
+explicit-final/hot.json	request and WhoAmI counts	PASS	-
+explicit-final/hot.json	sample errors and totals	PASS	-
+explicit-final/hot.json	root variant or nonroot sample identity	PASS	-
+explicit-final/distributed.json	top-level error and fixture	PASS	-
+explicit-final/distributed.json	config and setup	PASS	-
+explicit-final/distributed.json	endpoints and cleanup	PASS	-
+explicit-final/distributed.json	stage/method/members/endpoint/repeat inventory	PASS	18/18
+explicit-final/distributed.json	operation and latency counts	PASS	-
+explicit-final/distributed.json	request and WhoAmI counts	PASS	-
+explicit-final/distributed.json	sample errors and totals	PASS	-
+explicit-final/distributed.json	root variant or nonroot sample identity	PASS	-
+explicit-final/groups.json	top-level error and fixture	PASS	-
+explicit-final/groups.json	config and setup	PASS	-
+explicit-final/groups.json	endpoints and cleanup	PASS	-
+explicit-final/groups.json	stage/method/members/endpoint/repeat inventory	PASS	36/36
+explicit-final/groups.json	operation and latency counts	PASS	-
+explicit-final/groups.json	request and WhoAmI counts	PASS	-
+explicit-final/groups.json	sample errors and totals	PASS	-
+explicit-final/groups.json	root variant or nonroot sample identity	PASS	-
+explicit-final/smoke.json	top-level error and fixture	PASS	-
+explicit-final/smoke.json	config and setup	PASS	-
+explicit-final/smoke.json	endpoints and cleanup	PASS	-
+explicit-final/smoke.json	stage/method/members/endpoint/repeat inventory	PASS	30/30
+explicit-final/smoke.json	operation and latency counts	PASS	-
+explicit-final/smoke.json	request and WhoAmI counts	PASS	-
+explicit-final/smoke.json	sample errors and totals	PASS	-
+explicit-final/smoke.json	root variant or nonroot sample identity	PASS	-
+explicit-final/before/warmup.json	top-level error and fixture	PASS	-
+explicit-final/before/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-final/before/warmup.json	warmup operations and errors	PASS	-
+explicit-final/current/warmup.json	top-level error and fixture	PASS	-
+explicit-final/current/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-final/current/warmup.json	warmup operations and errors	PASS	-
+explicit-final/openldap/warmup.json	top-level error and fixture	PASS	-
+explicit-final/openldap/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-final/openldap/warmup.json	warmup operations and errors	PASS	-
+default-final/hot.json	top-level error and fixture	PASS	-
+default-final/hot.json	config and setup	PASS	-
+default-final/hot.json	endpoints and cleanup	PASS	-
+default-final/hot.json	stage/method/members/endpoint/repeat inventory	PASS	54/54
+default-final/hot.json	operation and latency counts	PASS	-
+default-final/hot.json	request and WhoAmI counts	PASS	-
+default-final/hot.json	sample errors and totals	PASS	-
+default-final/hot.json	root variant or nonroot sample identity	PASS	-
+default-final/distributed.json	top-level error and fixture	PASS	-
+default-final/distributed.json	config and setup	PASS	-
+default-final/distributed.json	endpoints and cleanup	PASS	-
+default-final/distributed.json	stage/method/members/endpoint/repeat inventory	PASS	18/18
+default-final/distributed.json	operation and latency counts	PASS	-
+default-final/distributed.json	request and WhoAmI counts	PASS	-
+default-final/distributed.json	sample errors and totals	PASS	-
+default-final/distributed.json	root variant or nonroot sample identity	PASS	-
+default-final/groups.json	top-level error and fixture	PASS	-
+default-final/groups.json	config and setup	PASS	-
+default-final/groups.json	endpoints and cleanup	PASS	-
+default-final/groups.json	stage/method/members/endpoint/repeat inventory	PASS	36/36
+default-final/groups.json	operation and latency counts	PASS	-
+default-final/groups.json	request and WhoAmI counts	PASS	-
+default-final/groups.json	sample errors and totals	PASS	-
+default-final/groups.json	root variant or nonroot sample identity	PASS	-
+default-final/smoke.json	top-level error and fixture	PASS	-
+default-final/smoke.json	config and setup	PASS	-
+default-final/smoke.json	endpoints and cleanup	PASS	-
+default-final/smoke.json	stage/method/members/endpoint/repeat inventory	PASS	30/30
+default-final/smoke.json	operation and latency counts	PASS	-
+default-final/smoke.json	request and WhoAmI counts	PASS	-
+default-final/smoke.json	sample errors and totals	PASS	-
+default-final/smoke.json	root variant or nonroot sample identity	PASS	-
+default-final/before/warmup.json	top-level error and fixture	PASS	-
+default-final/before/warmup.json	unchanged SDK warmup stages	PASS	-
+default-final/before/warmup.json	warmup operations and errors	PASS	-
+default-final/current/warmup.json	top-level error and fixture	PASS	-
+default-final/current/warmup.json	unchanged SDK warmup stages	PASS	-
+default-final/current/warmup.json	warmup operations and errors	PASS	-
+default-final/openldap/warmup.json	top-level error and fixture	PASS	-
+default-final/openldap/warmup.json	unchanged SDK warmup stages	PASS	-
+default-final/openldap/warmup.json	warmup operations and errors	PASS	-
+root-paired/literal.json	top-level error and fixture	PASS	-
+root-paired/literal.json	config and setup	PASS	-
+root-paired/literal.json	endpoints and cleanup	PASS	-
+root-paired/literal.json	stage/method/members/endpoint/repeat inventory	PASS	105/105
+root-paired/literal.json	operation and latency counts	PASS	-
+root-paired/literal.json	request and WhoAmI counts	PASS	-
+root-paired/literal.json	sample errors and totals	PASS	-
+root-paired/literal.json	root variant or nonroot sample identity	PASS	-
+root-paired/literal-smoke.json	top-level error and fixture	PASS	-
+root-paired/literal-smoke.json	config and setup	PASS	-
+root-paired/literal-smoke.json	endpoints and cleanup	PASS	-
+root-paired/literal-smoke.json	stage/method/members/endpoint/repeat inventory	PASS	15/15
+root-paired/literal-smoke.json	operation and latency counts	PASS	-
+root-paired/literal-smoke.json	request and WhoAmI counts	PASS	-
+root-paired/literal-smoke.json	sample errors and totals	PASS	-
+root-paired/literal-smoke.json	root variant or nonroot sample identity	PASS	-
+root-paired/normalized.json	top-level error and fixture	PASS	-
+root-paired/normalized.json	config and setup	PASS	-
+root-paired/normalized.json	endpoints and cleanup	PASS	-
+root-paired/normalized.json	stage/method/members/endpoint/repeat inventory	PASS	105/105
+root-paired/normalized.json	operation and latency counts	PASS	-
+root-paired/normalized.json	request and WhoAmI counts	PASS	-
+root-paired/normalized.json	sample errors and totals	PASS	-
+root-paired/normalized.json	root variant or nonroot sample identity	PASS	-
+root-paired/normalized-smoke.json	top-level error and fixture	PASS	-
+root-paired/normalized-smoke.json	config and setup	PASS	-
+root-paired/normalized-smoke.json	endpoints and cleanup	PASS	-
+root-paired/normalized-smoke.json	stage/method/members/endpoint/repeat inventory	PASS	15/15
+root-paired/normalized-smoke.json	operation and latency counts	PASS	-
+root-paired/normalized-smoke.json	request and WhoAmI counts	PASS	-
+root-paired/normalized-smoke.json	sample errors and totals	PASS	-
+root-paired/normalized-smoke.json	root variant or nonroot sample identity	PASS	-
+root-paired/before/warmup.json	top-level error and fixture	PASS	-
+root-paired/before/warmup.json	unchanged SDK warmup stages	PASS	-
+root-paired/before/warmup.json	warmup operations and errors	PASS	-
+root-paired/current/warmup.json	top-level error and fixture	PASS	-
+root-paired/current/warmup.json	unchanged SDK warmup stages	PASS	-
+root-paired/current/warmup.json	warmup operations and errors	PASS	-
+root-paired/openldap/warmup.json	top-level error and fixture	PASS	-
+root-paired/openldap/warmup.json	unchanged SDK warmup stages	PASS	-
+root-paired/openldap/warmup.json	warmup operations and errors	PASS	-
+explicit-group-compare/groups.json	top-level error and fixture	PASS	-
+explicit-group-compare/groups.json	config and setup	PASS	-
+explicit-group-compare/groups.json	endpoints and cleanup	PASS	-
+explicit-group-compare/groups.json	stage/method/members/endpoint/repeat inventory	PASS	90/90
+explicit-group-compare/groups.json	operation and latency counts	PASS	-
+explicit-group-compare/groups.json	request and WhoAmI counts	PASS	-
+explicit-group-compare/groups.json	sample errors and totals	PASS	-
+explicit-group-compare/groups.json	root variant or nonroot sample identity	PASS	-
+explicit-group-compare/smoke.json	top-level error and fixture	PASS	-
+explicit-group-compare/smoke.json	config and setup	PASS	-
+explicit-group-compare/smoke.json	endpoints and cleanup	PASS	-
+explicit-group-compare/smoke.json	stage/method/members/endpoint/repeat inventory	PASS	18/18
+explicit-group-compare/smoke.json	operation and latency counts	PASS	-
+explicit-group-compare/smoke.json	request and WhoAmI counts	PASS	-
+explicit-group-compare/smoke.json	sample errors and totals	PASS	-
+explicit-group-compare/smoke.json	root variant or nonroot sample identity	PASS	-
+explicit-group-compare/before/warmup.json	top-level error and fixture	PASS	-
+explicit-group-compare/before/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-group-compare/before/warmup.json	warmup operations and errors	PASS	-
+explicit-group-compare/current/warmup.json	top-level error and fixture	PASS	-
+explicit-group-compare/current/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-group-compare/current/warmup.json	warmup operations and errors	PASS	-
+explicit-group-compare/openldap/warmup.json	top-level error and fixture	PASS	-
+explicit-group-compare/openldap/warmup.json	unchanged SDK warmup stages	PASS	-
+explicit-group-compare/openldap/warmup.json	warmup operations and errors	PASS	-
+default-group-compare/groups.json	top-level error and fixture	PASS	-
+default-group-compare/groups.json	config and setup	PASS	-
+default-group-compare/groups.json	endpoints and cleanup	PASS	-
+default-group-compare/groups.json	stage/method/members/endpoint/repeat inventory	PASS	90/90
+default-group-compare/groups.json	operation and latency counts	PASS	-
+default-group-compare/groups.json	request and WhoAmI counts	PASS	-
+default-group-compare/groups.json	sample errors and totals	PASS	-
+default-group-compare/groups.json	root variant or nonroot sample identity	PASS	-
+default-group-compare/smoke.json	top-level error and fixture	PASS	-
+default-group-compare/smoke.json	config and setup	PASS	-
+default-group-compare/smoke.json	endpoints and cleanup	PASS	-
+default-group-compare/smoke.json	stage/method/members/endpoint/repeat inventory	PASS	18/18
+default-group-compare/smoke.json	operation and latency counts	PASS	-
+default-group-compare/smoke.json	request and WhoAmI counts	PASS	-
+default-group-compare/smoke.json	sample errors and totals	PASS	-
+default-group-compare/smoke.json	root variant or nonroot sample identity	PASS	-
+default-group-compare/before/warmup.json	top-level error and fixture	PASS	-
+default-group-compare/before/warmup.json	unchanged SDK warmup stages	PASS	-
+default-group-compare/before/warmup.json	warmup operations and errors	PASS	-
+default-group-compare/current/warmup.json	top-level error and fixture	PASS	-
+default-group-compare/current/warmup.json	unchanged SDK warmup stages	PASS	-
+default-group-compare/current/warmup.json	warmup operations and errors	PASS	-
+default-group-compare/openldap/warmup.json	top-level error and fixture	PASS	-
+default-group-compare/openldap/warmup.json	unchanged SDK warmup stages	PASS	-
+default-group-compare/openldap/warmup.json	warmup operations and errors	PASS	-
+archive	31 raw JSON reports from five macro runs	PASS	-
+explicit-final/validation.tsv	three export identities	PASS	-
+explicit-final/validation.tsv	before	PASS	-
+explicit-final/validation.tsv	current	PASS	-
+explicit-final/validation.tsv	openldap	PASS	-
+explicit-final	password and seeded database cleanup	PASS	-
+explicit-final/concurrent.tsv	concurrent warmup and measured repeats	PASS	-
+default-final/validation.tsv	three export identities	PASS	-
+default-final/validation.tsv	before	PASS	-
+default-final/validation.tsv	current	PASS	-
+default-final/validation.tsv	openldap	PASS	-
+default-final	password and seeded database cleanup	PASS	-
+default-final/concurrent.tsv	concurrent warmup and measured repeats	PASS	-
+root-paired/validation.tsv	three export identities	PASS	-
+root-paired/validation.tsv	before	PASS	-
+root-paired/validation.tsv	current	PASS	-
+root-paired/validation.tsv	openldap	PASS	-
+root-paired	password and seeded database cleanup	PASS	-
+explicit-group-compare/validation.tsv	three export identities	PASS	-
+explicit-group-compare/validation.tsv	before	PASS	-
+explicit-group-compare/validation.tsv	current	PASS	-
+explicit-group-compare/validation.tsv	openldap	PASS	-
+explicit-group-compare	password and seeded database cleanup	PASS	-
+default-group-compare/validation.tsv	three export identities	PASS	-
+default-group-compare/validation.tsv	before	PASS	-
+default-group-compare/validation.tsv	current	PASS	-
+default-group-compare/validation.tsv	openldap	PASS	-
+default-group-compare	password and seeded database cleanup	PASS	-
+exports	15 identical canonical SHA256 values	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"before"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"current"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"openldap"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"before"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"current"]	median repeats and operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"openldap"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"before"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"current"]	median repeats and operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"openldap"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"before"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"current"]	median repeats and operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"openldap"]	median repeats and operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"before"]	median repeats and operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"current"]	median repeats and operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"openldap"]	median repeats and operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"before"]	median repeats and operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"current"]	median repeats and operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"openldap"]	median repeats and operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000]	comparison endpoints and operation counts	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000]	comparison endpoints and operation counts	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0]	comparison endpoints and operation counts	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10]	comparison endpoints and operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000]	comparison endpoints and operation counts	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0]	comparison endpoints and operation counts	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0]	comparison endpoints and operation counts	PASS	-
+compare-before.txt	complete final benchmark inventory and PASS	PASS	-
+compare-current.txt	complete final benchmark inventory and PASS	PASS	-
+projection-bench.txt	complete final benchmark inventory and PASS	PASS	-
+["compare","targets-1","R10-baseline-31f3c08"]	three component repeats	PASS	-
+["compare","targets-1024","R10-baseline-31f3c08"]	three component repeats	PASS	-
+["compare","targets-1","R11-current"]	three component repeats	PASS	-
+["compare","targets-1024","R11-current"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values1","same-process-original-withSubschemaReference"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values1","same-process-current-withCompareSubschemaReference"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values10","same-process-original-withSubschemaReference"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values10","same-process-current-withCompareSubschemaReference"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values1000","same-process-original-withSubschemaReference"]	three component repeats	PASS	-
+["projection-helper","BenchmarkCompareSubschemaReference/values1000","same-process-current-withCompareSubschemaReference"]	three component repeats	PASS	-
+compare-before.txt	final successful log	PASS	-
+compare-current.txt	final successful log	PASS	-
+projection-bench.txt	final successful log	PASS	-
+projection-test.txt	final successful log	PASS	-
+focused-test.txt	final successful log	PASS	-
+go-test.txt	final successful log	PASS	-
+openldap-differential.txt	final successful log	PASS	-
+openldap-differential.txt	355 native PASS records without skips	PASS	-
+common-explicit.log	script completion	PASS	-
+common-default.log	script completion	PASS	-
+root-paired.log	script completion	PASS	-
+group-compare-explicit.log	script completion	PASS	-
+group-compare-default.log	script completion	PASS	-
+executable-sha256.txt	before matches	PASS	-
+executable-sha256.txt	current matches	PASS	-

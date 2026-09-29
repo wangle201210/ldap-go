@@ -1,0 +1,12 @@
+item	value
+state	REJECTED_DIAGNOSTIC_ONLY
+acceptance	NOT_ACCEPTED
+reason	Normal Add sets subschemaSubentry; normal SDK fixtures bypass the optimized clone branch; macro gains cannot be attributed to this candidate.
+candidate_source	WITHDRAWN_AND_REVERTED
+raw_json	31
+exports	15
+median_groups	144
+measured_samples	624
+failed_checks	0
+recheck	CANCELLED_NOT_RUN
+completion	Published only after main confirmed all five original macros EXIT 0; see generator/main-finished.txt. An empty vet log alone is not exit proof.

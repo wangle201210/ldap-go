@@ -1,0 +1,7 @@
+logical_run	source_run	script	role	included_in_official_statistics
+explicit-final	explicit-final	common-explicit.sh	OFFICIAL	true
+default-final	default-final	common-default.sh	OFFICIAL	true
+root-paired	root-paired	root-paired.sh	OFFICIAL	true
+explicit-group-compare	explicit-group-compare	group-compare-explicit.sh	OFFICIAL	true
+default-group-compare	default-group-compare-retry	group-compare-default-retry.sh	OFFICIAL	true
+default-group-compare	default-group-compare	group-compare-default.sh	FAILED_DIAGNOSTIC_ONLY	false

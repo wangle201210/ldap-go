@@ -1,0 +1,7 @@
+suite	case	implementation	repeats	ns_op	B_op	allocs_op
+group-handler-root-1000	first	R10-baseline-31f3c08	3	39558	89568	423
+group-handler-root-1000	last	R10-baseline-31f3c08	3	198513	89648	427
+group-handler-root-1000	missing	R10-baseline-31f3c08	3	188560	89608	428
+group-handler-root-1000	first	R12-current	3	41101	89568	423
+group-handler-root-1000	last	R12-current	3	103786	89648	427
+group-handler-root-1000	missing	R12-current	3	90839	89608	428

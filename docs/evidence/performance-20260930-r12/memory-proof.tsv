@@ -1,0 +1,8 @@
+property	evidence	scope_or_limit
+request lifetime	simpleDNComparison is local to CompareEntryAttribute; no persistent tail cache	Source ownership argument; no new retained-heap profile claimed
+owned tail	tail [512]byte; copy(plan.tail[:], tail); no stored slice borrowed from candidate value	At most 512 bytes retained inside each request plan; longer tails follow full R10 comparison without tail publication
+publish after validation	tailReady updated only after syntax/depth and every attribute identity have been validated	A nonmatching leaf does not bypass validation of the remaining tail
+exact raw hit	bytes.Equal against owned tail, then validate leaf syntax and attribute type; leafMatches && tailMatches	Changed tail follows complete R10 DN comparison; unsupported input falls back to full normalization
+mutation and isolation coverage	TestSimpleDNTailOwnsSource; TestSimpleDNTailPlanIsolation; TestSimpleDNTailBoundaries; schema-test.txt	Source mutation, independent plans, and tail lengths 511/512/513/1024; aggregate package PASS recorded separately
+allocation measurements	component-samples.tsv; component-medians.tsv	B/op and allocs/op from unprofiled handler benchmarks; not a measurement of retained heap
+exploratory profile exclusion	R11 group CPU/memory profile included fixture setup and is not archived here	Not R12 timing or R12 retained-memory proof

@@ -1,0 +1,16 @@
+R11 REJECTED / NOT ACCEPTED: DIAGNOSTIC ARCHIVE ONLY.
+Normal Add sets subschemaSubentry in internal/server/write.go:4305. The normal SDK group fixtures therefore bypass the missing-subschemaSubentry clone branch targeted by this candidate. Macro measurements do not exercise that branch and cannot establish or attribute gains to this optimization. Main withdrew and reverted the R11 candidate production code and tests; this archive does not describe an accepted implementation.
+Projection original/current measures the shared original helper versus the withdrawn compact helper in the same process, 300ms x 3, for synthetic entries with 1/10/1000 values and missing subschemaSubentry. This isolated helper result is not an all-handler or normal-fixture gain.
+Before/current macro and Compare component results use the R10 baseline 31f3c08. The current binary/logs refer to the withdrawn candidate, not the restored working tree. Compare components are unprofiled 1s x 3.
+All raw positive and negative results remain, including the original explicit SSHA Bind regression. Bind was unchanged; no cause is claimed. The proposed seven-repeat SSHA recheck was cancelled on withdrawal and was not run.
+For equal operation counts, current throughput / native throughput = native_ms / current_ms. Exact 1000-member last/missing observations follow without causal attribution:
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	5.765959000000001	5.921666000000001	1.572499	26.555010025894735	-2.700452778106799
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	5.530459	5.749498	1.616126	28.10899316775134	-3.960593505891663
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	6.065664	5.968835	1.678876	28.127364887787984	1.5963462532708639
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	5.572164	5.588125000000001	1.647165	29.47616597696007	-0.28644167687814637
+
+First/last denotes fixture insertion order, not native storage order. No aggregate/native parity or whole compatibility is established.
+No new fuzz or profiling was run. Candidate directory/projection parity and historical R4 ownership tests do not constitute a new fuzz result. Earlier broad workloads remain historical only.
+Source hashes of the restored tree are not presented as candidate hashes. Archived executable hashes identify the measured binaries; no binaries, passwords, databases or LDIF/canonical contents are included.

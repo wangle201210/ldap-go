@@ -1,0 +1,12 @@
+Main confirmed R11 validate.sh EXIT 0 and final source frozen.
+This records the candidate at validation time. Main subsequently rejected and reverted it; see main-finished.txt. Passing validation does not imply acceptance.
+Full-suite server: 142.751s; storage: 25.395s; webadmin: 0.291s.
+Focused tests: directory 3.729s; schema 1.478s.
+Projection focused tests: server 0.031s; schema 0.027s.
+Vet: exit 0, confirmed by main; an empty go-vet.txt alone is not exit proof.
+Native differential log: 355 PASS records, 26 top-level RUN/PASS, 0 FAIL, 0 SKIP, package 11.633s.
+Projection benchmark: 6.347s; original/current helper in the same process, 300ms x 3, 1/10/1000 values. This is not an all-handler gain or immutable before/current binary comparison.
+Current Compare benchmark: 63.185s, unprofiled 1s x 3. Immutable before test binary was compiled at 31f3c087729e4ef9526d201412e7cc2d676d35a6 before R11 edits and already run at 1s x 3.
+New directory Entry clone tests and existing schema R4 response ownership tests passed. No new fuzz or profiling was planned.
+Main states the packing algorithm moved unchanged from schema.cloneResponseValues to directory.CloneValuesCompact; Entry.CloneCompact preserves all Clone fields, private DN hints and RawNormalized. Only Compare uses compact cloning to add missing subschemaSubentry. Default Clone and the shared withSubschemaReference remain unchanged; SelectForResponse uses the moved helper. No CGO.
+All five macro scripts were started after validation, expected 15 exports. This is the validation signal only; wait for main's final macro completion signal before publication.

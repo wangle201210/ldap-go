@@ -1,0 +1,7 @@
+suite	case	implementation	process_order	repeat	iterations	ns_op	B_op	allocs_op	source
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	1	1	30138	39538	89568	423	group-first-before-1.txt
+group-first-recheck-root-1000	first	R12-current	2	1	30381	39758	89568	423	group-first-current-1.txt
+group-first-recheck-root-1000	first	R12-current	3	2	29946	46008	89568	423	group-first-current-2.txt
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	4	2	28976	40304	89568	423	group-first-before-2.txt
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	5	3	29529	40150	89568	423	group-first-before-3.txt
+group-first-recheck-root-1000	first	R12-current	6	3	30054	40979	89568	423	group-first-current-3.txt

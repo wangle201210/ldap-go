@@ -1,0 +1,35 @@
+R12 does not establish aggregate/native parity or whole compatibility.
+Only exact previously validated raw tails of at most 512 bytes are reused inside a request. Leaf syntax/type still validate; changed or unsupported values retain the complete R10 fallback behavior. No borrowed tail is retained, and no persistent cache, storage/index/auth changes or CGO are introduced.
+The realistic root-bound handler component fixture is distinct from NONROOT LDAP macro measurements. Group before is R10 plus the same benchmark, compiled after R11 reversion; R11 rejected clone measurements and setup-inclusive exploratory profiles are not R12 evidence.
+All positive and negative observations are retained, including first-match overhead and any unchanged-stage regressions; no causal attribution is claimed for unrelated stages. B/op and allocs/op are not retained-heap measurements.
+For equal operation counts, current/native throughput = native_ms/current_ms. Exact 1000-member last/missing results follow:
+
+suite	access_mode	identity	variant	stage	method	members	operations	before_ms	current_ms	openldap_ms	current_over_openldap_throughput_pct	time_reduction_pct
+group-compare	explicit	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	6.067668	3.7337930000000004	1.6913330000000002	45.29798518557403	38.46411834002783
+group-compare	explicit	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	5.711955999999999	3.609457	1.6606249999999998	46.007612779429145	36.808739423062775
+group-compare	default	nonroot	groups	groupCompareTrueLast	compare_member_true_last	1000	20	6.099204999999999	3.731498	1.7672929999999998	47.361488603236545	38.81992817096652
+group-compare	default	nonroot	groups	groupCompareFalse	compare_member_false_missing	1000	20	6.342251000000001	4.1655429999999996	2.0287909999999996	48.704118526684276	34.32074826429924
+
+All group handler component results:
+
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	ns/op	39558	41101	-3.9006016482127537
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	B/op	89568	89568	0
+group-handler-root-1000	first	R10-baseline-31f3c08	R12-current	allocs/op	423	423	0
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	ns/op	198513	103786	47.71828545233814
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	B/op	89648	89648	0
+group-handler-root-1000	last	R10-baseline-31f3c08	R12-current	allocs/op	427	427	0
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	ns/op	188560	90839	51.8248833262622
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	B/op	89608	89608	0
+group-handler-root-1000	missing	R10-baseline-31f3c08	R12-current	allocs/op	428	428	0
+
+First/last denotes fixture insertion order, not native storage order. Earlier broad read/write and recheck results remain historical only.
+
+The original default group macro exited 1 on disk-space exhaustion during canonical export after SDK calls. It remains FAILED_DIAGNOSTIC_ONLY under diagnostic/; its incomplete export proof disqualifies it from official statistics. The official logical default group uses only the entire fresh default-group-compare-retry run, with the same source and workload and full export validation. No failed-attempt samples are pooled into official results. run-performance.sh records the original five-script sequence, whose last script failed; group-compare-default-retry.sh records the qualifying recovery.
+
+A separate first-only component recheck uses six fresh processes and 1s per process with the same fixture and unchanged production source. It does not replace or pool with original 500ms components or nonroot macro observations. No native endpoint or exports were added. Results:
+
+suite	case	reference	candidate	metric	reference_value	candidate_value	reduction_pct
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	ns/op	40150	40979	-2.064757160647579
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	B/op	89568	89568	0
+group-first-recheck-root-1000	first	R10-baseline-31f3c08	R12-current	allocs/op	423	423	0

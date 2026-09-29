@@ -1,0 +1,8 @@
+FINAL: Main confirmed first-component recheck EXIT 0; all R12 work is complete and final production source remains frozen.
+Six fresh test processes ran in order before-1,current-1,current-2,before-2,before-3,current-3. Each ran only BenchmarkLocalGroupCompare/first with 1s x 1, unprofiled, using the same root Group1000 fixture with stored operational attributes.
+Current group-current.test was rebuilt with CGO_ENABLED=0 and unchanged production source. Executable hashes are recorded in binary-hashes.tsv; binaries are not archived.
+Before median: 40150 ns/op. Current median: 40979 ns/op, approximately 2.065 percent slower. Both: 89568 B/op and 423 allocs/op.
+Retain the negative result and all six raw observations, including current-2 at 46008 ns/op. Recheck tables and medians are separate; do not replace or pool with original 500ms component samples or nonroot LDAP macro samples. Do not claim all Compare cases improve.
+Official macros remain the first four original successes plus the full successful default-group-compare-retry, with 15 verified exports. The original NoSpace default group failure remains diagnostic only and excluded from official statistics.
+The focused recheck adds no native endpoint and no exports. It is the sole additional workload authorized after the prior macro completion signal.
+Publish the complete R12 evidence promptly and freeze. No further workloads. Main owns the parent formal reports.

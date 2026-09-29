@@ -1,0 +1,13 @@
+item	value
+state	PUBLISHED_AFTER_MAIN_FINISHED
+baseline	31f3c087729e4ef9526d201412e7cc2d676d35a6
+raw_json	31
+diagnostic_raw_json	5
+default_group_official_source	default-group-compare-retry
+exports	15
+median_groups	144
+measured_samples	624
+component_samples	18
+first_recheck_samples	6
+failed_checks	0
+completion	See generator/main-finished.txt, validation-main.txt and recheck-finished.txt; empty vet output alone does not establish exit status.

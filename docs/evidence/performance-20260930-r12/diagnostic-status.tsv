@@ -1,0 +1,2 @@
+source_run	status	exit_code	reason	raw_json	official_samples	official_exports
+default-group-compare	FAILED_DIAGNOSTIC_ONLY	1	SDK calls completed; canonical export failed with no space left on device; export proof incomplete. Entire stage rerun in fresh retry directory; original excluded from official statistics.	5	0	0
