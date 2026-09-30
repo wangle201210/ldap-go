@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -47,8 +49,11 @@ type options struct {
 	Stages          []string      `json:"stages"`
 	GroupSizes      []int         `json:"group_sizes"`
 	SetupDisposable bool          `json:"setup_disposable"`
+	TLSCA           string        `json:"tls_ca,omitempty"`
+	StartTLS        bool          `json:"start_tls,omitzero"`
 	Timeout         time.Duration `json:"-"`
 	password        string
+	tlsConfig       *tls.Config
 }
 
 type sample struct {
@@ -142,6 +147,8 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	f.IntVar(&c.N, "n", 100, "operations per endpoint, method and repeat, in [1,100000]")
 	f.IntVar(&c.Repeats, "repeats", 3, "repeats per method, in [1,100]")
 	f.DurationVar(&c.Timeout, "timeout", 10*time.Second, "connect/request timeout, in (0,5m]")
+	f.StringVar(&c.TLSCA, "tls-ca", "", "PEM CA file for verified TLS (default: system roots)")
+	f.BoolVar(&c.StartTLS, "start-tls", false, "upgrade all ldap:// endpoints to verified TLS before any Bind")
 	f.StringVar(&c.People, "people", "", "optional existing scale UID pool below base; never modified")
 	f.IntVar(&c.Entries, "entries", 100000, "contiguous existing scale-%06d pool size, in [1,999999]")
 	f.StringVar(&c.UID, "uid", "", "optional fixed existing UID for nonroot Base/equality only; requires -people")
@@ -152,6 +159,25 @@ func parseOptions(args []string, lookup func(string) (string, bool), stderr io.W
 	}
 	if f.NArg() != 0 || !c.SetupDisposable || len(c.Endpoints) == 0 {
 		return c, errors.New("require -setup-disposable and at least one -endpoint; positional arguments are unsupported")
+	}
+	if c.StartTLS {
+		for _, e := range c.Endpoints {
+			u, _ := url.Parse(e.URI)
+			if u.Scheme != "ldap" {
+				return c, errors.New("-start-tls requires ldap:// endpoints only")
+			}
+		}
+	}
+	if c.TLSCA != "" {
+		pem, err := os.ReadFile(c.TLSCA)
+		if err != nil {
+			return c, fmt.Errorf("-tls-ca: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pem) {
+			return c, errors.New("-tls-ca must contain at least one valid PEM certificate")
+		}
+		c.tlsConfig = &tls.Config{RootCAs: roots}
 	}
 	for name, value := range map[string]string{"base": c.Base, "root-bind-dn": c.RootBindDN} {
 		if dn, err := ldap.ParseDN(value); err != nil || len(dn.RDNs) == 0 {
@@ -363,11 +389,55 @@ func (c *timedClient) Compare(dn, attribute, value string) (bool, error) {
 }
 
 func dial(c options, e endpoint) (client, error) {
-	conn, err := ldap.DialURL(e.URI, ldap.DialWithDialer(&net.Dialer{Timeout: c.Timeout}))
+	if c.StartTLS {
+		return dialStartTLS(c, e)
+	}
+	opts := []ldap.DialOpt{ldap.DialWithDialer(&net.Dialer{Timeout: c.Timeout})}
+	if c.tlsConfig != nil {
+		opts = append(opts, ldap.DialWithTLSConfig(c.tlsConfig))
+	}
+	conn, err := ldap.DialURL(e.URI, opts...)
 	if err == nil {
 		conn.SetTimeout(c.Timeout)
 	}
 	return conn, err
+}
+
+func dialStartTLS(c options, e endpoint) (client, error) {
+	u, err := url.Parse(e.URI)
+	if err != nil || u.Scheme != "ldap" || u.Hostname() == "" {
+		return nil, errors.New("-start-tls requires an ldap:// endpoint")
+	}
+	config := &tls.Config{}
+	if c.tlsConfig != nil {
+		config = c.tlsConfig.Clone()
+	}
+	config.ServerName = u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = ldap.DefaultLdapPort
+	}
+	raw, err := net.DialTimeout("tcp", net.JoinHostPort(u.Hostname(), port), c.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	// The SDK request timeout does not cover StartTLS's TLS handshake.
+	if err := raw.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	conn := ldap.NewConn(raw, false)
+	conn.Start()
+	conn.SetTimeout(c.Timeout)
+	if err := conn.StartTLS(config); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("StartTLS: %w", err)
+	}
+	if err := raw.SetDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 func sameDN(a, b string) bool {

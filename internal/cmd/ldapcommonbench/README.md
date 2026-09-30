@@ -17,8 +17,10 @@ CGO_ENABLED=0 GOFLAGS= go build -o /var/tmp/ldapcommonbench ./internal/cmd/ldapc
 /var/tmp/ldapcommonbench -help
 ```
 
-The tests use in-memory SDK responses, with no LDAP connections, benchmarks or
-race detector. Implementation validation does not establish performance numbers.
+The tests use in-memory SDK responses and disposable loopback LDAP/TLS peers,
+without external servers, benchmarks or a race detector. TLS tests cover trust,
+hostname verification, StartTLS ordering, failure cleanup and upgrade timeouts.
+Implementation validation does not establish performance numbers.
 
 ## Run on disposable copies
 
@@ -66,6 +68,34 @@ Expected data is the exact DN and matching single UID; locally created users
 also assert exact `cn` and `sn`. UID filter values and RDNs are escaped separately.
 An equality filter alone cannot certify that the server used an index. Configure
 and verify equivalent indexes outside this runner.
+
+## Verified TLS
+
+Keep the required fixture/credential flags above. For LDAPS, replace the endpoint
+flags with the servers' TLS listeners and add a PEM CA bundle, for example:
+
+```sh
+-endpoint current=ldaps://localhost:29636 -endpoint native=ldaps://localhost:29637 -tls-ca /path/to/bench-ca.pem
+```
+
+For StartTLS, use the ordinary LDAP listeners and add
+`-start-tls -tls-ca /path/to/bench-ca.pem`. Every endpoint must use `ldap://` with
+`-start-tls`; mixing in `ldaps://` is rejected before any connection. All setup,
+root, measured and cleanup connections upgrade before their first Bind.
+
+Without `-tls-ca`, TLS uses system roots. A supplied bundle replaces those roots
+for this invocation and must contain at least one valid PEM certificate. Chain
+and endpoint hostname/IP verification remain enabled; there is no insecure flag.
+An unreadable or unusable bundle is an argument error. `-tls-ca` alone does not
+upgrade a plaintext `ldap://` connection; defaults keep the original dial path.
+
+CA parsing and trust-pool construction happen once before connections. Dialing
+and TLS negotiation stay outside samples. `-timeout` bounds the TCP dial and the
+StartTLS exchange/handshake; the upgrade deadline is cleared before normal LDAP
+requests use the existing request timeout. JSON records `tls_ca` when supplied
+and `start_tls` when true, never the parsed TLS config. Compare server variants
+and native servers with the same SDK, transport and verification settings; these
+reused-connection samples do not measure handshake performance.
 
 ## In-process network diagnostic
 
