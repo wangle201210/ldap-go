@@ -3217,7 +3217,8 @@ func (server *Server) handleCompare(
 			}
 			return nil
 		}
-		present, matched, compareErr := state.runtime.schema.CompareEntryAttributeCachedDN(
+		present, matched, compareErr := state.runtime.compareDNPrefixes.compare(
+			state.runtime.schema,
 			entry,
 			request.Attribute,
 			request.Assertion,

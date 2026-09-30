@@ -73,6 +73,7 @@ type runtimeState struct {
 	searchBases          *searchBaseCache
 	searchEntryClasses   *schema.PreparedObjectClassMatcher
 	searchSelections     *preparedAttributeSelectionCache
+	compareDNPrefixes    *compareDNPrefixCache
 }
 
 type runtimeOperationFeatures struct {
@@ -534,6 +535,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
 		searchBases:          newSearchBaseCache(),
 		searchEntryClasses:   searchEntryClasses,
 		searchSelections:     newPreparedAttributeSelectionCache(),
+		compareDNPrefixes:    newCompareDNPrefixCache(),
 	}
 	runtime.allowed, err = buildAllowedSchemaPlan(registry, databases)
 	if err != nil {
