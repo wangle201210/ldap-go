@@ -1,0 +1,159 @@
+Verification started (UTC): 2026-09-30T00:08:30Z
+PASS: generated env syntax, verified marker, commit, version and all exported artifact paths.
+Source revision: d172686d3d270bc961b78f3ff00d7019c8dfb094
+PASS: source remains clean, including ignored/untracked files.
+
+slapd -VVV:
+@(#) $OpenLDAP: slapd 2.6.13 (Sep 30 2026 08:07:08) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd
+
+Included static overlays:
+    accesslog
+    auditlog
+    autoca
+    collect
+    constraint
+    dds
+    deref
+    dyngroup
+    dynlist
+    homedir
+    memberof
+    nestgroup
+    otp
+    ppolicy
+    pcache
+    refint
+    remoteauth
+    retcode
+    rwm
+    seqmod
+    sssvlv
+    syncprov
+    translucent
+    unique
+    valsort
+Included static backends:
+    config
+    ldif
+    monitor
+    dnssrv
+    ldap
+    mdb
+    meta
+    asyncmeta
+    null
+    passwd
+    relay
+    sock
+    sql
+
+lloadd -VV:
+Verification continuation: lloadd -VV prints its version then returns 1 in the pinned upstream source (servers/lloadd/main.c: int rc=1; version>1 jumps to stop; MAIN_RETURN(rc)). The first verification invocation stopped at that exit status; the repository build script succeeded unchanged.
+@(#) $OpenLDAP: lloadd 2.6.13 (Sep 30 2026 08:07:11) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd
+lloadd -VV exit status: 1 (expected 1 for this pinned source).
+
+ldapsearch -VV:
+ldapsearch: @(#) $OpenLDAP: ldapsearch 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapmodify -VV:
+ldapmodify: @(#) $OpenLDAP: ldapmodify 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+Verification continuation: ldapadd is an install-only alias in upstream clients/tools/Makefile.in:136-137; this build script does not run install. No alias was created and no system ldapadd was executed. Checking the nine built version-reporting clients; ldapurl has no -V option.
+
+ldapsearch -VV:
+ldapsearch: @(#) $OpenLDAP: ldapsearch 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapmodify -VV:
+ldapmodify: @(#) $OpenLDAP: ldapmodify 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapdelete -VV:
+ldapdelete: @(#) $OpenLDAP: ldapdelete 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapcompare -VV:
+ldapcompare: @(#) $OpenLDAP: ldapcompare 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapmodrdn -VV:
+ldapmodrdn: @(#) $OpenLDAP: ldapmodrdn 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldappasswd -VV:
+ldappasswd: @(#) $OpenLDAP: ldappasswd 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapwhoami -VV:
+ldapwhoami: @(#) $OpenLDAP: ldapwhoami 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapexop -VV:
+ldapexop: @(#) $OpenLDAP: ldapexop 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+ldapvc -VV:
+ldapvc: @(#) $OpenLDAP: ldapvc 2.6.13 (Sep 30 2026 08:07:12) $
+	wanna@wannadeMacBook-Pro.local:/private/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools
+	(LDAP library: OpenLDAP 20613)
+
+PASS: all nine built version-reporting LDAP clients exited 0; each reports 2.6.13 with library OpenLDAP 20613.
+PASS: slap tool links preserve basename dispatch and resolve to this build.
+
+Architecture and dynamic linkage:
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd:      Mach-O 64-bit executable arm64
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd/.libs/lloadd:    Mach-O 64-bit executable arm64
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapsearch: Mach-O 64-bit executable arm64
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd:
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/libldap.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/liblber.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/opt/homebrew/opt/libtool/lib/libltdl.7.dylib (compatibility version 11.0.0, current version 11.3.0)
+	/opt/homebrew/opt/unixodbc/lib/libodbc.2.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/cyrus-sasl/lib/libsasl2.3.dylib (compatibility version 4.0.0, current version 4.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/libevent/lib/libevent-2.1.7.dylib (compatibility version 8.0.0, current version 8.1.0)
+	/usr/lib/libresolv.9.dylib (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd/.libs/lloadd:
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/libldap.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/liblber.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+	/opt/homebrew/opt/libevent/lib/libevent_core-2.1.7.dylib (compatibility version 8.0.0, current version 8.1.0)
+	/opt/homebrew/opt/libevent/lib/libevent_extra-2.1.7.dylib (compatibility version 8.0.0, current version 8.1.0)
+	/opt/homebrew/opt/cyrus-sasl/lib/libsasl2.3.dylib (compatibility version 4.0.0, current version 4.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/libevent/lib/libevent-2.1.7.dylib (compatibility version 8.0.0, current version 8.1.0)
+	/usr/lib/libresolv.9.dylib (compatibility version 1.0.0, current version 1.0.0)
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapsearch:
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/libldap.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/prefix/lib/liblber.2.dylib (compatibility version 3.0.0, current version 3.200.0)
+	/opt/homebrew/opt/cyrus-sasl/lib/libsasl2.3.dylib (compatibility version 4.0.0, current version 4.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)
+	/opt/homebrew/opt/libevent/lib/libevent-2.1.7.dylib (compatibility version 8.0.0, current version 8.1.0)
+	/usr/lib/libresolv.9.dylib (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+
+Build script SHA-256 after build:
+33d532a205fd25fee079c417e2535eac39d07260ef29326ff4f3dfa9eeabff20  scripts/build-openldap-reference.sh
+
+PASS: source and build script unchanged after all probes.
+Constraints: JOBS=2, MAKEFLAGS=-j2, default configure CFLAGS=-g -O2, external C reference only, CGO_ENABLED=0, no Go commands, no performance benchmarks, no install/upgrade, no fixture reconstruction.
+Limitations: build-tree artifacts are not an installed prefix; source schema directory and existing Homebrew dylibs/plugins must remain available. No network service, fixture or performance qualification was run. Upstream compiler/linker warnings are retained in build.log.
+Verification completed (UTC): 2026-09-30T00:10:44Z

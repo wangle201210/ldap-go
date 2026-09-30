@@ -1,0 +1,370 @@
+package server
+
+import (
+	"reflect"
+	"slices"
+	"testing"
+	"testing/synctest"
+
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+)
+
+func TestOperationQueueBufferLayout(t *testing.T) {
+	queueType := reflect.TypeFor[operationQueue]()
+	pointerSize := reflect.TypeFor[*queuedOperation]().Size()
+	t.Logf("operationQueue size=%d alignment=%d pointer=%d", queueType.Size(), queueType.Align(), pointerSize)
+	// With 64-bit gc Go, the 88-byte baseline and 96-byte candidate both use
+	// the 96-byte allocation class. No unsafe or queue construction is needed.
+	if pointerSize == 8 && queueType.Size() != 96 {
+		t.Fatalf("queue size = %d, want 96; reassess per-connection cost", queueType.Size())
+	}
+}
+
+func TestOperationQueueBufferReuseKeepsActiveOperation(t *testing.T) {
+	queue := newOperationQueue(2)
+	defer queue.close()
+	queue.maximumRetainedBytes = 10
+	releases := 0
+	first := operationQueueBufferFixture(t, 1, 6, &releases)
+	first.message.Controls = []ldapwire.Control{{Value: make([]byte, 1<<20), HasValue: true}}
+	first.state = &connectionState{boundDN: "cn=original"}
+	first.completion = make(chan operationCompletion, 1)
+	message, tracked, state, completion := first.message, first.operation, first.state, first.completion
+	operationQueueBufferPush(t, queue, first, -1)
+	operationQueueBufferPop(t, queue, first)
+	if !tracked.start() {
+		t.Fatal("first operation did not start")
+	}
+	operationQueueBufferEmpty(t, queue)
+
+	for index := range 3 {
+		next := operationQueueBufferFixture(t, int64(index+2), 4, &releases)
+		operationQueueBufferPush(t, queue, next, -1)
+		if &queue.items[0] != &queue.inline[0] || cap(queue.items) != 1 {
+			t.Fatal("empty queue did not reuse its one inline slot")
+		}
+		rejectedReleases := 0
+		rejected := operationQueueBufferFixture(t, 99, 1, &rejectedReleases)
+		if got := queue.push(rejected, 10); got != operationQueueLimitExceeded {
+			t.Fatalf("byte overflow push = %d", got)
+		}
+		queue.maximumRetainedBytes = 11
+		if got := queue.push(rejected, 0); got != operationQueueLimitExceeded {
+			t.Fatalf("pending overflow push = %d", got)
+		}
+		queue.maximumRetainedBytes = 10
+		if queue.inline[0] != next || len(queue.items) != 1 || queue.retainedBytes != 10 ||
+			queue.active != 1 || queue.fence || rejectedReleases != 0 {
+			t.Fatal("rejected admission changed storage, budget or execution state")
+		}
+		operationQueueBufferPop(t, queue, next)
+		operationQueueBufferEmpty(t, queue)
+		if queue.active != 2 || queue.retainedBytes != 10 {
+			t.Fatal("pop released active capacity or retained bytes early")
+		}
+		queue.complete(next)
+		if queue.active != 1 || queue.retainedBytes != 6 || releases != index+1 {
+			t.Fatal("completion changed the original operation's accounting")
+		}
+		if first.operation != tracked || first.state != state || first.completion != completion ||
+			!reflect.DeepEqual(first.message, message) || first.state.boundDN != "cn=original" ||
+			!tracked.executing() || tracked.ctx.Err() != nil {
+			t.Fatal("slot reuse overwrote an executing operation or its identity")
+		}
+	}
+	tracked.finish()
+	queue.complete(first)
+	if queue.active != 0 || queue.retainedBytes != 0 || releases != 4 {
+		t.Fatal("final completion did not release the original operation")
+	}
+}
+
+func TestOperationQueueBufferGrowthRemovalAndFIFO(t *testing.T) {
+	queue := newOperationQueue(1)
+	defer queue.close()
+	releases := 0
+	want := make([]*queuedOperation, 17)
+	for index := range want {
+		want[index] = operationQueueBufferFixture(t, int64(index+1), 1, &releases)
+		operationQueueBufferPush(t, queue, want[index], len(want))
+		if index > 0 && (queue.inline[0] != nil || &queue.items[0] == &queue.inline[0]) {
+			t.Fatal("heap growth left a reference in inline storage")
+		}
+	}
+	backing := queue.items[:cap(queue.items)]
+	for _, id := range []int64{1, 9, 17} {
+		index := slices.IndexFunc(want, func(operation *queuedOperation) bool { return operation.message.ID == id })
+		removed := want[index]
+		if got := queue.remove(id); got != removed {
+			t.Fatalf("remove(%d) = %p, want %p", id, got, removed)
+		}
+		want = slices.Delete(want, index, index+1)
+		if !slices.Equal(queue.items, want) || removed.releaseRetainedBytes() {
+			t.Fatal("removal changed FIFO or released the same operation twice")
+		}
+		for _, operation := range backing[len(want):] {
+			if operation != nil {
+				t.Fatal("removal retained a request beyond the slice length")
+			}
+		}
+	}
+	if queue.remove(99) != nil || queue.retainedBytes != 14 || releases != 3 {
+		t.Fatal("removal accounting mismatch")
+	}
+	for _, operation := range want {
+		operationQueueBufferPop(t, queue, operation)
+		queue.complete(operation)
+	}
+	operationQueueBufferEmpty(t, queue)
+	for _, operation := range backing {
+		if operation != nil {
+			t.Fatal("popped heap slot still retains a request")
+		}
+	}
+	if queue.retainedBytes != 0 || releases != 17 {
+		t.Fatal("grown queue did not release all operations")
+	}
+	next := operationQueueBufferFixture(t, 18, 1, &releases)
+	operationQueueBufferPush(t, queue, next, 0)
+	if &queue.items[0] != &queue.inline[0] {
+		t.Fatal("empty grown queue did not return to inline storage")
+	}
+}
+
+func TestOperationQueueBufferRemoveAbandonedLast(t *testing.T) {
+	queue := newOperationQueue(1)
+	defer queue.close()
+	releases := 0
+	active := operationQueueBufferFixture(t, 1, 6, &releases)
+	pending := operationQueueBufferFixture(t, 2, 4, &releases)
+	operationQueueBufferPush(t, queue, active, 0)
+	operationQueueBufferPop(t, queue, active)
+	operationQueueBufferPush(t, queue, pending, 1)
+	if result := pending.operation.requestCancel(); result.Code != ldapwire.ResultCannotCancel {
+		t.Fatalf("pending Cancel = %d", result.Code)
+	}
+	pending.operation.requestAbandon()
+	if queue.remove(pending.message.ID) != pending || pending.operation.stopMode() != operationAbandoned ||
+		pending.operation.ctx.Err() == nil || pending.releaseRetainedBytes() {
+		t.Fatal("remove lost the abandoned operation or duplicated its release")
+	}
+	operationQueueBufferEmpty(t, queue)
+	if queue.active != 1 || queue.retainedBytes != 6 || releases != 1 {
+		t.Fatal("removing pending work released the active operation")
+	}
+	replacement := operationQueueBufferFixture(t, 3, 4, &releases)
+	operationQueueBufferPush(t, queue, replacement, 1)
+	if queue.inline[0] != replacement || pending.message.ID != 2 || pending.operation.start() {
+		t.Fatal("inline reuse changed the removed operation")
+	}
+	queue.complete(active)
+	operationQueueBufferPop(t, queue, replacement)
+	queue.complete(replacement)
+	operationQueueBufferEmpty(t, queue)
+	if releases != 3 || queue.retainedBytes != 0 {
+		t.Fatal("abandon/reuse accounting mismatch")
+	}
+}
+
+func TestOperationQueueBufferReuseBehindBindFence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := newOperationQueue(2)
+		defer queue.close()
+		queue.maximumRetainedBytes = 10
+		releases := 0
+		bind := &queuedOperation{
+			message:         ldapwire.Message{ID: 1, Request: ldapwire.BindRequest{Version: 3}},
+			retainedBytes:   6,
+			releaseRetained: func() { releases++ },
+		}
+		operationQueueBufferPush(t, queue, bind, 0)
+		operationQueueBufferPop(t, queue, bind)
+		operationQueueBufferEmpty(t, queue)
+		next := operationQueueBufferFixture(t, 2, 4, &releases)
+		if got := queue.push(next, 0); got != operationQueueLimitExceeded {
+			t.Fatalf("push behind active Bind with no pending allowance = %d", got)
+		}
+		operationQueueBufferPush(t, queue, next, 1)
+		if queue.inline[0] != next || !queue.fence || queue.active != 1 || queue.retainedBytes != 10 {
+			t.Fatal("reuse behind Bind changed the fence or accounting")
+		}
+		popped := operationQueuePopWaiters(queue, 1)
+		synctest.Wait()
+		if len(popped) != 0 {
+			t.Fatal("reused slot passed the active Bind fence")
+		}
+		queue.closeAndDrain()
+		synctest.Wait()
+		if len(popped) != 0 || releases != 0 {
+			t.Fatal("drain bypassed the Bind fence or released requests early")
+		}
+		queue.complete(bind)
+		synctest.Wait()
+		if len(popped) != 1 {
+			t.Fatal("Bind completion did not wake the draining worker")
+		}
+		if got := <-popped; got != next {
+			t.Fatalf("draining pop = %p, want %p", got, next)
+		}
+		operationQueueBufferEmpty(t, queue)
+		if queue.fence || queue.active != 1 || queue.retainedBytes != 4 || releases != 1 {
+			t.Fatal("Bind completion lost the executing request's budget")
+		}
+		queue.complete(next)
+		if queue.active != 0 || queue.retainedBytes != 0 || releases != 2 {
+			t.Fatal("drained request did not release its budget")
+		}
+	})
+}
+
+func TestOperationQueueBufferDiscardOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		depth int
+		pop   int
+	}{
+		{name: "inline", depth: 1},
+		{name: "heap", depth: 3},
+		{name: "heap-single-tail", depth: 3, pop: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := newOperationQueue(1)
+			defer queue.close()
+			releases := 0
+			operations := make([]*queuedOperation, test.depth)
+			for index := range operations {
+				operations[index] = operationQueueBufferFixture(t, int64(index+1), 1, &releases)
+				operationQueueBufferPush(t, queue, operations[index], test.depth)
+			}
+			for _, operation := range operations[:test.pop] {
+				operationQueueBufferPop(t, queue, operation)
+				queue.complete(operation)
+			}
+			discarded := queue.discardPending()
+			if !slices.Equal(discarded, operations[test.pop:]) || &discarded[0] == &queue.inline[0] {
+				t.Fatal("discarded operations lost FIFO or still alias inline storage")
+			}
+			operationQueueBufferEmpty(t, queue)
+			if releases != test.depth || queue.retainedBytes != 0 {
+				t.Fatal("discard accounting mismatch")
+			}
+			next := operationQueueBufferFixture(t, 10, 1, &releases)
+			operationQueueBufferPush(t, queue, next, 0)
+			if !slices.Equal(discarded, operations[test.pop:]) {
+				t.Fatal("next push overwrote the caller's discarded slice")
+			}
+			for _, operation := range discarded {
+				if operation.releaseRetainedBytes() {
+					t.Fatal("discarded operation was not already released")
+				}
+			}
+			clear(discarded)
+			if queue.inline[0] != next || queue.items[0] != next {
+				t.Fatal("caller mutation of discarded storage changed the queue")
+			}
+			operationQueueBufferPop(t, queue, next)
+			queue.complete(next)
+			if queue.discardPending() != nil {
+				t.Fatal("empty discard changed its nil-slice result")
+			}
+			operationQueueBufferEmpty(t, queue)
+		})
+	}
+}
+
+func TestOperationQueueBufferCloseAndDrainReferences(t *testing.T) {
+	for _, mode := range []string{"close", "drain", "drain-then-close"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, depth := range []int{1, 3} {
+				name := "inline"
+				if depth > 1 {
+					name = "heap"
+				}
+				t.Run(name, func(t *testing.T) {
+					queue := newOperationQueue(2)
+					defer queue.close()
+					releases := 0
+					active := operationQueueBufferFixture(t, 1, 7, &releases)
+					operationQueueBufferPush(t, queue, active, 0)
+					operationQueueBufferPop(t, queue, active)
+					pending := make([]*queuedOperation, depth)
+					for index := range pending {
+						pending[index] = operationQueueBufferFixture(t, int64(index+2), 11, &releases)
+						pending[index].message.Controls = []ldapwire.Control{{Value: make([]byte, 1<<20), HasValue: true}}
+						operationQueueBufferPush(t, queue, pending[index], depth)
+					}
+					if mode != "close" {
+						queue.closeAndDrain()
+						if queue.retainedBytes != 7+int64(depth)*11 || releases != 0 {
+							t.Fatal("drain released pending requests before execution")
+						}
+					}
+					if mode != "drain" {
+						queue.close()
+					} else {
+						for _, operation := range pending {
+							operationQueueBufferPop(t, queue, operation)
+							queue.complete(operation)
+						}
+					}
+					operationQueueBufferEmpty(t, queue)
+					if got, ok := queue.pop(); ok || got != nil {
+						t.Fatalf("closed pop = %p, %v", got, ok)
+					}
+					if got := queue.push(&queuedOperation{}, depth); got != operationQueueClosed {
+						t.Fatalf("closed push = %d", got)
+					}
+					if queue.active != 1 || queue.retainedBytes != 7 || releases != depth {
+						t.Fatal("close/drain released the still-active request")
+					}
+					queue.complete(active)
+					queue.close()
+					queue.close()
+					if queue.retainedBytes != 0 || queue.active != 0 || releases != depth+1 {
+						t.Fatal("close/drain release was not exactly once")
+					}
+					for _, operation := range pending {
+						if operation.releaseRetainedBytes() || len(operation.message.Controls[0].Value) != 1<<20 {
+							t.Fatal("close/drain duplicated release or overwrote the request")
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func operationQueueBufferFixture(t *testing.T, id, retainedBytes int64, releases *int) *queuedOperation {
+	t.Helper()
+	message := ldapwire.Message{ID: id, Request: ldapwire.SearchRequest{}}
+	if id%2 == 0 {
+		message.Request = ldapwire.CompareRequest{DN: "cn=example", Attribute: "cn", Assertion: []byte("example")}
+	}
+	operation := newTrackedOperation(t.Context(), message)
+	t.Cleanup(operation.finish)
+	return &queuedOperation{
+		message: message, operation: operation, concurrent: true, retainedBytes: retainedBytes,
+		releaseRetained: func() { (*releases)++ },
+	}
+}
+
+func operationQueueBufferPush(t *testing.T, queue *operationQueue, operation *queuedOperation, maxPending int) {
+	t.Helper()
+	if got := queue.push(operation, maxPending); got != operationQueuePushed {
+		t.Fatalf("push ID %d = %d", operation.message.ID, got)
+	}
+}
+
+func operationQueueBufferPop(t *testing.T, queue *operationQueue, want *queuedOperation) {
+	t.Helper()
+	if got, ok := queue.pop(); !ok || got != want {
+		t.Fatalf("pop = %p, %v; want %p", got, ok, want)
+	}
+}
+
+func operationQueueBufferEmpty(t *testing.T, queue *operationQueue) {
+	t.Helper()
+	if queue.items != nil || queue.inline[0] != nil {
+		t.Fatal("empty queue retains request pointers or heap storage")
+	}
+}

@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+: "${LDAP_BENCH_PASSWORD:?set the disposable fixture password}"
+root=/var/tmp/ldap-go-r20-reference-recovery
+seed=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db
+binary=/var/tmp/ldap-go-perf-20260930-r20-request/before
+ldapsearch=/opt/homebrew/opt/openldap/bin/ldapsearch
+ldapwhoami=/opt/homebrew/opt/openldap/bin/ldapwhoami
+if lsof -nP -iTCP:29681 -sTCP:LISTEN -t >/dev/null; then exit 1; fi
+mkdir "$root/export-private"
+umask 077
+printf '%s' "$LDAP_BENCH_PASSWORD" >"$root/export-private/password"
+cp -c "$seed" "$root/export-private/data.db"
+pid=
+cleanup() {
+  if [ -n "$pid" ]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+  rm -f "$root/export-private/password" "$root/export-private/data.db"
+}
+trap cleanup EXIT HUP INT TERM
+LDAP_GO_ROOT_PASSWORD="$LDAP_BENCH_PASSWORD" "$binary" serve \
+  -db "$root/export-private/data.db" -listen 127.0.0.1:29681 \
+  -root-dn cn=admin,dc=scale,dc=qualification -search-limit 100100 \
+  -search-candidate-limit 100100 -search-candidate-bytes 819200000 \
+  -search-memory-bytes 1638400000 >"$root/export-server.log" 2>&1 &
+pid=$!
+deadline=$(( $(date +%s) + 60 ))
+until "$ldapwhoami" -H ldap://127.0.0.1:29681 -x -D cn=admin,dc=scale,dc=qualification \
+  -y "$root/export-private/password" -o nettimeout=1 >/dev/null 2>&1; do
+  kill -0 "$pid"
+  [ "$(date +%s)" -lt "$deadline" ]
+  sleep 0.05
+done
+"$ldapsearch" -H ldap://127.0.0.1:29681 -x -D cn=admin,dc=scale,dc=qualification \
+  -y "$root/export-private/password" -LLL -o ldif-wrap=no -E pr=10000/noprompt \
+  -b dc=scale,dc=qualification '(objectClass=*)' '*' >"$root/content.ldif"
+"$root/ldifcanonical" -in "$root/content.ldif" >"$root/data.unsorted"
+LC_ALL=C sort "$root/data.unsorted" >"$root/data.canonical"
+rm "$root/data.unsorted"
+[ "$(wc -l <"$root/data.canonical" | tr -d ' ')" = 100002 ]
+set -- $(cksum "$root/data.canonical")
+[ "$1" = 2143929969 ]
+[ "$2" = 42712438 ]
+expected=5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0
+actual=$(shasum -a 256 "$root/data.canonical" | awk '{print $1}')
+[ "$actual" = "$expected" ]
+shasum -a 256 "$seed" "$binary" "$root/content.ldif" "$root/data.canonical" \
+  "$root/ldifcanonical" "$root/ldapbench" >"$root/recovery-sha256.txt"
+printf 'Original 100002-entry canonical contents recovered and verified.\n'

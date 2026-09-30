@@ -1,0 +1,7 @@
+item	status	evidence
+focused	MAIN_LOG	focused-test.txt
+full_go	MAIN_LOG	go-test.txt
+vet	MAIN_CONFIRMED_EMPTY_LOG	go-vet.txt
+native	355_PASS_RECORDS	openldap-differential.txt
+fuzz	NOT_RUN_THIS_ROUND	generator/main-finished.json
+race	NOT_RUN_THIS_ROUND	generator/main-finished.json

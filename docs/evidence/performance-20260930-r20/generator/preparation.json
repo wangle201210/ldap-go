@@ -1,0 +1,116 @@
+{
+  "state": "PREPARED_NOT_GENERATED",
+  "observed_at": "2026-09-30T00:18:35.707Z",
+  "hashing_performed": false,
+  "baseline": "bf510d8f2becd4c023fe04a7df8b8dd1681e1d11",
+  "source_root": "/tmp/ldap-go-r20-evidence-source",
+  "module": "github.com/wangle201210/ldap-go",
+  "go_directive": "1.26.0",
+  "source_inventory": [
+    {
+      "path": "go.mod",
+      "bytes": 1850
+    },
+    {
+      "path": "go.sum",
+      "bytes": 15454
+    },
+    {
+      "path": "internal/cmd/ldapbench/main.go",
+      "bytes": 19052
+    },
+    {
+      "path": "internal/cmd/ldapcommonbench/group_compare_test.go",
+      "bytes": 9130
+    },
+    {
+      "path": "internal/cmd/ldapcommonbench/main.go",
+      "bytes": 29149
+    },
+    {
+      "path": "internal/cmd/ldifcanonical/main.go",
+      "bytes": 3201
+    },
+    {
+      "path": "internal/server/audit_identity_bench_test.go",
+      "bytes": 4314
+    },
+    {
+      "path": "internal/server/audit_identity_test.go",
+      "bytes": 9001
+    },
+    {
+      "path": "internal/server/network_common_bench_test.go",
+      "bytes": 5572
+    },
+    {
+      "path": "internal/server/operation_queue_buffer_bench_test.go",
+      "bytes": 2767
+    },
+    {
+      "path": "internal/server/operation_queue_buffer_test.go",
+      "bytes": 13727
+    },
+    {
+      "path": "internal/server/operation.go",
+      "bytes": 24308
+    },
+    {
+      "path": "internal/server/server.go",
+      "bytes": 84532
+    },
+    {
+      "path": "tracked.patch",
+      "bytes": 2987
+    }
+  ],
+  "patch_paths": [
+    "internal/server/operation.go",
+    "internal/server/server.go"
+  ],
+  "executable_hashes": {
+    "status": "READ_MAIN_HASH_FILE_NOT_REHASHED",
+    "source": "/var/tmp/ldap-go-perf-20260930-r20-request/executable-sha256.txt",
+    "values": {
+      "before": "8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98",
+      "current": "1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550"
+    }
+  },
+  "native_validation": {
+    "source": "/var/tmp/ldap-go-perf-20260930-r20-request/openldap-differential.txt",
+    "pass_records": 355,
+    "top_level_pass": 26,
+    "top_level_run": 26,
+    "failed": 0,
+    "skipped": 0,
+    "package_seconds": "12.750"
+  },
+  "native_environment": {
+    "source": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env",
+    "values": {
+      "OPENLDAP_COMMIT": "d172686d3d270bc961b78f3ff00d7019c8dfb094",
+      "OPENLDAP_VERIFIED_COMMIT": "d172686d3d270bc961b78f3ff00d7019c8dfb094",
+      "OPENLDAP_REFERENCE_VERIFIED": "1",
+      "OPENLDAP_SLAPD": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd",
+      "OPENLDAP_SCHEMA_DIR": "/var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/ldap-go-openldap-source-2.6.13/servers/slapd/schema"
+    }
+  },
+  "recovery": {
+    "canonical_status": "READ_EXISTING_MAIN_HASH_RECORDS; worker has not rehashed",
+    "native_seed_round_trip": "MAIN_CONFIRMED_CMP_MATCH_BEFORE_MACROS",
+    "macro_finished": false,
+    "source_dir": "/var/tmp/ldap-go-r20-reference-recovery",
+    "openldap_alias": "openldap-1 -> native-seed",
+    "completed": true,
+    "macro_state": "MAIN_REPORTED_STARTED",
+    "recorded_user_attribute_canonical_sha256": "5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0",
+    "hash_record_sources": [
+      "/var/tmp/ldap-go-r20-reference-recovery/recovery-sha256.txt",
+      "/var/tmp/ldap-go-r20-reference-recovery/native-recovery-sha256.txt"
+    ],
+    "native_mdb_size": "Main-reported approximately 85 MB; not a layout-equivalence claim",
+    "equivalence_scope": "Canonical user attributes only; no assertion that physical MDB layout or generated operational attributes match the removed fixture"
+  },
+  "main_decision": "pending",
+  "last_updated_at": "2026-09-30T00:22:58.771Z"
+}

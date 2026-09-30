@@ -1,0 +1,3 @@
+scope	role	source	limitations
+queue	OLD_BASELINE_CANDIDATE_VS_OLD_CONTROL	/var/tmp/ldap-go-perf-20260930-r20/queue-components.txt	Historical isolated exploration; source revision not established by the log; NOT actual bf510d8 before; no pooling with R20 network/macros; negatives retained
+audit-identity	OLD_BASELINE_CANDIDATE_VS_OLD_CONTROL	/var/tmp/ldap-go-audit-identity-r18/components.txt	Historical isolated exploration; source revision not established by the log; NOT actual bf510d8 before; no pooling with R20 network/macros; negatives retained

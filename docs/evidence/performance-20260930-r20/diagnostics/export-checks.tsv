@@ -1,0 +1,7 @@
+run	endpoint	entries	cksum	bytes	sha256	source_path
+default-read-aa	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/before/data.canonical
+default-read-aa	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/current/data.canonical
+default-read-aa	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/openldap/data.canonical
+default-read-swap	before	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/before/data.canonical
+default-read-swap	current	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/current/data.canonical
+default-read-swap	openldap	100002	2143929969	42712438	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/openldap/data.canonical

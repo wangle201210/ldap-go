@@ -1,0 +1,144 @@
+{
+  "round": "R20",
+  "main_signal": "R20 network, full tests, vet, rebuilt pinned native checks, seven macros and 21 exports completed; candidate rejected for lack of stable end-to-end improvement.",
+  "completed_at": "2026-09-30T00:30:25Z",
+  "validation_finished": true,
+  "macro_finished": true,
+  "network_finished": true,
+  "validation_exit_code": 0,
+  "performance_exit_code": 0,
+  "network_exit_code": 0,
+  "current_sha256": "1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550",
+  "source_git_head": "bf510d8f2becd4c023fe04a7df8b8dd1681e1d11",
+  "source_frozen": true,
+  "frozen_source_root": "/tmp/ldap-go-r20-evidence-source",
+  "main_decision": "REJECTED_NOT_SHIPPED",
+  "main_assessment": "The combined candidate saved three allocations in the same-process TCP/SDK benchmark but median Base/equality latency increased 8.9%/5.5%. Independent process results were mixed; startup/port-swap Base/equality remained 2.54%/0.87% slower. Retain all evidence, withdraw both optimizations, and retain only the generic opt-in benchmark as tooling. Native per-operation parity is not achieved.",
+  "fuzz_run": false,
+  "race_run": false,
+  "cli_sources": "Timed SDK executables were retained unchanged from R19. The deleted warmup ldapbench and canonicalizer were rebuilt from the frozen current source with CGO_ENABLED=0; their hashes and restored paths are recorded. Rebuilt native reference and regenerated MDB are not claimed bit-identical to the removed artifacts.",
+  "network": {
+    "before_source_revision": "bf510d8f2becd4c023fe04a7df8b8dd1681e1d11",
+    "same_benchmark_source": true,
+    "candidate_matches_frozen_source": true,
+    "benchtime": "1s",
+    "fixture": "/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db",
+    "benchmark_sha256": "28017fe1a4cb1215da62ff74daeebe92529bba1f0e6c67d3c1a603e54d5a8d28",
+    "runs": [
+      {
+        "file": "network-before-1.txt",
+        "side": "before",
+        "round": 1,
+        "position": 1,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-before.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      },
+      {
+        "file": "network-current-1.txt",
+        "side": "current",
+        "round": 1,
+        "position": 2,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-current.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      },
+      {
+        "file": "network-current-2.txt",
+        "side": "current",
+        "round": 2,
+        "position": 1,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-current.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      },
+      {
+        "file": "network-before-2.txt",
+        "side": "before",
+        "round": 2,
+        "position": 2,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-before.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      },
+      {
+        "file": "network-before-3.txt",
+        "side": "before",
+        "round": 3,
+        "position": 1,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-before.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      },
+      {
+        "file": "network-current-3.txt",
+        "side": "current",
+        "round": 3,
+        "position": 2,
+        "command": "LDAP_GO_NETWORK_BENCH_FIXTURE=/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db /var/tmp/ldap-go-perf-20260930-r20-request/server-current.test -test.run '^$' -test.bench '^BenchmarkNetworkCommon$' -test.benchtime=1s -test.count=1 -test.benchmem",
+        "exit_code": 0
+      }
+    ]
+  },
+  "native": {
+    "version": "2.6.13",
+    "source_commit": "d172686d3d270bc961b78f3ff00d7019c8dfb094",
+    "binary": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd",
+    "env_file": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env",
+    "fixture_dir": "/var/tmp/ldap-go-r20-reference-recovery",
+    "version_log": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/verification.log"
+  },
+  "recovery": {
+    "completed": true,
+    "reason": "Main reported the fixed native environment, original native fixture and old canonical reference missing before native/macros; rebuild pinned OpenLDAP 2.6.13 and recover from retained Go seed.",
+    "source_seed": "/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db",
+    "canonical_path": "/var/tmp/ldap-go-r20-reference-recovery/data.canonical",
+    "native_canonical_path": "/var/tmp/ldap-go-r20-reference-recovery/native.canonical",
+    "canonical_sha256": "5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0",
+    "artifacts": [
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/README.md",
+        "archive": "recovery/raw/README.md.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/export-seed.sh",
+        "archive": "recovery/raw/export-seed.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/build-native-seed.sh",
+        "archive": "recovery/raw/build-native-seed.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/recovery-sha256.txt",
+        "archive": "recovery/raw/recovery-sha256.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/native-recovery-sha256.txt",
+        "archive": "recovery/raw/native-recovery-sha256.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/export-server.log",
+        "archive": "recovery/raw/export-server.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/slapadd.log",
+        "archive": "recovery/raw/slapadd.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/native-server.log",
+        "archive": "recovery/raw/native-server.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-perf-20260930-r20-request/pre-recovery/validate.sh",
+        "archive": "recovery/raw/pre-recovery-validate.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log",
+        "archive": "recovery/raw/native-build.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/SHA256SUMS",
+        "archive": "recovery/raw/native-tool-hashes.txt"
+      }
+    ]
+  },
+  "auxiliary_binaries": {
+    "ldapbench": "/var/tmp/ldap-go-r20-reference-recovery/ldapbench",
+    "ldifcanonical": "/var/tmp/ldap-go-r20-reference-recovery/ldifcanonical"
+  }
+}

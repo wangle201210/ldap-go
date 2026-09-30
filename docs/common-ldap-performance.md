@@ -146,3 +146,17 @@ current 8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98
 
 Actual embedded build metadata and baseline-relative source reconstruction are
 retained; reused binaries are not described as clean builds of later commits.
+
+## Subsequent rejected experiment
+
+[R20 request-allocation evidence](evidence/performance-20260930-r20/README.md)
+records an unshipped queue/audit-snapshot candidate. It removed three allocations
+in the same-process network benchmark but did not establish stable latency gains;
+that benchmark regressed and the separate startup-order check remained slower.
+Both production changes were withdrawn. The R19 figures above remain the last
+shipped qualification, and all R20 observations stay separate.
+
+R20 also documents recovery of the removed reference environment and fixtures:
+the same pinned OpenLDAP source was rebuilt, and all 21 final exports matched
+the original canonical contents. Physical MDB layout and generated operational
+attributes were not claimed identical to the removed database.

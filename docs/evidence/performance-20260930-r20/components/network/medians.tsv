@@ -1,0 +1,5 @@
+scope	access_mode	identity	variant	stage	method	members	endpoint	rounds	ns_op	B_op	allocs_op
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	before	3	84868	25861	496
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	before	3	87629	27653	519
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	current	3	92387	25788	493
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	current	3	92470	27581	516

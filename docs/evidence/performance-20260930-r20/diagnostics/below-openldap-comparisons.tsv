@@ -1,0 +1,5 @@
+suite	access_mode	identity	variant	stage	method	members	operations	before_label_ms	current_label_ms	openldap_ms	current_label_over_openldap_throughput_pct	label_time_reduction_pct
+aa	default	nonroot	hot	nonrootBase	search_nonrootBase	0	1000	111.34328400000003	111.6157390000002	91.98944499999998	82.41619490598885	-0.24469818943024801
+aa	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	1000	113.12880300000013	115.09393100000001	91.95154300000004	79.89260789085398	-1.7370713274495353
+startup-port-swap	default	nonroot	hot	nonrootBase	search_nonrootBase	0	1000	113.77707999999998	116.66229300000022	91.39046800000001	78.33762362274145	-2.5358472901574114
+startup-port-swap	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	1000	115.75131800000014	116.76249399999998	93.76887500000004	80.30735879965022	-0.8735762300346561

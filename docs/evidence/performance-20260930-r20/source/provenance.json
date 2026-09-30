@@ -1,0 +1,41 @@
+{
+  "round": "R20",
+  "baseline": "bf510d8f2becd4c023fe04a7df8b8dd1681e1d11",
+  "source_git_head": "bf510d8f2becd4c023fe04a7df8b8dd1681e1d11",
+  "tracked": [
+    "internal/server/operation.go",
+    "internal/server/server.go"
+  ],
+  "new_sources": [
+    "internal/server/audit_identity_bench_test.go",
+    "internal/server/audit_identity_test.go",
+    "internal/server/network_common_bench_test.go",
+    "internal/server/operation_queue_buffer_bench_test.go",
+    "internal/server/operation_queue_buffer_test.go"
+  ],
+  "frozen_files": [
+    "go.mod",
+    "go.sum",
+    "internal/cmd/ldapbench/main.go",
+    "internal/cmd/ldapcommonbench/group_compare_test.go",
+    "internal/cmd/ldapcommonbench/main.go",
+    "internal/cmd/ldifcanonical/main.go",
+    "internal/server/audit_identity_bench_test.go",
+    "internal/server/audit_identity_test.go",
+    "internal/server/network_common_bench_test.go",
+    "internal/server/operation.go",
+    "internal/server/operation_queue_buffer_bench_test.go",
+    "internal/server/operation_queue_buffer_test.go",
+    "internal/server/server.go"
+  ],
+  "main_signal": "R20 network, full tests, vet, rebuilt pinned native checks, seven macros and 21 exports completed; candidate rejected for lack of stable end-to-end improvement.",
+  "source_root": "/tmp/ldap-go-r20-evidence-source",
+  "patch_sha256": "01a150252d573ef9dd21c476e1ec406e6e830300870de286d0ce60c4ce0833ad",
+  "source_files": 1306,
+  "reconstruction": "Immutable bf510d8 baseline + tracked.patch.txt + five source/new .raw files.",
+  "scope": "R20 operationQueue inline[1] pointer-slot reuse and immutable audit-identity snapshot reuse only.",
+  "unchanged_source": "All other Go/module bytes read from immutable baseline, never later live main.",
+  "component_source": "internal/server/network_common_bench_test.go",
+  "component_source_sha256": "28017fe1a4cb1215da62ff74daeebe92529bba1f0e6c67d3c1a603e54d5a8d28",
+  "cli_confirmation": "Timed SDK executables were retained unchanged from R19. The deleted warmup ldapbench and canonicalizer were rebuilt from the frozen current source with CGO_ENABLED=0; their hashes and restored paths are recorded. Rebuilt native reference and regenerated MDB are not claimed bit-identical to the removed artifacts."
+}

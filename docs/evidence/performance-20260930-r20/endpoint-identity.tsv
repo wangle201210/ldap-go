@@ -1,0 +1,16 @@
+run	role	endpoint_label	binary	sha256	port	startup_position
+explicit-final	CORE	before	before	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+explicit-final	CORE	current	current	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	29482	2
+explicit-final	CORE	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3
+default-final	CORE	before	before	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+default-final	CORE	current	current	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	29482	2
+default-final	CORE	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3
+root-paired	CORE	before	before	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+root-paired	CORE	current	current	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	29482	2
+root-paired	CORE	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3
+explicit-group-compare	CORE	before	before	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+explicit-group-compare	CORE	current	current	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	29482	2
+explicit-group-compare	CORE	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3
+default-group-compare	CORE	before	before	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	29481	1
+default-group-compare	CORE	current	current	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	29482	2
+default-group-compare	CORE	openldap	openldap	OPENLDAP_2.6.13_REFERENCE	29483	3

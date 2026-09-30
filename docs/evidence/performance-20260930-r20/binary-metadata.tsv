@@ -1,0 +1,10 @@
+file	go_version	vcs_revision	vcs_modified	CGO_ENABLED	GOOS	GOARCH
+before	go1.26.4	8918569d6b7b32c683606e88744eeb1ec36bd4db	true	0	darwin	arm64
+current	go1.26.4	bf510d8f2becd4c023fe04a7df8b8dd1681e1d11	true	0	darwin	arm64
+server-before.test	go1.26.4	NOT_EMBEDDED	NOT_EMBEDDED	0	darwin	arm64
+server-current.test	go1.26.4	NOT_EMBEDDED	NOT_EMBEDDED	0	darwin	arm64
+ldapcommonbench	go1.26.4	NOT_EMBEDDED	NOT_EMBEDDED	0	darwin	arm64
+ldapcommonbench-root	go1.26.4	b55f670ac7f704467cfcc50bf05432bc60af3f11	true	0	darwin	arm64
+ldapcommonbench-group	go1.26.4	0a29f6036e149ad1245b825250023353fa0cc48c	true	0	darwin	arm64
+ldapbench	go1.26.4	bf510d8f2becd4c023fe04a7df8b8dd1681e1d11	true	0	darwin	arm64
+ldifcanonical	go1.26.4	bf510d8f2becd4c023fe04a7df8b8dd1681e1d11	true	0	darwin	arm64

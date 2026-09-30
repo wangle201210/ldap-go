@@ -1,0 +1,7 @@
+scope	access_mode	identity	variant	stage	method	members	metric	before	current	absolute_reduction	reduction_pct
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	ns/op	84868	92387	-7519	-8.859640854032147
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	B/op	25861	25788	73	0.2822783341711488
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	allocs/op	496	493	3	0.6048387096774244
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	ns/op	87629	92470	-4841	-5.524426844994235
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	B/op	27653	27581	72	0.26036958015405176
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	allocs/op	519	516	3	0.5780346820809301

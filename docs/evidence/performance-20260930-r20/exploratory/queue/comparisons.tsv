@@ -1,0 +1,10 @@
+scope	case	old_control_label	metric	old_control	candidate	absolute_reduction	reduction_pct
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialSearch	PairedOldControl	ns/op	55.08	44.59	10.489999999999995	19.045025417574422
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialSearch	PairedOldControl	B/op	8	0	8	100
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialSearch	PairedOldControl	allocs/op	1	0	1	100
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialCompare	PairedOldControl	ns/op	50.43	44.77	5.659999999999997	11.223478088439409
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialCompare	PairedOldControl	B/op	8	0	8	100
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialCompare	PairedOldControl	allocs/op	1	0	1	100
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/Burst8	PairedOldControl	ns/op	412.6	405.5	7.100000000000023	1.7207949587978777
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/Burst8	PairedOldControl	B/op	120	112	8	6.666666666666665
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/Burst8	PairedOldControl	allocs/op	4	3	1	25

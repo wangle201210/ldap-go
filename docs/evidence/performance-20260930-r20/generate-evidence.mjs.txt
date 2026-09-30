@@ -1,0 +1,789 @@
+// Evidence only: no build/test/bench, and no hashing until main's final handoff.
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const repo = '/Users/wanna/mine/github/ldap-go';
+const src = '/var/tmp/ldap-go-perf-20260930-r20-request';
+const dst = path.join(repo, 'docs/evidence/performance-20260930-r20');
+const baseline = 'bf510d8f2becd4c023fe04a7df8b8dd1681e1d11';
+const baselineHash = '8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98';
+const canonicalHash = '5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0';
+const nativeCommit = 'd172686d3d270bc961b78f3ff00d7019c8dfb094';
+const signalFile = 'generator/main-finished.json';
+const signalPath = path.join(dst, signalFile);
+const inputConfig = fs.existsSync(signalPath) ? JSON.parse(fs.readFileSync(signalPath, 'utf8')) : null;
+const frozenRoot = inputConfig?.frozen_source_root ?? '/tmp/ldap-go-r20-evidence-source';
+const keySources = ['internal/server/operation.go', 'internal/server/server.go'];
+const newSources = ['internal/server/audit_identity_bench_test.go', 'internal/server/audit_identity_test.go',
+  'internal/server/network_common_bench_test.go', 'internal/server/operation_queue_buffer_bench_test.go',
+  'internal/server/operation_queue_buffer_test.go'];
+const cliSources = ['internal/cmd/ldapcommonbench/main.go', 'internal/cmd/ldapcommonbench/group_compare_test.go',
+  'internal/cmd/ldapbench/main.go', 'internal/cmd/ldifcanonical/main.go'];
+const componentSource = 'internal/server/network_common_bench_test.go';
+const frozenFiles = [...keySources, ...newSources, ...cliSources, 'go.mod', 'go.sum'].sort();
+const endpoints = ['before', 'current', 'openldap'];
+const rootDN = 'cn=admin,dc=scale,dc=qualification';
+const plans = [
+  { run: 'explicit-final', script: 'common-explicit', suite: 'common', access: 'explicit' },
+  { run: 'default-final', script: 'common-default', suite: 'common', access: 'default' },
+  { run: 'root-paired', script: 'root-paired', suite: 'root', access: 'default' },
+  { run: 'explicit-group-compare', script: 'group-compare-explicit', suite: 'group-compare', access: 'explicit' },
+  { run: 'default-group-compare', script: 'group-compare-default', suite: 'group-compare', access: 'default' },
+  { run: 'default-read-aa', script: 'read-aa', suite: 'aa', access: 'default', diagnostic: true },
+  { run: 'default-read-swap', script: 'read-swap', suite: 'startup-port-swap', access: 'default', diagnostic: true },
+];
+const bindCases = [['userBind', 'simple_bind_ssha', 0], ['userBind', 'simple_bind_plaintext', 0],
+  ['userBindWrong', 'simple_bind_ssha', 0], ['userBindWrong', 'simple_bind_plaintext', 0]];
+const reads = [['nonrootBase', 'search_nonrootBase', 0], ['nonrootEquality', 'search_nonrootEquality', 0]];
+const hot = [...bindCases, ...reads];
+const groupCases = [['memberEquality', 'search_memberEquality', 0], ['groupBase', 'base_member_values', 10],
+  ['groupBase', 'base_member_values', 1000], ['nestedMembership', 'client_bfs_member_equality', 0]];
+const rootCases = [['rootBind', 'simple_bind_root', 0], ['rootBase', 'base_objectclass_root', 0],
+  ['rootEquality', 'subtree_uid_equality_root', 0], ['rootCompareTrue', 'compare_uid_true_root', 0],
+  ['rootCompareFalse', 'compare_uid_false_root', 0]];
+const compareCases = [['groupCompareTrueFirst', 'compare_member_true_first'], ['groupCompareTrueLast', 'compare_member_true_last'],
+  ['groupCompareFalse', 'compare_member_false_missing']].flatMap(c => [10, 1000].map(n => [...c, n]));
+const sdkStages = ['connect', 'rootBind', 'baseSearch', 'indexedEquality', 'compareTrue', 'compareFalse', 'substringPrefix', 'substringNegative'];
+const batches = p => p.diagnostic ? ['smoke', 'hot'] : p.suite === 'root' ? ['literal', 'literal-smoke', 'normalized', 'normalized-smoke']
+  : p.suite === 'group-compare' ? ['smoke', 'groups'] : ['smoke', 'hot', 'distributed', 'groups'];
+const jsonFiles = p => [...batches(p).map(b => p.run + '/' + b + '.json'), ...endpoints.map(e => p.run + '/' + e + '/warmup.json')];
+const networkRuns = Array.from({ length: 3 }, (_, i) => i + 1).flatMap(round =>
+  (round % 2 ? ['before', 'current'] : ['current', 'before']).map((side, i) => ({
+    file: 'network-' + side + '-' + round + '.txt', side, round, position: i + 1,
+  })));
+const logs = ['focused-test.txt', 'go-test.txt', 'go-vet.txt', 'openldap-differential.txt',
+  ...networkRuns.map(r => r.file)];
+const exploratoryInputs = [
+  { name: 'queue', file: '/var/tmp/ldap-go-perf-20260930-r20/queue-components.txt', samples: 18,
+    controls: ['Current', 'PairedOldControl'] },
+  { name: 'audit-identity', file: '/var/tmp/ldap-go-audit-identity-r18/components.txt', samples: 108,
+    controls: ['Current', 'Legacy'] },
+];
+const binaries = ['before', 'current', 'server-before.test', 'server-current.test',
+  'ldapcommonbench', 'ldapcommonbench-root', 'ldapcommonbench-group'];
+const auxiliaryBinaries = [
+  ['ldapbench', inputConfig?.auxiliary_binaries?.ldapbench ?? '/var/tmp/ldap-go-r20-reference-recovery/ldapbench'],
+  ['ldifcanonical', inputConfig?.auxiliary_binaries?.ldifcanonical ?? '/var/tmp/ldap-go-r20-reference-recovery/ldifcanonical'],
+];
+const rawFiles = [...logs, 'validate.sh', 'run-performance.sh', 'executable-sha256.txt', ...plans.flatMap(p => [
+  p.script + '.sh', p.script + '.log', ...jsonFiles(p), p.run + '/validation.tsv', p.run + '/openldap/reindex.log',
+  ...endpoints.map(e => p.run + '/' + e + '/server.log'), ...(p.suite === 'common' ? [p.run + '/concurrent.tsv'] : []),
+])];
+const same = (a, b) => Array.isArray(a) && Array.isArray(b) && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const git = args => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const mode = process.argv[2] ?? '--inspect';
+if (process.argv.length > 3 || !['--inspect', '--main-finished'].includes(mode)) {
+  throw new Error('Use --inspect (read-only inventory, no hashes) or --main-finished (requires explicit main handoff).');
+}
+const required = [...rawFiles, ...binaries, 'member-acl.db', 'member-index.db',
+  ...plans.flatMap(p => endpoints.map(e => p.run + '/' + e + '/data.canonical')),
+].map(f => path.join(src, f));
+required.push(signalPath, ...frozenFiles.map(f => path.join(frozenRoot, f)), path.join(frozenRoot, 'tracked.patch'),
+  ...auxiliaryBinaries.map(([, f]) => f), ...exploratoryInputs.map(p => p.file));
+if (inputConfig?.recovery) required.push(inputConfig.recovery.canonical_path, inputConfig.recovery.native_canonical_path,
+  inputConfig.recovery.source_seed,
+  ...(inputConfig.recovery.artifacts ?? []).map(p => p.source));
+if (inputConfig?.native) required.push(inputConfig.native.binary, inputConfig.native.version_log,
+  inputConfig.native.env_file);
+const missing = required.filter(f => !fs.existsSync(f));
+if (mode === '--inspect') {
+  console.log(JSON.stringify({ state: 'PREPARED_NOT_GENERATED', hashing: false, frozenRoot,
+    expected_core: { scripts: 5, json: 31, samples: 840, medians: 144, comparisons: 48, exports: 15 },
+    expected_diagnostics: { scripts: 2, json: 10, samples: 84, medians: 12, comparisons: 4, exports: 6 },
+    expected_network: { rounds: 3, logs: 6, samples: 12, medians: 4, metric_comparisons: 6 },
+    handoff_instructions: 'generator/HANDOFF.md and generator/main-finished.example.json in the evidence directory',
+    native_recovery: 'Await rebuilt pinned OpenLDAP 2.6.13 provenance and canonical matching the original SHA256; no native PASS inferred.',
+    required_frozen_files: [...frozenFiles, 'tracked.patch'], missing }, null, 2));
+  process.exit(0);
+}
+if (missing.length) throw new Error('Incomplete inputs; nothing published:\n' + missing.join('\n'));
+const output = new Map(), checks = [['path', 'check', 'status', 'detail']], trackedReads = new Map();
+const sha = body => createHash('sha256').update(body).digest('hex');
+const tsv = rows => rows.map(r => r.map(v => String(v ?? '').replace(/[\t\r\n]/g, ' ') || '-').join('\t')).join('\n') + '\n';
+const seq = n => Array.from({ length: n }, (_, i) => i + 1);
+const finite = n => Number.isFinite(n) && n >= 0;
+const positive = n => Number.isFinite(n) && n > 0;
+const median = values => { const a = [...values].sort((a, b) => a - b); return (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2; };
+const table = (f, rows) => output.set(f, tsv(rows));
+const check = (f, name, ok, detail = '-') => checks.push([f, name, ok ? 'PASS' : 'FAIL', detail]);
+function requirePassing() {
+  const failures = checks.slice(1).filter(r => r[2] === 'FAIL');
+  if (failures.length) throw new Error('Evidence checks failed; nothing published:\n' + tsv([checks[0], ...failures]));
+}
+function remember(f) {
+  const s = fs.lstatSync(f), previous = trackedReads.get(f);
+  if (!s.isFile() || s.isSymbolicLink()) throw new Error('Expected regular file: ' + f);
+  const stamp = [s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs].join(':');
+  if (previous && previous !== stamp) throw new Error('Input changed: ' + f);
+  trackedReads.set(f, stamp);
+}
+function readPath(f) { remember(f); const body = fs.readFileSync(f, 'utf8'); remember(f); return body; }
+const read = f => readPath(path.join(src, f));
+const archiveName = f => /\.(sh|log|mjs|go)$/.test(f) ? f + '.txt' : f;
+function safeRelative(f) { return typeof f === 'string' && f.length > 0 && !path.isAbsolute(f) && !f.split('/').some(p => ['..', '.', ''].includes(p)); }
+function rawArchivePath(f) {
+  const diagnostic = plans.some(p => p.diagnostic && (f.startsWith(p.run + '/') || f.startsWith(p.script + '.')));
+  return (diagnostic ? 'diagnostics/' : '') + archiveName(f);
+}
+function parseTSV(f, header) {
+  const [head, ...rows] = read(f).trim().split(/\r?\n/).map(s => s.split('\t'));
+  check(f, 'TSV header and rows', JSON.stringify(head) === JSON.stringify(header) && rows.length > 0 && rows.every(r => r.length === head.length));
+  return rows.map(row => Object.fromEntries(head.map((h, i) => [h, row[i]])));
+}
+const signal = JSON.parse(readPath(signalPath));
+check(signalFile, 'handoff stable during input discovery', JSON.stringify(signal) === JSON.stringify(inputConfig));
+check(signalFile, 'explicit final validation, macro and network completion', signal.round === 'R20' &&
+  signal.validation_finished === true && signal.macro_finished === true && signal.network_finished === true &&
+  signal.validation_exit_code === 0 && signal.performance_exit_code === 0 && signal.network_exit_code === 0 &&
+  typeof signal.main_signal === 'string' && !!signal.main_signal.trim() && Number.isFinite(Date.parse(signal.completed_at)) &&
+  /^[a-f0-9]{64}$/.test(signal.current_sha256) && signal.current_sha256 !== baselineHash && signal.source_git_head === baseline);
+check(signalFile, 'frozen production source and shared network benchmark provenance', signal.source_frozen === true &&
+  signal.network?.before_source_revision === baseline && signal.network?.same_benchmark_source === true &&
+  signal.network?.candidate_matches_frozen_source === true && signal.network?.benchtime === '1s' &&
+  signal.network?.fixture === path.join(src, 'member-index.db') &&
+  typeof signal.network?.benchmark_sha256 === 'string' && /^[a-f0-9]{64}$/.test(signal.network.benchmark_sha256));
+check(signalFile, 'main-reported alternating execution order and successful commands',
+  Array.isArray(signal.network?.runs) && signal.network.runs.length === 6 &&
+  networkRuns.every((r, i) => {
+    const actual = signal.network.runs[i];
+    return actual?.file === r.file && actual.side === r.side && actual.round === r.round &&
+      actual.position === r.position && actual.exit_code === 0 &&
+      typeof actual.command === 'string' && !!actual.command.trim();
+  }));
+check(signalFile, 'no fuzz/race claim and source/CLI relationship recorded', signal.fuzz_run === false && signal.race_run === false &&
+  typeof signal.cli_sources === 'string' && !!signal.cli_sources.trim());
+check(signalFile, 'main records the final rejection', typeof signal.main_decision === 'string' && /REJECTED/i.test(signal.main_decision));
+check(signalFile, 'rebuilt native reference and recovery completed', signal.native?.version === '2.6.13' &&
+  signal.native?.source_commit === nativeCommit &&
+  typeof signal.native?.binary === 'string' && path.isAbsolute(signal.native.binary) &&
+  typeof signal.native?.env_file === 'string' && path.isAbsolute(signal.native.env_file) &&
+  typeof signal.native?.fixture_dir === 'string' && path.isAbsolute(signal.native.fixture_dir) &&
+  signal.recovery?.completed === true && signal.recovery?.canonical_sha256 === canonicalHash &&
+  typeof signal.recovery?.reason === 'string' && !!signal.recovery.reason.trim() &&
+  typeof signal.recovery?.source_seed === 'string' && path.isAbsolute(signal.recovery.source_seed) &&
+  typeof signal.recovery?.canonical_path === 'string' && path.isAbsolute(signal.recovery.canonical_path) &&
+  typeof signal.recovery?.native_canonical_path === 'string' && path.isAbsolute(signal.recovery.native_canonical_path) &&
+  Array.isArray(signal.recovery?.artifacts) && signal.recovery.artifacts.length > 0);
+check(signalFile, 'recovery archive paths are explicit unique text inputs',
+  Array.isArray(signal.recovery?.artifacts) && signal.recovery.artifacts.every(p =>
+    typeof p.source === 'string' && path.isAbsolute(p.source) && safeRelative(p.archive) &&
+    p.archive.startsWith('recovery/raw/') && /\.(?:txt|json|tsv|raw)$/.test(p.archive) &&
+    !/\.env$|\/(?:password|credentials)(?:\.|$)/.test(p.source)) &&
+  new Set(signal.recovery.artifacts.map(p => p.archive)).size === signal.recovery.artifacts.length);
+requirePassing();
+output.set(signalFile, readPath(signalPath));
+for (const f of ['generator/HANDOFF.md', 'generator/main-finished.example.json']) {
+  output.set(f, readPath(path.join(dst, f)));
+}
+if (fs.existsSync(path.join(dst, 'generator/preparation.json'))) {
+  output.set('generator/preparation.json', readPath(path.join(dst, 'generator/preparation.json')));
+}
+const expectedHashes = Object.fromEntries([...read('executable-sha256.txt').matchAll(/^([a-f0-9]{64})\s+(.+)$/gm)].map(m => [path.basename(m[2]), m[1]]));
+check('executable-sha256.txt', 'pipeline hashes equal frozen R19 CLI and final R20 handoff', same(Object.keys(expectedHashes), ['before', 'current']) &&
+  read('executable-sha256.txt').trim().split('\n').length === 2 && expectedHashes.before === baselineHash && expectedHashes.current === signal.current_sha256);
+requirePassing();
+for (const f of rawFiles) output.set(rawArchivePath(f), read(f));
+output.set('generate-evidence.mjs.txt', readPath(fileURLToPath(import.meta.url)));
+const nativeVersion = readPath(signal.native.version_log);
+check('recovery/native-version.txt', 'actual OpenLDAP 2.6.13 version output', /slapd\s+2\.6\.13\b/.test(nativeVersion));
+output.set('recovery/native-version.txt', nativeVersion);
+const nativeEnv = Object.fromEntries([...readPath(signal.native.env_file).matchAll(
+  /^export (OPENLDAP_COMMIT|OPENLDAP_VERIFIED_COMMIT|OPENLDAP_REFERENCE_VERIFIED|OPENLDAP_SLAPD|OPENLDAP_SCHEMA_DIR)='([^']*)'$/gm
+)].map(m => [m[1], m[2]]));
+check('recovery/native-environment.tsv', 'verified native environment pin and binary match handoff',
+  nativeEnv.OPENLDAP_COMMIT === nativeCommit && nativeEnv.OPENLDAP_VERIFIED_COMMIT === nativeCommit &&
+  nativeEnv.OPENLDAP_REFERENCE_VERIFIED === '1' && nativeEnv.OPENLDAP_SLAPD === signal.native.binary &&
+  typeof nativeEnv.OPENLDAP_SCHEMA_DIR === 'string' && !!nativeEnv.OPENLDAP_SCHEMA_DIR);
+table('recovery/native-environment.tsv', [['name', 'value'], ...Object.entries(nativeEnv)]);
+for (const p of signal.recovery.artifacts) {
+  const body = readPath(p.source);
+  check(p.source, 'recovery evidence is textual', !body.includes('\0'));
+  output.set(p.archive, body);
+}
+output.set('recovery/provenance.json', JSON.stringify({ native: signal.native, recovery: signal.recovery }, null, 2) + '\n');
+
+const dims = ['suite', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members', 'endpoint'];
+const sampleHeader = [...dims, 'repeat', 'operations', 'total_ms', 'source'];
+const medianHeader = [...dims, 'repeats', 'operations', 'median_ms', 'operations_per_second_at_median'];
+const comparisonHeader = [...dims.slice(0, -1), 'operations', 'before_ms', 'current_ms', 'openldap_ms', 'current_over_openldap_throughput_pct', 'time_reduction_pct'];
+const reportHeader = ['path', 'rows', 'n', 'repeats', 'setup_adds', 'cleanup_done', 'error', 'started_at'];
+const counterHeader = ['path', ...dims, 'repeat', 'operations', 'completed', 'requests', 'latencies', 'verification_requests', 'verification_ms'];
+const makeCollection = () => ({ samples: [sampleHeader], groups: new Map(), medians: [medianHeader], comparisons: [comparisonHeader], reports: [reportHeader], counters: [counterHeader] });
+const core = makeCollection(), diagnostics = makeCollection();
+diagnostics.comparisons[0] = [...dims.slice(0, -1), 'operations', 'before_label_ms', 'current_label_ms', 'openldap_ms', 'current_label_over_openldap_throughput_pct', 'label_time_reduction_pct'];
+function add(collection, dimensions, s, f, repeats) {
+  const key = JSON.stringify(dimensions);
+  if (!collection.groups.has(key)) collection.groups.set(key, { repeats, rows: [] });
+  const group = collection.groups.get(key);
+  if (group.repeats !== repeats) throw new Error(`Mixed repeat design: ${key}`);
+  group.rows.push(s);
+  collection.samples.push([...dimensions, s.repeat, s.operations, s.total_ms, rawArchivePath(f)]);
+}
+const identities = [['run', 'role', 'endpoint_label', 'binary', 'sha256', 'port', 'startup_position']];
+for (const p of plans) {
+  const body = read(p.script + '.sh'), swap = p.suite === 'startup-port-swap', aa = p.suite === 'aa';
+  const ports = { before: swap ? 29482 : 29481, current: swap ? 29481 : 29482, openldap: 29483 };
+  const startup = swap ? ['current', 'before', 'openldap'] : endpoints;
+  check(p.script + '.log', 'successful script completion', read(p.script + '.log').trimEnd().endsWith('Common-operation comparison passed.'));
+  check(p.script + '.sh', 'uses rebuilt reference environment and recovered native fixture',
+    body.includes(signal.native.env_file) && body.includes('source_dir=' + signal.native.fixture_dir));
+  check(p.script + '.sh', 'round, access mode and uniform APFS clone setup', body.includes(`audit=${src}`) && body.includes(`out=$audit/${p.run}`) &&
+    body.includes(`cp -c "$audit/${p.access === 'explicit' ? 'member-acl' : 'member-index'}.db"`) &&
+    body.includes('cp -c "$source_dir/openldap-1/data/data.mdb"') && [...body.matchAll(/^\s*cp /gm)].length === 2 &&
+    (p.access === 'explicit' ? body.includes('access to attrs=userPassword') : !/^.*'access to /m.test(body)));
+  check(p.script + '.sh', 'startup and Go executable mapping', body.includes(`for side in ${startup.join(' ')}; do`) &&
+    (aa ? body.includes('binary=$audit/current') && !body.includes('binary=$audit/$side') : body.includes('binary=$audit/$side')));
+  if (p.diagnostic) check(p.script + '.sh', 'predetermined two fixed-UID reads at 1000 x 7', body.includes('-stages base,equality') && body.includes('-uid scale-001001') && body.includes('-n 1000 -repeats 7') && body.includes('>"$out/hot.json"'));
+  if (p.suite === 'common') check(p.script + '.sh', 'eight concurrent workers, 1000 validated results, warm0 plus three',
+    body.includes('for repeat in 0 1 2 3; do') && body.includes('for worker in 0 1 2 3 4 5 6 7; do') && body.includes('i=1001;i<=2000;i++') && body.includes('-eq 1000 ]'));
+  for (const e of endpoints) {
+    check(p.script + '.sh', `${e} endpoint port`, body.includes(`${e}) port=${ports[e]};;`) && body.includes(`-endpoint ${e}=ldap://127.0.0.1:${ports[e]}`));
+    const binary = e === 'openldap' ? 'openldap' : aa ? 'current' : e;
+    identities.push([p.run, p.diagnostic ? 'DIAGNOSTIC' : 'CORE', e, binary, expectedHashes[binary] ?? 'OPENLDAP_2.6.13_REFERENCE', ports[e], startup.indexOf(e) + 1]);
+  }
+  const collection = p.diagnostic ? diagnostics : core;
+  for (const f of jsonFiles(p)) {
+    const j = JSON.parse(read(f)), c = j.config, batch = path.basename(f, '.json');
+    const warmup = batch === 'warmup', smoke = batch.includes('smoke'), root = p.suite === 'root', group = p.suite === 'group-compare';
+    check(f, 'error-free report shape, 100k fixture and timestamp', !!c && Array.isArray(warmup ? j.stages : j.samples) && j.error === '' && c.entries === 100000 && Number.isFinite(Date.parse(j.started_at)));
+    requirePassing();
+    collection.reports.push([rawArchivePath(f), (j.samples || j.stages).length, c.n, c.repeats, j.setup_adds, j.cleanup_done?.join(','), j.error, j.started_at]);
+    if (warmup) {
+      const e = f.split('/')[1];
+      check(f, 'SDK warmup endpoint, inventory and read-only mode', c.uri === `ldap://127.0.0.1:${ports[e]}` && c.n === 2 && c.read_only === true && c.write === false && same(j.stages.map(s => s.name), sdkStages));
+      check(f, 'warmup counters, errors and timing totals', j.stages.every(s => s.operations === (s.name === 'connect' ? 1 : 2) && Array.isArray(s.errors) && !s.errors.length && finite(s.total_ms) && finite(s.verification_ms) && finite(s.verification_operations)));
+      continue;
+    }
+    const repeats = smoke ? 1 : p.diagnostic || root || group || batch === 'hot' ? 7 : 3;
+    const n = smoke ? 2 : p.suite === 'common' && batch === 'groups' ? 100 : 1000;
+    const cases = p.diagnostic ? reads : root ? rootCases : group ? compareCases : smoke ? [...hot, ...groupCases] : batch === 'hot' ? hot : batch === 'distributed' ? reads : groupCases;
+    const expected = cases.flatMap(row => endpoints.flatMap(e => seq(repeats).map(i => JSON.stringify([...row, e, i]))));
+    check(f, 'operation and repeat count, disposable setup and cleanup', c.n === n && c.repeats === repeats && c.setup_disposable === true && Number.isInteger(j.setup_adds) && j.setup_adds > 0 && !!j.run_dn && same(j.cleanup_done, endpoints));
+    check(f, 'configured stages and endpoint addresses', same(c.stages, [...new Set(cases.map(r => r[0]))]) && same(c.endpoints?.map(e => `${e.name}=${e.uri}`), endpoints.map(e => `${e}=ldap://127.0.0.1:${ports[e]}`)));
+    check(f, 'exact stage/method/members/endpoint/repeat inventory', same(j.samples.map(s => JSON.stringify([s.stage, s.method, s.members ?? 0, s.endpoint, s.repeat])), expected), `${j.samples.length}/${expected.length}`);
+    check(f, 'operation and latency counts', j.samples.every(s => s.operations === n && s.completed === n && s.latency_ms?.length === n && s.latency_ms.every(finite)));
+    check(f, 'request and WhoAmI verification counts', j.samples.every(s => Number.isInteger(s.requests) && (s.stage === 'nestedMembership' ? s.requests >= n : s.requests === n) && s.verification_requests === (s.stage === 'userBindWrong' ? 3 * n : s.requests) + 2));
+    check(f, 'sample errors and timing totals', j.samples.every(s => !s.error && !s.errors?.length && positive(s.total_ms) && finite(s.verification_ms)));
+    check(f, 'latency sum equals total', j.samples.every(s => Array.isArray(s.latency_ms) && Math.abs(s.total_ms - s.latency_ms.reduce((a, b) => a + b, 0)) <= Math.max(1e-6, s.total_ms * 1e-9)));
+    const expectedDN = batch.startsWith('normalized') ? rootDN.toUpperCase() : rootDN;
+    check(f, 'root variant and nonroot identity', c.root_bind_dn === expectedDN && j.samples.every(s => root ? s.root_bind_dn === expectedDN : !s.root_bind_dn));
+    if ((p.suite === 'common' && ['hot', 'distributed'].includes(batch)) || p.diagnostic) check(f, 'hot versus distributed target selection', (p.diagnostic || batch === 'hot') ? c.uid === 'scale-001001' : !c.uid);
+    for (const s of j.samples) {
+      const d = [p.suite, p.access, root ? 'root' : 'nonroot', batch, s.stage, s.method, s.members ?? 0, s.endpoint];
+      collection.counters.push([rawArchivePath(f), ...d, s.repeat, s.operations, s.completed, s.requests, s.latency_ms?.length, s.verification_requests, s.verification_ms]);
+      if (!smoke) add(collection, d, s, f, repeats);
+    }
+  }
+  if (p.suite === 'common') {
+    const f = `${p.run}/concurrent.tsv`, rows = parseTSV(f, ['side', 'repeat', 'ms']);
+    check(f, 'warmup and three measured repeats per endpoint', same(rows.map(r => `${r.side}:${r.repeat}`), endpoints.flatMap(e => [0, 1, 2, 3].map(i => `${e}:${i}`))) && rows.every(r => positive(+r.ms)));
+    for (const r of rows.filter(r => +r.repeat > 0)) add(core, ['concurrent', p.access, 'root', '8-workers', 'uidEquality', 'ldapsearch', 0, r.side], { repeat: +r.repeat, operations: 8000, total_ms: +r.ms }, f, 3);
+  }
+}
+check('run-performance.sh', 'seven fixed sequential scripts', JSON.stringify([...read('run-performance.sh').matchAll(/^sh "\$audit\/([^"\n]+)\.sh"/gm)].map(m => m[1])) === JSON.stringify(plans.map(p => p.script)) && !/\s&(?:\s|$)/m.test(read('run-performance.sh')));
+table('endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'CORE'));
+table('diagnostics/endpoint-identity.tsv', identities.filter((r, i) => i === 0 || r[1] === 'DIAGNOSTIC'));
+table('run-sources.tsv', [['run', 'script', 'access_mode', 'role'], ...plans.map(p => [p.run, p.script + '.sh', p.access, p.diagnostic ? 'DIAGNOSTIC' : 'CORE'])]);
+function summarize(collection, prefix, expected) {
+  for (const [key, group] of collection.groups) {
+    const d = JSON.parse(key), rows = group.rows;
+    check(key, 'fixed repeat inventory and equal operations', same(rows.map(s => s.repeat), seq(group.repeats)) && new Set(rows.map(s => s.operations)).size === 1 && rows.every(s => positive(s.total_ms)));
+    const ms = median(rows.map(s => s.total_ms));
+    collection.medians.push([...d, rows.length, rows[0].operations, ms, rows[0].operations * 1000 / ms]);
+  }
+  for (const key of new Set(collection.medians.slice(1).map(r => JSON.stringify(r.slice(0, 7))))) {
+    const rows = endpoints.map(e => collection.medians.slice(1).find(r => JSON.stringify(r.slice(0, 7)) === key && r[7] === e));
+    check(key, 'three endpoints with equal operation counts', rows.every(Boolean) && new Set(rows.map(r => r?.[9])).size === 1);
+    if (rows.some(r => !r)) continue;
+    const [b, c, o] = rows.map(r => r[10]);
+    collection.comparisons.push([...JSON.parse(key), rows[0][9], b, c, o, 100 * o / c, 100 * (1 - c / b)]);
+  }
+  check(prefix || 'core', 'samples, medians, comparisons and JSON totals', [collection.samples.length - 1, collection.medians.length - 1, collection.comparisons.length - 1, collection.reports.length - 1].every((n, i) => n === expected[i]), expected.join('/'));
+  for (const name of ['samples', 'medians', 'comparisons', 'reports', 'counters']) table(prefix + name + '.tsv', collection[name]);
+  collection.negatives = collection.comparisons.slice(1).filter(r => r[12] < 0);
+  collection.belowNative = collection.comparisons.slice(1).filter(r => r[11] < 100);
+  table(prefix + 'negative-comparisons.tsv', [collection.comparisons[0], ...collection.negatives]);
+  table(prefix + 'below-openldap-comparisons.tsv', [collection.comparisons[0], ...collection.belowNative]);
+}
+summarize(core, '', [840, 144, 48, 31]);
+summarize(diagnostics, 'diagnostics/', [84, 12, 4, 10]);
+const counts = [['scope', 'variant', 'samples', 'medians', 'comparisons']];
+for (const [scope, collection] of [['core', core], ['diagnostics', diagnostics]]) {
+  for (const variant of new Set(collection.samples.slice(1).map(r => `${r[0]}/${r[3]}`))) {
+    const matches = r => `${r[0]}/${r[3]}` === variant;
+    counts.push([scope, variant, collection.samples.slice(1).filter(matches).length, collection.medians.slice(1).filter(matches).length, collection.comparisons.slice(1).filter(matches).length]);
+  }
+}
+check('core', '252 hot, 36 distributed, 72 group reads, 210 root, 252 group Compare, 18 concurrent samples',
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'hot').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'distributed').length === 36 &&
+  core.samples.slice(1).filter(r => r[0] === 'common' && r[3] === 'groups').length === 72 &&
+  core.samples.slice(1).filter(r => r[0] === 'root').length === 210 && core.samples.slice(1).filter(r => r[0] === 'group-compare').length === 252 &&
+  core.samples.slice(1).filter(r => r[0] === 'concurrent').length === 18);
+table('statistics-inventory.tsv', counts);
+requirePassing();
+
+
+// Network allocation measurements include SDK and server in the same process.
+// They have no native endpoint and never enter macro or diagnostic collections.
+const benchExpression = /^(Benchmark\S+)-(\d+)\s+(\d+)\s+([\d.]+) ns\/op\s+(\d+) B\/op\s+(\d+) allocs\/op\s*$/gm;
+function benchmarkRows(file, body, expected) {
+  const rows = [...body.matchAll(benchExpression)].map(m => ({
+    name: m[1], cpu: +m[2], iterations: +m[3], ns: +m[4], bytes: +m[5], allocs: +m[6],
+  }));
+  check(file, 'complete benchmark log with expected samples and PASS',
+    rows.length === expected && rows.length === (body.match(/^Benchmark\S+/gm) || []).length &&
+    /^goos: darwin$/m.test(body) && /^goarch: arm64$/m.test(body) && /^cpu: Apple M1 Pro$/m.test(body) &&
+    /^pkg: github\.com\/wangle201210\/ldap-go\/internal\/server$/m.test(body) &&
+    /^PASS$/m.test(body) && /(?:^|\n)(?:PASS|ok\s+\S+\s+[\d.]+s)\s*$/.test(body) &&
+    !/^FAIL(?:\s|$)|^\s*--- (?:FAIL|SKIP):|^panic:/m.test(body) &&
+    rows.every(r => r.cpu === 8 && positive(r.iterations) && positive(r.ns) && finite(r.bytes) && finite(r.allocs)));
+  return rows;
+}
+const networkDims = ['scope', 'access_mode', 'identity', 'variant', 'stage', 'method', 'members'];
+const networkScope = 'same_process_TCP_SDK_plus_server';
+const networkSamples = [[...networkDims, 'endpoint', 'round', 'position', 'iterations', 'ns_op', 'B_op', 'allocs_op', 'source']];
+const networkGroups = new Map();
+for (const run of networkRuns) {
+  const rows = benchmarkRows(run.file, read(run.file), 2);
+  check(run.file, 'exact nonroot Base/equality hot cases', same(rows.map(r => r.name),
+    reads.map(r => 'BenchmarkNetworkCommon/' + r[0] + '/hot')));
+  for (const r of rows) {
+    const stage = r.name.split('/')[1];
+    const d = [networkScope, 'default', 'nonroot', 'hot', stage, 'SDK_Search_' + stage, 0];
+    networkSamples.push([...d, run.side, run.round, run.position, r.iterations, r.ns, r.bytes, r.allocs, run.file]);
+    const key = JSON.stringify([...d, run.side]);
+    if (!networkGroups.has(key)) networkGroups.set(key, []);
+    networkGroups.get(key).push({ ...r, round: run.round });
+  }
+}
+const networkMedians = [[...networkDims, 'endpoint', 'rounds', 'ns_op', 'B_op', 'allocs_op']];
+const networkRanges = [[...networkDims, 'endpoint', 'metric', 'min', 'median', 'max']];
+for (const [key, rows] of networkGroups) {
+  check(key, 'three independent network rounds', same(rows.map(r => r.round), [1, 2, 3]));
+  networkMedians.push([...JSON.parse(key), rows.length, ...['ns', 'bytes', 'allocs'].map(k => median(rows.map(r => r[k])))]);
+  for (const [keyName, metric] of [['ns', 'ns/op'], ['bytes', 'B/op'], ['allocs', 'allocs/op']]) {
+    const values = rows.map(r => r[keyName]);
+    networkRanges.push([...JSON.parse(key), metric, Math.min(...values), median(values), Math.max(...values)]);
+  }
+}
+const networkComparisons = [[...networkDims, 'metric', 'before', 'current', 'absolute_reduction', 'reduction_pct']];
+for (const [stage] of reads) {
+  const [before, current] = ['before', 'current'].map(side => networkMedians.slice(1).find(r => r[4] === stage && r[7] === side));
+  check(stage, 'both network endpoint medians', !!before && !!current);
+  if (!before || !current) continue;
+  for (const [i, metric] of [[9, 'ns/op'], [10, 'B/op'], [11, 'allocs/op']]) {
+    networkComparisons.push([...before.slice(0, 7), metric, before[i], current[i], before[i] - current[i],
+      before[i] ? 100 * (1 - current[i] / before[i]) : null]);
+  }
+}
+check('network', '12 samples, four medians, six metric comparisons',
+  networkSamples.length === 13 && networkMedians.length === 5 && networkComparisons.length === 7);
+const networkNegative = networkComparisons.slice(1).filter(r => r[10] < 0);
+for (const [name, rows] of Object.entries({ samples: networkSamples, medians: networkMedians,
+  comparisons: networkComparisons, ranges: networkRanges,
+  'negative-comparisons': [networkComparisons[0], ...networkNegative] })) table('components/network/' + name + '.tsv', rows);
+table('components/network/run-order.tsv', [['round', 'position', 'endpoint', 'source', 'command'],
+  ...networkRuns.map((r, i) => [r.round, r.position, r.side, r.file, signal.network.runs[i].command])]);
+table('components/network/provenance.tsv', [['item', 'value'],
+  ['before', 'bf510d8 production plus the same opt-in network benchmark source; server-before.test'],
+  ['current', 'R20 candidate plus that identical benchmark source; server-current.test'],
+  ['scope', 'Real TCP and SDK; temporary private copy of the 100k default-access fixture; nonroot Base/equality, hot fixed UID scale-001001'],
+  ['timing', '1s per case; three fixed alternating rounds; b.Loop excludes setup and final validation; allocation counts cover SDK and server'],
+  ['limits', 'Not isolated server allocations; no native measurements in this component; no component/macro pooling or causal attribution'],
+  ['benchmark_source', 'source/new/' + componentSource + '.raw'],
+  ['benchmark_sha256', signal.network.benchmark_sha256],
+]);
+
+// Historical candidate/old-control microbenchmarks are exploratory, not true before.
+const exploratorySummary = [];
+for (const p of exploratoryInputs) {
+  const body = readPath(p.file), archive = 'exploratory/' + p.name + '/components.txt';
+  output.set(archive, body);
+  const rows = benchmarkRows(archive, body, p.samples), groups = new Map();
+  const samples = [['scope', 'case', 'control_label', 'repeat', 'iterations', 'ns_op', 'B_op', 'allocs_op', 'source']];
+  for (const r of rows) {
+    const parts = r.name.split('/'), label = parts.pop(), caseName = parts.join('/');
+    check(archive, 'known exploratory control label', p.controls.includes(label));
+    const key = JSON.stringify([caseName, label]);
+    if (!groups.has(key)) groups.set(key, []);
+    const bucket = groups.get(key);
+    bucket.push(r);
+    samples.push(['OLD_BASELINE_EXPLORATORY', caseName, label, bucket.length, r.iterations, r.ns, r.bytes, r.allocs, archive]);
+  }
+  const medians = [['scope', 'case', 'control_label', 'repeats', 'ns_op', 'B_op', 'allocs_op']];
+  for (const [key, bucket] of groups) {
+    check(archive + '/' + key, 'three exploratory repeats', bucket.length === 3);
+    medians.push(['OLD_BASELINE_EXPLORATORY', ...JSON.parse(key), bucket.length,
+      ...['ns', 'bytes', 'allocs'].map(k => median(bucket.map(r => r[k])))]);
+  }
+  const comparisons = [['scope', 'case', 'old_control_label', 'metric', 'old_control', 'candidate', 'absolute_reduction', 'reduction_pct']];
+  for (const caseName of new Set(medians.slice(1).map(r => r[1]))) {
+    const [old, candidate] = [p.controls[1], 'Current'].map(label => medians.slice(1).find(r => r[1] === caseName && r[2] === label));
+    check(archive + '/' + caseName, 'paired exploratory labels', !!old && !!candidate);
+    if (!old || !candidate) continue;
+    for (const [i, metric] of [[4, 'ns/op'], [5, 'B/op'], [6, 'allocs/op']]) {
+      comparisons.push(['OLD_BASELINE_EXPLORATORY', caseName, p.controls[1], metric, old[i], candidate[i],
+        old[i] - candidate[i], old[i] ? 100 * (1 - candidate[i] / old[i]) : null]);
+    }
+  }
+  for (const [name, values] of Object.entries({ samples, medians, comparisons,
+    'negative-comparisons': [comparisons[0], ...comparisons.slice(1).filter(r => r[6] < 0)] })) {
+    table('exploratory/' + p.name + '/' + name + '.tsv', values);
+  }
+  exploratorySummary.push([p.name, samples.length - 1, medians.length - 1, comparisons.length - 1]);
+}
+table('exploratory/provenance.tsv', [['scope', 'role', 'source', 'limitations'],
+  ...exploratoryInputs.map(p => [p.name, 'OLD_BASELINE_CANDIDATE_VS_OLD_CONTROL', p.file,
+    'Historical isolated exploration; source revision not established by the log; NOT actual bf510d8 before; no pooling with R20 network/macros; negatives retained'])]);
+table('exploratory/inventory.tsv', [['scope', 'samples', 'medians', 'metric_comparisons'], ...exploratorySummary]);
+
+const statuses = [['path', 'role', 'bytes', 'package_ok', 'cached_package_ok', 'test_PASS', 'test_FAIL', 'test_SKIP', 'PASS_lines', 'FAIL_lines', 'top_level_RUN', 'top_level_PASS']];
+for (const f of logs) {
+  const body = read(f), count = re => [...body.matchAll(re)].length;
+  statuses.push([f, f.startsWith('network-') ? 'R20_NETWORK' : 'R20_MAIN', Buffer.byteLength(body),
+    count(/^ok\s/gm), count(/^ok\s.*\(cached\)/gm), count(/^\s*--- PASS:/gm), count(/^\s*--- FAIL:/gm),
+    count(/^\s*--- SKIP:/gm), count(/^PASS$/gm), count(/^FAIL(?:\s|$)/gm),
+    count(/^=== RUN[ \t]+[^\s/]+$/gm), count(/^--- PASS:/gm)]);
+  check(f, 'no failures or panic', !/^FAIL(?:\s|$)|^\s*--- FAIL:|^panic:/m.test(body));
+  if (f === 'go-vet.txt') check(f, 'empty vet log and main confirmed success', !body.trim() && signal.validation_exit_code === 0);
+  else check(f, 'successful complete log', /(?:^|\n)(?:PASS|ok\s[^\n]+|\?\s[^\n]+\[no test files\])\s*$/.test(body));
+  if (f === 'openldap-differential.txt') check(f, '355 native PASS records, 26 top-level tests, no skips',
+    count(/^\s*--- PASS:/gm) === 355 && count(/^=== RUN[ \t]+[^\s/]+$/gm) === 26 &&
+    count(/^--- PASS:/gm) === 26 && count(/^\s*--- (?:FAIL|SKIP):/gm) === 0);
+}
+check('focused-test.txt', 'main focused server PASS at 0.079s', /^ok\s+github\.com\/wangle201210\/ldap-go\/internal\/server\s+0\.079s\s*$/m.test(read('focused-test.txt')));
+check('go-test.txt', 'full Go suite includes directory/schema/storage/server', ['directory', 'schema', 'storage', 'server'].every(p =>
+  new RegExp('^ok\\s+github\\.com/wangle201210/ldap-go/internal/' + p + '\\s', 'm').test(read('go-test.txt'))));
+const validationScript = read('validate.sh');
+check('validate.sh', 'full Go, vet, native, build and hash; no fuzz/race',
+  ['export CGO_ENABLED=0', 'go test ./...', 'go vet ./...', 'go build -o', 'shasum -a 256',
+    'LDAP_GO_OPENLDAP_REFERENCE_TESTS=1'].every(s => validationScript.includes(s)) &&
+  !/-fuzz|-race/.test(validationScript));
+check('validate.sh', 'rebuilt native environment used for final native validation', validationScript.includes(signal.native.env_file));
+table('log-status.tsv', statuses);
+table('validation-scope.tsv', [['item', 'status', 'evidence'],
+  ['focused', 'MAIN_LOG', 'focused-test.txt'], ['full_go', 'MAIN_LOG', 'go-test.txt'],
+  ['vet', 'MAIN_CONFIRMED_EMPTY_LOG', 'go-vet.txt'], ['native', '355_PASS_RECORDS', 'openldap-differential.txt'],
+  ['fuzz', 'NOT_RUN_THIS_ROUND', signalFile], ['race', 'NOT_RUN_THIS_ROUND', signalFile]]);
+requirePassing();
+
+// Main owns the immutable /tmp capture. This worker reads it and writes only the archive.
+const capture = { round: 'R20', baseline, source_git_head: signal.source_git_head,
+  tracked: keySources, new_sources: newSources, frozen_files: frozenFiles, main_signal: signal.main_signal };
+const baselineFiles = git(['ls-tree', '-r', '--name-only', baseline]).trim().split('\n')
+  .filter(f => !f.startsWith('docs/') && (f.endsWith('.go') || /(^|\/)go\.(mod|sum)$/.test(f)));
+const sourceFiles = [...new Set([...baselineFiles, ...frozenFiles])].sort();
+const objects = execFileSync('git', ['cat-file', '--batch'], { cwd: repo,
+  input: baselineFiles.map(f => baseline + ':' + f + '\n').join(''), maxBuffer: 64 * 1024 * 1024 });
+const baselineBodies = new Map();
+let offset = 0;
+for (const f of baselineFiles) {
+  const end = objects.indexOf(10, offset), header = objects.subarray(offset, end).toString('utf8');
+  const matched = header.match(/^[a-f0-9]{40} blob (\d+)$/);
+  if (!matched) throw new Error('Invalid baseline blob for ' + f);
+  const size = +matched[1], start = end + 1;
+  baselineBodies.set(f, objects.subarray(start, start + size).toString('utf8')); offset = start + size + 1;
+}
+if (offset !== objects.length) throw new Error('Baseline blob inventory mismatch');
+const sourceBodies = new Map(baselineBodies);
+for (const f of frozenFiles) sourceBodies.set(f, readPath(path.join(frozenRoot, f)));
+const sourcePatch = readPath(path.join(frozenRoot, 'tracked.patch'));
+const patchFiles = [];
+function gitBlob(body) { return createHash('sha1').update('blob ' + Buffer.byteLength(body) + '\0').update(body).digest('hex'); }
+for (const section of sourcePatch.split('diff --git ').slice(1)) {
+  const filename = section.match(/^a\/(\S+) b\/\1\n/)?.[1];
+  const blobs = section.match(/^index ([a-f0-9]{40})\.\.([a-f0-9]{40}) /m);
+  patchFiles.push(filename);
+  check(filename ?? 'source-patch', 'full patch blob identities equal immutable baseline and captured bytes', !!blobs &&
+    baselineBodies.has(filename) && sourceBodies.has(filename) &&
+    gitBlob(baselineBodies.get(filename)) === blobs[1] && gitBlob(sourceBodies.get(filename)) === blobs[2]);
+}
+check('source', 'baseline-relative two tracked files plus exactly five new files', same(patchFiles, keySources) &&
+  same(sourceFiles.filter(f => !baselineFiles.includes(f)), newSources));
+check('source', 'CLI and module files unchanged from baseline',
+  [...cliSources, 'go.mod', 'go.sum'].every(f => baselineBodies.get(f) === sourceBodies.get(f)));
+check('source', 'shared network benchmark equals main-reported source hash',
+  sha(sourceBodies.get(componentSource)) === signal.network.benchmark_sha256);
+const sourceRows = [['path', 'sha256', 'bytes', 'reconstruction'], ...sourceFiles.map(f => {
+  const body = sourceBodies.get(f);
+  return [f, sha(body), Buffer.byteLength(body), newSources.includes(f) ? 'source/new/' + f + '.raw'
+    : keySources.includes(f) ? 'baseline + source/tracked.patch.txt' : 'immutable baseline ' + baseline];
+})];
+table('source-hashes.tsv', sourceRows);
+output.set('source/tracked.patch.txt', sourcePatch);
+for (const f of newSources) output.set('source/new/' + f + '.raw', sourceBodies.get(f));
+for (const f of cliSources) output.set('source/cli/' + f + '.txt', sourceBodies.get(f));
+for (const f of ['go.mod', 'go.sum']) output.set('source/module/' + f + '.raw', sourceBodies.get(f));
+table('cli-source-hashes.tsv', [['path', 'sha256', 'archive_path'], ...cliSources.map(f =>
+  [f, sha(sourceBodies.get(f)), 'source/cli/' + f + '.txt'])]);
+table('source/frozen-source.tsv', [['path', 'sha256', 'bytes', 'frozen_path'], ...frozenFiles.map(f =>
+  [f, sha(sourceBodies.get(f)), Buffer.byteLength(sourceBodies.get(f)), path.join(frozenRoot, f)])]);
+output.set('source/reconstruction.hash', sourceRows.slice(1).map(r => r[1] + '  ' + r[0]).join('\n') + '\n');
+output.set('source/provenance.json', JSON.stringify({ ...capture, source_root: frozenRoot,
+  patch_sha256: sha(sourcePatch), source_files: sourceFiles.length,
+  reconstruction: 'Immutable bf510d8 baseline + tracked.patch.txt + five source/new .raw files.',
+  scope: 'R20 operationQueue inline[1] pointer-slot reuse and immutable audit-identity snapshot reuse only.',
+  unchanged_source: 'All other Go/module bytes read from immutable baseline, never later live main.',
+  component_source: componentSource, component_source_sha256: sha(sourceBodies.get(componentSource)),
+  cli_confirmation: signal.cli_sources,
+}, null, 2) + '\n');
+output.set('source/RECONSTRUCTION.txt', 'Start from clean baseline ' + baseline + '. Apply source/tracked.patch.txt with git apply. Copy the five source/new/ files to their repository paths, stripping only the final .raw suffix. Verify Go/module files with source/reconstruction.hash relative to that checkout.\n\nMain froze changed source and CLI/module references at ' + frozenRoot + '. This evidence worker does not write there. No duplicate complete server.go or operation.go is archived; the patch and five new files are sufficient. CLI copies and module files are convenience references. This records source provenance, not reproducible binaries. Actual executable module metadata is retained separately, including missing test-executable VCS fields.\n');
+requirePassing();
+
+// Large reads and all SHA256 work are gated by main's explicit final completion.
+async function facts(file, countLines = false) {
+  remember(file);
+  const hash = createHash('sha256');
+  let bytes = 0, lines = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    hash.update(chunk); bytes += chunk.length;
+    if (countLines) for (let i = chunk.indexOf(10); i >= 0; i = chunk.indexOf(10, i + 1)) lines++;
+  }
+  remember(file);
+  return { sha256: hash.digest('hex'), bytes, lines };
+}
+const exportHeader = ['run', 'endpoint', 'entries', 'cksum', 'bytes', 'sha256', 'source_path'];
+const recoveredCanonical = await facts(signal.recovery.canonical_path, true);
+const nativeCanonical = await facts(signal.recovery.native_canonical_path, true);
+const recoveredChecksum = execFileSync('cksum', [signal.recovery.canonical_path], { encoding: 'utf8' }).trim().split(/\s+/);
+check('recovery', 'rebuilt canonical matches original content, line count, bytes and cksum',
+  recoveredCanonical.sha256 === canonicalHash && recoveredCanonical.lines === 100002 &&
+  recoveredCanonical.bytes === 42712438 && recoveredChecksum[0] === '2143929969' &&
+  +recoveredChecksum[1] === recoveredCanonical.bytes);
+check('recovery', 'native seed round-trip canonical matches original',
+  nativeCanonical.sha256 === canonicalHash && nativeCanonical.lines === recoveredCanonical.lines &&
+  nativeCanonical.bytes === recoveredCanonical.bytes);
+const recoverySeed = await facts(signal.recovery.source_seed);
+const nativeBinary = await facts(signal.native.binary);
+const nativeHashArtifact = signal.recovery.artifacts.find(p => p.archive === 'recovery/raw/native-tool-hashes.txt');
+check('recovery', 'native tool manifest provided', !!nativeHashArtifact);
+requirePassing();
+const nativeHashText = readPath(nativeHashArtifact.source);
+const nativeRecords = [...nativeHashText.matchAll(/^([a-f0-9]{64})\s+(.+)$/gm)].map(m => ({ expected: m[1], file: m[2] }));
+const nativeRoot = path.dirname(signal.native.env_file);
+const realNativeRoot = fs.realpathSync(nativeRoot);
+const nativeResolutions = [];
+const nativeExecutablePath = path.join(path.dirname(signal.native.binary), '.libs', path.basename(signal.native.binary));
+const builderPath = 'scripts/build-openldap-reference.sh';
+const builderSource = git(['show', baseline + ':' + builderPath]);
+check('recovery', 'native manifest is complete, unique and scoped to rebuilt artifacts or immutable builder',
+  nativeRecords.length === nativeHashText.trim().split('\n').length &&
+  new Set(nativeRecords.map(r => r.file)).size === nativeRecords.length &&
+  nativeRecords.every(r => r.file.startsWith(nativeRoot + '/') || r.file === path.join(repo, builderPath)) &&
+  [nativeExecutablePath, signal.native.env_file, path.join(repo, builderPath)].every(f => nativeRecords.some(r => r.file === f)));
+requirePassing();
+const nativeToolRows = [['role', 'source_path', 'resolved_path', 'file_type', 'expected_sha256', 'actual_sha256', 'bytes', 'status']];
+let nativeExecutable;
+for (const record of nativeRecords) {
+  const fromGit = record.file === path.join(repo, builderPath);
+  const resolved = fromGit ? baseline + ':' + builderPath : fs.realpathSync(record.file);
+  if (!fromGit) {
+    check(record.file, 'native artifact resolves within the rebuilt directory', resolved.startsWith(realNativeRoot + '/'));
+    requirePassing();
+    nativeResolutions.push([record.file, resolved]);
+  }
+  const actual = fromGit ? { sha256: sha(builderSource), bytes: Buffer.byteLength(builderSource) } : await facts(resolved);
+  const type = fromGit ? 'immutable Git source at ' + baseline : execFileSync('file', ['-b', resolved], { encoding: 'utf8' }).trim();
+  const role = fromGit ? 'IMMUTABLE_REFERENCE_BUILDER' : record.file === nativeExecutablePath ? 'ACTUAL_SLAPD_EXECUTABLE'
+    : record.file === signal.native.binary ? 'ENV_ENTRYPOINT_WRAPPER' : 'RECORDED_NATIVE_ARTIFACT';
+  check(record.file, 'actual native artifact equals recorded SHA256', actual.sha256 === record.expected, actual.sha256);
+  nativeToolRows.push([role, record.file, resolved, type, record.expected, actual.sha256, actual.bytes, actual.sha256 === record.expected ? 'PASS' : 'FAIL']);
+  if (record.file === nativeExecutablePath) {
+    nativeExecutable = actual;
+    check(record.file, 'actual slapd is the observed arm64 Mach-O executable', /Mach-O 64-bit executable arm64/.test(type));
+  }
+}
+const wrapperType = execFileSync('file', ['-b', signal.native.binary], { encoding: 'utf8' }).trim();
+check(signal.native.binary, 'env entrypoint is a libtool shell wrapper, not the actual executable',
+  /shell script/.test(wrapperType) && readPath(signal.native.binary).includes('temporary wrapper script for .libs/slapd'));
+if (!nativeRecords.some(r => r.file === signal.native.binary)) nativeToolRows.push([
+  'ENV_ENTRYPOINT_WRAPPER', signal.native.binary, fs.realpathSync(signal.native.binary), wrapperType, '-', nativeBinary.sha256, nativeBinary.bytes,
+  'WORKER_HASH; not listed in input native manifest',
+]);
+table('recovery/native-tool-checks.tsv', nativeToolRows);
+output.set('recovery/raw/build-openldap-reference.sh.txt', builderSource);
+requirePassing();
+table('recovery/hashes.tsv', [['role', 'source_path', 'sha256', 'bytes'],
+  ['canonical', signal.recovery.canonical_path, recoveredCanonical.sha256, recoveredCanonical.bytes],
+  ['native_round_trip', signal.recovery.native_canonical_path, nativeCanonical.sha256, nativeCanonical.bytes],
+  ['retained_go_seed', signal.recovery.source_seed, recoverySeed.sha256, recoverySeed.bytes],
+  ['rebuilt_native_entrypoint_wrapper', signal.native.binary, nativeBinary.sha256, nativeBinary.bytes],
+  ['actual_native_executable', nativeExecutablePath, nativeExecutable.sha256, nativeExecutable.bytes]]);
+table('recovery/checks.tsv', [['item', 'value'], ['canonical_entries', recoveredCanonical.lines],
+  ['canonical_cksum', recoveredChecksum[0]], ['canonical_bytes', recoveredCanonical.bytes],
+  ['canonical_sha256', recoveredCanonical.sha256], ['openldap_version', signal.native.version]]);
+requirePassing();
+const exports = [exportHeader], diagnosticExports = [exportHeader];
+for (const p of plans) {
+  const f = p.run + '/validation.tsv', rows = parseTSV(f, ['run', 'canonical_entries', 'canonical_cksum', 'canonical_bytes']);
+  check(f, 'three canonical export identities', same(rows.map(r => r.run), endpoints));
+  for (const e of endpoints) {
+    const row = rows.find(r => r.run === e), file = path.join(src, p.run, e, 'data.canonical');
+    const actual = await facts(file, true), checksum = execFileSync('cksum', [file], { encoding: 'utf8' }).trim().split(/\s+/);
+    (p.diagnostic ? diagnosticExports : exports).push([p.run, e, actual.lines, checksum[0], actual.bytes, actual.sha256, file]);
+    check(file, 'export content, recorded validation and original canonical fixture agree',
+      row?.canonical_entries === String(actual.lines) && row?.canonical_cksum === checksum[0] &&
+      row?.canonical_bytes === String(actual.bytes) && actual.lines === 100002 && actual.bytes === 42712438 &&
+      checksum[0] === '2143929969' && +checksum[1] === actual.bytes && actual.sha256 === canonicalHash);
+  }
+  check(p.run, 'password and disposable endpoint DBs cleaned up',
+    ['password', 'before/data.db', 'current/data.db', 'openldap/data/data.mdb'].every(f => !fs.existsSync(path.join(src, p.run, f))));
+}
+check('exports', '15 core exports and six separate calibration exports', exports.length === 16 && diagnosticExports.length === 7);
+table('export-checks.tsv', exports); table('diagnostics/export-checks.tsv', diagnosticExports);
+const binaryRows = [['file', 'sha256', 'bytes', 'source_path']];
+const metadataRows = [['file', 'go_version', 'vcs_revision', 'vcs_modified', 'CGO_ENABLED', 'GOOS', 'GOARCH']];
+for (const [name, file] of [...binaries.map(f => [f, path.join(src, f)]), ...auxiliaryBinaries]) {
+  const actual = await facts(file); binaryRows.push([name, actual.sha256, actual.bytes, file]);
+  if (['before', 'current'].includes(name)) check(name, 'actual executable equals pipeline and main handoff', actual.sha256 === expectedHashes[name], actual.sha256);
+  const metadata = execFileSync('go', ['version', '-m', file], { encoding: 'utf8', env: { ...process.env, GOTOOLCHAIN: 'local' } });
+  output.set('binary-metadata/' + name + '.txt', metadata);
+  const field = key => metadata.match(new RegExp('(?:^|\\s)' + key.replaceAll('.', '\\.') + '=([^\\s]+)'))?.[1] ?? 'NOT_EMBEDDED';
+  const version = metadata.split('\n')[0].match(/go[\d.]+/)?.[0] ?? 'NOT_EMBEDDED';
+  metadataRows.push([name, version, field('vcs.revision'), field('vcs.modified'), field('CGO_ENABLED'), field('GOOS'), field('GOARCH')]);
+  check(name, 'Go executable metadata retained', version !== 'NOT_EMBEDDED');
+  if (['before', 'current'].includes(name)) check(name, 'Go1.26.4 CGO-disabled darwin/arm64',
+    version === 'go1.26.4' && field('CGO_ENABLED') === '0' && field('GOOS') === 'darwin' && field('GOARCH') === 'arm64');
+  if (name === 'before') check(name, 'actual frozen R19 executable embeds 8918569 dirty',
+    field('vcs.revision') === '8918569d6b7b32c683606e88744eeb1ec36bd4db' && field('vcs.modified') === 'true');
+  if (name === 'current') check(name, 'current actual embedded revision and dirty flag',
+    field('vcs.revision') === signal.source_git_head && field('vcs.modified') === 'true');
+}
+table('binary-hashes.tsv', binaryRows); table('binary-metadata.tsv', metadataRows);
+const fixtures = [['file', 'sha256', 'bytes', 'access_mode']];
+for (const [file, access] of [['member-acl.db', 'explicit'], ['member-index.db', 'default']]) {
+  const actual = await facts(path.join(src, file)); fixtures.push([file, actual.sha256, actual.bytes, access]);
+}
+table('fixture-hashes.tsv', fixtures);
+const currentMetadata = metadataRows.find(r => r[0] === 'current');
+
+table('timing-scope.tsv', [['scope', 'rule'],
+  ['common-hot', 'Explicit/default nonroot correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.'],
+  ['common-distributed', 'Explicit/default nonroot Base/equality; 1000 x 3; warmed rotating targets, not controlled cold cache.'],
+  ['common-groups', 'Explicit/default nonroot member equality, Base 10/1000 and nested membership; 100 x 3.'],
+  ['root', 'Default access; literal and normalized root identities separate; five cases, 1000 x 7.'],
+  ['group-compare', 'Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7; fixture insertion order.'],
+  ['concurrent', 'Root ldapsearch; 8 x 1000; warmup repeat 0 excluded, three measured repeats; process overhead included.'],
+  ['diagnostics', 'Independent default read A/A and startup/port swap; fixed UID scale-001001; Base/equality 1000 x 7, hot.json plus smoke and three SDK warmups per run; 84/12/4 total.'],
+  ['operation-timing', 'Setup and WhoAmI verification outside operation latency; request, verification and latency counters retained.'],
+  ['APFS', 'Seven macro scripts use cp -c writable clones; setup/warmup excluded; COW and warm caches remain limitations.'],
+  ['network', 'Real TCP, same-process SDK plus server; private copied 100k fixture; two default-access nonroot hot reads; 1s, alternating three rounds; 12 samples. Not pure server allocation and not a native comparison.'],
+  ['exploratory', 'Historical queue/audit candidate versus old-control logs on older baselines; not actual bf510d8 before.'],
+  ['exclusions', 'SDK warmups, smoke, concurrent repeat 0, network and exploratory components excluded from core medians. Diagnostics are never pooled or subtracted.'],
+  ['formulas', 'time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current; all negatives retained.'],
+  ['stopping-rule', 'Predetermined counts; no favorable sample selection, diagnostic correction or historical pooling.'],
+]);
+table('diagnostics/provenance.tsv', [['item', 'value'],
+  ['role', 'INDEPENDENT_READ_DIAGNOSTICS; excluded from core 840/144/48'],
+  ['aa', 'Both Go labels execute the same current candidate binary; differences describe labels, not production improvements.'],
+  ['startup-port-swap', 'Current starts first on 29481; before starts second on 29482; startup order and port change jointly.'],
+  ['counts', 'Two runs x two cases x three endpoints x seven = 84 samples; 12 medians; four comparisons; six exports.'],
+  ['method', 'Default-access nonroot Base/equality at fixed UID scale-001001, 1000 operations; seven repeats.'],
+  ['meaning', 'No correction or pooling with core or components; does not establish the cause of any observed difference.'],
+]);
+const scopeText = 'operationQueue reuses inline[1] pointer storage, clears old slots on growth, and copies discardPending results to owned storage before unlock. Audit identity skips Store for equal values; clone has an independent mutable wrapper sharing an immutable two-string snapshot.';
+const invariantText = 'Credential Clone/clear, FIFO, fences, budgets, cancellation, authorization and error order are intended unchanged. No DN, Bind route, read buffer or GOMAXPROCS change.';
+table('provenance.tsv', [['item', 'value', 'evidence'],
+  ['round', 'R20 request allocation evidence', 'source/provenance.json'],
+  ['baseline_source', baseline, 'R19 production plus docs-only scheduling record'],
+  ['before_sha256', baselineHash, 'binary-hashes.tsv'],
+  ['before_embedded', '8918569 dirty; distinct from baseline bf510d8', 'binary-metadata/before.txt'],
+  ['current_sha256', expectedHashes.current, 'binary-hashes.tsv'],
+  ['current_embedded', currentMetadata[2] + ' modified=' + currentMetadata[3], 'binary-metadata/current.txt'],
+  ['frozen_source', frozenRoot, 'source/frozen-source.tsv'],
+  ['main_completion', signal.main_signal, signalFile],
+  ['native_recovery', signal.recovery.reason, 'recovery/provenance.json'],
+  ['native_version', signal.native.version, 'recovery/native-version.txt'],
+  ['native_source_commit', nativeCommit, 'recovery/native-environment.tsv'],
+  ['main_decision', signal.main_decision ?? 'pending', signalFile],
+  ['static_review', 'Main reports two independent operation pipeline reviews; no reviewer transcript or runtime proof inferred', 'User handoff'],
+  ['scope', scopeText, 'source/tracked.patch.txt'],
+  ['invariants', invariantText, 'User scope and archived patch/tests'],
+  ['worker_execution', 'No build/test/bench; go version -m inspects metadata only; hashes gated on final main completion', 'generate-evidence.mjs.txt'],
+]);
+const summary = [['item', 'value'], ['state', 'EVIDENCE_COMPLETE'],
+  ['main_decision', signal.main_decision ?? 'pending'],
+  ['shipping_status', 'NOT_SHIPPED'],
+  ['main_assessment', signal.main_assessment ?? 'Main report owns the decision; no acceptance inferred'],
+  ['per_operation_native_parity', core.belowNative.length ? 'NOT_ACHIEVED' : 'NOT_ESTABLISHED_BY_THESE_MEDIANS'],
+  ['core_scripts', 5], ['core_json', core.reports.length - 1], ['core_samples', core.samples.length - 1],
+  ['core_medians', core.medians.length - 1], ['core_comparisons', core.comparisons.length - 1], ['core_exports', exports.length - 1],
+  ['negative_core_comparisons', core.negatives.length], ['below_openldap_core_comparisons', core.belowNative.length],
+  ['diagnostic_scripts', 2], ['diagnostic_json', diagnostics.reports.length - 1], ['diagnostic_samples', diagnostics.samples.length - 1],
+  ['diagnostic_medians', diagnostics.medians.length - 1], ['diagnostic_comparisons', diagnostics.comparisons.length - 1],
+  ['diagnostic_exports', diagnosticExports.length - 1], ['negative_diagnostic_comparisons', diagnostics.negatives.length],
+  ['total_exports', exports.length + diagnosticExports.length - 2],
+  ['network_samples', networkSamples.length - 1], ['network_medians', networkMedians.length - 1],
+  ['network_metric_comparisons', networkComparisons.length - 1], ['network_negative_metric_comparisons', networkNegative.length],
+  ['final_fuzz_runs', 0], ['race_runs', 0], ['source_files', sourceFiles.length], ['failed_checks', 0]];
+table('summary.tsv', summary);
+output.set('overview.txt', [
+  'R20 REQUEST ALLOCATION EVIDENCE', '',
+  'Evidence completeness is independent of adoption. Main decision: ' + (signal.main_decision ?? 'pending') + '.',
+  'Disposition: REJECTED / NOT_SHIPPED. The current endpoint always denotes the measured rejected candidate, independent of later production rollback. Allocation reductions alone do not justify adoption.',
+  'Main assessment: ' + (signal.main_assessment ?? 'Pending main report; no acceptance inferred'), '',
+  'Source baseline: ' + baseline + ' (R19 production plus docs-only scheduling). Frozen before CLI SHA256: ' + baselineHash + '; actual embedded 8918569 dirty.',
+  'Measured current candidate SHA256: ' + expectedHashes.current + '; actual embedded ' + currentMetadata[2] + ', modified=' + currentMetadata[3] + '.', '',
+  'Scope: ' + scopeText + ' ' + invariantText, '',
+  'Core: five scripts, 31 JSON, 840 samples, 144 medians, 48 comparisons, 15 exports. Negative time reductions: ' + core.negatives.length + '/48. Below OpenLDAP throughput: ' + core.belowNative.length + '/48. All negative observations retained; no universal speedup or native-parity claim.',
+  'Read diagnostics: separate default A/A and startup/port swap; 10 JSON, 84 samples, 12 medians, four comparisons, six exports. Fixed UID scale-001001; Base/equality, 1000 x 7. A/A Go labels both use current. Swap starts current first on 29481 and before second on 29482. No pooling or correction.',
+  'Network: six logs, three fixed alternating rounds, 12 samples, four medians and six metric comparisons. Actual bf510d8 production and candidate test binaries use the same opt-in benchmark source. Real TCP and SDK with private 100k database copies; allocation totals include SDK plus server. Both timing regressions and allocation reductions remain in the tables. This is not pure server allocation or a native comparison.',
+  'Exploratory: historical isolated queue and audit-identity candidate/old-control logs kept separately. They are not actual bf510d8 before and do not establish final candidate behavior.',
+  'Validation: main focused server PASS 0.079s; full Go, vet and 355 native PASS records. No fuzz or race run this round; no older DN fuzz imported.', '',
+  'Recovery: previous fixed native environment, original native fixture and old canonical reference disappeared before native validation/macros. Main retained full Go/vet results, rebuilt pinned OpenLDAP 2.6.13 and regenerated the canonical/native fixture from the retained Go seed. Native and macros in this archive are new R20 runs after recovery; the recovered canonical independently matches the original hash. Recovery source paths, scripts/logs, actual native version and hashes are retained under recovery/.', '',
+  'Recovered data equivalence covers canonical user attributes. The new native MDB physical layout and generated operational attributes are not claimed identical to the removed fixture. openldap-1 is only a task-local alias for the reconstructed native-seed directory.', '',
+  'Native executable provenance: the env entrypoint is a libtool shell wrapper. Its hash is distinct from servers/slapd/.libs/slapd, the actual arm64 Mach-O executable. All entries in the provided native-tool manifest are independently checked; reference-builder source is read from immutable bf510d8 and matched to the recorded hash, never from live main.', '',
+  'All 21 exports verified against the original canonical fixture: 100002 entries, cksum 2143929969, 42712438 bytes, SHA256 ' + canonicalHash + '.',
+  'Seven macro scripts use APFS cp -c. Setup/warmup are outside operation timing. COW, fixed endpoint order and warm caches remain limitations; distributed targets do not establish cold-cache performance.',
+  'Source reconstruction: baseline plus tracked patch and five new .raw files; main-frozen inputs at ' + frozenRoot + '. Full changed server.go/operation.go are not duplicated. Actual module metadata and source hashes are archived, without asserting reproducible builds.',
+  'Raw JSON/TSV/logs/scripts, checks, counters and all 21 export attestations are retained. Databases, canonical contents, executables, credentials and binary profiles are not bundled. SHA256SUMS covers every artifact except itself.',
+  'Main completion signal: ' + signalFile + '. Formal report and adoption decision belong to main. This worker executes no build/test/bench and hashes only after main completion.', '',
+].join('\n'));
+output.set('README.md', [
+  '# R20 Request Allocation Evidence', '',
+  '**REJECTED / NOT_SHIPPED.** Main decision: ' + signal.main_decision + '. Reduced allocations did not establish a stable improvement in the independent CLI workload or close the native gap.', '',
+  'Read [overview](overview.txt), [core comparisons](comparisons.tsv), [negative core observations](negative-comparisons.tsv), [network allocation and timing](components/network/comparisons.tsv), [separate read diagnostics](diagnostics/comparisons.tsv), and [exploratory provenance](exploratory/provenance.tsv). Network results include SDK and server allocations and are kept separate from native comparisons.', '',
+  'Inspect [raw samples](samples.tsv), [checks](checks.tsv), [all export checks](export-checks.tsv), [diagnostic export checks](diagnostics/export-checks.tsv), [actual module metadata](binary-metadata.tsv), [source reconstruction](source/RECONSTRUCTION.txt), [source hashes](source-hashes.tsv), and [counts](summary.tsv).', '',
+  'The native reference was rebuilt after external fixture loss. See [recovery provenance](recovery/provenance.json), [recovery hashes](recovery/hashes.tsv), [native tool checks](recovery/native-tool-checks.tsv) and [canonical checks](recovery/checks.tsv). Wrapper and actual executable hashes are separate. No older native PASS is substituted.', '',
+  output.get('overview.txt'),
+  'The [formal R19 report](../../common-ldap-performance.md) remains the shipped-performance report. This separate R20 archive documents the rejected candidate. SHA256SUMS includes this top-level README.', '',
+].join('\n'));
+output.set('limitations.txt', 'Local medians do not establish universal speedup, statistical significance, regression-free behavior, native parity or causality. Reduced allocations do not imply improved elapsed time or adoption. Core, read diagnostics, same-process TCP SDK/server components and historical exploratory controls remain separate. APFS COW, endpoint order, warm caches and SDK work affect interpretation. No race, fuzz, retained-heap or controlled cold-cache evidence is claimed. Dirty CLI and missing test-executable VCS metadata remain explicit. Archive completeness remains valid if main rejects the candidate.\n');
+for (const [file, resolved] of nativeResolutions) check(file, 'native path resolution stable during generation', fs.realpathSync(file) === resolved);
+requirePassing();
+for (const f of trackedReads.keys()) remember(f);
+table('checks.tsv', checks);
+function existingFiles(dir, prefix = '') {
+  if (!fs.existsSync(dir)) return [];
+  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Archive symlink: ' + dir);
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = prefix + entry.name, full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error('Archive symlink: ' + full);
+    if (entry.isDirectory()) return existingFiles(full, name + '/');
+    if (!entry.isFile()) throw new Error('Unexpected archive entry: ' + full);
+    return [name];
+  });
+}
+const unexpected = existingFiles(dst).filter(f => f !== 'SHA256SUMS' && !output.has(f));
+if (unexpected.length) throw new Error('Unexpected archive files; nothing published: ' + unexpected.join(', '));
+function write(f, body) {
+  if (!safeRelative(f)) throw new Error('Unsafe archive path: ' + f);
+  const target = path.join(dst, f);
+  fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, body);
+}
+for (const [f, body] of output) write(f, body);
+write('SHA256SUMS', [...output].sort(([a], [b]) => a.localeCompare(b)).map(([f, body]) => sha(body) + '  ' + f).join('\n') + '\n');
+for (const [f, body] of output) if (sha(fs.readFileSync(path.join(dst, f))) !== sha(body)) throw new Error('Archive verification failed: ' + f);
+if (!same(existingFiles(dst), [...output.keys(), 'SHA256SUMS'])) throw new Error('Archive inventory mismatch');
+console.log(JSON.stringify({ state: 'EVIDENCE_COMPLETE', files_in_manifest: output.size, checks: checks.length - 1, failed_checks: 0,
+  core: { samples: core.samples.length - 1, medians: core.medians.length - 1, comparisons: core.comparisons.length - 1, exports: exports.length - 1,
+    negatives: core.negatives.length, below_openldap: core.belowNative.length },
+  calibration: { samples: diagnostics.samples.length - 1, medians: diagnostics.medians.length - 1, comparisons: diagnostics.comparisons.length - 1,
+    exports: diagnosticExports.length - 1, negatives: diagnostics.negatives.length },
+  network: { samples: networkSamples.length - 1, medians: networkMedians.length - 1,
+    metric_comparisons: networkComparisons.length - 1, negatives: networkNegative.length },
+  main_decision: signal.main_decision ?? 'pending', current_sha256: expectedHashes.current }, null, 2));

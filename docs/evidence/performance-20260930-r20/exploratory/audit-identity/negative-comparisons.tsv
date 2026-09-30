@@ -1,0 +1,7 @@
+scope	case	old_control_label	metric	old_control	candidate	absolute_reduction	reduction_pct
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityPublish/New	Legacy	ns/op	41.38	42.29	-0.9099999999999966	-2.1991300144997394
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityPublish/ChangedDN	Legacy	ns/op	26.01	27.16	-1.1499999999999986	-4.4213763936947315
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityPublish/ChangedMechanism	Legacy	ns/op	26.39	27.43	-1.0399999999999991	-3.9408866995073843
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityClone/StaleDN/Clone	Legacy	ns/op	74.5	80.53	-6.030000000000001	-8.093959731543631
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityClone/StaleMechanism/Clone	Legacy	ns/op	72.65	80.54	-7.890000000000001	-10.860289057123197
+OLD_BASELINE_EXPLORATORY	BenchmarkAuditIdentityClone/NoSnapshot/Clone	Legacy	ns/op	73.4	74.52	-1.1199999999999903	-1.5258855585830844

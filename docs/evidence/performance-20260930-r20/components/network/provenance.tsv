@@ -1,0 +1,8 @@
+item	value
+before	bf510d8 production plus the same opt-in network benchmark source; server-before.test
+current	R20 candidate plus that identical benchmark source; server-current.test
+scope	Real TCP and SDK; temporary private copy of the 100k default-access fixture; nonroot Base/equality, hot fixed UID scale-001001
+timing	1s per case; three fixed alternating rounds; b.Loop excludes setup and final validation; allocation counts cover SDK and server
+limits	Not isolated server allocations; no native measurements in this component; no component/macro pooling or causal attribution
+benchmark_source	source/new/internal/server/network_common_bench_test.go.raw
+benchmark_sha256	28017fe1a4cb1215da62ff74daeebe92529bba1f0e6c67d3c1a603e54d5a8d28

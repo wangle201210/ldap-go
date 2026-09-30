@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+: "${LDAP_BENCH_PASSWORD:?set disposable fixture password}"
+. /var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env
+root=/var/tmp/ldap-go-r20-reference-recovery
+seed=$root/native-seed
+mkdir "$seed" "$seed/data"
+umask 077
+printf '%s\n' \
+  "include $OPENLDAP_SCHEMA_DIR/core.schema" \
+  "include $OPENLDAP_SCHEMA_DIR/cosine.schema" \
+  "include $OPENLDAP_SCHEMA_DIR/inetorgperson.schema" \
+  "pidfile $seed/slapd.pid" "argsfile $seed/slapd.args" \
+  'loglevel none' 'sizelimit 100100' 'database mdb' 'maxsize 4294967296' \
+  'suffix "dc=scale,dc=qualification"' \
+  'rootdn "cn=admin,dc=scale,dc=qualification"' \
+  "rootpw $LDAP_BENCH_PASSWORD" "directory $seed/data" \
+  'index uid eq' 'index objectClass eq' >"$seed/slapd.conf"
+slapadd -f "$seed/slapd.conf" -n 1 -l "$root/content.ldif" >"$root/slapadd.log" 2>&1
+printf '%s' "$LDAP_BENCH_PASSWORD" >"$seed/password"
+pid=
+cleanup() {
+  if [ -n "$pid" ]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+  rm -f "$seed/password"
+}
+trap cleanup EXIT HUP INT TERM
+if lsof -nP -iTCP:29682 -sTCP:LISTEN -t >/dev/null; then exit 1; fi
+slapd -f "$seed/slapd.conf" -h ldap://127.0.0.1:29682 -d 0 >"$root/native-server.log" 2>&1 &
+pid=$!
+deadline=$(( $(date +%s) + 60 ))
+until ldapwhoami -H ldap://127.0.0.1:29682 -x -D cn=admin,dc=scale,dc=qualification \
+  -y "$seed/password" -o nettimeout=1 >/dev/null 2>&1; do
+  kill -0 "$pid"
+  [ "$(date +%s)" -lt "$deadline" ]
+  sleep 0.05
+done
+ldapsearch -H ldap://127.0.0.1:29682 -x -D cn=admin,dc=scale,dc=qualification \
+  -y "$seed/password" -LLL -o ldif-wrap=no -E pr=10000/noprompt \
+  -b dc=scale,dc=qualification '(objectClass=*)' '*' >"$root/native.ldif"
+"$root/ldifcanonical" -in "$root/native.ldif" >"$root/native.unsorted"
+LC_ALL=C sort "$root/native.unsorted" >"$root/native.canonical"
+rm "$root/native.unsorted"
+cmp "$root/data.canonical" "$root/native.canonical"
+shasum -a 256 "$root/native.canonical" "$seed/data/data.mdb" >"$root/native-recovery-sha256.txt"
+printf 'Rebuilt native fixture has identical canonical contents.\n'

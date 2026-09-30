@@ -1,0 +1,238 @@
+package server
+
+import (
+	"bytes"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+)
+
+func TestAuditIdentityPublication(t *testing.T) {
+	for _, initialized := range []bool{false, true} {
+		state := &connectionState{}
+		if initialized {
+			state.auditIdentity = &connectionAuditIdentityState{}
+		}
+		for _, want := range []connectionAuditIdentity{
+			{}, {},
+			{aliceDN, "SIMPLE"},
+			{strings.Clone(aliceDN), strings.Clone("SIMPLE")},
+			{strings.ToUpper(aliceDN), "SIMPLE"},
+			{strings.ToUpper(aliceDN), "simple"},
+			{aliceDN, "EXTERNAL"},
+			{}, {},
+		} {
+			var old *connectionAuditIdentity
+			var oldValue connectionAuditIdentity
+			if state.auditIdentity != nil {
+				old = state.auditIdentity.current.Load()
+				if old != nil {
+					oldValue = *old
+				}
+			}
+			state.boundDN, state.authMechanism = want.boundDN, want.authMechanism
+			state.publishAuditIdentity()
+			if state.auditIdentity == nil || state.auditIdentity.current.Load() == nil {
+				t.Fatal("initial publication did not create a snapshot")
+			}
+			if got := state.loadAuditIdentity(); got != want {
+				t.Fatalf("identity = %#v, want %#v", got, want)
+			}
+			if old != nil {
+				if *old != oldValue {
+					t.Fatal("publishing mutated a retained snapshot")
+				}
+				if reused := state.auditIdentity.current.Load() == old; reused != (oldValue == want) {
+					t.Fatalf("snapshot reuse = %t, old = %#v, want = %#v", reused, oldValue, want)
+				}
+			}
+			loaded := state.loadAuditIdentity()
+			loaded.boundDN, loaded.authMechanism = "changed locally", "changed locally"
+			if got := state.loadAuditIdentity(); got == loaded || got != want {
+				t.Fatal("load exposed a mutable snapshot")
+			}
+		}
+	}
+}
+
+func TestAuditIdentityCloneIsolation(t *testing.T) {
+	main := &connectionState{
+		boundDN: aliceDN, authMechanism: "SIMPLE",
+		bindCredentialDN: aliceDN, bindCredentials: []byte("secret"),
+	}
+	main.publishAuditIdentity()
+	first := cloneConcurrentConnectionState(main)
+	second := cloneConcurrentConnectionState(main)
+	t.Cleanup(func() {
+		clearConcurrentConnectionState(&first)
+		clearConcurrentConnectionState(&second)
+		clearBindCredentials(main)
+	})
+	if first.auditIdentity == main.auditIdentity || second.auditIdentity == main.auditIdentity ||
+		first.auditIdentity == second.auditIdentity {
+		t.Fatal("operations share a mutable identity wrapper")
+	}
+	initial := main.auditIdentity.current.Load()
+	if first.auditIdentity.current.Load() != initial || second.auditIdentity.current.Load() != initial {
+		t.Fatal("matching clones did not share the immutable snapshot")
+	}
+	main.boundDN = "uid=bob,dc=example,dc=com"
+	main.publishAuditIdentity()
+	first.authMechanism = "EXTERNAL"
+	first.publishAuditIdentity()
+	if got := main.loadAuditIdentity(); got != (connectionAuditIdentity{main.boundDN, "SIMPLE"}) {
+		t.Fatalf("clone publication changed main: %#v", got)
+	}
+	if got := first.loadAuditIdentity(); got != (connectionAuditIdentity{aliceDN, "EXTERNAL"}) {
+		t.Fatalf("main publication changed clone: %#v", got)
+	}
+	if got := second.loadAuditIdentity(); got != (connectionAuditIdentity{aliceDN, "SIMPLE"}) || got != *initial {
+		t.Fatalf("publication changed sibling or old snapshot: %#v", got)
+	}
+	first.boundDN, first.authMechanism = "", ""
+	first.publishAuditIdentity()
+	if got := first.loadAuditIdentity(); got != (connectionAuditIdentity{}) {
+		t.Fatalf("clone did not become anonymous: %#v", got)
+	}
+	credentials := first.bindCredentials
+	first.bindCredentials[0] = 'x'
+	clearConcurrentConnectionState(&first)
+	if !bytes.Equal(credentials, make([]byte, len(credentials))) || first.bindCredentials != nil || first.bindCredentialDN != "" {
+		t.Fatal("clone credentials were not cleared")
+	}
+	if string(main.bindCredentials) != "secret" || string(second.bindCredentials) != "secret" ||
+		main.bindCredentialDN != aliceDN || second.bindCredentialDN != aliceDN {
+		t.Fatal("clearing clone credentials changed another operation")
+	}
+	if main.loadAuditIdentity().boundDN != main.boundDN || second.loadAuditIdentity() != *initial {
+		t.Fatal("clearing an anonymous clone changed another identity")
+	}
+}
+
+func TestAuditIdentityCloneUnpublishedFields(t *testing.T) {
+	for _, mode := range []string{"no-wrapper", "empty-wrapper", "published"} {
+		for _, want := range []connectionAuditIdentity{
+			{aliceDN, "SIMPLE"},
+			{"uid=bob,dc=example,dc=com", "SIMPLE"},
+			{aliceDN, "EXTERNAL"},
+			{},
+		} {
+			t.Run(mode+"/"+want.boundDN+"/"+want.authMechanism, func(t *testing.T) {
+				state := &connectionState{boundDN: aliceDN, authMechanism: "SIMPLE"}
+				if mode == "empty-wrapper" {
+					state.auditIdentity = &connectionAuditIdentityState{}
+				} else if mode == "published" {
+					state.publishAuditIdentity()
+				}
+				state.boundDN, state.authMechanism = want.boundDN, want.authMechanism
+				before := state.loadAuditIdentity()
+				cloned := cloneConcurrentConnectionState(state)
+				defer clearConcurrentConnectionState(&cloned)
+				if got := cloned.loadAuditIdentity(); got != want {
+					t.Fatalf("clone kept stale identity: %#v, want %#v", got, want)
+				}
+				if got := state.loadAuditIdentity(); got != before {
+					t.Fatalf("cloning published source fields: %#v, want %#v", got, before)
+				}
+			})
+		}
+	}
+}
+
+func TestAuditIdentityConcurrentReaders(t *testing.T) {
+	identities := []connectionAuditIdentity{{}, {aliceDN, "SIMPLE"}, {"uid=bob,dc=example,dc=com", "EXTERNAL"}}
+	state := &connectionState{}
+	state.publishAuditIdentity()
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for range 4 {
+		workers.Go(func() {
+			<-start
+			for range 10000 {
+				got := state.loadAuditIdentity()
+				if got != identities[0] && got != identities[1] && got != identities[2] {
+					t.Errorf("reader observed a mixed identity: %#v", got)
+					return
+				}
+				runtime.Gosched()
+			}
+		})
+	}
+	workers.Go(func() {
+		<-start
+		for index := range 10000 {
+			identity := identities[index%len(identities)]
+			state.boundDN = identity.boundDN
+			runtime.Gosched()
+			state.authMechanism = identity.authMechanism
+			state.publishAuditIdentity()
+			state.publishAuditIdentity()
+		}
+	})
+	close(start)
+	workers.Wait()
+}
+
+func TestAuditIdentityBindHandlerPublication(t *testing.T) {
+	instance, _, dn := newReadOnlyPasswordBindFixture(t, "memory", stringValues("secret"), nil)
+	sink := &recordingAuditSink{}
+	instance.config.AuditSink = sink
+	state := &connectionState{runtime: instance.runtime.Load()}
+	state.publishAuditIdentity()
+	t.Cleanup(func() { clearBindCredentials(state) })
+	capture := &smallIndexedCapture{}
+	for index, step := range []struct {
+		dn, password string
+		code         ldapwire.ResultCode
+	}{
+		{aliceDN, "secret", ldapwire.ResultSuccess},
+		{aliceDN, "secret", ldapwire.ResultSuccess},
+		{aliceDN, "wrong", ldapwire.ResultInvalidCredentials},
+		{aliceDN, "wrong", ldapwire.ResultInvalidCredentials},
+		{aliceDN, "secret", ldapwire.ResultSuccess},
+		{"", "", ldapwire.ResultSuccess},
+		{"", "", ldapwire.ResultSuccess},
+	} {
+		request := ldapwire.BindRequest{Version: 3, Name: step.dn, Authentication: ldapwire.Authentication{Simple: []byte(step.password)}}
+		message := ldapwire.Message{ID: int64(index + 1), Request: request}
+		observation := instance.newOperationAuditObservation(state, message)
+		capture.Reset()
+		response := &auditResponseConnection{Conn: capture, observation: observation}
+		previousCredentials := state.bindCredentials
+		if err := instance.handleBind(t.Context(), response, state, message, request); err != nil {
+			t.Fatal(err)
+		}
+		// Match the operation runner: publish only after the real handler returns.
+		state.publishAuditIdentity()
+		instance.finishOperationAudit(observation, state, operationRunning, nil)
+		if code, ok := auditLDAPResultCode(capture.Bytes()); !ok || code != int(step.code) {
+			t.Fatalf("step %d: response = %d/%t, want %d", index, code, ok, step.code)
+		}
+		want := connectionAuditIdentity{}
+		wantCredentials := ""
+		if step.code == ldapwire.ResultSuccess {
+			want.authMechanism = "SIMPLE"
+		}
+		if step.dn != "" && step.code == ldapwire.ResultSuccess {
+			want = connectionAuditIdentity{dn.String(), "SIMPLE"}
+			wantCredentials = step.password
+		}
+		if got := state.loadAuditIdentity(); got != want || state.bindCredentialDN != want.boundDN ||
+			string(state.bindCredentials) != wantCredentials || state.protocolVersion != 3 {
+			t.Fatalf("step %d: handler identity = %#v, want %#v", index, got, want)
+		}
+		if !bytes.Equal(previousCredentials, make([]byte, len(previousCredentials))) {
+			t.Fatalf("step %d: handler retained previous credentials", index)
+		}
+		events := sink.snapshot()
+		if len(events) != index+1 || events[index].ResultCode == nil || *events[index].ResultCode != int(step.code) {
+			t.Fatalf("step %d: unexpected audit events: %#v", index, events)
+		}
+		if step.code == ldapwire.ResultSuccess && (events[index].AuthorizationDN != want.boundDN || events[index].AuthenticationMechanism != want.authMechanism) {
+			t.Fatalf("step %d: audit identity = %#v", index, events[index])
+		}
+	}
+}

@@ -1,0 +1,13 @@
+scope	access_mode	identity	variant	stage	method	members	endpoint	metric	min	median	max
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	before	ns/op	84244	84868	88730
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	before	B/op	25860	25861	25862
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	before	allocs/op	496	496	496
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	before	ns/op	84638	87629	93680
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	before	B/op	27653	27653	27656
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	before	allocs/op	519	519	519
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	current	ns/op	89595	92387	93465
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	current	B/op	25788	25788	25788
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootBase	SDK_Search_nonrootBase	0	current	allocs/op	493	493	493
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	current	ns/op	90374	92470	99623
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	current	B/op	27581	27581	27582
+same_process_TCP_SDK_plus_server	default	nonroot	hot	nonrootEquality	SDK_Search_nonrootEquality	0	current	allocs/op	516	516	516

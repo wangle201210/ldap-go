@@ -67,6 +67,27 @@ also assert exact `cn` and `sn`. UID filter values and RDNs are escaped separate
 An equality filter alone cannot certify that the server used an index. Configure
 and verify equivalent indexes outside this runner.
 
+## In-process network diagnostic
+
+An opt-in server benchmark copies a quiescent 100k qualification seed into a
+temporary directory, starts a private loopback server, adds a temporary reader,
+and uses the same SDK hot Base/equality requests. The supplied seed is never
+opened for writing. Its naming context must be `dc=scale,dc=qualification`, with
+`uid=scale-001001,ou=people,dc=scale,dc=qualification` present.
+
+```sh
+CGO_ENABLED=0 LDAP_GO_NETWORK_BENCH_FIXTURE=/path/to/member-index.db \
+  go test ./internal/server -run '^$' -bench '^BenchmarkNetworkCommon$' \
+  -benchtime=5s -count=3 -benchmem
+```
+
+Timing excludes setup and response/identity checks. Allocation counts include
+both the SDK and server in one process; these results are not the separate
+endpoint OpenLDAP comparison. A CPU profile also includes setup and background
+work; filtering `runConnectionOperation` stacks does not change its total-sample
+denominator. Compare historical and current code with identical benchmark source
+and fixed interleaved order, retaining all samples and negative results.
+
 ## Optional root SDK stages
 
 Select root stages explicitly; `all` still means only the original nonroot

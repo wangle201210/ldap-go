@@ -1,0 +1,6 @@
+role	source_path	sha256	bytes
+canonical	/var/tmp/ldap-go-r20-reference-recovery/data.canonical	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	42712438
+native_round_trip	/var/tmp/ldap-go-r20-reference-recovery/native.canonical	5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0	42712438
+retained_go_seed	/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db	d80c928a0cde9dab070827bbc1c585ddb7995f4fb640a9bc689dfc4c92a3c192	359546880
+rebuilt_native_entrypoint_wrapper	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd	eeb30489ff2ff2487ac8ac72435429eb800ce037b8f00891323b192d9e2365ae	6516
+actual_native_executable	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd	eacda98ceb48765ae091b86c4566333175e0b317c897821c08263e863f0e68af	2809144

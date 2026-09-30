@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/server
+cpu: Apple M1 Pro
+BenchmarkOperationQueueBuffer/SerialSearch/Current-8 	13739014	        50.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialSearch/Current-8 	13965531	        44.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialSearch/Current-8 	13282074	        44.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialSearch/PairedOldControl-8         	10756471	        55.08 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/SerialSearch/PairedOldControl-8         	11366551	        55.36 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/SerialSearch/PairedOldControl-8         	10539474	        53.98 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/Current-8                 	13857505	        44.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/Current-8                 	13673863	        44.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/Current-8                 	13351555	        42.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/PairedOldControl-8        	11676028	        50.20 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/PairedOldControl-8        	12006313	        50.98 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/SerialCompare/PairedOldControl-8        	11872371	        50.43 ns/op	       8 B/op	       1 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/Current-8                        	 1495290	       401.9 ns/op	     112 B/op	       3 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/Current-8                        	 1479432	       405.5 ns/op	     112 B/op	       3 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/Current-8                        	 1483158	       405.5 ns/op	     112 B/op	       3 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/PairedOldControl-8               	 1459426	       412.6 ns/op	     120 B/op	       4 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/PairedOldControl-8               	 1451204	       413.4 ns/op	     120 B/op	       4 allocs/op
+BenchmarkOperationQueueBuffer/Burst8/PairedOldControl-8               	 1457278	       412.1 ns/op	     120 B/op	       4 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	10.958s

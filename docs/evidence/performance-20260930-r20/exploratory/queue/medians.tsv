@@ -1,0 +1,7 @@
+scope	case	control_label	repeats	ns_op	B_op	allocs_op
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialSearch	Current	3	44.59	0	0
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialSearch	PairedOldControl	3	55.08	8	1
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialCompare	Current	3	44.77	0	0
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/SerialCompare	PairedOldControl	3	50.43	8	1
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/Burst8	Current	3	405.5	112	3
+OLD_BASELINE_EXPLORATORY	BenchmarkOperationQueueBuffer/Burst8	PairedOldControl	3	412.6	120	4

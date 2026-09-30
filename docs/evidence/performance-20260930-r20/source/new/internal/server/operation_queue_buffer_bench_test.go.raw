@@ -1,0 +1,87 @@
+package server
+
+import (
+	"testing"
+
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+)
+
+// BenchmarkOperationQueueAdmission covers the unchanged admission calculation.
+// This pair also measures the actual append/pop/complete path. Zero-byte fixtures
+// are reused only here to isolate queue storage from request allocation. b.Loop
+// excludes queue, request and fixture setup from both time and allocation counts.
+func BenchmarkOperationQueueBuffer(b *testing.B) {
+	for _, test := range []struct {
+		name    string
+		depth   int
+		request ldapwire.Request
+	}{
+		{name: "SerialSearch", depth: 1, request: ldapwire.SearchRequest{}},
+		{name: "SerialCompare", depth: 1, request: ldapwire.CompareRequest{}},
+		{name: "Burst8", depth: 8, request: ldapwire.SearchRequest{}},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			for _, implementation := range []struct {
+				name string
+				push func(*operationQueue, *queuedOperation, int) operationQueuePushResult
+			}{
+				{name: "Current", push: (*operationQueue).push},
+				{name: "PairedOldControl", push: operationQueueBufferOldPush},
+			} {
+				b.Run(implementation.name, func(b *testing.B) {
+					queue := newOperationQueue(8)
+					defer queue.close()
+					operations := make([]*queuedOperation, test.depth)
+					for index := range operations {
+						operations[index] = &queuedOperation{
+							message: ldapwire.Message{
+								ID: int64(index + 1), Request: test.request,
+							},
+							concurrent: true,
+						}
+					}
+					b.ReportAllocs()
+					for b.Loop() {
+						for _, operation := range operations {
+							if result := implementation.push(queue, operation, test.depth); result != operationQueuePushed {
+								b.Fatalf("push = %d", result)
+							}
+						}
+						for _, want := range operations {
+							if got, ok := queue.pop(); !ok || got != want {
+								b.Fatalf("pop = %p, %v; want %p", got, ok, want)
+							}
+							queue.complete()
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// The push implementation from 15f428a. pop and complete remain unchanged in
+// the candidate, and both implementations use the same queue and call shape.
+func operationQueueBufferOldPush(
+	queue *operationQueue,
+	operation *queuedOperation,
+	maxPending int,
+) operationQueuePushResult {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.closed {
+		return operationQueueClosed
+	}
+	if queue.maximumRetainedBytes > 0 &&
+		operation.retainedBytes > queue.maximumRetainedBytes-queue.retainedBytes {
+		return operationQueueLimitExceeded
+	}
+	pending := queue.pendingAfterPushLocked(operation)
+	if pending > 0 && pending > maxPending {
+		return operationQueueLimitExceeded
+	}
+	queue.items = append(queue.items, operation)
+	queue.retainedBytes += operation.retainedBytes
+	queue.ready.Signal()
+	return operationQueuePushed
+}

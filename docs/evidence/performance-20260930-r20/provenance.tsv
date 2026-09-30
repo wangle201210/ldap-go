@@ -1,0 +1,17 @@
+item	value	evidence
+round	R20 request allocation evidence	source/provenance.json
+baseline_source	bf510d8f2becd4c023fe04a7df8b8dd1681e1d11	R19 production plus docs-only scheduling record
+before_sha256	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98	binary-hashes.tsv
+before_embedded	8918569 dirty; distinct from baseline bf510d8	binary-metadata/before.txt
+current_sha256	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550	binary-hashes.tsv
+current_embedded	bf510d8f2becd4c023fe04a7df8b8dd1681e1d11 modified=true	binary-metadata/current.txt
+frozen_source	/tmp/ldap-go-r20-evidence-source	source/frozen-source.tsv
+main_completion	R20 network, full tests, vet, rebuilt pinned native checks, seven macros and 21 exports completed; candidate rejected for lack of stable end-to-end improvement.	generator/main-finished.json
+native_recovery	Main reported the fixed native environment, original native fixture and old canonical reference missing before native/macros; rebuild pinned OpenLDAP 2.6.13 and recover from retained Go seed.	recovery/provenance.json
+native_version	2.6.13	recovery/native-version.txt
+native_source_commit	d172686d3d270bc961b78f3ff00d7019c8dfb094	recovery/native-environment.tsv
+main_decision	REJECTED_NOT_SHIPPED	generator/main-finished.json
+static_review	Main reports two independent operation pipeline reviews; no reviewer transcript or runtime proof inferred	User handoff
+scope	operationQueue reuses inline[1] pointer storage, clears old slots on growth, and copies discardPending results to owned storage before unlock. Audit identity skips Store for equal values; clone has an independent mutable wrapper sharing an immutable two-string snapshot.	source/tracked.patch.txt
+invariants	Credential Clone/clear, FIFO, fences, budgets, cancellation, authorization and error order are intended unchanged. No DN, Bind route, read buffer or GOMAXPROCS change.	User scope and archived patch/tests
+worker_execution	No build/test/bench; go version -m inspects metadata only; hashes gated on final main completion	generate-evidence.mjs.txt

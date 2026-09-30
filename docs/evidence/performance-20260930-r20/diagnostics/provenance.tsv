@@ -1,0 +1,7 @@
+item	value
+role	INDEPENDENT_READ_DIAGNOSTICS; excluded from core 840/144/48
+aa	Both Go labels execute the same current candidate binary; differences describe labels, not production improvements.
+startup-port-swap	Current starts first on 29481; before starts second on 29482; startup order and port change jointly.
+counts	Two runs x two cases x three endpoints x seven = 84 samples; 12 medians; four comparisons; six exports.
+method	Default-access nonroot Base/equality at fixed UID scale-001001, 1000 operations; seven repeats.
+meaning	No correction or pooling with core or components; does not establish the cause of any observed difference.

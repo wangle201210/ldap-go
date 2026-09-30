@@ -1,0 +1,884 @@
+path	check	status	detail
+generator/main-finished.json	handoff stable during input discovery	PASS	-
+generator/main-finished.json	explicit final validation, macro and network completion	PASS	-
+generator/main-finished.json	frozen production source and shared network benchmark provenance	PASS	-
+generator/main-finished.json	main-reported alternating execution order and successful commands	PASS	-
+generator/main-finished.json	no fuzz/race claim and source/CLI relationship recorded	PASS	-
+generator/main-finished.json	main records the final rejection	PASS	-
+generator/main-finished.json	rebuilt native reference and recovery completed	PASS	-
+generator/main-finished.json	recovery archive paths are explicit unique text inputs	PASS	-
+executable-sha256.txt	pipeline hashes equal frozen R19 CLI and final R20 handoff	PASS	-
+recovery/native-version.txt	actual OpenLDAP 2.6.13 version output	PASS	-
+recovery/native-environment.tsv	verified native environment pin and binary match handoff	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/README.md	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/export-seed.sh	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/build-native-seed.sh	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/recovery-sha256.txt	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/native-recovery-sha256.txt	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/export-server.log	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/slapadd.log	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-r20-reference-recovery/native-server.log	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/pre-recovery/validate.sh	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log	recovery evidence is textual	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/SHA256SUMS	recovery evidence is textual	PASS	-
+common-explicit.log	successful script completion	PASS	-
+common-explicit.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+common-explicit.sh	round, access mode and uniform APFS clone setup	PASS	-
+common-explicit.sh	startup and Go executable mapping	PASS	-
+common-explicit.sh	eight concurrent workers, 1000 validated results, warm0 plus three	PASS	-
+common-explicit.sh	before endpoint port	PASS	-
+common-explicit.sh	current endpoint port	PASS	-
+common-explicit.sh	openldap endpoint port	PASS	-
+explicit-final/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-final/smoke.json	configured stages and endpoint addresses	PASS	-
+explicit-final/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	30/30
+explicit-final/smoke.json	operation and latency counts	PASS	-
+explicit-final/smoke.json	request and WhoAmI verification counts	PASS	-
+explicit-final/smoke.json	sample errors and timing totals	PASS	-
+explicit-final/smoke.json	latency sum equals total	PASS	-
+explicit-final/smoke.json	root variant and nonroot identity	PASS	-
+explicit-final/hot.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/hot.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-final/hot.json	configured stages and endpoint addresses	PASS	-
+explicit-final/hot.json	exact stage/method/members/endpoint/repeat inventory	PASS	126/126
+explicit-final/hot.json	operation and latency counts	PASS	-
+explicit-final/hot.json	request and WhoAmI verification counts	PASS	-
+explicit-final/hot.json	sample errors and timing totals	PASS	-
+explicit-final/hot.json	latency sum equals total	PASS	-
+explicit-final/hot.json	root variant and nonroot identity	PASS	-
+explicit-final/hot.json	hot versus distributed target selection	PASS	-
+explicit-final/distributed.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/distributed.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-final/distributed.json	configured stages and endpoint addresses	PASS	-
+explicit-final/distributed.json	exact stage/method/members/endpoint/repeat inventory	PASS	18/18
+explicit-final/distributed.json	operation and latency counts	PASS	-
+explicit-final/distributed.json	request and WhoAmI verification counts	PASS	-
+explicit-final/distributed.json	sample errors and timing totals	PASS	-
+explicit-final/distributed.json	latency sum equals total	PASS	-
+explicit-final/distributed.json	root variant and nonroot identity	PASS	-
+explicit-final/distributed.json	hot versus distributed target selection	PASS	-
+explicit-final/groups.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/groups.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-final/groups.json	configured stages and endpoint addresses	PASS	-
+explicit-final/groups.json	exact stage/method/members/endpoint/repeat inventory	PASS	36/36
+explicit-final/groups.json	operation and latency counts	PASS	-
+explicit-final/groups.json	request and WhoAmI verification counts	PASS	-
+explicit-final/groups.json	sample errors and timing totals	PASS	-
+explicit-final/groups.json	latency sum equals total	PASS	-
+explicit-final/groups.json	root variant and nonroot identity	PASS	-
+explicit-final/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-final/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+explicit-final/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-final/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+explicit-final/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-final/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-final/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+explicit-final/concurrent.tsv	TSV header and rows	PASS	-
+explicit-final/concurrent.tsv	warmup and three measured repeats per endpoint	PASS	-
+common-default.log	successful script completion	PASS	-
+common-default.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+common-default.sh	round, access mode and uniform APFS clone setup	PASS	-
+common-default.sh	startup and Go executable mapping	PASS	-
+common-default.sh	eight concurrent workers, 1000 validated results, warm0 plus three	PASS	-
+common-default.sh	before endpoint port	PASS	-
+common-default.sh	current endpoint port	PASS	-
+common-default.sh	openldap endpoint port	PASS	-
+default-final/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-final/smoke.json	configured stages and endpoint addresses	PASS	-
+default-final/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	30/30
+default-final/smoke.json	operation and latency counts	PASS	-
+default-final/smoke.json	request and WhoAmI verification counts	PASS	-
+default-final/smoke.json	sample errors and timing totals	PASS	-
+default-final/smoke.json	latency sum equals total	PASS	-
+default-final/smoke.json	root variant and nonroot identity	PASS	-
+default-final/hot.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/hot.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-final/hot.json	configured stages and endpoint addresses	PASS	-
+default-final/hot.json	exact stage/method/members/endpoint/repeat inventory	PASS	126/126
+default-final/hot.json	operation and latency counts	PASS	-
+default-final/hot.json	request and WhoAmI verification counts	PASS	-
+default-final/hot.json	sample errors and timing totals	PASS	-
+default-final/hot.json	latency sum equals total	PASS	-
+default-final/hot.json	root variant and nonroot identity	PASS	-
+default-final/hot.json	hot versus distributed target selection	PASS	-
+default-final/distributed.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/distributed.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-final/distributed.json	configured stages and endpoint addresses	PASS	-
+default-final/distributed.json	exact stage/method/members/endpoint/repeat inventory	PASS	18/18
+default-final/distributed.json	operation and latency counts	PASS	-
+default-final/distributed.json	request and WhoAmI verification counts	PASS	-
+default-final/distributed.json	sample errors and timing totals	PASS	-
+default-final/distributed.json	latency sum equals total	PASS	-
+default-final/distributed.json	root variant and nonroot identity	PASS	-
+default-final/distributed.json	hot versus distributed target selection	PASS	-
+default-final/groups.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/groups.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-final/groups.json	configured stages and endpoint addresses	PASS	-
+default-final/groups.json	exact stage/method/members/endpoint/repeat inventory	PASS	36/36
+default-final/groups.json	operation and latency counts	PASS	-
+default-final/groups.json	request and WhoAmI verification counts	PASS	-
+default-final/groups.json	sample errors and timing totals	PASS	-
+default-final/groups.json	latency sum equals total	PASS	-
+default-final/groups.json	root variant and nonroot identity	PASS	-
+default-final/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-final/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-final/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-final/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-final/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-final/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-final/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-final/concurrent.tsv	TSV header and rows	PASS	-
+default-final/concurrent.tsv	warmup and three measured repeats per endpoint	PASS	-
+root-paired.log	successful script completion	PASS	-
+root-paired.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+root-paired.sh	round, access mode and uniform APFS clone setup	PASS	-
+root-paired.sh	startup and Go executable mapping	PASS	-
+root-paired.sh	before endpoint port	PASS	-
+root-paired.sh	current endpoint port	PASS	-
+root-paired.sh	openldap endpoint port	PASS	-
+root-paired/literal.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/literal.json	operation and repeat count, disposable setup and cleanup	PASS	-
+root-paired/literal.json	configured stages and endpoint addresses	PASS	-
+root-paired/literal.json	exact stage/method/members/endpoint/repeat inventory	PASS	105/105
+root-paired/literal.json	operation and latency counts	PASS	-
+root-paired/literal.json	request and WhoAmI verification counts	PASS	-
+root-paired/literal.json	sample errors and timing totals	PASS	-
+root-paired/literal.json	latency sum equals total	PASS	-
+root-paired/literal.json	root variant and nonroot identity	PASS	-
+root-paired/literal-smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/literal-smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+root-paired/literal-smoke.json	configured stages and endpoint addresses	PASS	-
+root-paired/literal-smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	15/15
+root-paired/literal-smoke.json	operation and latency counts	PASS	-
+root-paired/literal-smoke.json	request and WhoAmI verification counts	PASS	-
+root-paired/literal-smoke.json	sample errors and timing totals	PASS	-
+root-paired/literal-smoke.json	latency sum equals total	PASS	-
+root-paired/literal-smoke.json	root variant and nonroot identity	PASS	-
+root-paired/normalized.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/normalized.json	operation and repeat count, disposable setup and cleanup	PASS	-
+root-paired/normalized.json	configured stages and endpoint addresses	PASS	-
+root-paired/normalized.json	exact stage/method/members/endpoint/repeat inventory	PASS	105/105
+root-paired/normalized.json	operation and latency counts	PASS	-
+root-paired/normalized.json	request and WhoAmI verification counts	PASS	-
+root-paired/normalized.json	sample errors and timing totals	PASS	-
+root-paired/normalized.json	latency sum equals total	PASS	-
+root-paired/normalized.json	root variant and nonroot identity	PASS	-
+root-paired/normalized-smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/normalized-smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+root-paired/normalized-smoke.json	configured stages and endpoint addresses	PASS	-
+root-paired/normalized-smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	15/15
+root-paired/normalized-smoke.json	operation and latency counts	PASS	-
+root-paired/normalized-smoke.json	request and WhoAmI verification counts	PASS	-
+root-paired/normalized-smoke.json	sample errors and timing totals	PASS	-
+root-paired/normalized-smoke.json	latency sum equals total	PASS	-
+root-paired/normalized-smoke.json	root variant and nonroot identity	PASS	-
+root-paired/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+root-paired/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+root-paired/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+root-paired/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+root-paired/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+root-paired/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+root-paired/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+group-compare-explicit.log	successful script completion	PASS	-
+group-compare-explicit.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+group-compare-explicit.sh	round, access mode and uniform APFS clone setup	PASS	-
+group-compare-explicit.sh	startup and Go executable mapping	PASS	-
+group-compare-explicit.sh	before endpoint port	PASS	-
+group-compare-explicit.sh	current endpoint port	PASS	-
+group-compare-explicit.sh	openldap endpoint port	PASS	-
+explicit-group-compare/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-group-compare/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-group-compare/smoke.json	configured stages and endpoint addresses	PASS	-
+explicit-group-compare/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	18/18
+explicit-group-compare/smoke.json	operation and latency counts	PASS	-
+explicit-group-compare/smoke.json	request and WhoAmI verification counts	PASS	-
+explicit-group-compare/smoke.json	sample errors and timing totals	PASS	-
+explicit-group-compare/smoke.json	latency sum equals total	PASS	-
+explicit-group-compare/smoke.json	root variant and nonroot identity	PASS	-
+explicit-group-compare/groups.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-group-compare/groups.json	operation and repeat count, disposable setup and cleanup	PASS	-
+explicit-group-compare/groups.json	configured stages and endpoint addresses	PASS	-
+explicit-group-compare/groups.json	exact stage/method/members/endpoint/repeat inventory	PASS	126/126
+explicit-group-compare/groups.json	operation and latency counts	PASS	-
+explicit-group-compare/groups.json	request and WhoAmI verification counts	PASS	-
+explicit-group-compare/groups.json	sample errors and timing totals	PASS	-
+explicit-group-compare/groups.json	latency sum equals total	PASS	-
+explicit-group-compare/groups.json	root variant and nonroot identity	PASS	-
+explicit-group-compare/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-group-compare/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-group-compare/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+explicit-group-compare/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-group-compare/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-group-compare/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+explicit-group-compare/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+explicit-group-compare/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+explicit-group-compare/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+group-compare-default.log	successful script completion	PASS	-
+group-compare-default.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+group-compare-default.sh	round, access mode and uniform APFS clone setup	PASS	-
+group-compare-default.sh	startup and Go executable mapping	PASS	-
+group-compare-default.sh	before endpoint port	PASS	-
+group-compare-default.sh	current endpoint port	PASS	-
+group-compare-default.sh	openldap endpoint port	PASS	-
+default-group-compare/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-group-compare/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-group-compare/smoke.json	configured stages and endpoint addresses	PASS	-
+default-group-compare/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	18/18
+default-group-compare/smoke.json	operation and latency counts	PASS	-
+default-group-compare/smoke.json	request and WhoAmI verification counts	PASS	-
+default-group-compare/smoke.json	sample errors and timing totals	PASS	-
+default-group-compare/smoke.json	latency sum equals total	PASS	-
+default-group-compare/smoke.json	root variant and nonroot identity	PASS	-
+default-group-compare/groups.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-group-compare/groups.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-group-compare/groups.json	configured stages and endpoint addresses	PASS	-
+default-group-compare/groups.json	exact stage/method/members/endpoint/repeat inventory	PASS	126/126
+default-group-compare/groups.json	operation and latency counts	PASS	-
+default-group-compare/groups.json	request and WhoAmI verification counts	PASS	-
+default-group-compare/groups.json	sample errors and timing totals	PASS	-
+default-group-compare/groups.json	latency sum equals total	PASS	-
+default-group-compare/groups.json	root variant and nonroot identity	PASS	-
+default-group-compare/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-group-compare/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-group-compare/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-group-compare/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-group-compare/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-group-compare/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-group-compare/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-group-compare/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-group-compare/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+read-aa.log	successful script completion	PASS	-
+read-aa.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+read-aa.sh	round, access mode and uniform APFS clone setup	PASS	-
+read-aa.sh	startup and Go executable mapping	PASS	-
+read-aa.sh	predetermined two fixed-UID reads at 1000 x 7	PASS	-
+read-aa.sh	before endpoint port	PASS	-
+read-aa.sh	current endpoint port	PASS	-
+read-aa.sh	openldap endpoint port	PASS	-
+default-read-aa/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-aa/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-read-aa/smoke.json	configured stages and endpoint addresses	PASS	-
+default-read-aa/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	6/6
+default-read-aa/smoke.json	operation and latency counts	PASS	-
+default-read-aa/smoke.json	request and WhoAmI verification counts	PASS	-
+default-read-aa/smoke.json	sample errors and timing totals	PASS	-
+default-read-aa/smoke.json	latency sum equals total	PASS	-
+default-read-aa/smoke.json	root variant and nonroot identity	PASS	-
+default-read-aa/smoke.json	hot versus distributed target selection	PASS	-
+default-read-aa/hot.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-aa/hot.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-read-aa/hot.json	configured stages and endpoint addresses	PASS	-
+default-read-aa/hot.json	exact stage/method/members/endpoint/repeat inventory	PASS	42/42
+default-read-aa/hot.json	operation and latency counts	PASS	-
+default-read-aa/hot.json	request and WhoAmI verification counts	PASS	-
+default-read-aa/hot.json	sample errors and timing totals	PASS	-
+default-read-aa/hot.json	latency sum equals total	PASS	-
+default-read-aa/hot.json	root variant and nonroot identity	PASS	-
+default-read-aa/hot.json	hot versus distributed target selection	PASS	-
+default-read-aa/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-aa/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-aa/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-read-aa/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-aa/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-aa/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-read-aa/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-aa/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-aa/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+read-swap.log	successful script completion	PASS	-
+read-swap.sh	uses rebuilt reference environment and recovered native fixture	PASS	-
+read-swap.sh	round, access mode and uniform APFS clone setup	PASS	-
+read-swap.sh	startup and Go executable mapping	PASS	-
+read-swap.sh	predetermined two fixed-UID reads at 1000 x 7	PASS	-
+read-swap.sh	before endpoint port	PASS	-
+read-swap.sh	current endpoint port	PASS	-
+read-swap.sh	openldap endpoint port	PASS	-
+default-read-swap/smoke.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-swap/smoke.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-read-swap/smoke.json	configured stages and endpoint addresses	PASS	-
+default-read-swap/smoke.json	exact stage/method/members/endpoint/repeat inventory	PASS	6/6
+default-read-swap/smoke.json	operation and latency counts	PASS	-
+default-read-swap/smoke.json	request and WhoAmI verification counts	PASS	-
+default-read-swap/smoke.json	sample errors and timing totals	PASS	-
+default-read-swap/smoke.json	latency sum equals total	PASS	-
+default-read-swap/smoke.json	root variant and nonroot identity	PASS	-
+default-read-swap/smoke.json	hot versus distributed target selection	PASS	-
+default-read-swap/hot.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-swap/hot.json	operation and repeat count, disposable setup and cleanup	PASS	-
+default-read-swap/hot.json	configured stages and endpoint addresses	PASS	-
+default-read-swap/hot.json	exact stage/method/members/endpoint/repeat inventory	PASS	42/42
+default-read-swap/hot.json	operation and latency counts	PASS	-
+default-read-swap/hot.json	request and WhoAmI verification counts	PASS	-
+default-read-swap/hot.json	sample errors and timing totals	PASS	-
+default-read-swap/hot.json	latency sum equals total	PASS	-
+default-read-swap/hot.json	root variant and nonroot identity	PASS	-
+default-read-swap/hot.json	hot versus distributed target selection	PASS	-
+default-read-swap/before/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-swap/before/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-swap/before/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-read-swap/current/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-swap/current/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-swap/current/warmup.json	warmup counters, errors and timing totals	PASS	-
+default-read-swap/openldap/warmup.json	error-free report shape, 100k fixture and timestamp	PASS	-
+default-read-swap/openldap/warmup.json	SDK warmup endpoint, inventory and read-only mode	PASS	-
+default-read-swap/openldap/warmup.json	warmup counters, errors and timing totals	PASS	-
+run-performance.sh	seven fixed sequential scripts	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"before"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"current"]	fixed repeat inventory and equal operations	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_ssha",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","hot","userBind","simple_bind_plaintext",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_ssha",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","hot","userBindWrong","simple_bind_plaintext",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","hot","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","distributed","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","distributed","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","groups","memberEquality","search_memberEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",10]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","groups","groupBase","base_member_values",1000]	three endpoints with equal operation counts	PASS	-
+["common","explicit","nonroot","groups","nestedMembership","client_bfs_member_equality",0]	three endpoints with equal operation counts	PASS	-
+["concurrent","explicit","root","8-workers","uidEquality","ldapsearch",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_ssha",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","userBind","simple_bind_plaintext",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_ssha",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","userBindWrong","simple_bind_plaintext",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","distributed","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","distributed","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","groups","memberEquality","search_memberEquality",0]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",10]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","groups","groupBase","base_member_values",1000]	three endpoints with equal operation counts	PASS	-
+["common","default","nonroot","groups","nestedMembership","client_bfs_member_equality",0]	three endpoints with equal operation counts	PASS	-
+["concurrent","default","root","8-workers","uidEquality","ldapsearch",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","literal","rootBind","simple_bind_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","literal","rootBase","base_objectclass_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","literal","rootEquality","subtree_uid_equality_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","literal","rootCompareTrue","compare_uid_true_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","literal","rootCompareFalse","compare_uid_false_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","normalized","rootBind","simple_bind_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","normalized","rootBase","base_objectclass_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","normalized","rootEquality","subtree_uid_equality_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","normalized","rootCompareTrue","compare_uid_true_root",0]	three endpoints with equal operation counts	PASS	-
+["root","default","root","normalized","rootCompareFalse","compare_uid_false_root",0]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","explicit","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueFirst","compare_member_true_first",1000]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareTrueLast","compare_member_true_last",1000]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",10]	three endpoints with equal operation counts	PASS	-
+["group-compare","default","nonroot","groups","groupCompareFalse","compare_member_false_missing",1000]	three endpoints with equal operation counts	PASS	-
+core	samples, medians, comparisons and JSON totals	PASS	840/144/48/31
+["aa","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootBase","search_nonrootBase",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"before"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"current"]	fixed repeat inventory and equal operations	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0,"openldap"]	fixed repeat inventory and equal operations	PASS	-
+["aa","default","nonroot","hot","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["aa","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootBase","search_nonrootBase",0]	three endpoints with equal operation counts	PASS	-
+["startup-port-swap","default","nonroot","hot","nonrootEquality","search_nonrootEquality",0]	three endpoints with equal operation counts	PASS	-
+diagnostics/	samples, medians, comparisons and JSON totals	PASS	84/12/4/10
+core	252 hot, 36 distributed, 72 group reads, 210 root, 252 group Compare, 18 concurrent samples	PASS	-
+network-before-1.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-before-1.txt	exact nonroot Base/equality hot cases	PASS	-
+network-current-1.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-current-1.txt	exact nonroot Base/equality hot cases	PASS	-
+network-current-2.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-current-2.txt	exact nonroot Base/equality hot cases	PASS	-
+network-before-2.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-before-2.txt	exact nonroot Base/equality hot cases	PASS	-
+network-before-3.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-before-3.txt	exact nonroot Base/equality hot cases	PASS	-
+network-current-3.txt	complete benchmark log with expected samples and PASS	PASS	-
+network-current-3.txt	exact nonroot Base/equality hot cases	PASS	-
+["same_process_TCP_SDK_plus_server","default","nonroot","hot","nonrootBase","SDK_Search_nonrootBase",0,"before"]	three independent network rounds	PASS	-
+["same_process_TCP_SDK_plus_server","default","nonroot","hot","nonrootEquality","SDK_Search_nonrootEquality",0,"before"]	three independent network rounds	PASS	-
+["same_process_TCP_SDK_plus_server","default","nonroot","hot","nonrootBase","SDK_Search_nonrootBase",0,"current"]	three independent network rounds	PASS	-
+["same_process_TCP_SDK_plus_server","default","nonroot","hot","nonrootEquality","SDK_Search_nonrootEquality",0,"current"]	three independent network rounds	PASS	-
+nonrootBase	both network endpoint medians	PASS	-
+nonrootEquality	both network endpoint medians	PASS	-
+network	12 samples, four medians, six metric comparisons	PASS	-
+exploratory/queue/components.txt	complete benchmark log with expected samples and PASS	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt	known exploratory control label	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/SerialSearch","Current"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/SerialSearch","PairedOldControl"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/SerialCompare","Current"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/SerialCompare","PairedOldControl"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/Burst8","Current"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/["BenchmarkOperationQueueBuffer/Burst8","PairedOldControl"]	three exploratory repeats	PASS	-
+exploratory/queue/components.txt/BenchmarkOperationQueueBuffer/SerialSearch	paired exploratory labels	PASS	-
+exploratory/queue/components.txt/BenchmarkOperationQueueBuffer/SerialCompare	paired exploratory labels	PASS	-
+exploratory/queue/components.txt/BenchmarkOperationQueueBuffer/Burst8	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt	complete benchmark log with expected samples and PASS	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt	known exploratory control label	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/New","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/New","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/Unchanged","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/Unchanged","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/EqualBytes","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/EqualBytes","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/ChangedDN","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/ChangedDN","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/ChangedMechanism","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/ChangedMechanism","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/Anonymous","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityPublish/Anonymous","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Published/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Published/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Published/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Published/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Credentials/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Credentials/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Credentials/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Credentials/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleDN/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleDN/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleDN/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleDN/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleMechanism/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleMechanism/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleMechanism/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/StaleMechanism/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Anonymous/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Anonymous/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Anonymous/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/Anonymous/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/NoSnapshot/Clone","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/NoSnapshot/Clone","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/NoSnapshot/CloneAndComplete","Legacy"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/["BenchmarkAuditIdentityClone/NoSnapshot/CloneAndComplete","Current"]	three exploratory repeats	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/New	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/Unchanged	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/EqualBytes	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/ChangedDN	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/ChangedMechanism	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityPublish/Anonymous	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Published/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Published/CloneAndComplete	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Credentials/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Credentials/CloneAndComplete	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/StaleDN/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/StaleDN/CloneAndComplete	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/StaleMechanism/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/StaleMechanism/CloneAndComplete	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Anonymous/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/Anonymous/CloneAndComplete	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/NoSnapshot/Clone	paired exploratory labels	PASS	-
+exploratory/audit-identity/components.txt/BenchmarkAuditIdentityClone/NoSnapshot/CloneAndComplete	paired exploratory labels	PASS	-
+focused-test.txt	no failures or panic	PASS	-
+focused-test.txt	successful complete log	PASS	-
+go-test.txt	no failures or panic	PASS	-
+go-test.txt	successful complete log	PASS	-
+go-vet.txt	no failures or panic	PASS	-
+go-vet.txt	empty vet log and main confirmed success	PASS	-
+openldap-differential.txt	no failures or panic	PASS	-
+openldap-differential.txt	successful complete log	PASS	-
+openldap-differential.txt	355 native PASS records, 26 top-level tests, no skips	PASS	-
+network-before-1.txt	no failures or panic	PASS	-
+network-before-1.txt	successful complete log	PASS	-
+network-current-1.txt	no failures or panic	PASS	-
+network-current-1.txt	successful complete log	PASS	-
+network-current-2.txt	no failures or panic	PASS	-
+network-current-2.txt	successful complete log	PASS	-
+network-before-2.txt	no failures or panic	PASS	-
+network-before-2.txt	successful complete log	PASS	-
+network-before-3.txt	no failures or panic	PASS	-
+network-before-3.txt	successful complete log	PASS	-
+network-current-3.txt	no failures or panic	PASS	-
+network-current-3.txt	successful complete log	PASS	-
+focused-test.txt	main focused server PASS at 0.079s	PASS	-
+go-test.txt	full Go suite includes directory/schema/storage/server	PASS	-
+validate.sh	full Go, vet, native, build and hash; no fuzz/race	PASS	-
+validate.sh	rebuilt native environment used for final native validation	PASS	-
+internal/server/operation.go	full patch blob identities equal immutable baseline and captured bytes	PASS	-
+internal/server/server.go	full patch blob identities equal immutable baseline and captured bytes	PASS	-
+source	baseline-relative two tracked files plus exactly five new files	PASS	-
+source	CLI and module files unchanged from baseline	PASS	-
+source	shared network benchmark equals main-reported source hash	PASS	-
+recovery	rebuilt canonical matches original content, line count, bytes and cksum	PASS	-
+recovery	native seed round-trip canonical matches original	PASS	-
+recovery	native tool manifest provided	PASS	-
+recovery	native manifest is complete, unique and scoped to rebuilt artifacts or immutable builder	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env	actual native artifact equals recorded SHA256	PASS	7fb55b654f0704245a5e6f4e1059abb9a45d1303c5abae65126b01d17e0588aa
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd	actual native artifact equals recorded SHA256	PASS	eacda98ceb48765ae091b86c4566333175e0b317c897821c08263e863f0e68af
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd	actual slapd is the observed arm64 Mach-O executable	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd/.libs/lloadd	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd/.libs/lloadd	actual native artifact equals recorded SHA256	PASS	47c3a47f160d4794630a9196944f85d37d75cde82ecf28a8a78f9d12ebff949e
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapsearch	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapsearch	actual native artifact equals recorded SHA256	PASS	8ab0f5c427cdd6af5ac51c34676a1caf169216ffba3aac07ce201c4d04d2dd09
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapmodify	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapmodify	actual native artifact equals recorded SHA256	PASS	e411c999a32690ef3dbcdca3231f48a0f19c142fef0d2124da211d34abcd28ad
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapwhoami	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapwhoami	actual native artifact equals recorded SHA256	PASS	96e370fdf85bd1e25cda2f4150253734118791e02cf60ab31049a5216e92dd53
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapexop	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapexop	actual native artifact equals recorded SHA256	PASS	01b8e97a71de2b379be3fb934c39e3ca1f5f4b06ce82445403871ef61b17de1c
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/libldap/.libs/libldap.dylib	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/libldap/.libs/libldap.dylib	actual native artifact equals recorded SHA256	PASS	36a93c2d0fc4eed53d19497d502c601ca4eccf874733df7fc10462e2098edee2
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/liblber/.libs/liblber.dylib	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/liblber/.libs/liblber.dylib	actual native artifact equals recorded SHA256	PASS	7b3b753fdaf65e2b98c034f6aa3fbf7ea565330b73a2a4ce43973725cd719f11
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/.ldap-go-reference-config	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/.ldap-go-reference-config	actual native artifact equals recorded SHA256	PASS	74afa03fc388664dee05e8eb5869a43d13eced9c604ac003f5ab632d7e9e827f
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log	actual native artifact equals recorded SHA256	PASS	0b561e1d33fc0c0201565530a9e3bc72b8993b2be89bca069e0fdb99bde57ddb
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/verification.log	native artifact resolves within the rebuilt directory	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/verification.log	actual native artifact equals recorded SHA256	PASS	e2b0a257f2914e50817b122de8b37a096ca78f00cbf251a0603c2a7599b44922
+/Users/wanna/mine/github/ldap-go/scripts/build-openldap-reference.sh	actual native artifact equals recorded SHA256	PASS	33d532a205fd25fee079c417e2535eac39d07260ef29326ff4f3dfa9eeabff20
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd	env entrypoint is a libtool shell wrapper, not the actual executable	PASS	-
+explicit-final/validation.tsv	TSV header and rows	PASS	-
+explicit-final/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-final/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-final/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-final/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+explicit-final	password and disposable endpoint DBs cleaned up	PASS	-
+default-final/validation.tsv	TSV header and rows	PASS	-
+default-final/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-final/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-final/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-final/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+default-final	password and disposable endpoint DBs cleaned up	PASS	-
+root-paired/validation.tsv	TSV header and rows	PASS	-
+root-paired/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/root-paired/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/root-paired/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/root-paired/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+root-paired	password and disposable endpoint DBs cleaned up	PASS	-
+explicit-group-compare/validation.tsv	TSV header and rows	PASS	-
+explicit-group-compare/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-group-compare/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-group-compare/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/explicit-group-compare/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+explicit-group-compare	password and disposable endpoint DBs cleaned up	PASS	-
+default-group-compare/validation.tsv	TSV header and rows	PASS	-
+default-group-compare/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-group-compare/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-group-compare/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-group-compare/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+default-group-compare	password and disposable endpoint DBs cleaned up	PASS	-
+default-read-aa/validation.tsv	TSV header and rows	PASS	-
+default-read-aa/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-aa/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+default-read-aa	password and disposable endpoint DBs cleaned up	PASS	-
+default-read-swap/validation.tsv	TSV header and rows	PASS	-
+default-read-swap/validation.tsv	three canonical export identities	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/before/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/current/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+/var/tmp/ldap-go-perf-20260930-r20-request/default-read-swap/openldap/data.canonical	export content, recorded validation and original canonical fixture agree	PASS	-
+default-read-swap	password and disposable endpoint DBs cleaned up	PASS	-
+exports	15 core exports and six separate calibration exports	PASS	-
+before	actual executable equals pipeline and main handoff	PASS	8337870fb7ccd7c6a2849d2bcd21b05f5df11d022c658e401fcd4054fccadf98
+before	Go executable metadata retained	PASS	-
+before	Go1.26.4 CGO-disabled darwin/arm64	PASS	-
+before	actual frozen R19 executable embeds 8918569 dirty	PASS	-
+current	actual executable equals pipeline and main handoff	PASS	1c179ea706042d9647e7c158272576261576ede0e87d6f140864ca786c888550
+current	Go executable metadata retained	PASS	-
+current	Go1.26.4 CGO-disabled darwin/arm64	PASS	-
+current	current actual embedded revision and dirty flag	PASS	-
+server-before.test	Go executable metadata retained	PASS	-
+server-current.test	Go executable metadata retained	PASS	-
+ldapcommonbench	Go executable metadata retained	PASS	-
+ldapcommonbench-root	Go executable metadata retained	PASS	-
+ldapcommonbench-group	Go executable metadata retained	PASS	-
+ldapbench	Go executable metadata retained	PASS	-
+ldifcanonical	Go executable metadata retained	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/.libs/slapd	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/lloadd/.libs/lloadd	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapsearch	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapmodify	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapwhoami	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/clients/tools/.libs/ldapexop	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/libldap/.libs/libldap.dylib	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/libraries/liblber/.libs/liblber.dylib	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/.ldap-go-reference-config	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log	native path resolution stable during generation	PASS	-
+/var/tmp/ldap-go-openldap-reference-r20-rebuilt/verification.log	native path resolution stable during generation	PASS	-

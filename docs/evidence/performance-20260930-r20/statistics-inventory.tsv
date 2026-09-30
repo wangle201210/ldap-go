@@ -1,0 +1,10 @@
+scope	variant	samples	medians	comparisons
+core	common/hot	252	36	12
+core	common/distributed	36	12	4
+core	common/groups	72	24	8
+core	concurrent/8-workers	18	6	2
+core	root/literal	105	15	5
+core	root/normalized	105	15	5
+core	group-compare/groups	252	36	12
+diagnostics	aa/hot	42	6	2
+diagnostics	startup-port-swap/hot	42	6	2

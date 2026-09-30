@@ -1,0 +1,3 @@
+Start from clean baseline bf510d8f2becd4c023fe04a7df8b8dd1681e1d11. Apply source/tracked.patch.txt with git apply. Copy the five source/new/ files to their repository paths, stripping only the final .raw suffix. Verify Go/module files with source/reconstruction.hash relative to that checkout.
+
+Main froze changed source and CLI/module references at /tmp/ldap-go-r20-evidence-source. This evidence worker does not write there. No duplicate complete server.go or operation.go is archived; the patch and five new files are sufficient. CLI copies and module files are convenience references. This records source provenance, not reproducible binaries. Actual executable module metadata is retained separately, including missing test-executable VCS fields.

@@ -1,0 +1,5 @@
+path	sha256	archive_path
+internal/cmd/ldapcommonbench/main.go	620df9d47ca7ce263e9dbe8190dd4943b25e77d6543c35035aea25eb3de920ad	source/cli/internal/cmd/ldapcommonbench/main.go.txt
+internal/cmd/ldapcommonbench/group_compare_test.go	6396779e5772eb8dfd68abd0bfba1815c66597e1768b4dfc0f814eca6268cec8	source/cli/internal/cmd/ldapcommonbench/group_compare_test.go.txt
+internal/cmd/ldapbench/main.go	251497d4a5ae99da1da5d461120d087c29aac504759b0aaa4609e194fbf2854f	source/cli/internal/cmd/ldapbench/main.go.txt
+internal/cmd/ldifcanonical/main.go	b764e320448fc8484c9427439ea2bb5871c79756d0241ff72d64211baee4261f	source/cli/internal/cmd/ldifcanonical/main.go.txt

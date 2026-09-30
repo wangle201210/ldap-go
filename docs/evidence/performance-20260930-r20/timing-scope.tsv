@@ -1,0 +1,15 @@
+scope	rule
+common-hot	Explicit/default nonroot correct/wrong SSHA/plaintext Bind plus Base/equality; 1000 x 7.
+common-distributed	Explicit/default nonroot Base/equality; 1000 x 3; warmed rotating targets, not controlled cold cache.
+common-groups	Explicit/default nonroot member equality, Base 10/1000 and nested membership; 100 x 3.
+root	Default access; literal and normalized root identities separate; five cases, 1000 x 7.
+group-compare	Explicit/default nonroot first/last/missing x 10/1000 members; 1000 x 7; fixture insertion order.
+concurrent	Root ldapsearch; 8 x 1000; warmup repeat 0 excluded, three measured repeats; process overhead included.
+diagnostics	Independent default read A/A and startup/port swap; fixed UID scale-001001; Base/equality 1000 x 7, hot.json plus smoke and three SDK warmups per run; 84/12/4 total.
+operation-timing	Setup and WhoAmI verification outside operation latency; request, verification and latency counters retained.
+APFS	Seven macro scripts use cp -c writable clones; setup/warmup excluded; COW and warm caches remain limitations.
+network	Real TCP, same-process SDK plus server; private copied 100k fixture; two default-access nonroot hot reads; 1s, alternating three rounds; 12 samples. Not pure server allocation and not a native comparison.
+exploratory	Historical queue/audit candidate versus old-control logs on older baselines; not actual bf510d8 before.
+exclusions	SDK warmups, smoke, concurrent repeat 0, network and exploratory components excluded from core medians. Diagnostics are never pooled or subtracted.
+formulas	time_reduction_pct=100*(1-current/before); native throughput percentage=100*openldap/current; all negatives retained.
+stopping-rule	Predetermined counts; no favorable sample selection, diagnostic correction or historical pooling.

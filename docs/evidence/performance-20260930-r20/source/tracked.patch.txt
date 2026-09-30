@@ -1,0 +1,82 @@
+diff --git a/internal/server/operation.go b/internal/server/operation.go
+index 987ea3aa1b1703ff31523cf55d6adbf8ead77217..84c1be1b53a96383d36108adce40cdf32f936ba0 100644
+--- a/internal/server/operation.go
++++ b/internal/server/operation.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"io"
+ 	"net"
++	"slices"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -451,6 +452,7 @@ type operationQueue struct {
+ 	mu                   sync.Mutex
+ 	ready                *sync.Cond
+ 	items                []*queuedOperation
++	inline               [1]*queuedOperation
+ 	active               int
+ 	maximum              int
+ 	fence                bool
+@@ -519,7 +521,14 @@ func (queue *operationQueue) push(
+ 	if pending > 0 && pending > maxPending {
+ 		return operationQueueLimitExceeded
+ 	}
+-	queue.items = append(queue.items, operation)
++	if len(queue.items) == 0 {
++		queue.inline[0] = operation
++		queue.items = queue.inline[:]
++	} else {
++		queue.items = append(queue.items, operation)
++		// append has moved the inline item to the heap; do not retain it twice.
++		queue.inline[0] = nil
++	}
+ 	queue.retainedBytes += operation.retainedBytes
+ 	queue.ready.Signal()
+ 	return operationQueuePushed
+@@ -636,6 +645,11 @@ func (queue *operationQueue) remove(messageID int64) *queuedOperation {
+ func (queue *operationQueue) discardPending() []*queuedOperation {
+ 	queue.mu.Lock()
+ 	discarded := queue.items
++	if len(discarded) != 0 && &discarded[0] == &queue.inline[0] {
++		// The caller owns this slice after unlock, while inline can be reused.
++		discarded = slices.Clone(discarded)
++		queue.inline[0] = nil
++	}
+ 	queue.items = nil
+ 	for _, operation := range discarded {
+ 		if operation != nil {
+@@ -672,6 +686,7 @@ func (queue *operationQueue) close() {
+ 		}
+ 	}
+ 	queue.items = nil
++	queue.inline[0] = nil
+ 	queue.ready.Broadcast()
+ 	queue.mu.Unlock()
+ }
+diff --git a/internal/server/server.go b/internal/server/server.go
+index a9988c4bcb21f001538c76996b2bdb9b2347e5e3..e5bbbf851a23454a7c684873cd7cfd0e522acc9f 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -1315,6 +1315,10 @@ func cloneConcurrentConnectionState(state *connectionState) connectionState {
+ 	cloned.transaction = nil
+ 	cloned.saslSession = nil
+ 	cloned.auditIdentity = &connectionAuditIdentityState{}
++	if state.auditIdentity != nil {
++		// Only the immutable snapshot is shared; each operation publishes independently.
++		cloned.auditIdentity.current.Store(state.auditIdentity.current.Load())
++	}
+ 	cloned.publishAuditIdentity()
+ 	return cloned
+ }
+@@ -2759,6 +2763,10 @@ func (state *connectionState) publishAuditIdentity() {
+ 	if state.auditIdentity == nil {
+ 		state.auditIdentity = &connectionAuditIdentityState{}
+ 	}
++	current := state.auditIdentity.current.Load()
++	if current != nil && current.boundDN == state.boundDN && current.authMechanism == state.authMechanism {
++		return
++	}
+ 	state.auditIdentity.current.Store(&connectionAuditIdentity{
+ 		boundDN:       state.boundDN,
+ 		authMechanism: state.authMechanism,

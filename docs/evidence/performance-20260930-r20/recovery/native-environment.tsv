@@ -1,0 +1,6 @@
+name	value
+OPENLDAP_COMMIT	d172686d3d270bc961b78f3ff00d7019c8dfb094
+OPENLDAP_VERIFIED_COMMIT	d172686d3d270bc961b78f3ff00d7019c8dfb094
+OPENLDAP_REFERENCE_VERIFIED	1
+OPENLDAP_SLAPD	/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd
+OPENLDAP_SCHEMA_DIR	/var/folders/fw/xl67d1095_10q5ybtfs44svh0000gn/T/ldap-go-openldap-source-2.6.13/servers/slapd/schema

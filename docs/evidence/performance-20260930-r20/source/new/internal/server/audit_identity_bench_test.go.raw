@@ -1,0 +1,130 @@
+package server
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+// Preserve the pre-optimization implementations as allocation and timing controls.
+func legacyPublishAuditIdentity(state *connectionState) {
+	if state.auditIdentity == nil {
+		state.auditIdentity = &connectionAuditIdentityState{}
+	}
+	state.auditIdentity.current.Store(&connectionAuditIdentity{
+		boundDN: state.boundDN, authMechanism: state.authMechanism,
+	})
+}
+
+func legacyCloneConcurrentConnectionState(state *connectionState) connectionState {
+	cloned := *state
+	cloned.bindCredentials = bytes.Clone(state.bindCredentials)
+	cloned.pagedSearch = nil
+	cloned.virtualListViews = nil
+	cloned.sortSessionCounts = nil
+	cloned.transaction = nil
+	cloned.saslSession = nil
+	cloned.auditIdentity = &connectionAuditIdentityState{}
+	legacyPublishAuditIdentity(&cloned)
+	return cloned
+}
+
+func BenchmarkAuditIdentityPublish(b *testing.B) {
+	for _, scenario := range []string{"New", "Unchanged", "EqualBytes", "ChangedDN", "ChangedMechanism", "Anonymous"} {
+		for _, implementation := range []string{"Legacy", "Current"} {
+			b.Run(scenario+"/"+implementation, func(b *testing.B) {
+				state := connectionState{boundDN: aliceDN, authMechanism: "SIMPLE"}
+				if scenario == "Anonymous" {
+					state.boundDN, state.authMechanism = "", ""
+				}
+				state.publishAuditIdentity()
+				if scenario == "EqualBytes" {
+					state.boundDN, state.authMechanism = strings.Clone(state.boundDN), strings.Clone(state.authMechanism)
+				}
+				legacy := implementation == "Legacy"
+				b.ReportAllocs()
+				for b.Loop() {
+					switch scenario {
+					case "New":
+						state = connectionState{boundDN: aliceDN, authMechanism: "SIMPLE"}
+					case "ChangedDN":
+						if state.boundDN == aliceDN {
+							state.boundDN = "uid=bob,dc=example,dc=com"
+						} else {
+							state.boundDN = aliceDN
+						}
+					case "ChangedMechanism":
+						if state.authMechanism == "SIMPLE" {
+							state.authMechanism = "EXTERNAL"
+						} else {
+							state.authMechanism = "SIMPLE"
+						}
+					}
+					if legacy {
+						legacyPublishAuditIdentity(&state)
+					} else {
+						state.publishAuditIdentity()
+					}
+				}
+				if got := state.loadAuditIdentity(); got != (connectionAuditIdentity{state.boundDN, state.authMechanism}) {
+					b.Fatalf("published identity = %#v", got)
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkAuditIdentityClone(b *testing.B) {
+	for _, scenario := range []string{"Published", "Credentials", "StaleDN", "StaleMechanism", "Anonymous", "NoSnapshot"} {
+		for _, lifecycle := range []string{"Clone", "CloneAndComplete"} {
+			for _, implementation := range []string{"Legacy", "Current"} {
+				b.Run(scenario+"/"+lifecycle+"/"+implementation, func(b *testing.B) {
+					state := connectionState{boundDN: aliceDN, authMechanism: "SIMPLE"}
+					if scenario == "Anonymous" {
+						state.boundDN, state.authMechanism = "", ""
+					}
+					if scenario != "NoSnapshot" {
+						state.publishAuditIdentity()
+					}
+					switch scenario {
+					case "Credentials":
+						state.bindCredentialDN, state.bindCredentials = aliceDN, []byte("secret")
+					case "StaleDN":
+						state.boundDN = "uid=bob,dc=example,dc=com"
+					case "StaleMechanism":
+						state.authMechanism = "EXTERNAL"
+					}
+					defer clearBindCredentials(&state)
+					before := state.loadAuditIdentity()
+					var got connectionAuditIdentity
+					legacy := implementation == "Legacy"
+					b.ReportAllocs()
+					for b.Loop() {
+						// Direct calls avoid forcing the whole connectionState to escape.
+						var cloned connectionState
+						if legacy {
+							cloned = legacyCloneConcurrentConnectionState(&state)
+						} else {
+							cloned = cloneConcurrentConnectionState(&state)
+						}
+						if lifecycle == "CloneAndComplete" {
+							if legacy {
+								legacyPublishAuditIdentity(&cloned)
+							} else {
+								cloned.publishAuditIdentity()
+							}
+						}
+						got = cloned.loadAuditIdentity()
+						clearConcurrentConnectionState(&cloned)
+					}
+					if got != (connectionAuditIdentity{state.boundDN, state.authMechanism}) || state.loadAuditIdentity() != before {
+						b.Fatalf("cloned identity = %#v, source = %#v", got, state.loadAuditIdentity())
+					}
+					if scenario == "Credentials" && string(state.bindCredentials) != "secret" {
+						b.Fatal("clone cleanup changed source credentials")
+					}
+				})
+			}
+		}
+	}
+}

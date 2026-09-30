@@ -1,0 +1,64 @@
+{
+  "native": {
+    "version": "2.6.13",
+    "source_commit": "d172686d3d270bc961b78f3ff00d7019c8dfb094",
+    "binary": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/servers/slapd/slapd",
+    "env_file": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/openldap-reference.env",
+    "fixture_dir": "/var/tmp/ldap-go-r20-reference-recovery",
+    "version_log": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/verification.log"
+  },
+  "recovery": {
+    "completed": true,
+    "reason": "Main reported the fixed native environment, original native fixture and old canonical reference missing before native/macros; rebuild pinned OpenLDAP 2.6.13 and recover from retained Go seed.",
+    "source_seed": "/var/tmp/ldap-go-perf-20260930-r20-request/member-index.db",
+    "canonical_path": "/var/tmp/ldap-go-r20-reference-recovery/data.canonical",
+    "native_canonical_path": "/var/tmp/ldap-go-r20-reference-recovery/native.canonical",
+    "canonical_sha256": "5dbd9fc0096a98c9a4818972cbc612fb1af150c581c930c604123854549852a0",
+    "artifacts": [
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/README.md",
+        "archive": "recovery/raw/README.md.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/export-seed.sh",
+        "archive": "recovery/raw/export-seed.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/build-native-seed.sh",
+        "archive": "recovery/raw/build-native-seed.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/recovery-sha256.txt",
+        "archive": "recovery/raw/recovery-sha256.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/native-recovery-sha256.txt",
+        "archive": "recovery/raw/native-recovery-sha256.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/export-server.log",
+        "archive": "recovery/raw/export-server.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/slapadd.log",
+        "archive": "recovery/raw/slapadd.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-r20-reference-recovery/native-server.log",
+        "archive": "recovery/raw/native-server.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-perf-20260930-r20-request/pre-recovery/validate.sh",
+        "archive": "recovery/raw/pre-recovery-validate.sh.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/build.log",
+        "archive": "recovery/raw/native-build.log.txt"
+      },
+      {
+        "source": "/var/tmp/ldap-go-openldap-reference-r20-rebuilt/SHA256SUMS",
+        "archive": "recovery/raw/native-tool-hashes.txt"
+      }
+    ]
+  }
+}

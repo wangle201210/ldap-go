@@ -1,0 +1,13 @@
+suite	access_mode	identity	variant	stage	method	members	endpoint	repeats	operations	median_ms	operations_per_second_at_median
+aa	default	nonroot	hot	nonrootBase	search_nonrootBase	0	before	7	1000	111.34328400000003	8981.233210258104
+aa	default	nonroot	hot	nonrootBase	search_nonrootBase	0	current	7	1000	111.6157390000002	8959.309941046919
+aa	default	nonroot	hot	nonrootBase	search_nonrootBase	0	openldap	7	1000	91.98944499999998	10870.812406792978
+aa	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	before	7	1000	113.12880300000013	8839.481842656805
+aa	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	current	7	1000	115.09393100000001	8688.555437384442
+aa	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	openldap	7	1000	91.95154300000004	10875.293305301027
+startup-port-swap	default	nonroot	hot	nonrootBase	search_nonrootBase	0	before	7	1000	113.77707999999998	8789.116402002936
+startup-port-swap	default	nonroot	hot	nonrootBase	search_nonrootBase	0	current	7	1000	116.66229300000022	8571.749914087477
+startup-port-swap	default	nonroot	hot	nonrootBase	search_nonrootBase	0	openldap	7	1000	91.39046800000001	10942.06017196454
+startup-port-swap	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	before	7	1000	115.75131800000014	8639.2104839791
+startup-port-swap	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	current	7	1000	116.76249399999998	8564.393973975926
+startup-port-swap	default	nonroot	hot	nonrootEquality	search_nonrootEquality	0	openldap	7	1000	93.76887500000004	10664.519543398592
