@@ -1,0 +1,7 @@
+--- FAIL: TestGetReadOnlyWithCheckErrorOrder (0.61s)
+    --- FAIL: TestGetReadOnlyWithCheckErrorOrder/missing-marker (0.06s)
+        entry_read_lease_check_test.go:196: allow=false: calls/trace/error = 1/[normalize ctx ctx check]/<nil>, want 0/[normalize ctx ctx]/<nil>
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/storage	2.805s
+ok  	github.com/wangle201210/ldap-go/internal/server	0.555s
+FAIL

@@ -1,0 +1,1755 @@
+diff --git a/internal/server/compare_read_lease.go b/internal/server/compare_read_lease.go
+new file mode 100644
+index 0000000..c677410
+--- /dev/null
++++ b/internal/server/compare_read_lease.go
+@@ -0,0 +1,49 @@
++package server
++
++import "github.com/wangle201210/ldap-go/internal/storage"
++
++func (server *Server) compareReadLeaseSource(
++	state *connectionState,
++	database *runtimeDatabase,
++	attribute string,
++	hasControls bool,
++	reader storage.Reader,
++) storage.Reader {
++	source := server.compareReadLeaseCandidate(state, database, attribute, hasControls, reader)
++	if source == nil || !compareReadLeaseAllowed(state, database, reader) {
++		return nil
++	}
++	return source
++}
++
++func compareReadLeaseAllowed(state *connectionState, database *runtimeDatabase, reader storage.Reader) bool {
++	return databaseSearchResultCacheSafe(state.runtime, *database) &&
++		smallIndexedRuntimeProjectionSafe(state.runtime) &&
++		localProjectionReadOnly(state.runtime, reader) && state.runtime.access.CanBatchValues()
++}
++
++func (server *Server) compareReadLeaseCandidate(
++	state *connectionState,
++	database *runtimeDatabase,
++	attribute string,
++	hasControls bool,
++	reader storage.Reader,
++) storage.Reader {
++	if attribute != "member" || database == nil || state.protocolVersion != 3 || hasControls ||
++		!databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) ||
++		!plainBoltSearchStore(server.config.Store) {
++		return nil
++	}
++	// These server-owned wrappers only supply context/revision metadata. Keep
++	// the original reader for Get and ACL; the source authorizes its row lease.
++	for {
++		switch contextual := reader.(type) {
++		case storageRevisionReader:
++			reader = contextual.Reader
++		case accessContextReader:
++			reader = contextual.Reader
++		default:
++			return reader
++		}
++	}
++}
+diff --git a/internal/server/compare_read_lease_bench_test.go b/internal/server/compare_read_lease_bench_test.go
+new file mode 100644
+index 0000000..7e242a4
+--- /dev/null
++++ b/internal/server/compare_read_lease_bench_test.go
+@@ -0,0 +1,82 @@
++package server
++
++import (
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/storage"
++)
++
++func BenchmarkCompareReadLeaseGate(b *testing.B) {
++	server, state := newSmallIndexedFixture(b, 0)
++	state.protocolVersion = 3
++	dn, err := parseCoreWriteDN(state.runtime, "cn=group,"+smallIndexedPeopleDN)
++	if err != nil {
++		b.Fatal(err)
++	}
++	database := databaseForNormalizedDN(state.runtime, dn)
++	if err := server.config.Store.View(b.Context(), func(reader storage.Reader) error {
++		if server.compareReadLeaseSource(state, database, "member", false, reader) == nil {
++			b.Fatal("fixture is not eligible")
++		}
++		b.ReportAllocs()
++		for b.Loop() {
++			if server.compareReadLeaseSource(state, database, "member", false, reader) == nil {
++				b.Fatal("fixture became ineligible")
++			}
++		}
++		return nil
++	}); err != nil {
++		b.Fatal(err)
++	}
++}
++
++// Repeated failures also have to return the borrowed decoder before View ends.
++func BenchmarkCompareReadLeaseFailure(b *testing.B) {
++	for _, scenario := range []string{"malformed-member", "denied", "referral"} {
++		b.Run(scenario, func(b *testing.B) {
++			server, state := newSmallIndexedFixture(b, 0)
++			state.protocolVersion = 3
++			group := defaultProjectionBenchmarkEntry(true)
++			group.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
++			assertion := []byte("uid=absent," + smallIndexedPeopleDN)
++			want := ldapwire.ResultInappropriateMatching
++			switch scenario {
++			case "malformed-member":
++				members := group.Values("member")
++				members[0] = []byte("bad-dn")
++				group.ReplaceValues("member", members)
++			case "denied":
++				state.boundDN = smallNonRootReaderDN
++				state.runtime.access = defaultProjectionPolicy(b, defaultProjectionRules(b,
++					"to attrs=member by * none", "to * by users read by * none"), nil)
++				want = ldapwire.ResultInsufficientAccessRights
++			case "referral":
++				group.ReplaceValues("objectClass", stringValues("referral", "extensibleObject"))
++				group.ReplaceValues("ref", stringValues("ldap://other.example/dc=other"))
++				want = ldapwire.ResultReferral
++			}
++			smallIndexedPut(b, server, state, group, false)
++			request := ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: assertion}
++			message := ldapwire.Message{ID: 1, Request: request}
++			capture := &smallIndexedCapture{}
++			run := func() {
++				capture.Reset()
++				if err := server.handleCompare(b.Context(), capture, state, message, request); err != nil {
++					b.Fatal(err)
++				}
++			}
++			run()
++			if code, ok := auditLDAPResultCode(capture.Bytes()); !ok || code != int(want) {
++				b.Fatalf("result=%d, decoded=%v, want=%d", code, ok, want)
++			}
++			b.ReportAllocs()
++			for b.Loop() {
++				run()
++			}
++			if code, ok := auditLDAPResultCode(capture.Bytes()); !ok || code != int(want) {
++				b.Fatalf("result=%d, decoded=%v, want=%d", code, ok, want)
++			}
++		})
++	}
++}
+diff --git a/internal/server/compare_read_lease_test.go b/internal/server/compare_read_lease_test.go
+new file mode 100644
+index 0000000..cf4a628
+--- /dev/null
++++ b/internal/server/compare_read_lease_test.go
+@@ -0,0 +1,265 @@
++package server
++
++import (
++	"bytes"
++	"errors"
++	"slices"
++	"testing"
++
++	ber "github.com/go-asn1-ber/asn1-ber"
++	ldap "github.com/go-ldap/ldap/v3"
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/storage"
++)
++
++func compareReadLeaseWire(t *testing.T, server *Server, state *connectionState, message ldapwire.Message, want ldapwire.ResultCode) []byte {
++	t.Helper()
++	capture := &smallIndexedCapture{}
++	if err := server.handleCompare(t.Context(), capture, state, message, message.Request.(ldapwire.CompareRequest)); err != nil {
++		t.Fatal(err)
++	}
++	reader := bytes.NewReader(capture.Bytes())
++	packet, err := ber.ReadPacket(reader)
++	if err != nil || reader.Len() != 0 {
++		t.Fatalf("BER error=%v, trailing bytes=%d", err, reader.Len())
++	}
++	result, err := parseSyncConsumerLDAPResult(packet, message.ID, ldapwire.ApplicationCompareResponse)
++	if err != nil || result.code != uint16(want) {
++		t.Fatalf("result=%+v, error=%v, want=%d", result, err, want)
++	}
++	if want == ldapwire.ResultInappropriateMatching && result.diagnosticMessage == "" ||
++		want == ldapwire.ResultNoSuchObject && result.matchedDN == "" ||
++		want == ldapwire.ResultReferral && len(ldapResultReferrals(packet)) == 0 {
++		t.Fatalf("missing diagnostic, matched DN or referrals: %+v", result)
++	}
++	return bytes.Clone(capture.Bytes())
++}
++
++func checkCompareReadLeaseWire(t *testing.T, server *Server, state *connectionState, message ldapwire.Message, want ldapwire.ResultCode, eligible bool) {
++	t.Helper()
++	request := message.Request.(ldapwire.CompareRequest)
++	dn, err := parseCoreWriteDN(state.runtime, request.DN)
++	if err != nil {
++		t.Fatal(err)
++	}
++	database := databaseForNormalizedDN(state.runtime, dn)
++	store, cache := server.config.Store, state.runtime.compareDNPrefixes
++	defer func() { server.config.Store, state.runtime.compareDNPrefixes = store, cache }()
++	var wire []byte
++	for _, owned := range []bool{false, true} {
++		if owned {
++			// This wrapper deliberately forces entryOrReferralWithReadLease(nil)
++			// and Reader.Get. The candidate above must retain the plain Bolt gate.
++			server.config.Store = &smallIndexedObservedStore{Store: store}
++			state.runtime.compareDNPrefixes = nil
++		}
++		if err := server.config.Store.View(t.Context(), func(reader storage.Reader) error {
++			if got := server.compareReadLeaseSource(state, database, request.Attribute, len(message.Controls) != 0 || message.ControlsPresent, reader) != nil; got != (eligible && !owned) {
++				t.Fatalf("owned=%v: lease gate=%v, want=%v", owned, got, eligible && !owned)
++			}
++			return nil
++		}); err != nil {
++			t.Fatal(err)
++		}
++		got := compareReadLeaseWire(t, server, state, message, want)
++		if owned && !bytes.Equal(wire, got) {
++			t.Fatalf("candidate wire=%x, owned Get wire=%x", wire, got)
++		}
++		wire = got
++	}
++}
++
++func TestCompareReadLeaseWireAndMutations(t *testing.T) {
++	server, state := newSmallIndexedFixture(t, 0)
++	state.protocolVersion = 3
++	group := defaultProjectionBenchmarkEntry(true)
++	// Avoid withSubschemaReference cloning the borrowed entry before comparison.
++	group.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
++	smallIndexedPut(t, server, state, group, false)
++	other := group.Clone()
++	other.DN = "cn=otherGroup,dc=example,dc=com"
++	other.ReplaceValues("cn", stringValues("otherGroup"))
++	other.ReplaceValues("member", compareDNPrefixTestEntry(1000).Values("member"))
++	smallIndexedPut(t, server, state, other, false)
++	members, otherMembers := group.Values("member"), other.Values("member")
++	missing := []byte("uid=absent," + smallIndexedPeopleDN)
++	message := ldapwire.Message{ID: 17, Request: ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: missing}}
++	check := func(label, dn string, assertion []byte, want ldapwire.ResultCode) {
++		t.Helper()
++		t.Run(label, func(t *testing.T) {
++			request := ldapwire.CompareRequest{DN: dn, Attribute: "member", Assertion: assertion}
++			checkCompareReadLeaseWire(t, server, state, ldapwire.Message{ID: message.ID, Request: request}, want, true)
++		})
++	}
++	check("cold miss", group.DN, missing, ldapwire.ResultCompareFalse)
++	cache := state.runtime.compareDNPrefixes
++	if cache == nil {
++		t.Fatal("missing prefix cache")
++	}
++	// Each request releases its lease and closes its View. Alternate rows while
++	// warming so cached values must remain owned when the decoder is reused.
++	for i := range len(members) + 1 {
++		compareReadLeaseWire(t, server, state, message, ldapwire.ResultCompareFalse)
++		if i%32 == 0 {
++			otherMessage := ldapwire.Message{ID: 17, Request: ldapwire.CompareRequest{DN: other.DN, Attribute: "member", Assertion: missing}}
++			compareReadLeaseWire(t, server, state, otherMessage, ldapwire.ResultCompareFalse)
++		}
++	}
++	if len(cache.records) != 2 {
++		t.Fatalf("warmed prefix records=%d, want both groups", len(cache.records))
++	}
++	check("warm first", group.DN, members[0], ldapwire.ResultCompareTrue)
++	check("warm last", group.DN, members[999], ldapwire.ResultCompareTrue)
++	check("other last", other.DN, otherMembers[999], ldapwire.ResultCompareTrue)
++	check("other does not contain original", other.DN, members[999], ldapwire.ResultCompareFalse)
++	check("original after other", group.DN, members[999], ldapwire.ResultCompareTrue)
++	changed := group.Clone()
++	values := changed.Values("member")
++	values[900] = missing
++	changed.ReplaceValues("member", values)
++	smallIndexedPut(t, server, state, changed, true)
++	check("modified old late member", group.DN, members[900], ldapwire.ResultCompareFalse)
++	check("modified new late member", group.DN, missing, ldapwire.ResultCompareTrue)
++	dn, err := parseCoreWriteDN(state.runtime, group.DN)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := server.config.Store.Update(t.Context(), func(writer storage.Writer) error {
++		return writerForDatabase(writer, *databaseForNormalizedDN(state.runtime, dn)).Delete(dn)
++	}); err != nil {
++		t.Fatal(err)
++	}
++	check("deleted", group.DN, missing, ldapwire.ResultNoSuchObject)
++	check("other after delete", other.DN, otherMembers[999], ldapwire.ResultCompareTrue)
++	smallIndexedPut(t, server, state, group, false)
++	check("recreated removed member", group.DN, missing, ldapwire.ResultCompareFalse)
++	check("recreated original member", group.DN, members[900], ldapwire.ResultCompareTrue)
++	if state.runtime.compareDNPrefixes != cache {
++		t.Fatal("mutations replaced the warmed prefix cache")
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareReadLeaseErrorOrder(t *testing.T) {
++	server, state := newSmallIndexedFixture(t, 0)
++	state.protocolVersion = 3
++	group := defaultProjectionBenchmarkEntry(true)
++	group.ReplaceValues("subschemaSubentry", stringValues("cn=Subschema"))
++	members := group.Values("member")
++	members[0] = []byte("not-a-dn")
++	group.ReplaceValues("member", members)
++	smallIndexedPut(t, server, state, group, false)
++	filter, err := ldap.CompileFilter("(cn=absent)")
++	if err != nil {
++		t.Fatal(err)
++	}
++	assertion := ldapwire.Control{OID: assertionControlOID, Critical: true, HasValue: true, Value: filter.Bytes()}
++	manage := ldapwire.Control{OID: manageDsaITControlOID, Critical: true}
++	check := func(label string, want ldapwire.ResultCode, controls ...ldapwire.Control) {
++		t.Helper()
++		t.Run(label, func(t *testing.T) {
++			request := ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: members[999]}
++			checkCompareReadLeaseWire(t, server, state, ldapwire.Message{ID: 17, Request: request, Controls: controls}, want, len(controls) == 0)
++		})
++	}
++	check("malformed before match", ldapwire.ResultInappropriateMatching)
++	state.boundDN = ""
++	check("ACL before malformed member", ldapwire.ResultInsufficientAccessRights)
++	check("ACL before assertion", ldapwire.ResultInsufficientAccessRights, assertion)
++	state.boundDN = smallIndexedRootDN
++	check("assertion before malformed member", ldapwire.ResultAssertionFailed, assertion)
++	group.ReplaceValues("objectClass", stringValues("referral", "extensibleObject"))
++	group.ReplaceValues("ref", stringValues("ldap://remote.example/dc=remote,dc=example"))
++	smallIndexedPut(t, server, state, group, true)
++	check("referral before malformed member", ldapwire.ResultReferral)
++	check("referral before assertion", ldapwire.ResultReferral, assertion)
++	state.runtime.access = defaultProjectionPolicy(t, defaultProjectionRules(t,
++		"to attrs=member by * none", "to * by * read"), nil)
++	state.boundDN = ""
++	check("referral before denied compare", ldapwire.ResultReferral)
++	check("managed referral ACL before assertion", ldapwire.ResultInsufficientAccessRights, manage, assertion)
++	state.boundDN = smallIndexedRootDN
++	check("managed referral assertion", ldapwire.ResultAssertionFailed, manage, assertion)
++	check("managed referral malformed member", ldapwire.ResultInappropriateMatching, manage)
++}
++
++func TestCompareReadLeaseGateFallback(t *testing.T) {
++	server, state := newSmallIndexedFixture(t, 0)
++	state.protocolVersion = 3
++	group := defaultProjectionBenchmarkEntry(true)
++	smallIndexedPut(t, server, state, group, false)
++	request := ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: group.Values("member")[999]}
++	message := ldapwire.Message{ID: 17, Request: request}
++	checkCompareReadLeaseWire(t, server, state, message, ldapwire.ResultCompareTrue, true)
++	dn, err := parseCoreWriteDN(state.runtime, group.DN)
++	if err != nil {
++		t.Fatal(err)
++	}
++	database := databaseForNormalizedDN(state.runtime, dn)
++	store, normalizer := server.config.Store, database.dnNormalizer
++	for _, name := range []string{"custom store", "custom normalizer", "empty controls", "control", "LDAPv2", "other attribute"} {
++		t.Run(name, func(t *testing.T) {
++			defer func() {
++				server.config.Store, database.dnNormalizer, state.protocolVersion = store, normalizer, 3
++			}()
++			message, request := message, request
++			var calls []string
++			switch name {
++			case "custom store":
++				server.config.Store = &smallIndexedObservedStore{Store: store}
++			case "custom normalizer":
++				database.dnNormalizer = routingAttributeNormalizer(func(attribute string, value []byte) (string, []byte, error) {
++					calls = append(calls, attribute+"="+string(value))
++					return state.runtime.schema.NormalizeDNAttribute(attribute, value)
++				})
++			case "empty controls":
++				message.ControlsPresent = true
++			case "control":
++				message.Controls = []ldapwire.Control{{OID: manageDsaITControlOID, Critical: true}}
++			case "LDAPv2":
++				state.protocolVersion = 2
++			case "other attribute":
++				request.Attribute, request.Assertion = "cn", group.Values("cn")[0]
++			}
++			message.Request = request
++			if err := server.config.Store.View(t.Context(), func(reader storage.Reader) error {
++				if server.compareReadLeaseSource(state, database, request.Attribute, len(message.Controls) != 0 || message.ControlsPresent, reader) != nil || len(calls) != 0 {
++					t.Fatalf("fallback gate authorized borrowing or called custom normalizer: calls=%v", calls)
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++			wire := compareReadLeaseWire(t, server, state, message, ldapwire.ResultCompareTrue)
++			if name == "custom normalizer" && len(calls) == 0 {
++				t.Fatal("fallback skipped custom normalization")
++			}
++			candidateCalls := slices.Clone(calls)
++			calls = nil
++			server.config.Store = &smallIndexedObservedStore{Store: server.config.Store}
++			ownedWire := compareReadLeaseWire(t, server, state, message, ldapwire.ResultCompareTrue)
++			if !bytes.Equal(wire, ownedWire) || !slices.Equal(candidateCalls, calls) {
++				t.Fatalf("fallback changed owned Get wire or callbacks: candidate=%v, owned=%v", candidateCalls, calls)
++			}
++		})
++	}
++	var trace string
++	observed := &smallIndexedObservedStore{Store: store,
++		beforeView: func() { trace += "view;" },
++		afterView: func() error {
++			trace += "return;"
++			return nil
++		},
++	}
++	server.config.Store = observed
++	defer func() { server.config.Store = store }()
++	writeErr := errors.New("compare write failed")
++	for _, failure := range []error{nil, writeErr} {
++		trace, observed.views, observed.updates = "", 0, 0
++		capture := &smallIndexedCapture{onWrite: func() { trace += "wire;" }, err: failure}
++		err := server.handleCompare(t.Context(), capture, state, message, request)
++		if !errors.Is(err, failure) || trace != "view;return;wire;" || observed.views != 1 || observed.updates != 0 {
++			t.Fatalf("error=%v, callbacks=%s, views=%d updates=%d", err, trace, observed.views, observed.updates)
++		}
++	}
++}
+diff --git a/internal/server/referral.go b/internal/server/referral.go
+index edc2f3f..bcf2313 100644
+--- a/internal/server/referral.go
++++ b/internal/server/referral.go
+@@ -158,6 +158,18 @@ func (server *Server) entryOrReferral(
+ 	boundDN string,
+ 	target directory.DN,
+ 	manageDsaIT bool,
++) (directory.Entry, error) {
++	return server.entryOrReferralWithReadLease(runtime, reader, boundDN, target, manageDsaIT, nil, nil)
++}
++
++func (server *Server) entryOrReferralWithReadLease(
++	runtime *runtimeState,
++	reader storage.Reader,
++	boundDN string,
++	target directory.DN,
++	manageDsaIT bool,
++	lease *storage.EntryReadLease,
++	check func() bool,
+ ) (directory.Entry, error) {
+ 	target, err := storage.NormalizeReaderDN(reader, target)
+ 	if err != nil {
+@@ -167,7 +179,7 @@ func (server *Server) entryOrReferral(
+ 			err,
+ 		)
+ 	}
+-	entry, err := reader.Get(target)
++	entry, err := storage.GetReadOnlyWithCheck(reader, target, lease, check)
+ 	if err == nil {
+ 		if manageDsaIT || !runtime.schema.EntryHasObjectClass(entry, "referral") {
+ 			return entry, nil
+diff --git a/internal/server/write.go b/internal/server/write.go
+index 589d132..130a841 100644
+--- a/internal/server/write.go
++++ b/internal/server/write.go
+@@ -3033,7 +3033,18 @@ func (server *Server) handleCompare(
+ 	}
+ 
+ 	result := ldapwire.Result{Code: ldapwire.ResultCompareFalse}
++	compareHasControls := len(message.Controls) != 0 || message.ControlsPresent
+ 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
++		var readLease *storage.EntryReadLease
++		var checkReadLease func() bool
++		if source := server.compareReadLeaseCandidate(state, database, request.Attribute, compareHasControls, reader); source != nil {
++			lease := storage.NewEntryReadLease(source)
++			checkReadLease = func() bool {
++				return compareReadLeaseAllowed(state, database, reader)
++			}
++			defer lease.Release()
++			readLease = &lease
++		}
+ 		tx := reader
+ 		if database != nil && !isMonitorDatabase(*database) {
+ 			tx = readerForDatabase(reader, *database)
+@@ -3066,12 +3077,14 @@ func (server *Server) handleCompare(
+ 			entry = server.subschemaEntry(state.runtime)
+ 		} else {
+ 			var getErr error
+-			entry, getErr = server.entryOrReferral(
++			entry, getErr = server.entryOrReferralWithReadLease(
+ 				state.runtime,
+ 				tx,
+ 				state.boundDN,
+ 				dn,
+ 				controls.manageDsaIT,
++				readLease,
++				checkReadLease,
+ 			)
+ 			if errors.Is(getErr, storage.ErrEntryNotFound) {
+ 				if controls.dontUseCopy && database.shadow {
+diff --git a/internal/storage/bolt.go b/internal/storage/bolt.go
+index d1b3956..bd5e55a 100644
+--- a/internal/storage/bolt.go
++++ b/internal/storage/bolt.go
+@@ -657,6 +657,10 @@ func (tx *boltTx) getSchemaAwareIn(
+ 	partition string,
+ 	dn directory.DN,
+ ) (directory.Entry, error) {
++	return tx.getSchemaAwareInWithLease(partition, dn, nil, nil)
++}
++
++func (tx *boltTx) getSchemaAwareInWithLease(partition string, dn directory.DN, lease *EntryReadLease, check func() bool) (directory.Entry, error) {
+ 	if err := tx.ctx.Err(); err != nil {
+ 		return directory.Entry{}, err
+ 	}
+@@ -665,6 +669,16 @@ func (tx *boltTx) getSchemaAwareIn(
+ 	if value == nil {
+ 		return directory.Entry{}, ErrEntryNotFound
+ 	}
++	if lease != nil && lease.decoder == nil && len(value) >= 8*1024 &&
++		(bytes.HasPrefix(value, entryBinaryV1Prefix) || bytes.HasPrefix(value, entryBinaryPrefix) || bytes.HasPrefix(value, entryBinaryV3Prefix)) &&
++		(check == nil || check()) {
++		decoder := acquireReadOnlyCandidateDecoder()
++		if entry, borrowed := decoder.borrow(value); borrowed {
++			lease.decoder = decoder
++			return entry, nil
++		}
++		releaseReadOnlyCandidateDecoder(decoder)
++	}
+ 	stored, err := decodeStoredEntry(value)
+ 	if err != nil {
+ 		return directory.Entry{}, err
+diff --git a/internal/storage/entry_read_lease.go b/internal/storage/entry_read_lease.go
+new file mode 100644
+index 0000000..01c45d9
+--- /dev/null
++++ b/internal/storage/entry_read_lease.go
+@@ -0,0 +1,82 @@
++package storage
++
++import "github.com/wangle201210/ldap-go/internal/directory"
++
++// EntryReadLease pins the descriptors and Bolt payloads of one read-only entry.
++// Its zero value is ready for use. Do not copy or use a lease concurrently.
++// Release it before the enclosing Store.View callback returns, including on
++// errors and panics. A lease can be reused after Release.
++type EntryReadLease struct {
++	source  *boltTx
++	decoder *readOnlyCandidateDecoder
++}
++
++// NewEntryReadLease authorizes borrowing from source through a caller-approved
++// wrapper chain. It accepts only a concrete read-only Bolt reader, without
++// unwrapping decorators or acquiring a decoder. Other readers produce a zero
++// lease. The caller must establish that the original scoped reader and source
++// belong to the same View and that its wrappers permit read-only entry use.
++// GetReadOnly still traverses the original reader's normalization, migration
++// and getter dispatch; it borrows only if that dispatch reaches this source.
++// A source-bound lease must not outlive its View, even after Release.
++func NewEntryReadLease(source Reader) EntryReadLease {
++	if tx, ok := source.(*boltTx); ok && tx != nil && tx.tx != nil && !tx.tx.Writable() {
++		return EntryReadLease{source: tx}
++	}
++	return EntryReadLease{}
++}
++
++// Release invalidates borrowed entry descriptors and values. It is idempotent;
++// owned copies, DN strings and attribute descriptions remain valid. A source
++// binding remains available for reuse within the same View.
++func (lease *EntryReadLease) Release() {
++	if lease == nil || lease.decoder == nil {
++		return
++	}
++	decoder := lease.decoder
++	lease.decoder = nil
++	releaseReadOnlyCandidateDecoder(decoder)
++}
++
++// GetReadOnly has reader.Get's normalization, lookup and error semantics, but
++// the returned entry must not be mutated or retained beyond lease.Release or
++// the current Store.View callback. Clone or Select inside that lifetime to
++// obtain owned data. It does not validate display DNs or add identity hints.
++//
++// A zero lease borrows only from an undecorated read-only Bolt transaction in a
++// schema-aware partition. NewEntryReadLease also permits caller-approved wrappers
++// around its exact source. Both require the existing IndexEntryValuesReadOnly
++// schema opt-in. Binary rows smaller than 8 KiB, unsupported shapes, unapproved
++// custom readers/normalizers and legacy lookups use owned decoding. An active
++// or nil lease also uses the original owned path, without invalidating an
++// earlier borrowed entry.
++// Reader.Get itself always retains its existing owned-entry contract.
++func GetReadOnly(reader Reader, dn directory.DN, lease *EntryReadLease) (directory.Entry, error) {
++	return GetReadOnlyWithCheck(reader, dn, lease, nil)
++}
++
++// GetReadOnlyWithCheck additionally requires check to allow borrowing. It runs
++// synchronously after a large binary row is found and before decoder acquisition;
++// it is never retained. A false result keeps owned decoding and its errors.
++// The check must not mutate the reader, lease or policy. Source and normalizer
++// eligibility must already hold, independently of this deferred check.
++func GetReadOnlyWithCheck(reader Reader, dn directory.DN, lease *EntryReadLease, check func() bool) (directory.Entry, error) {
++	if lease == nil || lease.decoder != nil {
++		return reader.Get(dn)
++	}
++	scoped, ok := reader.(schemaAwarePartitionReader)
++	if !ok {
++		return reader.Get(dn)
++	}
++	if lease.source == nil {
++		tx, ok := scoped.Reader.(*boltTx)
++		if !ok || tx == nil || tx.tx == nil || tx.tx.Writable() {
++			return reader.Get(dn)
++		}
++	}
++	readOnly, ok := scoped.normalizer.(readOnlyIndexEntryValues)
++	if !ok || !readOnly.IndexEntryValuesReadOnly() {
++		return reader.Get(dn)
++	}
++	return scoped.get(dn, lease, check)
++}
+diff --git a/internal/storage/entry_read_lease_bench_test.go b/internal/storage/entry_read_lease_bench_test.go
+new file mode 100644
+index 0000000..6532fce
+--- /dev/null
++++ b/internal/storage/entry_read_lease_bench_test.go
+@@ -0,0 +1,68 @@
++package storage
++
++import (
++	"fmt"
++	"testing"
++)
++
++// One static read transaction isolates Get and lease costs from fixture setup,
++// View construction, context creation, writes, server wrappers and sockets.
++func BenchmarkBoltDirectGetReadOnly(b *testing.B) {
++	for _, members := range []int{10, 1000} {
++		b.Run(fmt.Sprintf("Members=%d", members), func(b *testing.B) {
++			store, schema, dn := newEntryReadFixture(b, members, "v3")
++			ctx := b.Context()
++			for _, readonly := range []bool{false, true} {
++				name := "Owned"
++				if readonly {
++					name = "ReadOnly"
++				}
++				b.Run(name, func(b *testing.B) {
++					if err := store.View(ctx, func(reader Reader) error {
++						scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++						want, err := scoped.Get(dn)
++						if err != nil {
++							return err
++						}
++						memberIndex := len(want.Attributes) - 1
++						if len(want.Attributes[memberIndex].Values) != members {
++							b.Fatal("unexpected member count")
++						}
++						// Warm decoder recycling before timing; allocation on a cold
++						// pool remains covered by the ownership tests, not this loop.
++						var warm EntryReadLease
++						if readonly {
++							if _, err := GetReadOnly(scoped, dn, &warm); err != nil {
++								warm.Release()
++								return err
++							}
++							warm.Release()
++						}
++						b.ReportAllocs()
++						if readonly {
++							for b.Loop() {
++								var lease EntryReadLease
++								entry, err := GetReadOnly(scoped, dn, &lease)
++								valid := err == nil && len(entry.Attributes[memberIndex].Values) == members
++								lease.Release()
++								if !valid {
++									b.Fatalf("GetReadOnly result changed: %v", err)
++								}
++							}
++						} else {
++							for b.Loop() {
++								entry, err := scoped.Get(dn)
++								if err != nil || len(entry.Attributes[memberIndex].Values) != members {
++									b.Fatalf("Get result changed: %v", err)
++								}
++							}
++						}
++						return nil
++					}); err != nil {
++						b.Fatal(err)
++					}
++				})
++			}
++		})
++	}
++}
+diff --git a/internal/storage/entry_read_lease_check_test.go b/internal/storage/entry_read_lease_check_test.go
+new file mode 100644
+index 0000000..0fb84b7
+--- /dev/null
++++ b/internal/storage/entry_read_lease_check_test.go
+@@ -0,0 +1,406 @@
++package storage
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"slices"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++func TestGetReadOnlyWithCheckFormatsAndBounds(t *testing.T) {
++	holdIdleReadOnlyCandidateDecoders(t)
++	releaseReadOnlyCandidateDecoder(acquireReadOnlyCandidateDecoder())
++	store, schema, dn := newEntryReadFixture(t, 10, "v3")
++	key := entryReadKey(t, schema, dn)
++	entry := directory.Entry{DN: "not a valid DN", Attributes: []directory.Attribute{
++		{Description: "member", Values: [][]byte{bytes.Repeat([]byte("x"), 9000)}, RawNormalized: true},
++		{Description: "empty"},
++		{Description: "binary;lang-EN", Values: [][]byte{{}, {0, 255}}},
++	}}
++	type testCase struct {
++		name     string
++		encoded  []byte
++		calls    int
++		borrowed bool
++	}
++	var cases []testCase
++	for _, format := range []string{"v1", "v2", "v3", "json"} {
++		encoded := encodeCandidateTestEntry(t, entry, "unrelated identity", format)
++		calls := 0
++		if format != "json" {
++			calls = 1
++		}
++		cases = append(cases,
++			testCase{format, encoded, calls, calls == 1},
++			testCase{format + "/trailing", append(bytes.Clone(encoded), 0), calls, false},
++			testCase{format + "/truncated", bytes.Clone(encoded[:len(encoded)-1]), calls, false},
++		)
++	}
++	for _, size := range []int{8191, 8192, 8193} {
++		candidate := entry.Clone()
++		encoded := encodeCandidateTestEntry(t, candidate, "unrelated identity", "v3")
++		values := candidate.Attributes[0].Values
++		values[0] = values[0][:len(values[0])-(len(encoded)-size)]
++		encoded = encodeCandidateTestEntry(t, candidate, "unrelated identity", "v3")
++		if len(encoded) != size {
++			t.Fatalf("fixture size = %d, want %d", len(encoded), size)
++		}
++		calls := 0
++		if size >= 8192 {
++			calls = 1
++		}
++		cases = append(cases, testCase{fmt.Sprintf("bytes/%d", size), encoded, calls, calls == 1})
++	}
++	for _, test := range cases {
++		t.Run(test.name, func(t *testing.T) {
++			if err := store.Update(t.Context(), func(writer Writer) error {
++				return writer.(*boltTx).entries.Put(key, test.encoded)
++			}); err != nil {
++				t.Fatal(err)
++			}
++			if err := store.View(t.Context(), func(reader Reader) error {
++				scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++				want, wantErr := scoped.Get(dn)
++				raw := reader.(*boltTx).entries.Get(key)
++				before := bytes.Clone(raw)
++				for _, allow := range []bool{false, true} {
++					lease := NewEntryReadLease(reader)
++					defer lease.Release()
++					calls, idle := 0, len(idleReadOnlyCandidateDecoders)
++					got, err := GetReadOnlyWithCheck(scoped, dn, &lease, func() bool {
++						calls++
++						if lease.decoder != nil || len(idleReadOnlyCandidateDecoders) != idle {
++							t.Fatal("check ran after decoder acquisition")
++						}
++						return allow
++					})
++					assertEntryReadEqual(t, got, err, want, wantErr)
++					borrowed := allow && test.borrowed
++					if calls != test.calls || (lease.decoder != nil) != borrowed || entryReadBorrows(got, raw) != borrowed {
++						t.Fatalf("allow=%t: calls/borrowed = %d/%t, want %d/%t", allow, calls, lease.decoder != nil, test.calls, borrowed)
++					}
++					if _, hinted := got.DNIdentity(); hinted {
++						t.Fatal("checked Get added an identity hint")
++					}
++					lease.Release()
++					if len(idleReadOnlyCandidateDecoders) != idle || !bytes.Equal(raw, before) {
++						t.Fatal("checked Get leaked a decoder or changed the stored row")
++					}
++					if !allow {
++						assertEntryReadEqual(t, got, err, want, wantErr)
++					}
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++func TestGetReadOnlyWithCheckErrorOrder(t *testing.T) {
++	for _, test := range []struct {
++		name           string
++		mode           string
++		cancelAt       int
++		normalizeFails bool
++		allowLegacy    bool
++		calls          int
++	}{
++		{name: "normal", calls: 1},
++		{name: "normalize-before-context-and-migration", mode: "bad-marker", cancelAt: 1, normalizeFails: true},
++		{name: "context-before-migration", mode: "bad-marker", cancelAt: 1},
++		{name: "context-before-row", cancelAt: 2},
++		{name: "missing", mode: "missing"},
++		{name: "context-before-missing", mode: "missing", cancelAt: 2},
++		{name: "context-before-decode", mode: "malformed", cancelAt: 2},
++		{name: "malformed", mode: "malformed", calls: 1},
++		{name: "bad-marker", mode: "bad-marker"},
++		// An absent marker with only schema-aware rows still permits direct Get.
++		{name: "missing-marker", mode: "missing-marker", calls: 1},
++		{name: "legacy-required", mode: "legacy"},
++		{name: "legacy-allowed", mode: "legacy", allowLegacy: true},
++		{name: "legacy-context", mode: "legacy", allowLegacy: true, cancelAt: 3},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++			key := entryReadKey(t, schema, dn)
++			if err := store.Update(t.Context(), func(writer Writer) error {
++				tx := writer.(*boltTx)
++				switch test.mode {
++				case "missing":
++					return tx.entries.Delete(key)
++				case "malformed":
++					return tx.entries.Put(key, append(bytes.Clone(tx.entries.Get(key)), 0))
++				case "bad-marker":
++					return tx.meta.Put(boltSchemaAwareDNMigrationMetadataKey("db"), []byte{99})
++				case "missing-marker", "legacy":
++					if err := tx.meta.Delete(boltSchemaAwareDNMigrationMetadataKey("db")); err != nil {
++						return err
++					}
++					if test.mode == "legacy" {
++						stored, err := decodeStoredEntry(tx.entries.Get(key))
++						if err != nil {
++							return err
++						}
++						encoded, err := encodeEntry(stored.Entry, "", "")
++						if err != nil {
++							return err
++						}
++						if err := tx.entries.Delete(key); err != nil {
++							return err
++						}
++						return tx.entries.Put([]byte(partitionedEntryKey("db", dn.Key())), encoded)
++					}
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++			if err := store.View(t.Context(), func(reader Reader) error {
++				tx := reader.(*boltTx)
++				original := tx.ctx
++				defer func() { tx.ctx = original }()
++				var trace []string
++				normalizer := entryReadTraceNormalizer{boltModifyReadOnlySchema: schema, trace: &trace}
++				failure := errors.New("normalizer failure")
++				if test.normalizeFails {
++					normalizer.failure = failure
++				}
++				scoped := schemaAwarePartitionReader{partitionReader: partitionReader{Reader: reader, partition: "db"}, normalizer: normalizer, allowLegacy: test.allowLegacy}
++				tx.ctx = &entryReadTraceContext{Context: original, trace: &trace, cancelAt: test.cancelAt}
++				want, wantErr := scoped.Get(dn)
++				wantTrace := slices.Clone(trace)
++				for _, allow := range []bool{false, true} {
++					trace = nil
++					tx.ctx = &entryReadTraceContext{Context: original, trace: &trace, cancelAt: test.cancelAt}
++					lease := NewEntryReadLease(reader)
++					defer lease.Release()
++					calls := 0
++					got, err := GetReadOnlyWithCheck(scoped, dn, &lease, func() bool {
++						calls++
++						if lease.decoder != nil || !slices.Equal(trace, wantTrace) {
++							t.Fatalf("check preceded original Get checkpoints: %v, want %v", trace, wantTrace)
++						}
++						trace = append(trace, "check")
++						return allow
++					})
++					assertEntryReadEqual(t, got, err, want, wantErr)
++					expected := slices.Clone(wantTrace)
++					if test.calls != 0 {
++						expected = append(expected, "check")
++					}
++					if calls != test.calls || !slices.Equal(trace, expected) || errors.Is(err, failure) != errors.Is(wantErr, failure) {
++						t.Fatalf("allow=%t: calls/trace/error = %d/%v/%v, want %d/%v/%v", allow, calls, trace, err, test.calls, expected, wantErr)
++					}
++					if (!allow || test.calls == 0 || err != nil) && lease.decoder != nil {
++						t.Fatal("owned fallback retained a decoder")
++					}
++					lease.Release()
++					if calls != test.calls || !slices.Equal(trace, expected) {
++						t.Fatal("Release invoked callbacks")
++					}
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++func TestGetReadOnlyWithCheckSourceDispatch(t *testing.T) {
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	key := entryReadKey(t, schema, dn)
++	if err := store.View(t.Context(), func(reader Reader) error {
++		return store.View(t.Context(), func(other Reader) error {
++			for _, mode := range []string{"known-wrappers", "different-source", "different-source-direct", "unknown-source", "custom-getter", "nil-lease"} {
++				t.Run(mode, func(t *testing.T) {
++					var trace []string
++					var wrapped Reader = entryReadObservedReader{Reader: entryReadObservedReader{Reader: reader, trace: &trace}, trace: &trace}
++					if mode == "different-source-direct" {
++						wrapped = reader
++					} else if mode == "custom-getter" {
++						wrapped = entryReadObservedGetter{Reader: reader, trace: &trace}
++					}
++					scoped := ReaderInPartitionWithNormalizerLegacy(wrapped, "db", schema)
++					want, wantErr := scoped.Get(dn)
++					wantTrace := slices.Clone(trace)
++					trace = nil
++					source := reader
++					switch mode {
++					case "different-source", "different-source-direct":
++						source = other
++					case "unknown-source":
++						source = wrapped
++					}
++					lease := NewEntryReadLease(source)
++					defer lease.Release()
++					leasePointer := &lease
++					if mode == "nil-lease" {
++						leasePointer = nil
++					}
++					calls := 0
++					got, err := GetReadOnlyWithCheck(scoped, dn, leasePointer, func() bool {
++						calls++
++						if !slices.Equal(trace, wantTrace) {
++							t.Fatalf("check reordered getter dispatch: %v, want %v", trace, wantTrace)
++						}
++						return true
++					})
++					assertEntryReadEqual(t, got, err, want, wantErr)
++					wantCalls := 0
++					if mode == "known-wrappers" {
++						wantCalls = 1
++					}
++					borrowed := wantCalls == 1
++					if calls != wantCalls || !slices.Equal(trace, wantTrace) || (lease.decoder != nil) != borrowed || entryReadBorrows(got, reader.(*boltTx).entries.Get(key)) != borrowed {
++						t.Fatalf("calls/trace/borrowed = %d/%v/%t, want %d/%v/%t", calls, trace, lease.decoder != nil, wantCalls, wantTrace, borrowed)
++					}
++				})
++			}
++			return nil
++		})
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestGetReadOnlyWithCheckActiveLeaseAndReuse(t *testing.T) {
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	secondDN, err := directory.ParseDN("uid=user000001,dc=example")
++	if err != nil {
++		t.Fatal(err)
++	}
++	missing, err := directory.ParseDN("uid=missing,dc=example")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := store.View(t.Context(), func(reader Reader) error {
++		scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++		want, err := scoped.Get(dn)
++		if err != nil {
++			return err
++		}
++		lease := NewEntryReadLease(reader)
++		defer lease.Release()
++		allow, calls := true, 0
++		check := func() bool {
++			calls++
++			if lease.decoder != nil {
++				t.Fatal("check ran with an active lease")
++			}
++			return allow
++		}
++		for i, decision := range []bool{true, false, true} {
++			allow = decision
++			first, err := GetReadOnlyWithCheck(scoped, dn, &lease, check)
++			assertEntryReadEqual(t, first, err, want, nil)
++			if calls != i+1 || (lease.decoder != nil) != allow || entryReadBorrows(first, reader.(*boltTx).entries.Get(entryReadKey(t, schema, dn))) != allow {
++				t.Fatalf("reuse %d: calls/borrowed = %d/%t, want %d/%t", i, calls, lease.decoder != nil, i+1, allow)
++			}
++			decoder := lease.decoder
++			if i == 0 {
++				for _, nestedDN := range []directory.DN{secondDN, missing} {
++					nestedWant, nestedErr := scoped.Get(nestedDN)
++					got, err := GetReadOnlyWithCheck(scoped, nestedDN, &lease, check)
++					assertEntryReadEqual(t, got, err, nestedWant, nestedErr)
++					if calls != 1 || lease.decoder != decoder || entryReadBorrows(got, reader.(*boltTx).entries.Get(entryReadKey(t, schema, nestedDN))) {
++						t.Fatal("nested Get invoked check, borrowed, or overwrote the active lease")
++					}
++					assertEntryReadEqual(t, first, nil, want, nil)
++				}
++			}
++			lease.Release()
++			lease.Release()
++			if lease.decoder != nil || lease.source != reader.(*boltTx) || calls != i+1 {
++				t.Fatal("Release changed the binding, called check, or retained a decoder")
++			}
++			if decoder != nil {
++				assertReadOnlyCandidateDecoderCleared(t, decoder)
++			}
++		}
++		otherCalls := 0
++		got, err := GetReadOnlyWithCheck(scoped, dn, &lease, func() bool { otherCalls++; return false })
++		assertEntryReadEqual(t, got, err, want, nil)
++		if otherCalls != 1 || calls != 3 || lease.decoder != nil {
++			t.Fatal("Get reused a previous call's check")
++		}
++		for _, checked := range []bool{true, false} {
++			if checked {
++				got, err = GetReadOnlyWithCheck(scoped, dn, &lease, nil)
++			} else {
++				got, err = GetReadOnly(scoped, dn, &lease)
++			}
++			assertEntryReadEqual(t, got, err, want, nil)
++			if lease.decoder == nil || otherCalls != 1 || calls != 3 {
++				t.Fatal("nil check or GetReadOnly reused a previous call's policy")
++			}
++			lease.Release()
++		}
++		return nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestGetReadOnlyWithCheckPanicCleanup(t *testing.T) {
++	for _, mode := range []string{"check", "consumer"} {
++		t.Run(mode, func(t *testing.T) {
++			holdIdleReadOnlyCandidateDecoders(t)
++			releaseReadOnlyCandidateDecoder(acquireReadOnlyCandidateDecoder())
++			store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++			if err := store.View(t.Context(), func(reader Reader) error {
++				scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++				lease := NewEntryReadLease(reader)
++				defer lease.Release()
++				panicValue := errors.New(mode + " panic")
++				calls := 0
++				var decoder *readOnlyCandidateDecoder
++				func() {
++					defer func() {
++						if recovered := recover(); recovered != panicValue {
++							t.Fatalf("recovered %v, want %v", recovered, panicValue)
++						}
++					}()
++					defer lease.Release()
++					_, err := GetReadOnlyWithCheck(scoped, dn, &lease, func() bool {
++						calls++
++						if lease.decoder != nil || len(idleReadOnlyCandidateDecoders) != 1 {
++							t.Fatal("check ran after decoder acquisition")
++						}
++						if mode == "check" {
++							panic(panicValue)
++						}
++						return true
++					})
++					if err != nil {
++						t.Fatal(err)
++					}
++					decoder = lease.decoder
++					if mode == "consumer" {
++						panic(panicValue)
++					}
++				}()
++				if calls != 1 || lease.decoder != nil || len(idleReadOnlyCandidateDecoders) != 1 || (decoder != nil) != (mode == "consumer") {
++					t.Fatal("panic cleanup lost or retained a decoder, or skipped check")
++				}
++				if decoder != nil {
++					assertReadOnlyCandidateDecoderCleared(t, decoder)
++				}
++				want, wantErr := scoped.Get(dn)
++				got, err := GetReadOnlyWithCheck(scoped, dn, &lease, func() bool { calls++; return true })
++				assertEntryReadEqual(t, got, err, want, wantErr)
++				if calls != 2 || lease.decoder == nil {
++					t.Fatal("lease was not reusable after panic")
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
+diff --git a/internal/storage/entry_read_lease_test.go b/internal/storage/entry_read_lease_test.go
+new file mode 100644
+index 0000000..dcb1978
+--- /dev/null
++++ b/internal/storage/entry_read_lease_test.go
+@@ -0,0 +1,609 @@
++package storage
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"reflect"
++	"slices"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++func newEntryReadFixture(t testing.TB, members int, format string) (*Bolt, boltModifyReadOnlySchema, directory.DN) {
++	t.Helper()
++	store, schema, _ := newSmallGroupCandidateStore(t, 2, members, format)
++	dn, err := directory.ParseDN("uid=user000000,dc=example")
++	if err != nil {
++		t.Fatal(err)
++	}
++	return store, boltModifyReadOnlySchema{schema}, dn
++}
++
++func entryReadKey(t testing.TB, schema directory.DNAttributeNormalizer, dn directory.DN) []byte {
++	t.Helper()
++	normalized, err := directory.ParseDNWithNormalizer(dn.String(), schema)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return []byte(partitionedEntryKey("db", normalized.Key()))
++}
++
++func assertEntryReadEqual(t *testing.T, got directory.Entry, err error, want directory.Entry, wantErr error) {
++	t.Helper()
++	if !reflect.DeepEqual(got, want) || reflect.TypeOf(err) != reflect.TypeOf(wantErr) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
++		t.Fatalf("entry/error differs: got %v, want %v; entries equal=%v", err, wantErr, reflect.DeepEqual(got, want))
++	}
++	for _, sentinel := range []error{ErrEntryNotFound, ErrEntryAmbiguous, ErrDNIdentityMigrationRequired, context.Canceled} {
++		if errors.Is(err, sentinel) != errors.Is(wantErr, sentinel) {
++			t.Fatalf("error identity differs for %v", sentinel)
++		}
++	}
++}
++
++func entryReadBorrows(entry directory.Entry, encoded []byte) bool {
++	for _, attribute := range entry.Attributes {
++		for _, value := range attribute.Values {
++			if len(value) != 0 {
++				position := bytes.Index(encoded, value)
++				if position >= 0 && &value[0] == &encoded[position] {
++					return true
++				}
++			}
++		}
++	}
++	return false
++}
++
++func TestGetReadOnlyFormatsAndOwnership(t *testing.T) {
++	for _, format := range []string{"v1", "v2", "v3", "json"} {
++		for _, members := range []int{10, 1000} {
++			t.Run(fmt.Sprintf("%s/%d", format, members), func(t *testing.T) {
++				store, schema, dn := newEntryReadFixture(t, members, format)
++				key := entryReadKey(t, schema, dn)
++				var want, cloned, selected directory.Entry
++				var dnText string
++				var names []string
++				if err := store.View(t.Context(), func(reader Reader) error {
++					scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++					var err error
++					want, err = scoped.Get(dn)
++					if err != nil {
++						return err
++					}
++					raw := reader.(*boltTx).entries.Get(key)
++					before := bytes.Clone(raw)
++					var lease EntryReadLease
++					defer lease.Release()
++					entry, err := GetReadOnly(scoped, dn, &lease)
++					assertEntryReadEqual(t, entry, err, want, nil)
++					borrowed := members == 1000 && format != "json"
++					if entryReadBorrows(entry, raw) != borrowed || (lease.decoder != nil) != borrowed || entryReadBorrows(want, raw) {
++						t.Fatalf("unexpected owned/borrowed result for %s/%d", format, members)
++					}
++					cloned = entry.Clone()
++					selected = entry.Select([]string{"member"}, false)
++					dnText = entry.DN
++					for _, attribute := range entry.Attributes {
++						names = append(names, attribute.Description)
++					}
++					decoder := lease.decoder
++					lease.Release()
++					lease.Release()
++					if decoder != nil {
++						assertReadOnlyCandidateDecoderCleared(t, decoder)
++					}
++					// Reuse after Release must not change owned output or strings.
++					if _, err := GetReadOnly(scoped, dn, &lease); err != nil {
++						return err
++					}
++					if !bytes.Equal(raw, before) {
++						t.Fatal("borrowing or release changed Bolt payloads")
++					}
++					return nil
++				}); err != nil {
++					t.Fatal(err)
++				}
++				if err := store.Close(); err != nil {
++					t.Fatal(err)
++				}
++				if !reflect.DeepEqual(cloned, want.Clone()) || !reflect.DeepEqual(selected, want.Select([]string{"member"}, false)) || dnText != want.DN {
++					t.Fatal("owned output changed after release and Bolt unmap")
++				}
++				for i, name := range names {
++					if name != want.Attributes[i].Description {
++						t.Fatal("attribute description did not remain owned")
++					}
++				}
++				selected.Attributes[0].Values[0][0] ^= 1
++				if !reflect.DeepEqual(cloned, want.Clone()) {
++					t.Fatal("independent owned outputs share mutable bytes")
++				}
++			})
++		}
++	}
++}
++
++func TestGetReadOnlyActiveLeaseAndPanic(t *testing.T) {
++	var nilLease *EntryReadLease
++	nilLease.Release()
++	holdIdleReadOnlyCandidateDecoders(t)
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	secondDN, err := directory.ParseDN("uid=user000001,dc=example")
++	if err != nil {
++		t.Fatal(err)
++	}
++	key := entryReadKey(t, schema, secondDN)
++	if err := store.View(t.Context(), func(reader Reader) error {
++		scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++		var firstLease, nestedLease EntryReadLease
++		defer firstLease.Release()
++		defer nestedLease.Release()
++		first, err := GetReadOnly(scoped, dn, &firstLease)
++		if err != nil {
++			return err
++		}
++		want := first.Clone()
++		decoder := firstLease.decoder
++		if decoder == nil {
++			t.Fatal("large fixture did not borrow")
++		}
++		second, err := GetReadOnly(scoped, secondDN, &firstLease)
++		if err != nil {
++			return err
++		}
++		if entryReadBorrows(second, reader.(*boltTx).entries.Get(key)) || firstLease.decoder != decoder {
++			t.Fatal("active lease was overwritten or a second entry borrowed")
++		}
++		missing, err := directory.ParseDN("uid=missing,dc=example")
++		if err != nil {
++			return err
++		}
++		if _, err := GetReadOnly(scoped, missing, &firstLease); !errors.Is(err, ErrEntryNotFound) || firstLease.decoder != decoder {
++			t.Fatalf("failed nested lookup changed active lease: %v", err)
++		}
++		if _, err := GetReadOnly(scoped, secondDN, &nestedLease); err != nil {
++			return err
++		}
++		if nestedLease.decoder == nil || nestedLease.decoder == decoder {
++			t.Fatal("nested lease does not have an exclusive decoder")
++		}
++		nestedLease.Release()
++		if _, err := scoped.Get(secondDN); err != nil {
++			return err
++		}
++		if !reflect.DeepEqual(first, want) {
++			t.Fatal("nested reads changed the active entry")
++		}
++		firstLease.Release()
++		poolSize := len(idleReadOnlyCandidateDecoders)
++		firstLease.Release()
++		if len(idleReadOnlyCandidateDecoders) != poolSize {
++			t.Fatal("decoder released twice")
++		}
++		panicValue := errors.New("consumer panic")
++		var panicLease EntryReadLease
++		var panicDecoder *readOnlyCandidateDecoder
++		func() {
++			defer func() {
++				if recovered := recover(); recovered != panicValue {
++					t.Fatalf("recovered %v, want consumer panic", recovered)
++				}
++			}()
++			defer panicLease.Release()
++			if _, err := GetReadOnly(scoped, dn, &panicLease); err != nil {
++				t.Fatal(err)
++			}
++			panicDecoder = panicLease.decoder
++			panic(panicValue)
++		}()
++		if panicLease.decoder != nil || panicDecoder == nil {
++			t.Fatal("panic cleanup did not release the lease")
++		}
++		assertReadOnlyCandidateDecoderCleared(t, panicDecoder)
++		return nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++type entryReadTraceContext struct {
++	context.Context
++	trace    *[]string
++	cancelAt int
++	checks   int
++}
++
++func (ctx *entryReadTraceContext) Err() error {
++	*ctx.trace = append(*ctx.trace, "ctx")
++	ctx.checks++
++	if ctx.cancelAt > 0 && ctx.checks >= ctx.cancelAt {
++		return context.Canceled
++	}
++	return ctx.Context.Err()
++}
++
++type entryReadTraceNormalizer struct {
++	boltModifyReadOnlySchema
++	trace   *[]string
++	failure error
++}
++
++func (normalizer entryReadTraceNormalizer) ParseDNIdentity(value string) (directory.DN, error) {
++	*normalizer.trace = append(*normalizer.trace, "normalize")
++	if normalizer.failure != nil {
++		return directory.DN{}, normalizer.failure
++	}
++	return directory.ParseDNWithNormalizer(value, normalizer.indexTestSchema)
++}
++
++func TestGetReadOnlyErrorAndCallbackOrder(t *testing.T) {
++	for _, mode := range []string{"normal", "missing", "malformed", "bad-marker", "missing-marker", "legacy"} {
++		for _, allowLegacy := range []bool{false, true} {
++			t.Run(fmt.Sprintf("%s/legacy=%t", mode, allowLegacy), func(t *testing.T) {
++				store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++				key := entryReadKey(t, schema, dn)
++				if err := store.Update(t.Context(), func(writer Writer) error {
++					tx := writer.(*boltTx)
++					switch mode {
++					case "missing":
++						return tx.entries.Delete(key)
++					case "malformed":
++						return tx.entries.Put(key, append(bytes.Clone(tx.entries.Get(key)), 0))
++					case "bad-marker":
++						return tx.meta.Put(boltSchemaAwareDNMigrationMetadataKey("db"), []byte{99})
++					case "missing-marker", "legacy":
++						if err := tx.meta.Delete(boltSchemaAwareDNMigrationMetadataKey("db")); err != nil {
++							return err
++						}
++						if mode == "legacy" {
++							stored, err := decodeStoredEntry(tx.entries.Get(key))
++							if err != nil {
++								return err
++							}
++							encoded, err := encodeEntry(stored.Entry, "", "")
++							if err != nil {
++								return err
++							}
++							if err := tx.entries.Delete(key); err != nil {
++								return err
++							}
++							return tx.entries.Put([]byte(partitionedEntryKey("db", dn.Key())), encoded)
++						}
++					}
++					return nil
++				}); err != nil {
++					t.Fatal(err)
++				}
++				for _, cancelAt := range []int{0, 1, 2, 3, 4} {
++					for _, normalizeFails := range []bool{false, true} {
++						if err := store.View(t.Context(), func(reader Reader) error {
++							tx := reader.(*boltTx)
++							original := tx.ctx
++							defer func() { tx.ctx = original }()
++							var want directory.Entry
++							var wantErr error
++							var wantTrace []string
++							failure := errors.New("normalizer failure")
++							for _, readonly := range []bool{false, true} {
++								var trace []string
++								tx.ctx = &entryReadTraceContext{Context: original, trace: &trace, cancelAt: cancelAt}
++								normalizer := entryReadTraceNormalizer{boltModifyReadOnlySchema: schema, trace: &trace}
++								if normalizeFails {
++									normalizer.failure = failure
++								}
++								scoped := schemaAwarePartitionReader{partitionReader: partitionReader{Reader: reader, partition: "db"}, normalizer: normalizer, allowLegacy: allowLegacy}
++								var entry directory.Entry
++								var err error
++								var lease EntryReadLease
++								defer lease.Release()
++								if readonly {
++									entry, err = GetReadOnly(scoped, dn, &lease)
++									assertEntryReadEqual(t, entry, err, want, wantErr)
++									if !slices.Equal(trace, wantTrace) || errors.Is(err, failure) != errors.Is(wantErr, failure) {
++										t.Fatalf("cancel=%d: trace/error = %v/%v, want %v/%v", cancelAt, trace, err, wantTrace, wantErr)
++									}
++									if mode == "legacy" && lease.decoder != nil {
++										t.Fatal("legacy fallback borrowed an entry")
++									}
++									lease.Release()
++								} else {
++									entry, err = scoped.Get(dn)
++									want, wantErr, wantTrace = entry, err, slices.Clone(trace)
++									if normalizeFails && !slices.Equal(trace, []string{"normalize"}) {
++										t.Fatalf("normalizer failure reached storage: %v", trace)
++									}
++									if mode == "normal" && cancelAt == 0 && !normalizeFails && !slices.Equal(trace, []string{"normalize", "ctx", "ctx"}) {
++										t.Fatalf("direct Get checkpoints changed: %v", trace)
++									}
++								}
++								trace = append(trace, "consumer")
++								if lease.decoder != nil {
++									t.Fatal("lease retained after consumer cleanup")
++								}
++								if readonly && !slices.Equal(trace, append(slices.Clone(wantTrace), "consumer")) {
++									t.Fatal("release added callbacks")
++								}
++							}
++							return nil
++						}); err != nil {
++							t.Fatal(err)
++						}
++					}
++				}
++			})
++		}
++	}
++}
++
++func TestGetReadOnlyDecodeParityAndBounds(t *testing.T) {
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	key := entryReadKey(t, schema, dn)
++	entry := directory.Entry{DN: "not a valid DN", Attributes: []directory.Attribute{
++		{Description: "member", Values: [][]byte{bytes.Repeat([]byte("x"), 9000)}, RawNormalized: true},
++		{Description: "empty"},
++		{Description: "binary;lang-EN", Values: [][]byte{{}, {0, 255}}},
++	}}
++	type testCase struct {
++		name     string
++		encoded  []byte
++		borrowed bool
++	}
++	var cases []testCase
++	for _, format := range []string{"v1", "v2", "v3", "json"} {
++		encoded := encodeCandidateTestEntry(t, entry, "unrelated identity", format)
++		cases = append(cases,
++			testCase{format + "/unvalidated-DN-binding", encoded, format != "json"},
++			testCase{format + "/trailing", append(bytes.Clone(encoded), 0), false},
++			testCase{format + "/truncated", bytes.Clone(encoded[:len(encoded)-1]), false},
++		)
++	}
++	for _, size := range []int{8191, 8192, 8193} {
++		candidate := entry.Clone()
++		encoded := encodeCandidateTestEntry(t, candidate, "unrelated identity", "v3")
++		values := candidate.Attributes[0].Values
++		values[0] = values[0][:len(values[0])-(len(encoded)-size)]
++		encoded = encodeCandidateTestEntry(t, candidate, "unrelated identity", "v3")
++		if len(encoded) != size {
++			t.Fatalf("threshold fixture size = %d, want %d", len(encoded), size)
++		}
++		cases = append(cases, testCase{fmt.Sprintf("bytes/%d", size), encoded, size >= 8192})
++	}
++	for _, attributes := range []int{64, 65} {
++		candidate := entry.Clone()
++		for len(candidate.Attributes) < attributes {
++			candidate.Attributes = append(candidate.Attributes, directory.Attribute{Description: "extra"})
++		}
++		cases = append(cases, testCase{fmt.Sprintf("attributes/%d", attributes), encodeCandidateTestEntry(t, candidate, "unrelated", "v3"), attributes <= 64})
++	}
++	for _, count := range []int{4096, 4097} {
++		candidate := directory.Entry{DN: entry.DN, Attributes: []directory.Attribute{
++			{Description: "first", Values: [][]byte{[]byte("first")}},
++			{Description: "member", Values: make([][]byte, count-1)},
++		}}
++		for i := range candidate.Attributes[1].Values {
++			candidate.Attributes[1].Values[i] = []byte("value")
++		}
++		cases = append(cases, testCase{fmt.Sprintf("total-values/%d", count), encodeCandidateTestEntry(t, candidate, "unrelated", "v3"), count <= 4096})
++	}
++	flagsEntry := encodeCandidateTestEntry(t, entry, "unrelated", "v3")
++	flags, _, err := consumeEntryBinaryField(flagsEntry[len(entryBinaryV3Prefix):])
++	if err != nil {
++		t.Fatal(err)
++	}
++	flags[0] |= 0x80
++	cases = append(cases, testCase{"invalid-normalization-bit", flagsEntry, false})
++	cases = append(cases, testCase{"unrecognized", append([]byte{0, 'L', 'G', 'E', 99}, bytes.Repeat([]byte("x"), 9000)...), false})
++	for _, test := range cases {
++		t.Run(test.name, func(t *testing.T) {
++			if err := store.Update(t.Context(), func(writer Writer) error {
++				return writer.(*boltTx).entries.Put(key, test.encoded)
++			}); err != nil {
++				t.Fatal(err)
++			}
++			if err := store.View(t.Context(), func(reader Reader) error {
++				scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++				want, wantErr := scoped.Get(dn)
++				var lease EntryReadLease
++				defer lease.Release()
++				got, err := GetReadOnly(scoped, dn, &lease)
++				assertEntryReadEqual(t, got, err, want, wantErr)
++				if (lease.decoder != nil) != test.borrowed {
++					t.Fatalf("borrowed=%t, want %t", lease.decoder != nil, test.borrowed)
++				}
++				if test.borrowed && !entryReadBorrows(got, reader.(*boltTx).entries.Get(key)) {
++					t.Fatal("eligible payload was copied")
++				}
++				if _, hinted := got.DNIdentity(); hinted {
++					t.Fatal("direct Get added an identity hint")
++				}
++				return nil
++			}); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++type entryReadObservedReader struct {
++	Reader
++	trace   *[]string
++	failure error
++}
++
++func (reader entryReadObservedReader) Get(dn directory.DN) (directory.Entry, error) {
++	*reader.trace = append(*reader.trace, "Get")
++	if reader.failure != nil {
++		return directory.Entry{}, reader.failure
++	}
++	return reader.Reader.Get(dn)
++}
++
++func (reader entryReadObservedReader) MaintenanceStorageReader() Reader {
++	*reader.trace = append(*reader.trace, "maintenance")
++	return reader.Reader
++}
++
++func TestGetReadOnlyOwnedFallbacks(t *testing.T) {
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	key := entryReadKey(t, schema, dn)
++	for _, mode := range []string{"nil-lease", "custom-normalizer", "custom-reader", "custom-reader-error", "maintenance-wrapper", "unscoped", "partition-only", "writer"} {
++		t.Run(mode, func(t *testing.T) {
++			visit := func(reader Reader) error {
++				var want directory.Entry
++				var wantErr error
++				var wantTrace []string
++				failure := errors.New("custom reader failure")
++				for _, readonly := range []bool{false, true} {
++					var trace []string
++					scoped := ReaderInPartitionWithNormalizer(reader, "db", schema)
++					switch mode {
++					case "custom-normalizer":
++						scoped = ReaderInPartitionWithNormalizer(reader, "db", schema.indexTestSchema)
++					case "custom-reader", "custom-reader-error":
++						wrapped := entryReadObservedReader{Reader: scoped, trace: &trace}
++						if mode == "custom-reader-error" {
++							wrapped.failure = failure
++						}
++						scoped = wrapped
++					case "maintenance-wrapper":
++						scoped = ReaderInPartitionWithNormalizer(entryReadObservedReader{Reader: reader, trace: &trace}, "db", schema)
++					case "unscoped":
++						scoped = reader
++					case "partition-only":
++						scoped = ReaderInPartition(reader, "db")
++					}
++					var lease EntryReadLease
++					defer lease.Release()
++					if readonly {
++						leasePointer := &lease
++						if mode == "nil-lease" {
++							leasePointer = nil
++						}
++						got, err := GetReadOnly(scoped, dn, leasePointer)
++						assertEntryReadEqual(t, got, err, want, wantErr)
++						if !slices.Equal(trace, wantTrace) || errors.Is(err, failure) != errors.Is(wantErr, failure) {
++							t.Fatalf("custom callbacks/error changed: got %v/%v, want %v/%v", trace, err, wantTrace, wantErr)
++						}
++						if lease.decoder != nil || entryReadBorrows(got, reader.(*boltTx).entries.Get(key)) {
++							t.Fatal("unsupported reader or normalizer borrowed")
++						}
++					} else {
++						want, wantErr = scoped.Get(dn)
++						wantTrace = slices.Clone(trace)
++					}
++				}
++				return nil
++			}
++			var err error
++			if mode == "writer" {
++				err = store.Update(t.Context(), func(writer Writer) error { return visit(writer) })
++			} else {
++				err = store.View(t.Context(), visit)
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++type entryReadObservedGetter struct {
++	Reader
++	trace *[]string
++}
++
++func (reader entryReadObservedGetter) getSchemaAwareIn(partition string, dn directory.DN) (directory.Entry, error) {
++	*reader.trace = append(*reader.trace, "custom-get")
++	return reader.Reader.(*boltTx).getSchemaAwareIn(partition, dn)
++}
++
++func TestEntryReadLeaseSourceDispatch(t *testing.T) {
++	store, schema, dn := newEntryReadFixture(t, 1000, "v3")
++	key := entryReadKey(t, schema, dn)
++	if err := store.View(t.Context(), func(reader Reader) error {
++		return store.View(t.Context(), func(other Reader) error {
++			tx := reader.(*boltTx)
++			originalContext := tx.ctx
++			defer func() { tx.ctx = originalContext }()
++			for _, mode := range []string{"known-wrappers", "zero-wrapped", "unknown-source", "different-source", "different-source-direct", "custom-getter"} {
++				t.Run(mode, func(t *testing.T) {
++					var want directory.Entry
++					var wantErr error
++					var wantTrace []string
++					for _, readonly := range []bool{false, true} {
++						var trace []string
++						tx.ctx = &entryReadTraceContext{Context: originalContext, trace: &trace}
++						normalizer := entryReadTraceNormalizer{boltModifyReadOnlySchema: schema, trace: &trace}
++						var wrapped Reader = entryReadObservedReader{
++							Reader: entryReadObservedReader{Reader: reader, trace: &trace}, trace: &trace,
++						}
++						if mode == "custom-getter" {
++							wrapped = entryReadObservedGetter{Reader: reader, trace: &trace}
++						} else if mode == "different-source-direct" {
++							wrapped = reader
++						}
++						scoped := ReaderInPartitionWithNormalizerLegacy(wrapped, "db", normalizer)
++						if !readonly {
++							want, wantErr = scoped.Get(dn)
++							wantTrace = slices.Clone(trace)
++							continue
++						}
++						var lease EntryReadLease
++						switch mode {
++						case "known-wrappers", "custom-getter":
++							lease = NewEntryReadLease(reader)
++						case "unknown-source":
++							lease = NewEntryReadLease(wrapped)
++							if lease.source != nil {
++								t.Fatal("factory unwrapped an unknown source")
++							}
++						case "different-source", "different-source-direct":
++							lease = NewEntryReadLease(other)
++						}
++						defer lease.Release()
++						if len(trace) != 0 || lease.decoder != nil {
++							t.Fatalf("factory acquired a decoder or called source: %v", trace)
++						}
++						got, err := GetReadOnly(scoped, dn, &lease)
++						assertEntryReadEqual(t, got, err, want, wantErr)
++						if !slices.Equal(trace, wantTrace) {
++							t.Fatalf("original getter checkpoints changed: got %v, want %v", trace, wantTrace)
++						}
++						borrowed := mode == "known-wrappers"
++						if (lease.decoder != nil) != borrowed || entryReadBorrows(got, tx.entries.Get(key)) != borrowed {
++							t.Fatalf("borrowed=%t, want %t", lease.decoder != nil, borrowed)
++						}
++						if borrowed {
++							expected := []string{"normalize", "maintenance", "maintenance", "ctx", "maintenance", "maintenance", "ctx"}
++							if !slices.Equal(trace, expected) {
++								t.Fatalf("unexpected wrapper traversal order: %v", trace)
++							}
++							lease.Release()
++							if lease.source != tx {
++								t.Fatal("Release lost same-View authorization")
++							}
++							if _, err := GetReadOnly(scoped, dn, &lease); err != nil || lease.decoder == nil {
++								t.Fatalf("source-bound reuse failed: %v", err)
++							}
++						}
++					}
++				})
++			}
++			return nil
++		})
++	}); err != nil {
++		t.Fatal(err)
++	}
++	if err := store.Update(t.Context(), func(writer Writer) error {
++		lease := NewEntryReadLease(writer)
++		if lease.source != nil || lease.decoder != nil {
++			t.Fatal("factory authorized a writable transaction")
++		}
++		return nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
+diff --git a/internal/storage/partition.go b/internal/storage/partition.go
+index 3d01a5d..ea20e48 100644
+--- a/internal/storage/partition.go
++++ b/internal/storage/partition.go
+@@ -303,14 +303,20 @@ func (reader schemaAwarePartitionReader) DNIdentityOrderKey(
+ func (reader schemaAwarePartitionReader) Get(
+ 	dn directory.DN,
+ ) (directory.Entry, error) {
++	return reader.get(dn, nil, nil)
++}
++
++func (reader schemaAwarePartitionReader) get(dn directory.DN, lease *EntryReadLease, check func() bool) (directory.Entry, error) {
+ 	normalized, err := reader.NormalizeDNIdentity(dn)
+ 	if err != nil {
+ 		return directory.Entry{}, err
+ 	}
+-	entry, err := schemaAwareGetIn(
++	entry, err := schemaAwareGetInWithLease(
+ 		reader.Reader,
+ 		reader.partition,
+ 		normalized,
++		lease,
++		check,
+ 	)
+ 	if err != nil && reader.allowLegacy && errors.Is(err, ErrDNIdentityMigrationRequired) {
+ 		return legacySchemaAwareGetIn(
+@@ -472,10 +478,22 @@ func schemaAwareGetIn(
+ 	partition string,
+ 	dn directory.DN,
+ ) (directory.Entry, error) {
++	return schemaAwareGetInWithLease(reader, partition, dn, nil, nil)
++}
++
++func schemaAwareGetInWithLease(reader Reader, partition string, dn directory.DN, lease *EntryReadLease, check func() bool) (directory.Entry, error) {
+ 	if err := requireSchemaAwareDNIdentities(reader, partition); err != nil {
+ 		return directory.Entry{}, err
+ 	}
+ 	if getter, ok := maintenanceReader(reader).(schemaAwareDirectGetter); ok {
++		// Resolve the getter at the original checkpoint, then keep the lease on
++		// concrete calls so an unknown implementation cannot retain it.
++		if lease != nil {
++			if tx, ok := getter.(*boltTx); ok && !tx.tx.Writable() &&
++				(lease.source == tx || lease.source == nil && reader == tx) {
++				return tx.getSchemaAwareInWithLease(partition, dn, lease, check)
++			}
++		}
+ 		return getter.getSchemaAwareIn(partition, dn)
+ 	}
+ 	return reader.GetIn(partition, dn)

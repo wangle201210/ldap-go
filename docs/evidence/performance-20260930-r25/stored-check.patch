@@ -1,0 +1,98 @@
+diff --git a/internal/server/compare_read_lease.go b/internal/server/compare_read_lease.go
+index a22df75..c677410 100644
+--- a/internal/server/compare_read_lease.go
++++ b/internal/server/compare_read_lease.go
+@@ -8,12 +8,29 @@ func (server *Server) compareReadLeaseSource(
+ 	attribute string,
+ 	hasControls bool,
+ 	reader storage.Reader,
++) storage.Reader {
++	source := server.compareReadLeaseCandidate(state, database, attribute, hasControls, reader)
++	if source == nil || !compareReadLeaseAllowed(state, database, reader) {
++		return nil
++	}
++	return source
++}
++
++func compareReadLeaseAllowed(state *connectionState, database *runtimeDatabase, reader storage.Reader) bool {
++	return databaseSearchResultCacheSafe(state.runtime, *database) &&
++		smallIndexedRuntimeProjectionSafe(state.runtime) &&
++		localProjectionReadOnly(state.runtime, reader) && state.runtime.access.CanBatchValues()
++}
++
++func (server *Server) compareReadLeaseCandidate(
++	state *connectionState,
++	database *runtimeDatabase,
++	attribute string,
++	hasControls bool,
++	reader storage.Reader,
+ ) storage.Reader {
+ 	if attribute != "member" || database == nil || state.protocolVersion != 3 || hasControls ||
+-		!databaseSearchResultCacheSafe(state.runtime, *database) ||
+-		!smallIndexedRuntimeProjectionSafe(state.runtime) ||
+ 		!databaseUsesRuntimeDNIdentity(*database, state.runtime.schema) ||
+-		!localProjectionReadOnly(state.runtime, reader) || !state.runtime.access.CanBatchValues() ||
+ 		!plainBoltSearchStore(server.config.Store) {
+ 		return nil
+ 	}
+diff --git a/internal/server/write.go b/internal/server/write.go
+index a04052c..8637e93 100644
+--- a/internal/server/write.go
++++ b/internal/server/write.go
+@@ -3036,8 +3036,10 @@ func (server *Server) handleCompare(
+ 	compareHasControls := len(message.Controls) != 0 || message.ControlsPresent
+ 	err = server.config.Store.View(ctx, func(reader storage.Reader) error {
+ 		var readLease *storage.EntryReadLease
+-		if source := server.compareReadLeaseSource(state, database, request.Attribute, compareHasControls, reader); source != nil {
+-			lease := storage.NewEntryReadLease(source)
++		if source := server.compareReadLeaseCandidate(state, database, request.Attribute, compareHasControls, reader); source != nil {
++			lease := storage.NewEntryReadLeaseWithCheck(source, func() bool {
++				return compareReadLeaseAllowed(state, database, reader)
++			})
+ 			defer lease.Release()
+ 			readLease = &lease
+ 		}
+diff --git a/internal/storage/bolt.go b/internal/storage/bolt.go
+index 40aac82..cf7a6b3 100644
+--- a/internal/storage/bolt.go
++++ b/internal/storage/bolt.go
+@@ -670,7 +670,8 @@ func (tx *boltTx) getSchemaAwareInWithLease(partition string, dn directory.DN, l
+ 		return directory.Entry{}, ErrEntryNotFound
+ 	}
+ 	if lease != nil && lease.decoder == nil && len(value) >= 8*1024 &&
+-		(bytes.HasPrefix(value, entryBinaryV1Prefix) || bytes.HasPrefix(value, entryBinaryPrefix) || bytes.HasPrefix(value, entryBinaryV3Prefix)) {
++		(bytes.HasPrefix(value, entryBinaryV1Prefix) || bytes.HasPrefix(value, entryBinaryPrefix) || bytes.HasPrefix(value, entryBinaryV3Prefix)) &&
++		(lease.check == nil || lease.check()) {
+ 		decoder := acquireReadOnlyCandidateDecoder()
+ 		if entry, borrowed := decoder.borrow(value); borrowed {
+ 			lease.decoder = decoder
+diff --git a/internal/storage/entry_read_lease.go b/internal/storage/entry_read_lease.go
+index 900762d..d3a5a5a 100644
+--- a/internal/storage/entry_read_lease.go
++++ b/internal/storage/entry_read_lease.go
+@@ -9,6 +9,7 @@ import "github.com/wangle201210/ldap-go/internal/directory"
+ type EntryReadLease struct {
+ 	source  *boltTx
+ 	decoder *readOnlyCandidateDecoder
++	check   func() bool
+ }
+ 
+ // NewEntryReadLease authorizes borrowing from source through a caller-approved
+@@ -26,6 +27,17 @@ func NewEntryReadLease(source Reader) EntryReadLease {
+ 	return EntryReadLease{}
+ }
+ 
++// NewEntryReadLeaseWithCheck additionally requires check to allow borrowing.
++// The check runs synchronously only after a large binary row has been found,
++// before a decoder is acquired. It must not mutate the reader, lease or policy.
++// A false result retains the original owned decode and its errors. The caller
++// must still establish the source and normalizer contracts before this point.
++func NewEntryReadLeaseWithCheck(source Reader, check func() bool) EntryReadLease {
++	lease := NewEntryReadLease(source)
++	lease.check = check
++	return lease
++}
++
+ // Release invalidates borrowed entry descriptors and values. It is idempotent;
+ // owned copies, DN strings and attribute descriptions remain valid. A source
+ // binding remains available for reuse within the same View.
