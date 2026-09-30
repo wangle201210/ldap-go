@@ -1,0 +1,586 @@
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=9
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=30
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=999
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=4095
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=4096
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=9
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=30
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=999
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=4095
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=-1
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=4096
+=== RUN   TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=-1
+--- PASS: TestCompareEntryAttributeWithDNPrefixParity (14.24s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=9 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=10/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=30 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=31/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=32/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=999 (0.03s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=1000/position=-1 (0.03s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=4095 (0.12s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4096/position=-1 (0.12s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=4096 (0.12s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=false/values=4097/position=-1 (0.12s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=9 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=10/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=30 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=31/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=32/position=-1 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=999 (0.40s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=1000/position=-1 (0.50s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=4095 (3.60s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4096/position=-1 (3.93s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=0 (0.01s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=4096 (2.67s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixParity/complex=true/values=4097/position=-1 (2.57s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=31
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=0
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=7
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=8
+=== RUN   TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=31
+--- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures (0.08s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/canonical/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/ASCII_fold/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/alias/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/OID/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/inherited_alias/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/rule_OID/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_same/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/exact_different/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_same/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/IA5_exact_different/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mixed_rules/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/punctuation/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/first_value_mismatch/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/last_value_mismatch/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/value_length_mismatch/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/different_type/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/subtype_is_not_same_type/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/shorter_shape/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/longer_shape/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_DN/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_stored/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/empty_AVA/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_stored/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/nonASCII_assertion/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/spaces/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_stored/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_assertion_normalizes_simple/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/escaped_comma/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_stored/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/multiAVA_assertion/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/integer_rule/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/octet_rule/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_nine/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/depth_eight_mismatch/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_missing_equals/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_trailing_comma/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_escape/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_type/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/length_mismatch_then_unknown_type/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_no_rule/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_unknown_rule/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_cycle/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_orphan/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_other_rule/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_duplicate_AVA/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/type_mismatch_then_bad_tail/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_nonASCII/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_UTF8/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_option/position=31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=0 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=7 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=8 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixDNFixtures/mismatch_then_invalid_OID/position=31 (0.00s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/absent
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/unselected
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/empty_nil
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/empty_slice
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/small
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/name_to_OID
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/OID_to_name
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/case_differs
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/subtype
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/option_on_stored
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/option_on_both
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/option_prefix
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/option_mismatch
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/two_selected
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/empty_selected_second
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/empty_selected_first
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/second_selected_option
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/split_below_threshold
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/prefixOrdered
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/uid
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/uniqueMember
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eqExact
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eqNoRule
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eqUnknownRule
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eqOrphan
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eqCycleA
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/prefixUnknown
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eligible/member
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eligible/prefixChild
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eligible/prefixOID
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eligible/2.5.4.31
+=== RUN   TestCompareEntryAttributeWithDNPrefixFallback/eligible/MEMBER
+--- PASS: TestCompareEntryAttributeWithDNPrefixFallback (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/absent (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/unselected (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/empty_nil (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/empty_slice (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/small (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/name_to_OID (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/OID_to_name (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/case_differs (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/subtype (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/option_on_stored (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/option_on_both (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/option_prefix (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/option_mismatch (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/two_selected (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/empty_selected_second (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/empty_selected_first (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/second_selected_option (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/split_below_threshold (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/prefixOrdered (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/uid (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/uniqueMember (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eqExact (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eqNoRule (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eqUnknownRule (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eqOrphan (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eqCycleA (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/prefixUnknown (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eligible/member (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eligible/prefixChild (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eligible/prefixOID (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eligible/2.5.4.31 (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixFallback/eligible/MEMBER (0.00s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=0/matchFirst=false
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=0/matchFirst=true
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=7/matchFirst=false
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=7/matchFirst=true
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=8/matchFirst=false
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=8/matchFirst=true
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=30/matchFirst=false
+=== RUN   TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=30/matchFirst=true
+--- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=0/matchFirst=false (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=0/matchFirst=true (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=7/matchFirst=false (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=7/matchFirst=true (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=8/matchFirst=false (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=8/matchFirst=true (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=30/matchFirst=false (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixStopsInOrder/position=30/matchFirst=true (0.00s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixOwnershipAndMutation
+--- PASS: TestCompareEntryAttributeWithDNPrefixOwnershipAndMutation (0.01s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixRegistryIdentityAndGeneration
+--- PASS: TestCompareEntryAttributeWithDNPrefixRegistryIdentityAndGeneration (0.01s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixEightValueExtension
+--- PASS: TestCompareEntryAttributeWithDNPrefixEightValueExtension (0.01s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixLimits
+=== RUN   TestCompareEntryAttributeWithDNPrefixLimits/budget
+=== RUN   TestCompareEntryAttributeWithDNPrefixLimits/raw_length_boundary
+=== RUN   TestCompareEntryAttributeWithDNPrefixLimits/long_value_stops_extension
+--- PASS: TestCompareEntryAttributeWithDNPrefixLimits (0.77s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixLimits/budget (0.76s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixLimits/raw_length_boundary (0.00s)
+    --- PASS: TestCompareEntryAttributeWithDNPrefixLimits/long_value_stops_extension (0.00s)
+=== RUN   TestCompareEntryAttributeWithDNPrefixConcurrent
+--- PASS: TestCompareEntryAttributeWithDNPrefixConcurrent (0.00s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	15.133s

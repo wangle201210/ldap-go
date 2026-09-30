@@ -1,0 +1,33 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/wangle201210/ldap-go/internal/schema
+cpu: Apple M1 Pro
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/cached-dn-8         	 1000000	       352.7 ns/op	     144 B/op	       4 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/cached-dn-8         	 1000000	       356.4 ns/op	     144 B/op	       4 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/cached-dn-8         	 1000000	       347.6 ns/op	     144 B/op	       4 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-cold-8       	  713300	       490.9 ns/op	       784.0 retained-B/token	     568 B/op	       9 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-cold-8       	  700525	       500.5 ns/op	       784.0 retained-B/token	     568 B/op	       9 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-cold-8       	  712159	       494.2 ns/op	       784.0 retained-B/token	     568 B/op	       9 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-warm-8       	 1261012	       286.7 ns/op	       784.0 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-warm-8       	 1264162	       285.1 ns/op	       784.0 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/first/prefix-warm-8       	 1259570	       286.2 ns/op	       784.0 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/cached-dn-8          	   15178	     23631 ns/op	     200 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/cached-dn-8          	   15276	     23571 ns/op	     200 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/cached-dn-8          	   15314	     23466 ns/op	     200 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-cold-8        	   14438	     24900 ns/op	      1708 retained-B/token	    1632 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-cold-8        	   14400	     24923 ns/op	      1708 retained-B/token	    1632 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-cold-8        	   14526	     28175 ns/op	      1708 retained-B/token	    1632 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-warm-8        	   49093	      7420 ns/op	    196140 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-warm-8        	   48265	      7382 ns/op	    196140 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/last/prefix-warm-8        	   47871	      7410 ns/op	    196140 retained-B/token	      96 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/cached-dn-8       	   18062	     19894 ns/op	     184 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/cached-dn-8       	   18096	     19890 ns/op	     184 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/cached-dn-8       	   18082	     19901 ns/op	     184 B/op	       7 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-cold-8     	   16540	     21737 ns/op	      1708 retained-B/token	    1616 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-cold-8     	   16550	     21739 ns/op	      1708 retained-B/token	    1616 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-cold-8     	   16600	     21675 ns/op	      1708 retained-B/token	    1616 B/op	      33 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-warm-8     	   63004	      5759 ns/op	    196140 retained-B/token	      80 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-warm-8     	   55406	      5893 ns/op	    196140 retained-B/token	      80 B/op	       3 allocs/op
+BenchmarkCompareEntryAttributeWithDNPrefix/simple/values=1000/missing/prefix-warm-8     	   60022	      5857 ns/op	    196140 retained-B/token	      80 B/op	       3 allocs/op
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/schema	9.957s

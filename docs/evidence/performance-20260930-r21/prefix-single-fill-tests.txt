@@ -1,0 +1,2 @@
+ok  	github.com/wangle201210/ldap-go/internal/schema	89.250s
+ok  	github.com/wangle201210/ldap-go/internal/server	14.959s

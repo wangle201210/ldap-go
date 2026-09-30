@@ -1,0 +1,60 @@
+=== RUN   TestCompareDNPrefixCacheFallback
+=== RUN   TestCompareDNPrefixCacheFallback/empty_description
+=== RUN   TestCompareDNPrefixCacheFallback/other_description
+=== RUN   TestCompareDNPrefixCacheFallback/case_alias
+=== RUN   TestCompareDNPrefixCacheFallback/OID_alias
+=== RUN   TestCompareDNPrefixCacheFallback/option
+=== RUN   TestCompareDNPrefixCacheFallback/empty_DN
+=== RUN   TestCompareDNPrefixCacheFallback/long_DN
+=== RUN   TestCompareDNPrefixCacheFallback/absent
+=== RUN   TestCompareDNPrefixCacheFallback/empty_values
+=== RUN   TestCompareDNPrefixCacheFallback/31_values
+=== RUN   TestCompareDNPrefixCacheFallback/stored_alias
+=== RUN   TestCompareDNPrefixCacheFallback/stored_option
+=== RUN   TestCompareDNPrefixCacheFallback/other_attribute_large
+=== RUN   TestCompareDNPrefixCacheFallback/split_values
+--- PASS: TestCompareDNPrefixCacheFallback (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/empty_description (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/other_description (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/case_alias (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/OID_alias (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/option (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/empty_DN (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/long_DN (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/absent (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/empty_values (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/31_values (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/stored_alias (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/stored_option (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/other_attribute_large (0.00s)
+    --- PASS: TestCompareDNPrefixCacheFallback/split_values (0.00s)
+=== RUN   TestCompareDNPrefixCacheQueryChanges
+--- PASS: TestCompareDNPrefixCacheQueryChanges (0.00s)
+=== RUN   TestCompareDNPrefixCacheRegistryChecks
+--- PASS: TestCompareDNPrefixCacheRegistryChecks (0.00s)
+=== RUN   TestCompareDNPrefixCacheGrowthAndOwnedKeys
+--- PASS: TestCompareDNPrefixCacheGrowthAndOwnedKeys (0.00s)
+=== RUN   TestCompareDNPrefixCacheReservationLimit
+--- PASS: TestCompareDNPrefixCacheReservationLimit (0.00s)
+=== RUN   TestCompareDNPrefixCacheReplacementAndRetirement
+--- PASS: TestCompareDNPrefixCacheReplacementAndRetirement (0.00s)
+=== RUN   TestCompareDNPrefixCacheColdPublicationAndRecordLimit
+--- PASS: TestCompareDNPrefixCacheColdPublicationAndRecordLimit (0.00s)
+=== RUN   TestCompareDNPrefixCacheLiveBudgetEviction
+--- PASS: TestCompareDNPrefixCacheLiveBudgetEviction (14.63s)
+=== RUN   TestCompareDNPrefixCachePanicReleases
+=== RUN   TestCompareDNPrefixCachePanicReleases/warm=false
+=== RUN   TestCompareDNPrefixCachePanicReleases/warm=true
+--- PASS: TestCompareDNPrefixCachePanicReleases (0.00s)
+    --- PASS: TestCompareDNPrefixCachePanicReleases/warm=false (0.00s)
+    --- PASS: TestCompareDNPrefixCachePanicReleases/warm=true (0.00s)
+=== RUN   TestCompareDNPrefixCacheConcurrentQueries
+--- PASS: TestCompareDNPrefixCacheConcurrentQueries (0.00s)
+=== RUN   TestCompareDNPrefixHandlerIntegration
+=== RUN   TestCompareDNPrefixHandlerIntegration/bolt
+=== RUN   TestCompareDNPrefixHandlerIntegration/memory
+--- PASS: TestCompareDNPrefixHandlerIntegration (0.34s)
+    --- PASS: TestCompareDNPrefixHandlerIntegration/bolt (0.25s)
+    --- PASS: TestCompareDNPrefixHandlerIntegration/memory (0.09s)
+PASS
+ok  	github.com/wangle201210/ldap-go/internal/server	15.032s

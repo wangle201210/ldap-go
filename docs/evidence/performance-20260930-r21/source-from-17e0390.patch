@@ -1,0 +1,2260 @@
+diff --git a/internal/schema/compare_entry_prefix.go b/internal/schema/compare_entry_prefix.go
+new file mode 100644
+index 0000000..f52c2ca
+--- /dev/null
++++ b/internal/schema/compare_entry_prefix.go
+@@ -0,0 +1,217 @@
++package schema
++
++import (
++	"bytes"
++	"errors"
++	"strings"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++const (
++	minDNPrefixValues = 32
++	maxDNPrefixValues = 4096
++	maxDNPrefixBytes  = 256 << 10
++	maxDNPrefixFill   = 1
++)
++
++type dnPrefixValue struct {
++	raw        string
++	normalized string
++}
++
++// DNComparisonPrefix owns successful raw-to-normalized DN translations. It is
++// immutable after return and may be shared by concurrent callers. Every use
++// rechecks the current raw value; this is not an entry or comparison-result cache.
++type DNComparisonPrefix struct {
++	registry    *Registry
++	generation  uint64
++	description string
++	values      []dnPrefixValue
++	retained    int
++}
++
++// RetainedBytes conservatively charges this token's strings, descriptors and
++// capacity. It is a per-token bound, not a global or in-flight memory budget.
++func (prefix *DNComparisonPrefix) RetainedBytes() int {
++	if prefix == nil {
++		return 0
++	}
++	return prefix.retained
++}
++
++// CompareEntryAttributeWithDNPrefix opts into bounded normalization reuse with the same
++// immutable-schema contract as CompareEntryAttributeCachedDN. Only a single
++// exact, option-free DN attribute with at least 32 values qualifies. At most
++// one visited successful value extends the prefix per call. Other values use
++// the original comparison path, and matching/error order remains left-to-right.
++// The caller owns retention of returned tokens; no global cache is installed.
++func (registry *Registry) CompareEntryAttributeWithDNPrefix(
++	entry directory.Entry,
++	description string,
++	assertion []byte,
++	previous *DNComparisonPrefix,
++) (present, matched bool, next *DNComparisonPrefix, err error) {
++	registry.mu.RLock()
++	values, eligible := registry.dnPrefixValuesLocked(entry, description)
++	if !eligible {
++		registry.mu.RUnlock()
++		present, matched, err = registry.CompareEntryAttributeCachedDN(entry, description, assertion)
++		return present, matched, nil, err
++	}
++	defer registry.mu.RUnlock()
++	if previous != nil && previous.registry == registry &&
++		previous.generation == registry.preparedNames.generation && previous.description == description {
++		next = previous
++	}
++	original := next
++	filled := 0
++	var normalizedAssertion []byte
++	var assertionReady, planReady bool
++	var plan simpleDNComparison
++	for index, value := range values {
++		cached := next != nil && index < len(next.values) && next.values[index].raw == string(value)
++		if cached {
++			if !assertionReady {
++				var err error
++				normalizedAssertion, err = registry.normalizeCompareDNLocked(assertion, true)
++				if err != nil {
++					return true, false, next, errors.New("distinguishedNameMatch received invalid DN")
++				}
++				assertionReady = true
++			}
++			if next.values[index].normalized == string(normalizedAssertion) {
++				return true, true, next, nil
++			}
++			continue
++		}
++		if assertionReady && !planReady {
++			planReady = true
++			plan = registry.prepareSimpleDNComparisonLocked(normalizedAssertion)
++		}
++		canFill := filled < maxDNPrefixFill && index < maxDNPrefixValues && len(value) <= maxCachedDNInput &&
++			((next == nil && index == 0) || (next != nil && index <= len(next.values)))
++		if !canFill {
++			if matched, handled := plan.match(registry, value); handled {
++				if matched {
++					return true, true, next, nil
++				}
++				continue
++			}
++		}
++		left, leftErr := registry.normalizeCompareDNLocked(value, true)
++		var rightErr error
++		if !assertionReady {
++			normalizedAssertion, rightErr = registry.normalizeCompareDNLocked(assertion, true)
++			assertionReady = true
++		}
++		if leftErr != nil || rightErr != nil {
++			return true, false, next, errors.New("distinguishedNameMatch received invalid DN")
++		}
++		if canFill {
++			if updated, stored := registry.extendDNPrefix(next, original, description, index, value, left); stored {
++				next = updated
++				filled++
++			} else {
++				filled = maxDNPrefixFill
++			}
++		}
++		if bytes.Equal(left, normalizedAssertion) {
++			return true, true, next, nil
++		}
++		if !planReady {
++			planReady = true
++			plan = registry.prepareSimpleDNComparisonLocked(normalizedAssertion)
++		}
++	}
++	return true, false, next, nil
++}
++
++func (registry *Registry) dnPrefixValuesLocked(entry directory.Entry, description string) ([][]byte, bool) {
++	if description == "" || len(description) > 128 || strings.Contains(description, ";") {
++		return nil, false
++	}
++	requested := registry.attributes[schemaKey(description)]
++	if requested == nil || attributeHasOrderedValues(*requested) ||
++		(requested.Equality != "" && canonicalMatchingRule(requested.Equality) != "distinguishednamematch") {
++		return nil, false
++	}
++	effective, err := registry.effectiveAttributeType(requested, make(map[string]bool))
++	if err != nil || canonicalMatchingRule(effective.Equality) != "distinguishednamematch" {
++		return nil, false
++	}
++	var selected [][]byte
++	found := false
++	for _, attribute := range entry.Attributes {
++		if !registry.dnPrefixAttributeSelectedLocked(attribute.Description, description, requested) {
++			continue
++		}
++		if found || attribute.Description != description {
++			return nil, false
++		}
++		found, selected = true, attribute.Values
++	}
++	return selected, found && len(selected) >= minDNPrefixValues
++}
++
++// The request has no options and resolves to requested. Avoid allocating folded
++// camel-case names while checking all attributes, including those after a match.
++func (registry *Registry) dnPrefixAttributeSelectedLocked(candidate, description string, requested *AttributeType) bool {
++	if candidate == description {
++		return true
++	}
++	var folded [128]byte
++	if len(candidate) == 0 || len(candidate) > len(folded) {
++		return registry.attributeDescriptionSubtype(candidate, description)
++	}
++	for index := range len(candidate) {
++		value := candidate[index]
++		switch {
++		case value >= 'A' && value <= 'Z':
++			value += 'a' - 'A'
++		case value >= 'a' && value <= 'z', value >= '0' && value <= '9', value == '.', value == '-':
++		default:
++			return registry.attributeDescriptionSubtype(candidate, description)
++		}
++		folded[index] = value
++	}
++	attribute := registry.attributes[string(folded[:len(candidate)])]
++	return attribute != nil && registry.attributeTypeSubtype(attribute, requested, make(map[string]bool))
++}
++
++// The registry read lock covers normalization and publication. Copy-on-write
++// preserves all previously returned tokens, including callers still using them.
++func (registry *Registry) extendDNPrefix(prefix, original *DNComparisonPrefix, description string, index int, raw, normalized []byte) (*DNComparisonPrefix, bool) {
++	if len(normalized) > 4096 {
++		return prefix, false
++	}
++	capacity := min(maxDNPrefixValues, index+maxDNPrefixFill)
++	payload := 2 * (len(raw) + len(normalized))
++	if prefix != nil && index == len(prefix.values) {
++		payload += prefix.retained - 128 - 2*len(prefix.description) - 64*cap(prefix.values)
++	} else {
++		for i := 0; i < index; i++ {
++			payload += 2 * (len(prefix.values[i].raw) + len(prefix.values[i].normalized))
++		}
++	}
++	if prefix != nil && prefix != original && index == len(prefix.values) && index < cap(prefix.values) {
++		capacity = cap(prefix.values)
++	}
++	retained := 128 + 2*len(description) + 64*capacity + payload
++	if retained > maxDNPrefixBytes {
++		return prefix, false
++	}
++	if prefix == nil || prefix == original || index != len(prefix.values) || index == cap(prefix.values) {
++		updated := &DNComparisonPrefix{
++			registry: registry, generation: registry.preparedNames.generation,
++			description: strings.Clone(description), values: make([]dnPrefixValue, index, capacity),
++		}
++		if prefix != nil {
++			copy(updated.values, prefix.values[:index])
++		}
++		prefix = updated
++	}
++	prefix.values = append(prefix.values, dnPrefixValue{raw: string(raw), normalized: string(normalized)})
++	prefix.retained = retained
++	return prefix, true
++}
+diff --git a/internal/schema/compare_entry_prefix_test.go b/internal/schema/compare_entry_prefix_test.go
+new file mode 100644
+index 0000000..c4aa20d
+--- /dev/null
++++ b/internal/schema/compare_entry_prefix_test.go
+@@ -0,0 +1,509 @@
++package schema
++
++import (
++	"bytes"
++	"fmt"
++	"reflect"
++	"slices"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++const dnPrefixTestBudget = 256 << 10
++
++func dnPrefixTestEntry(count int, complex bool) directory.Entry {
++	values := make([][]byte, count)
++	for i := range values {
++		if complex {
++			values[i] = fmt.Appendf(nil, `uid=User%05d+cn=Smith\, User%05d,ou=People,dc=example`, i, i)
++		} else {
++			values[i] = fmt.Appendf(nil, "cn=User%05d,ou=People,dc=example", i)
++		}
++	}
++	return directory.Entry{DN: "cn=group,dc=example", Attributes: []directory.Attribute{{Description: "member", Values: values}}}
++}
++
++func dnPrefixTestBytes(prefix *DNComparisonPrefix) int {
++	if prefix == nil {
++		return 0
++	}
++	return prefix.RetainedBytes()
++}
++
++func checkCompareEntryAttributeWithDNPrefix(t testing.TB, registry *Registry, entry directory.Entry, description string, assertion []byte, previous *DNComparisonPrefix) *DNComparisonPrefix {
++	t.Helper()
++	before := entry
++	before.Attributes = slices.Clone(entry.Attributes)
++	for i := range before.Attributes {
++		before.Attributes[i].Values = slices.Clone(entry.Attributes[i].Values)
++		for j, value := range before.Attributes[i].Values {
++			before.Attributes[i].Values[j] = bytes.Clone(value)
++		}
++	}
++	assertionBefore := bytes.Clone(assertion)
++	previousBytes := dnPrefixTestBytes(previous)
++	wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, description, assertion)
++	present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, description, assertion, previous)
++	if present != wantPresent || matched != wantMatched || !reflect.DeepEqual(err, wantErr) {
++		t.Fatalf("%s=%q: prefix=(%v,%v,%T: %v), oracle=(%v,%v,%T: %v)",
++			description, assertion, present, matched, err, err, wantPresent, wantMatched, wantErr, wantErr)
++	}
++	if !reflect.DeepEqual(entry, before) || !reflect.DeepEqual(assertion, assertionBefore) {
++		t.Fatal("prefix comparison mutated caller-owned input")
++	}
++	if dnPrefixTestBytes(previous) != previousBytes {
++		t.Fatal("comparison changed the previous token's retained bytes")
++	}
++	if retained := dnPrefixTestBytes(next); retained < 0 || retained > dnPrefixTestBudget || next != nil && retained == 0 {
++		t.Fatalf("invalid per-token retained bytes: %d", retained)
++	}
++	return next
++}
++
++// Fill at most one successful value per call through the public API. Equality
++// of the retained-byte count detects exhaustion, an early match, or the budget
++// limit without inspecting token fields.
++func warmDNPrefixForTest(t testing.TB, registry *Registry, entry directory.Entry, description string, assertion []byte) *DNComparisonPrefix {
++	t.Helper()
++	wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, description, assertion)
++	if wantErr != nil {
++		t.Fatalf("invalid warm fixture: %v", wantErr)
++	}
++	var prefix *DNComparisonPrefix
++	for range 4096 + 2 {
++		before := dnPrefixTestBytes(prefix)
++		present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, description, assertion, prefix)
++		if present != wantPresent || matched != wantMatched || err != nil {
++			t.Fatalf("warm fixture: (%v,%v,%v), want (%v,%v,nil)", present, matched, err, wantPresent, wantMatched)
++		}
++		if dnPrefixTestBytes(prefix) != before {
++			t.Fatal("warming mutated an older token")
++		}
++		retained := dnPrefixTestBytes(next)
++		if retained < 0 || retained > dnPrefixTestBudget {
++			t.Fatalf("warming exceeded the per-token budget: %d", retained)
++		}
++		prefix = next
++		if retained == before {
++			return prefix
++		}
++	}
++	t.Fatal("prefix did not stop extending")
++	return nil
++}
++
++func TestCompareEntryAttributeWithDNPrefixParity(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	for _, complex := range []bool{false, true} {
++		for _, count := range []int{10, 31, 32, 1000, 4096, 4097} {
++			entry := dnPrefixTestEntry(count, complex)
++			for _, position := range []int{0, count - 1, -1} {
++				t.Run(fmt.Sprintf("complex=%t/values=%d/position=%d", complex, count, position), func(t *testing.T) {
++					assertion := []byte("cn=missing,ou=People,dc=example")
++					if position >= 0 {
++						assertion = bytes.Clone(entry.Attributes[0].Values[position])
++					}
++					cold := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, nil)
++					if count < 32 && cold != nil || count >= 32 && cold == nil {
++						t.Fatalf("unexpected eligibility for %d values: token=%v", count, cold != nil)
++					}
++					warm := warmDNPrefixForTest(t, registry, entry, "member", assertion)
++					checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, warm)
++					checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("bad-dn"), warm)
++				})
++			}
++		}
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixDNFixtures(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	base := dnPrefixTestEntry(32, false)
++	warm := warmDNPrefixForTest(t, registry, base, "member", []byte("cn=missing"))
++	for _, tc := range simpleDNComparisonCases() {
++		for _, position := range []int{0, 1, 2, 7, 8, 31} {
++			t.Run(fmt.Sprintf("%s/position=%d", tc.name, position), func(t *testing.T) {
++				entry := base.Clone()
++				entry.Attributes[0].RawNormalized = true
++				entry.Attributes[0].Values[position] = []byte(tc.value)
++				assertion := []byte(tc.assertion)
++				cold := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, nil)
++				checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, cold)
++				checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, warm)
++			})
++		}
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixFallback(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	for _, attribute := range []AttributeType{
++		{OID: "1.2.3.860", Names: []string{"prefixChild"}, Superior: "member"},
++		{OID: "1.2.3.861", Names: []string{"prefixOID"}, Equality: "2.5.13.1", Syntax: SyntaxDistinguishedName},
++		{OID: "1.2.3.862", Names: []string{"prefixOrdered"}, Superior: "member", Extensions: map[string][]string{"X-ORDERED": {"VALUES"}}},
++	} {
++		if err := registry.RegisterAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++	}
++	base := dnPrefixTestEntry(32, false)
++	warm := warmDNPrefixForTest(t, registry, base, "member", []byte("cn=missing"))
++	values := base.Attributes[0].Values
++	for _, tc := range []struct {
++		name, requested, assertion string
++		attributes                 []directory.Attribute
++	}{
++		{"absent", "member", "bad-dn", nil},
++		{"unselected", "member", "bad-dn", []directory.Attribute{{Description: "cn", Values: values}}},
++		{"empty nil", "member", "bad-dn", []directory.Attribute{{Description: "member"}}},
++		{"empty slice", "member", "bad-dn", []directory.Attribute{{Description: "member", Values: [][]byte{}}}},
++		{"small", "member", string(values[0]), []directory.Attribute{{Description: "member", Values: values[:31]}}},
++		{"name to OID", "member", string(values[0]), []directory.Attribute{{Description: "2.5.4.31", Values: values}}},
++		{"OID to name", "2.5.4.31", string(values[0]), []directory.Attribute{{Description: "member", Values: values}}},
++		{"case differs", "MEMBER", string(values[0]), []directory.Attribute{{Description: "member", Values: values}}},
++		{"subtype", "member", string(values[0]), []directory.Attribute{{Description: "prefixChild", Values: values}}},
++		{"option on stored", "member", string(values[0]), []directory.Attribute{{Description: "member;lang-en", Values: values}}},
++		{"option on both", "member;lang-en", string(values[0]), []directory.Attribute{{Description: "member;lang-en", Values: values}}},
++		{"option prefix", "member;lang-", string(values[0]), []directory.Attribute{{Description: "member;lang-en", Values: values}}},
++		{"option mismatch", "member;lang-en", "bad-dn", []directory.Attribute{{Description: "member;lang-fr", Values: values}}},
++		{"two selected", "member", string(values[0]), []directory.Attribute{{Description: "member", Values: values}, {Description: "member", Values: values}}},
++		{"empty selected second", "member", string(values[0]), []directory.Attribute{{Description: "member", Values: values}, {Description: "member"}}},
++		{"empty selected first", "member", string(values[0]), []directory.Attribute{{Description: "member"}, {Description: "member", Values: values}}},
++		{"second selected option", "member", string(values[0]), []directory.Attribute{{Description: "member", Values: values}, {Description: "member;lang-en", Values: values}}},
++		{"split below threshold", "member", string(values[31]), []directory.Attribute{{Description: "member", Values: values[:16]}, {Description: "member", Values: values[16:]}}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			entry := directory.Entry{DN: base.DN, Attributes: tc.attributes}
++			for _, previous := range []*DNComparisonPrefix{nil, warm} {
++				if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, tc.requested, []byte(tc.assertion), previous); next != nil {
++					t.Fatal("fallback returned a token")
++				}
++			}
++		})
++	}
++	for _, description := range []string{"prefixOrdered", "uid", "uniqueMember", "eqExact", "eqNoRule", "eqUnknownRule", "eqOrphan", "eqCycleA", "prefixUnknown"} {
++		t.Run(description, func(t *testing.T) {
++			entry := base.Clone()
++			entry.Attributes[0].Description = description
++			if description == "prefixOrdered" {
++				entry.Attributes[0].Values[0] = []byte("{1}bad-dn")
++			}
++			for _, assertion := range []string{string(values[0]), "{1}", "bad-dn"} {
++				for _, previous := range []*DNComparisonPrefix{nil, warm} {
++					if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, description, []byte(assertion), previous); next != nil {
++						t.Fatal("non-DN, ordered, or invalid rule returned a token")
++					}
++				}
++			}
++		})
++	}
++	for _, description := range []string{"member", "prefixChild", "prefixOID", "2.5.4.31", "MEMBER"} {
++		t.Run("eligible/"+description, func(t *testing.T) {
++			entry := base.Clone()
++			entry.Attributes[0].Description = description
++			entry.Attributes = append(entry.Attributes, directory.Attribute{Description: "cn", Values: byteValues("unselected")})
++			if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, description, values[0], nil); next == nil {
++				t.Fatal("one exact selected DN attribute did not return a token")
++			}
++		})
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixStopsInOrder(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	base := dnPrefixTestEntry(32, false)
++	warm := warmDNPrefixForTest(t, registry, base, "member", []byte("cn=missing"))
++	for _, position := range []int{0, 1, 2, 7, 8, 30} {
++		for _, matchFirst := range []bool{false, true} {
++			t.Run(fmt.Sprintf("position=%d/matchFirst=%t", position, matchFirst), func(t *testing.T) {
++				entry := base.Clone()
++				pair := byteValues("bad-dn", "cn=target")
++				if matchFirst {
++					slices.Reverse(pair)
++				}
++				copy(entry.Attributes[0].Values[position:], pair)
++				for _, previous := range []*DNComparisonPrefix{nil, warm} {
++					checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("cn=target"), previous)
++				}
++			})
++		}
++	}
++	entry := base.Clone()
++	entry.Attributes[0].Values[0] = []byte("cn=target")
++	for i := 1; i < len(entry.Attributes[0].Values); i++ {
++		entry.Attributes[0].Values[i] = []byte("bad-dn")
++	}
++	one := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("cn=target"), nil)
++	reference := base.Clone()
++	reference.Attributes[0].Values[0] = []byte("cn=target")
++	first := checkCompareEntryAttributeWithDNPrefix(t, registry, reference, "member", []byte("cn=target"), nil)
++	if dnPrefixTestBytes(one) != dnPrefixTestBytes(first) {
++		t.Fatal("values after a match changed the retained prefix")
++	}
++	// The previously unvisited error must be observed when the assertion changes.
++	failed := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("cn=missing"), one)
++	entry.Attributes[0].Values[1] = []byte("cn=missing")
++	checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("cn=missing"), failed)
++
++	for _, value := range [][]byte{nil, {}} {
++		entry := base.Clone()
++		entry.Attributes[0].Values[0] = value
++		prefix := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", nil, nil)
++		checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte{}, prefix)
++		checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte("bad-dn"), prefix)
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixOwnershipAndMutation(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	entry := dnPrefixTestEntry(32, false)
++	// Short slices of a large reusable buffer must be owned as short strings.
++	backing := make([]byte, 1<<20)
++	offset := 0
++	for i, raw := range entry.Attributes[0].Values {
++		copy(backing[offset:], raw)
++		entry.Attributes[0].Values[i] = backing[offset : offset+len(raw)]
++		offset += len(raw)
++	}
++	original := entry.Clone()
++	missing := []byte("cn=missing")
++	prefix := warmDNPrefixForTest(t, registry, entry, "member", missing)
++	owned := warmDNPrefixForTest(t, registry, original, "member", missing)
++	if dnPrefixTestBytes(prefix) != dnPrefixTestBytes(owned) {
++		t.Fatal("retention depends on input buffer capacity")
++	}
++	for _, position := range []int{0, 1, 2, 7, 8, 31} {
++		copy(entry.Attributes[0].Values[position][3:7], "Else")
++		for _, assertion := range [][]byte{original.Attributes[0].Values[position], entry.Attributes[0].Values[position], missing} {
++			checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, prefix)
++		}
++	}
++	assertion := bytes.Clone(original.Attributes[0].Values[0])
++	checkCompareEntryAttributeWithDNPrefix(t, registry, original, "member", assertion, prefix)
++	copy(assertion[3:7], "Else")
++	checkCompareEntryAttributeWithDNPrefix(t, registry, original, "member", assertion, prefix)
++	checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, prefix)
++	checkCompareEntryAttributeWithDNPrefix(t, registry, original, "member", original.Attributes[0].Values[31], prefix)
++
++	reordered := original.Clone()
++	slices.Reverse(reordered.Attributes[0].Values)
++	reordered.Attributes[0].Values[0] = []byte("bad-dn")
++	checkCompareEntryAttributeWithDNPrefix(t, registry, reordered, "member", original.Attributes[0].Values[0], prefix)
++	reordered.Attributes[0].Values[0] = bytes.Clone(original.Attributes[0].Values[31])
++	checkCompareEntryAttributeWithDNPrefix(t, registry, reordered, "member", original.Attributes[0].Values[0], prefix)
++	deleted := original.Clone()
++	deleted.Attributes[0].Values = deleted.Attributes[0].Values[:31]
++	if next := checkCompareEntryAttributeWithDNPrefix(t, registry, deleted, "member", missing, prefix); next != nil {
++		t.Fatal("shrinking below the threshold did not discard the token")
++	}
++	changedDescription := original.Clone()
++	changedDescription.Attributes[0].Description = "manager"
++	next := checkCompareEntryAttributeWithDNPrefix(t, registry, changedDescription, "manager", missing, prefix)
++	fresh := checkCompareEntryAttributeWithDNPrefix(t, registry, changedDescription, "manager", missing, nil)
++	if dnPrefixTestBytes(next) != dnPrefixTestBytes(fresh) {
++		t.Fatal("token from a different description was reused")
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixRegistryIdentityAndGeneration(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	entry := dnPrefixTestEntry(32, false)
++	entry.Attributes[0].Values[0] = []byte("1.2.3.802=ALICE")
++	assertion := []byte("1.2.3.802=alice")
++	prefix := warmDNPrefixForTest(t, registry, entry, "member", assertion)
++	clone := registry.Clone()
++	for _, other := range []*Registry{clone, equalityEvaluationRegistry(t)} {
++		next := checkCompareEntryAttributeWithDNPrefix(t, other, entry, "member", assertion, prefix)
++		fresh := checkCompareEntryAttributeWithDNPrefix(t, other, entry, "member", assertion, nil)
++		if dnPrefixTestBytes(next) != dnPrefixTestBytes(fresh) {
++			t.Fatal("another registry reused the source registry's full prefix")
++		}
++	}
++	attribute, _ := registry.AttributeType("eqExact")
++	for _, rule := range []string{"caseIgnoreMatch", "caseExactMatch", "caseIgnoreMatch"} {
++		attribute.Equality = rule
++		attribute.Names = []string{"prefixRenamedExact"}
++		if err := registry.UpsertAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++		next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, prefix)
++		fresh := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, nil)
++		if dnPrefixTestBytes(next) != dnPrefixTestBytes(fresh) {
++			t.Fatal("schema mutation reused the previous generation's full prefix")
++		}
++		prefix = next
++	}
++	// Give two independently mutable clones the same mutation history length,
++	// but different naming rules. Identity must distinguish their tokens.
++	left, right := clone.Clone(), clone.Clone()
++	for i, target := range []*Registry{left, right} {
++		attribute, _ := target.AttributeType("eqExact")
++		attribute.Equality = []string{"caseExactMatch", "caseIgnoreMatch"}[i]
++		if err := target.UpsertAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++	}
++	leftToken := warmDNPrefixForTest(t, left, entry, "member", assertion)
++	rightToken := checkCompareEntryAttributeWithDNPrefix(t, right, entry, "member", assertion, leftToken)
++	checkCompareEntryAttributeWithDNPrefix(t, left, entry, "member", assertion, rightToken)
++	checkCompareEntryAttributeWithDNPrefix(t, clone, entry, "member", assertion, leftToken)
++
++	member, _ := registry.AttributeType("member")
++	member.Equality = "caseExactMatch"
++	if err := registry.UpsertAttributeType(member); err != nil {
++		t.Fatal(err)
++	}
++	if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, prefix); next != nil {
++		t.Fatal("changing the selected attribute's equality rule did not fall back")
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixSingleValueExtension(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	entry := dnPrefixTestEntry(40, false)
++	missing := []byte("cn=missing")
++	var prefix *DNComparisonPrefix
++	var history []*DNComparisonPrefix
++	var retained []int
++	for pass := range entry.Attributes[0].Values {
++		previousBytes := dnPrefixTestBytes(prefix)
++		next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, prefix)
++		// An early match after exactly one new value must retain the same
++		// prefix as a complete scan that continues through the simple DN path.
++		stopAtOne := entry.Attributes[0].Values[pass]
++		reference := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", stopAtOne, prefix)
++		if next == nil || dnPrefixTestBytes(next) <= previousBytes || dnPrefixTestBytes(next) != dnPrefixTestBytes(reference) {
++			t.Fatalf("pass %d did not extend by the same single visited value: before=%d, scan=%d, early=%d",
++				pass, previousBytes, dnPrefixTestBytes(next), dnPrefixTestBytes(reference))
++		}
++		if next == prefix {
++			t.Fatal("extending a prefix reused the mutable token object")
++		}
++		prefix = next
++		history = append(history, prefix)
++		retained = append(retained, dnPrefixTestBytes(prefix))
++	}
++	for range 3 {
++		next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, prefix)
++		if dnPrefixTestBytes(next) != dnPrefixTestBytes(prefix) {
++			t.Fatal("exhausted prefix continued to grow")
++		}
++	}
++	for i, old := range history {
++		if dnPrefixTestBytes(old) != retained[i] {
++			t.Fatalf("old token %d changed after a later extension", i)
++		}
++		branch := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, old)
++		if dnPrefixTestBytes(branch) != retained[min(i+1, len(retained)-1)] {
++			t.Fatalf("old token %d no longer creates the same independent branch", i)
++		}
++	}
++	for _, assertion := range []string{"cn=another-miss", "cn=" + strings.Repeat("z", 2048)} {
++		next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", []byte(assertion), nil)
++		if dnPrefixTestBytes(next) != retained[0] {
++			t.Fatal("token retention depends on the assertion")
++		}
++	}
++}
++
++func TestCompareEntryAttributeWithDNPrefixLimits(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	missing := []byte("cn=missing")
++	t.Run("budget", func(t *testing.T) {
++		entry := dnPrefixTestEntry(4097, false)
++		for i := range entry.Attributes[0].Values {
++			entry.Attributes[0].Values[i] = fmt.Appendf(nil, "cn=%04d%s", i, strings.Repeat("x", 1017))
++		}
++		// Every raw DN is exactly 1024 bytes, so even the raw strings alone
++		// exceed the per-token budget before all input values can be retained.
++		prefix := warmDNPrefixForTest(t, registry, entry, "member", missing)
++		if prefix == nil || dnPrefixTestBytes(prefix) <= 1024 || dnPrefixTestBytes(prefix) > dnPrefixTestBudget {
++			t.Fatalf("invalid budget-limited token: %d", dnPrefixTestBytes(prefix))
++		}
++		for range 3 {
++			next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, prefix)
++			if dnPrefixTestBytes(next) != dnPrefixTestBytes(prefix) {
++				t.Fatal("budget-limited prefix continued to expand")
++			}
++		}
++		checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", entry.Attributes[0].Values[4096], prefix)
++		entry.Attributes[0].Values[4095] = []byte("bad-dn")
++		checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", entry.Attributes[0].Values[4096], prefix)
++	})
++	t.Run("raw length boundary", func(t *testing.T) {
++		entry := dnPrefixTestEntry(32, false)
++		entry.Attributes[0].Values[0] = []byte("cn=" + strings.Repeat("x", 1021))
++		if prefix := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, nil); prefix == nil {
++			t.Fatal("1024-byte raw DN was not retained")
++		}
++		entry.Attributes[0].Values[0] = append(entry.Attributes[0].Values[0], 'x')
++		if prefix := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, nil); prefix != nil {
++			t.Fatal("prefix extended past a 1025-byte first value")
++		}
++	})
++	t.Run("long value stops extension", func(t *testing.T) {
++		entry := dnPrefixTestEntry(32, false)
++		entry.Attributes[0].Values[1] = []byte("cn=" + strings.Repeat("x", 1022))
++		prefix := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, nil)
++		if prefix == nil {
++			t.Fatal("the single value preceding the long DN was not retained")
++		}
++		for range 3 {
++			next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, prefix)
++			if dnPrefixTestBytes(next) != dnPrefixTestBytes(prefix) {
++				t.Fatal("prefix extended past the long raw DN")
++			}
++		}
++		checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", entry.Attributes[0].Values[31], prefix)
++		entry.Attributes[0].Values[1] = []byte("cn=repaired")
++		if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", missing, prefix); dnPrefixTestBytes(next) <= dnPrefixTestBytes(prefix) {
++			t.Fatal("prefix did not resume after replacing the oversized value")
++		}
++	})
++}
++
++func TestCompareEntryAttributeWithDNPrefixConcurrent(t *testing.T) {
++	registry := equalityEvaluationRegistry(t)
++	base := dnPrefixTestEntry(64, true)
++	missing := []byte("cn=missing")
++	shared := checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", missing, nil)
++	retained := dnPrefixTestBytes(shared)
++	reference := checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", missing, shared)
++	var workers sync.WaitGroup
++	failures := make(chan error, 16)
++	for worker := range 16 {
++		entry := base.Clone()
++		if worker%2 != 0 {
++			entry.Attributes[0].Values[0] = fmt.Appendf(nil, "cn=worker%d", worker)
++		}
++		workers.Go(func() {
++			prefix := shared
++			for round := range 24 {
++				assertion := missing
++				if round%3 == 0 {
++					assertion = entry.Attributes[0].Values[0]
++				} else if round%3 == 1 {
++					assertion = entry.Attributes[0].Values[63]
++				}
++				present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, prefix)
++				if !present || matched != (round%3 != 2) || err != nil || next == nil || dnPrefixTestBytes(next) > dnPrefixTestBudget || dnPrefixTestBytes(shared) != retained {
++					failures <- fmt.Errorf("worker %d round %d: (%v,%v,%v), retained=%d shared=%d", worker, round, present, matched, err, dnPrefixTestBytes(next), dnPrefixTestBytes(shared))
++					return
++				}
++				prefix = next
++			}
++		})
++	}
++	workers.Wait()
++	close(failures)
++	for err := range failures {
++		t.Error(err)
++	}
++	branch := checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", missing, shared)
++	if dnPrefixTestBytes(branch) != dnPrefixTestBytes(reference) {
++		t.Fatal("concurrent branches changed the original shared prefix")
++	}
++}
+diff --git a/internal/schema/compare_entry_prefix_bench_test.go b/internal/schema/compare_entry_prefix_bench_test.go
+new file mode 100644
+index 0000000..fcaee16
+--- /dev/null
++++ b/internal/schema/compare_entry_prefix_bench_test.go
+@@ -0,0 +1,263 @@
++package schema
++
++import (
++	"bytes"
++	"fmt"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++// Cold and warm refer to the caller-owned prefix token, not a cold process or
++// an empty Registry DN cache. Every implementation gets its own registry and
++// primes its normal comparison path before timing. A cold call always receives
++// nil; a warm call receives the same immutable, fully primed token each time.
++func BenchmarkCompareEntryAttributeWithDNPrefix(b *testing.B) {
++	for _, complex := range []bool{false, true} {
++		shape := "simple"
++		if complex {
++			shape = "escaped-multi-AVA"
++		}
++		for _, count := range []int{10, 1000, 4097} {
++			entry := dnPrefixTestEntry(count, complex)
++			for _, position := range []struct {
++				name  string
++				index int
++			}{{"first", 0}, {"last", count - 1}, {"missing", -1}} {
++				assertion := []byte("cn=missing,ou=People,dc=example")
++				if position.index >= 0 {
++					assertion = bytes.Clone(entry.Attributes[0].Values[position.index])
++				}
++				b.Run(fmt.Sprintf("%s/values=%d/%s", shape, count, position.name), func(b *testing.B) {
++					benchmarkDNPrefixComparison(b, entry, assertion)
++				})
++			}
++		}
++	}
++}
++
++func benchmarkDNPrefixComparison(b *testing.B, entry directory.Entry, assertion []byte) {
++	for _, implementation := range []string{"oracle", "uncached", "cached-dn", "prefix-cold", "prefix-warm"} {
++		b.Run(implementation, func(b *testing.B) {
++			registry := equalityEvaluationRegistry(b)
++			wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, "member", assertion)
++			if wantErr != nil {
++				b.Fatalf("invalid benchmark fixture: %v", wantErr)
++			}
++			var previous *DNComparisonPrefix
++			if implementation == "prefix-warm" {
++				previous = warmDNPrefixForTest(b, registry, entry, "member", assertion)
++			}
++			var next *DNComparisonPrefix
++			compare := func() (bool, bool, error) {
++				present, matched, token, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, previous)
++				next = token
++				return present, matched, err
++			}
++			switch implementation {
++			case "oracle":
++				compare = func() (bool, bool, error) {
++					return originalCompareEntryAttribute(registry, entry, "member", assertion)
++				}
++			case "uncached":
++				compare = func() (bool, bool, error) {
++					return registry.CompareEntryAttribute(entry, "member", assertion)
++				}
++			case "cached-dn":
++				compare = func() (bool, bool, error) {
++					return registry.CompareEntryAttributeCachedDN(entry, "member", assertion)
++				}
++			}
++			present, matched, err := compare()
++			if present != wantPresent || matched != wantMatched || err != nil {
++				b.Fatalf("priming: (%v,%v,%v), want (%v,%v,nil)", present, matched, err, wantPresent, wantMatched)
++			}
++			b.ReportAllocs()
++			for b.Loop() {
++				present, matched, err = compare()
++			}
++			if present != wantPresent || matched != wantMatched || err != nil {
++				b.Fatalf("comparison: (%v,%v,%v), want (%v,%v,nil)", present, matched, err, wantPresent, wantMatched)
++			}
++			if next != nil {
++				b.ReportMetric(float64(next.RetainedBytes()), "retained-B/token")
++			}
++		})
++	}
++}
++
++// Each row measures a single-value fill from a fixed prefix with 0, 1, ... 7 values.
++// Preparation of that prefix is outside b.Loop. Keeping the input token fixed
++// prevents a fill benchmark from silently turning into a steady-state warm one.
++func BenchmarkCompareEntryAttributeWithDNPrefixFillSingle(b *testing.B) {
++	for _, complex := range []bool{false, true} {
++		shape := "simple"
++		if complex {
++			shape = "escaped-multi-AVA"
++		}
++		for pass := range 8 {
++			b.Run(fmt.Sprintf("%s/values=1000/from=%d", shape, pass), func(b *testing.B) {
++				registry := equalityEvaluationRegistry(b)
++				entry := dnPrefixTestEntry(1000, complex)
++				assertion := []byte("cn=missing,ou=People,dc=example")
++				wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, "member", assertion)
++				if !wantPresent || wantMatched || wantErr != nil {
++					b.Fatalf("invalid fill fixture: (%v,%v,%v)", wantPresent, wantMatched, wantErr)
++				}
++				var previous *DNComparisonPrefix
++				for range pass {
++					present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, previous)
++					if !present || matched || err != nil || next == nil {
++						b.Fatalf("fill setup: (%v,%v,%v), token=%v", present, matched, err, next != nil)
++					}
++					previous = next
++				}
++				before := dnPrefixTestBytes(previous)
++				present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, previous)
++				if !present || matched || err != nil || dnPrefixTestBytes(next) <= before {
++					b.Fatalf("fill priming: (%v,%v,%v), before=%d after=%d", present, matched, err, before, dnPrefixTestBytes(next))
++				}
++				b.ReportAllocs()
++				for b.Loop() {
++					present, matched, next, err = registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, previous)
++				}
++				if !present || matched || err != nil || dnPrefixTestBytes(previous) != before || dnPrefixTestBytes(next) <= before {
++					b.Fatalf("fill comparison: (%v,%v,%v), before=%d after=%d", present, matched, err, before, dnPrefixTestBytes(next))
++				}
++				b.ReportMetric(1, "values/call")
++				b.ReportMetric(float64(next.RetainedBytes()), "retained-B/token")
++			})
++		}
++	}
++}
++
++// Each timed operation is a complete 1001-call episode starting with a nil
++// prefix. Last/missing fill one value per call for 1000 calls, then make one warm call;
++// first naturally visits and retains only the first value. Registry and entry
++// setup, oracle evaluation and one priming episode are outside b.Loop. The
++// bounded Registry DN cache is shared across episodes and evolves normally;
++// "shared" does not mean all 1000 DNs fit in that cache or stay warm.
++func BenchmarkCompareEntryAttributeWithDNPrefixEpisode(b *testing.B) {
++	const callsPerEpisode = 1001
++	for _, position := range []struct {
++		name  string
++		index int
++	}{{"first", 0}, {"last", 999}, {"missing", -1}} {
++		for _, implementation := range []string{"cached-dn", "prefix-progressive"} {
++			b.Run("simple/values=1000/"+position.name+"/dn-cache-shared/"+implementation, func(b *testing.B) {
++				registry := equalityEvaluationRegistry(b)
++				entry := dnPrefixTestEntry(1000, false)
++				assertion := []byte("cn=missing,ou=People,dc=example")
++				if position.index >= 0 {
++					assertion = bytes.Clone(entry.Attributes[0].Values[position.index])
++				}
++				wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, "member", assertion)
++				if !wantPresent || wantErr != nil {
++					b.Fatalf("invalid episode fixture: (%v,%v,%v)", wantPresent, wantMatched, wantErr)
++				}
++				compare := func(previous *DNComparisonPrefix) (bool, bool, *DNComparisonPrefix, error) {
++					return registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, previous)
++				}
++				if implementation == "cached-dn" {
++					compare = func(_ *DNComparisonPrefix) (bool, bool, *DNComparisonPrefix, error) {
++						present, matched, err := registry.CompareEntryAttributeCachedDN(entry, "member", assertion)
++						return present, matched, nil, err
++					}
++				}
++				runEpisode := func() (*DNComparisonPrefix, bool) {
++					var prefix *DNComparisonPrefix
++					valid := true
++					for range callsPerEpisode {
++						present, matched, next, err := compare(prefix)
++						valid = present == wantPresent && matched == wantMatched && err == nil && valid
++						prefix = next
++					}
++					return prefix, valid
++				}
++				prefix, valid := runEpisode()
++				if !valid || implementation == "prefix-progressive" && prefix == nil {
++					b.Fatal("invalid priming episode")
++				}
++				wantRetained := dnPrefixTestBytes(prefix)
++				allValid := true
++				b.ReportAllocs()
++				for b.Loop() {
++					prefix, valid = runEpisode()
++					allValid = valid && allValid
++				}
++				if !allValid || dnPrefixTestBytes(prefix) != wantRetained {
++					b.Fatal("episode result or final retention changed")
++				}
++				b.ReportMetric(callsPerEpisode, "calls/episode")
++				b.ReportMetric(float64(dnPrefixTestBytes(prefix)), "retained-B/token")
++				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/(float64(b.N)*callsPerEpisode), "ns/call")
++			})
++		}
++	}
++}
++
++// This is an artificial cache-reset diagnostic, not a cold-process benchmark.
++// Each timed operation includes both lock pairs, discarding the DN cache map,
++// and one comparison (including any new map allocation). Both implementations
++// get the same reset. Generation and all other Registry caches are preserved;
++// the prefix implementation always receives nil. No per-call timer pauses or
++// Registry construction are used.
++func BenchmarkCompareEntryAttributeWithDNPrefixDNCacheReset(b *testing.B) {
++	for _, position := range []struct {
++		name  string
++		index int
++	}{{"first", 0}, {"last", 999}, {"missing", -1}} {
++		for _, implementation := range []string{"cached-dn", "prefix-cold"} {
++			b.Run("simple/values=1000/"+position.name+"/artificial-reset-included/"+implementation, func(b *testing.B) {
++				registry := equalityEvaluationRegistry(b)
++				entry := dnPrefixTestEntry(1000, false)
++				assertion := []byte("cn=missing,ou=People,dc=example")
++				if position.index >= 0 {
++					assertion = bytes.Clone(entry.Attributes[0].Values[position.index])
++				}
++				wantPresent, wantMatched, wantErr := originalCompareEntryAttribute(registry, entry, "member", assertion)
++				if !wantPresent || wantErr != nil {
++					b.Fatalf("invalid reset fixture: (%v,%v,%v)", wantPresent, wantMatched, wantErr)
++				}
++				var prefix *DNComparisonPrefix
++				compare := func() (bool, bool, error) {
++					present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", assertion, nil)
++					prefix = next
++					return present, matched, err
++				}
++				if implementation == "cached-dn" {
++					compare = func() (bool, bool, error) {
++						return registry.CompareEntryAttributeCachedDN(entry, "member", assertion)
++					}
++				}
++				present, matched, err := compare()
++				if present != wantPresent || matched != wantMatched || err != nil {
++					b.Fatalf("reset priming: (%v,%v,%v)", present, matched, err)
++				}
++				allValid := true
++				b.ReportAllocs()
++				for b.Loop() {
++					resetDNCacheForPrefixBenchmark(registry)
++					present, matched, err = compare()
++					allValid = present == wantPresent && matched == wantMatched && err == nil && allValid
++				}
++				if !allValid {
++					b.Fatalf("reset comparison: (%v,%v,%v)", present, matched, err)
++				}
++				b.ReportMetric(1, "cache-resets/op")
++				b.ReportMetric(float64(dnPrefixTestBytes(prefix)), "retained-B/token")
++			})
++		}
++	}
++}
++
++func resetDNCacheForPrefixBenchmark(registry *Registry) {
++	// Exclude in-flight normalizers while resetting, in the production lock
++	// order. In particular, do not reset the schema generation.
++	registry.mu.Lock()
++	registry.dnCache.mu.Lock()
++	registry.dnCache.entries = nil
++	registry.dnCache.bytes = 0
++	registry.dnCache.mu.Unlock()
++	registry.mu.Unlock()
++}
+diff --git a/internal/schema/compare_entry_prefix_names_test.go b/internal/schema/compare_entry_prefix_names_test.go
+new file mode 100644
+index 0000000..c75a6d8
+--- /dev/null
++++ b/internal/schema/compare_entry_prefix_names_test.go
+@@ -0,0 +1,208 @@
++package schema
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++)
++
++func dnPrefixNamesTestRegistry(t testing.TB) *Registry {
++	t.Helper()
++	registry, err := NewBuiltinRegistry()
++	if err != nil {
++		t.Fatal(err)
++	}
++	member, ok := registry.AttributeType("member")
++	if !ok {
++		t.Fatal("missing builtin member")
++	}
++	member.Names = append(member.Names, "prefixMemberAlias", "prefix-member.7", "kMember", "\u00c9Member")
++	if err := registry.UpsertAttributeType(member); err != nil {
++		t.Fatal(err)
++	}
++	for _, attribute := range []AttributeType{
++		{OID: "1.2.3.871", Names: []string{"prefixNameChild", "prefixChildAlias"}, Superior: "2.5.4.31"},
++		{OID: "1.2.3.872", Names: []string{"prefixNameGrandchild"}, Superior: "prefixChildAlias"},
++		// The option-free alias resolves, but Name() is not an equivalent request.
++		{OID: "1.2.3.873", Names: []string{"prefixPrimary;lang-en", "prefixPlainAlias"}, Superior: "member"},
++	} {
++		if err := registry.RegisterAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++	}
++	for _, length := range []int{127, 128, 129} {
++		attribute := AttributeType{
++			OID: fmt.Sprintf("1.2.3.874.%d", length), Names: []string{strings.Repeat("N", length)}, Superior: "member",
++		}
++		if err := registry.RegisterAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++	}
++	// Distinct descriptors with the same OID must retain subtype identity.
++	duplicate := member
++	duplicate.Names = []string{"prefixDuplicateMember"}
++	registry.mu.Lock()
++	registry.attributes[schemaKey(duplicate.Name())] = &duplicate
++	registry.mu.Unlock()
++	return registry
++}
++
++func TestDNPrefixAttributeSelectedLockedNamesParity(t *testing.T) {
++	registry := dnPrefixNamesTestRegistry(t)
++	registry.mu.RLock()
++	defer registry.mu.RUnlock()
++	check := func(t *testing.T, candidate, description string) {
++		t.Helper()
++		requested := registry.attributes[schemaKey(description)]
++		if requested == nil || len(description) > 128 || strings.Contains(description, ";") {
++			t.Fatalf("invalid option-free request fixture %q", description)
++		}
++		want := registry.attributeDescriptionSubtype(candidate, description)
++		if got := registry.dnPrefixAttributeSelectedLocked(candidate, description, requested); got != want {
++			t.Fatalf("selected(%q, %q) = %v, attributeDescriptionSubtype = %v", candidate, description, got, want)
++		}
++	}
++
++	candidates := []string{
++		"member", "MEMBER", "MeMbEr", "2.5.4.31", "prefixMemberAlias", "PREFIXMEMBERALIAS",
++		"prefix-member.7", "PREFIX-MEMBER.7", "prefixDuplicateMember", "PREFIXDUPLICATEMEMBER",
++		"prefixNameChild", "PREFIXNAMECHILD", "prefixChildAlias", "1.2.3.871",
++		"prefixNameGrandchild", "PREFIXNAMEGRANDCHILD", "1.2.3.872",
++		"prefixPlainAlias", "PREFIXPLAINALIAS", "1.2.3.873", "prefixPrimary;lang-en",
++		"cn", "manager", "uniqueMember", "memberOf", "objectClass", "creatorsName", "modifiersName",
++		"createTimestamp", "modifyTimestamp", "entryUUID", "entryCSN", "structuralObjectClass",
++		"", " ", "\t\r\n", ";", ";;", " ; ", "unknown", "UNKNOWN", "unknown;lang-en",
++		" member ", "\tMEMBER\r\n", "\u00a0member\u2003", "\u202fMEMBER\u3000",
++		"member;lang-en", "MEMBER;LANG-en;binary", "member;lang-", "member;lang-en;lang-en",
++		" member ; LANG-en ; binary ", "member;", "member;;", "member;=", "member;\xff",
++		"2.5.4.31;binary", "prefixMemberAlias;lang-en", "prefixChildAlias;binary",
++		"prefixNameGrandchild;lang-en", "prefixDuplicateMember;binary", "prefixPlainAlias;binary",
++		" prefixPlainAlias ", "\u00a0prefixPlainAlias\u2003", "1.2.3.873;binary",
++		"\u212aMember", "KMEMBER", "\u00c9Member", "\u00e9MEMBER", "\u00e9Member;binary",
++		"m\u00e9mber", "mem\u200bber", "member\x00", "\x00member", "\xffmember", "member\xff",
++		"\xc0\xafmember", "\xff;\xfe", "mem ber", "mem;ber", ";member", "member=", "member_",
++		"member/", "member.", "member-", "2..5.4.31", ".", "-", "0",
++	}
++	for _, length := range []int{127, 128, 129} {
++		name := strings.Repeat("N", length)
++		candidates = append(candidates, name, strings.ToLower(name), name+";binary", " "+name+" ", strings.Repeat("Z", length))
++		candidates = append(candidates, "member;"+strings.Repeat("x", length-len("member;")), strings.Repeat(" ", length-len("member"))+"member")
++	}
++	for _, description := range []string{
++		"member", "MEMBER", "2.5.4.31", "prefixMemberAlias", "prefixDuplicateMember",
++		" prefixMemberAlias ", "\u00a0member\u2003", "\u00c9Member",
++		"prefixNameChild", "prefixChildAlias", "1.2.3.871", "prefixNameGrandchild",
++		"prefixPlainAlias", "1.2.3.873", strings.Repeat("N", 127), strings.Repeat("N", 128),
++	} {
++		t.Run(description, func(t *testing.T) {
++			for _, candidate := range candidates {
++				check(t, candidate, description)
++			}
++		})
++	}
++
++	t.Run("all byte insertions and replacements", func(t *testing.T) {
++		for _, description := range []string{"member", "2.5.4.31", "prefixChildAlias", "prefixPlainAlias"} {
++			for _, seed := range []string{"MeMbEr", "2.5.4.31", "prefixChildAlias", "prefixPlainAlias"} {
++				for value := range 256 {
++					variation := string([]byte{byte(value)})
++					for offset := range len(seed) + 1 {
++						check(t, seed[:offset]+variation+seed[offset:], description)
++						if offset < len(seed) {
++							check(t, seed[:offset]+variation+seed[offset+1:], description)
++						}
++					}
++				}
++			}
++		}
++	})
++}
++
++func TestCompareEntryAttributeWithDNPrefixNamesOracle(t *testing.T) {
++	registry := dnPrefixNamesTestRegistry(t)
++	base := dnPrefixTestEntry(32, false)
++	member := base.Attributes[0]
++	base.Attributes = []directory.Attribute{
++		{Description: "objectClass", Values: byteValues("top", "groupOfNames")},
++		{Description: "cn", Values: byteValues("group")},
++		{Description: "creatorsName", Values: byteValues("cn=creator,dc=example")},
++		{Description: "createTimestamp", Values: byteValues("20260930000000Z")},
++		member,
++		{Description: "modifiersName", Values: byteValues("cn=modifier,dc=example")},
++		{Description: "modifyTimestamp", Values: byteValues("20260930010000Z")},
++		{Description: "entryUUID", Values: byteValues("11111111-1111-4111-8111-111111111111")},
++		{Description: "entryCSN", Values: byteValues("20260930010000.000000Z#000000#000#000000")},
++		{Description: "structuralObjectClass", Values: byteValues("groupOfNames")},
++	}
++	first := member.Values[0]
++	last := member.Values[len(member.Values)-1]
++	missing := []byte("cn=missing,dc=example")
++	warm := checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", first, nil)
++	if warm == nil {
++		t.Fatal("unselected camel-case operational attributes prevented prefix qualification")
++	}
++	t.Run("operational attributes remain unselected", func(t *testing.T) {
++		for _, previous := range []*DNComparisonPrefix{nil, warm} {
++			for _, assertion := range [][]byte{first, last, missing} {
++				if next := checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", assertion, previous); next == nil {
++					t.Fatal("single exact member did not return a prefix")
++				}
++			}
++			checkCompareEntryAttributeWithDNPrefix(t, registry, base, "member", []byte("bad-dn"), previous)
++		}
++	})
++
++	for _, description := range []string{
++		"member", "MEMBER", "2.5.4.31", "prefixMemberAlias", "prefixDuplicateMember",
++		"member;lang-en", "member;;", " member ", "\u00a0member\u2003", "\u212aMember",
++		"prefixNameChild", "prefixChildAlias", "1.2.3.871", "prefixNameGrandchild;binary",
++		strings.Repeat("N", 129),
++	} {
++		t.Run("later selected/"+description, func(t *testing.T) {
++			if !registry.AttributeDescriptionSubtype(description, "member") {
++				t.Fatalf("later attribute %q must be selected by the oracle", description)
++			}
++			for _, fixture := range []struct {
++				name   string
++				values [][]byte
++			}{
++				{"empty", nil},
++				{"match before error", byteValues("cn=added,dc=example", "bad-dn")},
++				{"error before match", byteValues("bad-dn", "cn=added,dc=example")},
++			} {
++				t.Run(fixture.name, func(t *testing.T) {
++					entry := base.Clone()
++					entry.Attributes = append(entry.Attributes, directory.Attribute{Description: description, Values: fixture.values})
++					for _, previous := range []*DNComparisonPrefix{nil, warm} {
++						// Qualification must scan past the first matching member even
++						// though comparison still stops before later invalid values.
++						for _, assertion := range [][]byte{first, last, []byte("cn=added,dc=example"), missing, []byte("bad-dn")} {
++							if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "member", assertion, previous); next != nil {
++								t.Fatal("later selected attribute failed to discard the prefix and use the full comparator")
++							}
++						}
++					}
++				})
++			}
++		})
++	}
++
++	t.Run("fallback preserves original requested alias", func(t *testing.T) {
++		entry := base.Clone()
++		entry.Attributes[4].Description = "prefixPlainAlias"
++		warm := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "prefixPlainAlias", first, nil)
++		if warm == nil {
++			t.Fatal("option-free alias did not qualify for a prefix")
++		}
++		entry.Attributes = append(entry.Attributes, directory.Attribute{Description: "prefixPlainAlias;binary", Values: byteValues("bad-dn")})
++		for _, previous := range []*DNComparisonPrefix{nil, warm} {
++			for _, assertion := range [][]byte{first, missing} {
++				if next := checkCompareEntryAttributeWithDNPrefix(t, registry, entry, "prefixPlainAlias", assertion, previous); next != nil {
++					t.Fatal("fallback substituted the primary name for the original requested alias")
++				}
++			}
++		}
++	})
++}
+diff --git a/internal/server/compare_dn_prefix_cache.go b/internal/server/compare_dn_prefix_cache.go
+new file mode 100644
+index 0000000..c80ef6a
+--- /dev/null
++++ b/internal/server/compare_dn_prefix_cache.go
+@@ -0,0 +1,174 @@
++package server
++
++import (
++	"bytes"
++	"strings"
++	"sync"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++	"github.com/wangle201210/ldap-go/internal/schema"
++)
++
++const (
++	compareDNPrefixMaxRecords = 64
++	compareDNPrefixMaxBytes   = 8 << 20
++	compareDNPrefixMetadata   = 64 << 10
++	compareDNPrefixReserve    = 1 << 20
++	compareDNPrefixMaxToken   = 256 << 10
++	compareDNPrefixMaxDN      = 1024
++	compareDNPrefixMinValues  = 32
++)
++
++// Each runtime owns one cache for its schema lifetime. Keys are hints only:
++// schema checks token ownership, generation and each current raw value. This
++// container owns no entries, assertions, comparison results or authorization.
++type compareDNPrefixCache struct {
++	mu       sync.Mutex
++	records  map[compareDNPrefixKey]*compareDNPrefixRecord
++	live     int // Includes fixed metadata and retired records with borrowers.
++	reserved int
++}
++
++type compareDNPrefixKey struct {
++	dn          string
++	description string
++}
++
++type compareDNPrefixRecord struct {
++	token *schema.DNComparisonPrefix
++	cost  int
++	refs  int // One map owner, if present, plus active callers.
++}
++
++// A lease is local to one call and must not be copied after acquisition.
++type compareDNPrefixLease struct {
++	record   *compareDNPrefixRecord
++	reserved int
++}
++
++func newCompareDNPrefixCache() *compareDNPrefixCache {
++	return &compareDNPrefixCache{
++		records: make(map[compareDNPrefixKey]*compareDNPrefixRecord, compareDNPrefixMaxRecords),
++		live:    compareDNPrefixMetadata,
++	}
++}
++
++func (cache *compareDNPrefixCache) compare(registry *schema.Registry, entry directory.Entry, description string, assertion []byte) (bool, bool, error) {
++	if cache == nil || !compareDNPrefixEligible(entry, description) {
++		return registry.CompareEntryAttributeCachedDN(entry, description, assertion)
++	}
++	// Raw equality only selects the original comparator; it never proves a
++	// match. This keeps its cheap first-value path and all earlier errors.
++	for _, attribute := range entry.Attributes {
++		if attribute.Description == "member" {
++			if len(attribute.Values) > 0 && bytes.Equal(attribute.Values[0], assertion) {
++				return registry.CompareEntryAttributeCachedDN(entry, description, assertion)
++			}
++			break
++		}
++	}
++	key := compareDNPrefixKey{dn: entry.DN, description: description}
++	lease, ok := cache.acquire(key)
++	if !ok {
++		return registry.CompareEntryAttributeCachedDN(entry, description, assertion)
++	}
++	defer cache.release(&lease)
++
++	var previous *schema.DNComparisonPrefix
++	if lease.record != nil {
++		previous = lease.record.token
++	}
++	present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, description, assertion, previous)
++	cache.publish(key, &lease, next)
++	return present, matched, err
++}
++
++func compareDNPrefixEligible(entry directory.Entry, description string) bool {
++	if description != "member" || entry.DN == "" || len(entry.DN) > compareDNPrefixMaxDN {
++		return false
++	}
++	for _, attribute := range entry.Attributes {
++		if attribute.Description == "member" && len(attribute.Values) >= compareDNPrefixMinValues {
++			return true
++		}
++	}
++	return false
++}
++
++func (cache *compareDNPrefixCache) acquire(key compareDNPrefixKey) (compareDNPrefixLease, bool) {
++	cache.mu.Lock()
++	defer cache.mu.Unlock()
++	lease := compareDNPrefixLease{record: cache.records[key]}
++	if lease.record != nil {
++		lease.record.refs++
++	}
++	for key, record := range cache.records {
++		if cache.live+cache.reserved+compareDNPrefixReserve <= compareDNPrefixMaxBytes {
++			break
++		}
++		// Pin the acquired record before eviction; borrowed tokens remain live.
++		if record.refs == 1 {
++			delete(cache.records, key)
++			cache.drop(record)
++		}
++	}
++	if cache.live+cache.reserved+compareDNPrefixReserve > compareDNPrefixMaxBytes {
++		cache.drop(lease.record)
++		return compareDNPrefixLease{}, false
++	}
++	lease.reserved = compareDNPrefixReserve
++	cache.reserved += lease.reserved
++	return lease, true
++}
++
++func (cache *compareDNPrefixCache) publish(key compareDNPrefixKey, lease *compareDNPrefixLease, next *schema.DNComparisonPrefix) {
++	if next == nil {
++		return
++	}
++	retained := next.RetainedBytes()
++	if retained <= 0 || retained > compareDNPrefixMaxToken {
++		return
++	}
++	cache.mu.Lock()
++	defer cache.mu.Unlock()
++	if cache.records[key] != lease.record || lease.record != nil && lease.record.token == next {
++		return
++	}
++	if lease.record == nil && len(cache.records) >= compareDNPrefixMaxRecords {
++		return
++	}
++	cost := retained + 512 + 4*(len(key.dn)+len(key.description))
++	if cost > lease.reserved {
++		return
++	}
++	key = compareDNPrefixKey{dn: strings.Clone(key.dn), description: strings.Clone(key.description)}
++	record := &compareDNPrefixRecord{token: next, cost: cost, refs: 1}
++	cache.records[key] = record
++	// Convert the construction reservation, retaining the remainder until the
++	// caller returns. Replaced records stay charged until their last release.
++	cache.reserved -= cost
++	lease.reserved -= cost
++	cache.live += cost
++	cache.drop(lease.record)
++}
++
++func (cache *compareDNPrefixCache) release(lease *compareDNPrefixLease) {
++	cache.mu.Lock()
++	defer cache.mu.Unlock()
++	cache.reserved -= lease.reserved
++	lease.reserved = 0
++	cache.drop(lease.record)
++	lease.record = nil
++}
++
++// drop removes one ownership reference while holding cache.mu.
++func (cache *compareDNPrefixCache) drop(record *compareDNPrefixRecord) {
++	if record == nil {
++		return
++	}
++	record.refs--
++	if record.refs == 0 {
++		cache.live -= record.cost
++		record.token = nil
++	}
++}
+diff --git a/internal/server/compare_dn_prefix_cache_test.go b/internal/server/compare_dn_prefix_cache_test.go
+new file mode 100644
+index 0000000..b1e9d16
+--- /dev/null
++++ b/internal/server/compare_dn_prefix_cache_test.go
+@@ -0,0 +1,563 @@
++package server
++
++import (
++	"bytes"
++	"fmt"
++	"reflect"
++	"slices"
++	"strings"
++	"sync"
++	"testing"
++	"unsafe"
++
++	"github.com/wangle201210/ldap-go/internal/directory"
++	"github.com/wangle201210/ldap-go/internal/schema"
++)
++
++func compareDNPrefixTestRegistry(t *testing.T) *schema.Registry {
++	t.Helper()
++	registry, err := schema.NewBuiltinRegistry()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return registry
++}
++
++func compareDNPrefixTestEntry(count int) directory.Entry {
++	values := make([][]byte, count)
++	for i := range values {
++		values[i] = fmt.Appendf(nil, "cn=User%04d,ou=People,dc=example", i)
++	}
++	return directory.Entry{DN: "cn=group,dc=example", Attributes: []directory.Attribute{{Description: "member", Values: values}}}
++}
++
++func checkCompareDNPrefixQuery(t *testing.T, cache *compareDNPrefixCache, registry *schema.Registry, entry directory.Entry, description string, assertion []byte) {
++	t.Helper()
++	before, assertionBefore := entry.Clone(), bytes.Clone(assertion)
++	wantPresent, wantMatched, wantErr := registry.CompareEntryAttributeCachedDN(entry, description, assertion)
++	present, matched, err := cache.compare(registry, entry, description, assertion)
++	if present != wantPresent || matched != wantMatched || !reflect.DeepEqual(err, wantErr) {
++		t.Fatalf("%s=%q: got (%v,%v,%v), want (%v,%v,%v)", description, assertion, present, matched, err, wantPresent, wantMatched, wantErr)
++	}
++	// Clone may turn a nil attribute slice into an empty slice.
++	if !reflect.DeepEqual(entry.Clone(), before) || !bytes.Equal(assertion, assertionBefore) {
++		t.Fatal("comparison mutated caller input")
++	}
++}
++
++// Include every outstanding lease, so retired records cannot disappear from
++// the accounting oracle merely because they are no longer in the map.
++func checkCompareDNPrefixAccounting(t *testing.T, cache *compareDNPrefixCache, leases ...*compareDNPrefixLease) {
++	t.Helper()
++	cache.mu.Lock()
++	defer cache.mu.Unlock()
++	refs := make(map[*compareDNPrefixRecord]int)
++	for key, record := range cache.records {
++		refs[record]++
++		wantCost := record.token.RetainedBytes() + 512 + 4*(len(key.dn)+len(key.description))
++		if record.cost != wantCost {
++			t.Fatalf("record cost=%d, want %d", record.cost, wantCost)
++		}
++	}
++	reserved := 0
++	for _, lease := range leases {
++		reserved += lease.reserved
++		if lease.reserved < 0 || lease.reserved > compareDNPrefixReserve {
++			t.Fatalf("invalid lease reservation: %d", lease.reserved)
++		}
++		if lease.record != nil {
++			refs[lease.record]++
++		}
++	}
++	live := compareDNPrefixMetadata
++	for record, wantRefs := range refs {
++		if record.refs != wantRefs || record.token == nil || record.token.RetainedBytes() <= 0 || record.token.RetainedBytes() > compareDNPrefixMaxToken {
++			t.Fatalf("invalid live record: refs=%d, want %d, retained=%d", record.refs, wantRefs, record.token.RetainedBytes())
++		}
++		live += record.cost
++	}
++	if cache.live != live || cache.reserved != reserved || live+reserved > compareDNPrefixMaxBytes || len(cache.records) > compareDNPrefixMaxRecords {
++		t.Fatalf("accounting live=%d/%d reserved=%d/%d records=%d", cache.live, live, cache.reserved, reserved, len(cache.records))
++	}
++}
++
++func acquireCompareDNPrefixForTest(t *testing.T, cache *compareDNPrefixCache, key compareDNPrefixKey) *compareDNPrefixLease {
++	t.Helper()
++	lease, ok := cache.acquire(key)
++	if !ok {
++		t.Fatal("unexpected reservation rejection")
++	}
++	t.Cleanup(func() { cache.release(&lease) })
++	return &lease
++}
++
++func TestCompareDNPrefixCacheFallback(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	base := compareDNPrefixTestEntry(32)
++	checkCompareDNPrefixQuery(t, nil, registry, base, "member", base.Attributes[0].Values[0])
++	for _, tc := range []struct {
++		name, description string
++		change            func(*directory.Entry)
++	}{
++		{"empty description", "", nil},
++		{"other description", "cn", nil},
++		{"case alias", "MEMBER", nil},
++		{"OID alias", "2.5.4.31", nil},
++		{"option", "member;lang-en", nil},
++		{"empty DN", "member", func(e *directory.Entry) { e.DN = "" }},
++		{"long DN", "member", func(e *directory.Entry) { e.DN = strings.Repeat("x", 1025) }},
++		{"absent", "member", func(e *directory.Entry) { e.Attributes = nil }},
++		{"empty values", "member", func(e *directory.Entry) { e.Attributes[0].Values = nil }},
++		{"31 values", "member", func(e *directory.Entry) { e.Attributes[0].Values = e.Attributes[0].Values[:31] }},
++		{"stored alias", "member", func(e *directory.Entry) { e.Attributes[0].Description = "MEMBER" }},
++		{"stored option", "member", func(e *directory.Entry) { e.Attributes[0].Description = "member;lang-en" }},
++		{"other attribute large", "member", func(e *directory.Entry) {
++			e.Attributes = append(e.Attributes, directory.Attribute{Description: "cn", Values: e.Attributes[0].Values})
++			e.Attributes[0].Values = e.Attributes[0].Values[:31]
++		}},
++		{"split values", "member", func(e *directory.Entry) {
++			e.Attributes = append(e.Attributes, directory.Attribute{Description: "member", Values: e.Attributes[0].Values[16:]})
++			e.Attributes[0].Values = e.Attributes[0].Values[:16]
++		}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			cache := newCompareDNPrefixCache()
++			checkCompareDNPrefixQuery(t, cache, registry, base, "member", []byte("cn=missing"))
++			key := compareDNPrefixKey{base.DN, "member"}
++			owner := cache.records[key]
++			var leases []*compareDNPrefixLease
++			for range 7 {
++				leases = append(leases, acquireCompareDNPrefixForTest(t, cache, compareDNPrefixKey{dn: "unpublished"}))
++			}
++			entry := base.Clone()
++			if tc.change != nil {
++				tc.change(&entry)
++			}
++			for _, assertion := range [][]byte{base.Attributes[0].Values[0], []byte("cn=missing"), []byte("bad-dn")} {
++				checkCompareDNPrefixQuery(t, cache, registry, entry, tc.description, assertion)
++			}
++			// An attempted reservation here would evict the unborrowed owner.
++			if cache.records[key] != owner || len(cache.records) != 1 {
++				t.Fatal("fallback touched the prefix container")
++			}
++			checkCompareDNPrefixAccounting(t, cache, leases...)
++		})
++	}
++	cache := newCompareDNPrefixCache()
++	base.DN = "cn=" + strings.Repeat("x", 1021)
++	checkCompareDNPrefixQuery(t, cache, registry, base, "member", []byte("CN=User0000,ou=People,dc=example"))
++	if len(cache.records) != 1 {
++		t.Fatal("1024-byte DN should qualify")
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheRawIdenticalFirst(t *testing.T) {
++	baseRegistry := compareDNPrefixTestRegistry(t)
++	if err := baseRegistry.RegisterAttributeType(schema.AttributeType{
++		OID: "1.2.3.863", Names: []string{"prefixGuardChild"}, Superior: "member",
++	}); err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		name, first, earlier, equality string
++		malformedLater, wantErr        bool
++	}{
++		{name: "exact first"},
++		{name: "match before malformed later value", malformedLater: true},
++		{name: "unrelated attribute before literal member", earlier: "description"},
++		{name: "malformed identical value and assertion", first: "bad-dn", wantErr: true},
++		{name: "malformed earlier subtype", earlier: "prefixGuardChild", wantErr: true},
++		{name: "malformed earlier option", earlier: "member;lang-en", wantErr: true},
++		{name: "malformed earlier subtype with option", earlier: "prefixGuardChild;lang-en", wantErr: true},
++		{name: "member rule accepts non-DN", first: "bad-dn", equality: "caseExactMatch"},
++		{name: "member rule rejects identical DN", equality: "integerMatch", wantErr: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			registry := baseRegistry.Clone()
++			if tc.equality != "" {
++				member, _ := registry.AttributeType("member")
++				member.Equality = tc.equality
++				if err := registry.UpsertAttributeType(member); err != nil {
++					t.Fatal(err)
++				}
++			}
++			entry := compareDNPrefixTestEntry(32)
++			if tc.first != "" {
++				entry.Attributes[0].Values[0] = []byte(tc.first)
++			}
++			if tc.malformedLater {
++				entry.Attributes[0].Values[1] = []byte("bad-dn")
++			}
++			assertion := bytes.Clone(entry.Attributes[0].Values[0])
++			if tc.earlier != "" {
++				entry.Attributes = append([]directory.Attribute{{
++					Description: tc.earlier, Values: [][]byte{[]byte("bad-dn")},
++				}}, entry.Attributes...)
++			}
++			if !compareDNPrefixEligible(entry, "member") {
++				t.Fatal("fixture must qualify for the prefix cache before the raw-identical guard")
++			}
++			present, matched, err := registry.CompareEntryAttributeCachedDN(entry, "member", assertion)
++			if !present || matched != !tc.wantErr || (err != nil) != tc.wantErr {
++				t.Fatalf("original comparator returned (%v,%v,%v), want present=true, matched=%v, error=%v", present, matched, err, !tc.wantErr, tc.wantErr)
++			}
++			cache := newCompareDNPrefixCache()
++			checkCompareDNPrefixQuery(t, cache, registry, entry, "member", assertion)
++			if len(cache.records) != 0 {
++				t.Fatal("raw-identical first value populated the prefix cache")
++			}
++			checkCompareDNPrefixAccounting(t, cache)
++
++			other := compareDNPrefixTestEntry(32)
++			other.DN = "cn=other,dc=example"
++			checkCompareDNPrefixQuery(t, cache, baseRegistry, other, "member", []byte("cn=missing"))
++			key := compareDNPrefixKey{other.DN, "member"}
++			owner := cache.records[key]
++			if owner == nil {
++				t.Fatal("reservation-pressure fixture did not publish a token")
++			}
++			var leases []*compareDNPrefixLease
++			for range 7 {
++				leases = append(leases, acquireCompareDNPrefixForTest(t, cache, compareDNPrefixKey{dn: "unpublished"}))
++			}
++			// Even an unsuccessful acquisition would evict the unrelated owner.
++			checkCompareDNPrefixQuery(t, cache, registry, entry, "member", assertion)
++			if cache.records[key] != owner || len(cache.records) != 1 {
++				t.Fatal("raw-identical first value acquired the prefix cache")
++			}
++			checkCompareDNPrefixAccounting(t, cache, leases...)
++		})
++	}
++}
++
++func TestCompareDNPrefixCacheQueryChanges(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	cache := newCompareDNPrefixCache()
++	entry := compareDNPrefixTestEntry(32)
++	for range len(entry.Attributes[0].Values) {
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	}
++	old := bytes.Clone(entry.Attributes[0].Values[0])
++	copy(entry.Attributes[0].Values[0][3:7], "Else")
++	for _, assertion := range [][]byte{old, entry.Attributes[0].Values[0], entry.Attributes[0].Values[31], []byte("cn=missing"), []byte("bad-dn")} {
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", assertion)
++	}
++	slices.Reverse(entry.Attributes[0].Values)
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", old)
++	for _, values := range [][][]byte{
++		{[]byte("bad-dn"), []byte("cn=target")},
++		{[]byte("cn=target"), []byte("bad-dn")},
++	} {
++		copy(entry.Attributes[0].Values, values)
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=target"))
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	}
++	entry = compareDNPrefixTestEntry(32)
++	entry.Attributes = append(entry.Attributes, directory.Attribute{Description: "member;lang-en", Values: [][]byte{[]byte("bad-dn")}})
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	entry.Attributes = entry.Attributes[:1]
++	entry.Attributes[0].Values = entry.Attributes[0].Values[:31]
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	entry.Attributes[0].Values = nil
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("bad-dn"))
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheRegistryChecks(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	cache := newCompareDNPrefixCache()
++	entry := compareDNPrefixTestEntry(32)
++	assertion := []byte("cn=user0000,ou=People,dc=example")
++	attribute, _ := registry.AttributeType("cn")
++	for _, rule := range []string{"caseIgnoreMatch", "caseExactMatch", "caseIgnoreMatch"} {
++		attribute.Equality = rule
++		if err := registry.UpsertAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", assertion)
++	}
++	left, right := registry.Clone(), registry.Clone()
++	for i, other := range []*schema.Registry{left, right} {
++		attribute.Equality = []string{"caseExactMatch", "caseIgnoreMatch"}[i]
++		if err := other.UpsertAttributeType(attribute); err != nil {
++			t.Fatal(err)
++		}
++	}
++	// Equal mutation counts with different Registry owners and naming rules.
++	for _, other := range []*schema.Registry{left, right, left, right} {
++		checkCompareDNPrefixQuery(t, cache, other, entry, "member", assertion)
++	}
++	member, _ := registry.AttributeType("member")
++	member.Equality = "caseExactMatch"
++	if err := registry.UpsertAttributeType(member); err != nil {
++		t.Fatal(err)
++	}
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", assertion)
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheGrowthAndOwnedKeys(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	entry := compareDNPrefixTestEntry(40)
++	backing := strings.Repeat("x", 1<<20) + entry.DN + "member"
++	entry.DN = backing[1<<20 : len(backing)-len("member")]
++	description := backing[len(backing)-len("member"):]
++	full, early := newCompareDNPrefixCache(), newCompareDNPrefixCache()
++	key := compareDNPrefixKey{entry.DN, description}
++	for pass := range len(entry.Attributes[0].Values) {
++		checkCompareDNPrefixQuery(t, full, registry, entry, description, []byte("cn=missing"))
++		// Equivalent DN spelling still exercises prefix growth on the first value.
++		assertion := bytes.Clone(entry.Attributes[0].Values[pass])
++		assertion[0], assertion[1] = 'C', 'N'
++		checkCompareDNPrefixQuery(t, early, registry, entry, description, assertion)
++		fullRecord, earlyRecord := full.records[key], early.records[key]
++		if fullRecord == nil || earlyRecord == nil {
++			t.Fatal("equivalent non-identical assertion did not publish a prefix")
++		}
++		if fullRecord.token.RetainedBytes() != earlyRecord.token.RetainedBytes() {
++			t.Fatal("one call extended beyond one new value")
++		}
++		checkCompareDNPrefixAccounting(t, full)
++		checkCompareDNPrefixAccounting(t, early)
++	}
++	owner, live := full.records[key], full.live
++	checkCompareDNPrefixQuery(t, full, registry, entry, description, []byte("cn=missing"))
++	if full.records[key] != owner || full.live != live {
++		t.Fatal("unchanged token created another owner or charge")
++	}
++	for stored := range full.records {
++		if unsafe.StringData(stored.dn) == unsafe.StringData(entry.DN) || unsafe.StringData(stored.description) == unsafe.StringData(description) {
++			t.Fatal("key retains caller string backing storage")
++		}
++	}
++	checkCompareDNPrefixAccounting(t, full)
++}
++
++func TestCompareDNPrefixCacheReservationLimit(t *testing.T) {
++	cache := newCompareDNPrefixCache()
++	var leases []*compareDNPrefixLease
++	for range 7 {
++		leases = append(leases, acquireCompareDNPrefixForTest(t, cache, compareDNPrefixKey{}))
++		checkCompareDNPrefixAccounting(t, cache, leases...)
++	}
++	if _, ok := cache.acquire(compareDNPrefixKey{}); ok {
++		t.Fatal("metadata plus eight reservations exceeds 8 MiB")
++	}
++	entry := compareDNPrefixTestEntry(32)
++	registry := compareDNPrefixTestRegistry(t)
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", entry.Attributes[0].Values[31])
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("bad-dn"))
++	checkCompareDNPrefixAccounting(t, cache, leases...)
++	for _, lease := range leases {
++		cache.release(lease)
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	if len(cache.records) != 1 {
++		t.Fatal("reservation rejection prevented later publication")
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheReplacementAndRetirement(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	entry := compareDNPrefixTestEntry(32)
++	cache := newCompareDNPrefixCache()
++	key := compareDNPrefixKey{entry.DN, "member"}
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	slow := acquireCompareDNPrefixForTest(t, cache, key)
++	fast := acquireCompareDNPrefixForTest(t, cache, key)
++	old := slow.record
++	oldBytes := old.token.RetainedBytes()
++	checkCompareDNPrefixAccounting(t, cache, slow, fast)
++	present, matched, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", []byte("cn=missing"), fast.record.token)
++	if !present || matched || err != nil || next == nil || next == old.token {
++		t.Fatalf("extension failed: (%v,%v,%v)", present, matched, err)
++	}
++	before := cache.live + cache.reserved
++	cache.publish(key, fast, next)
++	current := cache.records[key]
++	if current == old || cache.live+cache.reserved != before || fast.reserved != compareDNPrefixReserve-current.cost {
++		t.Fatal("publication did not convert its reservation exactly once")
++	}
++	checkCompareDNPrefixAccounting(t, cache, slow, fast)
++	changed := entry.Clone()
++	changed.Attributes[0].Values[0] = []byte("cn=replaced")
++	present, matched, shorter, err := registry.CompareEntryAttributeWithDNPrefix(changed, "member", changed.Attributes[0].Values[0], slow.record.token)
++	if !present || !matched || err != nil || shorter == nil || shorter.RetainedBytes() >= next.RetainedBytes() {
++		t.Fatalf("short branch failed: (%v,%v,%v)", present, matched, err)
++	}
++	cache.publish(key, slow, shorter)
++	if cache.records[key] != current || slow.reserved != compareDNPrefixReserve {
++		t.Fatal("stale borrower overwrote the newer publication")
++	}
++	cache.release(fast)
++	checkCompareDNPrefixAccounting(t, cache, slow)
++	if old.refs != 1 || old.token.RetainedBytes() != oldBytes {
++		t.Fatal("replacement lost or mutated a borrowed old token")
++	}
++	// Seven reservations leave no room for an eighth even after evicting the
++	// new owner. The retired old record must remain charged and usable.
++	leases := []*compareDNPrefixLease{slow}
++	for range 6 {
++		leases = append(leases, acquireCompareDNPrefixForTest(t, cache, compareDNPrefixKey{}))
++	}
++	if _, ok := cache.acquire(key); ok {
++		t.Fatal("budget admitted an eighth reservation")
++	}
++	// acquire(key) pins current, so pressure cannot evict it.
++	if cache.records[key] != current || current.refs != 1 {
++		t.Fatal("failed acquisition changed the current owner")
++	}
++	if _, ok := cache.acquire(compareDNPrefixKey{dn: "missing"}); ok {
++		t.Fatal("eviction incorrectly released a borrowed retired token")
++	}
++	if len(cache.records) != 0 || cache.live != compareDNPrefixMetadata+old.cost || old.token == nil {
++		t.Fatal("eviction hid retired live memory")
++	}
++	checkCompareDNPrefixAccounting(t, cache, leases...)
++	present, matched, _, err = registry.CompareEntryAttributeWithDNPrefix(entry, "member", entry.Attributes[0].Values[0], old.token)
++	if !present || !matched || err != nil || old.token.RetainedBytes() != oldBytes {
++		t.Fatal("retired token is not usable by its remaining borrower")
++	}
++	for _, lease := range leases {
++		cache.release(lease)
++	}
++	if old.refs != 0 || old.token != nil {
++		t.Fatal("last release retained the retired token")
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheColdPublicationAndRecordLimit(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	entry := compareDNPrefixTestEntry(32)
++	cache := newCompareDNPrefixCache()
++	key := compareDNPrefixKey{entry.DN, "member"}
++	slow := acquireCompareDNPrefixForTest(t, cache, key)
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	owner := cache.records[key]
++	_, _, next, err := registry.CompareEntryAttributeWithDNPrefix(entry, "member", entry.Attributes[0].Values[0], nil)
++	if err != nil || next == nil {
++		t.Fatal("cold branch failed")
++	}
++	cache.publish(key, slow, next)
++	if cache.records[key] != owner {
++		t.Fatal("cold loser replaced the first publication")
++	}
++	checkCompareDNPrefixAccounting(t, cache, slow)
++	cache.release(slow)
++	for i := range 64 {
++		entry.DN = fmt.Sprintf("cn=group%d,dc=example", i)
++		checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++		checkCompareDNPrefixAccounting(t, cache)
++	}
++	if len(cache.records) != 64 || cache.records[compareDNPrefixKey{entry.DN, "member"}] != nil {
++		t.Fatal("record limit did not reject the 65th key")
++	}
++	entry.DN = key.dn
++	checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++	if cache.records[key] == owner {
++		t.Fatal("full map prevented replacement of an existing record")
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
++
++func TestCompareDNPrefixCacheLiveBudgetEviction(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	entry := compareDNPrefixTestEntry(128)
++	for i := range entry.Attributes[0].Values {
++		entry.Attributes[0].Values[i] = fmt.Appendf(nil, "cn=%04d%s,dc=example", i, strings.Repeat("x", 970))
++	}
++	cache := newCompareDNPrefixCache()
++	for i := range 40 {
++		entry.DN = fmt.Sprintf("cn=large%d,dc=example", i)
++		key := compareDNPrefixKey{entry.DN, "member"}
++		for pass := range len(entry.Attributes[0].Values) + 1 {
++			previous := cache.records[key]
++			checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++			checkCompareDNPrefixAccounting(t, cache)
++			if cache.records[key] == nil {
++				t.Fatal("warming did not publish a token")
++			}
++			if cache.records[key] == previous {
++				break
++			}
++			if pass == len(entry.Attributes[0].Values) {
++				t.Fatal("prefix did not stop growing")
++			}
++		}
++	}
++	if len(cache.records) >= 40 || cache.live < 4<<20 {
++		t.Fatalf("fixture did not exercise live-budget eviction: records=%d live=%d", len(cache.records), cache.live)
++	}
++}
++
++func TestCompareDNPrefixCachePanicReleases(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	entry := compareDNPrefixTestEntry(32)
++	for _, warm := range []bool{false, true} {
++		t.Run(fmt.Sprintf("warm=%t", warm), func(t *testing.T) {
++			cache := newCompareDNPrefixCache()
++			if warm {
++				checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++			}
++			before := cache.live
++			for range 3 {
++				func() {
++					defer func() {
++						if recover() == nil {
++							t.Error("nil registry did not panic")
++						}
++					}()
++					cache.compare(nil, entry, "member", []byte("cn=missing"))
++				}()
++				if cache.live != before {
++					t.Fatal("panic changed retained ownership")
++				}
++				checkCompareDNPrefixAccounting(t, cache)
++			}
++			checkCompareDNPrefixQuery(t, cache, registry, entry, "member", []byte("cn=missing"))
++			checkCompareDNPrefixAccounting(t, cache)
++		})
++	}
++}
++
++func TestCompareDNPrefixCacheConcurrentQueries(t *testing.T) {
++	registry := compareDNPrefixTestRegistry(t)
++	cache := newCompareDNPrefixCache()
++	start := make(chan struct{})
++	failures := make(chan error, 16)
++	var workers sync.WaitGroup
++	for worker := range 16 {
++		workers.Go(func() {
++			entry := compareDNPrefixTestEntry(64)
++			entry.Attributes[0].Values[0] = fmt.Appendf(nil, "cn=worker%d,dc=example", worker)
++			<-start
++			for round := range 24 {
++				assertion := [][]byte{entry.Attributes[0].Values[0], entry.Attributes[0].Values[63], []byte("cn=missing"), []byte("bad-dn")}[round%4]
++				wantPresent, wantMatched, wantErr := registry.CompareEntryAttributeCachedDN(entry, "member", assertion)
++				present, matched, err := cache.compare(registry, entry, "member", assertion)
++				if present != wantPresent || matched != wantMatched || !reflect.DeepEqual(err, wantErr) {
++					failures <- fmt.Errorf("worker %d round %d: got (%v,%v,%v), want (%v,%v,%v)", worker, round, present, matched, err, wantPresent, wantMatched, wantErr)
++					return
++				}
++				cache.mu.Lock()
++				bounded := cache.live >= compareDNPrefixMetadata && cache.reserved >= 0 && cache.live+cache.reserved <= compareDNPrefixMaxBytes && len(cache.records) <= compareDNPrefixMaxRecords
++				cache.mu.Unlock()
++				if !bounded {
++					failures <- fmt.Errorf("worker %d observed an invalid budget", worker)
++					return
++				}
++			}
++		})
++	}
++	close(start)
++	workers.Wait()
++	close(failures)
++	for err := range failures {
++		t.Error(err)
++	}
++	checkCompareDNPrefixAccounting(t, cache)
++}
+diff --git a/internal/server/compare_dn_prefix_integration_test.go b/internal/server/compare_dn_prefix_integration_test.go
+new file mode 100644
+index 0000000..22d8ad5
+--- /dev/null
++++ b/internal/server/compare_dn_prefix_integration_test.go
+@@ -0,0 +1,250 @@
++package server
++
++import (
++	"bytes"
++	"testing"
++
++	ber "github.com/go-asn1-ber/asn1-ber"
++	ldap "github.com/go-ldap/ldap/v3"
++	"github.com/wangle201210/ldap-go/internal/directory"
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/storage"
++)
++
++func TestCompareDNPrefixHandlerIntegration(t *testing.T) {
++	for _, backend := range []string{"bolt", "memory"} {
++		t.Run(backend, func(t *testing.T) {
++			server, state := newSmallIndexedFixture(t, 0)
++			if backend == "memory" {
++				memory := storage.NewMemory()
++				t.Cleanup(func() { _ = memory.Close() })
++				if err := memory.Update(t.Context(), func(writer storage.Writer) error {
++					return server.config.Store.View(t.Context(), func(reader storage.Reader) error {
++						contexts, err := reader.NamingContexts()
++						if err != nil {
++							return err
++						}
++						if err := writer.SetNamingContexts(contexts); err != nil {
++							return err
++						}
++						return reader.ForEachPartition(func(partition string, entry directory.Entry) error {
++							return writer.PutIn(partition, entry.WithoutDNIdentity(), false)
++						})
++					})
++				}); err != nil {
++					t.Fatal(err)
++				}
++				var err error
++				server, err = New(Config{Store: memory, Schema: server.baseSchema,
++					RootDN: smallIndexedRootDN, RootPassword: []byte("secret")})
++				if err != nil {
++					t.Fatal(err)
++				}
++				state.runtime = server.runtime.Load()
++			}
++			state.protocolVersion = 3
++			observed := &smallIndexedObservedStore{Store: server.config.Store}
++			server.config.Store = observed
++			var trace string
++			observed.beforeView = func() { trace += "view;" }
++			observed.afterView = func() error {
++				trace += "return;"
++				return nil
++			}
++
++			group := defaultProjectionBenchmarkEntry(true) // Existing group1000 fixture.
++			members := group.Values("member")
++			members[0] = []byte("uid=Alice," + smallIndexedPeopleDN)
++			group.ReplaceValues("member", members)
++			smallIndexedPut(t, server, state, group, false)
++			check := func(label, attribute string, assertion []byte, want ldapwire.ResultCode, controls ...ldapwire.Control) {
++				t.Helper()
++				cache := state.runtime.compareDNPrefixes
++				if cache == nil {
++					t.Fatal("runtime did not initialize the prefix cache")
++				}
++				defer func() { state.runtime.compareDNPrefixes = cache }()
++				var oracle []byte
++				var oracleTrace string
++				// The old handler path is the complete wire oracle; repeat with the
++				// same cache across requests and mutations, without inspecting tokens.
++				for _, candidate := range []*compareDNPrefixCache{nil, cache, cache} {
++					state.runtime.compareDNPrefixes = candidate
++					observed.views, observed.updates, trace = 0, 0, ""
++					capture := &smallIndexedCapture{onWrite: func() { trace += "wire;" }}
++					request := ldapwire.CompareRequest{DN: group.DN, Attribute: attribute, Assertion: assertion}
++					message := ldapwire.Message{ID: 17, Request: request, Controls: controls}
++					if err := server.handleCompare(t.Context(), capture, state, message, request); err != nil {
++						t.Fatalf("%s: %v", label, err)
++					}
++					reader := bytes.NewReader(capture.Bytes())
++					packet, err := ber.ReadPacket(reader)
++					if err != nil || reader.Len() != 0 {
++						t.Fatalf("%s: BER error=%v, trailing bytes=%d", label, err, reader.Len())
++					}
++					result, err := parseSyncConsumerLDAPResult(packet, message.ID, ldapwire.ApplicationCompareResponse)
++					if err != nil || result.code != uint16(want) {
++						t.Fatalf("%s: result=%+v, error=%v, want=%d", label, result, err, want)
++					}
++					if want == ldapwire.ResultInappropriateMatching && result.diagnosticMessage == "" ||
++						want == ldapwire.ResultNoSuchObject && result.matchedDN == "" ||
++						want == ldapwire.ResultReferral && len(ldapResultReferrals(packet)) == 0 {
++						t.Fatalf("%s: missing diagnostic, matched DN or referrals: %+v", label, result)
++					}
++					if candidate == nil {
++						oracle = bytes.Clone(capture.Bytes())
++						oracleTrace = trace
++					} else if !bytes.Equal(oracle, capture.Bytes()) || trace != oracleTrace {
++						t.Fatalf("%s: wire=%x callbacks=%s, oracle=%x callbacks=%s", label, capture.Bytes(), trace, oracle, oracleTrace)
++					}
++					if observed.views != 1 || observed.updates != 0 {
++						t.Fatalf("%s: views=%d updates=%d callbacks=%s", label, observed.views, observed.updates, trace)
++					}
++				}
++			}
++			missing := []byte("uid=absent," + smallIndexedPeopleDN)
++			warmedCache := state.runtime.compareDNPrefixes
++			if warmedCache == nil {
++				t.Fatal("runtime did not initialize the prefix cache")
++			}
++			// Warm the whole group even when each call extends only one value.
++			// Keep this loop on the handler path; run the wire oracle afterward.
++			warmRequest := ldapwire.CompareRequest{DN: group.DN, Attribute: "member", Assertion: missing}
++			warmMessage := ldapwire.Message{ID: 17, Request: warmRequest}
++			for i := range 1001 {
++				observed.views, observed.updates, trace = 0, 0, ""
++				capture := &smallIndexedCapture{onWrite: func() { trace += "wire;" }}
++				if err := server.handleCompare(t.Context(), capture, state, warmMessage, warmRequest); err != nil {
++					t.Fatalf("warm call %d: %v", i, err)
++				}
++				reader := bytes.NewReader(capture.Bytes())
++				packet, err := ber.ReadPacket(reader)
++				if err != nil || reader.Len() != 0 {
++					t.Fatalf("warm call %d: BER error=%v, trailing bytes=%d", i, err, reader.Len())
++				}
++				result, err := parseSyncConsumerLDAPResult(packet, warmMessage.ID, ldapwire.ApplicationCompareResponse)
++				if err != nil || result.code != uint16(ldapwire.ResultCompareFalse) {
++					t.Fatalf("warm call %d: result=%+v, error=%v", i, result, err)
++				}
++				if observed.views != 1 || observed.updates != 0 || trace != "view;return;wire;" {
++					t.Fatalf("warm call %d: views=%d updates=%d callbacks=%s", i, observed.views, observed.updates, trace)
++				}
++			}
++			check("first", "member", members[0], ldapwire.ResultCompareTrue)
++			check("last", "member", members[len(members)-1], ldapwire.ResultCompareTrue)
++			check("missing", "member", missing, ldapwire.ResultCompareFalse)
++			changed := group.Clone()
++			values := changed.Values("member")
++			values[900] = missing
++			changed.ReplaceValues("member", values)
++			smallIndexedPut(t, server, state, changed, true)
++			check("updated old member at 900", "member", members[900], ldapwire.ResultCompareFalse)
++			check("updated new member", "member", missing, ldapwire.ResultCompareTrue)
++			dn, err := state.runtime.schema.NormalizeDN(group.DN)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if err := observed.Update(t.Context(), func(writer storage.Writer) error {
++				return writerForDatabase(writer, *databaseForNormalizedDN(state.runtime, dn)).Delete(dn)
++			}); err != nil {
++				t.Fatal(err)
++			}
++			check("deleted", "member", missing, ldapwire.ResultNoSuchObject)
++			smallIndexedPut(t, server, state, group, false)
++			check("recreated old member", "member", missing, ldapwire.ResultCompareFalse)
++			check("recreated member at 900", "member", members[900], ldapwire.ResultCompareTrue)
++
++			for _, badIndex := range []int{1, 0} {
++				smallIndexedPut(t, server, state, group, true)
++				check("warm before malformed value", "member", missing, ldapwire.ResultCompareFalse)
++				changed = group.Clone()
++				values = changed.Values("member")
++				values[badIndex] = []byte("not-a-dn")
++				changed.ReplaceValues("member", values)
++				smallIndexedPut(t, server, state, changed, true)
++				want := ldapwire.ResultCompareTrue
++				if badIndex == 0 {
++					want = ldapwire.ResultInappropriateMatching
++				}
++				check("malformed before/after match", "member", members[0], want)
++				check("malformed reached on miss", "member", missing, ldapwire.ResultInappropriateMatching)
++			}
++			filter, err := ldap.CompileFilter("(cn=absent)")
++			if err != nil {
++				t.Fatal(err)
++			}
++			assertion := ldapwire.Control{OID: assertionControlOID, Critical: true, HasValue: true, Value: filter.Bytes()}
++			state.boundDN = ""
++			check("ACL before assertion and malformed member", "member", missing, ldapwire.ResultInsufficientAccessRights, assertion)
++			state.boundDN = smallIndexedRootDN
++			check("assertion before malformed member", "member", missing, ldapwire.ResultAssertionFailed, assertion)
++			changed.ReplaceValues("objectClass", stringValues("referral", "extensibleObject"))
++			changed.ReplaceValues("ref", stringValues("ldap://remote.example/dc=remote,dc=example"))
++			smallIndexedPut(t, server, state, changed, true)
++			check("referral before assertion and member", "member", missing, ldapwire.ResultReferral, assertion)
++			manage := ldapwire.Control{OID: manageDsaITControlOID, Critical: true}
++			state.runtime.access = defaultProjectionPolicy(t, defaultProjectionRules(t,
++				"to attrs=member by * none", "to * by * read"), nil)
++			state.boundDN = ""
++			check("referral before denied compare", "member", missing, ldapwire.ResultReferral, assertion)
++			check("managed referral ACL before assertion", "member", missing, ldapwire.ResultInsufficientAccessRights, manage, assertion)
++			state.boundDN = smallIndexedRootDN
++			check("managed referral assertion", "member", missing, ldapwire.ResultAssertionFailed, manage, assertion)
++			check("managed referral malformed member", "member", missing, ldapwire.ResultInappropriateMatching, manage)
++
++			smallIndexedPut(t, server, state, group, true)
++			lower := []byte("uid=alice," + smallIndexedPeopleDN)
++			check("warm schema", "member", lower, ldapwire.ResultCompareTrue)
++			uid, _ := state.runtime.schema.AttributeType("uid")
++			for _, equality := range []string{"caseExactMatch", "caseIgnoreMatch", "caseExactMatch"} {
++				uid.Equality = equality
++				if err := state.runtime.schema.UpsertAttributeType(uid); err != nil {
++					t.Fatal(err)
++				}
++				want := ldapwire.ResultCompareFalse
++				if equality == "caseIgnoreMatch" {
++					want = ldapwire.ResultCompareTrue
++				}
++				check(equality, "member", lower, want)
++			}
++			if state.runtime.compareDNPrefixes != warmedCache {
++				t.Fatal("store mutations or schema changes replaced the warmed cache")
++			}
++			previous := state.runtime
++			if err := observed.View(t.Context(), func(reader storage.Reader) error {
++				var err error
++				state.runtime, err = server.buildRuntimeState(reader)
++				return err
++			}); err != nil {
++				t.Fatal(err)
++			}
++			if state.runtime.compareDNPrefixes == previous.compareDNPrefixes || state.runtime.schema == previous.schema {
++				t.Fatal("rebuilt runtime retained the previous cache or schema")
++			}
++			server.activateRuntime(state.runtime)
++			check("reloaded schema", "member", lower, ldapwire.ResultCompareTrue)
++
++			if err := state.runtime.schema.ParseAndRegisterAttributeType("( 1.2.3.991 NAME 'prefixChild' SUP member )"); err != nil {
++				t.Fatal(err)
++			}
++			for _, fallback := range []struct {
++				name, stored, requested string
++				values                  [][]byte
++			}{
++				{"small", "member", "member", members[:10]},
++				{"uid", "uid", "uid", stringValues("Alice")},
++				{"unique UID", "uniqueMember", "uniqueMember", stringValues(string(members[0]) + "#'0101'B")},
++				{"options", "member;lang-en", "member", members},
++				{"requested options", "member;lang-en", "member;lang-en", members},
++				{"SUP", "prefixChild", "member", members},
++			} {
++				changed = group.Clone()
++				changed.ReplaceValues("member", nil)
++				changed.ReplaceValues(fallback.stored, fallback.values)
++				smallIndexedPut(t, server, state, changed, true)
++				check(fallback.name, fallback.requested, fallback.values[0], ldapwire.ResultCompareTrue)
++				check(fallback.name+" missing", fallback.requested, missing, ldapwire.ResultCompareFalse)
++			}
++		})
++	}
++}
+diff --git a/internal/server/runtime.go b/internal/server/runtime.go
+index 8e1ab7a..5f51225 100644
+--- a/internal/server/runtime.go
++++ b/internal/server/runtime.go
+@@ -73,6 +73,7 @@ type runtimeState struct {
+ 	searchBases          *searchBaseCache
+ 	searchEntryClasses   *schema.PreparedObjectClassMatcher
+ 	searchSelections     *preparedAttributeSelectionCache
++	compareDNPrefixes    *compareDNPrefixCache
+ }
+ 
+ type runtimeOperationFeatures struct {
+@@ -534,6 +535,7 @@ func (server *Server) buildRuntimeState(reader storage.Reader) (*runtimeState, e
+ 		searchBases:          newSearchBaseCache(),
+ 		searchEntryClasses:   searchEntryClasses,
+ 		searchSelections:     newPreparedAttributeSelectionCache(),
++		compareDNPrefixes:    newCompareDNPrefixCache(),
+ 	}
+ 	runtime.allowed, err = buildAllowedSchemaPlan(registry, databases)
+ 	if err != nil {
+diff --git a/internal/server/write.go b/internal/server/write.go
+index 828f7fd..589d132 100644
+--- a/internal/server/write.go
++++ b/internal/server/write.go
+@@ -3217,7 +3217,8 @@ func (server *Server) handleCompare(
+ 			}
+ 			return nil
+ 		}
+-		present, matched, compareErr := state.runtime.schema.CompareEntryAttributeCachedDN(
++		present, matched, compareErr := state.runtime.compareDNPrefixes.compare(
++			state.runtime.schema,
+ 			entry,
+ 			request.Attribute,
+ 			request.Assertion,

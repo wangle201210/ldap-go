@@ -51,35 +51,33 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest comparison: September 30, 2026, R19, 100,000 users, production baseline
-`8918569`, Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`), OpenLDAP 2.6.13.
-Bind and hot lookups use seven SDK batches; group searches use three.
+Latest focused comparison: September 30, 2026, R21, 100,000 users, source baseline
+`17e0390` (R19 production logic), Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`),
+OpenLDAP 2.6.13. Each row uses seven SDK batches of 1,000 calls.
 Relative performance is `OpenLDAP/current * 100%`; 100% means parity.
 Frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 89.60 ms | 71.22 ms | 79.5% | 78.3% |
-| Non-root Base, hot | High | 1,000 | 100.88 ms | 80.16 ms | 79.5% | 80.1% |
-| Non-root equality, hot | Very high | 1,000 | 101.94 ms | 82.99 ms | 81.4% | 77.4% |
-| Direct group discovery | High | 100 | 15.16 ms | 11.63 ms | 76.7% | 72.3% |
-| Group Base, 1,000 members | Medium | 100 | 92.46 ms | 86.51 ms | 93.6% | 91.7% |
-| Nested membership, client BFS | Medium-high | 100 traversals | 53.96 ms | 44.78 ms | 83.0% | 78.2% |
+| User Bind, SSHA | Very high | 1,000 | 97.70 ms | 77.66 ms | 79.5% | 81.2% |
+| Non-root Base, hot | High | 1,000 | 116.51 ms | 94.39 ms | 81.0% | 78.5% |
+| Non-root equality, hot | Very high | 1,000 | 104.33 ms | 83.94 ms | 80.5% | 83.9% |
+| Group1000 Compare, first | Medium | 1,000 | 107.71 ms | 81.83 ms | 76.0% | 77.6% |
+| Group1000 Compare, last | Medium | 1,000 | 133.63 ms | 91.48 ms | 68.5% | 70.8% |
+| Group1000 Compare, missing | Medium | 1,000 | 119.89 ms | 84.88 ms | 70.8% | 70.2% |
 
-R19 combines strict ASCII DN leaf validation and comparison. Separate
-1,000-member last/missing Compare runs improve 3.7%-7.6% versus the paired
-baseline, with unchanged component allocations. Other rows include negative
-observations, all retained. **Common operations have not individually reached
-parity; fast writes do not offset slow reads.** No universal speedup or
-regression-free result is claimed. Compare versions within a run, not across rounds.
+R21 reuses bounded, individually verified DN normalizations. Large-group
+last/missing Compare improves 11.5%-14.2% versus the paired baseline; warming
+has allocation costs and other rows include slowdowns. **Common operations have
+not individually reached parity; fast writes do not offset slow reads.**
+No universal speedup is claimed. Compare versions within a run, not across rounds.
 
-Full tests, vet, 355 native checks and two parser/matcher fuzz campaigns passed;
-21 exports match (15 primary and six calibration). See the
-[R19 report](docs/common-ldap-performance.md) and
-[evidence](docs/evidence/performance-20260930-r19/README.md) for all results
-and limits. The [R18 archive](docs/common-ldap-performance-20260930-r18.md),
-[R8b broad results](docs/common-ldap-performance-20260930-r8b.md) and
-[separate audit study](docs/audit-performance-20260929-r5.md) remain historical.
+Full tests, vet and 355 native checks passed; nine final exports match.
+See the [R21 report](docs/common-ldap-performance-20260930-r21.md) and
+[evidence](docs/evidence/performance-20260930-r21/README.md) for all samples,
+negative observations, warm-up costs and limits. Other group searches and broad
+reads/writes were not rerun; [R19](docs/common-ldap-performance.md) and
+[R8b](docs/common-ldap-performance-20260930-r8b.md) remain historical.
 
 ## Requirements
 

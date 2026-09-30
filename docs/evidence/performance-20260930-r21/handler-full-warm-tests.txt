@@ -1,0 +1,7 @@
+=== RUN   TestCompareDNPrefixHandlerIntegration
+=== RUN   TestCompareDNPrefixHandlerIntegration/bolt
+=== RUN   TestCompareDNPrefixHandlerIntegration/memory
+--- PASS: TestCompareDNPrefixHandlerIntegration (0.50s)
+    --- PASS: TestCompareDNPrefixHandlerIntegration/bolt (0.32s)
+    --- PASS: TestCompareDNPrefixHandlerIntegration/memory (0.18s)
+PASS
