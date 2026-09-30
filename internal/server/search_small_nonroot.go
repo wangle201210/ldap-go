@@ -174,11 +174,10 @@ func (server *Server) trySmallNonRootSearch(
 		if basePresence {
 			// Match the general base-candidate path after a rename, using this
 			// snapshot's already-read entry and the physical normalized identity.
-			dn, err := directory.ParseDNWithIdentityKey(baseEntry.DN, base.Key())
-			if err != nil {
+			if err := directory.ValidateDNWithIdentityKey(baseEntry.DN, base.Key()); err != nil {
 				return err
 			}
-			if err := visit(baseEntry.WithNormalizedDNHint(dn, "")); err != nil {
+			if err := visit(baseEntry.WithDNIdentityKey(base.Key())); err != nil {
 				return err
 			}
 			complete = true

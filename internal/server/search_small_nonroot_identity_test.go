@@ -1,0 +1,451 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	ber "github.com/go-asn1-ber/asn1-ber"
+	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/wangle201210/ldap-go/internal/acl"
+	"github.com/wangle201210/ldap-go/internal/directory"
+	"github.com/wangle201210/ldap-go/internal/ldapwire"
+	"github.com/wangle201210/ldap-go/internal/storage"
+	bolt "go.etcd.io/bbolt"
+)
+
+func smallNonRootIdentityMessage(base string) ldapwire.Message {
+	message := smallIndexedMessage("(objectClass=*)")
+	request := message.Request.(ldapwire.SearchRequest)
+	request.BaseDN, request.Scope = base, directory.ScopeBase
+	request.Attributes = []string{"cn", "userid", "member", "jpegPhoto"}
+	message.Request = request
+	return message
+}
+
+func TestSmallNonRootBaseIdentitySpelling(t *testing.T) {
+	for _, policy := range []string{"default", "explicit"} {
+		for _, spelling := range []struct{ name, dn string }{
+			{"canonical", "cn=group-00," + smallIndexedPeopleDN},
+			{"case", "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"},
+			{"OID and escape", `2.5.4.3=group-\30\30,2.5.4.11=people,dc=example,dc=com`},
+		} {
+			t.Run(policy+"/"+spelling.name, func(t *testing.T) {
+				fixture := newSmallNonRootFixture(t, 1, 3)
+				entry := fixture.groups[0].Clone()
+				entry.DN = spelling.dn
+				smallIndexedPut(t, fixture.server, fixture.state, entry.WithoutDNIdentity(), true)
+				identity, err := fixture.state.runtime.schema.NormalizeDN(entry.DN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var storedDN string
+				if err := fixture.store.View(t.Context(), func(reader storage.Reader) error {
+					stored, err := readerForDatabase(reader, *fixture.database).Get(identity)
+					storedDN = stored.DN
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if policy == "default" {
+					fixture.policy(t, "default")
+				} else {
+					smallNonRootPolicy(t, fixture,
+						`{0}to attrs=userPassword by * none`,
+						`{1}to dn.exact="cn=group-00,ou=people,dc=example,dc=com" by users read by * none`,
+						`{2}to * by * none`)
+				}
+				smallNonRootReady(t, fixture)
+				for _, base := range []string{entry.DN, "cn=group-00," + smallIndexedPeopleDN,
+					"CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM",
+					"2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com"} {
+					for _, typesOnly := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/typesOnly=%t", base, typesOnly), func(t *testing.T) {
+							request := readOnlySearchRequest("(ObJeCtClAsS=*)",
+								[]string{"2.5.4.3", "userid", "member", "jpegPhoto", "userPassword"}, typesOnly)
+							request.BaseDN, request.Scope = base, ldap.ScopeBaseObject
+							result, err, outcome := smallNonRootDifferential(t, fixture, request, true)
+							smallNonRootAssertResult(t, result, err, outcome, ldap.LDAPResultSuccess, 1)
+							got := result.Entries[0]
+							if got.DN != storedDN {
+								t.Fatalf("response DN = %q, want stored spelling %q", got.DN, storedDN)
+							}
+							var names []string
+							for _, attribute := range got.Attributes {
+								names = append(names, attribute.Name)
+								if typesOnly && len(attribute.ByteValues) != 0 {
+									t.Fatalf("typesOnly returned values for %s", attribute.Name)
+								}
+							}
+							wantNames := []string{"cn", "cn;lang-en", "uid", "member", "jpegPhoto"}
+							if policy == "default" {
+								wantNames = append(wantNames, "userPassword")
+							}
+							slices.Sort(names)
+							slices.Sort(wantNames)
+							if !slices.Equal(names, wantNames) {
+								t.Fatalf("projected descriptions = %v, want %v", names, wantNames)
+							}
+							if !typesOnly && (!reflect.DeepEqual(got.GetRawAttributeValues("member"), entry.Values("member")) ||
+								!bytes.Equal(got.GetRawAttributeValue("jpegPhoto"), []byte{0, 0, 255})) {
+								t.Fatal("projection changed DN-valued or binary attributes")
+							}
+						})
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSmallNonRootBaseIdentityACLStages(t *testing.T) {
+	fixture := newSmallNonRootFixture(t, 1, 3)
+	for _, test := range []struct {
+		name, rule string
+		entries    int
+	}{
+		{"filter search denied", `attrs=objectClass by * none`, 0},
+		{"entry read denied", `attrs=entry by users search by * none`, 0},
+		{"attribute read denied", `attrs=member,userPassword by users search by * none`, 1},
+		{"self subject", `by self read by * none`, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture.state.boundDN = smallNonRootReaderDN
+			if test.name == "self subject" {
+				fixture.state.boundDN = "2.5.4.3=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+			}
+			smallNonRootPolicy(t, fixture,
+				fmt.Sprintf(`{0}to dn.exact="%s" %s`, fixture.groups[0].DN, test.rule),
+				"{1}to * by users read by * none")
+			for _, typesOnly := range []bool{false, true} {
+				request := readOnlySearchRequest("(objectClass=*)", []string{"cn", "member", "userPassword"}, typesOnly)
+				request.BaseDN, request.Scope = strings.ToUpper(fixture.groups[0].DN), ldap.ScopeBaseObject
+				result, err, outcome := smallNonRootDifferential(t, fixture, request, true)
+				smallNonRootAssertResult(t, result, err, outcome, ldap.LDAPResultSuccess, test.entries)
+				if test.name == "attribute read denied" && (len(result.Entries[0].Attributes) != 2 ||
+					slices.ContainsFunc(result.Entries[0].Attributes, func(a *ldap.EntryAttribute) bool {
+						return a.Name != "cn" && a.Name != "cn;lang-en"
+					})) {
+					t.Fatal("attribute ACL exposed a denied description or value")
+				}
+			}
+		})
+	}
+}
+
+func TestSmallNonRootBaseIdentityRename(t *testing.T) {
+	fixture := newSmallNonRootFixture(t, 1, 3)
+	request := readOnlySearchRequest("(objectClass=*)", []string{"cn", "member", "jpegPhoto"}, false)
+	request.BaseDN, request.Scope = fixture.groups[0].DN, ldap.ScopeBaseObject
+	before, err, outcome := smallNonRootDifferential(t, fixture, request, true)
+	smallNonRootAssertResult(t, before, err, outcome, ldap.LDAPResultSuccess, 1)
+	oldDN := request.BaseDN
+	// Rename the parent through the real write handler, including descendant
+	// identities. Reuse the connection whose old request spelling is now cached.
+	rename := ldapwire.ModifyDNRequest{DN: smallIndexedPeopleDN, NewRDN: "ou=Renamed", DeleteOldRDN: true}
+	root := &connectionState{runtime: fixture.state.runtime, boundDN: smallIndexedRootDN, protocolVersion: 3}
+	capture := &smallIndexedCapture{}
+	if err := fixture.server.handleModifyDN(t.Context(), capture, root, ldapwire.Message{ID: 2, Request: rename}, rename); err != nil {
+		t.Fatal(err)
+	}
+	if code, ok := auditLDAPResultCode(capture.Bytes()); !ok || code != int(ldapwire.ResultSuccess) {
+		t.Fatalf("rename result = %d, decoded=%t", code, ok)
+	}
+	smallNonRootReady(t, fixture)
+	newDN := strings.Replace(oldDN, smallIndexedPeopleDN, "ou=Renamed,dc=example,dc=com", 1)
+	for _, base := range []string{newDN, strings.ToUpper(newDN),
+		strings.Replace(newDN, "cn=", "2.5.4.3=", 1)} {
+		request.BaseDN = base
+		result, err, outcome := smallNonRootDifferential(t, fixture, request, true)
+		smallNonRootAssertResult(t, result, err, outcome, ldap.LDAPResultSuccess, 1)
+		if result.Entries[0].DN != newDN || !reflect.DeepEqual(result.Entries[0].Attributes, before.Entries[0].Attributes) {
+			t.Fatalf("rename lost the current DN or original projection: %#v", result.Entries[0])
+		}
+	}
+	request.BaseDN = oldDN
+	result, err, outcome := smallNonRootDifferential(t, fixture, request, false)
+	smallNonRootAssertResult(t, result, err, outcome, ldap.LDAPResultNoSuchObject, 0)
+	if ldapErr, ok := errors.AsType[*ldap.Error](err); !ok || ldapErr.MatchedDN != "dc=example,dc=com" {
+		t.Fatalf("old DN fallback lost its surviving ancestor: %v", err)
+	}
+}
+
+func TestSmallNonRootBaseIdentityMetadata(t *testing.T) {
+	fixture := newSmallNonRootFixture(t, 1, 3)
+	base, err := fixture.state.runtime.schema.NormalizeDN(fixture.groups[0].DN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := fixture.state.runtime.schema.NormalizeDN("cn=old,ou=archive,dc=example,dc=com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := fixture.groups[0].WithNormalizedDNHint(stale, "old cursor")
+	parsed, err := directory.ParseDNWithIdentityKey(entry.DN, base.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.ValidateDNWithIdentityKey(entry.DN, base.Key()); err != nil {
+		t.Fatal(err)
+	}
+	old, keyed := entry.WithNormalizedDNHint(parsed, ""), entry.WithDNIdentityKey(base.Key())
+	if _, present := keyed.NormalizedDNHint(); present {
+		t.Fatal("identity-only candidate retained a stale parsed DN")
+	}
+	if _, present := keyed.DNOrderKeyHint(); present {
+		t.Fatal("identity-only candidate retained a stale order key")
+	}
+	if key, present := keyed.DNIdentity(); !present || key != base.Key() {
+		t.Fatal("candidate lost its physical identity")
+	}
+	if err := fixture.server.config.Store.View(t.Context(), func(reader storage.Reader) error {
+		tx := readerForDatabase(reader, *fixture.database)
+		selection, prepared := fixture.state.runtime.searchSelections.get(fixture.state.runtime.schema,
+			[]string{"cn", "member", "jpegPhoto"})
+		if !prepared {
+			return errors.New("fixture selection is not prepared")
+		}
+		var want directory.Entry
+		for index, candidate := range []directory.Entry{old, keyed} {
+			inScope, err := smallIndexedEntryInScope(fixture.state.runtime, fixture.database, tx, base, candidate, directory.ScopeBase)
+			if err != nil || !inScope || smallIndexedEntryIsSpecial(fixture.state.runtime, candidate) {
+				return fmt.Errorf("candidate %d: inScope=%t err=%v", index, inScope, err)
+			}
+			matches, err := fixture.server.filterMatches(fixture.state.runtime, tx, fixture.state.boundDN, candidate,
+				directory.Filter{Kind: directory.FilterPresent, Attribute: "objectClass"})
+			if err != nil || !matches || !fixture.server.allowed(fixture.state.runtime, tx, fixture.state.boundDN, candidate, "entry", nil, acl.Read) {
+				return fmt.Errorf("candidate %d: filter/entry ACL failed: matches=%t err=%v", index, matches, err)
+			}
+			readable := fixture.server.attributesWithPrivilegeValues(fixture.state.runtime, tx, fixture.state.boundDN, candidate, acl.Read, false, true, selection)
+			readable = fixture.server.applyAllowedAttributes(fixture.state.runtime, tx, fixture.state.boundDN, candidate, readable,
+				[]string{"cn", "member", "jpegPhoto"}, false)
+			selected := selection.SelectForResponse(readable, false)
+			if index == 0 {
+				want = selected
+			} else if !reflect.DeepEqual(selected, want) ||
+				searchCandidateRetainedBytes(searchCandidate{selected: selected, dn: candidate.DN}) !=
+					searchCandidateRetainedBytes(searchCandidate{selected: want, dn: old.DN}) ||
+				!bytes.Equal(ldapwire.EncodeSearchResultEntry(1, selected, nil), ldapwire.EncodeSearchResultEntry(1, want, nil)) {
+				return errors.New("identity-only metadata changed downstream projection, budget, or wire response")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSmallNonRootBaseIdentityCorruptStorage(t *testing.T) {
+	for _, damage := range []string{"invalid display", "wrong RDN count", "wrong binding", "malformed physical key"} {
+		t.Run(damage, func(t *testing.T) {
+			fixture := newSmallNonRootFixture(t, 1, 3)
+			entry := fixture.groups[0].Clone()
+			dn, err := fixture.state.runtime.schema.NormalizeDN(entry.DN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "damaged-base.db")
+			if _, err := fixture.store.Backup(t.Context(), path, false); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := bolt.Open(path, 0o600, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = raw.Update(func(tx *bolt.Tx) error {
+				entries := tx.Bucket([]byte("entries"))
+				key := []byte(fixture.database.partition + "\x00" + dn.Key())
+				encoded := entries.Get(key)
+				if encoded == nil {
+					return errors.New("fixture base has no physical row")
+				}
+				if damage == "malformed physical key" {
+					// Requests can only contain valid normalized keys. Moving the
+					// row to a malformed key must therefore preserve a missing-base
+					// fallback, rather than manufacture an invalid request DN.
+					if err := entries.Put(append(bytes.Clone(key), '!'), bytes.Clone(encoded)); err != nil {
+						return err
+					}
+					return entries.Delete(key)
+				}
+				stored := struct {
+					directory.Entry
+					Identity string `json:"dnIdentity"`
+					Source   string `json:"dnSource"`
+				}{entry, dn.Key(), entry.DN}
+				switch damage {
+				case "invalid display":
+					stored.DN, stored.Source = "not-a-dn", "not-a-dn"
+				case "wrong RDN count":
+					stored.DN, stored.Source = smallIndexedPeopleDN, smallIndexedPeopleDN
+				case "wrong binding":
+					stored.Identity += "!"
+				}
+				// The legacy JSON codec lets the test damage only the display or
+				// identity contract, without depending on binary record offsets.
+				encoded, err := json.Marshal(stored)
+				if err != nil {
+					return err
+				}
+				return entries.Put(key, encoded)
+			})
+			closeErr := raw.Close()
+			if err != nil || closeErr != nil {
+				t.Fatalf("damage copied base: %v / %v", err, closeErr)
+			}
+			copyStore, err := storage.OpenBolt(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = copyStore.Close() })
+			fixture.server.config.Store = copyStore
+			revision, available := copyStore.CurrentStorageSnapshotRevision()
+			fixture.database.equalityIndexInit.markReady(revision, available)
+			fast := damage == "wrong binding"
+			if !fast {
+				smallNonRootAssertDeclines(t, t.Context(), fixture, smallNonRootIdentityMessage(entry.DN))
+			}
+			request := readOnlySearchRequest("(objectClass=*)", []string{"cn", "member"}, false)
+			request.BaseDN, request.Scope = entry.DN, ldap.ScopeBaseObject
+			result, sdkErr, outcome := smallNonRootDifferential(t, fixture, request, fast)
+			if damage == "wrong binding" {
+				// Both paths use the physical row key rather than the stale JSON hint.
+				smallNonRootAssertResult(t, result, sdkErr, outcome, ldap.LDAPResultSuccess, 1)
+			} else if damage == "invalid display" {
+				// The base Search ACL rejects an unparseable target before validation.
+				smallNonRootAssertResult(t, result, sdkErr, outcome, ldap.LDAPResultNoSuchObject, 0)
+			} else if damage == "malformed physical key" {
+				smallNonRootAssertResult(t, result, sdkErr, outcome, ldap.LDAPResultNoSuchObject, 0)
+				if ldapErr, ok := errors.AsType[*ldap.Error](sdkErr); !ok || ldapErr.MatchedDN != smallIndexedPeopleDN {
+					t.Fatalf("missing physical row changed matched DN: %v", sdkErr)
+				}
+			} else if sdkErr == nil || outcome.handlerError == "" || len(outcome.wire) != 0 || outcome.rejections != 0 {
+				t.Fatalf("corrupt base did not retain general error without output: %+v", outcome)
+			}
+		})
+	}
+}
+
+type smallNonRootIdentityStore struct {
+	storage.Store
+	trace   []string
+	readErr error
+}
+
+func (store *smallNonRootIdentityStore) CurrentStorageSnapshotRevision() (uint64, bool) {
+	return store.Store.(storage.SnapshotRevisionStore).CurrentStorageSnapshotRevision()
+}
+
+func (store *smallNonRootIdentityStore) View(ctx context.Context, fn func(storage.Reader) error) error {
+	store.trace = append(store.trace, "view")
+	err := store.Store.View(ctx, func(reader storage.Reader) error {
+		return fn(smallNonRootIdentityReader{Reader: reader, store: store})
+	})
+	store.trace = append(store.trace, "return")
+	return err
+}
+
+func (store *smallNonRootIdentityStore) Update(ctx context.Context, fn func(storage.Writer) error) error {
+	store.trace = append(store.trace, "update")
+	return store.Store.Update(ctx, fn)
+}
+
+type smallNonRootIdentityReader struct {
+	storage.Reader
+	store *smallNonRootIdentityStore
+}
+
+func (reader smallNonRootIdentityReader) Get(dn directory.DN) (directory.Entry, error) {
+	reader.store.trace = append(reader.store.trace, "get:"+dn.String())
+	if reader.store.readErr != nil {
+		return directory.Entry{}, reader.store.readErr
+	}
+	return reader.Reader.Get(dn)
+}
+
+func (reader smallNonRootIdentityReader) GetIn(partition string, dn directory.DN) (directory.Entry, error) {
+	reader.store.trace = append(reader.store.trace, "getIn:"+partition+":"+dn.String())
+	if reader.store.readErr != nil {
+		return directory.Entry{}, reader.store.readErr
+	}
+	return reader.Reader.GetIn(partition, dn)
+}
+
+func TestSmallNonRootBaseIdentityCallbackOrder(t *testing.T) {
+	for _, failRead := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readError=%t", failRead), func(t *testing.T) {
+			fixture := newSmallNonRootFixture(t, 1, 3)
+			observed := &smallNonRootIdentityStore{Store: fixture.server.config.Store}
+			if failRead {
+				observed.readErr = errors.New("base read callback failed")
+			}
+			fixture.server.config.Store = &homedirEffectStore{Store: &accessContextStore{Store: observed}}
+			message := smallNonRootIdentityMessage(fixture.groups[0].DN)
+			smallNonRootAssertDeclines(t, t.Context(), fixture, message)
+			if len(observed.trace) != 0 {
+				t.Fatalf("speculation invoked custom callbacks: %v", observed.trace)
+			}
+			request := message.Request.(ldapwire.SearchRequest)
+			prelude, database := smallIndexedTestPrelude(fixture.server, fixture.state, message)
+			var wantWire []byte
+			var wantTrace []string
+			var wantError string
+			for _, mode := range []string{"general", "small", "wrapper"} {
+				observed.trace = nil
+				capture := &smallIndexedCapture{onWrite: func() { observed.trace = append(observed.trace, "wire") }}
+				var err error
+				if mode == "wrapper" {
+					err = fixture.server.handleSearch(t.Context(), capture, fixture.state, message, request)
+				} else {
+					if mode == "small" {
+						handled, probeErr := fixture.server.trySmallNonRootSearch(t.Context(), capture, fixture.state,
+							message, request, prelude.base, database)
+						if handled || probeErr != nil || capture.Len() != 0 || len(observed.trace) != 0 {
+							t.Fatal("custom-store probe had effects before general fallback")
+						}
+					}
+					err = fixture.server.handleUncachedSearch(t.Context(), capture, fixture.state, message, request, prelude)
+				}
+				if failRead {
+					if !errors.Is(err, observed.readErr) || capture.Len() != 0 {
+						t.Fatalf("%s lost the callback error or emitted a response: %v", mode, err)
+					}
+				} else {
+					response := bytes.NewReader(capture.Bytes())
+					entry, readErr := ber.ReadPacket(response)
+					if err != nil || readErr != nil || len(entry.Children) < 2 || entry.Children[1].Tag != ldapwire.ApplicationSearchResultEntry {
+						t.Fatalf("%s: missing entry response: handler=%v read=%v", mode, err, readErr)
+					}
+					packet, readErr := ber.ReadPacket(response)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					result, parseErr := parseSyncConsumerLDAPResult(packet, message.ID, ldapwire.ApplicationSearchResultDone)
+					if parseErr != nil || result.code != uint16(ldapwire.ResultSuccess) || response.Len() != 0 {
+						t.Fatalf("%s: invalid final response: %+v, %v", mode, result, parseErr)
+					}
+				}
+				if mode == "general" {
+					wantWire, wantTrace, wantError = bytes.Clone(capture.Bytes()), slices.Clone(observed.trace), fmt.Sprint(err)
+					if !slices.ContainsFunc(wantTrace, func(event string) bool { return strings.HasPrefix(event, "getIn:") }) ||
+						slices.Contains(wantTrace, "update") {
+						t.Fatalf("baseline did not exercise read-only base callbacks: %v", wantTrace)
+					}
+				} else if !bytes.Equal(capture.Bytes(), wantWire) || !slices.Equal(observed.trace, wantTrace) || fmt.Sprint(err) != wantError {
+					t.Fatalf("%s changed wire, error, or callback order: %v, want %v", mode, observed.trace, wantTrace)
+				}
+				if fixture.server.searchMemoryLimiter.active.Load() != 0 {
+					t.Fatal("callback path leaked candidate memory")
+				}
+				smallNonRootNoCaches(t, fixture)
+			}
+		})
+	}
+}
