@@ -1,0 +1,82 @@
+--- FAIL: TestSmallNonRootBaseIdentitySpelling (0.71s)
+    --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case (0.12s)
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/cn=group-00,ou=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/cn=group-00,ou=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false#01 (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true#01 (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/case/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+    --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape (0.11s)
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/2.5.4.3=group-\30\30,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/2.5.4.3=group-\30\30,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/cn=group-00,ou=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/cn=group-00,ou=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/default/OID_and_escape/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+    --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case (0.11s)
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/cn=group-00,ou=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/cn=group-00,ou=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false#01 (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true#01 (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/case/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=GROUP-00,ou=PEOPLE,dc=EXAMPLE,dc=COM", want stored spelling "CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM"
+    --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape (0.11s)
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/2.5.4.3=group-\30\30,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/2.5.4.3=group-\30\30,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/cn=group-00,ou=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/cn=group-00,ou=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/CN=GROUP-00,OU=PEOPLE,DC=EXAMPLE,DC=COM/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=false (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+        --- FAIL: TestSmallNonRootBaseIdentitySpelling/explicit/OID_and_escape/2.5.4.3=group-00,2.5.4.11=people,dc=example,dc=com/typesOnly=true (0.00s)
+            search_small_nonroot_identity_test.go:65: response DN = "cn=group-00,ou=people,dc=example,dc=com", want stored spelling "2.5.4.3=group-\\30\\30,2.5.4.11=people,dc=example,dc=com"
+--- FAIL: TestSmallNonRootBaseIdentityCorruptStorage (0.49s)
+    --- FAIL: TestSmallNonRootBaseIdentityCorruptStorage/invalid_display (0.13s)
+        search_small_nonroot_identity_test.go:308: corrupt base did not retain general error without output: {wire:[48 12 2 1 1 101 7 10 1 32 4 0 4 0] handlerError: handled:false code:32 entries:0 diagnostic: memory:0 rejections:0}
+    --- FAIL: TestSmallNonRootBaseIdentityCorruptStorage/wrong_binding (0.12s)
+        search_small_nonroot_identity_test.go:298: decline had effects: handled=true err=<nil> bytes=324 active=0 rejected=0
+--- FAIL: TestSmallNonRootBaseIdentityCallbackOrder (0.20s)
+    --- FAIL: TestSmallNonRootBaseIdentityCallbackOrder/readError=false (0.11s)
+        search_small_nonroot_identity_test.go:403: general: result=0 decoded=false err=<nil>
+    --- FAIL: TestSmallNonRootBaseIdentityCallbackOrder/readError=true (0.09s)
+        search_small_nonroot_identity_test.go:400: general lost the callback error or emitted a response: <nil>
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/server	1.741s
+FAIL

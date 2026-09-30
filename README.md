@@ -51,32 +51,32 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest focused comparison: September 30, 2026, R21, 100,000 users, source baseline
-`17e0390` (R19 production logic), Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`),
+Latest focused comparison: September 30, 2026, R22, 100,000 users, source baseline
+`984ada3` (R21), Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`),
 OpenLDAP 2.6.13. Each row uses seven SDK batches of 1,000 calls.
 Relative performance is `OpenLDAP/current * 100%`; 100% means parity.
 Frequency is qualitative, not measured traffic.
 
 | Common operation | Typical use | Calls | ldap-go, default access | OpenLDAP, default access | Relative, default | Relative, explicit ACL |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| User Bind, SSHA | Very high | 1,000 | 97.70 ms | 77.66 ms | 79.5% | 81.2% |
-| Non-root Base, hot | High | 1,000 | 116.51 ms | 94.39 ms | 81.0% | 78.5% |
-| Non-root equality, hot | Very high | 1,000 | 104.33 ms | 83.94 ms | 80.5% | 83.9% |
-| Group1000 Compare, first | Medium | 1,000 | 107.71 ms | 81.83 ms | 76.0% | 77.6% |
-| Group1000 Compare, last | Medium | 1,000 | 133.63 ms | 91.48 ms | 68.5% | 70.8% |
-| Group1000 Compare, missing | Medium | 1,000 | 119.89 ms | 84.88 ms | 70.8% | 70.2% |
+| User Bind, SSHA | Very high | 1,000 | 89.50 ms | 71.80 ms | 80.2% | 79.3% |
+| Non-root Base, hot | High | 1,000 | 109.46 ms | 91.16 ms | 83.3% | 79.8% |
+| Non-root equality, hot | Very high | 1,000 | 119.83 ms | 95.19 ms | 79.4% | 77.0% |
+| Group1000 Compare, first | Medium | 1,000 | 114.86 ms | 88.82 ms | 77.3% | 78.1% |
+| Group1000 Compare, last | Medium | 1,000 | 127.20 ms | 90.77 ms | 71.4% | 68.3% |
+| Group1000 Compare, missing | Medium | 1,000 | 113.88 ms | 82.65 ms | 72.6% | 71.3% |
 
-R21 reuses bounded, individually verified DN normalizations. Large-group
-last/missing Compare improves 11.5%-14.2% versus the paired baseline; warming
-has allocation costs and other rows include slowdowns. **Common operations have
+R22 validates Base-search DN identity without rebuilding its parsed fields.
+The SDK/server benchmark removes 50 allocations per Base call; paired network
+Base time decreases 1.2%-2.0%. Other rows include slowdowns. **Common operations have
 not individually reached parity; fast writes do not offset slow reads.**
 No universal speedup is claimed. Compare versions within a run, not across rounds.
 
 Full tests, vet and 355 native checks passed; nine final exports match.
-See the [R21 report](docs/common-ldap-performance-20260930-r21.md) and
-[evidence](docs/evidence/performance-20260930-r21/README.md) for all samples,
-negative observations, warm-up costs and limits. Other group searches and broad
-reads/writes were not rerun; [R19](docs/common-ldap-performance.md) and
+See the [R22 report](docs/common-ldap-performance-20260930-r22.md) and
+[evidence](docs/evidence/performance-20260930-r22/README.md) for all samples,
+negative observations and limits. Other group searches and broad reads/writes
+were not rerun; [R21](docs/common-ldap-performance-20260930-r21.md), [R19](docs/common-ldap-performance.md) and
 [R8b](docs/common-ldap-performance-20260930-r8b.md) remain historical.
 
 ## Requirements

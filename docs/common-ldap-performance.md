@@ -1,8 +1,8 @@
 # Common LDAP performance qualification
 
-Latest focused comparison: [R21 large-group Compare](common-ldap-performance-20260930-r21.md).
+Latest focused comparison: [R22 Base search](common-ldap-performance-20260930-r22.md).
 The R19 results below are retained as historical evidence, including workloads
-not rerun in R21.
+not rerun in R22.
 
 September 30, 2026, R19; production baseline `8918569` (R18), 100,000 users,
 Apple M1 Pro, Go 1.26.4 with `CGO_ENABLED=0`, OpenLDAP 2.6.13.
