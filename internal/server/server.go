@@ -1202,9 +1202,9 @@ func (server *Server) runConnectionOperation(
 		)
 	}
 	server.finishOperationAudit(responseConnection.audit, state, stopMode, err)
-	server.monitor.updateConnectionState(state.monitor, state)
-	server.monitor.completeOperation(
+	server.monitor.completeOperationWithState(
 		state.monitor,
+		state,
 		queued.message.Request,
 		started,
 	)

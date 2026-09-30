@@ -266,6 +266,27 @@ func (monitor *monitorState) completeOperation(
 	}
 }
 
+func (monitor *monitorState) completeOperationWithState(
+	connection *monitorConnection,
+	state *connectionState,
+	request ldapwire.Request,
+	started bool,
+) {
+	connection.mu.Lock()
+	connection.authorizationDN = state.boundDN
+	connection.localAddress = monitorAddress(state.connection.LocalAddr())
+	connection.peerAddress = monitorAddress(state.connection.RemoteAddr())
+	if started && connection.executing > 0 {
+		connection.executing--
+	}
+	connection.completed++
+	connection.activityAt = time.Now().UTC()
+	connection.mu.Unlock()
+	if operation, ok := monitorOperationIndex(request); ok {
+		monitor.operations[operation].completed.Add(1)
+	}
+}
+
 func (monitor *monitorState) completeImmediateOperation(
 	connection *monitorConnection,
 	request ldapwire.Request,
