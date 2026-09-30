@@ -571,7 +571,12 @@ func (reader schemaAwarePartitionReader) planCurrentEqualityIndexCandidates(
 		if err != nil {
 			return nil, true, err
 		}
-		sort.Strings(references)
+		// Bolt's cursor already yields posting suffixes in byte order because
+		// the entry reference is the final component of every key. Other index
+		// implementations retain the explicit sort contract.
+		if _, isBolt := indexed.(*boltTx); !isBolt {
+			sort.Strings(references)
+		}
 		// Only the read-only iterator opts into prevalidation for small sets.
 		// Empty sets still take the owned planner's metadata/error checkpoints.
 		if encoded != nil && (len(references) >= minEncodedEqualityIndexCandidates || allowSmallEncoded && len(references) > 0) {
