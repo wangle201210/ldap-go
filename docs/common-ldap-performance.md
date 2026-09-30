@@ -1,6 +1,8 @@
 # Common LDAP performance qualification
 
 Latest focused comparison: [R22 Base search](common-ldap-performance-20260930-r22.md).
+Verified TLS results and a rejected input-buffer experiment:
+[R23](common-ldap-performance-20260930-r23.md).
 The R19 results below are retained as historical evidence, including workloads
 not rerun in R22.
 

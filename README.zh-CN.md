@@ -44,7 +44,7 @@ Web 管理控制台。
 
 ## 性能对比
 
-最新专项对照：2026-09-30 第二十二轮 R22，100,000 个用户，源码基线 `984ada3`
+最新明文 TCP 对照：2026-09-30 第二十二轮 R22，100,000 个用户，源码基线 `984ada3`
 （R21），Apple M1 Pro，Go 1.26.4（`CGO_ENABLED=0`），OpenLDAP 2.6.13。
 每行采用七个 SDK 批次，每批 1,000 次调用，表中为批次计时总和的中位数。
 相对性能为 `OpenLDAP/current × 100%`，100% 表示持平；使用频率为定性估计。
@@ -68,6 +68,10 @@ Base 调用减少 50 次分配，同轮网络耗时改善 1.2%～2.0%；其他�
 [证据](docs/evidence/performance-20260930-r22/README.md)。其他组搜索和全面读写本轮未复测；
 [R21](docs/common-ldap-performance-20260930-r21.md)、[R19](docs/common-ldap-performance.md)与 [R8b](docs/common-ldap-performance-20260930-r8b.md)
 保留为历史结果。
+
+启用证书验证的 LDAPS、StartTLS 结果单独记录在
+[R23](docs/common-ldap-performance-20260930-r23.md)，其中也保留了未采用的输入缓冲实验。
+对比工具现支持可信 CA 文件和 StartTLS。
 
 ## 环境要求
 

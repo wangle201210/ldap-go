@@ -1,0 +1,4 @@
+# github.com/wangle201210/ldap-go/internal/server [github.com/wangle201210/ldap-go/internal/server.test]
+internal/server/tcp_input_integration_test.go:12:2: "github.com/wangle201210/ldap-go/internal/directory" imported and not used
+FAIL	github.com/wangle201210/ldap-go/internal/server [build failed]
+FAIL

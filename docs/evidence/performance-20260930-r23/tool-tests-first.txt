@@ -1,0 +1,8 @@
+--- FAIL: TestVerifiedTLSDial (0.05s)
+    --- FAIL: TestVerifiedTLSDial/StartTLS=false/system_roots_reject_private_CA (0.03s)
+        tls_test.go:148: want certificate error containing "unknown authority", got LDAP Result Code 200 "Network Error": tls: failed to verify certificate: x509: The key size is not supported.
+    --- FAIL: TestVerifiedTLSDial/StartTLS=true/system_roots_reject_private_CA (0.00s)
+        tls_test.go:148: want certificate error containing "unknown authority", got StartTLS: LDAP Result Code 200 "Network Error": TLS handshake failed (tls: failed to verify certificate: x509: The key size is not supported.)
+FAIL
+FAIL	github.com/wangle201210/ldap-go/internal/cmd/ldapcommonbench	0.986s
+FAIL

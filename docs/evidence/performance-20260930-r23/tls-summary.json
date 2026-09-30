@@ -1,0 +1,174 @@
+{
+  "samples": 336,
+  "exports": 4,
+  "rows": [
+    {
+      "mode": "ldaps",
+      "operation": "userBind/simple_bind_ssha/0",
+      "ldapgo": 88.10661099999996,
+      "openldap": 73.97151,
+      "relative_percent": 83.95682135589125
+    },
+    {
+      "mode": "ldaps",
+      "operation": "userBind/simple_bind_plaintext/0",
+      "ldapgo": 84.26852499999997,
+      "openldap": 70.30088399999983,
+      "relative_percent": 83.42484219345224
+    },
+    {
+      "mode": "ldaps",
+      "operation": "userBindWrong/simple_bind_ssha/0",
+      "ldapgo": 87.62884399999996,
+      "openldap": 73.71472099999997,
+      "relative_percent": 84.12152624083458
+    },
+    {
+      "mode": "ldaps",
+      "operation": "userBindWrong/simple_bind_plaintext/0",
+      "ldapgo": 89.18773000000004,
+      "openldap": 73.5782899999999,
+      "relative_percent": 82.49822032694392
+    },
+    {
+      "mode": "ldaps",
+      "operation": "nonrootBase/search_nonrootBase/0",
+      "ldapgo": 100.76642100000001,
+      "openldap": 86.97516499999993,
+      "relative_percent": 86.3136391437381
+    },
+    {
+      "mode": "ldaps",
+      "operation": "nonrootEquality/search_nonrootEquality/0",
+      "ldapgo": 100.62924499999998,
+      "openldap": 85.097399,
+      "relative_percent": 84.56527622760164
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareTrueFirst/compare_member_true_first/10",
+      "ldapgo": 82.99491799999996,
+      "openldap": 72.79608299999995,
+      "relative_percent": 87.71149457608958
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareTrueFirst/compare_member_true_first/1000",
+      "ldapgo": 98.3282050000001,
+      "openldap": 80.29379799999991,
+      "relative_percent": 81.6589685533259
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareTrueLast/compare_member_true_last/10",
+      "ldapgo": 90.28623100000003,
+      "openldap": 76.88011000000009,
+      "relative_percent": 85.15153323877266
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareTrueLast/compare_member_true_last/1000",
+      "ldapgo": 112.92153299999993,
+      "openldap": 84.95300700000006,
+      "relative_percent": 75.23189310580835
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareFalse/compare_member_false_missing/10",
+      "ldapgo": 97.03690200000003,
+      "openldap": 81.83961399999993,
+      "relative_percent": 84.33865087737436
+    },
+    {
+      "mode": "ldaps",
+      "operation": "groupCompareFalse/compare_member_false_missing/1000",
+      "ldapgo": 109.79992000000014,
+      "openldap": 84.94232800000002,
+      "relative_percent": 77.36101082769451
+    },
+    {
+      "mode": "starttls",
+      "operation": "userBind/simple_bind_ssha/0",
+      "ldapgo": 84.94323899999992,
+      "openldap": 69.04251799999999,
+      "relative_percent": 81.28076914985553
+    },
+    {
+      "mode": "starttls",
+      "operation": "userBind/simple_bind_plaintext/0",
+      "ldapgo": 83.53050499999998,
+      "openldap": 69.25359900000007,
+      "relative_percent": 82.90815313519305
+    },
+    {
+      "mode": "starttls",
+      "operation": "userBindWrong/simple_bind_ssha/0",
+      "ldapgo": 89.3673669999999,
+      "openldap": 75.83411499999995,
+      "relative_percent": 84.85660655080063
+    },
+    {
+      "mode": "starttls",
+      "operation": "userBindWrong/simple_bind_plaintext/0",
+      "ldapgo": 86.06359599999995,
+      "openldap": 71.76441200000005,
+      "relative_percent": 83.38532821705485
+    },
+    {
+      "mode": "starttls",
+      "operation": "nonrootBase/search_nonrootBase/0",
+      "ldapgo": 92.10255600000006,
+      "openldap": 80.47444900000002,
+      "relative_percent": 87.37482703520189
+    },
+    {
+      "mode": "starttls",
+      "operation": "nonrootEquality/search_nonrootEquality/0",
+      "ldapgo": 103.02504200000004,
+      "openldap": 86.73149699999992,
+      "relative_percent": 84.18486934467823
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareTrueFirst/compare_member_true_first/10",
+      "ldapgo": 88.76987699999994,
+      "openldap": 77.14765200000005,
+      "relative_percent": 86.90746749598415
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareTrueFirst/compare_member_true_first/1000",
+      "ldapgo": 95.76878599999985,
+      "openldap": 78.28584100000002,
+      "relative_percent": 81.74463128309901
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareTrueLast/compare_member_true_last/10",
+      "ldapgo": 90.44907800000004,
+      "openldap": 76.56858099999997,
+      "relative_percent": 84.6537993455278
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareTrueLast/compare_member_true_last/1000",
+      "ldapgo": 111.73152599999999,
+      "openldap": 84.96249500000015,
+      "relative_percent": 76.04164915817954
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareFalse/compare_member_false_missing/10",
+      "ldapgo": 87.73147499999996,
+      "openldap": 74.58783699999995,
+      "relative_percent": 85.0183323601934
+    },
+    {
+      "mode": "starttls",
+      "operation": "groupCompareFalse/compare_member_false_missing/1000",
+      "ldapgo": 103.59561299999993,
+      "openldap": 80.30408499999994,
+      "relative_percent": 77.5168780554443
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+| Transport | Operation | ldap-go ms | OpenLDAP ms | Relative |
+| --- | --- | ---: | ---: | ---: |
+| ldaps | userBind/simple_bind_ssha/0 | 88.11 | 73.97 | 84.0% |
+| ldaps | userBind/simple_bind_plaintext/0 | 84.27 | 70.30 | 83.4% |
+| ldaps | userBindWrong/simple_bind_ssha/0 | 87.63 | 73.71 | 84.1% |
+| ldaps | userBindWrong/simple_bind_plaintext/0 | 89.19 | 73.58 | 82.5% |
+| ldaps | nonrootBase/search_nonrootBase/0 | 100.77 | 86.98 | 86.3% |
+| ldaps | nonrootEquality/search_nonrootEquality/0 | 100.63 | 85.10 | 84.6% |
+| ldaps | groupCompareTrueFirst/compare_member_true_first/10 | 82.99 | 72.80 | 87.7% |
+| ldaps | groupCompareTrueFirst/compare_member_true_first/1000 | 98.33 | 80.29 | 81.7% |
+| ldaps | groupCompareTrueLast/compare_member_true_last/10 | 90.29 | 76.88 | 85.2% |
+| ldaps | groupCompareTrueLast/compare_member_true_last/1000 | 112.92 | 84.95 | 75.2% |
+| ldaps | groupCompareFalse/compare_member_false_missing/10 | 97.04 | 81.84 | 84.3% |
+| ldaps | groupCompareFalse/compare_member_false_missing/1000 | 109.80 | 84.94 | 77.4% |
+| starttls | userBind/simple_bind_ssha/0 | 84.94 | 69.04 | 81.3% |
+| starttls | userBind/simple_bind_plaintext/0 | 83.53 | 69.25 | 82.9% |
+| starttls | userBindWrong/simple_bind_ssha/0 | 89.37 | 75.83 | 84.9% |
+| starttls | userBindWrong/simple_bind_plaintext/0 | 86.06 | 71.76 | 83.4% |
+| starttls | nonrootBase/search_nonrootBase/0 | 92.10 | 80.47 | 87.4% |
+| starttls | nonrootEquality/search_nonrootEquality/0 | 103.03 | 86.73 | 84.2% |
+| starttls | groupCompareTrueFirst/compare_member_true_first/10 | 88.77 | 77.15 | 86.9% |
+| starttls | groupCompareTrueFirst/compare_member_true_first/1000 | 95.77 | 78.29 | 81.7% |
+| starttls | groupCompareTrueLast/compare_member_true_last/10 | 90.45 | 76.57 | 84.7% |
+| starttls | groupCompareTrueLast/compare_member_true_last/1000 | 111.73 | 84.96 | 76.0% |
+| starttls | groupCompareFalse/compare_member_false_missing/10 | 87.73 | 74.59 | 85.0% |
+| starttls | groupCompareFalse/compare_member_false_missing/1000 | 103.60 | 80.30 | 77.5% |

@@ -1,0 +1,1986 @@
+diff --git a/cmd/ldap-go/main.go b/cmd/ldap-go/main.go
+index 7013630..89798fe 100644
+--- a/cmd/ldap-go/main.go
++++ b/cmd/ldap-go/main.go
+@@ -1883,6 +1883,9 @@ func runServe(
+ 	if err := validateServeListenerTransportMix(listenerURLs, tlcpRequested); err != nil {
+ 		return err
+ 	}
++	for index, listener := range listeners {
++		listeners[index] = server.BufferedTCPListener(listener)
++	}
+ 	listenerSchemeForConnection := serveListenerSchemeResolver(
+ 		listeners,
+ 		listenerURLs,
+diff --git a/cmd/ldap-go/serve_tcp_input_test.go b/cmd/ldap-go/serve_tcp_input_test.go
+new file mode 100644
+index 0000000..30b826e
+--- /dev/null
++++ b/cmd/ldap-go/serve_tcp_input_test.go
+@@ -0,0 +1,75 @@
++package main
++
++import (
++	"bytes"
++	"io"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/wangle201210/ldap-go/internal/server"
++)
++
++func TestServeBufferedTCPBeforeSchemeResolverAndMultiplexer(t *testing.T) {
++	for _, secureScheme := range []string{"ldaps", "ldap+tlcp"} {
++		t.Run(secureScheme, func(t *testing.T) {
++			listeners := []net.Listener{listenServeResolverTCP(t), listenServeResolverTCP(t)}
++			for index, listener := range listeners {
++				if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
++					t.Fatal(err)
++				}
++				listeners[index] = server.BufferedTCPListener(listener)
++				if listeners[index] == listener {
++					t.Fatal("native CLI listener was not buffered")
++				}
++			}
++			plain, secure := listeners[0], listeners[1]
++			resolver := serveListenerSchemeResolver(listeners, []string{"ldap://listener/", secureScheme + "://listener/"})
++			marked, ok := listeners[1].(*serveSchemeListener)
++			if resolver == nil || listeners[0] != plain || !ok || marked.Listener != secure {
++				t.Fatal("scheme resolver did not preserve the buffered listeners")
++			}
++			listener := newServeListener(listeners)
++			t.Cleanup(func() { listener.Close() })
++			for index, scheme := range []string{"ldap", secureScheme} {
++				peer, err := net.DialTimeout("tcp", listeners[index].Addr().String(), time.Second)
++				if err != nil {
++					t.Fatal(err)
++				}
++				t.Cleanup(func() { peer.Close() })
++				accepted, err := listener.Accept()
++				if err != nil {
++					t.Fatal(err)
++				}
++				t.Cleanup(func() { accepted.Close() })
++				if got := resolver(accepted); got != scheme {
++					t.Fatalf("multiplexed scheme = %q, want %q", got, scheme)
++				}
++				input := accepted
++				if index == 1 {
++					marked, ok := accepted.(*serveSchemeConnection)
++					if !ok {
++						t.Fatalf("secure connection lost scheme wrapper: %T", accepted)
++					}
++					input = marked.Conn
++				}
++				if _, raw := input.(*net.TCPConn); raw {
++					t.Fatal("multiplexer accepted unbuffered TCP input")
++				}
++				for _, connection := range []net.Conn{peer, accepted} {
++					if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
++						t.Fatal(err)
++					}
++				}
++				payload := []byte("classified TCP input")
++				if n, err := peer.Write(payload); err != nil || n != len(payload) {
++					t.Fatalf("Write = (%d, %v)", n, err)
++				}
++				got := make([]byte, len(payload))
++				if _, err := io.ReadFull(accepted, got); err != nil || !bytes.Equal(got, payload) {
++					t.Fatalf("ReadFull = (%q, %v)", got, err)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/server/server.go b/internal/server/server.go
+index a9988c4..0993e1e 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -469,6 +469,10 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) error {
+ 	if listener == nil {
+ 		return errors.New("listener is required")
+ 	}
++	// Custom classifiers retain their original accepted-connection contract.
++	if server.config.ImplicitTLSForConnection == nil && server.config.ListenerSchemeForConnection == nil {
++		listener = BufferedTCPListener(listener)
++	}
+ 	defer server.monitor.closeLogFile()
+ 	if err := server.syncConsumers.start(ctx); err != nil {
+ 		return err
+diff --git a/internal/server/tcp_input.go b/internal/server/tcp_input.go
+new file mode 100644
+index 0000000..9d49bfa
+--- /dev/null
++++ b/internal/server/tcp_input.go
+@@ -0,0 +1,164 @@
++package server
++
++import (
++	"net"
++	"os"
++	"sync"
++	"time"
++)
++
++const tcpInputBufferSize = 1024
++
++// BufferedTCPListener buffers input only on sockets accepted by a native TCP
++// listener. Other listeners, including an already buffered listener, are unchanged.
++func BufferedTCPListener(listener net.Listener) net.Listener {
++	tcp, ok := listener.(*net.TCPListener)
++	if !ok || tcp == nil {
++		return listener
++	}
++	return &bufferedTCPListener{tcp: tcp}
++}
++
++type bufferedTCPListener struct {
++	tcp *net.TCPListener
++}
++
++func (listener *bufferedTCPListener) Accept() (net.Conn, error) {
++	connection, err := listener.tcp.AcceptTCP()
++	if err != nil {
++		return nil, err
++	}
++	return &bufferedTCPConnection{tcp: connection}, nil
++}
++
++func (listener *bufferedTCPListener) Close() error {
++	return listener.tcp.Close()
++}
++
++func (listener *bufferedTCPListener) Addr() net.Addr {
++	return listener.tcp.Addr()
++}
++
++// The native accept owns the socket before any reads or deadline changes. Keep
++// it private so later lifecycle calls cannot bypass the buffered input state.
++type bufferedTCPConnection struct {
++	tcp *net.TCPConn
++
++	readMu     sync.Mutex
++	buffer     [tcpInputBufferSize]byte
++	start, end int
++	pending    error
++
++	stateMu      sync.Mutex
++	closed       bool
++	readDeadline time.Time
++}
++
++func (connection *bufferedTCPConnection) Read(value []byte) (int, error) {
++	connection.readMu.Lock()
++	defer connection.readMu.Unlock()
++	if len(value) == 0 {
++		return connection.tcp.Read(value)
++	}
++
++	for {
++		connection.stateMu.Lock()
++		if err := connection.readErrorLocked(); err != nil {
++			connection.stateMu.Unlock()
++			return 0, err
++		}
++		if connection.start < connection.end {
++			count := copy(value, connection.buffer[connection.start:connection.end])
++			clear(connection.buffer[connection.start : connection.start+count])
++			connection.start += count
++			var err error
++			if connection.start == connection.end {
++				connection.start, connection.end = 0, 0
++				err, connection.pending = connection.pending, nil
++			}
++			connection.stateMu.Unlock()
++			return count, err
++		}
++		connection.stateMu.Unlock()
++
++		// A blocking socket read must leave stateMu available to Close and
++		// deadline setters. Recheck that state before delivering prefetched bytes.
++		if len(value) >= len(connection.buffer) {
++			return connection.tcp.Read(value)
++		}
++		count, err := connection.tcp.Read(connection.buffer[:])
++		if count == 0 {
++			return 0, err
++		}
++		connection.start, connection.end, connection.pending = 0, count, err
++	}
++}
++
++func (connection *bufferedTCPConnection) readErrorLocked() error {
++	var err error
++	if connection.closed {
++		err = net.ErrClosed
++	} else if !connection.readDeadline.IsZero() && !time.Now().Before(connection.readDeadline) {
++		err = os.ErrDeadlineExceeded
++	}
++	if err == nil {
++		return nil
++	}
++	return &net.OpError{
++		Op:     "read",
++		Net:    "tcp",
++		Source: connection.tcp.LocalAddr(),
++		Addr:   connection.tcp.RemoteAddr(),
++		Err:    err,
++	}
++}
++
++func (connection *bufferedTCPConnection) Write(value []byte) (int, error) {
++	return connection.tcp.Write(value)
++}
++
++func (connection *bufferedTCPConnection) Close() error {
++	connection.stateMu.Lock()
++	connection.closed = true
++	connection.stateMu.Unlock()
++
++	// Interrupt an in-flight refill before waiting to clear its buffer.
++	err := connection.tcp.Close()
++	connection.readMu.Lock()
++	clear(connection.buffer[:])
++	connection.start, connection.end, connection.pending = 0, 0, nil
++	connection.readMu.Unlock()
++	return err
++}
++
++func (connection *bufferedTCPConnection) LocalAddr() net.Addr {
++	return connection.tcp.LocalAddr()
++}
++
++func (connection *bufferedTCPConnection) RemoteAddr() net.Addr {
++	return connection.tcp.RemoteAddr()
++}
++
++func (connection *bufferedTCPConnection) SetDeadline(deadline time.Time) error {
++	connection.stateMu.Lock()
++	defer connection.stateMu.Unlock()
++	if err := connection.tcp.SetDeadline(deadline); err != nil {
++		return err
++	}
++	connection.readDeadline = deadline
++	return nil
++}
++
++func (connection *bufferedTCPConnection) SetReadDeadline(deadline time.Time) error {
++	connection.stateMu.Lock()
++	defer connection.stateMu.Unlock()
++	if err := connection.tcp.SetReadDeadline(deadline); err != nil {
++		return err
++	}
++	connection.readDeadline = deadline
++	return nil
++}
++
++func (connection *bufferedTCPConnection) SetWriteDeadline(deadline time.Time) error {
++	return connection.tcp.SetWriteDeadline(deadline)
++}
+diff --git a/internal/server/tcp_input_integration_test.go b/internal/server/tcp_input_integration_test.go
+new file mode 100644
+index 0000000..4c8f046
+--- /dev/null
++++ b/internal/server/tcp_input_integration_test.go
+@@ -0,0 +1,372 @@
++package server
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"net"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/storage"
++)
++
++func TestTCPInputServeListenerSelectionAndOwnership(t *testing.T) {
++	for _, name := range []string{"native", "implicit_classifier", "scheme_classifier", "both_classifiers", "custom_listener", "explicit_buffer_with_classifier"} {
++		t.Run(name, func(t *testing.T) {
++			var listener net.Listener = tcpInputListener(t)
++			config := Config{}
++			classified := make(chan net.Conn, 2)
++			if name == "implicit_classifier" || name == "both_classifiers" {
++				config.ImplicitTLSForConnection = func(connection net.Conn) bool {
++					classified <- connection
++					return false
++				}
++			}
++			if name == "scheme_classifier" || name == "both_classifiers" || name == "explicit_buffer_with_classifier" {
++				config.ListenerSchemeForConnection = func(connection net.Conn) string {
++					classified <- connection
++					return "ldap"
++				}
++			}
++			if config.ImplicitTLSForConnection != nil || config.ListenerSchemeForConnection != nil {
++				config.TLSConfig = testServerTLSConfig(t)
++			}
++			if name == "custom_listener" {
++				listener = &tcpInputListenerWrapper{Listener: listener}
++			} else if name == "explicit_buffer_with_classifier" {
++				listener = BufferedTCPListener(listener)
++			}
++			instance, cancel, wait := startTCPInputIntegrationServer(t, listener, config)
++			peer, err := net.DialTimeout("tcp", listener.Addr().String(), tcpInputTestTimeout)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { peer.Close() })
++			if err := peer.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++				t.Fatal(err)
++			}
++			writeRawLDAPRequest(t, peer, 1, rawExtendedRequest(whoAmIOID, nil, false), nil)
++			assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 1,
++				ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++			owned, registry := tcpInputIntegrationOwnedConnection(t, instance)
++			controlled, buffered := owned.(*bufferedTCPConnection)
++			wantBuffered := name == "native" || name == "explicit_buffer_with_classifier"
++			if buffered != wantBuffered {
++				t.Fatalf("registered connection = %T, want buffered=%v", owned, wantBuffered)
++			}
++			if !wantBuffered {
++				if _, ok := owned.(*net.TCPConn); !ok {
++					t.Fatalf("fallback registered %T, want original *net.TCPConn", owned)
++				}
++			}
++			if config.ImplicitTLSForConnection != nil || config.ListenerSchemeForConnection != nil {
++				select {
++				case original := <-classified:
++					if original != owned {
++						t.Fatalf("classifier saw %T %p, registry owns %T %p", original, original, owned, owned)
++					}
++				default:
++					t.Fatal("custom classifier was not called")
++				}
++			}
++			cancel()
++			if err := wait(); err != nil {
++				t.Fatal(err)
++			}
++			assertConnectionTimeoutClosesSilently(t, peer, time.Second)
++			if registry.hasOutstanding() {
++				t.Fatal("shutdown left registered operations")
++			}
++			assertInlineBindTestReleased(t, instance)
++			if buffered {
++				controlled.stateMu.Lock()
++				closed := controlled.closed
++				controlled.stateMu.Unlock()
++				if !closed {
++					t.Fatal("shutdown bypassed the controlled input Close")
++				}
++			}
++			instance.mu.Lock()
++			connections, operations := len(instance.connections), len(instance.connectionOperations)
++			instance.mu.Unlock()
++			if connections != 0 || operations != 0 {
++				t.Fatalf("shutdown retained connections=%d registries=%d", connections, operations)
++			}
++		})
++	}
++}
++
++func TestTCPInputPrefetchedBindIdentityAndIncomingLimit(t *testing.T) {
++	for _, test := range []struct {
++		name     string
++		rebind   bool
++		dn       string
++		password string
++		code     ldapwire.ResultCode
++		identity string
++	}{
++		{name: "success", dn: inlineBindRootDN, password: "admin-secret", identity: "dn:" + inlineBindRootDN},
++		{name: "failed_rebind", rebind: true, dn: inlineBindRootDN, password: "wrong", code: ldapwire.ResultInvalidCredentials},
++		{name: "anonymous_rebind", rebind: true},
++	} {
++		for _, mode := range []string{"identity", "incoming_limit"} {
++			t.Run(test.name+"/"+mode, func(t *testing.T) {
++				store := storage.NewMemory()
++				t.Cleanup(func() { store.Close() })
++				seedDirectory(t, store)
++				putIncomingLimitRuntimeEntry(t, store, 128, 1024)
++				who := ldapwire.Message{ID: 4, Request: ldapwire.ExtendedRequest{Name: whoAmIOID}}
++				if mode == "incoming_limit" {
++					who.Controls = []ldapwire.Control{{OID: "1.3.6.1.4.1.4203.666.999", HasValue: true, Value: make([]byte, 384)}}
++				}
++				request := tcpInputEncode(t, who)
++				if mode == "incoming_limit" {
++					if content := ldapFrameContentLength(t, request); content <= 128 || content > 1024 {
++						t.Fatalf("request content length = %d, want between the two limits", content)
++					}
++				}
++				var pipeline []byte
++				if test.rebind {
++					pipeline = tcpInputEncode(t, inlineBindTestMessage(1, inlineBindRootDN, "admin-secret"))
++				}
++				pipeline = append(pipeline, tcpInputEncode(t, inlineBindTestMessage(3, test.dn, test.password))...)
++				pipeline = append(pipeline, request...)
++				connection, peer := tcpInputPending(t, pipeline)
++				listener := &tcpInputPreloadedListener{Listener: tcpInputListener(t), connection: connection}
++				instance, cancel, wait := startTCPInputIntegrationServer(t, listener, Config{Store: store})
++				if test.rebind {
++					assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 1,
++						ldapwire.ApplicationBindResponse, int64(ldapwire.ResultSuccess))
++				}
++				assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 3,
++					ldapwire.ApplicationBindResponse, int64(test.code))
++				if mode == "incoming_limit" && test.identity == "" {
++					assertIncomingLimitSilentClose(t, peer)
++				} else {
++					response := readRawLDAPPacket(t, peer)
++					assertRawLDAPEnvelope(t, response, 4, ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++					value, present := rawExtendedResponseValue(response)
++					if !present || string(value) != test.identity {
++						t.Fatalf("prefetched Who Am I = %q, present=%v; want %q", value, present, test.identity)
++					}
++				}
++				cancel()
++				if err := wait(); err != nil {
++					t.Fatal(err)
++				}
++				assertInlineBindTestReleased(t, instance)
++			})
++		}
++	}
++}
++
++func TestTCPInputIdleTimeoutAfterPrefetchedBindAndPartialRequest(t *testing.T) {
++	store := storage.NewMemory()
++	t.Cleanup(func() { store.Close() })
++	seedDirectory(t, store)
++	putConnectionTimeoutGlobalEntry(t, store, []string{"1"}, nil)
++	pipeline := tcpInputEncode(t, inlineBindTestMessage(1, inlineBindRootDN, "admin-secret"))
++	pipeline = append(pipeline, 0x30, 0x10, 0x02, 0x01, 0x02)
++	connection, peer := tcpInputPending(t, pipeline)
++	listener := &tcpInputPreloadedListener{Listener: tcpInputListener(t), connection: connection}
++	started := time.Now()
++	instance, cancel, wait := startTCPInputIntegrationServer(t, listener, Config{Store: store})
++	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 1,
++		ldapwire.ApplicationBindResponse, int64(ldapwire.ResultSuccess))
++	owned, _ := tcpInputIntegrationOwnedConnection(t, instance)
++	if owned != connection {
++		t.Fatal("idle watcher does not own the preloaded connection")
++	}
++	assertConnectionTimeoutClosesSilently(t, peer, 3*time.Second)
++	if elapsed := time.Since(started); elapsed < 700*time.Millisecond {
++		t.Fatalf("partial PDU closed before the idle timeout: %s", elapsed)
++	}
++	waitForServerConnectionCount(t, instance, 0)
++	cancel()
++	if err := wait(); err != nil {
++		t.Fatal(err)
++	}
++	assertInlineBindTestReleased(t, instance)
++}
++
++func TestTCPInputCancelBypassesPendingLimit(t *testing.T) {
++	store := newCancelBlockingStore(storage.NewMemory())
++	t.Cleanup(func() { store.Close() })
++	seedDirectory(t, store)
++	putConnectionPendingGlobalEntry(t, store, []string{"0"}, []string{"0"})
++	listener := tcpInputListener(t)
++	instance, cancel, wait := startTCPInputIntegrationServer(t, listener, Config{Store: store})
++	peer := dialAndBindRawLDAP(t, listener.Addr().String(), inlineBindRootDN, "admin-secret")
++	t.Cleanup(func() { peer.Close() })
++	if err := peer.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++		t.Fatal(err)
++	}
++	gate := store.blockNextSearch()
++	writeRawLDAPRequest(t, peer, 2, rawCancellationSearch(t), nil)
++	gate.waitUntilBlocked(t)
++	owned, registry := tcpInputIntegrationOwnedConnection(t, instance)
++	if _, ok := owned.(*bufferedTCPConnection); !ok || !registry.contains(2) {
++		t.Fatalf("blocked Search is not registered on controlled TCP input: %T", owned)
++	}
++	assertLDAPConnectionHasNoResponse(t, peer)
++	if err := peer.SetReadDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++		t.Fatal(err)
++	}
++	writeRawLDAPRequest(t, peer, 3, rawExtendedRequest(cancelOID, ldapwire.EncodeCancelRequestValue(2), true), nil)
++	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 2,
++		ldapwire.ApplicationSearchResultDone, int64(ldapwire.ResultCanceled))
++	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 3,
++		ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++	select {
++	case <-gate.resumed:
++	case <-time.After(tcpInputTestTimeout):
++		t.Fatal("Cancel did not release the storage scan")
++	}
++	writeRawLDAPRequest(t, peer, 4, rawExtendedRequest(whoAmIOID, nil, false), nil)
++	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 4,
++		ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++	cancel()
++	if err := wait(); err != nil {
++		t.Fatal(err)
++	}
++	assertInlineBindTestReleased(t, instance)
++}
++
++func TestTCPInputShutdownWithPrefetchedRequestBehindBind(t *testing.T) {
++	for _, mode := range []string{"graceful", "forced"} {
++		t.Run(mode, func(t *testing.T) {
++			store := newResourceLimitStore(storage.NewMemory())
++			t.Cleanup(func() { store.Close() })
++			seedDirectory(t, store)
++			following := tcpInputEncode(t, ldapwire.Message{ID: 2, Request: ldapwire.ExtendedRequest{Name: whoAmIOID}})
++			pipeline := tcpInputEncode(t, inlineBindTestMessage(1, "uid=alice,ou=people,dc=example,dc=com", "secret"))
++			connection, peer := tcpInputPending(t, append(pipeline, following...))
++			listener := &tcpInputPreloadedListener{Listener: tcpInputListener(t), connection: connection}
++			shutdownTimeout := time.Second
++			if mode == "forced" {
++				shutdownTimeout = 200 * time.Millisecond
++			}
++			instance, cancel, wait := startTCPInputIntegrationServer(t, listener, Config{
++				Store: store, Ready: store.enable, ShutdownTimeout: shutdownTimeout,
++			})
++			t.Cleanup(store.unblock)
++			select {
++			case <-store.entered:
++			case <-time.After(tcpInputTestTimeout):
++				t.Fatal("prefetched Bind did not reach storage")
++			}
++			owned, registry := tcpInputIntegrationOwnedConnection(t, instance)
++			if owned != connection || !registry.contains(1) || registry.contains(2) {
++				t.Fatal("Bind did not retain its registry and reader barrier")
++			}
++			connection.readMu.Lock()
++			pending := bytes.Equal(connection.buffer[connection.start:connection.end], following)
++			connection.readMu.Unlock()
++			if !pending {
++				t.Fatal("following request was not pending in the private input buffer")
++			}
++			cancel()
++			bound := time.Now().Add(tcpInputTestTimeout)
++			for {
++				connection.stateMu.Lock()
++				deadline := connection.readDeadline
++				connection.stateMu.Unlock()
++				if !deadline.IsZero() && !deadline.After(time.Now()) {
++					break
++				}
++				if time.Now().After(bound) {
++					t.Fatal("Serve cancellation did not expire the controlled read deadline")
++				}
++				time.Sleep(time.Millisecond)
++			}
++			if mode == "graceful" {
++				if !registry.contains(1) || store.active.Load() != 1 {
++					t.Fatal("graceful drain canceled the active Bind")
++				}
++				store.unblock()
++				assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 1,
++					ldapwire.ApplicationBindResponse, int64(ldapwire.ResultSuccess))
++				if err := wait(); err != nil {
++					t.Fatal(err)
++				}
++			} else if err := wait(); !errors.Is(err, ErrShutdownTimeout) {
++				t.Fatalf("forced drain = %v, want shutdown timeout", err)
++			}
++			assertConnectionTimeoutClosesSilently(t, peer, time.Second)
++			if registry.hasOutstanding() || store.active.Load() != 0 {
++				t.Fatal("shutdown retained the blocked Bind")
++			}
++			assertInlineBindTestReleased(t, instance)
++			if n, err := connection.Read(make([]byte, 1)); n != 0 || !errors.Is(err, net.ErrClosed) {
++				t.Fatalf("read after shutdown = (%d, %v), want closed", n, err)
++			}
++			if connection.start != 0 || connection.end != 0 || connection.buffer != [tcpInputBufferSize]byte{} {
++				t.Fatal("shutdown did not clear prefetched request bytes")
++			}
++		})
++	}
++}
++
++// Only the first Accept is supplied by the fixture; subsequent accepts and
++// shutdown still use a real TCP listener. tcpInputPending owns preloading.
++type tcpInputPreloadedListener struct {
++	net.Listener
++	connection net.Conn
++}
++
++func (listener *tcpInputPreloadedListener) Accept() (net.Conn, error) {
++	if connection := listener.connection; connection != nil {
++		listener.connection = nil
++		return connection, nil
++	}
++	return listener.Listener.Accept()
++}
++
++func startTCPInputIntegrationServer(t *testing.T, listener net.Listener, config Config) (*Server, context.CancelFunc, func() error) {
++	t.Helper()
++	if config.Store == nil {
++		store := storage.NewMemory()
++		t.Cleanup(func() { store.Close() })
++		seedDirectory(t, store)
++		config.Store = store
++	}
++	config.RootDN, config.RootPassword = inlineBindRootDN, []byte("admin-secret")
++	if config.ShutdownTimeout == 0 {
++		config.ShutdownTimeout = time.Second
++	}
++	instance, err := New(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithCancel(t.Context())
++	done := make(chan error, 1)
++	go func() { done <- instance.Serve(ctx, listener) }()
++	wait := sync.OnceValue(func() error { return tcpInputAwait(t, done) })
++	t.Cleanup(func() {
++		cancel()
++		if err := wait(); err != nil && !errors.Is(err, ErrShutdownTimeout) {
++			t.Errorf("Serve: %v", err)
++		}
++	})
++	return instance, cancel, wait
++}
++
++func tcpInputIntegrationOwnedConnection(t *testing.T, instance *Server) (net.Conn, *operationRegistry) {
++	t.Helper()
++	instance.mu.Lock()
++	defer instance.mu.Unlock()
++	if len(instance.connections) != 1 || len(instance.connectionOperations) != 1 {
++		t.Fatalf("connections=%d registries=%d, want one of each", len(instance.connections), len(instance.connectionOperations))
++	}
++	for connection := range instance.connections {
++		registry := instance.connectionOperations[connection]
++		if registry == nil {
++			t.Fatal("operation registry is keyed by a different connection handle")
++		}
++		return connection, registry
++	}
++	return nil, nil
++}
+diff --git a/internal/server/tcp_input_sasl_test.go b/internal/server/tcp_input_sasl_test.go
+new file mode 100644
+index 0000000..e4c1420
+--- /dev/null
++++ b/internal/server/tcp_input_sasl_test.go
+@@ -0,0 +1,243 @@
++package server
++
++import (
++	"bytes"
++	"errors"
++	"io"
++	"net"
++	"testing"
++
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/saslkrb5"
++)
++
++// These are transport/security-layer tests, not authentication or server-loop
++// tests. A synthetic final SASL BindRequest is consumed before installing the
++// real negotiated layer with fixed keys. Both sides of that boundary are already
++// in the real TCP input buffer; no kernel packet-coalescing assumption is needed.
++func TestBufferedTCPInputSASLTransition(t *testing.T) {
++	for _, test := range []struct {
++		mechanism  string
++		protection string
++	}{
++		{mechanism: "DIGEST-MD5", protection: "auth-int"},
++		{mechanism: "DIGEST-MD5", protection: saslDigestMD5RC4Cipher},
++		{mechanism: "DIGEST-MD5", protection: saslDigestMD53DESCipher},
++		{mechanism: "GSSAPI", protection: "auth-int"},
++		{mechanism: "GSSAPI", protection: "auth-conf"},
++	} {
++		t.Run(test.mechanism+"/"+test.protection, func(t *testing.T) {
++			for _, boundary := range []string{"two_frames_prefetched", "split_frame_header"} {
++				t.Run(boundary, func(t *testing.T) {
++					wire := &syncConsumerSecurityTestConn{}
++					sender := tcpInputSASLLayer(t, wire, test.mechanism, test.protection, false)
++					messages := []ldapwire.Message{
++						tcpInputSASLCompare(2, 7),
++						tcpInputSASLCompare(3, 13),
++						tcpInputSASLCompare(4, 1600),
++					}
++					var frames [][]byte
++					var stream []byte
++					for _, message := range messages {
++						frame := tcpInputSASLFrame(t, sender, wire, message)
++						frames = append(frames, frame)
++						stream = append(stream, frame...)
++					}
++					prefetched := len(frames[0]) + len(frames[1])
++					if boundary == "split_frame_header" {
++						prefetched = 2
++					}
++					raw, peer := tcpInputSASLPending(t, test.mechanism, stream[:prefetched])
++					receiver := tcpInputSASLLayer(t, raw, test.mechanism, test.protection, true)
++					if err := tcpInputWriteChunks(peer, stream[prefetched:], 37); err != nil {
++						t.Fatal(err)
++					}
++					if err := peer.CloseWrite(); err != nil {
++						t.Fatal(err)
++					}
++					var retained []ldapwire.Message
++					for index, want := range messages {
++						got, err := ldapwire.ReadMessage(receiver, 0)
++						if err != nil {
++							t.Fatalf("protected message %d: %v", want.ID, err)
++						}
++						if !bytes.Equal(tcpInputEncode(t, got), tcpInputEncode(t, want)) {
++							t.Fatalf("protected message %d changed", want.ID)
++						}
++						retained = append(retained, got)
++						if index == 0 && boundary == "two_frames_prefetched" &&
++							!bytes.Equal(raw.buffer[raw.start:raw.end], frames[1]) {
++							t.Fatal("first protected read consumed or changed the next prefetched frame")
++						}
++					}
++					if _, err := ldapwire.ReadMessage(receiver, 0); !errors.Is(err, io.EOF) {
++						t.Fatalf("after protected messages: %v, want EOF", err)
++					}
++					if err := receiver.Close(); err != nil {
++						t.Fatal(err)
++					}
++					for index, got := range retained {
++						if !bytes.Equal(tcpInputEncode(t, got), tcpInputEncode(t, messages[index])) {
++							t.Fatalf("message %d aliases reused or cleared frame storage", got.ID)
++						}
++					}
++				})
++			}
++
++			for _, failure := range []string{"tamper", "replay", "invalid_length", "plaintext"} {
++				t.Run(failure, func(t *testing.T) {
++					wire := &syncConsumerSecurityTestConn{}
++					sender := tcpInputSASLLayer(t, wire, test.mechanism, test.protection, false)
++					message := tcpInputSASLCompare(2, 7)
++					frame := tcpInputSASLFrame(t, sender, wire, message)
++					var stream []byte
++					wantErr := errSASLDigestMD5SecurityFrame
++					switch failure {
++					case "tamper":
++						// In DIGEST this hits the MAC or ciphertext, leaving the
++						// type/sequence trailer intact; in GSSAPI it hits the body.
++						frame[len(frame)-7] ^= 0x80
++						wantErr = errSASLDigestMD5Integrity
++					case "replay":
++						stream = append(stream, frame...)
++						wantErr = errSASLDigestMD5Sequence
++					case "invalid_length":
++						frame = []byte{0, 0, 0, 0}
++					case "plaintext":
++						frame = tcpInputEncode(t, message)
++					}
++					stream = append(stream, frame...)
++					// A valid unprotected PDU must never become dispatchable after
++					// the failed frame, including on subsequent decoder calls.
++					stream = append(stream, tcpInputEncode(t, tcpInputSASLCompare(99, 13))...)
++					raw, peer := tcpInputSASLPending(t, test.mechanism, stream)
++					receiver := tcpInputSASLLayer(t, raw, test.mechanism, test.protection, true)
++					if err := peer.CloseWrite(); err != nil {
++						t.Fatal(err)
++					}
++					if failure == "replay" {
++						got, err := ldapwire.ReadMessage(receiver, 0)
++						if err != nil || !bytes.Equal(tcpInputEncode(t, got), tcpInputEncode(t, message)) {
++							t.Fatalf("original frame before replay: %#v, %v", got, err)
++						}
++					}
++					output := bytes.Repeat([]byte{0xa5}, 256)
++					unchanged := bytes.Clone(output)
++					n, readErr := receiver.Read(output)
++					if n != 0 || readErr == nil || !bytes.Equal(output, unchanged) {
++						t.Fatalf("failed protected Read = (%d, %v), want no plaintext or buffer mutation", n, readErr)
++					}
++					if test.mechanism == "DIGEST-MD5" && !errors.Is(readErr, wantErr) {
++						t.Fatalf("protected Read error = %v, want %v", readErr, wantErr)
++					}
++					if _, ok := errors.AsType[net.Error](readErr); ok ||
++						errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
++						t.Fatalf("transport failure masked protected-frame rejection: %v", readErr)
++					}
++					start, end := raw.start, raw.end
++					pending := bytes.Clone(raw.buffer[start:end])
++					if len(pending) == 0 {
++						t.Fatal("failed frame consumed the trailing plaintext PDU")
++					}
++					for range 2 {
++						got, err := ldapwire.ReadMessage(receiver, 0)
++						if !errors.Is(err, readErr) || got.Request != nil || got.ID != 0 {
++							t.Fatalf("decoder after failed frame = (%#v, %v), want no dispatchable request", got, err)
++						}
++						if raw.start != start || raw.end != end || !bytes.Equal(raw.buffer[start:end], pending) {
++							t.Fatal("security failure resumed consuming prefetched input")
++						}
++					}
++				})
++			}
++		})
++	}
++}
++
++func tcpInputSASLCompare(id int64, size int) ldapwire.Message {
++	return ldapwire.Message{ID: id, Request: ldapwire.CompareRequest{
++		DN: "cn=tcp-input", Attribute: "description", Assertion: bytes.Repeat([]byte{byte(id)}, size),
++	}}
++}
++
++func tcpInputSASLFrame(t *testing.T, sender net.Conn, wire *syncConsumerSecurityTestConn, message ldapwire.Message) []byte {
++	t.Helper()
++	wire.written.Reset()
++	plaintext := tcpInputEncode(t, message)
++	if n, err := sender.Write(plaintext); n != len(plaintext) || err != nil {
++		t.Fatalf("protect message %d = (%d, %v)", message.ID, n, err)
++	}
++	return bytes.Clone(wire.written.Bytes())
++}
++
++func tcpInputSASLPending(t *testing.T, mechanism string, protected []byte) (*bufferedTCPConnection, *net.TCPConn) {
++	t.Helper()
++	finalBind := tcpInputEncode(t, ldapwire.Message{ID: 1, Request: ldapwire.BindRequest{
++		Version: 3,
++		Authentication: ldapwire.Authentication{
++			IsSASL: true, SASLMechanism: mechanism,
++			HasSASLCredentials: true, SASLCredentials: []byte("synthetic final response"),
++		},
++	}})
++	stream := append(bytes.Clone(finalBind), protected...)
++	raw, peer := tcpInputPending(t, stream)
++	got, err := ldapwire.ReadMessage(raw, 0)
++	if err != nil {
++		t.Fatalf("read final SASL bind: %v", err)
++	}
++	if !bytes.Equal(tcpInputEncode(t, got), finalBind) {
++		t.Fatal("final SASL bind changed")
++	}
++	if raw.start != len(finalBind) || raw.end != len(stream) ||
++		!bytes.Equal(raw.buffer[raw.start:raw.end], protected) {
++		t.Fatal("protected bytes were not retained at the final-bind boundary")
++	}
++	t.Cleanup(func() {
++		if !bytes.Equal(tcpInputEncode(t, got), finalBind) {
++			t.Error("final SASL bind aliases reused or cleared TCP storage")
++		}
++	})
++	return raw, peer
++}
++
++func tcpInputSASLLayer(t *testing.T, raw net.Conn, mechanism, protection string, acceptor bool) net.Conn {
++	t.Helper()
++	const maximum = saslDigestMD5DefaultMaxBuffer
++	var layer net.Conn
++	var err error
++	if mechanism == "GSSAPI" {
++		// Reuse the existing AES key fixture; neither wrapper requires a KDC.
++		state := saslkrb5.SecurityState{SendSequence: 41, ReceiveSequence: 73}
++		if acceptor {
++			state.SendSequence, state.ReceiveSequence = state.ReceiveSequence, state.SendSequence
++		}
++		if protection == "auth-int" {
++			layer, err = saslkrb5.NewIntegrityConnection(raw, ldapBackendGSSAPITestKey(), acceptor, state, maximum, maximum)
++		} else {
++			layer, err = saslkrb5.NewConfidentialityConnection(raw, ldapBackendGSSAPITestKey(), acceptor, state, maximum, maximum)
++		}
++	} else {
++		key := []byte("0123456789abcdef")
++		defer clear(key)
++		cipher := availableSASLDigestMD5Ciphers(0, saslDigestMD5RC4SSF)[protection]
++		if protection == "auth-int" {
++			if acceptor {
++				layer, err = newSASLDigestMD5ServerIntegrityConnection(raw, key, maximum, maximum)
++			} else {
++				layer, err = newSASLDigestMD5IntegrityConnection(raw,
++					saslDigestMD5SigningClientServer, saslDigestMD5SigningServerClient, key, maximum, maximum)
++			}
++		} else if acceptor {
++			layer, err = newSASLDigestMD5ServerPrivacyConnection(raw, key, cipher, maximum, maximum)
++		} else {
++			layer, err = newSASLDigestMD5PrivacyConnection(raw,
++				saslDigestMD5SigningClientServer, saslDigestMD5SigningServerClient,
++				saslDigestMD5SealingClientServer, saslDigestMD5SealingServerClient, key, cipher, maximum, maximum)
++		}
++	}
++	if err != nil {
++		t.Fatalf("create %s/%s layer: %v", mechanism, protection, err)
++	}
++	t.Cleanup(func() { layer.Close() })
++	return layer
++}
+diff --git a/internal/server/tcp_input_test.go b/internal/server/tcp_input_test.go
+new file mode 100644
+index 0000000..c55388b
+--- /dev/null
++++ b/internal/server/tcp_input_test.go
+@@ -0,0 +1,734 @@
++package server
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"runtime"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++)
++
++const tcpInputTestTimeout = 5 * time.Second
++
++func TestBufferedTCPInputFraming(t *testing.T) {
++	for _, test := range []struct {
++		name      string
++		sizes     [2]int
++		chunkSize int
++	}{
++		{name: "short", sizes: [2]int{7, 13}},
++		{name: "long", sizes: [2]int{180, 250}},
++		{name: "fragmented", sizes: [2]int{180, 7}, chunkSize: 1},
++		{name: "larger_than_buffer", sizes: [2]int{1600, 2700}},
++		{name: "fragmented_large", sizes: [2]int{2700, 13}, chunkSize: 37},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			connection, peer := tcpInputPair(t, true)
++			first := tcpInputBindMessage(1, test.sizes[0])
++			second := tcpInputBindMessage(2, test.sizes[1])
++			stream := append(tcpInputEncode(t, first), tcpInputEncode(t, second)...)
++			consumed := make(chan int, 1)
++			var reader io.Reader = connection
++			if test.chunkSize > 0 {
++				reader = tcpInputReaderFunc(func(buffer []byte) (int, error) {
++					n, err := connection.Read(buffer)
++					if n > 0 {
++						select {
++						case consumed <- n:
++						case <-t.Context().Done():
++						}
++					}
++					return n, err
++				})
++			}
++			write := func() error {
++				if test.chunkSize == 0 {
++					return tcpInputWriteChunks(peer, stream, 0)
++				}
++				for len(stream) > 0 {
++					chunk := stream[:min(test.chunkSize, len(stream))]
++					if err := tcpInputWriteChunks(peer, chunk, 0); err != nil {
++						return err
++					}
++					// Wait for delivery before sending the next fragment, allowing
++					// any number of native reads to consume the current fragment.
++					for remaining := len(chunk); remaining > 0; {
++						select {
++						case n := <-consumed:
++							remaining -= n
++						case <-t.Context().Done():
++							return t.Context().Err()
++						}
++					}
++					stream = stream[len(chunk):]
++				}
++				return nil
++			}
++			written := make(chan error, 1)
++			go func() {
++				written <- errors.Join(write(), peer.CloseWrite())
++			}()
++			for _, want := range []ldapwire.Message{first, second} {
++				got, err := ldapwire.ReadMessage(reader, 0)
++				if err != nil {
++					t.Fatalf("ReadMessage(%d): %v", want.ID, err)
++				}
++				tcpInputAssertMessage(t, got, want)
++			}
++			if _, err := ldapwire.ReadMessage(reader, 0); !errors.Is(err, io.EOF) {
++				t.Fatalf("after two PDUs: %v, want EOF", err)
++			}
++			if err := tcpInputAwait(t, written); err != nil {
++				t.Fatalf("write PDUs: %v", err)
++			}
++		})
++	}
++}
++
++func TestBufferedTCPInputTruncatedPDU(t *testing.T) {
++	for _, test := range []struct {
++		name string
++		size int
++		keep int
++	}{
++		{name: "short_header", size: 7, keep: 1},
++		{name: "long_length", size: 1600, keep: 3},
++		{name: "short_body", size: 7, keep: -1},
++		{name: "body_beyond_buffer", size: 2700, keep: 1300},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			connection, peer := tcpInputPair(t, true)
++			first := tcpInputBindMessage(1, 7)
++			truncated := tcpInputEncode(t, tcpInputBindMessage(2, test.size))
++			keep := test.keep
++			if keep < 0 {
++				keep += len(truncated)
++			}
++			stream := append(tcpInputEncode(t, first), truncated[:keep]...)
++			if err := tcpInputWriteChunks(peer, stream, 31); err != nil {
++				t.Fatal(err)
++			}
++			if err := peer.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			got, err := ldapwire.ReadMessage(connection, 0)
++			if err != nil {
++				t.Fatalf("first PDU: %v", err)
++			}
++			tcpInputAssertMessage(t, got, first)
++			if _, err := ldapwire.ReadMessage(connection, 0); !errors.Is(err, io.ErrUnexpectedEOF) {
++				t.Fatalf("truncated PDU: %v, want unexpected EOF", err)
++			}
++		})
++	}
++}
++
++func TestBufferedTCPInputRawWrite(t *testing.T) {
++	connection, peer := tcpInputPair(t, true)
++	if connection.LocalAddr().String() != peer.RemoteAddr().String() ||
++		connection.RemoteAddr().String() != peer.LocalAddr().String() {
++		t.Fatal("connection addresses do not match the TCP peer")
++	}
++	if err := connection.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	// No flush or read on the wrapped connection may be necessary for a write.
++	for _, payload := range [][]byte{{0, 0xff, 0x30, 0x80}, bytes.Repeat([]byte{0x00, 0xff, 0x7f}, 513)} {
++		if n, err := connection.Write(payload); n != len(payload) || err != nil {
++			t.Fatalf("Write = (%d, %v), want (%d, nil)", n, err, len(payload))
++		}
++		got := make([]byte, len(payload))
++		if _, err := io.ReadFull(peer, got); err != nil {
++			t.Fatal(err)
++		}
++		if !bytes.Equal(got, payload) {
++			t.Fatal("raw write changed payload")
++		}
++	}
++	if err := connection.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	n, err := connection.Write([]byte{1})
++	if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
++		t.Fatalf("expired Write = (%d, %v), want (0, deadline exceeded)", n, err)
++	}
++	if err := connection.SetWriteDeadline(time.Time{}); err != nil {
++		t.Fatal(err)
++	}
++	if n, err := connection.Write([]byte{2}); n != 1 || err != nil {
++		t.Fatalf("Write after clearing deadline = (%d, %v)", n, err)
++	}
++	var got [1]byte
++	if _, err := io.ReadFull(peer, got[:]); err != nil || got[0] != 2 {
++		t.Fatalf("peer read after clearing deadline = (%x, %v)", got, err)
++	}
++}
++
++func TestBufferedTCPInputPendingDeadline(t *testing.T) {
++	for _, method := range []string{"SetReadDeadline", "SetDeadline"} {
++		for _, expiry := range []string{"past", "elapses"} {
++			for _, recovery := range []string{"extend", "clear"} {
++				t.Run(method+"/"+expiry+"/"+recovery, func(t *testing.T) {
++					payload := []byte("pending TCP input")
++					connection, peer := tcpInputPending(t, payload)
++					setDeadline := connection.SetReadDeadline
++					if method == "SetDeadline" {
++						setDeadline = connection.SetDeadline
++					}
++					deadline := time.Now().Add(-time.Second)
++					if expiry == "elapses" {
++						deadline = time.Now().Add(20 * time.Millisecond)
++					}
++					if err := setDeadline(deadline); err != nil {
++						t.Fatal(err)
++					}
++					if expiry == "elapses" {
++						<-time.After(time.Until(deadline))
++					}
++					for range 2 {
++						var buffer [1]byte
++						n, err := connection.Read(buffer[:])
++						timeout, ok := errors.AsType[net.Error](err)
++						if n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) || !ok || !timeout.Timeout() {
++							t.Fatalf("Read with pending data after expiry = (%d, %v), want timeout", n, err)
++						}
++					}
++					if method == "SetDeadline" {
++						if n, err := connection.Write([]byte{1}); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
++							t.Fatalf("Write after SetDeadline expiry = (%d, %v)", n, err)
++						}
++					}
++					deadline = time.Time{}
++					if recovery == "extend" {
++						deadline = time.Now().Add(tcpInputTestTimeout)
++					}
++					if err := setDeadline(deadline); err != nil {
++						t.Fatal(err)
++					}
++					got := make([]byte, len(payload))
++					if _, err := io.ReadFull(connection, got); err != nil {
++						t.Fatalf("Read after deadline recovery: %v", err)
++					}
++					if !bytes.Equal(got, payload) {
++						t.Fatalf("deadline expiry consumed pending input: %q, want %q", got, payload)
++					}
++					// Recovery must reach the native socket once the pending buffer drains.
++					if err := tcpInputWriteChunks(peer, payload, 3); err != nil {
++						t.Fatal(err)
++					}
++					if _, err := io.ReadFull(connection, got); err != nil || !bytes.Equal(got, payload) {
++						t.Fatalf("refill after deadline recovery = (%q, %v)", got, err)
++					}
++				})
++			}
++		}
++	}
++}
++
++func TestBufferedTCPInputWriteDeadlineKeepsPendingInputReadable(t *testing.T) {
++	payload := []byte("readable")
++	connection, _ := tcpInputPending(t, payload)
++	if err := connection.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	got := make([]byte, len(payload))
++	if _, err := io.ReadFull(connection, got); err != nil || !bytes.Equal(got, payload) {
++		t.Fatalf("Read with expired write deadline = (%q, %v)", got, err)
++	}
++}
++
++func TestBufferedTCPInputCloseDeniesPendingInput(t *testing.T) {
++	connection, _ := tcpInputPending(t, []byte("pending"))
++	if err := connection.Close(); err != nil {
++		t.Fatal(err)
++	}
++	for range 2 {
++		var buffer [1]byte
++		if n, err := connection.Read(buffer[:]); n != 0 || !errors.Is(err, net.ErrClosed) {
++			t.Fatalf("Read with pending data after Close = (%d, %v)", n, err)
++		}
++	}
++	if n, err := connection.Write([]byte{1}); n != 0 || !errors.Is(err, net.ErrClosed) {
++		t.Fatalf("Write after Close = (%d, %v)", n, err)
++	}
++}
++
++func TestBufferedTCPInputZeroLengthReadKeepsPendingInput(t *testing.T) {
++	for _, expired := range []bool{false, true} {
++		t.Run(fmt.Sprint("expired=", expired), func(t *testing.T) {
++			payload := []byte("pending")
++			connection, _ := tcpInputPending(t, payload)
++			native, _ := tcpInputPair(t, false)
++			if expired {
++				for _, conn := range []net.Conn{connection, native} {
++					if err := conn.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
++						t.Fatal(err)
++					}
++				}
++			}
++			wantN, wantErr := native.Read(nil)
++			gotN, gotErr := connection.Read(nil)
++			if gotN != wantN || (gotErr == nil) != (wantErr == nil) ||
++				errors.Is(gotErr, os.ErrDeadlineExceeded) != errors.Is(wantErr, os.ErrDeadlineExceeded) {
++				t.Fatalf("Read(nil) with pending input = (%d, %v), native = (%d, %v)", gotN, gotErr, wantN, wantErr)
++			}
++			if err := connection.SetReadDeadline(time.Time{}); err != nil {
++				t.Fatal(err)
++			}
++			got := make([]byte, len(payload))
++			if _, err := io.ReadFull(connection, got); err != nil || !bytes.Equal(got, payload) {
++				t.Fatalf("input after zero-length read = (%q, %v)", got, err)
++			}
++		})
++	}
++}
++
++func TestBufferedTCPInputZeroLengthReadMatchesTCP(t *testing.T) {
++	for _, state := range []string{"open", "expired", "closed"} {
++		t.Run(state, func(t *testing.T) {
++			connection, _ := tcpInputPair(t, true)
++			native, _ := tcpInputPair(t, false)
++			for _, conn := range []net.Conn{connection, native} {
++				switch state {
++				case "expired":
++					if err := conn.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
++						t.Fatal(err)
++					}
++				case "closed":
++					if err := conn.Close(); err != nil {
++						t.Fatal(err)
++					}
++				}
++			}
++			for _, buffer := range [][]byte{nil, make([]byte, 0, 1)} {
++				wantN, wantErr := native.Read(buffer)
++				gotN, gotErr := connection.Read(buffer)
++				if gotN != wantN || (gotErr == nil) != (wantErr == nil) {
++					t.Fatalf("Read(empty) = (%d, %v), native = (%d, %v)", gotN, gotErr, wantN, wantErr)
++				}
++				for _, target := range []error{net.ErrClosed, os.ErrDeadlineExceeded, io.EOF} {
++					if errors.Is(gotErr, target) != errors.Is(wantErr, target) {
++						t.Fatalf("Read(empty) error = %v, native = %v", gotErr, wantErr)
++					}
++				}
++			}
++		})
++	}
++}
++
++func TestBufferedTCPInputInterruptBlockedRead(t *testing.T) {
++	for _, test := range []struct {
++		name      string
++		interrupt func(net.Conn) error
++		wantErr   error
++	}{
++		{name: "Close", interrupt: net.Conn.Close, wantErr: net.ErrClosed},
++		{
++			name: "SetReadDeadline",
++			interrupt: func(connection net.Conn) error {
++				return connection.SetReadDeadline(time.Now().Add(-time.Second))
++			},
++			wantErr: os.ErrDeadlineExceeded,
++		},
++		{
++			name: "SetDeadline",
++			interrupt: func(connection net.Conn) error {
++				return connection.SetDeadline(time.Now().Add(-time.Second))
++			},
++			wantErr: os.ErrDeadlineExceeded,
++		},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			connection, peer := tcpInputPair(t, true)
++			started := make(chan error, 1)
++			readDone := make(chan error, 1)
++			go func() {
++				started <- nil
++				var buffer [1]byte
++				n, err := connection.Read(buffer[:])
++				if n != 0 || !errors.Is(err, test.wantErr) {
++					readDone <- fmt.Errorf("interrupted Read = (%d, %v), want (0, %v)", n, err, test.wantErr)
++					return
++				}
++				readDone <- nil
++			}()
++			tcpInputAwait(t, started)
++			select {
++			case err := <-readDone:
++				t.Fatalf("read completed before interruption: %v", err)
++			case <-time.After(20 * time.Millisecond):
++			}
++			interruptDone := make(chan error, 1)
++			go func() { interruptDone <- test.interrupt(connection) }()
++			if err := tcpInputAwait(t, interruptDone); err != nil {
++				t.Fatalf("interrupt read: %v", err)
++			}
++			if err := tcpInputAwait(t, readDone); err != nil {
++				t.Fatal(err)
++			}
++			if test.name != "Close" {
++				if err := connection.SetDeadline(time.Time{}); err != nil {
++					t.Fatal(err)
++				}
++				if err := tcpInputWriteChunks(peer, []byte{'r'}, 0); err != nil {
++					t.Fatal(err)
++				}
++				var got [1]byte
++				if _, err := io.ReadFull(connection, got[:]); err != nil || got[0] != 'r' {
++					t.Fatalf("Read after clearing interrupt = (%q, %v)", got, err)
++				}
++			}
++		})
++	}
++}
++
++func TestBufferedTCPInputConcurrentMethods(t *testing.T) {
++	connection, peer := tcpInputPair(t, true)
++	const size = 512
++	if err := tcpInputWriteChunks(peer, bytes.Repeat([]byte{'r'}, 2*size), 0); err != nil {
++		t.Fatal(err)
++	}
++	start := make(chan struct{})
++	results := make(chan error, 8)
++	deadline := time.Now().Add(tcpInputTestTimeout)
++	jobs := []func() error{
++		func() error {
++			got := make([]byte, 2*size)
++			if _, err := io.ReadFull(peer, got); err != nil {
++				return err
++			}
++			if !bytes.Equal(got, bytes.Repeat([]byte{'w'}, len(got))) {
++				return errors.New("concurrent writes changed data")
++			}
++			return nil
++		},
++		func() error { return connection.SetReadDeadline(deadline) },
++		func() error { return connection.SetWriteDeadline(deadline) },
++		func() error { return connection.SetDeadline(deadline) },
++	}
++	for range 2 {
++		jobs = append(jobs, func() error {
++			got := make([]byte, size)
++			if _, err := io.ReadFull(connection, got); err != nil {
++				return err
++			}
++			if !bytes.Equal(got, bytes.Repeat([]byte{'r'}, size)) {
++				return errors.New("concurrent reads changed data")
++			}
++			return nil
++		}, func() error {
++			return tcpInputWriteChunks(connection, bytes.Repeat([]byte{'w'}, size), 17)
++		})
++	}
++	var workers sync.WaitGroup
++	for _, job := range jobs {
++		workers.Go(func() {
++			<-start
++			results <- job()
++		})
++	}
++	close(start)
++	for range jobs {
++		if err := tcpInputAwait(t, results); err != nil {
++			t.Fatal(err)
++		}
++	}
++	workers.Wait()
++
++	// Race Close with all deadline setters and address queries on the same socket.
++	start = make(chan struct{})
++	closingJobs := []func() error{
++		connection.Close,
++		func() error { return connection.SetDeadline(deadline) },
++		func() error { return connection.SetReadDeadline(deadline) },
++		func() error { return connection.SetWriteDeadline(deadline) },
++		func() error {
++			connection.LocalAddr()
++			connection.RemoteAddr()
++			return nil
++		},
++		func() error { _, err := connection.Read(make([]byte, 1)); return err },
++		func() error { _, err := connection.Write([]byte{'c'}); return err },
++	}
++	for _, operation := range closingJobs {
++		workers.Go(func() {
++			<-start
++			results <- operation()
++		})
++	}
++	close(start)
++	for range closingJobs {
++		if err := tcpInputAwait(t, results); err != nil && !errors.Is(err, net.ErrClosed) {
++			t.Fatal(err)
++		}
++	}
++	workers.Wait()
++}
++
++func TestBufferedTCPListenerForwarding(t *testing.T) {
++	listener := tcpInputListener(t)
++	wrapped := BufferedTCPListener(listener)
++	if wrapped == listener {
++		t.Fatal("concrete TCP listener was not wrapped")
++	}
++	if got := BufferedTCPListener(wrapped); got != wrapped {
++		t.Fatal("already buffered listener was wrapped again")
++	}
++	if wrapped.Addr() != listener.Addr() {
++		t.Fatal("listener address was not forwarded")
++	}
++	if err := wrapped.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if connection, err := wrapped.Accept(); connection != nil || !errors.Is(err, net.ErrClosed) {
++		if connection != nil {
++			connection.Close()
++		}
++		t.Fatalf("Accept on closed wrapper = (%v, %v)", connection, err)
++	}
++	if connection, err := listener.AcceptTCP(); connection != nil || !errors.Is(err, net.ErrClosed) {
++		if connection != nil {
++			connection.Close()
++		}
++		t.Fatalf("underlying listener remains open: (%v, %v)", connection, err)
++	}
++}
++
++func TestBufferedTCPListenerFallback(t *testing.T) {
++	t.Run("custom", func(t *testing.T) {
++		connection, _ := tcpInputPair(t, false)
++		acceptErr := errors.New("custom accept")
++		closeErr := errors.New("custom close")
++		listener := &tcpInputCustomListener{
++			connection: connection,
++			address:    connection.LocalAddr(),
++			closeErr:   closeErr,
++		}
++		wrapped := BufferedTCPListener(listener)
++		if wrapped != listener {
++			t.Fatalf("custom listener with TCP address changed: %T", wrapped)
++		}
++		if got, err := wrapped.Accept(); got != connection || err != nil {
++			t.Fatalf("custom Accept = (%v, %v)", got, err)
++		}
++		listener.connection, listener.acceptErr = nil, acceptErr
++		if got, err := wrapped.Accept(); got != nil || !errors.Is(err, acceptErr) {
++			t.Fatalf("custom Accept error = (%v, %v)", got, err)
++		}
++		if wrapped.Addr() != listener.address {
++			t.Fatal("custom address changed")
++		}
++		if err := wrapped.Close(); !errors.Is(err, closeErr) || listener.closes != 1 {
++			t.Fatalf("custom Close = %v, calls = %d", err, listener.closes)
++		}
++	})
++	for _, name := range []string{"interface_wrapper", "embedded_tcp_wrapper"} {
++		t.Run(name, func(t *testing.T) {
++			listener := tcpInputListener(t)
++			var original net.Listener = &tcpInputListenerWrapper{Listener: listener}
++			if name == "embedded_tcp_wrapper" {
++				original = &tcpInputEmbeddedListener{TCPListener: listener}
++			}
++			wrapped := BufferedTCPListener(original)
++			if wrapped != original {
++				t.Fatalf("wrapped TCP listener changed: %T", wrapped)
++			}
++			peer, err := net.DialTimeout("tcp", listener.Addr().String(), tcpInputTestTimeout)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { peer.Close() })
++			connection, err := wrapped.Accept()
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { connection.Close() })
++			if _, ok := connection.(*net.TCPConn); !ok {
++				t.Fatalf("fallback accepted %T, want native TCP connection", connection)
++			}
++		})
++	}
++	t.Run("unix", func(t *testing.T) {
++		if runtime.GOOS == "windows" {
++			t.Skip("Unix sockets are not required on Windows")
++		}
++		// A short directory avoids the platform's Unix socket path-length limit.
++		directory, err := os.MkdirTemp("", "tcp-input-")
++		if err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(func() { os.RemoveAll(directory) })
++		listener, err := net.Listen("unix", filepath.Join(directory, "s"))
++		if err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(func() { listener.Close() })
++		if got := BufferedTCPListener(listener); got != listener {
++			t.Fatalf("Unix listener changed: %T", got)
++		}
++	})
++}
++
++func tcpInputListener(t *testing.T) *net.TCPListener {
++	t.Helper()
++	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { listener.Close() })
++	if err := listener.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++		t.Fatal(err)
++	}
++	return listener
++}
++
++func tcpInputPair(t *testing.T, buffered bool) (net.Conn, *net.TCPConn) {
++	t.Helper()
++	listener := tcpInputListener(t)
++	var acceptor net.Listener = listener
++	if buffered {
++		acceptor = BufferedTCPListener(listener)
++	}
++	peer, err := net.DialTimeout("tcp4", listener.Addr().String(), tcpInputTestTimeout)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { peer.Close() })
++	connection, err := acceptor.Accept()
++	if err != nil {
++		t.Fatal(err)
++	}
++	// This independent bound survives tests that clear the socket deadlines.
++	guard := time.AfterFunc(tcpInputTestTimeout, func() { peer.Close() })
++	t.Cleanup(func() {
++		guard.Stop()
++		peer.Close()
++		connection.Close()
++	})
++	for _, conn := range []net.Conn{connection, peer} {
++		if err := conn.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if buffered {
++		if _, ok := connection.(*bufferedTCPConnection); !ok {
++			t.Fatalf("Accept returned %T, want *bufferedTCPConnection", connection)
++		}
++	}
++	return connection, peer.(*net.TCPConn)
++}
++
++func tcpInputPending(t *testing.T, payload []byte) (*bufferedTCPConnection, *net.TCPConn) {
++	t.Helper()
++	connection, peer := tcpInputPair(t, true)
++	buffered := connection.(*bufferedTCPConnection)
++	if len(buffered.buffer) != 1024 {
++		t.Fatalf("input buffer size = %d, want 1024", len(buffered.buffer))
++	}
++	if len(payload) == 0 || len(payload) > len(buffered.buffer) {
++		t.Fatal("invalid pending-input fixture size")
++	}
++	if err := tcpInputWriteChunks(peer, payload, 3); err != nil {
++		t.Fatal(err)
++	}
++	// Set up pending input from a real socket without assuming a single kernel
++	// read fills the buffer. No other goroutine owns the connection at this point.
++	if _, err := io.ReadFull(buffered.tcp, buffered.buffer[:len(payload)]); err != nil {
++		t.Fatal(err)
++	}
++	buffered.start, buffered.end = 0, len(payload)
++	return buffered, peer
++}
++
++func tcpInputBindMessage(id int64, size int) ldapwire.Message {
++	return ldapwire.Message{
++		ID: id,
++		Request: ldapwire.BindRequest{
++			Version:        3,
++			Name:           "cn=tcp-input",
++			Authentication: ldapwire.Authentication{Simple: bytes.Repeat([]byte{byte('a' + id)}, size)},
++		},
++	}
++}
++
++func tcpInputEncode(t *testing.T, message ldapwire.Message) []byte {
++	t.Helper()
++	encoded, err := ldapwire.EncodeRequestMessage(message)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return encoded
++}
++
++func tcpInputAssertMessage(t *testing.T, got, want ldapwire.Message) {
++	t.Helper()
++	bind, ok := got.Request.(ldapwire.BindRequest)
++	expected := want.Request.(ldapwire.BindRequest)
++	if got.ID != want.ID || !ok || bind.Version != expected.Version || bind.Name != expected.Name ||
++		!bytes.Equal(bind.Authentication.Simple, expected.Authentication.Simple) {
++		t.Fatalf("decoded PDU mismatch: id = %d, request = %#v, want id = %d, request = %#v", got.ID, got.Request, want.ID, want.Request)
++	}
++}
++
++func tcpInputWriteChunks(connection net.Conn, data []byte, chunkSize int) error {
++	if chunkSize <= 0 {
++		chunkSize = len(data)
++	}
++	for len(data) > 0 {
++		chunk := data[:min(chunkSize, len(data))]
++		n, err := connection.Write(chunk)
++		if err != nil {
++			return err
++		}
++		if n != len(chunk) {
++			return io.ErrShortWrite
++		}
++		data = data[n:]
++	}
++	return nil
++}
++
++func tcpInputAwait(t *testing.T, result <-chan error) error {
++	t.Helper()
++	select {
++	case err := <-result:
++		return err
++	case <-time.After(tcpInputTestTimeout):
++		t.Fatal("TCP operation did not finish within the test bound")
++		return nil
++	}
++}
++
++type tcpInputListenerWrapper struct{ net.Listener }
++type tcpInputEmbeddedListener struct{ *net.TCPListener }
++
++type tcpInputReaderFunc func([]byte) (int, error)
++
++func (read tcpInputReaderFunc) Read(buffer []byte) (int, error) { return read(buffer) }
++
++type tcpInputCustomListener struct {
++	connection net.Conn
++	address    net.Addr
++	acceptErr  error
++	closeErr   error
++	closes     int
++}
++
++func (listener *tcpInputCustomListener) Accept() (net.Conn, error) {
++	return listener.connection, listener.acceptErr
++}
++
++func (listener *tcpInputCustomListener) Addr() net.Addr { return listener.address }
++
++func (listener *tcpInputCustomListener) Close() error {
++	listener.closes++
++	return listener.closeErr
++}
+diff --git a/internal/server/tcp_input_tls_test.go b/internal/server/tcp_input_tls_test.go
+new file mode 100644
+index 0000000..bd9285e
+--- /dev/null
++++ b/internal/server/tcp_input_tls_test.go
+@@ -0,0 +1,333 @@
++package server
++
++import (
++	"bytes"
++	"context"
++	"crypto/tls"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"testing"
++	"time"
++
++	ber "github.com/go-asn1-ber/asn1-ber"
++	ldap "github.com/go-ldap/ldap/v3"
++	"github.com/wangle201210/ldap-go/internal/directory"
++	"github.com/wangle201210/ldap-go/internal/ldapwire"
++	"github.com/wangle201210/ldap-go/internal/storage"
++)
++
++func TestTCPInputTLSStartTLSUnreadClientHello(t *testing.T) {
++	for _, test := range []struct {
++		name          string
++		clientVersion uint16
++		serverVersion uint16
++		wantFailure   bool
++	}{
++		{name: "TLS12", clientVersion: tls.VersionTLS12, serverVersion: tls.VersionTLS12},
++		{name: "TLS13", clientVersion: tls.VersionTLS13, serverVersion: tls.VersionTLS13},
++		{name: "version_rejected", clientVersion: tls.VersionTLS13, serverVersion: tls.VersionTLS12, wantFailure: true},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			store := tcpInputTLSStore(t)
++			configuration := testServerTLSConfig(t)
++			configuration.MaxVersion = test.serverVersion
++			request := tcpInputEncode(t, ldapwire.Message{
++				ID: 41, Request: ldapwire.ExtendedRequest{Name: startTLSOID},
++			})
++			connection, peer := tcpInputPending(t, request)
++			wire := &tcpInputTLSClientConnection{Conn: peer}
++			client := tls.Client(wire, &tls.Config{
++				InsecureSkipVerify: true, // The existing fixture uses a self-signed certificate.
++				MinVersion:         test.clientVersion,
++				MaxVersion:         test.clientVersion,
++			})
++			ctx, cancel := context.WithTimeout(t.Context(), tcpInputTestTimeout)
++			defer cancel()
++			handshakeDone := make(chan error, 1)
++			go func() { handshakeDone <- client.HandshakeContext(ctx) }()
++
++			// No server goroutine owns this socket yet. Preserve real ClientHello
++			// bytes behind the LDAP PDU, irrespective of TCP read boundaries.
++			pending := tcpInputTLSPrefetchHello(t, connection)
++			transport := &tcpInputTLSProbe{
++				config: configuration, pending: pending, checked: make(chan error, 1),
++			}
++			instance, done := tcpInputTLSServeConnection(t, connection, Config{
++				Store: store, SecureTransport: transport,
++			})
++			err := tcpInputAwait(t, handshakeDone)
++			if probeErr := tcpInputAwait(t, transport.checked); probeErr != nil {
++				t.Fatal(probeErr)
++			}
++			assertRawLDAPEnvelope(t, wire.response, 41, ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++			if test.wantFailure {
++				if err == nil {
++					t.Fatal("TLS accepted a ClientHello with no supported protocol version")
++				}
++				if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
++					t.Fatalf("TLS version rejection timed out: %v", err)
++				}
++				tcpInputTLSWaitClosed(t, done)
++				tcpInputTLSAssertNoDispatch(t, instance)
++				return
++			}
++			if err != nil {
++				t.Fatalf("StartTLS handshake with buffered ClientHello: %v", err)
++			}
++			if got := client.ConnectionState().Version; got != test.clientVersion {
++				t.Fatalf("TLS version = %#x, want %#x", got, test.clientVersion)
++			}
++			tcpInputTLSBindSearch(t, client)
++		})
++	}
++}
++
++func TestTCPInputTLSStartTLSFailureDoesNotDispatchPlaintext(t *testing.T) {
++	store := tcpInputTLSStore(t)
++	startTLS := tcpInputEncode(t, ldapwire.Message{
++		ID: 41, Request: ldapwire.ExtendedRequest{Name: startTLSOID},
++	})
++	bind := tcpInputEncode(t, ldapwire.Message{
++		ID: 42,
++		Request: ldapwire.BindRequest{
++			Version: 3, Name: "uid=alice,ou=people,dc=example,dc=com",
++			Authentication: ldapwire.Authentication{Simple: []byte("secret")},
++		},
++	})
++	search := tcpInputEncode(t, ldapwire.Message{
++		ID: 43,
++		Request: ldapwire.SearchRequest{
++			BaseDN: "uid=alice,ou=people,dc=example,dc=com",
++			Filter: directory.Filter{Kind: directory.FilterPresent, Attribute: "objectClass"},
++		},
++	})
++	pending := append(bind, search...)
++	connection, peer := tcpInputPending(t, append(startTLS, pending...))
++	transport := &tcpInputTLSProbe{
++		config: testServerTLSConfig(t), pending: pending, checked: make(chan error, 1),
++	}
++	instance, done := tcpInputTLSServeConnection(t, connection, Config{
++		Store: store, SecureTransport: transport,
++	})
++	assertRawLDAPEnvelope(t, readRawLDAPPacket(t, peer), 41, ldapwire.ApplicationExtendedResponse, int64(ldapwire.ResultSuccess))
++	if err := tcpInputAwait(t, transport.checked); err != nil {
++		t.Fatal(err)
++	}
++	// Valid LDAP requests are invalid TLS records. Neither a Bind response nor
++	// a fallback LDAP notice may follow the already committed StartTLS success.
++	var next [1]byte
++	if n, err := peer.Read(next[:]); n != 0 || !errors.Is(err, io.EOF) {
++		t.Fatalf("after failed TLS handshake: Read = (%d, %v), byte = %x; want EOF", n, err, next)
++	}
++	tcpInputTLSWaitClosed(t, done)
++	tcpInputTLSAssertNoDispatch(t, instance)
++}
++
++func TestTCPInputTLSImplicitTLSBindSearch(t *testing.T) {
++	store := tcpInputTLSStore(t)
++	transport := &tcpInputTLSProbe{
++		config: testServerTLSConfig(t), checked: make(chan error, 1),
++	}
++	// startServer passes a native TCP listener to Serve with both custom
++	// classifiers nil, so the probe also verifies automatic buffering.
++	address, stop := startServer(t, store, Config{
++		SecureTransport: transport, ImplicitTLS: true,
++	})
++	defer stop()
++	peer, err := net.DialTimeout("tcp", address, tcpInputTestTimeout)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer peer.Close()
++	guard := time.AfterFunc(tcpInputTestTimeout, func() { peer.Close() })
++	defer guard.Stop()
++	if err := peer.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++		t.Fatal(err)
++	}
++	client := tls.Client(peer, &tls.Config{
++		InsecureSkipVerify: true, // The existing fixture uses a self-signed certificate.
++		MinVersion:         tls.VersionTLS12,
++	})
++	ctx, cancel := context.WithTimeout(t.Context(), tcpInputTestTimeout)
++	defer cancel()
++	if err := client.HandshakeContext(ctx); err != nil {
++		t.Fatalf("implicit TLS handshake: %v", err)
++	}
++	if err := tcpInputAwait(t, transport.checked); err != nil {
++		t.Fatal(err)
++	}
++	tcpInputTLSBindSearch(t, client)
++}
++
++type tcpInputTLSClientConnection struct {
++	net.Conn
++	response *ber.Packet
++}
++
++func (connection *tcpInputTLSClientConnection) Read(value []byte) (int, error) {
++	if connection.response == nil {
++		response, err := ber.ReadPacket(connection.Conn)
++		if err != nil {
++			return 0, fmt.Errorf("read plaintext StartTLS result: %w", err)
++		}
++		connection.response = response
++	}
++	return connection.Conn.Read(value)
++}
++
++func tcpInputTLSPrefetchHello(t *testing.T, connection *bufferedTCPConnection) []byte {
++	t.Helper()
++	start := connection.end
++	if start+6 > len(connection.buffer) {
++		t.Fatal("no room for TLS record header and ClientHello type")
++	}
++	if _, err := io.ReadFull(connection.tcp, connection.buffer[start:start+5]); err != nil {
++		t.Fatalf("prefetch TLS record header: %v", err)
++	}
++	header := connection.buffer[start : start+5]
++	if header[0] != 22 || header[1] != 3 {
++		t.Fatalf("expected TLS handshake record, got %x", header)
++	}
++	recordSize := int(binary.BigEndian.Uint16(header[3:]))
++	end := min(len(connection.buffer), start+5+recordSize)
++	if recordSize == 0 {
++		t.Fatal("empty TLS handshake record")
++	}
++	if _, err := io.ReadFull(connection.tcp, connection.buffer[start+5:end]); err != nil {
++		t.Fatalf("prefetch ClientHello: %v", err)
++	}
++	if connection.buffer[start+5] != 1 {
++		t.Fatal("first TLS handshake message is not a ClientHello")
++	}
++	connection.end = end
++	return bytes.Clone(connection.buffer[start:end])
++}
++
++type tcpInputTLSProbe struct {
++	config  *tls.Config
++	pending []byte
++	checked chan error
++}
++
++func (transport *tcpInputTLSProbe) ServerHandshake(ctx context.Context, connection net.Conn) (net.Conn, error) {
++	err := transport.checkInput(connection)
++	transport.checked <- err
++	if err != nil {
++		return nil, err
++	}
++	return (standardTLSTransport{config: transport.config}).ServerHandshake(ctx, connection)
++}
++
++func (transport *tcpInputTLSProbe) checkInput(connection net.Conn) error {
++	activity, ok := connection.(*activityTrackingConnection)
++	if !ok {
++		return fmt.Errorf("TLS received %T, want activity-tracking connection", connection)
++	}
++	buffered, ok := activity.Conn.(*bufferedTCPConnection)
++	if !ok {
++		return fmt.Errorf("activity tracking wraps %T, want buffered TCP", activity.Conn)
++	}
++	buffered.readMu.Lock()
++	defer buffered.readMu.Unlock()
++	if len(buffered.buffer) != 1024 {
++		return fmt.Errorf("TCP input buffer size = %d, want 1024", len(buffered.buffer))
++	}
++	if transport.pending != nil && !bytes.Equal(buffered.buffer[buffered.start:buffered.end], transport.pending) {
++		return fmt.Errorf("TLS boundary retained %d bytes, want the exact %d prefetched bytes", buffered.end-buffered.start, len(transport.pending))
++	}
++	return nil
++}
++
++func tcpInputTLSStore(t *testing.T) storage.Store {
++	t.Helper()
++	store := storage.NewMemory()
++	t.Cleanup(func() { _ = store.Close() })
++	seedDirectory(t, store)
++	seedSASLPlainConfiguration(t, store, "noplain,noanonymous")
++	return store
++}
++
++func tcpInputTLSServeConnection(t *testing.T, connection net.Conn, config Config) (*Server, <-chan struct{}) {
++	t.Helper()
++	config.SecureHandshakeTimeout = tcpInputTestTimeout
++	instance, err := New(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithCancel(t.Context())
++	instance.connections[connection] = struct{}{}
++	done := make(chan struct{})
++	instance.wg.Add(1)
++	go func() {
++		defer close(done)
++		instance.serveConnection(ctx, connection)
++	}()
++	t.Cleanup(func() {
++		cancel()
++		_ = connection.Close()
++		tcpInputTLSWaitClosed(t, done)
++		instance.monitor.closeLogFile()
++		instance.closeSQLBackends()
++		instance.metaTransports.close()
++	})
++	return instance, done
++}
++
++func tcpInputTLSWaitClosed(t *testing.T, done <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-done:
++	case <-time.After(tcpInputTestTimeout):
++		t.Fatal("buffered TLS connection did not stop within the test bound")
++	}
++}
++
++func tcpInputTLSAssertNoDispatch(t *testing.T, instance *Server) {
++	t.Helper()
++	for _, request := range []ldapwire.Request{ldapwire.BindRequest{}, ldapwire.SearchRequest{}} {
++		index, ok := monitorOperationIndex(request)
++		if !ok {
++			t.Fatalf("no monitor counter for %T", request)
++		}
++		if got := instance.monitor.operations[index].initiated.Load(); got != 0 {
++			t.Errorf("dispatched %d plaintext %T operations after StartTLS", got, request)
++		}
++	}
++	instance.mu.Lock()
++	remaining := len(instance.connections)
++	instance.mu.Unlock()
++	if remaining != 0 {
++		t.Errorf("failed TLS connection remains registered: %d", remaining)
++	}
++}
++
++func tcpInputTLSBindSearch(t *testing.T, connection *tls.Conn) {
++	t.Helper()
++	if err := bindSASLPlainConnection(connection, "", "alice", "secret"); err != nil {
++		t.Fatalf("SASL PLAIN over buffered TLS: %v", err)
++	}
++	if err := connection.SetDeadline(time.Now().Add(tcpInputTestTimeout)); err != nil {
++		t.Fatal(err)
++	}
++	client := ldap.NewConn(connection, true)
++	client.SetTimeout(tcpInputTestTimeout)
++	client.Start()
++	defer client.Close()
++	for _, mechanism := range []string{"SASL PLAIN", "simple"} {
++		if mechanism == "simple" {
++			if err := client.Bind("uid=alice,ou=people,dc=example,dc=com", "secret"); err != nil {
++				t.Fatalf("simple Bind over buffered TLS: %v", err)
++			}
++		}
++		result, err := client.Search(ldap.NewSearchRequest(
++			"uid=alice,ou=people,dc=example,dc=com", ldap.ScopeBaseObject,
++			ldap.NeverDerefAliases, 0, 0, false, "(objectClass=inetOrgPerson)", []string{"uid"}, nil,
++		))
++		if err != nil || len(result.Entries) != 1 || result.Entries[0].GetAttributeValue("uid") != "alice" {
++			t.Fatalf("Search after %s over buffered TLS = %#v, %v", mechanism, result, err)
++		}
++	}
++}

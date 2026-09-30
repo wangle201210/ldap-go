@@ -51,7 +51,7 @@ Detailed implementation claims and boundaries are recorded in the
 
 ## Performance snapshot
 
-Latest focused comparison: September 30, 2026, R22, 100,000 users, source baseline
+Latest plaintext comparison: September 30, 2026, R22, 100,000 users, source baseline
 `984ada3` (R21), Apple M1 Pro, Go 1.26.4 (`CGO_ENABLED=0`),
 OpenLDAP 2.6.13. Each row uses seven SDK batches of 1,000 calls.
 Relative performance is `OpenLDAP/current * 100%`; 100% means parity.
@@ -78,6 +78,10 @@ See the [R22 report](docs/common-ldap-performance-20260930-r22.md) and
 negative observations and limits. Other group searches and broad reads/writes
 were not rerun; [R21](docs/common-ldap-performance-20260930-r21.md), [R19](docs/common-ldap-performance.md) and
 [R8b](docs/common-ldap-performance-20260930-r8b.md) remain historical.
+
+Verified LDAPS and StartTLS results are recorded separately in
+[R23](docs/common-ldap-performance-20260930-r23.md), along with a rejected input-buffer
+experiment. The benchmark tool supports trusted CA bundles and StartTLS.
 
 ## Requirements
 
